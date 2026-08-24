@@ -27,6 +27,21 @@ BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:80
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
+@app.middleware("http")
+async def no_cache(request: Request, call_next):
+    """Tells the browser never to cache anything from this origin — static
+    files (index.html/script.js/style.css/logo.*) included, not just the
+    /api/* responses. The app is small and iterated on directly by editing
+    these files; a stale cached copy (especially of script.js) is a much
+    more likely and confusing failure mode here than the extra requests are
+    a real cost."""
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
 @app.post("/api/generate")
 async def proxy_generate(request: Request):
     body = await request.body()

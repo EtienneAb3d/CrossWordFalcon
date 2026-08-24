@@ -433,3 +433,15 @@ content (the French crossword words/clues, the web UI text) stays in French
   `build-essential`/`cmake` and says to check the error printed just
   above. Keep this pattern — name the missing thing and the fix — for any
   future fallback path added here.
+
+- `frontend/server.py` sets `Cache-Control: no-store, no-cache,
+  must-revalidate, max-age=0` (plus `Pragma`/`Expires` for older clients)
+  on every response via an `@app.middleware("http")`, at the user's
+  request — applies to the static files (`index.html`/`script.js`/
+  `style.css`/`logo.*`) and the `/api/*` proxy routes alike, not just one
+  or the other. Reason: this app is edited directly and reloaded by hand
+  during development, and a browser caching a stale `script.js` is a far
+  more likely and confusing failure than the extra bytes of always
+  refetching are a real cost. If the app ever needs real caching (e.g. for
+  the model download or some future heavy static asset), scope an
+  exception to that specific route rather than removing the blanket rule.

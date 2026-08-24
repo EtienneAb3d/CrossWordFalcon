@@ -82,9 +82,18 @@ English (see `project-best-practices`).
   is now purple/blue/white/navy rather than the original navy/cream/yellow;
   `#logo`'s 44px display size (unchanged) works fine with it since the new
   artwork reads clearly even small. Regenerated `frontend/static/logo.png`
-  from it (`qlmanage -t`, same method as before) for `README.md`. Whenever
-  `logo.svg` is replaced again, regenerate `logo.png` the same way — it is
-  not derived automatically.
+  from it for `README.md`. Whenever `logo.svg` is replaced again,
+  regenerate `logo.png` the same way — it is not derived automatically.
+
+- `frontend/static/logo.png` must be rendered with a transparent
+  background, not white — use `rsvg-convert -w 1024 -h 1024
+  --keep-aspect-ratio -o logo.png logo.svg` (`brew install librsvg` if
+  missing), not macOS's built-in `qlmanage -t`: Quick Look composites SVG
+  thumbnails onto an opaque white backdrop regardless of the source having
+  no background fill, silently baking in a white square that only shows up
+  once the logo sits on anything other than a white page. Verified with
+  Pillow (`im.getpixel((0,0))`) that the corner pixel is `(0,0,0,0)` after
+  `rsvg-convert`, `(255,255,255,255)` after `qlmanage` — same source SVG.
 
 - logo stays top-left (`#page-header`, unchanged position),
   enlarged from `2.75rem` to `4rem`. Confirmed `position: static` (normal

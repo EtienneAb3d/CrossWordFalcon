@@ -79,8 +79,11 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default
   `http://127.0.0.1:8001`) so the browser only ever talks to one origin. `run_Falcon.sh`
   binds it to `0.0.0.0` (LAN-reachable, e.g. from a phone on the same network) — the
-  back end stays on `127.0.0.1` only, it's never meant to be reached directly. Static
-  files are
+  back end stays on `127.0.0.1` only, it's never meant to be reached directly. A
+  blanket `@app.middleware("http")` sets `Cache-Control: no-store` (plus
+  `Pragma`/`Expires`) on every response — static files and `/api/*` alike — so the
+  browser never caches a stale `script.js`/`style.css`/etc. while the app is being
+  edited directly. Static files are
   served via Starlette's `StaticFiles`, which 404s on anything not present in
   `frontend/static/` (including path traversal attempts) — keep that directory limited to
   the files the page actually needs. The page itself is a playable crossword, not just a
