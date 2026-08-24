@@ -68,7 +68,10 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
 - `frontend/server.py` — **middleware** FastAPI server: serves the static UI
   (`frontend/static/index.html`, `script.js`, `style.css`) and proxies `/api/*` to the
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default
-  `http://127.0.0.1:8001`) so the browser only ever talks to one origin. Static files are
+  `http://127.0.0.1:8001`) so the browser only ever talks to one origin. `run_Falcon.sh`
+  binds it to `0.0.0.0` (LAN-reachable, e.g. from a phone on the same network) — the
+  back end stays on `127.0.0.1` only, it's never meant to be reached directly. Static
+  files are
   served via Starlette's `StaticFiles`, which 404s on anything not present in
   `frontend/static/` (including path traversal attempts) — keep that directory limited to
   the files the page actually needs. The page itself is a playable crossword, not just a
@@ -104,8 +107,8 @@ python3 backend/crossword_gen.py --width 15 --height 15 --difficulty hard --seed
 python3 backend/crossword_gen.py --wordlist data/wordlist_en_full.tsv
 
 # Web UI: run both servers (separate terminals), then open http://127.0.0.1:8000
-uvicorn backend.app:app --port 8001
-uvicorn frontend.server:app --port 8000
+uvicorn backend.app:app --port 8001                       # 127.0.0.1 only, internal
+uvicorn frontend.server:app --host 0.0.0.0 --port 8000    # LAN-reachable
 
 # Or simply:
 ./run_Falcon.sh   # stops any server already running on 8000/8001, sources

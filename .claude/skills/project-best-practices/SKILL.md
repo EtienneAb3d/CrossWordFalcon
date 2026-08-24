@@ -378,3 +378,14 @@ content (the French crossword words/clues, the web UI text) stays in French
   not just fillability) or a fundamentally different construction method
   (aesthetic-scored search rather than greedy random placement) — bigger
   changes than this session made; flagged rather than done speculatively.
+
+- `run_Falcon.sh` starts the middleware (`frontend.server:app`) with
+  `--host 0.0.0.0`, not the uvicorn default (`127.0.0.1`), so the UI is
+  reachable from other machines on the same network, not just the one
+  running it. The back end (`backend.app:app`) stays on `127.0.0.1` only —
+  it has no reason to be reachable directly, the middleware is the only
+  thing that talks to it. The script also tries to print the machine's LAN
+  IP (`ipconfig getifaddr en0`/`en1` on macOS, `hostname -I` on Linux) so
+  the user has the address to hand to another device; falls back to
+  silence (not an error) if neither works, since `set -e`/`pipefail` are on
+  and a missing/down network interface is a normal, not exceptional, case.

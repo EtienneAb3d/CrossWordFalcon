@@ -41,12 +41,21 @@ nohup uvicorn backend.app:app --port "$BACKEND_PORT" > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 
 echo "Starting middleware on port $FRONTEND_PORT..."
-nohup uvicorn frontend.server:app --port "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
+# --host 0.0.0.0 so the UI is reachable from other machines on the network,
+# not just from this one. The back end (port 8001) stays on 127.0.0.1 only —
+# it's an internal implementation detail, browsers only ever talk to the
+# middleware (see CLAUDE.md).
+nohup uvicorn frontend.server:app --host 0.0.0.0 --port "$FRONTEND_PORT" > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
+
+LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || (hostname -I 2>/dev/null | awk '{print $1}') || true)
 
 echo "Back end started (pid $BACKEND_PID, log: $BACKEND_LOG)"
 echo "Middleware started (pid $FRONTEND_PID, log: $FRONTEND_LOG)"
-echo "UI available at http://127.0.0.1:$FRONTEND_PORT"
+echo "UI available at http://127.0.0.1:$FRONTEND_PORT (this machine)"
+if [ -n "$LAN_IP" ]; then
+    echo "               and http://$LAN_IP:$FRONTEND_PORT (from other machines on the network)"
+fi
 echo "To stop the servers, rerun this script or run: kill $BACKEND_PID $FRONTEND_PID"
 echo
 echo "Note: clue generation uses the local LLM server by default (see env.sh)."

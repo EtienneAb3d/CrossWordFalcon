@@ -61,6 +61,10 @@ a personal secret, like a password.
 
 Then open your browser at: **http://127.0.0.1:8000**
 
+Other devices on the same network can also reach it — the script prints
+the address to use for that when it finds one (something like
+`http://192.168.1.23:8000`).
+
 This script also takes care of cleanly stopping any version of the app that
 might already be running before starting a new one — feel free to rerun it
 as often as you like.
