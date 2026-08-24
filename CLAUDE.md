@@ -63,7 +63,11 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `llama_cpp.llama_supports_gpu_offload()` against whether a GPU should be present
   (macOS, or `nvidia-smi -L` succeeding) and force-reinstalls with the right
   `CMAKE_ARGS` (`-DGGML_METAL=on` / `-DGGML_CUDA=on`) if they disagree, so
-  `--n_gpu_layers -1` below isn't silently a no-op. Passes `--chat_template_kwargs
+  `--n_gpu_layers -1` below isn't silently a no-op. For CUDA specifically, also
+  checks `nvcc`/`$CUDACXX` is actually available first (`nvidia-smi` only proves the
+  driver is installed, not the CUDA Toolkit needed to compile) and never lets a
+  failed rebuild abort the script — falls back to whatever's already installed and
+  runs on CPU rather than not starting at all. Passes `--chat_template_kwargs
   '{"enable_thinking": false}'` — Qwen3.5 is a reasoning model that otherwise burns the
   whole token budget on a `<think>...</think>` block before ever answering, which
   starved `backend/clues.py`'s batches of any usable output (verified: 28s and no

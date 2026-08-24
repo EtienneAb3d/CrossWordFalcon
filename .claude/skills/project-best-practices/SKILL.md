@@ -406,3 +406,30 @@ content (the French crossword words/clues, the web UI text) stays in French
   Mac): reads `True` cleanly from stdout even though the same import emits
   a page of Metal device-init logs — those go to stderr, not stdout, so
   they don't corrupt the captured value.
+
+- The CUDA rebuild above checks for `nvcc` (or `$CUDACXX`) before
+  attempting it — `nvidia-smi -L` only proves the NVIDIA *driver* is
+  installed, not the CUDA *Toolkit* (a separate install that provides the
+  compiler CMake needs). Hit this for real: a user's machine had the
+  driver but not the toolkit, so the rebuild's `cmake` step failed with
+  "No CMAKE_CUDA_COMPILER could be found". The rebuild attempt is also
+  never allowed to abort the script (`if ! pip install ...; then ...` —
+  not a bare command under `set -e`) — a failed GPU build falls back to
+  whatever's already installed and runs on CPU, which is strictly better
+  than the script refusing to start the server at all. Don't remove either
+  guard when touching this: the failure mode (toolkit missing, or the
+  build failing for some other reason) is a normal, expected case on a
+  real user's machine, not a hypothetical.
+
+- Every CPU-fallback message in `run_llm.sh` names the actual missing
+  piece and how to install it, not just "running on CPU" — the user
+  otherwise has no way to tell "there's no GPU here" apart from "the GPU
+  build silently failed for a fixable reason". Missing CUDA Toolkit:
+  prints the right package-manager command for the detected distro
+  (`apt-get`/`dnf`/`pacman`, else a link to NVIDIA's downloads page).
+  Missing Xcode Command Line Tools (macOS, needed to build with Metal):
+  prints `xcode-select --install`. Generic rebuild failure (anything else
+  — usually a missing `cmake` or C/C++ compiler): points at
+  `build-essential`/`cmake` and says to check the error printed just
+  above. Keep this pattern — name the missing thing and the fix — for any
+  future fallback path added here.

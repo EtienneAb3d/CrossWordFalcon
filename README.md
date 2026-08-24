@@ -46,7 +46,10 @@ depending on your connection. It runs on a graphics card if you have one
 (including Apple Silicon Macs), and falls back to your CPU otherwise —
 slower, but it works. If it detects a graphics card that isn't being used
 yet, it rebuilds itself to enable it — a one-time, several-minute step
-that only happens once.
+that only happens once. On an NVIDIA card, this rebuild needs the full
+**CUDA Toolkit** installed, not just the graphics driver — if it's
+missing, the script says so and carries on with your CPU instead of
+getting stuck.
 
 If you'd rather use a cloud service instead of running a model locally,
 open `env.sh` at the project root and follow the commented instructions

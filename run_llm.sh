@@ -54,10 +54,55 @@ fi
 if [ -n "$GPU_CMAKE_ARGS" ]; then
     HAS_GPU_SUPPORT=$(python3 -c "import llama_cpp; print(llama_cpp.llama_supports_gpu_offload())" 2>/dev/null || echo False)
     if [ "$HAS_GPU_SUPPORT" != "True" ]; then
-        echo "GPU detected but the installed llama-cpp-python has no GPU support built in."
-        echo "Rebuilding with CMAKE_ARGS=\"$GPU_CMAKE_ARGS\" (recompiles llama.cpp, a few minutes)..."
-        CMAKE_ARGS="$GPU_CMAKE_ARGS" pip install --force-reinstall --no-cache-dir \
-            "$(grep -o 'llama-cpp-python\[server\]==[0-9.]*' requirements-llama.txt)"
+        CAN_BUILD=true
+
+        # nvidia-smi only proves the NVIDIA *driver* is installed — building
+        # against CUDA also needs the CUDA Toolkit's compiler (nvcc), a
+        # separate install. Don't attempt (and fail) a build we already know
+        # can't work — tell the user exactly what to install instead.
+        if [ "$GPU_CMAKE_ARGS" = "-DGGML_CUDA=on" ] \
+                && ! command -v nvcc >/dev/null 2>&1 && [ -z "${CUDACXX:-}" ]; then
+            CAN_BUILD=false
+            echo "NVIDIA GPU detected (driver present) but no CUDA compiler (nvcc) found —"
+            echo "running on CPU for now. To use the GPU, install the CUDA Toolkit (this is"
+            echo "separate from the driver you already have):"
+            if command -v apt-get >/dev/null 2>&1; then
+                echo "  sudo apt-get install nvidia-cuda-toolkit"
+            elif command -v dnf >/dev/null 2>&1; then
+                echo "  sudo dnf install cuda-toolkit"
+            elif command -v pacman >/dev/null 2>&1; then
+                echo "  sudo pacman -S cuda"
+            else
+                echo "  see https://developer.nvidia.com/cuda-downloads for your distro"
+            fi
+            echo "Then rerun this script (or set CUDACXX to your nvcc path if it's already"
+            echo "installed somewhere not on PATH)."
+        fi
+
+        # Similarly, building with Metal needs a C/C++ compiler — Xcode's
+        # Command Line Tools, which aren't installed on macOS by default.
+        if [ "$GPU_CMAKE_ARGS" = "-DGGML_METAL=on" ] && ! xcode-select -p >/dev/null 2>&1; then
+            CAN_BUILD=false
+            echo "Metal build needs Xcode's Command Line Tools, which aren't installed —"
+            echo "running on CPU for now. To use the GPU, install them with:"
+            echo "  xcode-select --install"
+            echo "Then rerun this script."
+        fi
+
+        if [ "$CAN_BUILD" = true ]; then
+            echo "GPU detected but the installed llama-cpp-python has no GPU support built in."
+            echo "Rebuilding with CMAKE_ARGS=\"$GPU_CMAKE_ARGS\" (recompiles llama.cpp, a few minutes)..."
+            # Never let a failed rebuild abort the script (set -e) — worst
+            # case we fall back to whatever's already installed and run on
+            # CPU, which is strictly better than not starting at all.
+            if ! CMAKE_ARGS="$GPU_CMAKE_ARGS" pip install --force-reinstall --no-cache-dir \
+                    "$(grep -o 'llama-cpp-python\[server\]==[0-9.]*' requirements-llama.txt)"; then
+                echo "GPU rebuild failed — continuing on CPU. This usually means a missing"
+                echo "build tool: check that cmake and a C/C++ compiler are installed"
+                echo "(Debian/Ubuntu: sudo apt-get install build-essential cmake), then rerun"
+                echo "this script. See the error above for the actual cause."
+            fi
+        fi
     fi
 fi
 
