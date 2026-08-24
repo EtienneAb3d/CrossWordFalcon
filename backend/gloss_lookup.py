@@ -58,6 +58,19 @@ def find_glosses_for_canonicals(canonical_forms, language):
     return result
 
 
+def has_gloss_dictionary(language):
+    """True if `language` actually has a built gloss dictionary (at least
+    one entry) — as opposed to `has_any_gloss` returning False for a
+    *specific* word because that word itself isn't covered. Distinguishing
+    these matters: `backend/crossword_gen.py`'s `require_gloss` filter is
+    meant to no-op entirely when a language has no gloss dictionary built
+    at all (an optional, gitignored artifact from `build_gloss_
+    dictionary.py` that a deploy can easily skip) rather than reject every
+    single word, which is what unconditionally trusting `has_any_gloss`
+    would do once every word "has no gloss" the same way."""
+    return bool(_load(language))
+
+
 def has_any_gloss(candidates, language):
     """True if any of `candidates` (e.g. a word's inflected spelling
     together with its candidate canonical form(s)) has an entry in

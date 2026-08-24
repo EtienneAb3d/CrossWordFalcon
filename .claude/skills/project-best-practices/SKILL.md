@@ -1007,16 +1007,36 @@ content (the French crossword words/clues, the web UI text) stays in French
 - added `GRID_SAMPLES/` (project root), at the user's explicit request:
   `backend/svg_export.py`'s `save_grid_png()` renders each grid's already-
   saved SVG (`GRIDS/`) to a PNG of the same basename here via
-  `rsvg-convert`. Unlike every other generated-output directory in this
+  `rsvg-convert`. Unlike most other generated-output directories in this
   project (`GRIDS/`, `data/hunspell_cache/`, `data/reference_corpus/`,
-  `data/gloss_dictionary/`, `models/` — all gitignored), `GRID_SAMPLES/`
-  is deliberately checked into git: the user wants a growing, version-
-  controlled visual record of what the app actually produces, evolving
-  release to release, not a disposable local cache — confirmed explicit
-  intent, not an oversight, so don't add it to `.gitignore` later out of
-  habit-matching the other generated directories. Best-effort like
-  `save_grid_svg`: a missing `rsvg-convert` or any conversion failure is
-  logged as a warning by `backend/app.py`, never fails the request.
+  `models/` — all gitignored), `GRID_SAMPLES/` is deliberately checked
+  into git: the user wants a growing, version-controlled visual record of
+  what the app actually produces, evolving release to release, not a
+  disposable local cache — confirmed explicit intent, not an oversight,
+  so don't add it to `.gitignore` later out of habit-matching the other
+  generated directories. Best-effort like `save_grid_svg`: a missing
+  `rsvg-convert` or any conversion failure is logged as a warning by
+  `backend/app.py`, never fails the request.
+
+- un-ignored `data/gloss_dictionary/` and committed its contents (a few
+  tens of MB total across all five languages), at the user's explicit
+  request after the `wordlist_loaded {'word_count': 0, ...}` deploy bug
+  above — confirmed first via `AskUserQuestion` which of the four
+  gitignored data directories were actually worth committing.
+  `data/reference_corpus/` (1.1GB) and `data/hunspell_cache/` (8MB)
+  stay gitignored: the reference corpus only feeds optional LLM-clue
+  example sentences and already degrades gracefully to "no examples
+  found" when absent (`backend/example_sentences.py` checks
+  `corpus_path.exists()`), and the hunspell cache is only ever read by
+  the one-off wordlist-building scripts, never by the running app.
+  `models/` also stays gitignored: it's the local LLM's GGUF weights,
+  already auto-downloaded by `run_llm.sh` from HuggingFace on first run —
+  committing a duplicate 5.7GB binary into git history would be pure
+  waste. `data/gloss_dictionary/` was the one directory that's both
+  small enough to commit reasonably and load-bearing enough at runtime
+  (the "easy"-difficulty definition filter, LLM clue grounding) to be
+  worth shipping directly rather than depending on every deploy
+  remembering to run the separate, heavy `build_gloss_dictionary.py`.
 
 - `README.md` leads with two headline facts, at the user's explicit
   request: runs 100% locally (no cloud account/AI subscription needed)
@@ -1088,3 +1108,25 @@ content (the French crossword words/clues, the web UI text) stays in French
   `require_gloss`/`max_words` combination that starves a specific slot
   length down to very few (or zero) words is visible directly in the log
   instead of needing to be reproduced by hand next time this happens.
+
+- fixed a real bug this new logging immediately caught on a deployed
+  instance: `wordlist_loaded {'word_count': 0, ...}` — `require_gloss`
+  (the "easy" difficulty default) was rejecting *every* word instead of
+  no-opping, on an instance whose wordlist TSV was present but whose
+  gloss dictionary (`data/gloss_dictionary/<lang>_glosses.jsonl` —
+  optional, gitignored, built by the separate, heavy `build_gloss_
+  dictionary.py`) hadn't been built. `backend/gloss_lookup.py`'s
+  `has_any_gloss` returns `False` both for "this word has no dictionary
+  entry" and for "this language has no dictionary built at all" — the two
+  look identical from inside that function, and `crossword_gen.py`'s
+  `require_gloss` filter only ever checked whether the *import* of
+  `has_any_gloss` succeeded, not whether the language actually had a
+  dictionary — so it always applied the filter, and once every word
+  "has no gloss" the same way, the entire word list emptied out. CLAUDE.md
+  already documented the intended fallback ("no-op if the language...
+  has no gloss dictionary built") — it had just never been implemented.
+  Fixed by adding `has_gloss_dictionary(language)` to
+  `backend/gloss_lookup.py` (true iff that language's loaded index is
+  non-empty) and gating the filter on it in `crossword_gen.py`, verified
+  by removing a gloss dictionary file locally and confirming the word
+  list now stays at its full size instead of emptying out.

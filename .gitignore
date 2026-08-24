@@ -4,6 +4,5 @@ env.sh
 /models/
 /data/hunspell_cache/
 /data/reference_corpus/
-/data/gloss_dictionary/
 /GRIDS/
 *.log

@@ -52,19 +52,19 @@ def _lang_from_path(path):
     return match.group(1) if match else None
 
 
-def _try_import_has_any_gloss():
-    """`backend/gloss_lookup.py`'s `has_any_gloss`, imported lazily and
-    tolerantly: crossword_gen.py is also run standalone as a CLI script
-    (`python3 backend/crossword_gen.py`, see the module docstring) — a
-    relative import at module scope would break that (no package context
-    to resolve `.gloss_lookup` against), so this is only ever attempted
-    from inside a function, and a failure just means `require_gloss`
-    silently has no effect rather than crashing the CLI."""
+def _try_import_gloss_lookup():
+    """`backend/gloss_lookup.py`'s `has_any_gloss`/`has_gloss_dictionary`,
+    imported lazily and tolerantly: crossword_gen.py is also run standalone
+    as a CLI script (`python3 backend/crossword_gen.py`, see the module
+    docstring) — a relative import at module scope would break that (no
+    package context to resolve `.gloss_lookup` against), so this is only
+    ever attempted from inside a function, and a failure just means
+    `require_gloss` silently has no effect rather than crashing the CLI."""
     try:
-        from .gloss_lookup import has_any_gloss
-        return has_any_gloss
+        from .gloss_lookup import has_any_gloss, has_gloss_dictionary
+        return has_any_gloss, has_gloss_dictionary
     except ImportError:
-        return None
+        return None, None
 
 
 def load_wordlist(path, max_words=None, require_gloss=False):
@@ -134,9 +134,17 @@ def load_wordlist(path, max_words=None, require_gloss=False):
             best[word] = (accented, freq, canonical)
 
     if require_gloss:
-        has_any_gloss = _try_import_has_any_gloss()
+        has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
         lang = _lang_from_path(path)
-        if has_any_gloss and lang:
+        # Guard on the language actually *having* a gloss dictionary built,
+        # not just on the import succeeding — `has_any_gloss` returning
+        # False for a word with no dictionary at all is indistinguishable
+        # from it returning False for a word genuinely undefinable in a
+        # real dictionary; without this check, a language with no gloss
+        # dictionary built (an optional, gitignored artifact a deploy can
+        # easily skip — see build_gloss_dictionary.py) would have every
+        # single word rejected instead of the filter no-op'ing as intended.
+        if has_any_gloss and lang and has_gloss_dictionary(lang):
             best = {
                 word: v for word, v in best.items()
                 if has_any_gloss([v[0], *v[2]], lang)

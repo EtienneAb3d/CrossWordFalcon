@@ -177,7 +177,11 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   nothing is found for a word — not every word has dictionary or corpus coverage.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
-  (`data/gloss_dictionary/<lang>_glosses.jsonl`, gitignored). Loaded and cached in
+  (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
+  other generated data files here, this one is small enough (a few tens of MB total)
+  and important enough at runtime — see `require_gloss` below — to ship directly
+  rather than rely on every deploy re-running the one-off, multi-GB-download build
+  script). Loaded and cached in
   memory per language on first use (lazy, once per process lifetime — same pattern as
   `backend/example_sentences.py` below).
 - `backend/example_sentences.py` — `find_examples_for_words()`, looks up real usage
@@ -209,7 +213,7 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   to just the lemmas `data/wordlist_<lang>_full.tsv`'s `CANONIQUE` column actually
   needs (a few hundred thousand words at most) — the raw download is deleted right
   after, only the small filtered result (`data/gloss_dictionary/<lang>_glosses.jsonl`,
-  gitignored) is kept.
+  checked into the repo — see `backend/gloss_lookup.py` above) is kept.
 - `backend/svg_export.py` — `save_grid_svg()`, called by `backend/app.py` once a grid
   and its clues are both ready: renders a single self-contained SVG (no external
   assets/fonts) — the empty puzzle (grid + clue lists, grouped/chained the same way
@@ -324,8 +328,9 @@ requirements.txt` (or `./Install.sh`) installs `fastapi`, `uvicorn[standard]`, `
 python3 build_sentence_corpus.py fr    # downloads OpenSubtitles+Wikipedia, filters
 python3 build_wordlist_freq.py fr      # counts words, validates, writes wordlist_fr_full.tsv
 
-# Optional: build the gloss dictionary backend/clues.py grounds clues with
-# (large one-time download per language — see build_gloss_dictionary.py)
+# Optional: rebuild a language's gloss dictionary from scratch (large
+# one-time download — see build_gloss_dictionary.py). Not needed for a normal
+# clone: data/gloss_dictionary/*.jsonl is already checked into the repo.
 python3 build_gloss_dictionary.py fr
 
 # Generate a crossword grid from the CLI (defaults: 15x10, easy difficulty)
@@ -423,7 +428,17 @@ a word that's merely common yet undefinable (verified: 106 additional words drop
 from French `easy` this way, mostly foreign proper nouns that had passed Hunspell
 validation as loanword-like tokens). Falls back to no-op (silently skips the
 gloss-filter) if the wordlist's language can't be inferred from its filename or it has
-no gloss dictionary built — `require_gloss` never breaks a caller that doesn't have one.
+no gloss dictionary built (`backend/gloss_lookup.py`'s `has_gloss_dictionary`) —
+`require_gloss` never breaks a caller that doesn't have one. This guard is load-
+bearing, not a redundant safety net: `has_any_gloss` itself returns `False` for a word
+with no dictionary entry *and* for a word in a language with no dictionary built at
+all (both look identical from inside `has_any_gloss`) — without checking
+`has_gloss_dictionary` separately first, a deployed instance missing
+`data/gloss_dictionary/<lang>_glosses.jsonl` would have every single word rejected
+instead of the filter no-op'ing, since `require_gloss=True` is the default
+`easy`-difficulty behavior. Caught live: a deployed instance with a wordlist file but
+no gloss dictionary built produced `wordlist_loaded {'word_count': 0, ...}` in
+`backend.log` and "no fillable grid found" on every request.
 
 `build_wordlist_freq.py` counts word occurrences directly from a language's reference
 corpus (`data/reference_corpus/<lang>_sentences.txt`, `_count_word_frequencies`) —
