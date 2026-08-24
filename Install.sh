@@ -9,8 +9,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 echo "Install complete. Activate the venv with: source .venv/bin/activate"
-echo "Start the back end:   uvicorn backend.app:app --port 8001"
-echo "Start the middleware: uvicorn frontend.server:app --port 8000"
+echo "Start the app: ./run_Falcon.sh"
 echo
 echo "Optional: to run the default local LLM that generates crossword clues,"
 echo "run: pip install -r requirements-llama.txt && ./run_llm.sh"
