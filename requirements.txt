@@ -1,0 +1,4 @@
+# Serveurs web (backend/app.py, frontend/server.py)
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+httpx==0.28.1

@@ -1,0 +1,227 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f6f0fb;
+  --fg: #1f2320;
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+  --border: #c9c9c5;
+  --black-cell: #1f2320;
+  --white-cell: #ffffff;
+  --error: #b3261e;
+  --selected: #bfdbfe;
+  --correct-bg: #bbf7d0;
+  --correct-fg: #14532d;
+  --incorrect-bg: #fecaca;
+  --incorrect-fg: #7f1d1d;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 2rem 1rem 4rem;
+}
+
+#page-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+#logo {
+  position: static;
+  width: 4rem;
+  height: 4rem;
+  flex-shrink: 0;
+}
+
+h1 {
+  font-size: 1.4rem;
+  margin: 0;
+  margin-right: auto;
+}
+
+.badge {
+  flex-shrink: 0;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: var(--white-cell);
+  border: 1px solid var(--border);
+  color: #555;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+input, select, button {
+  font-size: 1rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--white-cell);
+  color: var(--fg);
+}
+
+input {
+  width: 6rem;
+}
+
+button {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+#status {
+  min-height: 1.2rem;
+  font-size: 0.9rem;
+}
+
+#status.error {
+  color: var(--error);
+}
+
+#stats {
+  font-size: 0.9rem;
+  color: #555;
+}
+
+.toggle-btn.active {
+  background: var(--accent-fg);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+#board {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 2rem;
+  margin-top: 1rem;
+}
+
+#grid {
+  display: inline-grid;
+  flex-shrink: 0;
+  gap: 2px;
+  background: var(--border);
+  border: 2px solid var(--border);
+}
+
+.cell {
+  position: relative;
+  width: 2rem;
+  height: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.cell.white {
+  background: var(--white-cell);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.cell.black {
+  background: var(--black-cell);
+}
+
+.cell.white.selected {
+  background: var(--selected);
+}
+
+.cell.white.correct {
+  background: var(--correct-bg);
+  color: var(--correct-fg);
+}
+
+.cell.white.incorrect {
+  background: var(--incorrect-bg);
+  color: var(--incorrect-fg);
+}
+
+.cell-number {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  font-size: 0.55rem;
+  font-weight: 400;
+  line-height: 1;
+}
+
+#clues {
+  min-width: 16rem;
+  flex: 1 1 16rem;
+}
+
+#clues h2,
+#down-clues-section h2 {
+  font-size: 1rem;
+  margin: 0 0 0.5rem;
+}
+
+#down-clues-section {
+  margin-top: 2rem;
+}
+
+.clue-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.clue-line {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* "Verticalement" spans the full width below the grid, balanced into 2
+   columns instead of one long list — flex can't split children across
+   columns, so this container switches to CSS multi-column layout instead. */
+.clue-lines-columns {
+  display: block;
+  column-count: 2;
+  column-gap: 2rem;
+}
+
+.clue-lines-columns .clue-line {
+  break-inside: avoid;
+  margin: 0 0 0.4rem;
+}

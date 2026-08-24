@@ -1,0 +1,4 @@
+env.sh
+*__pycache__*
+/models/
+*.log

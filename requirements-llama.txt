@@ -1,0 +1,14 @@
+# Optional: default local LLM server for clue generation (backend/clues.py),
+# serving a quantized GGUF model via llama.cpp's built-in OpenAI-compatible
+# server (llama_cpp.server) — no hand-written wrapper needed, unlike
+# requirements-vllm.txt/requirements-hf.txt (kept as alternative backends,
+# see run_vllm.sh). Works on both Linux and macOS (Metal on Apple Silicon,
+# CUDA on Linux with a GPU, or CPU everywhere) from the same package.
+#
+# No prebuilt wheels on PyPI — this builds llama.cpp from source via CMake,
+# needs a C/C++ toolchain (Xcode command line tools on macOS, build-essential
+# on Linux). Takes a few minutes the first time.
+#
+#   pip install -r requirements-llama.txt
+#   ./run_llm.sh
+llama-cpp-python[server]==0.3.35

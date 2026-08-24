@@ -1,0 +1,9 @@
+# Optional: local LLM server used by default for crossword clue generation
+# (backend/clues.py). Separate from requirements.txt because vLLM pulls in
+# torch/transformers (multi-GB) and only ships Linux wheels (CUDA GPUs, or
+# CPU on x86/ARM/PowerPC) — see https://pypi.org/project/vllm/.
+#
+# Install only on the machine that will actually serve the model:
+#   pip install -r requirements-vllm.txt
+#   ./run_vllm.sh
+vllm==0.27.1
