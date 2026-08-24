@@ -46,8 +46,8 @@ DEFAULT_TIMEOUT = 120.0
 # especially on small local models without constrained decoding.
 TEMPERATURE = 0.4
 
-# Small local models (backend/hf_server.py, no constrained decoding)
-# reliably answer a handful of words but tend to degenerate well before
+# Small local models (no constrained decoding) reliably answer a handful
+# of words but tend to degenerate well before
 # hitting the token budget once the list gets long — batching keeps every
 # request in the size range that's actually reliable (validated manually
 # up to ~5-6 words per call).

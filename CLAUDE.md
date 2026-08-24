@@ -62,10 +62,9 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   '{"enable_thinking": false}'` — Qwen3.5 is a reasoning model that otherwise burns the
   whole token budget on a `<think>...</think>` block before ever answering, which
   starved `backend/clues.py`'s batches of any usable output (verified: 28s and no
-  parsable line without the flag, 4s and a clean answer with it). `backend/hf_server.py`
-  (`transformers`-based) and `run_vllm.sh` (vLLM) remain as alternative backends — e.g.
-  vLLM for higher-throughput serving of a non-GGUF model on a Linux GPU box — but
-  `run_llm.sh`/llama.cpp is what `env.sh` points at by default now.
+  parsable line without the flag, 4s and a clean answer with it). This is the only
+  local LLM backend in the repo — see `LLM_BASE_URL` in `env.sh` to point at a cloud
+  API (e.g. Mistral) instead.
 - `frontend/server.py` — **middleware** FastAPI server: serves the static UI
   (`frontend/static/index.html`, `script.js`, `style.css`) and proxies `/api/*` to the
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default

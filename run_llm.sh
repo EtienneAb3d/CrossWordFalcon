@@ -5,9 +5,7 @@
 # way on Linux and macOS from a single package (Metal on Apple Silicon,
 # CUDA on Linux with a GPU, CPU everywhere) — see requirements-llama.txt.
 #
-# vLLM (run_vllm.sh) and the transformers-based macOS fallback
-# (backend/hf_server.py) remain available as alternative backends (e.g. to
-# serve a non-GGUF model on a Linux GPU box) but are no longer the default.
+# To use a cloud API instead of a local model, see env.sh.
 set -euo pipefail
 
 cd "$(dirname "$0")"

@@ -24,8 +24,9 @@ content (the French crossword words/clues, the web UI text) stays in French
 2. **Update `requirements.txt`** (project root) whenever a Python package is
    installed (`pip install ...`), added, upgraded, or removed. The file must
    always reflect the real dependency state, ideally with pinned versions.
-   Heavy, optional, or platform-specific dependencies (e.g. `vllm`) belong in
-   their own `requirements-*.txt` instead, so the base install stays light.
+   Heavy, optional, or platform-specific dependencies (e.g. `llama-cpp-python`)
+   belong in their own `requirements-*.txt` instead, so the base install stays
+   light.
 
 3. **Update `Install.sh`** (project root) whenever a change implies a
    different install procedure (new system dependency, new setup step,
@@ -100,8 +101,8 @@ content (the French crossword words/clues, the web UI text) stays in French
   `LLM_API_KEY` — read from `env.sh` (project root, **secret file, never
   commit**) and sourced by `run_Falcon.sh` before starting the servers. This
   is provider-agnostic (any OpenAI-compatible chat-completions endpoint
-  works): the default points at a local vLLM server (see below); pointing it
-  at a cloud API (e.g. Mistral) instead is just an env.sh edit, no code
+  works): the default points at a local server (see below); pointing it at
+  a cloud API (e.g. Mistral) instead is just an env.sh edit, no code
   change. If the LLM call fails, `POST /api/generate` returns an explicit
   502 rather than a grid without clues.
 
@@ -117,18 +118,10 @@ content (the French crossword words/clues, the web UI text) stays in French
   hard for them to follow. The rule to keep `README.md` up to date must only
   be mentioned in this SKILL, never in the README itself.
 
-- added a local vLLM server (`run_vllm.sh`) as the default LLM
-  for clue generation, serving a small instruction-tuned Qwen model
-  (`Qwen/Qwen2.5-1.5B-Instruct` by default) — small enough to comfortably
-  fit a 12GB GPU (e.g. an RTX 3060) with headroom for the KV cache, and
-  still usable on CPU when no GPU is present (vLLM auto-detects the
-  hardware; no manual `--device` flag needed on recent versions). `vllm` is
-  pinned in its own `requirements-vllm.txt`, not `requirements.txt`, because
-  it pulls in torch/transformers (multi-GB) and only ships Linux wheels
-  (CUDA GPUs, or CPU on x86/ARM/PowerPC) — it cannot be installed or run on
-  a macOS dev machine. `backend/clues.py` was generalized from a
-  Mistral-only client to a generic OpenAI-compatible one (see the env-var
-  decision above) specifically to support this swap with no code change.
+- `backend/clues.py` was generalized from a Mistral-only client to a
+  generic OpenAI-compatible one (see the env-var decision above)
+  specifically so the local LLM server backing it could be swapped with no
+  code change — only an `env.sh` edit.
 
 - the project's official language switched to English. This
   SKILL was renamed from `bonnes-pratiques-projet` to
@@ -215,26 +208,14 @@ content (the French crossword words/clues, the web UI text) stays in French
   frequency count, lower linguistic quality, but the user prioritized
   consistency over that extra quality for French specifically.
 
-- added `backend/hf_server.py`, a fallback local LLM server for
-  macOS (vLLM has no macOS wheels at all, not even for CPU — see the vLLM
-  decision above). Serves the same model via `transformers` (Apple Silicon
-  MPS, CUDA, or CPU), behind the same `/v1/chat/completions` shape, so
-  `backend/clues.py` needs no code change — `run_vllm.sh` now detects
-  `uname -s = Darwin` and launches this instead of `vllm serve`, same port.
-  Heavy deps (`torch`, `transformers`, `accelerate`) pinned in their own
-  `requirements-hf.txt`, same pattern as `requirements-vllm.txt`. Verified
-  working end to end on this Mac (Apple Silicon, MPS device) — unlike vLLM,
-  this path could actually be tested here.
-
-- `_call()` always sends an explicit `max_tokens` (never relies on
-  `hf_server.py`'s bare default) — found by testing `hf_server.py` for
-  real: without it, a grid with many words got its response truncated
+- `_call()` always sends an explicit `max_tokens` (never relies on the
+  local model server's bare default) — found by testing the local backend
+  for real: without it, a grid with many words got its response truncated
   mid-answer. A missing clue for one word falls back to showing the answer
   itself in the UI (see `script.js`) rather than failing the whole grid.
-  Note: small local models (`Qwen2.5-1.5B-Instruct` on CPU/MPS) can still
-  drift off-language partway through a long clue list — a model-quality
-  limit, not something a parsing fix can address (see the non-Latin-script
-  filter below).
+  Note: small local models can still drift off-language partway through a
+  long clue list — a model-quality limit, not something a parsing fix can
+  address (see the non-Latin-script filter below).
 
 - added `frontend/static/logo.svg` (+ a rendered
   `frontend/static/logo.png` for `README.md`, produced with macOS's
@@ -277,7 +258,7 @@ content (the French crossword words/clues, the web UI text) stays in French
   allows synonyms.
 
 - the harder 3-candidates-per-word prompt broke reliability on
-  the small local model (`hf_server.py`, no constrained decoding) — tested
+  the small local model (no constrained decoding) — tested
   with a 20-word grid, it degenerated (dropped entries, off-language
   fragments, then stopped) well before hitting the token budget, going from
   ~1 empty clue in 20 (old 1-candidate prompt) to 19 empty. Root-caused with
@@ -327,23 +308,22 @@ content (the French crossword words/clues, the web UI text) stays in French
   model, and a short middleware timeout would report the backend as down
   ("Serveur back indisponible") while it was actually just still working.
 
-- default local LLM switched from vLLM/Qwen2.5-1.5B-Instruct to
-  **llama.cpp serving a quantized GGUF (Qwen3.5-9B, Q4_K_M, ~5.75GB)** via
-  `run_llm.sh`, at the user's request for a newer, more capable model.
-  Reasoning: the user asked for "Qwen3.5 14B" specifically, but no official
-  Qwen3.5 release exists at that size (checked the HF API — real sizes are
-  0.8B/2B/4B/9B/27B/MoE); 9B is the closest that still comfortably fits a
-  12GB GPU at Q4 with headroom for the KV cache, 27B would not (~16GB for
-  weights alone). Chose llama.cpp specifically because it's the natural
-  runtime for a GGUF file and, via `llama_cpp.server`, already speaks the
-  OpenAI-compatible shape `backend/clues.py` expects — no hand-written
-  wrapper needed (unlike `backend/hf_server.py`), and no prebuilt PyPI
-  wheels (`requirements-llama.txt`) so it builds from source via CMake on
-  both Linux and macOS from one package, instead of needing a separate
-  vLLM-vs-transformers split by platform. `backend/hf_server.py` and
-  `run_vllm.sh` are kept as alternative backends, not deleted — vLLM in
-  particular is still the better choice for high-throughput serving of a
-  non-GGUF model on a dedicated Linux GPU box.
+- default local LLM: **llama.cpp serving a quantized GGUF (Qwen3.5-9B,
+  Q4_K_M, ~5.75GB)** via `run_llm.sh` — the only local backend in the repo.
+  Reasoning for the model: the user asked for "Qwen3.5 14B" specifically,
+  but no official Qwen3.5 release exists at that size (checked the HF API —
+  real sizes are 0.8B/2B/4B/9B/27B/MoE); 9B is the closest that still
+  comfortably fits a 12GB GPU at Q4 with headroom for the KV cache, 27B
+  would not (~16GB for weights alone). Reasoning for llama.cpp: it's the
+  natural runtime for a GGUF file and, via `llama_cpp.server`, already
+  speaks the OpenAI-compatible shape `backend/clues.py` expects — no
+  hand-written wrapper needed — and has no prebuilt PyPI wheels
+  (`requirements-llama.txt`) so it builds from source via CMake on both
+  Linux and macOS from one package. An earlier vLLM-based default (plus a
+  transformers-based macOS fallback, since vLLM ships no macOS wheels) was
+  fully removed once llama.cpp covered both platforms natively — no
+  reason to keep two working local-LLM code paths around, and the leftover
+  vLLM-specific files/mentions were themselves a source of confusion.
 
 - Qwen3.5 is a reasoning ("thinking") model: its chat template defaults
   to emitting a `<think>...</think>` block before the actual answer unless
