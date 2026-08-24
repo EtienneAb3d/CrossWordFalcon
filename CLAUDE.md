@@ -65,7 +65,21 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   **data)` callback, invoked at each of the pipeline's real phase transitions (a pattern
   attempt, a successful fill, minimizing, the finished grid) — `None` by default (a no-op)
   so the CLI and any other caller that doesn't care about progress needs no change;
-  `backend/app.py` is the only caller that passes one.
+  `backend/app.py` is the only caller that passes one. A failed pattern attempt
+  (black-square placement produced a grid the CSP solver couldn't fill) is logged with
+  real diagnostics, not just "it failed" — `try_fill`'s optional `diagnostics` dict
+  records `slot_count`/`length_counts` (the pattern's shape) and `checks`/`reason`
+  (how the search actually ended: `"deadline_exceeded"` — the `200_000`-check budget
+  ran out, inconclusive; `"search_exhausted"` — every candidate was tried and none
+  worked, a genuine dead end for that specific pattern; `"no_slots"` — no white run
+  ≥3 cells at all) — added after a report of "no fillable grid found" with all 40
+  attempts finishing in ~150ms total, far faster than a real CSP search (confirmed
+  by direct testing: a genuine `deadline_exceeded`/`search_exhausted` failure takes
+  seconds, not milliseconds) — a sign worth being able to see directly in
+  `backend.log` next time instead of re-deriving it by hand. `generate_grid()` also
+  logs the loaded word list's `length_counts` once per request (`wordlist_loaded`)
+  so a `require_gloss`/`max_words` combination that starves a specific slot length
+  down to very few (or zero) words is visible without guessing.
 - `backend/app.py` — **back** FastAPI server: exposes `generate_grid()` as a JSON API
   via a relative import (`from .crossword_gen import ...`). No static files, no
   `/docs`/`/openapi.json` (disabled) — any other path 404s by default. The request's

@@ -1066,3 +1066,25 @@ content (the French crossword words/clues, the web UI text) stays in French
   threaded into `_group_clue_lines()` to pick the right translation) —
   an honest placeholder instead of a silent, misleading substitution.
   Applies to any word that exhausts retries, not just `DUE` specifically.
+
+- added real diagnostics to `backend/crossword_gen.py`'s pattern-fill
+  failure logging, at the user's request after seeing a "no fillable
+  grid found" (`pattern_failed`) with all 40 attempts finishing in
+  ~150ms total in `backend.log` — far too fast to be an ordinary CSP
+  dead end (confirmed by direct testing: a genuine failed attempt with
+  the same word list/grid size takes several seconds, since the
+  200,000-check deadline has to actually run out or the search has to
+  actually exhaust every candidate). The old log line only said
+  `attempts=40`, giving no way to tell "the search genuinely explored
+  everything and failed" apart from "something degenerate made every
+  attempt fail near-instantly" after the fact. `try_fill()` now accepts
+  an optional `diagnostics` dict it fills in with the pattern's shape
+  (`slot_count`/`length_counts`) and how the search actually ended
+  (`checks` reached, `reason`: `deadline_exceeded` / `search_exhausted` /
+  `no_slots`) — `generate_grid()` logs this on every failed attempt
+  (`pattern_attempt_failed`) and again in the final `pattern_failed`
+  summary (`last_attempt`), plus the loaded word list's own
+  `length_counts` once per request (`wordlist_loaded`), so a
+  `require_gloss`/`max_words` combination that starves a specific slot
+  length down to very few (or zero) words is visible directly in the log
+  instead of needing to be reproduced by hand next time this happens.

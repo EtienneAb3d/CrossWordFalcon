@@ -20,7 +20,7 @@ import os
 import random
 import re
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 BLACK = "#"
 WHITE = "."
@@ -391,12 +391,35 @@ class Filler:
         return False
 
 
-def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000):
+def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=None):
+    """`diagnostics`, if given a dict, is filled in with data useful to
+    understand *why* a fill attempt failed (see generate_grid's
+    "pattern_failed" logging): `slot_count`/`length_counts` (the CSP's
+    shape, independent of the word list), and `checks`/`reason` (how far
+    the search got — "search_exhausted" means every candidate was tried
+    within budget and none worked, a genuine dead end for this pattern;
+    "deadline_exceeded" means the `deadline_checks` budget ran out first,
+    inconclusive; "no_slots" means the pattern had no white run >= 3
+    cells at all)."""
     slots = extract_slots(grid, rows, cols)
+    if diagnostics is not None:
+        diagnostics["slot_count"] = len(slots)
+        diagnostics["length_counts"] = dict(sorted(Counter(len(s) for s in slots).items()))
     if not slots:
+        if diagnostics is not None:
+            diagnostics["checks"] = 0
+            diagnostics["reason"] = "no_slots"
         return None
     filler = Filler(slots, index, rng)
-    if filler.solve(deadline_checks):
+    solved = filler.solve(deadline_checks)
+    if diagnostics is not None:
+        diagnostics["checks"] = filler.checks
+        diagnostics["reason"] = (
+            "solved" if solved
+            else "deadline_exceeded" if filler.checks >= deadline_checks
+            else "search_exhausted"
+        )
+    if solved:
         return slots, filler.assignment
     return None
 
@@ -509,21 +532,33 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         wordlist_path, mw, require_gloss=(difficulty == "easy")
     )
     index = build_index(by_length)
+    # Logged once per request, not per attempt: the CSP's failure mode
+    # (below) can't be told apart from a genuinely empty word list for
+    # some length without this — a `require_gloss`/`max_words` combination
+    # that shrinks a length to 0 words fails every pattern instantly, in
+    # a way that looks identical in the per-attempt log to ordinary bad
+    # luck unless this baseline is on record too.
+    progress("wordlist_loaded", word_count=sum(len(w) for w in by_length.values()),
+             length_counts=dict(sorted((length, len(words)) for length, words in by_length.items())))
 
     rows, cols = height, width
     ratio = black_ratio
     best, best_result = None, None
+    last_diag = None
     for attempt in range(attempts):
         progress("pattern", attempt=attempt + 1, attempts=attempts)
         grid = make_symmetric_pattern(rows, cols, ratio, rng)
-        result = try_fill(grid, rows, cols, index, rng)
+        diag = {}
+        result = try_fill(grid, rows, cols, index, rng, diagnostics=diag)
+        last_diag = diag
         if result is not None:
             best, best_result = grid, result
             break
+        progress("pattern_attempt_failed", attempt=attempt + 1, ratio=round(ratio, 3), **diag)
         ratio = min(ratio + 0.02, 0.45)
 
     if best is None:
-        progress("pattern_failed", attempts=attempts)
+        progress("pattern_failed", attempts=attempts, last_attempt=last_diag)
         return None
     progress("pattern_found", attempt=attempt + 1)
 
