@@ -389,3 +389,20 @@ content (the French crossword words/clues, the web UI text) stays in French
   the user has the address to hand to another device; falls back to
   silence (not an error) if neither works, since `set -e`/`pipefail` are on
   and a missing/down network interface is a normal, not exceptional, case.
+
+- `run_llm.sh` detects and self-heals a real `llama-cpp-python` footgun:
+  `pip install` builds a CPU-only binary by default — GPU support (CUDA,
+  Metal) only gets compiled in if `CMAKE_ARGS` says so at *install* time,
+  and `--n_gpu_layers -1` at *run* time silently does nothing if that
+  backend was never built in, regardless of what hardware is physically
+  present (reported by the user: model loading on CPU despite having a
+  GPU). Fix checks `llama_cpp.llama_supports_gpu_offload()` — the actual
+  compiled capability, not a hardware guess — against whether a GPU should
+  be there (macOS → Metal; `nvidia-smi -L` succeeding → CUDA), and if they
+  disagree, force-reinstalls `llama-cpp-python[server]` with the right
+  `CMAKE_ARGS` (parsed from `requirements-llama.txt` so the version stays
+  in sync automatically) before starting the server. Verified the check
+  itself is silent/harmless when GPU support is already present (this
+  Mac): reads `True` cleanly from stdout even though the same import emits
+  a page of Metal device-init logs — those go to stderr, not stdout, so
+  they don't corrupt the captured value.

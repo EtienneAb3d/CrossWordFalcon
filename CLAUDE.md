@@ -58,7 +58,12 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   first time, then serves it via `llama_cpp.server` (llama.cpp's built-in
   OpenAI-compatible server — no hand-written wrapper needed). One package
   (`requirements-llama.txt`) covers Linux and macOS alike (Metal on Apple Silicon, CUDA
-  on Linux with a GPU, CPU everywhere). Passes `--chat_template_kwargs
+  on Linux with a GPU, CPU everywhere) — but a plain `pip install` only builds
+  llama-cpp-python for CPU; before starting the server, the script checks
+  `llama_cpp.llama_supports_gpu_offload()` against whether a GPU should be present
+  (macOS, or `nvidia-smi -L` succeeding) and force-reinstalls with the right
+  `CMAKE_ARGS` (`-DGGML_METAL=on` / `-DGGML_CUDA=on`) if they disagree, so
+  `--n_gpu_layers -1` below isn't silently a no-op. Passes `--chat_template_kwargs
   '{"enable_thinking": false}'` — Qwen3.5 is a reasoning model that otherwise burns the
   whole token budget on a `<think>...</think>` block before ever answering, which
   starved `backend/clues.py`'s batches of any usable output (verified: 28s and no

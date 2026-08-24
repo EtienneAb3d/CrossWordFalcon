@@ -40,6 +40,27 @@ fi
 
 source .venv/bin/activate
 
+# `pip install llama-cpp-python` builds a CPU-only binary unless CMAKE_ARGS
+# asks for a GPU backend at build time — `--n_gpu_layers -1` below silently
+# does nothing if that backend was never compiled in, regardless of what
+# hardware is actually present. Detect that mismatch and rebuild with the
+# right flag rather than serving on CPU without saying why.
+GPU_CMAKE_ARGS=""
+if [ "$(uname -s)" = "Darwin" ]; then
+    GPU_CMAKE_ARGS="-DGGML_METAL=on"
+elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    GPU_CMAKE_ARGS="-DGGML_CUDA=on"
+fi
+if [ -n "$GPU_CMAKE_ARGS" ]; then
+    HAS_GPU_SUPPORT=$(python3 -c "import llama_cpp; print(llama_cpp.llama_supports_gpu_offload())" 2>/dev/null || echo False)
+    if [ "$HAS_GPU_SUPPORT" != "True" ]; then
+        echo "GPU detected but the installed llama-cpp-python has no GPU support built in."
+        echo "Rebuilding with CMAKE_ARGS=\"$GPU_CMAKE_ARGS\" (recompiles llama.cpp, a few minutes)..."
+        CMAKE_ARGS="$GPU_CMAKE_ARGS" pip install --force-reinstall --no-cache-dir \
+            "$(grep -o 'llama-cpp-python\[server\]==[0-9.]*' requirements-llama.txt)"
+    fi
+fi
+
 if [ ! -f "$MODEL_PATH" ]; then
     echo "Downloading $GGUF_FILE from $GGUF_REPO (several GB, one-time)..."
     curl -L --fail -o "$MODEL_PATH.part" \
