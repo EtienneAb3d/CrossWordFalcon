@@ -44,20 +44,33 @@ async def no_cache(request: Request, call_next):
 
 @app.post("/api/generate")
 async def proxy_generate(request: Request):
+    # The backend runs generation as a background job and responds almost
+    # immediately with a job_id (see backend/app.py) — the browser then
+    # polls /api/generate/status/{job_id} for progress and the final
+    # result, so this call no longer needs a long timeout itself.
     body = await request.body()
     try:
-        # Grid generation (CSP fill) plus several LLM clue-generation batches
-        # can together take a few minutes on a small local model — well past
-        # a typical short HTTP timeout. Generous on purpose: a real backend
-        # outage still fails via httpx.RequestError below, just slower.
-        async with httpx.AsyncClient(timeout=240.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{BACKEND_URL}/api/generate",
                 content=body,
                 headers={"content-type": "application/json"},
             )
     except httpx.RequestError:
-        raise HTTPException(status_code=502, detail="Serveur back indisponible.")
+        # Structured, not a plain string, so the frontend's i18n config
+        # (describeErrorCode() in script.js) can show this in the UI's
+        # current language instead of always-French text.
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.get("/api/generate/status/{job_id}")
+async def proxy_generate_status(job_id: str):
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/generate/status/{job_id}")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 

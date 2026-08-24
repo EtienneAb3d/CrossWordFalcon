@@ -39,8 +39,8 @@
       <label for="difficulty">
         <span data-i18n="difficultyLabel">Difficulté</span>
         <select id="difficulty" name="difficulty">
-          <option value="easy" data-i18n="difficultyEasy">Facile</option>
-          <option value="medium" selected data-i18n="difficultyMedium">Moyenne</option>
+          <option value="easy" selected data-i18n="difficultyEasy">Facile</option>
+          <option value="medium" data-i18n="difficultyMedium">Moyenne</option>
           <option value="hard" data-i18n="difficultyHard">Difficile</option>
         </select>
       </label>
@@ -55,11 +55,11 @@
     <section id="result" hidden>
       <p id="stats"></p>
       <div id="board">
-        <div id="grid"></div>
         <div id="clues">
           <h2 data-i18n="acrossHeading">Horizontalement</h2>
           <div id="clues-across" class="clue-lines"></div>
         </div>
+        <div id="grid"></div>
       </div>
       <div id="down-clues-section">
         <h2 data-i18n="downHeading">Verticalement</h2>
@@ -68,6 +68,7 @@
     </section>
   </main>
 
+  <script src="i18n.js"></script>
   <script src="script.js"></script>
 </body>
 </html>

@@ -124,3 +124,62 @@ English (see `project-best-practices`).
   can't split a list of children across columns — `.clue-line` needs
   `break-inside: avoid` so an individual definition never splits across
   the column break.
+
+- within `#board`, "Horizontalement" (`#clues`) comes before `#grid` in
+  source order, at the user's request — a plain flex row with no CSS
+  `order` override, so source order alone puts the across clues on the
+  left and the grid on the right. `script.js` accesses both by `id`, not
+  by DOM position, so this reorder needed no script change.
+
+- `#status` now shows live, granular progress during generation instead of
+  one static "generating…" message the whole time — generation moved to a
+  polled background job (see `project-best-practices`) specifically so
+  this was possible, since a single blocking request has nothing to report
+  mid-flight. No new visual treatment: still the same `#status` element,
+  same plain text, just updated repeatedly (`describeStep()` in
+  `script.js`) as the backend's job status changes — treated as
+  informational text, not a progress bar/spinner, consistent with the
+  existing plain-text status element rather than introducing a new visual
+  component for this.
+
+- the browser tab title (`document.title`) now switches with the UI
+  language too, not just the on-page `<h1>` — found missing during an i18n
+  completeness audit (`applyTranslations()` updated every `[data-i18n]`
+  element already, but nothing touched `document.title`). Set from the
+  same `t.pageTitle` value the `<h1>` uses, so the two never drift apart.
+
+- `#grid` gained 1-based row/column index headers (a header row of column
+  numbers, a header column of row numbers), at the user's request — added
+  as one extra row and one extra column inside the *same* CSS grid
+  (`grid-template-columns: repeat(width + 1, 2rem)`) rather than a
+  separate layout, so the headers stay pixel-aligned with the puzzle
+  cells automatically as the grid resizes. Header cells (`.header-cell`)
+  use the page background (`var(--bg)`), not white/black, and
+  `cursor: default` — visually distinct from both puzzle-cell states and
+  non-interactive, since clicking a header does nothing. Each clue line
+  (`renderClueLines()`) is now prefixed with the same row (across) /
+  column (down) index in bold (`.clue-line-position`, `var(--accent)`,
+  fixed `min-width` so the clue text after it stays aligned regardless of
+  the number's digit count) — lets a reader match a definition line back
+  to the grid's own header numbers. `backend/svg_export.py` mirrors both
+  additions (row/column labels on the exported grid, bold index prefix on
+  each clue line) since it's meant to match what the browser shows.
+
+- each word's own cell number within a clue line is now shown in
+  parentheses, e.g. "**3** (1) Voile de bateau — (5) Prénom hébreu"
+  instead of "3 1. Voile de bateau — 5. Prénom hébreu" — at the user's
+  request, to reduce confusion between it and the new bold row/column
+  index just before it on the same line (both were bare numbers
+  otherwise, easy to conflate at a glance). `backend/svg_export.py`
+  mirrors this too.
+
+- the difficulty `<select>`'s default option is now "Facile" (easy), not
+  "Moyenne" (medium) — matches the backend default (see
+  project-best-practices SKILL). Just moved `selected` between the two
+  `<option>` elements; no other markup change.
+
+- `main`'s width is now `80%` of the viewport (was a fixed `max-width:
+  1100px`), at the user's explicit request — the page now scales with
+  the browser window instead of capping out at a fixed pixel width, so it
+  fills more of the screen on wide displays. Still centered via
+  `margin: 0 auto`; no other layout change.

@@ -6,6 +6,10 @@ CrossWordFalcon generates crossword grids, complete with clues, straight
 from a web page — in French, English, German, Spanish, or Italian. Pick a
 language, a size, and a difficulty level, and the app builds a full grid.
 
+- **Runs 100% locally** — no cloud account, no AI subscription needed.
+- **Works on CPU or GPU** — uses a graphics card automatically if you have
+  one (including Apple Silicon Macs), and falls back to your CPU otherwise.
+
 ## What you need
 
 - **Python 3** installed on your computer.
@@ -82,20 +86,21 @@ On the page:
    too), a **width**, a **height** (15×10 by default), and a **difficulty
    level** ("Easy" uses everyday vocabulary, "Hard" allows rarer words).
 2. Click **"Generate grid"** (the button's own label follows your chosen
-   language). Larger grids can take up to thirty seconds or so to build —
-   that's normal, just wait for it.
-3. An empty grid appears on the left, with a small number in the cells
-   where each word starts, ready to be filled in. Clues follow the usual
-   crossword format: horizontal ("Horizontalement") clues appear to the
-   right of the grid, listed line by line; vertical ("Verticalement")
-   clues appear below, spanning the full width in two columns, listed
-   column by column. When several words start on the same line (or the
-   same column), their clues are grouped into a single line of text, for
-   example:
+   language). A full grid with all its definitions can take anywhere from
+   a few seconds to a couple of minutes, depending on its size — the
+   status line above the grid keeps updating (building the grid, then
+   writing each definition) so you can see it's still working, not stuck.
+3. An empty grid appears on the right, with row and column numbers along
+   its edges and a small number in the cells where each word starts,
+   ready to be filled in. Clues follow the usual crossword format:
+   horizontal ("Horizontalement") clues appear to the left of the grid,
+   grouped one line per row; vertical ("Verticalement") clues appear
+   below, grouped one line per column, spanning the full width in two
+   columns. Each line starts with its row or column number in bold,
+   followed by each word's own number in parentheses; several words on
+   the same line are chained together, for example:
 
-   ```
-   3. Petit mammifère domestique. — 5. Boisson chaude au petit-déjeuner.
-   ```
+   **3** (1) Petit mammifère domestique. — (5) Boisson chaude au petit-déjeuner.
 
 ### Filling in the grid
 
@@ -111,7 +116,7 @@ Two buttons above the grid help you check your progress:
 
 - **Solution** reveals every letter of the finished grid; click it again to
   go back to your own answers (nothing you typed is lost).
-- **Vérification** highlights what you've filled in so far: correct letters
+- **Check** highlights what you've filled in so far: correct letters
   turn green, wrong ones turn red; click it again to return to the plain
   grid.
 

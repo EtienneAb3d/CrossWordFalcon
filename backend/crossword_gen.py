@@ -16,7 +16,9 @@ Usage (depuis la racine du projet) :
     python3 backend/crossword_gen.py --width 15 --height 10 --wordlist data/wordlist_fr_full.tsv
 """
 import argparse
+import os
 import random
+import re
 import sys
 from collections import defaultdict
 
@@ -29,26 +31,64 @@ DEFAULT_HEIGHT = 10
 
 # ---------- Dictionnaire ----------
 
-# Presets de difficulté : nombre max de mots conservés par longueur, en ne
-# gardant que les plus fréquents. Moins de mots -> vocabulaire plus reconnaissable
-# mais grille parfois plus dure à remplir ; "hard"/None garde tout le lexique.
+# Presets de difficulté : nombre max de mots conservés au total (classement
+# global par fréquence, toutes longueurs confondues), pas par longueur — un
+# plafond par longueur ne filtre rien pour les longueurs qui ont moins de
+# mots au total que le plafond lui-même (ex. il n'existe que ~700 mots de 3
+# lettres en français, donc un ancien plafond de 600 "par longueur" laissait
+# passer TOUS les mots de 3 lettres, y compris des mots obscurs comme "ABD" —
+# bug réel signalé par l'utilisateur, score 103, ~33 000e position globale).
+# Moins de mots -> vocabulaire plus reconnaissable mais grille parfois plus
+# dure à remplir ; "hard"/None garde tout le lexique.
 DIFFICULTY_PRESETS = {
-    "easy": 600,
-    "medium": 3000,
+    "easy": 25_000,
+    "medium": 50_000,
     "hard": None,
 }
 
 
-def load_wordlist(path, max_per_length=None):
-    """Charge un lexique au format `MOT<TAB>ACCENTUE<TAB>FREQUENCE`
-    (build_wordlist_freq.py) ou, en repli, un simple texte libre (un ou
-    plusieurs mots par ligne, fréquence inconnue -> 0, pas de forme
-    accentuée disponible). Retourne (by_length, accents) :
-    - by_length = {longueur: [mots triés du plus fréquent au moins fréquent]},
-      tronqué à max_per_length si fourni ;
+def _lang_from_path(path):
+    match = re.search(r"wordlist_([a-z]{2})_full\.tsv$", os.path.basename(str(path)))
+    return match.group(1) if match else None
+
+
+def _try_import_has_any_gloss():
+    """`backend/gloss_lookup.py`'s `has_any_gloss`, imported lazily and
+    tolerantly: crossword_gen.py is also run standalone as a CLI script
+    (`python3 backend/crossword_gen.py`, see the module docstring) — a
+    relative import at module scope would break that (no package context
+    to resolve `.gloss_lookup` against), so this is only ever attempted
+    from inside a function, and a failure just means `require_gloss`
+    silently has no effect rather than crashing the CLI."""
+    try:
+        from .gloss_lookup import has_any_gloss
+        return has_any_gloss
+    except ImportError:
+        return None
+
+
+def load_wordlist(path, max_words=None, require_gloss=False):
+    """Charge un lexique au format
+    `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE` (build_wordlist_freq.py)
+    ou, en repli, un format à 3 ou 2 colonnes (sans CANONIQUE), ou un simple
+    texte libre (un ou plusieurs mots par ligne, fréquence inconnue -> 0,
+    pas de forme accentuée/canonique disponible). Si `require_gloss` est
+    vrai, un mot est aussi exclu s'il n'a de définition trouvable ni sous sa
+    forme fléchie ni sous aucune de ses formes canoniques (voir
+    backend/gloss_lookup.py — la fréquence seule ne suffit pas à repérer un
+    mot courant mais indéfinissable, ex. l'abréviation "ABD"), en repli
+    silencieux si la langue ne peut pas être déduite du nom de fichier ou si
+    aucun dictionnaire de définitions n'a été construit pour elle. Retourne
+    (by_length, accents, canonicals) :
+    - by_length = {longueur: [mots]} — seuls les `max_words` mots les plus
+      fréquents *au global* (toutes longueurs confondues), si fourni, sont
+      conservés, puis regroupés par longueur pour le solveur CSP ;
     - accents = {MOT: forme accentuée/naturelle}, pour les mots retenus dans
       by_length (sert à donner au LLM la vraie orthographe — genre, nombre,
-      conjugaison — quand il génère les définitions ; voir backend/clues.py)."""
+      conjugaison — quand il génère les définitions ; voir backend/clues.py) ;
+    - canonicals = {MOT: [forme(s) canonique(s)/lemme(s)]}, pour les mots
+      retenus dans by_length (sert à chercher une définition de dictionnaire
+      par lemme plutôt que par forme fléchie ; voir backend/clues.py)."""
     entries = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -56,7 +96,17 @@ def load_wordlist(path, max_per_length=None):
             if not line or line.startswith("#"):
                 continue
             parts = line.split("\t")
-            if len(parts) >= 3:
+            if len(parts) >= 4:
+                word = parts[0].upper()
+                accented = parts[1]
+                try:
+                    freq = float(parts[2])
+                except ValueError:
+                    freq = 0.0
+                canonical = [c for c in parts[3].split(";") if c]
+                if word.isalpha():
+                    entries.append((word, accented, freq, canonical or [accented]))
+            elif len(parts) == 3:
                 word = parts[0].upper()
                 accented = parts[1]
                 try:
@@ -64,7 +114,7 @@ def load_wordlist(path, max_per_length=None):
                 except ValueError:
                     freq = 0.0
                 if word.isalpha():
-                    entries.append((word, accented, freq))
+                    entries.append((word, accented, freq, [accented]))
             elif len(parts) == 2:
                 word = parts[0].upper()
                 try:
@@ -72,28 +122,42 @@ def load_wordlist(path, max_per_length=None):
                 except ValueError:
                     freq = 0.0
                 if word.isalpha():
-                    entries.append((word, word, freq))
+                    entries.append((word, word, freq, [word]))
             else:
                 for tok in line.upper().split():
                     if tok.isalpha():
-                        entries.append((tok, tok, 0.0))
+                        entries.append((tok, tok, 0.0, [tok]))
 
-    by_length = defaultdict(dict)  # length -> {word: (accented, best_freq)}
-    for word, accented, freq in entries:
-        d = by_length[len(word)]
-        if word not in d or freq > d[word][1]:
-            d[word] = (accented, freq)
+    best = {}  # word -> (accented, best_freq, canonical)
+    for word, accented, freq, canonical in entries:
+        if word not in best or freq > best[word][1]:
+            best[word] = (accented, freq, canonical)
 
-    result = {}
+    if require_gloss:
+        has_any_gloss = _try_import_has_any_gloss()
+        lang = _lang_from_path(path)
+        if has_any_gloss and lang:
+            best = {
+                word: v for word, v in best.items()
+                if has_any_gloss([v[0], *v[2]], lang)
+            }
+
+    # Global frequency ranking (see DIFFICULTY_PRESETS above for why this
+    # replaced a per-length cap) — then group into by_length for the CSP
+    # solver. Order within a length no longer matters here: Filler already
+    # shuffles its candidate list with the seeded rng before trying them.
+    ranked = sorted(best.items(), key=lambda kv: -kv[1][1])
+    if max_words:
+        ranked = ranked[:max_words]
+
+    result = defaultdict(list)
     accents = {}
-    for length, d in by_length.items():
-        words_sorted = sorted(d.items(), key=lambda kv: -kv[1][1])
-        if max_per_length:
-            words_sorted = words_sorted[:max_per_length]
-        result[length] = [w for w, _ in words_sorted]
-        for w, (accented, _) in words_sorted:
-            accents[w] = accented
-    return result, accents
+    canonicals = {}
+    for word, (accented, _, canonical) in ranked:
+        result[len(word)].append(word)
+        accents[word] = accented
+        canonicals[word] = canonical
+    return dict(result), accents, canonicals
 
 
 # ---------- Génération du motif de cases noires ----------
@@ -421,23 +485,36 @@ def build_letters_grid(rows, cols, slots, assignment):
     return letters
 
 
-def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="medium",
-                   max_per_length=None, black_ratio=0.22, attempts=40, seed=None,
-                   wordlist_path="data/wordlist_fr_full.tsv"):
+def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
+                   max_words=None, black_ratio=0.22, attempts=40, seed=None,
+                   wordlist_path="data/wordlist_fr_full.tsv", on_progress=None):
     """Génère une grille remplie de bout en bout (motif + CSP + minimisation).
     `width` est le nombre de colonnes (horizontal), `height` le nombre de lignes
     (vertical). Retourne un dict {width, height, pattern, solution, words,
     word_count, black_count, black_ratio}, ou None si aucune grille remplissable
-    n'a été trouvée en `attempts` essais."""
+    n'a été trouvée en `attempts` essais.
+
+    `on_progress`, si fourni, est appelé `on_progress(step, **data)` à chaque
+    étape notable (voir backend/app.py, qui s'en sert à la fois pour tracer
+    backend.log et pour exposer un statut d'avancement à l'interface via
+    l'API de polling) — aucun effet sur la génération elle-même, purement
+    un point d'observation."""
+    def progress(step, **data):
+        if on_progress:
+            on_progress(step, **data)
+
     rng = random.Random(seed)
-    mpl = max_per_length or DIFFICULTY_PRESETS.get(difficulty)
-    by_length, accents = load_wordlist(wordlist_path, mpl)
+    mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
+    by_length, accents, canonicals = load_wordlist(
+        wordlist_path, mw, require_gloss=(difficulty == "easy")
+    )
     index = build_index(by_length)
 
     rows, cols = height, width
     ratio = black_ratio
     best, best_result = None, None
-    for _ in range(attempts):
+    for attempt in range(attempts):
+        progress("pattern", attempt=attempt + 1, attempts=attempts)
         grid = make_symmetric_pattern(rows, cols, ratio, rng)
         result = try_fill(grid, rows, cols, index, rng)
         if result is not None:
@@ -446,13 +523,18 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="medium
         ratio = min(ratio + 0.02, 0.45)
 
     if best is None:
+        progress("pattern_failed", attempts=attempts)
         return None
+    progress("pattern_found", attempt=attempt + 1)
 
+    progress("minimizing")
     grid, slots, assignment = minimize_black_squares(best, best_result, rows, cols, index, rng)
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)
     for w in words:
         w["accented"] = accents.get(w["answer"], w["answer"])
+        w["canonical"] = canonicals.get(w["answer"], [w["accented"]])
+    progress("grid_ready", word_count=len(slots), black_count=n_black)
     return {
         "width": cols,
         "height": rows,
@@ -474,11 +556,12 @@ def main():
     ap.add_argument("--wordlist", default="data/wordlist_fr_full.tsv",
                      help="lexique MOT<TAB>ACCENTUE<TAB>FREQUENCE généré par "
                           "build_wordlist_freq.py (ou fichier texte libre en repli)")
-    ap.add_argument("--difficulty", choices=sorted(DIFFICULTY_PRESETS), default="medium",
-                     help="limite le vocabulaire aux N mots les plus fréquents par "
-                          "longueur : easy=600, medium=3000 (défaut), hard=tout le lexique")
-    ap.add_argument("--max-per-length", type=int, default=None,
-                     help="surcharge manuelle du nombre max de mots par longueur "
+    ap.add_argument("--difficulty", choices=sorted(DIFFICULTY_PRESETS), default="easy",
+                     help="limite le vocabulaire aux N mots les plus fréquents au global "
+                          "(toutes longueurs confondues) : easy=25000 (défaut), "
+                          "medium=50000, hard=tout le lexique")
+    ap.add_argument("--max-words", type=int, default=None,
+                     help="surcharge manuelle du nombre max de mots au global "
                           "(prioritaire sur --difficulty)")
     ap.add_argument("--black-ratio", type=float, default=0.22,
                      help="densité de cases noires visée au départ (0-1)")
@@ -491,7 +574,7 @@ def main():
         width=args.width,
         height=args.height,
         difficulty=args.difficulty,
-        max_per_length=args.max_per_length,
+        max_words=args.max_words,
         black_ratio=args.black_ratio,
         attempts=args.attempts,
         seed=args.seed,

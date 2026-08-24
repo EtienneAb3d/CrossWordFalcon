@@ -27,7 +27,7 @@ body {
 }
 
 main {
-  max-width: 1100px;
+  width: 80%;
   margin: 0 auto;
   padding: 2rem 1rem 4rem;
 }
@@ -185,6 +185,14 @@ button:disabled {
   line-height: 1;
 }
 
+.header-cell {
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.75rem;
+  font-weight: 400;
+  cursor: default;
+}
+
 #clues {
   min-width: 16rem;
   flex: 1 1 16rem;
@@ -210,6 +218,15 @@ button:disabled {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.4;
+}
+
+/* Row (across) / column (down) index, matching the grid's own header
+   numbers — a fixed min-width keeps the clue text lining up in a column
+   instead of drifting left/right as the number's digit-count changes. */
+.clue-line-position {
+  display: inline-block;
+  min-width: 1.4em;
+  color: var(--accent);
 }
 
 /* "Verticalement" spans the full width below the grid, balanced into 2
