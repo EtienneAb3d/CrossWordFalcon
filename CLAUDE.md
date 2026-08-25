@@ -438,6 +438,12 @@ of that kind ships here.
 
 Run everything with the venv's Python (`.venv`, Python 3.14). `pip install -r
 requirements.txt` (or `./Install.sh`) installs `fastapi`, `uvicorn[standard]`, `httpx`.
+`./Install.sh` also installs the `librsvg` system package (`rsvg-convert`) if missing
+— a real runtime dependency, not just a dev tool: `backend/app.py` calls it after
+every generated grid to save a `GRID_SAMPLES/` PNG (see `backend/svg_export.py`
+below), best-effort so a missing binary only logs a warning rather than failing the
+request — which is exactly why this was easy to go unnoticed until a fresh machine
+hit it.
 
 ```bash
 # Full pipeline to rebuild one language's wordlist from scratch (only needed to

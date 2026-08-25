@@ -1539,3 +1539,30 @@ content (the French crossword words/clues, the web UI text) stays in French
   when reporting progress on this model — the job genuinely was
   progressing throughout (confirmed via the live status endpoint and
   backend.log advancing word by word), not stalled.
+
+- fixed a real gap in `Install.sh`, caught by the user hitting the exact
+  runtime warning it produces ("`rsvg-convert` not found"): `librsvg`
+  (which provides `rsvg-convert`) has been documented as a required
+  system package ever since `backend/svg_export.py`'s `save_grid_png()`
+  and the logo-rendering step were added, but `Install.sh` never actually
+  installed it — a real violation of permanent rule 3 (update `Install.sh`
+  whenever a system dependency is added) that had gone unnoticed because
+  the failure is best-effort (a missing binary only logs a warning,
+  never fails the request — see `save_grid_png()`'s own docstring).
+  Fixed by adding an OS-aware install step (Homebrew on macOS; apt-get/
+  dnf/pacman on Linux, same detection pattern as `run_llm.sh`'s CUDA
+  toolkit check), non-fatal on failure the same way. Investigated
+  before concluding this was purely an `Install.sh` gap and not a live
+  bug on this machine: confirmed `rsvg-convert` actually is installed
+  here (`/opt/homebrew/bin/rsvg-convert` via Homebrew), and confirmed a
+  freshly generated grid through the actual running backend saved its
+  PNG sample successfully with no warning — so the pasted warning was
+  from an earlier point (before `librsvg` was installed on this machine,
+  or a different launch context/`PATH`), not an ongoing failure; verified
+  directly with `env -i bash -c 'command -v rsvg-convert'` that a
+  minimal, non-interactive shell's default `PATH` does *not* include
+  Homebrew's `/opt/homebrew/bin` — a plausible root cause for how a
+  backend process could fail to find a binary that's genuinely installed
+  system-wide, depending on how it was launched. `Install.sh` installing
+  it directly removes any dependency on the launching shell's `PATH`
+  having Homebrew set up correctly at the time.
