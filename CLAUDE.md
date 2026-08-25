@@ -234,9 +234,14 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   tokenized so it doesn't misfire on an unrelated word sharing the same letters, e.g.
   "château" vs. `CHAT`; the prompt forbids this too, but small models do it anyway —
   the filter is the actual guarantee). A word left with zero candidates after
-  filtering, or that the model never answered at all, gets re-queried in a follow-up
-  round — `generate()` loops up to 3 rounds, each re-sending only words still missing a
-  clue. The prompt is split into a `system` message (`_build_system_prompt()` — role,
+  filtering, or that the model never answered at all, gets retried up to 3 times in a
+  row, immediately, before `generate()` moves on to the next word — this was originally
+  round-based (every word got one attempt per pass over the whole list, before any
+  word got a second attempt), changed to immediate per-word retry at the user's
+  explicit request after the round-based log ordering read confusingly: two
+  consecutive "round 1/3" lines for two *different* words looked like a retry that
+  silently skipped to the next word, when it was really just two different words' own
+  first attempts (see the project-best-practices SKILL). The prompt is split into a `system` message (`_build_system_prompt()` — role,
   difficulty style, rules, worked examples: everything that's identical on every call)
   and a `user` message (`_build_user_message()` — just this one word's accented
   spelling plus its grounding block), rather than one long combined message; both are
@@ -568,6 +573,43 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   real local LLM server — no leak of "rasé"/"raser" in any sample — then re-tested
   `TENU`/`LÉGALE`/`MAMANS` to confirm the rule 1 wording change didn't regress any
   previously-fixed case.
+
+  A word that exhausts all 3 retry attempts without ever getting a clue now also gets
+  its own diagnostic Markdown file (`LLMClueGenerator._write_failure_log()`), at the
+  user's explicit request, so a specific failure can be inspected and reproduced by
+  hand without digging through `backend.log`: the *last* attempt's complete system +
+  user prompt (identical across all 3 attempts, since nothing about the prompt varies
+  between retries), its raw LLM output (or `None` if the call itself errored, e.g. a
+  timeout), and any `ClueGenerationError` message. Written to `LOG/` (project root,
+  gitignored — a debugging artifact, not a durable record like `GRIDS/`), one file per
+  failed word, named `<timestamp>_<answer>_ERROR.md` — best-effort like `backend/svg_
+  export.py`'s own saves, a write failure is logged but never allowed to break grid
+  generation. Verified live: unit-tested the file format directly with synthetic
+  data, then forced a *real* total failure (pointed `base_url` at an unreachable port)
+  — confirmed all 3 attempts logged the connection error and the resulting `LOG/
+  <timestamp>_CET_ERROR.md` correctly captured the exact endpoint/model/prompt/error.
+
+  Separately, tightened artifact filtering ahead of any content analysis, at the
+  user's request after reviewing the new raw-response logging output. Found and fixed
+  a real bug in `_strip_reasoning()` while doing this: it gated on `"<think>" in
+  content`, but the regex that actually does the stripping only needs `</think>` —
+  some chat-template/server setups inject the opening `<think>` into the *prompt*
+  itself rather than echoing it back in the completion's own `content` field, so a
+  real response can start directly with raw reasoning text and only a stray
+  `</think>` marking where it ends, with no literal `<think>` anywhere in `content`;
+  the old gate would skip stripping entirely in exactly that case and leak the
+  reasoning text straight into `_parse_response`. Now gates on `</think>` instead (and
+  still returns `""` for the inverse case — `<think>` present with no `</think>`,
+  meaning the reasoning ran out of `max_tokens` before ever reaching an answer).
+  `_LEADING_MARKER_RE` also broadened from `-`/`*`/`•`/numbered markers to include
+  em-dash (`—`) and en-dash (`–`) introductory-dash variants, and `_parse_response()`
+  now normalizes a non-breaking space (U+00A0 — some models emit these instead of a
+  plain space, which `str.strip()` alone doesn't remove) to a regular one before any
+  other cleanup. Verified live: unit-tested all 4 `_strip_reasoning()` cases (normal
+  `<think>...</think>` pair, stray `</think>`-only, `<think>`-only/unterminated, no
+  tags at all) plus `_parse_response()` against a mix of em-dash/en-dash bullets and
+  an embedded non-breaking space — all handled correctly — then re-ran a 5-word live
+  batch through the real LLM server to confirm no regression.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most

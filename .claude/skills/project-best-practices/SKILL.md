@@ -2082,3 +2082,60 @@ content (the French crossword words/clues, the web UI text) stays in French
   pipeline (sentence corpus → wordlist → gloss dictionary, for all 5
   languages) is now fully consistent with the Books-corpus addition, per
   rule 6 above.
+
+- changed `backend/clues.py`'s retry scheduling from round-based to
+  immediate per-word retry, at the user's explicit choice between the
+  two (asked directly rather than assumed, since both are legitimate
+  designs — see AskUserQuestion's "Stratégie retry" in this
+  conversation). Prompted by the user observing a real deployed
+  instance's log directly: `'CET'`'s round 1/3 failure was immediately
+  followed by a *different* word's ('RAP') own round 1/3 line — correct
+  under the old design (every word gets one attempt per pass over the
+  whole pending list before any word gets a second attempt) but read
+  exactly like a silently-abandoned retry. Now every word gets up to 3
+  consecutive attempts, immediately, before `generate()` moves to the
+  next word — same total attempt cap, same log format (`"clue round N/3:
+  ..."`), just sequenced differently, so a word's fate (success or final
+  failure) is known right away rather than only after every other word's
+  first attempt has already run. Also retired the now-unused `_chunks()`
+  helper (only ever called from the old round-based loop) rather than
+  leaving it as dead code. Verified live: reran the exact reported word
+  (`CET`) plus `RAP`/`CHAT`/`MAISON`/`QUI` — all 5 resolved; confirmed via
+  INFO-level logging that consecutive log lines for words that succeed on
+  their first attempt naturally show one line per word (no artificial
+  multi-line noise for the easy case), and confirmed by reading the new
+  loop directly (`for attempt in range(3): ... if answer in clues: break`)
+  that a word needing retries would show all of its own attempts
+  back-to-back rather than mixed with other words' — the scenario the
+  user originally asked about, now unambiguous from the log alone.
+
+- added a per-word failure diagnostic file (`LOG/<timestamp>_<answer>_
+  ERROR.md`, gitignored), at the user's explicit request, for any word
+  that exhausts all 3 retry attempts: the last attempt's complete prompt,
+  raw output, and any error — everything needed to reproduce that one
+  specific failure by hand, without needing to reconstruct it from
+  `backend.log`. Verified live: unit-tested the file directly, then
+  forced a real total failure (unreachable `base_url`) and confirmed the
+  file was written with the actual connection error.
+
+- while reviewing the new raw-response logging's output, the user asked
+  to filter obvious artifacts (`<think>`/`</think>` remnants, assorted
+  dash styles, stray spaces) before any content analysis. Doing this
+  surfaced a real, previously-unnoticed bug: `_strip_reasoning()` gated
+  on `"<think>" in content`, but its own stripping regex only needs
+  `</think>` — some chat-template/server setups inject the opening
+  `<think>` into the *prompt*, never echoing it back in the completion,
+  so a response can start directly with raw reasoning and only a stray
+  `</think>`; the old gate skipped stripping entirely in that exact case
+  and would have leaked reasoning text into the parsed candidates. Fixed
+  by gating on `</think>` instead. Also broadened `_LEADING_MARKER_RE` to
+  em/en-dash bullets and added non-breaking-space normalization in
+  `_parse_response()`. Worth remembering: a "please also clean up X"
+  request is sometimes worth treating as an invitation to actually reread
+  the surrounding logic rather than a checklist item — this is the
+  second time in this project a request framed as tidying/reinforcement
+  turned up a real, independently-worth-fixing bug nearby (the "word:"
+  placeholder-echo bug was the first). Verified live: unit-tested all 4
+  `_strip_reasoning()` branches plus dash/NBSP handling in
+  `_parse_response()`, then re-ran a 5-word live batch with no
+  regression.

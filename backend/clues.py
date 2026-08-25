@@ -52,6 +52,7 @@ import os
 import random
 import re
 import unicodedata
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -179,6 +180,13 @@ LANGUAGE_NAMES = {
 PROMPT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "data"
 _prompt_config_cache = {}
 
+# Where a word that exhausts all 3 retry attempts without ever getting a
+# clue gets its own diagnostic Markdown file — see generate()'s call to
+# _write_failure_log(). Project root, gitignored — a debugging artifact
+# for reproducing a specific failure by hand, not source content or a
+# durable record like GRIDS/ or GRID_SAMPLES/.
+FAILURE_LOG_DIR = Path(__file__).resolve().parent.parent / "LOG"
+
 
 def _load_prompt_config(language):
     if language not in _prompt_config_cache:
@@ -194,12 +202,15 @@ def _load_prompt_config(language):
 def _bullets(items):
     return "\n".join(f"- {item}" for item in items)
 
-# A "1. "/"2)"/"- " marker left on an individual line — happens when the
-# model numbers its 3 lines despite being asked for plain, unnumbered
-# ones. The only structural cleanup _parse_response still does, now that
-# there's no header/delimiter syntax left to validate — everything else
-# in a non-empty line is trusted as-is.
-_LEADING_MARKER_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
+# A "1. "/"2)"/"- " marker (or an em/en-dash variant of the same thing —
+# "— " and "– ", both real, observed introductory-dash styles distinct
+# from a plain hyphen) left on an individual line — happens when the
+# model numbers/bullets its 3 lines despite being asked for plain,
+# unnumbered ones. The only structural cleanup _parse_response still
+# does, now that there's no header/delimiter syntax left to validate —
+# everything else in a non-empty line is trusted as-is.
+_LEADING_MARKER_RE = re.compile(r"^\s*(?:[-–—*•]|\d+[.)])\s*")
+
 
 # DeepSeek-R1-distill models (unlike Qwen3.5 with `enable_thinking: false`,
 # see run_llm.sh) always reason through a `<think>...</think>` block before
@@ -214,17 +225,26 @@ _THINK_BLOCK_RE = re.compile(r"^.*?</think>", re.DOTALL)
 def _strip_reasoning(content):
     """Removes a leading `<think>...</think>` reasoning block, if present,
     so only the model's actual final answer ever reaches `_parse_response`.
-    A no-op for a model that doesn't emit one (e.g. Qwen3.5 with thinking
-    disabled) — `<think>` never appears in its output at all. If the closing
-    `</think>` is missing (the reasoning itself ran out of `max_tokens`
-    before ever reaching an answer), returns "" rather than the raw
-    in-progress reasoning text — `_parse_response` already treats empty/
-    unparsable content as "no clue yet, retry next round", which is the
-    correct outcome here."""
-    if "<think>" not in content:
-        return content
-    stripped, count = _THINK_BLOCK_RE.subn("", content, count=1)
-    return stripped if count else ""
+    A no-op for a model that emits neither tag (e.g. Qwen3.5 with thinking
+    disabled). Gates on `</think>` specifically, not `<think>` — some
+    chat-template/server setups inject the opening `<think>` as part of
+    the *prompt* itself rather than echoing it back in the completion's
+    `content` field, so a real response can start directly with raw
+    reasoning text and only a stray `</think>` marking where it ends,
+    with no literal `<think>` anywhere in `content` at all; gating on
+    `<think>` alone (an earlier version of this function did) would skip
+    stripping entirely in that case and leak the reasoning text straight
+    into `_parse_response`. If `<think>` is present with no closing
+    `</think>` (the reasoning itself ran out of `max_tokens` before ever
+    reaching an answer), returns "" rather than the raw in-progress
+    reasoning text — `_parse_response` already treats empty content as
+    "no clue yet, retry next round", which is the correct outcome here."""
+    if "</think>" in content:
+        stripped, count = _THINK_BLOCK_RE.subn("", content, count=1)
+        return stripped if count else content
+    if "<think>" in content:
+        return ""
+    return content
 
 
 def _normalize(word):
@@ -253,11 +273,6 @@ _NON_LATIN_RE = re.compile(
 # mentioning "château" shouldn't be flagged just because it contains the
 # letters of "chat".
 _WORD_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
-
-
-def _chunks(items, size):
-    for i in range(0, len(items), size):
-        yield items[i:i + size]
 
 
 def _contains_target_word(candidate, answer, accented, canonical=()):
@@ -316,7 +331,7 @@ class LLMClueGenerator:
         (fr/en/de/es/it), in the style matching `difficulty` (easy/medium/hard).
 
         `on_progress`, if given, is called `on_progress(current, total)`
-        after every word attempt (one LLM call each, `_BATCH_SIZE=1`) —
+        after every attempt (one LLM call each, `_BATCH_SIZE=1`) —
         `current` is how many words have a clue so far, `total` how many
         were asked for; used to surface live progress (see backend/app.py)
         since this is by far the slowest phase of grid generation."""
@@ -330,34 +345,41 @@ class LLMClueGenerator:
 
         clues = {}
         errors = []
-        pending = entries
+        max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * _BATCH_SIZE
         # A word can end up with no clue after filtering (every candidate
         # was a copy of the word itself, or non-Latin drift) just as easily
         # as from the LLM never answering for it — either way, ask again
-        # rather than leaving it without a clue. Each round only re-sends
-        # words still missing one, so this shrinks fast; capped so a word
-        # the model just can't do (e.g. a stubborn acronym) doesn't loop
-        # forever.
-        for _round in range(3):
-            if not pending:
-                break
-            for batch in _chunks(pending, _BATCH_SIZE):
-                entry = batch[0]
-                answer, accented, canonical = entry
-                system_prompt = self._build_system_prompt(difficulty, language)
-                user_message = self._build_user_message(entry, language)
-                max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * len(batch)
+        # rather than leaving it without a clue. Retries happen immediately,
+        # 3 attempts in a row on the *same* word, before moving to the next
+        # one — not spread one-attempt-per-word across 3 passes over the
+        # whole list (an earlier design, changed at the user's explicit
+        # request: with that design, a word's own final, third attempt
+        # only happened after every other word's first attempt had already
+        # run, which read confusingly in the log — two consecutive "round
+        # 1/3" lines for two different words look like a retry that
+        # silently moved on, when it's really just two different words'
+        # first attempts).
+        for entry in entries:
+            answer, accented, canonical = entry
+            system_prompt = self._build_system_prompt(difficulty, language)
+            user_message = self._build_user_message(entry, language)
+            last_content = None
+            last_error = None
+            for attempt in range(3):
+                last_content = None
+                last_error = None
                 try:
                     content = self._call(
-                        answer, accented, _round + 1,
+                        answer, accented, attempt + 1,
                         system_prompt, user_message, max_tokens, timeout,
                     )
+                    last_content = content
                     candidates = self._parse_response(content)
                     if not candidates:
                         logger.warning(
                             "clue round %d/3: %r (%r) — model gave no "
                             "candidate lines at all",
-                            _round + 1, answer, accented,
+                            attempt + 1, answer, accented,
                         )
                     else:
                         clue = self._pick_clue(candidates, answer, accented, canonical)
@@ -368,25 +390,33 @@ class LLMClueGenerator:
                                 "clue round %d/3: %r (%r) — all %d candidate(s) "
                                 "rejected by the too-long/copy/non-Latin/"
                                 "same-family filter: %r",
-                                _round + 1, answer, accented, len(candidates), candidates,
+                                attempt + 1, answer, accented, len(candidates), candidates,
                             )
                 except ClueGenerationError as e:
                     errors.append(e)
+                    last_error = e
                     logger.warning(
                         "clue round %d/3: %r (%r) — LLM call failed: %s",
-                        _round + 1, answer, accented, e,
+                        attempt + 1, answer, accented, e,
                     )
                 if on_progress:
                     on_progress(len(clues), total)
-            pending = [e for e in pending if e[0] not in clues]
+                if answer in clues:
+                    break
+            if answer not in clues:
+                self._write_failure_log(
+                    answer, accented, language, difficulty,
+                    system_prompt, user_message, last_content, last_error,
+                )
 
-        if pending:
+        missing = [e for e in entries if e[0] not in clues]
+        if missing:
             logger.warning(
                 "clue generation: %d/%d word(s) still have no clue after all "
                 "retry rounds (will show as the \"no definition available\" "
                 "placeholder) — see the per-round warnings above for why "
                 "each one failed: %s",
-                len(pending), total, [e[0] for e in pending],
+                len(missing), total, [e[0] for e in missing],
             )
 
         if errors and not clues:
@@ -618,21 +648,73 @@ class LLMClueGenerator:
         )
         return _strip_reasoning(content)
 
+    def _write_failure_log(self, answer, accented, language, difficulty,
+                            system_prompt, user_message, content, error):
+        """Writes a self-contained Markdown diagnostic file for a word
+        that exhausted all 3 retry attempts without ever getting a clue —
+        at the user's explicit request, so a specific failure can be
+        analyzed and reproduced by hand without digging through backend.
+        log. Captures the *last* attempt specifically (the complete
+        system + user prompt — identical across all 3 attempts, since
+        nothing about the prompt varies between retries — plus that
+        attempt's raw output and/or error, e.g. a timeout): the retry
+        loop already logs every attempt's own outcome as it happens (see
+        _call()/generate()), so this file's job isn't to repeat that —
+        it's a single artifact with everything needed to replay the
+        exact request that ultimately failed. Written to FAILURE_LOG_DIR
+        (LOG/, project root, gitignored — a debugging artifact, not a
+        durable record like GRIDS/), one file per failed word, named
+        `<timestamp>_<answer>_ERROR.md`. Best-effort, like backend/svg_
+        export.py's own saves: a failure to write this is logged, never
+        allowed to break grid generation, since a missing diagnostic
+        file is far less important than the grid itself finishing."""
+        FAILURE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        path = FAILURE_LOG_DIR / f"{timestamp}_{answer}_ERROR.md"
+        error_section = (
+            str(error) if error is not None else
+            "None — a response was received from the LLM, but it produced "
+            "no usable clue (see backend.log for the exact rejection "
+            "reason: no candidate lines, or every candidate filtered out "
+            "as too long/a copy/non-Latin/same-family)."
+        )
+        output_section = content if content is not None else "(no response — see error above)"
+        body = (
+            f"# Clue generation failure — {answer} ({accented})\n\n"
+            f"- **Date**: {datetime.now().isoformat()}\n"
+            f"- **Language**: {language}\n"
+            f"- **Difficulty**: {difficulty}\n"
+            f"- **LLM endpoint**: {self.base_url}\n"
+            f"- **Model**: {self.model}\n"
+            f"- **Attempts**: 3/3 failed\n\n"
+            f"## Error (last attempt)\n\n{error_section}\n\n"
+            f"## System prompt (last attempt)\n\n```\n{system_prompt}\n```\n\n"
+            f"## User message (last attempt)\n\n```\n{user_message}\n```\n\n"
+            f"## Raw LLM output (last attempt)\n\n```\n{output_section}\n```\n"
+        )
+        try:
+            path.write_text(body, encoding="utf-8")
+        except OSError as e:
+            logger.warning("failed to write failure log for %r: %s", answer, e)
+
     @staticmethod
     def _parse_response(content):
         """One candidate clue per line — safe now that there's only ever
         one word per call (`_BATCH_SIZE = 1`): there's no word/header to
         match a line against anymore, so every non-empty line is trusted
-        directly as one candidate. The only cleanup still applied is
-        stripping a leading numbered/bulleted marker (`_LEADING_MARKER_RE`)
-        the model sometimes adds despite being asked for plain lines —
+        directly as one candidate. The only cleanup still applied, before
+        a line is trusted: normalizing a non-breaking space (U+00A0,
+        which `str.strip()` alone doesn't remove — some models emit these
+        instead of a plain space) to a regular one, then stripping a
+        leading numbered/bulleted/dash marker (`_LEADING_MARKER_RE`) the
+        model sometimes adds despite being asked for plain lines —
         everything else is used as-is, no delimiter syntax to get right.
         Returns a list of candidate strings (empty if the model's response
         had no non-empty lines at all)."""
         return [
             cleaned
             for line in content.splitlines()
-            if (cleaned := _LEADING_MARKER_RE.sub("", line).strip())
+            if (cleaned := _LEADING_MARKER_RE.sub("", line.replace("\xa0", " ")).strip())
         ]
 
     @staticmethod
