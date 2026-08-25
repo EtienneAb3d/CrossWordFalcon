@@ -26,7 +26,8 @@
     "For AÑOS — PLURAL, \"years\" — answering \"Período de doce meses\" (\"a 12-month period\"): that describes a single 12-month period, i.e. ONE year (\"un año\", singular), not several years — the clue must itself refer to more than one to fit a plural word.",
     "For SERÍAMOS — first person plural CONDITIONAL of \"ser\" (to be), \"nosotros seríamos\" — answering \"Existen soluciones\" (\"there are solutions\"): that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea.",
     "For SEMBRÉ — first person singular PRETÉRITO INDEFINIDO of \"sembrar\" (to sow), \"yo sembré\" — answering \"Acción de esparcir semillas en la tierra\": that's a generic dictionary-style definition of the infinitive \"sembrar\", not phrased for a specific past action by \"yo\" — the clue must itself read as something \"I\" did, e.g. \"Lo que hice una mañana de primavera, con una bolsa de semillas en la mano.\"",
-    "For CANSADO — MASCULINE singular past participle/adjective (\"tired\") — answering \"Se dice de una persona agotada tras la maratón\": \"persona\" is feminine, so this clue's own gender doesn't match masculine CANSADO — the clue's subject noun must itself be masculine to fit, e.g. \"Se dice de un corredor agotado tras la maratón.\""
+    "For CANSADO — MASCULINE singular past participle/adjective (\"tired\") — answering \"Se dice de una persona agotada tras la maratón\": \"persona\" is feminine, so this clue's own gender doesn't match masculine CANSADO — the clue's subject noun must itself be masculine to fit, e.g. \"Se dice de un corredor agotado tras la maratón.\"",
+    "For NUEVA — FEMININE singular adjective (\"new\") — answering \"Se dice de un edificio recién construido\": \"edificio\" is masculine, so this clue's own gender doesn't match feminine NUEVA (the mirror case of the CANSADO example above: the mismatch can go either direction) — the clue's subject noun must itself be feminine to fit, e.g. \"Se dice de una casa recién construida.\""
   ],
   "rule_good": [
     "For HADAS, \"Personajes mágicos de los cuentos.\" (in the correct plural form, per rule 4).",
@@ -43,6 +44,7 @@
     "FUISTE (tú, pretérito indefinido de ser/ir) : Lo que hiciste o adónde llegaste, aquel verano memorable",
     "FUERON (ellos/ellas, pretérito indefinido de ser/ir) : Lo que varias personas hicieron, o adónde llegaron, aquella tarde decisiva",
     "GRANDE (singular) : Se dice de un edificio que domina toda la ciudad",
+    "NUEVA (femenino singular) : Se dice de una tienda recién inaugurada",
     "GRANDES (plural) : Se dice de varias casas que dominan el barrio",
     "PEQUEÑAS (femenino plural) : Se dice de varias habitaciones en las que apenas se cabe",
     "FELICES (plural) : Se dice de varias mujeres colmadas por la vida",

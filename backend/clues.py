@@ -20,12 +20,21 @@ single word throughout, not a batch — there is only ever one word per
 call (`_BATCH_SIZE = 1` below), and the wording reflects that rather than
 describing a list of words that never actually arrives.
 
-Output format is deliberately plain text, not JSON: one line per word,
-"WORD: clue 1; clue 2; clue 3". Small local models without constrained
-decoding were unreliable at producing syntactically valid JSON (mismatched
-quotes/brackets/escaping) — a flat line format has far fewer ways to come
-out unparseable, and a half-broken line just loses that one word's clues
-rather than derailing the whole response.
+Output format is the simplest thing that could work, given there's only
+ever one word per call: 3 plain-text lines, one candidate clue per line,
+nothing else — no JSON, and no word/label to echo back either.
+`_parse_response()` just splits the response into lines; every non-empty
+line is trusted directly as one candidate, no header or delimiter syntax
+to get right. This replaced an earlier single-line "WORD: clue 1; clue 2;
+clue 3" format that needed the model to echo the target word as a header
+before any of the response could be trusted as belonging to it — a real,
+observed failure mode on the local model: it would sometimes echo the
+format template's own literal placeholder text ("word:", or a bare
+"clue 2") instead of filling it in, which made an otherwise-fine answer
+unparseable. With one word and 3 plain lines, there's no header to get
+wrong and no template text left to leak (see the project-best-practices
+SKILL for the two incidents that motivated dropping the structured
+format rather than continuing to patch around it).
 
 The LLM endpoint is configurable via three environment variables (see
 env.sh at the project root):
@@ -38,6 +47,7 @@ This lets the same code target a local llama.cpp server or a cloud API
 (e.g. Mistral) just by changing env.sh, with no code change.
 """
 import json
+import logging
 import os
 import random
 import re
@@ -48,6 +58,17 @@ import httpx
 
 from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
+
+# Child of backend/app.py's "crosswordfalcon" logger — same handler/format
+# (configured once, by app.py's logging.basicConfig call), so these lines
+# land in the same backend.log, just distinguishable by logger name. Added
+# so a word that ends up showing the "no definition available" placeholder
+# (see backend/svg_export.py's/frontend's _NO_DEFINITION) has a real,
+# inspectable reason in the log instead of just vanishing silently — was
+# it never answered by the model at all, did every candidate get rejected
+# by our own copy/non-Latin/grammar filter, or did the HTTP call itself
+# fail?
+logger = logging.getLogger("crosswordfalcon.clues")
 
 DEFAULT_LLM_BASE_URL = "http://127.0.0.1:8002/v1/chat/completions"
 DEFAULT_LLM_MODEL = "Qwen/Qwen3.5-9B"
@@ -160,31 +181,20 @@ def _load_prompt_config(language):
 def _bullets(items):
     return "\n".join(f"- {item}" for item in items)
 
-# One line per word: "word: clue 1; clue 2; clue 3", tolerating a leading
-# bullet/number the model adds despite being asked not to (e.g. "- word:"
-# or "1. word:"). Matched against the batch's known words (case-insensitive)
-# before being trusted as a header line — see _parse_response — since a
-# clue can itself contain a colon.
-_WORD_LINE_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*([^:]+):\s*(.*)$")
-
-# A clue given on its own line under a "word:" header instead of after the
-# colon on the same line — models sometimes switch to this numbered/bulleted
-# style despite being asked for one flat line. Marker is optional so a bare
-# continuation line still counts.
-_LIST_ITEM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*(.+)$")
-
-# A "1. "/"2)"/"- " marker left on an individual candidate — happens when the
-# model numbers clues within the semicolon-separated line itself instead of
-# (or as well as) using separate lines.
+# A "1. "/"2)"/"- " marker left on an individual line — happens when the
+# model numbers its 3 lines despite being asked for plain, unnumbered
+# ones. The only structural cleanup _parse_response still does, now that
+# there's no header/delimiter syntax left to validate — everything else
+# in a non-empty line is trusted as-is.
 _LEADING_MARKER_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
 
 # DeepSeek-R1-distill models (unlike Qwen3.5 with `enable_thinking: false`,
 # see run_llm.sh) always reason through a `<think>...</think>` block before
 # the actual answer — there's no template flag to turn this off. Left in,
-# the reasoning text itself risks false-triggering `_WORD_LINE_RE` (a model
-# thinking out loud about the word by name, followed by a colon, reads
-# exactly like a header line) and contaminating `_parse_response`'s output
-# with reasoning fragments instead of the deliberate final answer.
+# the reasoning text would be parsed as if it were real candidate lines
+# (see _parse_response, which now trusts every non-empty line directly),
+# contaminating the output with reasoning fragments instead of the
+# deliberate final answer.
 _THINK_BLOCK_RE = re.compile(r"^.*?</think>", re.DOTALL)
 
 
@@ -320,19 +330,48 @@ class LLMClueGenerator:
                 break
             for batch in _chunks(pending, _BATCH_SIZE):
                 entry = batch[0]
-                accented_to_entry = {entry[1]: entry}
+                answer, accented, canonical = entry
                 system_prompt = self._build_system_prompt(difficulty, language)
                 user_message = self._build_user_message(entry, language)
                 max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * len(batch)
                 try:
                     content = self._call(system_prompt, user_message, max_tokens, timeout)
-                    raw = self._parse_response(content, accented_to_entry.keys())
-                    clues.update(self._pick_clues(raw, accented_to_entry))
+                    candidates = self._parse_response(content)
+                    if not candidates:
+                        logger.warning(
+                            "clue round %d/3: %r (%r) — model gave no "
+                            "candidate lines at all",
+                            _round + 1, answer, accented,
+                        )
+                    else:
+                        clue = self._pick_clue(candidates, answer, accented, canonical)
+                        if clue:
+                            clues[answer] = clue
+                        else:
+                            logger.warning(
+                                "clue round %d/3: %r (%r) — all %d candidate(s) "
+                                "rejected by the copy/non-Latin/same-family "
+                                "filter: %r",
+                                _round + 1, answer, accented, len(candidates), candidates,
+                            )
                 except ClueGenerationError as e:
                     errors.append(e)
+                    logger.warning(
+                        "clue round %d/3: %r (%r) — LLM call failed: %s",
+                        _round + 1, answer, accented, e,
+                    )
                 if on_progress:
                     on_progress(len(clues), total)
             pending = [e for e in pending if e[0] not in clues]
+
+        if pending:
+            logger.warning(
+                "clue generation: %d/%d word(s) still have no clue after all "
+                "retry rounds (will show as the \"no definition available\" "
+                "placeholder) — see the per-round warnings above for why "
+                "each one failed: %s",
+                len(pending), total, [e[0] for e in pending],
+            )
 
         if errors and not clues:
             raise errors[0]
@@ -395,12 +434,27 @@ class LLMClueGenerator:
 
     def _build_system_prompt(self, difficulty, language):
         """All of the crossword-clue-writing instructions that don't depend
-        on the specific word — role, difficulty style, rules, and a
-        clearly delimited EXAMPLES section illustrating them — sent as the
-        `system` message; kept separate from the HTTP/parsing plumbing
-        below. Pairs with `_build_user_message()`, which carries the one
-        thing that *does* vary per call: the word itself plus its
-        grounding block.
+        on the specific word — role, difficulty style, rules, a clearly
+        delimited EXAMPLES section illustrating them, and the final
+        output-format instructions — sent as the `system` message; kept
+        separate from the HTTP/parsing plumbing below. Pairs with
+        `_build_user_message()`, which carries the one thing that *does*
+        vary per call: the word itself plus its grounding block. Identical
+        across every word for a given difficulty/language, so this could
+        be cached per (difficulty, language) pair rather than rebuilt on
+        every call — not done, since rebuilding a string is cheap relative
+        to the LLM call it precedes.
+
+        The output-format instructions ask for exactly 3 plain lines, one
+        candidate clue per line — no word/label for the model to echo
+        back, unlike an earlier "word: clue 1; clue 2; clue 3" format that
+        needed the target word repeated as a header before any of the
+        response could be trusted (a real, observed failure mode: the
+        model would sometimes echo the format template's own literal
+        placeholder text instead of filling it in correctly). See
+        `_parse_response()` and the project-best-practices SKILL for the
+        two incidents that motivated dropping the structured single-line
+        format entirely.
 
         Every concrete word/clue example (and the subject-pronoun list
         rule 4 names) comes from PROMPT_CONFIG_DIR/<language>_prompt_
@@ -473,12 +527,11 @@ class LLMClueGenerator:
             "grammatical label):\n"
             f"{_bullets(config['rule_good'])}\n\n"
             "=== END OF EXAMPLES ===\n\n"
-            "Respond with exactly one line, in this exact plain-text "
-            "format (no JSON, no markdown, no numbering, no extra "
-            "commentary):\n"
-            "word: clue 1; clue 2; clue 3\n"
-            "Use the exact accented spelling you were given before the "
-            "colon, then the 3 clues separated by semicolons."
+            "Respond with exactly 3 lines and nothing else: one candidate "
+            "clue per line, in plain text. No JSON, no markdown, no "
+            "numbering or bullets, no blank lines, no repeating the word "
+            "itself anywhere, and no extra commentary before, between, or "
+            "after the 3 lines — just the 3 clues, one per line."
         )
 
     def _build_user_message(self, entry, language):
@@ -524,72 +577,39 @@ class LLMClueGenerator:
         return _strip_reasoning(content)
 
     @staticmethod
-    def _parse_response(content, known_words):
-        """Parses the "word: clue 1; clue 2; clue 3" line format. A "word:"
-        line is only trusted as a header when the word matches one of
-        `known_words` — the words actually sent in this batch — since a
-        clue can itself contain a colon; matched case- and accent-
-        insensitively, since a model given "élevées" sometimes echoes back
-        "elevees". Also tolerates a model that switches to a numbered/
-        bulleted list of clues under the header instead of the requested
-        single semicolon-joined line (a real, observed failure mode on
-        small local models): any line that isn't itself a recognized header
-        is treated as one more candidate for whichever word header came
-        before it. Returns {word_as_given: [candidate, ...]}."""
-        known = {}
-        for w in known_words:
-            known[w.lower()] = w
-            known[_normalize(w)] = w
-        result = {}
-        current = None
-        for line in content.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            header = _WORD_LINE_RE.match(line)
-            header_word = header.group(1).strip() if header else None
-            if header and (header_word.lower() in known or _normalize(header_word) in known):
-                current = known.get(header_word.lower()) or known[_normalize(header_word)]
-                rest = header.group(2).strip()
-                if rest:
-                    result.setdefault(current, []).extend(
-                        _LEADING_MARKER_RE.sub("", c).strip()
-                        for c in rest.split(";") if c.strip()
-                    )
-                continue
-            if current is not None:
-                item = _LIST_ITEM_RE.match(line)
-                if item and item.group(1).strip():
-                    result.setdefault(current, []).append(item.group(1).strip())
-        if not result:
-            raise ClueGenerationError(f"invalid LLM response (no parsable line): {content!r}")
-        return result
+    def _parse_response(content):
+        """One candidate clue per line — safe now that there's only ever
+        one word per call (`_BATCH_SIZE = 1`): there's no word/header to
+        match a line against anymore, so every non-empty line is trusted
+        directly as one candidate. The only cleanup still applied is
+        stripping a leading numbered/bulleted marker (`_LEADING_MARKER_RE`)
+        the model sometimes adds despite being asked for plain lines —
+        everything else is used as-is, no delimiter syntax to get right.
+        Returns a list of candidate strings (empty if the model's response
+        had no non-empty lines at all)."""
+        return [
+            cleaned
+            for line in content.splitlines()
+            if (cleaned := _LEADING_MARKER_RE.sub("", line).strip())
+        ]
 
     @staticmethod
-    def _pick_clues(raw, accented_to_entry):
-        """Picks one of the (up to 3) candidate clues per word at random —
-        favors variety across regenerations of the same word, and keeps the
-        choice out of the LLM's hands as requested. Drops any candidate
-        that isn't actually a clue: empty, non-Latin-script drift, or the
-        word being defined (or a same-family word sharing its canonical
-        form/lemma, e.g. singular "maman" leaking into a clue for plural
-        MAMANS) appearing anywhere in it, whether as the whole clue or
-        embedded in a longer sentence (the prompt forbids this, but small
-        local models sometimes do it anyway — see `_contains_target_word`)
-        — a word left with zero candidates after filtering gets no entry
-        here, which `generate()` reads as still needing a clue and
+    def _pick_clue(candidates, answer, accented, canonical):
+        """Picks one of this word's (up to 3) candidate clues at random —
+        favors variety across regenerations of the same word, and keeps
+        the choice out of the LLM's hands as requested. Drops any
+        candidate that isn't actually a clue: non-Latin-script drift, or
+        the word being defined (or a same-family word sharing its
+        canonical form/lemma, e.g. singular "maman" leaking into a clue
+        for plural MAMANS) appearing anywhere in it, whether as the whole
+        clue or embedded in a longer sentence (the prompt forbids this,
+        but small local models sometimes do it anyway — see
+        `_contains_target_word`). Returns None if every candidate was
+        rejected, which `generate()` reads as still needing a clue and
         retries."""
-        clues = {}
-        for key, candidates in raw.items():
-            entry = accented_to_entry.get(key) or accented_to_entry.get(key.upper())
-            if entry is None:
-                continue
-            answer, _, canonical = entry
-            candidates = [
-                c for c in candidates
-                if c and _NON_LATIN_RE.search(c) is None
-                and not _contains_target_word(c, answer, key, canonical)
-            ]
-            if candidates:
-                clues[answer] = random.choice(candidates)
-        return clues
+        candidates = [
+            c for c in candidates
+            if c and _NON_LATIN_RE.search(c) is None
+            and not _contains_target_word(c, answer, accented, canonical)
+        ]
+        return random.choice(candidates) if candidates else None

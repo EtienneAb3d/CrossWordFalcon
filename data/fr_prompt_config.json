@@ -26,7 +26,8 @@
     "For ANS — PLURAL, \"years\" — answering \"Durée de douze mois\": that describes a single 12-month period, i.e. ONE year (\"un an\", singular), not several years — the clue must itself refer to more than one to fit a plural word.",
     "For SERIONS — first person plural CONDITIONAL of \"être\" (to be), \"nous serions\" — answering \"Il existe des solutions\": that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea.",
     "For SEMAI — first person singular PASSÉ SIMPLE of \"semer\" (to sow), \"je semai\" — answering \"Action de répandre des graines dans la terre\": that's a generic dictionary-style definition of the infinitive \"semer\", not phrased for a specific past action by \"je\" — the clue must itself read as something \"I\" did, e.g. \"Ce que je fis un matin de printemps, sac de graines à la main.\"",
-    "For TENU — MASCULINE singular past participle of \"tenir\" (to keep/hold), \"il est tenu\" — answering \"Se dit d'une maison soignée et propre\": \"maison\" is feminine, so this clue's own gender doesn't match masculine TENU — the clue's subject noun must itself be masculine to fit, e.g. \"Se dit d'un jardin soigné et propre.\""
+    "For TENU — MASCULINE singular past participle of \"tenir\" (to keep/hold), \"il est tenu\" — answering \"Se dit d'une maison soignée et propre\": \"maison\" is feminine, so this clue's own gender doesn't match masculine TENU — the clue's subject noun must itself be masculine to fit, e.g. \"Se dit d'un jardin soigné et propre.\"",
+    "For LÉGALE — FEMININE singular adjective (\"lawful\"), \"une pratique légale\" — answering \"Qualifie un contrat établi selon les règles du droit\": \"contrat\" is masculine, so this clue's own gender doesn't match feminine LÉGALE (the mirror case of the TENU example above: the mismatch can go either direction) — the clue's subject noun must itself be feminine to fit, e.g. \"Qualifie une pratique établie selon les règles du droit.\""
   ],
   "rule_good": [
     "For FEES, \"Personnages magiques des contes.\" (in the correct plural form, per rule 4).",
@@ -43,6 +44,7 @@
     "SERAIENT (ils/elles, conditionnel, verbe être) : Ce qu'ils deviendraient dans un monde plus juste",
     "RENDRIEZ (vous, conditionnel) : Ce que vous feriez avec un objet qui ne vous appartient pas",
     "GRAND (masculin singulier) : Se dit d'un immeuble qui domine toute la ville",
+    "LÉGALE (féminin singulier) : Se dit d'une pratique conforme aux règles du droit",
     "GRANDES (féminin pluriel) : Se dit de plusieurs maisons qui dominent le quartier",
     "PETITES (féminin pluriel) : Se dit de plusieurs chambres où l'on tient à peine",
     "HEUREUSES (féminin pluriel) : Se dit de plusieurs femmes comblées par la vie",

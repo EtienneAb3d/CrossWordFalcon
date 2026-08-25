@@ -212,3 +212,73 @@ English (see `project-best-practices`).
   tracing `renderSystemInfoTooltip()`'s logic against the real `/api/
   system_info` response — both checked out, but an actual visual/hover
   check is still owed before fully trusting this on a real display.
+
+- added a faint logo watermark behind the grid/definitions area (`#result`),
+  at the user's explicit request (50% width, 90% transparent). First
+  attempt put it on `main::before` instead, covering the whole page —
+  since `#result` is `hidden` until a grid exists, `main`'s height (and
+  so the vertical center a `main`-wide background centers itself on) was
+  just the header+form's height at that point, which visually put the
+  watermark over the menus instead of over the grid/clues, exactly the
+  opposite of what was asked; corrected by moving the pseudo-element from
+  `main` to `#result` itself (`position: relative` added there instead).
+  Still `::before` rather than a plain `background-image` — a background
+  on the element itself would sit behind the element's own background/
+  border only, whereas a low-opacity image needs its own layer so the
+  opacity doesn't also fade the grid/clue text sitting above it;
+  `z-index: -1` keeps the pseudo-element below `#board`/`#down-clues-
+  section` (normal-flow children) while still painting above `#result`'s
+  own background, since `#result`'s own `position: relative` establishes
+  the stacking context the negative z-index resolves against.
+  `background-size: 50% auto` sizes the image to exactly 50% of the
+  container's width with the height auto-scaled to the SVG's own aspect
+  ratio (not a fixed 50%/50% box, which would distort a non-square logo).
+  `opacity: 0.1` on the pseudo-element itself (not a filter on the image)
+  is the 90%-transparent request. `pointer-events: none` so the (purely
+  decorative, behind everything anyway) watermark can never intercept a
+  click.
+
+- the `#result`-attached watermark above still had two bugs, both
+  reported by the user from real use: invisible at initial page load
+  (`#result` is `hidden` until a grid exists, so there was nothing to
+  attach a background to yet), and clipped to the grid's own height once
+  a small grid did generate (`#result`'s box is exactly as tall as its
+  content — `#board`/`#down-clues-section` — and a background painted
+  with `inset: 0` can never render past its own box's edges, so a short
+  grid clipped the image before it reached its full auto-scaled height).
+  Both bugs share one root cause: attaching the watermark to any element
+  whose height depends on dynamic content. Fixed by moving it once more,
+  this time to `body::before` with `position: fixed; inset: 0` — sized to
+  the *viewport*, not to any content box, so it's always exactly as tall
+  as the browser window regardless of what's rendered inside `main`,
+  visible from the very first load, and never clippable by short
+  content. `background-size` changed from `50% auto` (50% of `#result`'s
+  width) to `50vw auto` (50% of the *viewport's* width) to match, since
+  the sizing basis moved from a content box to the viewport itself. Still
+  `z-index: -1`, still `opacity: 0.1`, still `pointer-events: none` — the
+  layering/transparency/click-through requirements are unchanged, only
+  the positioning strategy. One accepted side effect of `position: fixed`
+  vs. the earlier `absolute` attempts: the watermark now stays pinned to
+  the browser window and does not scroll away with the page content —
+  standard behavior for a persistent watermark, not treated as a bug.
+
+- mirrored the same watermark onto the SVG/PNG exports
+  (`backend/svg_export.py`'s `render_grid_svg()`), at the user's explicit
+  request — a different sizing/position than the web UI's (90% of the
+  canvas's width, centered vertically, vs. the web UI's 50vw) since this
+  is a request for the export specifically, not a re-application of the
+  web UI's own numbers. Unlike the web UI, this target's canvas has a
+  *fixed*, fully-known final size (`canvas_width`/`y` are only computed
+  once the whole document — header, both grids, both clue lists — is laid
+  out), so there was never a version of the truncation/invisibility bug
+  the web UI hit — the watermark is placed and centered against that
+  final size directly, correct on the first attempt. Reuses
+  `_logo_data_uri()` (the same base64-embedded `frontend/static/logo.png`
+  already used for the header logo) rather than embedding `logo.svg`
+  separately — one asset, one caching mechanism, and this PNG is already
+  confirmed to have a transparent background (see the entry above on
+  `rsvg-convert` vs. `qlmanage`). Verified visually, not just by reading
+  the markup: generated a real grid, rendered it through `save_grid_png()`
+  (the actual `rsvg-convert` path used in production), and read the
+  resulting PNG — the watermark is faintly visible behind the entire page
+  (empty puzzle and solution both), correctly sized and centered.

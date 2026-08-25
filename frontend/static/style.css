@@ -26,6 +26,34 @@ body {
   color: var(--fg);
 }
 
+/* Faint logo watermark, centered on the browser window at all times —
+   position: fixed (relative to the viewport, not to any content box)
+   rather than attached to #result or main: both of those have a height
+   driven by dynamic content (#result is hidden until a grid exists, and
+   even then can be shorter than the watermark's own height for a small
+   grid), which previously made the image invisible at first load and
+   clipped once a small grid appeared. A viewport-sized box is always
+   tall enough, so neither problem can recur. z-index: -1 paints it above
+   body's own background but below every real element on the page (body
+   is the root stacking context here, so this simply needs body's own
+   normal-flow children — header/main — to have no z-index of their own,
+   which they don't). background-size: 50vw auto sizes the image to 50%
+   of the viewport's width, height auto-scaled to the SVG's own aspect
+   ratio; opacity: 0.1 (90% transparent) applies to the pseudo-element
+   itself, not a filter on the image, so it never fades real content. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url("logo.svg");
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: 50vw auto;
+  opacity: 0.1;
+  z-index: -1;
+  pointer-events: none;
+}
+
 main {
   width: 80%;
   margin: 0 auto;

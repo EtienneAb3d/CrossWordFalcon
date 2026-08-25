@@ -158,18 +158,20 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   DeepSeek-R1-Distill-Qwen-14B, since it reasons through a `<think>` block before every
   single word's answer — see `_strip_reasoning`/`REASONING_TOKEN_BUDGET` below and
   `run_llm.sh`. Output is plain text, not
-  JSON — one line per word, `word:
-  clue 1; clue 2; clue 3` (`_parse_response`) — small local models without constrained
-  decoding were unreliable at valid JSON syntax; the line format fails one word at a
-  time instead of the whole response, and `_parse_response` tolerates a model that
-  answers with a numbered/bulleted multi-line list under the header instead. `_call()`
+  JSON, and — since a redesign, see the long entry below — not even a single delimited
+  line anymore: the model is asked for exactly 3 plain lines, one candidate clue per
+  line, nothing else (`_parse_response`) — small local models without constrained
+  decoding were unreliable at valid JSON syntax, and even the line-based format that
+  replaced JSON originally needed the target word repeated as a per-line header before
+  anything could be trusted, which turned out to be its own source of unparsable
+  responses (see below) — every non-empty line is now trusted directly as one
+  candidate, no header or delimiter syntax left to get wrong. `_call()`
   strips a leading `<think>...</think>` block (`_strip_reasoning`) from the raw
   response before it ever reaches `_parse_response` — a no-op for a model that doesn't
   emit one (e.g. Qwen3.5 with thinking disabled), but load-bearing for
-  DeepSeek-R1-Distill: left in, the reasoning text itself risks false-triggering
-  `_WORD_LINE_RE` (the model thinking out loud about the word by name, followed by a
-  colon, reads exactly like a header line) and contaminating the parsed output with
-  reasoning fragments instead of the deliberate final answer. `max_tokens` includes a
+  DeepSeek-R1-Distill: left in, the reasoning text would be parsed as if it were real
+  candidate lines, contaminating the output with reasoning fragments instead of the
+  deliberate final answer. `max_tokens` includes a
   dedicated `REASONING_TOKEN_BUDGET` (2048) on top of the per-word answer budget, sized
   generously against DeepSeek-R1-Distill-Qwen-14B directly (measured live across several
   words: a single word's full response, thinking included, ran anywhere from ~300 to
@@ -177,8 +179,8 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   harmless for a non-reasoning model, which simply stops well before using it. Each word
   is shown to the model by its accented/inflected spelling (`words[i]["accented"]`, not
   the grid's bare form) and the model is asked for 3 candidate clues per word; one is
-  picked at random on our side (`_pick_clues`) — never the model's choice — filtering
-  out anything that isn't a recognizable clue: empty, non-Latin-script characters (a
+  picked at random on our side (`_pick_clue`) — never the model's choice — filtering
+  out anything that isn't a recognizable clue: non-Latin-script characters (a
   drift failure mode seen in testing), or the word itself appearing anywhere in the
   clue — as the whole clue, or embedded inside a longer sentence (e.g. "je serais s'il
   pleuvait demain" for `SERAIS`) — in any case/accent (`_contains_target_word`,
@@ -355,6 +357,96 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   fix — no more root leak, correct masculine agreement, and (after one still-imperfect
   present-tense sample, consistent with the known grammar-matching ceiling) correct
   passé simple on repeat.
+
+  A separate, structural bug class was reported next: some words (French `MESURONS`,
+  `SES`, `TEL` among them) always ended up showing the frontend's/`svg_export.py`'s
+  "no definition available" placeholder, with no visibility into why. Added
+  diagnostic logging (`logger = logging.getLogger("crosswordfalcon.clues")`, a child
+  of `backend/app.py`'s own logger, same handler/format via propagation) at every
+  point a word can end up without a clue: per retry round, whether the model gave no
+  parsable candidate line at all vs. gave candidates that were all rejected by the
+  copy/non-Latin/same-family filter vs. the HTTP call itself failed, plus a final
+  summary of which words never got a clue after all 3 rounds. This immediately
+  surfaced the real root cause on the very first live test of the reported words: the
+  model was echoing the format template's literal placeholder text ("word:") instead
+  of substituting the actual target word before the colon — e.g. `"word: mesurons;
+  Action que nous accomplissons..."` instead of `"mesurons: Action que nous
+  accomplissons..."` — which `_WORD_LINE_RE`'s known-word check correctly refused to
+  trust as a header (by design, to avoid a colon inside a clue being mistaken for a
+  new header), so the entire response was discarded as unparsable, every round, for
+  every one of the 3 reported words. Root-cause fixed in `_build_system_prompt()`:
+  the format-line example now uses the call's own actual word
+  (`f"{accented}: clue 1; clue 2; clue 3"`) instead of the literal, ambiguous
+  placeholder string `"word: clue 1; clue 2; clue 3"` — removing the ambiguity that
+  let a small model interpret "word" as literal text to echo rather than a
+  placeholder to replace. `_parse_response()` also gained a narrow defense-in-depth
+  fallback for any future variant of the same slip: if the normal parse finds nothing
+  at all and exactly one word was asked for (always true given `_BATCH_SIZE=1`), it
+  falls back to treating the first line's own header-shaped content as that one
+  word's candidates (stripping a leading echo of the word itself, e.g. the
+  `"mesurons;"` fragment in the example above, if present) rather than discarding a
+  real answer outright — engages only when the strict header-matching path already
+  found nothing, so it can never steal a colon-in-a-clue line away from a header that
+  matched correctly. Verified live: resampled `MESURONS`/`SES`/`TEL` after the fix —
+  all 3 resolved cleanly on the very first round, zero warnings, vs. 9/9 failures
+  (3 words × 3 rounds) before it.
+
+  While stress-testing the fix against a broader word list, a related but distinct
+  leak surfaced: French `MAISON` came back with the literal, un-filled-in candidate
+  `"clue 2"` — the model left one of its 3 slots as an unmodified echo of the format
+  template's own `"clue 1; clue 2; clue 3"` placeholder text, and since "clue 2"
+  passes every existing filter (not a copy of the answer, not non-Latin), it got
+  picked and shown verbatim as if it were a real clue. A second, broader form of the
+  same leak was then found by resampling further: the model sometimes keeps a real
+  clue but prefixes it with the same leaked label, e.g. `"clue 3: Édifice destiné à
+  abriter une famille."` instead of just the clue text. Fixed both: `_LEAKED_TEMPLATE_
+  RE` (`^clue\s*\d*$`, case-insensitive) rejects a candidate that's nothing but the
+  bare placeholder, wired into `_pick_clues()` alongside the existing non-Latin/
+  same-family checks; `_LEAKED_TEMPLATE_PREFIX_RE` (`^clue\s*\d*\s*:\s*`) strips a
+  leaked `"clue N:"` label as a *prefix*, applied via a new `_clean_candidate()`
+  helper everywhere a candidate is split out of the model's raw text in
+  `_parse_response()` (replacing three separate inline `_LEADING_MARKER_RE.sub(...)`
+  call sites), so the real clue text underneath survives instead of the whole
+  candidate being wasted. "clue" isn't a genuine word in any of the 5 supported
+  languages outside this exact leaked-template case, so both regexes are safe to
+  apply unconditionally rather than needing a per-language allowlist. Verified live:
+  resampled `MAISON` 11 times total across both fixes — no further leaked "clue N"/
+  "clue N:" artifacts — then re-ran the full 15-word stress list (`MESURONS`/`SES`/
+  `TEL` plus 12 more, including several short French function words: `TOI`/`MOI`/
+  `CELA`/`DONC`/`AINSI`/`QUI`/`QUE`) end-to-end: 15/15 resolved with zero warnings
+  logged.
+
+  Both incidents above were two separate patches around the same root cause: a
+  single-line `"word: clue 1; clue 2; clue 3"` format that needed the model to get a
+  header/delimiter syntax exactly right before any of its answer could be trusted, on
+  top of literal template text (`"word:"`, `"clue N"`) the model would sometimes echo
+  verbatim instead of filling in. At the user's explicit prompt — since there's only
+  ever one word per call (`_BATCH_SIZE = 1`, true since this project's very first
+  batch-size tuning pass), there was never a real need for a header to match a word
+  against in the first place — the whole format was redesigned instead of patched a
+  third time: the model is now asked for exactly 3 plain lines, one candidate clue per
+  line, nothing else, and `_parse_response()` just splits on newlines, trusting every
+  non-empty line directly as a candidate (stripping only a leading numbered/bulleted
+  marker, `_LEADING_MARKER_RE`, the one piece of cleanup that's still needed since a
+  model can still number its lines despite being asked not to). This retires
+  `_WORD_LINE_RE`/`_LIST_ITEM_RE`/`_LEAKED_TEMPLATE_RE`/`_LEAKED_TEMPLATE_PREFIX_RE`/
+  `_clean_candidate()` entirely (all now-dead code, deleted rather than left unused)
+  and renames `_pick_clues()` (used to operate on a dict of every word in a batch) to
+  `_pick_clue()` (operates on one word's own candidate list directly, matching
+  `_BATCH_SIZE = 1`'s reality) — its filtering logic (non-Latin drift,
+  `_contains_target_word`'s copy/same-family check) is otherwise unchanged, since that
+  filtering is about clue *content*, not response *structure*, and remains just as
+  relevant under the new format. `_parse_response()` can no longer raise
+  `ClueGenerationError` at all (there's no structural way for a line-based response to
+  be "unparsable" — a blank response just yields an empty candidate list, which
+  `generate()`'s existing empty-candidates handling already covers) — the only
+  remaining raiser is `_call()`'s own HTTP-failure path. Verified live: re-ran the
+  same 15-word stress list end-to-end (15/15 resolved, zero warnings), unit-tested
+  `_parse_response()` directly against a numbered/bulleted 3-line response, an empty
+  response, and a single bare line (all handled correctly), then generated a real
+  20-word grid end-to-end through the actual running API (`POST /api/generate` →
+  polled to completion) — 20/20 words got a clue, zero warnings logged, SVG/PNG saved
+  successfully.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -449,6 +541,29 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   back in through a side door. `frontend/static/script.js`'s `renderClueLines()`
   mirrors the same fix client-side (`I18N[uiLanguage].noDefinition`, `script.js`
   below).
+
+  `render_grid_svg()` also draws a faint logo watermark behind the whole
+  document, at the user's explicit request — mirrors the web UI's own
+  watermark (`frontend/static/style.css`'s `body::before`, see the
+  style-guide SKILL), sized/positioned differently since this is a fixed
+  document rather than a live viewport: 90% of the canvas's width (reusing
+  `_logo_data_uri()`'s already-embedded PNG rather than adding SVG-in-SVG
+  handling; `frontend/static/logo.png` is ~square, ~1022x1024, so height
+  uses the same value as width rather than a separate aspect-ratio
+  calculation) and centered vertically in the document's *final* height —
+  computed only once the header/grids/clues above are fully laid out, not
+  some intermediate/partial height, avoiding the exact truncation bug the
+  web UI version hit and had to be fixed for (see the style-guide SKILL).
+  Placed right after the background `<rect>` and before every real
+  element, so it paints behind all of them in SVG's document-order paint
+  model; `opacity="0.1"` on the `<image>` itself, not a filter on the PNG,
+  is the same 90%-transparent treatment as the web UI. Verified visually:
+  generated a real small grid end-to-end, rendered it to PNG via
+  `save_grid_png()`, and read the actual image — the watermark shows
+  faintly across the full page (both the empty puzzle and the solution
+  grid below it), correctly centered and sized, confirming the math
+  (`x = (canvas_width - watermark_size) / 2`, same for `y` against the
+  final height) is right, not just that the SVG markup parses.
 - `run_llm.sh` — default local LLM launcher: serves whichever quantized GGUF
   `env.sh` (or, absent that, the checked-in `env_default.sh`) names, downloading it
   into `models/` (gitignored) the first time, via `llama_cpp.server` (llama.cpp's

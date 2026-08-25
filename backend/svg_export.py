@@ -252,10 +252,31 @@ def render_grid_svg(result, language, difficulty=None):
     y += solution_height + MARGIN
 
     body = "".join(parts)
+    # Faint logo watermark behind the whole page — mirrors the web UI's own
+    # watermark (frontend/static/style.css's `body::before`), sized/
+    # positioned differently since this is a fixed document rather than a
+    # viewport: 90% of the canvas's width (logo.png is ~square, ~1022x1024,
+    # so height uses the same value rather than a separate aspect-ratio
+    # calculation) and centered vertically in the *final* page height `y`
+    # (known only now, after the header/grids/clues above have all been
+    # laid out) rather than some intermediate/partial height — placed right
+    # after the background rect and before every real element (`body`), so
+    # it paints behind all of them in SVG's document-order paint model.
+    # `opacity="0.1"` on the <image> itself is the same 90%-transparent
+    # treatment as the web UI, not a filter on the embedded PNG.
+    watermark_size = canvas_width * 0.9
+    watermark_x = (canvas_width - watermark_size) / 2
+    watermark_y = (y - watermark_size) / 2
+    watermark_svg = (
+        f'<image x="{watermark_x:.1f}" y="{watermark_y:.1f}" '
+        f'width="{watermark_size:.1f}" height="{watermark_size:.1f}" '
+        f'href="{_logo_data_uri()}" opacity="0.1"/>'
+    )
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{y}" '
         f'viewBox="0 0 {canvas_width} {y}">'
         f'<rect x="0" y="0" width="{canvas_width}" height="{y}" fill="#ffffff"/>'
+        f"{watermark_svg}"
         f"{body}</svg>"
     )
 

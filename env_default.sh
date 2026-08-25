@@ -8,9 +8,11 @@
 # variables below to change provider, no code change needed.
 #
 # Default: the local llama.cpp server (see run_llm.sh) serving a quantized
-# Qwen3.5-9B GGUF (thinking disabled) — this project's very first default,
-# restored here. No real API key needed — llama.cpp ignores the bearer
-# token unless you configured it to require one. All four LLAMA_* /
+# Qwen3.5-9B GGUF (thinking disabled), ~2s/word — this project's very
+# first default, restored again after trying Qwen3-14B (~8-9s/word): the
+# user found Qwen3.5-9B's clue quality better in practice, despite
+# Qwen3-14B's larger size. No real API key needed — llama.cpp ignores the
+# bearer token unless you configured it to require one. All four LLAMA_* /
 # LLM_MODEL lines below are the actual, sole source of truth for which
 # GGUF run_llm.sh serves — it has no separate hardcoded default of its
 # own, so these must always be kept in sync as a group (switch models by
@@ -41,8 +43,9 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export LLAMA_GGUF_FILE="Qwen_Qwen3.5-4B-bf16.gguf"
 # export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 
-# To use Qwen3-14B instead: uncomment all four lines below instead of the
-# ones above.
+# To use Qwen3-14B instead (~8-9s/word — tried as the default for a while;
+# see the project-best-practices SKILL): uncomment all four lines below
+# instead of the ones above.
 # export LLM_MODEL="Qwen/Qwen3-14B"
 # export LLAMA_GGUF_REPO="bartowski/Qwen_Qwen3-14B-GGUF"
 # export LLAMA_GGUF_FILE="Qwen_Qwen3-14B-Q4_K_M.gguf"

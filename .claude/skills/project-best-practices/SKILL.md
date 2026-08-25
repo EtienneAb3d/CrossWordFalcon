@@ -1777,3 +1777,130 @@ content (the French crossword words/clues, the web UI text) stays in French
   appeared once, consistent with this being a reliability ceiling, not a
   fully solved problem — reported honestly rather than claiming a
   complete fix).
+
+- default LLM switched to Qwen3-14B (Q4_K_M), at the user's explicit
+  request — was Qwen3.5-9B. `env_default.sh`/`env.sh`'s active block and
+  `backend/clues.py`'s `DEFAULT_LLM_MODEL` fallback both updated together
+  (the same "keep all four LLAMA_*/LLM_MODEL lines in sync as a group"
+  rule as every previous model swap this project has done — see
+  `run_llm.sh`'s no-hardcoded-default architecture). The GGUF was already
+  cached locally from earlier evaluation of this same model (`models/
+  Qwen_Qwen3-14B-Q4_K_M.gguf`, ~9GB), so no re-download was needed.
+  Verified live: killed the old Qwen3.5-9B `llama_cpp.server` process,
+  restarted via `./run_llm.sh` (picked up the new active block), waited
+  for `/v1/models` to report `Qwen_Qwen3-14B-Q4_K_M.gguf`, then restarted
+  the app servers via `./run_Falcon.sh` and confirmed `/api/system_info`
+  reports `"llm_model":"Qwen/Qwen3-14B"`.
+
+- fixed another real bad clue reported by hand: French `LÉGALE` (FEMININE
+  singular, "lawful") got "Qualifie un contrat établi selon les règles du
+  droit" — "contrat" is masculine, the mirror-image case of the earlier
+  `TENU` bug (masculine target, feminine noun), just in the opposite
+  direction. Same conclusion as `TENU`/`SEMAI`: the clue never contains
+  the target word or its root, so no containment filter could ever catch
+  this — it's rule 4's grammar-agreement gap again, not a new bug class.
+  Also noticed while fixing this: every language's `rule_good` bank had a
+  masculine-singular example (`GRAND`/`GRANDE`/`GRANDE`) but no feminine-
+  singular one — every feminine illustration jumped straight to plural,
+  so the model never saw a worked feminine-singular example specifically.
+  Added one `rule_bad` (the LÉGALE-style reverse-direction mismatch) and
+  one `rule_good` (a correctly-agreed feminine-singular clue) to French,
+  and mirrored both to Spanish (`NUEVA`) and Italian (`NUOVA`) — the two
+  other languages with the same adjective/participle gender-agreement
+  grammar, same pattern as the earlier `TENU`/`CANSADO`/`STANCO` fix.
+  Verified live: resampled `LÉGALE` three times through the real local
+  LLM server after the change — no more masculine-noun mismatch (two
+  samples used a correctly feminine noun, one avoided a noun entirely) —
+  reported as an improvement consistent with the known small-model
+  grammar-agreement ceiling, not a guaranteed fix for every future word.
+
+- added diagnostic logging (`backend/clues.py`'s new `crosswordfalcon.
+  clues` logger) for the "no definition available" placeholder, at the
+  user's request, after they reported it recurring on specific words
+  (`MESURONS`/`SES`/`TEL`) and asked whether it was a temporary glitch.
+  The logging itself immediately answered that question on the first
+  live test: not temporary/random at all — those exact words failed
+  100% of the time (3 words × 3 retry rounds = 9/9 failures) for one
+  concrete, reproducible reason: the model was echoing the system
+  prompt's literal format-template placeholder ("word:") instead of
+  substituting the real word before the colon, which the parser's
+  known-word check correctly refused to trust (by design — otherwise a
+  colon inside a clue's own sentence could get mistaken for a new
+  header). Fixed at the root: `_build_system_prompt()` now spells out
+  the format-line example using the call's *actual* word instead of the
+  ambiguous literal placeholder text, removing the ambiguity entirely.
+  Also added narrow defense-in-depth in `_parse_response()` for any
+  future variant of the same slip (see CLAUDE.md for the exact
+  mechanism). Verified live: resampled all 3 reported words — 3/3
+  resolved cleanly on the first round afterward, vs. 9/9 failures before
+  the fix. This is the kind of finding this project values highly: the
+  user asked only for *visibility* into a mystery, and the visibility
+  itself immediately located and let us fix the actual bug — logging
+  requests like this should always be treated as a potential root-cause
+  hunt, not just box-ticking instrumentation.
+
+  While stress-testing that fix against a broader word list (not just
+  the 3 reported ones), a related leak surfaced on its own: French
+  `MAISON` came back with the literal candidate `"clue 2"` — same root
+  cause (the model echoing the format template's own placeholder text),
+  different spot (one of the 3 clue slots, not the word header), and a
+  second variant where the placeholder survives as a prefix in front of
+  an otherwise real clue (`"clue 3: Édifice destiné à..."`). Neither
+  passed any existing filter (not a copy of the answer, not non-Latin),
+  so it would have been shown to players verbatim. Fixed both forms —
+  see CLAUDE.md for the two regexes and the new `_clean_candidate()`
+  helper. Verified live: resampled `MAISON` 11 times across both fixes
+  (no further leaks), then re-ran a 15-word stress list end-to-end —
+  15/15 resolved, zero warnings logged. Worth noting for next time: two
+  distinct, real bugs were found in one debugging session purely because
+  the fix for the first one was stress-tested past the exact reported
+  words instead of stopping once those 3 passed — worth doing again
+  whenever a similar parsing/prompt fix is made.
+
+- default LLM reverted to Qwen3.5-9B, at the user's explicit request —
+  was Qwen3-14B (see the earlier switch-to-Qwen3-14B entry above). The
+  user found Qwen3.5-9B's clue quality better in practice despite
+  Qwen3-14B's larger size, the opposite of this project's earlier
+  general pattern (bigger/slower model tried so far = better clues) —
+  recorded as-is, not second-guessed: quality here is inherently a
+  subjective, per-user judgment call this project has always deferred
+  to (see every previous model swap in this log). `env_default.sh`/
+  `env.sh`'s active block reverted to the Qwen3.5-9B four-line group
+  (Qwen3-14B kept as a commented alternative, same as every other model
+  this project has tried), `backend/clues.py`'s `DEFAULT_LLM_MODEL`
+  fallback reverted to match. Verified live: killed the Qwen3-14B
+  `llama_cpp.server` process, restarted via `./run_llm.sh`, waited for
+  `/v1/models` to report `Qwen_Qwen3.5-9B-Q4_K_M.gguf`, restarted the
+  app servers, confirmed `/api/system_info` reports
+  `"llm_model":"Qwen/Qwen3.5-9B"`.
+
+- redesigned `backend/clues.py`'s LLM response format entirely, at the
+  user's explicit suggestion, rather than continuing to patch the old
+  one. Their reasoning: since `_BATCH_SIZE = 1` means every call is
+  already about exactly one word, there was never a real need for the
+  model to echo that word back as a header to match a response against
+  — asking for a structured `"word: clue 1; clue 2; clue 3"` line was
+  pure unnecessary risk once batching was already down to one word per
+  call. This was validated by the session's own two immediately-prior
+  incidents (the "word:" placeholder echo and the "clue N" leak, both
+  logged above): both were the *same* underlying design flaw (a
+  structured format the model could get wrong) surfacing twice in a
+  row. Redesign: the model now writes exactly 3 plain lines, one clue
+  per line, nothing else; `_parse_response()` just splits on newlines
+  and trusts every non-empty line directly — no header, no delimiter,
+  no template text left to echo or leak. This retired 5 things outright
+  (`_WORD_LINE_RE`, `_LIST_ITEM_RE`, `_LEAKED_TEMPLATE_RE`,
+  `_LEAKED_TEMPLATE_PREFIX_RE`, `_clean_candidate()` — all deleted, not
+  left as unused code) and simplified `_pick_clues()` into `_pick_clue()`
+  (one word's candidates at a time, matching what `_BATCH_SIZE = 1`
+  already meant in practice). See the CLAUDE.md entry for the full
+  before/after. Worth remembering for next time: when the same class of
+  bug is fixed twice in one session, that's a signal to ask whether the
+  *design* is wrong, not just the latest symptom — the user caught this
+  pattern here before a third incident would have forced the same
+  question. Verified live: full 15-word stress list re-run (15/15, zero
+  warnings), `_parse_response()` unit-tested directly against numbered/
+  bulleted lines, an empty response, and a single bare line, and a real
+  20-word grid generated end-to-end through the actual running API
+  (`POST /api/generate`, polled to completion) — 20/20 words got a
+  clue, zero warnings, SVG/PNG saved successfully.
