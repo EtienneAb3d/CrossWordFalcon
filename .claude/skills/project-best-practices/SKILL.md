@@ -1566,3 +1566,27 @@ content (the French crossword words/clues, the web UI text) stays in French
   system-wide, depending on how it was launched. `Install.sh` installing
   it directly removes any dependency on the launching shell's `PATH`
   having Homebrew set up correctly at the time.
+
+- default local LLM reverted back to Qwen3.5-9B (this project's very
+  first default), at the user's explicit request — Qwen3.5-4B
+  unquantized, Qwen3-14B, DeepSeek-R1-Distill-Qwen-14B, and Qwen3.8-27B
+  all remain fully supported alternatives (same 4-way override mechanism,
+  `env_default.sh`/`env.sh`/`run_llm.sh` updated). `backend/clues.py`'s
+  `DEFAULT_LLM_MODEL` updated to match. No new evaluation needed — this
+  is the model every other option in this log was benchmarked against.
+  Verified end-to-end after switching: a real 9×9 grid (30 words)
+  generated successfully through the actual running API, back down to
+  ~2 minutes total (vs. ~13 minutes with the prior Qwen3.8-27B default),
+  confirming the speed reverted along with the config.
+
+- documented Qwen3.8-27B as a recommended alternative in `README.md`, at
+  the user's explicit request, gated on having a GPU with at least 12GB
+  VRAM — placed right after the paragraph explaining the default model's
+  GPU/CPU auto-detection in the "Generating clues" section, since that's
+  where a reader deciding whether they have the hardware for a bigger
+  model would already be looking. Points at the same `env.sh` override
+  block documented everywhere else in this log rather than duplicating
+  the model's rationale — the "why" (strongest observed clue-agreement
+  quality, especially on conjugation/agreement, at the cost of speed)
+  is stated briefly in the README itself and in full in this SKILL's own
+  entry on the model above, not re-derived from scratch in either place.

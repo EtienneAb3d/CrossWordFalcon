@@ -7,30 +7,29 @@
 # OpenAI-compatible chat-completions endpoint works — swap the three
 # variables below to change provider, no code change needed.
 #
-# Default: the local llama.cpp server (see run_llm.sh) serving Qwen3.8-27B,
-# Unsloth Dynamic 2-bit quant (`UD-Q2_K_XL`, thinking disabled, see
-# LLAMA_CHAT_TEMPLATE_KWARGS below) — the strongest observed clue-agreement
-# quality of every model tried so far (see the project-best-practices
-# SKILL), at the cost of being the slowest non-reasoning option (~20-40s/
-# word). No real API key needed — llama.cpp ignores the bearer token
-# unless you configured it to require one.
+# Default: the local llama.cpp server (see run_llm.sh) serving a quantized
+# Qwen3.5-9B GGUF (thinking disabled, see LLAMA_CHAT_TEMPLATE_KWARGS below)
+# — this project's very first default, restored here. No real API key
+# needed — llama.cpp ignores the bearer token unless you configured it to
+# require one.
 export LLM_BASE_URL="http://127.0.0.1:8002/v1/chat/completions"
-export LLM_MODEL="Qwen/Qwen3.8-27B"
+export LLM_MODEL="Qwen/Qwen3.5-9B"
 export LLM_API_KEY="EMPTY"
 
 # Which GGUF run_llm.sh downloads/serves — override to use a different
 # quantization or model (see run_llm.sh for the defaults).
-# export LLAMA_GGUF_REPO="unsloth/Qwen3.8-27B-GGUF"
-# export LLAMA_GGUF_FILE="Qwen3.8-27B-UD-Q2_K_XL.gguf"
-# export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
-
-# To use Qwen3.5-9B instead (this project's very first default — much
-# faster, ~2s/word, but weaker observed clue-agreement quality; see the
-# project-best-practices SKILL): uncomment all four lines below instead of
-# the ones above.
-# export LLM_MODEL="Qwen/Qwen3.5-9B"
 # export LLAMA_GGUF_REPO="bartowski/Qwen_Qwen3.5-9B-GGUF"
 # export LLAMA_GGUF_FILE="Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+# export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
+
+# To use Qwen3.8-27B instead (Unsloth Dynamic 2-bit quant — the strongest
+# observed clue-agreement quality of every model tried so far, at the cost
+# of being much slower, ~20-40s/word; a good choice if you have a GPU with
+# at least 12GB VRAM, see README.md and the project-best-practices SKILL):
+# uncomment all four lines below instead of the ones above.
+# export LLM_MODEL="Qwen/Qwen3.8-27B"
+# export LLAMA_GGUF_REPO="unsloth/Qwen3.8-27B-GGUF"
+# export LLAMA_GGUF_FILE="Qwen3.8-27B-UD-Q2_K_XL.gguf"
 # export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 
 # To use Qwen3.5-4B unquantized instead (bf16, full precision — the

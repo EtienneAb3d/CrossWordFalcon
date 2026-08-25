@@ -48,7 +48,7 @@ from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
 
 DEFAULT_LLM_BASE_URL = "http://127.0.0.1:8002/v1/chat/completions"
-DEFAULT_LLM_MODEL = "Qwen/Qwen3.8-27B"
+DEFAULT_LLM_MODEL = "Qwen/Qwen3.5-9B"
 DEFAULT_LLM_API_KEY = "EMPTY"
 # Generous relative to a non-reasoning model's ~2s/word (Qwen3/Qwen3.5 with
 # thinking disabled): kept high enough to also cover DeepSeek-R1-Distill (a

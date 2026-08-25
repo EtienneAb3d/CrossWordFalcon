@@ -119,15 +119,16 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   is why `generate()` takes an optional `on_progress(current, total)` callback, called
   after every word attempt, for `backend/app.py` to surface live progress instead of
   one static "generating…" message. How slow varies a lot by model: measured live at
-  ~2s/word with Qwen3.5-9B (thinking disabled — this project's very first default),
-  ~3s/word with Qwen3.5-4B unquantized (thinking disabled — smallest model, close to
-  Qwen3.5-9B's speed despite being full-precision rather than quantized), ~8-9s/word
-  with Qwen3-14B (also thinking disabled — larger model, same non-reasoning behavior,
-  so slower per token but not per-word-reasoning-slow), ~20-40s/word (a 9×9 grid's 32
-  words took ~13 minutes of clue generation) with the current default, Qwen3.8-27B
-  (thinking disabled, Unsloth Dynamic `UD-Q2_K_XL` — the largest non-reasoning model
-  tried, and the slowest of the non-reasoning ones, but also the one with the
-  strongest observed clue quality so far, see the project-best-practices SKILL), and
+  ~2s/word with the current default, Qwen3.5-9B (thinking disabled — this project's
+  very first default), ~3s/word with Qwen3.5-4B unquantized (thinking disabled —
+  smallest model, close to Qwen3.5-9B's speed despite being full-precision rather
+  than quantized), ~8-9s/word with Qwen3-14B (also thinking disabled — larger model,
+  same non-reasoning behavior, so slower per token but not per-word-reasoning-slow),
+  ~20-40s/word (a 9×9 grid's 32 words took ~13 minutes of clue generation) with
+  Qwen3.8-27B (thinking disabled, Unsloth Dynamic `UD-Q2_K_XL` — the largest
+  non-reasoning model tried, and the slowest of the non-reasoning ones, but also the
+  one with the strongest observed clue quality so far, see the project-best-practices
+  SKILL — a good choice with a GPU with at least 12GB VRAM, per README.md), and
   20-70s/word (potentially 15-40+ minutes per grid) with
   DeepSeek-R1-Distill-Qwen-14B, since it reasons through a `<think>` block before every
   single word's answer — see `_strip_reasoning`/`REASONING_TOKEN_BUDGET` below and
@@ -342,16 +343,19 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   back in through a side door. `frontend/static/script.js`'s `renderClueLines()`
   mirrors the same fix client-side (`I18N[uiLanguage].noDefinition`, `script.js`
   below).
-- `run_llm.sh` — default local LLM launcher: downloads a GGUF (default
-  `unsloth/Qwen3.8-27B-GGUF`, `UD-Q2_K_XL` — Unsloth Dynamic 2-bit quant, ~9.8GB, into
-  `models/`, gitignored) the first time, then serves it via `llama_cpp.server`
-  (llama.cpp's built-in OpenAI-compatible server — no hand-written wrapper needed).
-  The strongest observed clue-agreement quality of every model tried so far (see the
-  project-best-practices SKILL), at the cost of being the slowest non-reasoning
-  option (~20-40s/word, confirmed live: a 9×9 grid's 32 words took ~13 minutes of
-  clue generation). One package (`requirements-llama.txt`) covers Linux and macOS
-  alike (Metal on Apple Silicon, CUDA on Linux with a GPU, CPU everywhere) — but a
-  plain `pip install` only builds llama-cpp-python for CPU; before starting the
+- `run_llm.sh` — default local LLM launcher: downloads a quantized GGUF (default
+  `bartowski/Qwen_Qwen3.5-9B-GGUF`, `Q4_K_M`, ~5.75GB, into `models/`, gitignored) the
+  first time, then serves it via `llama_cpp.server` (llama.cpp's built-in
+  OpenAI-compatible server — no hand-written wrapper needed). This project's very
+  first default, restored here again after trying four alternatives (Qwen3.5-4B
+  unquantized, Qwen3-14B, DeepSeek-R1-Distill-Qwen-14B, Qwen3.8-27B) — all four remain
+  fully supported, see below; Qwen3.8-27B specifically is called out in README.md as a
+  good choice for anyone with a GPU with at least 12GB VRAM, since it showed the
+  strongest observed clue-agreement quality of every model tried (see the
+  project-best-practices SKILL) at the cost of being much slower (~20-40s/word vs.
+  this default's ~2s/word). One package (`requirements-llama.txt`) covers Linux and
+  macOS alike (Metal on Apple Silicon, CUDA on Linux with a GPU, CPU everywhere) — but
+  a plain `pip install` only builds llama-cpp-python for CPU; before starting the
   server, the script checks `llama_cpp.llama_supports_gpu_offload()` against whether
   a GPU should be present (macOS, or `nvidia-smi -L` succeeding) and force-reinstalls
   with the right `CMAKE_ARGS` (`-DGGML_METAL=on` / `-DGGML_CUDA=on`) if they disagree,
@@ -360,12 +364,12 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   driver is installed, not the CUDA Toolkit needed to compile) and never lets a
   failed rebuild abort the script — falls back to whatever's already installed and
   runs on CPU rather than not starting at all. `GGUF_REPO`/`GGUF_FILE` are overridable
-  via `LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE` (see `env.sh`) — Qwen3.5-9B (this project's
-  very first default, much faster), Qwen3.5-4B unquantized (`bf16`, full precision,
-  the fastest option tried), Qwen3-14B, and DeepSeek-R1-Distill-Qwen-14B (a reasoning
-  model, see below) are all still fully
-  supported this way, see `env_default.sh` for the exact override lines for any of
-  them. `--chat_template_kwargs` is also overridable (`LLAMA_CHAT_TEMPLATE_KWARGS`,
+  via `LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE` (see `env.sh`) — Qwen3.5-4B unquantized
+  (`bf16`, full precision, the fastest option tried), Qwen3-14B, DeepSeek-R1-Distill-
+  Qwen-14B (a reasoning model, see below), and Qwen3.8-27B (Unsloth Dynamic 2-bit
+  quant, `UD-Q2_K_XL`) are all still fully supported this way, see `env_default.sh`
+  for the exact override lines for any of them. `--chat_template_kwargs` is also
+  overridable (`LLAMA_CHAT_TEMPLATE_KWARGS`,
   default `{"enable_thinking": false}`): Qwen3 and Qwen3.5 are hybrid thinking/non-
   thinking models whose chat template reads an `enable_thinking` flag — verified
   directly by inspecting each GGUF's own embedded template (e.g. `{%- if

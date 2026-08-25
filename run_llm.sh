@@ -21,17 +21,16 @@ mkdir -p "$MODELS_DIR" "$LOG_DIR"
 if [ -f env.sh ]; then
     source env.sh
 fi
-# Default: Qwen3.8-27B, Unsloth Dynamic 2-bit quant (`UD-Q2_K_XL`, ~9.8GB) —
-# the strongest observed clue-agreement quality of every model tried so far
-# (see the project-best-practices SKILL), at the cost of being the slowest
-# non-reasoning option (~20-40s/word). Override in env.sh to use a different
-# GGUF — Qwen3.5-9B (this project's very first default), Qwen3.5-4B
-# unquantized (bf16, fastest of the options tried), Qwen3-14B, and
-# DeepSeek-R1-Distill-Qwen-14B (a reasoning model, see below) are all still
-# fully supported this way, see env_default.sh for the exact override lines
-# for any of them.
-GGUF_REPO="${LLAMA_GGUF_REPO:-unsloth/Qwen3.8-27B-GGUF}"
-GGUF_FILE="${LLAMA_GGUF_FILE:-Qwen3.8-27B-UD-Q2_K_XL.gguf}"
+# Default: Qwen3.5-9B, Q4_K_M quantized by bartowski (~5.75GB — this
+# project's very first default, restored here). Override in env.sh to use a
+# different GGUF — Qwen3.5-4B unquantized (bf16, fastest of the options
+# tried), Qwen3-14B, DeepSeek-R1-Distill-Qwen-14B (a reasoning model, see
+# below), and Qwen3.8-27B (Unsloth Dynamic 2-bit quant — the strongest
+# observed clue-agreement quality so far, a good choice with a GPU with at
+# least 12GB VRAM, see README.md) are all still fully supported this way,
+# see env_default.sh for the exact override lines for any of them.
+GGUF_REPO="${LLAMA_GGUF_REPO:-bartowski/Qwen_Qwen3.5-9B-GGUF}"
+GGUF_FILE="${LLAMA_GGUF_FILE:-Qwen_Qwen3.5-9B-Q4_K_M.gguf}"
 MODEL_PATH="$MODELS_DIR/$GGUF_FILE"
 # Qwen3 and Qwen3.5 are hybrid thinking/non-thinking models — their chat
 # template reads an `enable_thinking` flag, and backend/clues.py's

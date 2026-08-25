@@ -55,6 +55,14 @@ that only happens once. On an NVIDIA card, this rebuild needs the full
 missing, the script says so and carries on with your CPU instead of
 getting stuck.
 
+**Have a graphics card with at least 12GB of VRAM?** The default model
+favors speed, but a larger one — `Qwen/Qwen3.8-27B`, quantized to fit that
+much VRAM — writes noticeably better clues, especially on trickier
+grammatical cases (verb conjugations, plural/gender agreement), at the
+cost of taking longer per word. To switch to it, open `env.sh` and follow
+the commented instructions for `Qwen3.8-27B` (uncomment those four lines
+instead of the default ones just above them), then restart `run_llm.sh`.
+
 If you'd rather use a cloud service instead of running a model locally,
 open `env.sh` at the project root and follow the commented instructions
 there to switch to a cloud provider (e.g. Mistral, which offers a free API
