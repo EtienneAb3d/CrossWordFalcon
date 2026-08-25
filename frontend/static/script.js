@@ -88,6 +88,80 @@ let selected = null; // { row, col } or null
 let showSolution = false;
 let checking = false;
 
+// Grid <-> clue-list hover highlighting. cellElements lets highlightWordAt()
+// look up a cell's DOM node by position without a fresh querySelector per
+// cell; both are rebuilt from scratch on every renderGrid() call, since the
+// grid itself is fully re-rendered rather than patched.
+let cellElements = new Map(); // "row,col" -> cell element (white cells only)
+let hoveredGridCell = null; // { row, col } while the mouse is over a grid cell, else null
+
+// Finds every cell of the white-cell run through (row, col) in `direction`
+// ("across"/"down") by scanning the pattern outward until a black cell or
+// the grid edge — not a lookup against puzzle.words — so it works for any
+// cell of the word, not just its numbered start. Every white run is at
+// least 3 cells long (see backend/crossword_gen.py's structural-validity
+// check), so this always returns a real word, never a 1-2 cell fragment.
+function wordCellsAt(row, col, direction) {
+  const { width, height } = puzzle;
+  const cells = [];
+  if (direction === "across") {
+    let c = col;
+    while (c > 0 && isWhite(row, c - 1)) c--;
+    for (; c < width && isWhite(row, c); c++) cells.push({ row, col: c });
+  } else {
+    let r = row;
+    while (r > 0 && isWhite(r - 1, col)) r--;
+    for (; r < height && isWhite(r, col); r++) cells.push({ row: r, col });
+  }
+  return cells;
+}
+
+function clearHighlights() {
+  document.querySelectorAll(".cell.word-highlight").forEach((el) => el.classList.remove("word-highlight"));
+  document.querySelectorAll(".clue-segment.hover-highlight").forEach((el) => el.classList.remove("hover-highlight"));
+}
+
+// Shared by both hover directions (grid -> clue list and clue list ->
+// grid, see the event listeners in renderGrid()/renderClueLines()): frames
+// every cell of the word through (row, col) in `direction`, and highlights
+// the matching clue-segment span by its own data-row/col/direction — set
+// from the same word-start position wordCellsAt() itself resolves to
+// (cells[0]), so this never needs to search puzzle.words to find "which
+// word is this".
+function highlightWordAt(row, col, direction) {
+  clearHighlights();
+  if (!puzzle || !isWhite(row, col)) return;
+  const cells = wordCellsAt(row, col, direction);
+  for (const { row: r, col: c } of cells) {
+    const el = cellElements.get(`${r},${c}`);
+    if (el) el.classList.add("word-highlight");
+  }
+  const start = cells[0];
+  const selector = `.clue-segment[data-row="${start.row}"][data-col="${start.col}"][data-direction="${direction}"]`;
+  const segment = document.querySelector(selector);
+  if (segment) segment.classList.add("hover-highlight");
+}
+
+// Vertical word on Shift or CapsLock (either one), horizontal otherwise —
+// getModifierState() is part of the DOM's shared modifier-key mixin, so it
+// works on a MouseEvent (mouseenter) exactly like on a KeyboardEvent, no
+// separate key-tracking state needed.
+function hoverDirectionFromEvent(event) {
+  return event.getModifierState("Shift") || event.getModifierState("CapsLock") ? "down" : "across";
+}
+
+// Shift/CapsLock can be toggled while the mouse sits still over the same
+// cell — re-evaluate the hover direction on every key change too, not just
+// on mouseenter, so the highlighted word switches live rather than only on
+// the next mouse movement.
+document.addEventListener("keydown", updateHoverForModifierKey);
+document.addEventListener("keyup", updateHoverForModifierKey);
+
+function updateHoverForModifierKey(event) {
+  if (!hoveredGridCell || (event.key !== "Shift" && event.key !== "CapsLock")) return;
+  highlightWordAt(hoveredGridCell.row, hoveredGridCell.col, hoverDirectionFromEvent(event));
+}
+
 function setStatus(message, isError) {
   status.textContent = message;
   status.classList.toggle("error", Boolean(isError));
@@ -152,6 +226,10 @@ function renderGrid() {
   // stays aligned automatically.
   gridEl.style.gridTemplateColumns = `repeat(${width + 1}, 2rem)`;
   gridEl.innerHTML = "";
+  // The grid is fully rebuilt below, so every previous cell element (and
+  // any hover state referring to it) is about to become stale.
+  cellElements = new Map();
+  hoveredGridCell = null;
 
   const corner = document.createElement("div");
   corner.className = "cell header-cell";
@@ -198,6 +276,18 @@ function renderGrid() {
       if (!showSolution) {
         cell.addEventListener("click", () => selectCell(r, c));
       }
+      // Hover word highlighting works the same in every mode (typing,
+      // solution shown, checking) — it's a passive reading aid, not tied
+      // to the click-to-select input flow above.
+      cellElements.set(`${r},${c}`, cell);
+      cell.addEventListener("mouseenter", (event) => {
+        hoveredGridCell = { row: r, col: c };
+        highlightWordAt(r, c, hoverDirectionFromEvent(event));
+      });
+      cell.addEventListener("mouseleave", () => {
+        hoveredGridCell = null;
+        clearHighlights();
+      });
       gridEl.appendChild(cell);
     }
   }
@@ -234,9 +324,22 @@ function renderClueLines(container, words, direction, positionKey) {
     // backend's own filtering works hard to prevent (see the
     // project-best-practices SKILL). An honest placeholder instead.
     const noDefinition = I18N[uiLanguage].noDefinition;
-    line.appendChild(document.createTextNode(
-      " " + entries.map((w) => `(${w.number}) ${w.clue || noDefinition}`).join(" — ")
-    ));
+    line.appendChild(document.createTextNode(" "));
+    // Each word gets its own hoverable span (not just plain text joined
+    // by " — ") so hovering *this* word's definition highlights only its
+    // own cells in the grid, not every word chained onto the same line.
+    entries.forEach((w, i) => {
+      if (i > 0) line.appendChild(document.createTextNode(" — "));
+      const segment = document.createElement("span");
+      segment.className = "clue-segment";
+      segment.dataset.row = w.row;
+      segment.dataset.col = w.col;
+      segment.dataset.direction = w.direction;
+      segment.textContent = `(${w.number}) ${w.clue || noDefinition}`;
+      segment.addEventListener("mouseenter", () => highlightWordAt(w.row, w.col, w.direction));
+      segment.addEventListener("mouseleave", clearHighlights);
+      line.appendChild(segment);
+    });
     container.appendChild(line);
   }
 }

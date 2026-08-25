@@ -282,3 +282,48 @@ English (see `project-best-practices`).
   (the actual `rsvg-convert` path used in production), and read the
   resulting PNG — the watermark is faintly visible behind the entire page
   (empty puzzle and solution both), correctly sized and centered.
+
+- added bidirectional hover highlighting between the grid and the clue
+  lists, at the user's explicit request: hovering a grid cell frames every
+  cell of the word under the cursor (`.cell.word-highlight`, an inset
+  `box-shadow` border in `--accent`, not a background fill — kept visually
+  distinct from `.selected`'s solid blue fill and the green/red
+  correctness states, and composes cleanly when a cell is several of
+  these at once) and highlights that word's own clue text
+  (`.clue-segment.hover-highlight`, a `--selected`-colored background);
+  hovering a clue highlights the matching cells in the grid, the same
+  direction. Direction on grid hover is Shift-or-CapsLock = vertical word,
+  otherwise horizontal — matches the existing typing convention already
+  established for cell input (`handleKeydown`'s `isUpper` check), so the
+  same modifier gesture means "vertical" everywhere in the UI, not just
+  for typing. Re-evaluated live on every Shift/CapsLock keydown/keyup too,
+  not just on mouseenter, so the highlighted word switches immediately if
+  the modifier is toggled while the mouse sits still over the same cell.
+  `renderClueLines()`'s previously plain-text-joined clue line
+  (`"(1) clue — (2) clue"`) is now built from individual
+  `<span class="clue-segment" data-row data-col data-direction>` elements
+  per word instead, so a single word's own hover target can be
+  distinguished from its neighbors on the same line — the row/col/
+  direction triple is enough to identify a word uniquely (verified
+  against real generated grid data: two different words can share the
+  same clue *number* at the same starting cell — one across, one down —
+  so `data-number` alone would have been ambiguous, but adding direction
+  as the third key resolves it). Word extent (which cells belong to the
+  hovered word) is computed by scanning the grid's own `pattern` outward
+  from the hovered/clicked cell until a black cell or the edge
+  (`wordCellsAt()`), not by looking anything up in `puzzle.words` first —
+  works from any cell in the word, not just its numbered start, and
+  every white run is guaranteed ≥3 cells by the backend's own structural-
+  validity check, so there's no length-1/2 fragment edge case to handle.
+  This session's environment still has no browser-automation tooling
+  (see the info-badge entry above) — verified as thoroughly as possible
+  without one: real JS syntax check via a temporarily `pip install`ed
+  `esprima` (removed again afterward, never added to `requirements.txt`
+  — it's a one-off verification tool, not a runtime dependency), and the
+  `wordCellsAt()` word-extent algorithm mirrored in a standalone Python
+  script and run against a real generated grid's actual `pattern`/`words`
+  data — confirmed it reconstructs the exact same cells (and the same
+  `length`) as the backend's own word metadata for all 24 words, hovering
+  from both a word's start cell and a middle cell. The actual pixel-level
+  hover appearance in a real browser is still unverified and owed, same
+  caveat as the info badge.

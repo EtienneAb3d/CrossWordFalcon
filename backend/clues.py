@@ -348,7 +348,10 @@ class LLMClueGenerator:
                 user_message = self._build_user_message(entry, language)
                 max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * len(batch)
                 try:
-                    content = self._call(system_prompt, user_message, max_tokens, timeout)
+                    content = self._call(
+                        answer, accented, _round + 1,
+                        system_prompt, user_message, max_tokens, timeout,
+                    )
                     candidates = self._parse_response(content)
                     if not candidates:
                         logger.warning(
@@ -496,7 +499,12 @@ class LLMClueGenerator:
             "— not as the whole answer, and not embedded inside a longer "
             "sentence either — in any spelling, case, or with/without "
             "accents. A same-family word (a different form of the same "
-            "root) is also forbidden.\n"
+            "root) is also forbidden — including a different inflection "
+            "of this exact same word (e.g. the masculine equivalent of a "
+            "feminine target, or a different tense/person of the same "
+            "verb): a near-identical variant still gives the answer away "
+            "just as much as the exact spelling would, even though it "
+            "isn't byte-for-byte the same.\n"
             "2. Do not write a bare grammatical/technical description — "
             "write an actual clue a crossword solver would enjoy, not a "
             "label. Describe what the word actually means.\n"
@@ -571,7 +579,7 @@ class LLMClueGenerator:
             parts.append(examples_block)
         return "\n\n".join(parts)
 
-    def _call(self, system_prompt, user_message, max_tokens, timeout):
+    def _call(self, answer, accented, round_number, system_prompt, user_message, max_tokens, timeout):
         try:
             response = httpx.post(
                 self.base_url,
@@ -596,6 +604,18 @@ class LLMClueGenerator:
                 "LLM_BASE_URL/LLM_MODEL/LLM_API_KEY in env.sh."
             ) from e
         content = response.json()["choices"][0]["message"]["content"]
+        # Logged here — the exact, unmodified text the LLM returned, before
+        # _strip_reasoning touches it and before any of generate()'s own
+        # parsing/filtering runs — so a deployed instance's log always has
+        # the ground truth for what the model actually said, not just our
+        # after-the-fact verdict on it (empty/rejected/etc.). Added after a
+        # real diagnosis session where the *reason* a word ended up with no
+        # clue couldn't be fully confirmed from the existing warning-only
+        # logging alone.
+        logger.info(
+            "clue round %d/3: %r (%r) — raw LLM response: %r",
+            round_number, answer, accented, content,
+        )
         return _strip_reasoning(content)
 
     @staticmethod

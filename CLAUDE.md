@@ -481,6 +481,53 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   kind of word most likely to trigger this exact "is it an abbreviation?" reasoning
   spiral) — 10/10 resolved, every clue well under the 20-word cap, no reasoning
   leaks or language drift observed.
+
+  A report from a separately deployed instance (a different machine/model than this
+  session's own) showed a word ending up with no clue despite the log seeming to
+  show a nearby success right after its round-1 failure — inconclusive from the
+  existing warning-only logging alone, since `generate()`'s retry rounds process the
+  *entire* pending word list once before circling back to any word that failed (so a
+  `current` progress count rising right after one word's failure is very likely a
+  *different* word's unrelated success, not that word being retried immediately).
+  Rather than keep reasoning about log timing, `_call()` now logs the LLM's exact,
+  unmodified response for every single call, unconditionally — `logger.info("clue
+  round %d/3: %r (%r) — raw LLM response: %r", ...)`, placed right after extracting
+  `content` from the HTTP response and before `_strip_reasoning()` touches it or any
+  of `generate()`'s own parsing/filtering runs, so a deployed instance's log always
+  has the ground truth for what the model actually said — not just this codebase's
+  after-the-fact verdict on it (empty/rejected/failed). Needed `answer`/`accented`/
+  the current round number threaded into `_call()` as parameters (previously an
+  HTTP-only method) purely so the log line can be tied to the same word/round
+  identifiers already used by the round-outcome warnings next to it. Verified live:
+  called `generate()` directly for `CHIER` (the exact word from the report) with
+  logging enabled — confirmed the new line fires with the full raw multi-line
+  response *before* any success/failure verdict is logged, for every call, matching
+  what was asked for.
+
+  Another reported bad clue: French `RASÉE` (FEMININE past participle of "raser", "to
+  shave") got "Il est rasé de près pour la fête" — leaking "rasé", a *different
+  inflection* (masculine) of this exact same word, not a different lexeme like
+  `MAMANS`'s "maman" or a grammatically-mismatched unrelated noun like `TENU`'s
+  "maison". The user explicitly requested a prompt-level fix (`_build_system_prompt()`'s
+  worked examples), not a code-level structural filter, and gave the reason: a
+  code-level ban matching any inflected variant of the target's own canonical lemma
+  would also reject legitimate, hard-to-avoid clue text for words whose lemma is a
+  fundamental verb like "être" — some form of "être" shows up almost everywhere in
+  French, including inside otherwise-valid clues for *other* être-conjugations, so a
+  blanket morphological-family filter risks making être-based words unclueable far
+  more often than it prevents leaks. This is exactly why `_contains_target_word`
+  (used by `_pick_clue`) only ever matches the exact answer/accented spelling plus the
+  word's own known canonical form(s) — never a full morphological expansion — a
+  deliberate scope limit, not an oversight. Fix: rule 1 in `_build_system_prompt()`
+  now explicitly names "a different inflection of this exact same word" (not just an
+  unrelated same-family word) as forbidden, and one new `rule_bad` illustration was
+  added per language with adjective/participle gender inflection — `RASÉE`/`AFEITADA`/
+  `RASATA` in French/Spanish/Italian, mirroring the same `TENU`/`CANSADO`/`STANCO`
+  language split (German/English have no predicative gender agreement, so this exact
+  trap can't occur in either). Verified live: resampled `RASÉE` 5 times through the
+  real local LLM server — no leak of "rasé"/"raser" in any sample — then re-tested
+  `TENU`/`LÉGALE`/`MAMANS` to confirm the rule 1 wording change didn't regress any
+  previously-fixed case.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most

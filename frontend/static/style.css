@@ -249,6 +249,16 @@ button:disabled {
   color: var(--incorrect-fg);
 }
 
+/* Hover-only word outline (grid <-> clue list, see script.js's
+   highlightWordAt()) — an inset border rather than a background fill, so
+   it reads as "this is the word under the cursor" without being confused
+   with .selected's solid blue fill or the green/red correctness states,
+   and so it composes cleanly when a cell is simultaneously .selected/
+   .correct/.incorrect and part of the hovered word. */
+.cell.white.word-highlight {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 .cell-number {
   position: absolute;
   top: 1px;
@@ -291,6 +301,15 @@ button:disabled {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.4;
+}
+
+/* One word's own "(N) clue text" within a chained clue-line (see
+   renderClueLines() in script.js) — its own hoverable unit, distinct from
+   the " — " separator between entries, so hovering it highlights only
+   that one word's cells in the grid, not the whole line. */
+.clue-segment.hover-highlight {
+  background: var(--selected);
+  border-radius: 3px;
 }
 
 /* Row (across) / column (down) index, matching the grid's own header

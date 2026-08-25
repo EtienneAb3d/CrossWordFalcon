@@ -1926,3 +1926,52 @@ content (the French crossword words/clues, the web UI text) stays in French
   (`ABC`/`ETC`/`ONU`/`PDG` — the exact kind of word likely to trigger
   this "is it an abbreviation?" spiral) — 10/10 resolved, all well
   under the cap, no reasoning leaks or language drift.
+
+- added always-on raw-response logging, at the user's explicit request,
+  after a report from a separately deployed instance that couldn't be
+  fully diagnosed from the existing warning-only logging alone: a word
+  ended up with no clue, and the log seemed to show a nearby success
+  right after its round-1 failure, but this session's own read of
+  `generate()`'s retry design suggests that's very likely a *different*
+  word's unrelated success (rounds process the whole pending list once
+  before circling back to any failure), not proof the reported word was
+  actually retried successfully. Rather than keep reasoning about log
+  timing without more data, `_call()` now logs the LLM's exact,
+  unmodified response for every single call, unconditionally, before
+  `_strip_reasoning()` or any of `generate()`'s own parsing/filtering
+  ever runs — so a deployed instance's log always has the ground truth
+  for what the model actually said. Verified live: called `generate()`
+  directly for the exact reported word (`CHIER`) with logging enabled —
+  confirmed the raw response line fires before any success/failure
+  verdict, for every call. Still waiting on the user to confirm from
+  their own deployed log whether the original report was this logging
+  gap or a genuine bug — this addition should make that determinable
+  next time either way.
+
+- fixed another real bad clue reported by hand: French `RASÉE` (FEMININE
+  past participle of "raser", "to shave") got "Il est rasé de près pour
+  la fête" — leaking "rasé", a different inflection (masculine) of this
+  exact same word, not a different lexeme. The user explicitly asked for
+  this to be fixed via *forbidden examples* (prompt-level), not a
+  code-level structural filter, and explained why: a code-level ban on
+  "any inflected variant of the target's own lemma" would also catch
+  legitimate, hard-to-avoid auxiliary usage for words whose canonical
+  lemma is a fundamental verb like "être" (a different form of "être"
+  shows up almost everywhere in French, including in valid clues for
+  other être-conjugations) — this project's existing `_contains_target_
+  word` only matches the exact answer/accented spelling and the known
+  canonical form(s), deliberately not a full morphological generator,
+  for exactly this reason. Fix is prompt-only, matching the established
+  pattern for this whole class of rule-1/rule-4 grammar traps
+  (`TENU`/`SEMAI`/`LÉGALE` before it): rule 1's text in
+  `_build_system_prompt()` now explicitly names "a different inflection
+  of this exact same word" as forbidden, not just an unrelated same-
+  family word, and one new `rule_bad` illustration was added per
+  language with adjective/participle gender inflection — `RASÉE`/
+  `AFEITADA`/`RASATA` in French/Spanish/Italian (German/English don't
+  have this trap, same reasoning as the earlier `TENU`/`CANSADO`/
+  `STANCO` case: no predicative gender agreement in either language).
+  Verified live: resampled `RASÉE` 5 times through the real local LLM
+  server — no leak of "rasé"/"raser" in any sample — then re-tested
+  `TENU`/`LÉGALE`/`MAMANS` (all previously-fixed cases) to confirm no
+  regression from the rule 1 wording change.
