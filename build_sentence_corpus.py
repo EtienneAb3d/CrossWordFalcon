@@ -1,42 +1,57 @@
 #!/usr/bin/env python3
 """
-Builds a reference sentence corpus per language from two OPUS
-(opus.nlpl.eu) sources — OpenSubtitles and Wikipedia — merged together.
-Used two ways downstream: backend/example_sentences.py looks up real
-usage examples of a word's exact inflected form in it (to ground
+Builds a reference sentence corpus per language from three OPUS
+(opus.nlpl.eu) sources — OpenSubtitles, Wikipedia, and Books — merged
+together. Used two ways downstream: backend/example_sentences.py looks up
+real usage examples of a word's exact inflected form in it (to ground
 backend/clues.py's clue-writing prompt for rare/ambiguous words — see the
-French "ARE" case in the project-best-practices SKILL); compute_word_
-frequencies.py counts word occurrences in it to build this project's own
+French "ARE" case in the project-best-practices SKILL); build_wordlist_
+freq.py counts word occurrences in it to build this project's own
 word-frequency source, replacing the previously-used HermitDave
 FrequencyWords lists (see the project-best-practices SKILL for why).
 
-Wikipedia is a deliberate second source, not a replacement for
-OpenSubtitles: subtitle dialogue is colloquial and covers everyday
+Wikipedia and Books are deliberate additional sources, not a replacement
+for OpenSubtitles: subtitle dialogue is colloquial and covers everyday
 vocabulary (conjugated verbs, casual nouns) that encyclopedic text rarely
 uses, while Wikipedia covers formal/technical vocabulary (and rare-but-
 real words like French "are", the land-area unit) that dialogue almost
-never does — each fills a real gap the other has.
+never does; Books (literary prose, mostly older translated novels) adds a
+third, narrative/descriptive register — richer written vocabulary than
+either dialogue or encyclopedic text tends to use — each of the three
+fills a real gap the other two have.
 
-The full per-language source is multi-gigabyte (compressed) for either
-corpus; downloading all of it for every language would be impractical
-here, so this fetches only the first `--max-bytes` of each compressed
-file via an HTTP Range request and decompresses whatever complete data
-that partial download yields (the truncated tail, if any, is simply
-dropped) — still hundreds of thousands of lines per source.
+The full per-language source is multi-gigabyte (compressed) for any of
+the three corpora; downloading all of it for every language would be
+impractical here, so this fetches only the first `--max-bytes` of each
+compressed file via an HTTP Range request and decompresses whatever
+complete data that partial download yields (the truncated tail, if any,
+is simply dropped) — still hundreds of thousands of lines per source.
+
+Each source's raw (pre-language-filter) sentences are cached under
+CORPUS/ (project root, gitignored) as `<lang>_<source>.txt` — kept
+specifically so a later reprocessing pass (a different filtering
+strategy, a new source, a scoring change) can re-run against already-
+downloaded text instead of re-fetching multi-hundred-thousand-line
+partial downloads from opus.nlpl.eu every time; a source already cached
+there is read from disk instead of downloaded again. This is a *raw*
+cache (one file per source, before language-filtering or merging) —
+distinct from data/reference_corpus/<lang>_sentences.txt, which stays the
+final, filtered-and-merged-across-all-sources output the rest of the
+pipeline actually reads.
 
 Kept sentences must be:
 - under 50 words (--max-words) — drops very long/merged blocks;
-- valid words of their own language, mostly: neither source is perfectly
-  monolingual per language file (dialogue/article text in another
-  language leaks into every language's split — the same contamination
-  problem build_wordlist_freq.py solves for word *lists*) — each sentence
-  is tokenized and checked against the language's Hunspell dictionary
-  (reusing build_wordlist_freq.py's HUNSPELL_SOURCE/_fetch_hunspell, same
-  cached dictionaries in data/hunspell_cache/); a sentence with too high a
-  fraction of unrecognized words is dropped as likely wrong-language
-  content (a "sentence containing parts in the wrong language") rather
-  than kept as a false grounding example or counted into our own
-  frequency table.
+- valid words of their own language, mostly: none of the three sources is
+  perfectly monolingual per language file (dialogue/article/prose text in
+  another language leaks into every language's split — the same
+  contamination problem build_wordlist_freq.py solves for word *lists*) —
+  each sentence is tokenized and checked against the language's Hunspell
+  dictionary (reusing build_wordlist_freq.py's HUNSPELL_SOURCE/_fetch_
+  hunspell, same cached dictionaries in data/hunspell_cache/); a sentence
+  with too high a fraction of unrecognized words is dropped as likely
+  wrong-language content (a "sentence containing parts in the wrong
+  language") rather than kept as a false grounding example or counted
+  into our own frequency table.
 
 Usage:
     python3 build_sentence_corpus.py fr
@@ -52,11 +67,19 @@ from pathlib import Path
 from build_wordlist_freq import HUNSPELL_ENCODING, HUNSPELL_SOURCE, _fetch_hunspell
 
 CORPUS_DIR = Path(__file__).resolve().parent / "data" / "reference_corpus"
+# Raw, pre-filter, per-source sentence cache — see the module docstring's
+# "Each source's raw..." paragraph. Deliberately a project-root sibling of
+# data/, not nested under it: data/ is this project's shipped/generated
+# *output* (some of it checked in), while CORPUS/ is a purely local,
+# gitignored working cache of upstream downloads, closer in spirit to
+# data/hunspell_cache/ or models/ than to data/reference_corpus/ itself.
+RAW_CORPUS_DIR = Path(__file__).resolve().parent / "CORPUS"
 
 # path template (language filled in) -> full download URL, per OPUS source.
 SOURCES = {
     "opensubtitles": "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2018/mono/{lang}.txt.gz",
     "wikipedia": "https://object.pouta.csc.fi/OPUS-Wikipedia/v1.0/mono/{lang}.txt.gz",
+    "books": "https://object.pouta.csc.fi/OPUS-Books/v1/mono/{lang}.txt.gz",
 }
 
 DEFAULT_MAX_BYTES = 50_000_000
@@ -162,6 +185,13 @@ def _filter_by_language(sentences, lang):
 
 
 def _fetch_source_sentences(source_name, url_template, lang, max_bytes, tmp_dir):
+    raw_cache_path = RAW_CORPUS_DIR / f"{lang}_{source_name}.txt"
+    if raw_cache_path.exists():
+        sentences = raw_cache_path.read_text(encoding="utf-8").splitlines()
+        print(f"  {len(sentences)} candidate sentences from {source_name} "
+              f"(cached: {raw_cache_path})", file=sys.stderr)
+        return sentences
+
     url = url_template.format(lang=lang)
     compressed_path = tmp_dir / f"{lang}_{source_name}.txt.gz.part"
     print(f"Downloading up to {max_bytes:,} bytes of {source_name} ({lang}) ...", file=sys.stderr)
@@ -170,6 +200,9 @@ def _fetch_source_sentences(source_name, url_template, lang, max_bytes, tmp_dir)
     compressed_path.unlink()
     sentences = _split_sentences(raw, MAX_WORDS_PER_SENTENCE)
     print(f"  {len(sentences)} candidate sentences from {source_name}", file=sys.stderr)
+
+    RAW_CORPUS_DIR.mkdir(parents=True, exist_ok=True)
+    raw_cache_path.write_text("\n".join(sentences) + "\n", encoding="utf-8")
     return sentences
 
 

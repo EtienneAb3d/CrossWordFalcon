@@ -48,6 +48,19 @@ content (the French crossword words/clues, the web UI text) stays in French
    later). Never mention this auto-update rule inside `README.md` itself —
    it only lives in this SKILL.
 
+6. **Recompute the *entire* downstream data pipeline whenever the initial
+   corpus source list changes** — adding/removing/changing an OPUS source
+   in `build_sentence_corpus.py` means re-running, for every affected
+   language, all three stages in order: `build_sentence_corpus.py` (the
+   sentence corpus itself), `build_wordlist_freq.py` (the wordlist —
+   frequencies/canonical forms depend on what's in the corpus), *and*
+   `build_gloss_dictionary.py` (glosses are looked up by each wordlist's
+   own CANONICAL column, so a wordlist rebuild can introduce or drop
+   lemmas the gloss dictionary hasn't caught up with yet). Doing only the
+   first stage and treating the rest as optional/deferred leaves the
+   pipeline in a silently inconsistent state — this is a standing rule
+   now, not something to ask about or defer each time it comes up.
+
 6. **Keep `env_default.sh` (project root) in sync with `env.sh`'s structure**
    whenever a notable change touches `env.sh` (a new variable, a changed
    default, a new provider block) — same variables and comments, but never
@@ -1975,3 +1988,97 @@ content (the French crossword words/clues, the web UI text) stays in French
   server — no leak of "rasé"/"raser" in any sample — then re-tested
   `TENU`/`LÉGALE`/`MAMANS` (all previously-fixed cases) to confirm no
   regression from the rule 1 wording change.
+
+- added a third OPUS source (Books — literary prose) to `build_sentence_
+  corpus.py` and reprocessed all 5 languages' corpora/wordlists end to
+  end, at the user's explicit request. Also added, per the same request:
+  a raw per-source sentence cache under `CORPUS/` (project root,
+  gitignored) so a future reprocessing pass doesn't need to re-download
+  from opus.nlpl.eu — a source already cached there is read from disk
+  instead; and a 50% score penalty for likely proper nouns
+  (`PROPER_NOUN_SCORE_FACTOR` in `build_wordlist_freq.py`), after a
+  report that "easy" difficulty grids had too many of them — detected
+  via the existing as-is-vs-title-cased Hunspell signal (a word only
+  valid capitalized, in a language where common words aren't normally
+  capitalized), deliberately *not* applied to German, where every noun
+  requires capitalization regardless of common/proper status, so the
+  same signal carries no information there. See the CLAUDE.md entries
+  for both scripts for full detail (URL verification, the exact
+  detection/degradation logic, worked examples).
+
+  Sequencing mattered here: verified the OPUS Books URL pattern resolves
+  for all 5 languages, then ran a tiny (`--max-bytes 2000000`) smoke test
+  for Italian through both scripts end-to-end (confirmed the new source
+  downloads/merges/caches correctly, and that a second run reuses the
+  cache instead of re-downloading), deleted that smoke-test's tiny cache
+  and output (so the real run wouldn't wrongly reuse 2MB of cached data
+  instead of downloading the full default 50MB), *then* launched the
+  real, full 5-language reprocessing as a background job (~7 minutes
+  total for all 5 languages — much faster than expected going in).
+  Verified live afterward: `git status` confirms `CORPUS/` never shows as
+  untracked (properly gitignored); generated real grids end-to-end from
+  the freshly-regenerated `wordlist_fr_full.tsv`/`wordlist_de_full.tsv`
+  through the actual `generate_grid()` function; confirmed German's
+  summary line correctly omits the "(N likely proper nouns...)" suffix
+  the other 4 languages show, matching `PROPER_NOUN_LANGS`'s design.
+  Noticed and flagged to the user, but did *not* act on unprompted since
+  it's a separate, much larger undertaking (multi-GB per language — see
+  `build_gloss_dictionary.py`'s own entry in CLAUDE.md): the gloss
+  dictionaries (`data/gloss_dictionary/<lang>_glosses.jsonl`, used to
+  gate "easy" difficulty via `require_gloss`) are now slightly stale
+  relative to the regenerated wordlists — measured directly for French,
+  "easy" mode still finds gloss coverage for 109,088 of 112,385 words
+  (~97%, a ~3% drop from full coverage, mostly words newly introduced or
+  newly re-ranked by the Books source), a small, non-blocking gap, not a
+  functional regression, but worth a rebuild next time someone wants full
+  coverage of what the Books corpus specifically added.
+
+- the "why does `data/reference_corpus/` look unmodified" question above
+  led to the user asking to rebuild `data/gloss_dictionary/` too ("Idem
+  pour data/gloss_dictionary"), then stating directly: recomputing the
+  *entire* downstream pipeline is standing best practice whenever the
+  initial corpus source list changes, not just the first stage — now
+  codified as permanent rule 6 in this SKILL, and as a `feedback`-type
+  memory (`feedback_pipeline_recompute.md`) so it carries into future
+  sessions on this project even outside this SKILL. The gap this closed:
+  the Books-corpus addition earlier in this session rebuilt the sentence
+  corpus and wordlist for all 5 languages but left the gloss dictionaries
+  (dated the day before, confirmed via their file timestamps) untouched —
+  correctly flagged as a known gap at the time, but treated as optional/
+  deferred rather than part of the same change, which is exactly the
+  framing the user corrected.
+
+  Separately, mid-rebuild, the user asked for the same raw-download
+  caching `build_sentence_corpus.py`'s `CORPUS/` already does: keep each
+  language's full Kaikki/Wiktionary dump under `DICS/` (project root,
+  gitignored) instead of deleting it right after filtering, so a later
+  gloss-dictionary rebuild re-filters an already-downloaded dump instead
+  of re-fetching several gigabytes per language. Caught mid-flight: the
+  first rebuild attempt (without this change yet) was already downloading
+  French's ~3.2GB dump when the request came in — killed that process
+  tree (the outer bash script, the Python process, and its `curl` child)
+  and deleted the resulting `.part` file rather than let it finish under
+  the old delete-after-use code, so every one of the 5 languages —
+  including French — would get a genuine `DICS/` cache from a clean
+  restart, instead of French alone ending up inconsistent with the other
+  four. Verified live: confirmed via `ps`/`pgrep` that all 3 processes
+  were actually gone before deleting the partial file and relaunching;
+  confirmed the relaunched run correctly re-downloads (no stale cache to
+  find yet) rather than silently no-op'ing.
+
+  All 5 languages' gloss dictionaries finished rebuilding against the
+  Books-updated wordlists — French/English/German/Spanish/Italian's
+  `data/gloss_dictionary/<lang>_glosses.jsonl` all show as modified in
+  git (as expected — unlike `CORPUS/`/`DICS/`/`data/reference_corpus/`,
+  these are checked in). `DICS/` ended up ~11GB total (`de`/`en`/`fr`
+  ~3.2-3.3GB each, `es` ~1.4GB, `it` ~460MB — matching the sizes already
+  on record in CLAUDE.md). Verified live: re-ran `build_gloss_dictionary.
+  py it` a second time standalone — correctly reused the cached dump
+  ("Using cached Wiktionary dump: ...") and finished in ~3.8s instead of
+  re-downloading 460MB; re-measured French's "easy"-mode gloss coverage
+  (from `require_gloss=True`) — 110,487 of 112,385 words now, up from
+  109,088 before this rebuild — and generated a real grid end-to-end from
+  the fully-rebuilt French wordlist through `generate_grid()`. The whole
+  pipeline (sentence corpus → wordlist → gloss dictionary, for all 5
+  languages) is now fully consistent with the Books-corpus addition, per
+  rule 6 above.

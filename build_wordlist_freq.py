@@ -3,8 +3,8 @@
 Builds a crossword wordlist (WORD<TAB>ACCENTED<TAB>FREQUENCY<TAB>CANONICAL)
 for one language, from its reference sentence corpus
 (data/reference_corpus/<lang>_sentences.txt, built by
-build_sentence_corpus.py from OpenSubtitles + Wikipedia) — used for all
-five languages (data/wordlist_{fr,en,de,es,it}_full.tsv). Word frequency is
+build_sentence_corpus.py from OpenSubtitles + Wikipedia + Books) — used
+for all five languages (data/wordlist_{fr,en,de,es,it}_full.tsv). Word frequency is
 computed directly here (counting occurrences in the corpus) rather than
 via a separate persisted intermediate file: an earlier version of this
 pipeline wrote that count to data/raw/<lang>_50k.txt as a hand-off between
@@ -59,6 +59,24 @@ for, so it was folded into one script and the file removed.
   plausible meaning and leaves resolving genuine ambiguity to the LLM,
   which sees the word in its actual clue-writing context, rather than
   silently committing to one meaning at dictionary-build time.
+- Likely proper nouns (person/place/brand names) have their FREQUENCY
+  multiplied by PROPER_NOUN_SCORE_FACTOR (0.5), after a report that they
+  showed up too often at "easy" difficulty (see backend/crossword_gen.py's
+  DIFFICULTY_PRESETS, which caps "easy" to the globally-highest-scored
+  words). Detected via the same as-is-vs-title-cased check `_spellcheck_
+  valid` already does for every candidate: in French/English/Spanish/
+  Italian, an ordinary word is normally written lowercase in running text,
+  so a candidate that Hunspell only recognizes once capitalized (and
+  wasn't already capitalized in the corpus itself) is overwhelmingly
+  likely to be a name that happened to appear in a lowercased/otherwise-
+  uncapitalized corpus line, not a common word. This signal is deliberately
+  *not* applied to German: every German noun, common or proper, requires
+  capitalization, so "needed title-case to validate" carries no proper-
+  noun information there at all — see PROPER_NOUN_SCORE_FACTOR's own
+  comment. Not a hard exclusion (a real proper noun can still be a
+  legitimate, well-known crossword answer) — a same-magnitude demotion
+  rather than a removal, so a very frequent name can still rank above a
+  rare common word, just not among the very easiest words by default.
 
 Usage:
     python3 build_wordlist_freq.py fr
@@ -84,6 +102,17 @@ _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 # FREQUENCY bullet in the module docstring above.
 CANONICAL_WEIGHT = 0.9
 
+# Multiplier applied to a likely proper noun's final score — see the
+# "Likely proper nouns" bullet in the module docstring. A flat halving
+# rather than a more elaborate formula: this is a coarse signal (one
+# Hunspell capitalization check, not real named-entity recognition), so a
+# coarse correction matches it — enough to push most proper nouns out of
+# "easy" difficulty's globally-highest-scored cutoff without pretending to
+# rank them precisely against each other or against common words.
+# Languages where every noun requires capitalization regardless of common/
+# proper status (German) get no adjustment at all: see PROPER_NOUN_LANGS.
+PROPER_NOUN_SCORE_FACTOR = 0.5
+
 # Parses one "-m" morphological-analysis output line, e.g.
 # "déterminées  st:déterminer fl:p+" -> ("déterminées", "déterminer").
 _STEM_LINE_RE = re.compile(r"^(\S+)\s+st:(\S+)")
@@ -100,6 +129,15 @@ HUNSPELL_SOURCE = {
     "es": "es/es_ES",
     "it": "it_IT/it_IT",
 }
+
+# Languages where an ordinary common word is normally written lowercase in
+# running text, so "Hunspell only validated the title-cased form" (see
+# _spellcheck_valid) is a meaningful proper-noun signal — every HUNSPELL_
+# SOURCE language except German, whose nouns are ALL capitalized
+# regardless of common/proper status, so the same signal there would flag
+# ordinary nouns ("Haus") just as often as real names and carries no
+# useful information — see PROPER_NOUN_SCORE_FACTOR above.
+PROPER_NOUN_LANGS = set(HUNSPELL_SOURCE) - {"de"}
 
 # Actual byte encoding of each pair's .dic/.aff, verified with `file` since
 # a missing "SET" line in the .aff doesn't reliably mean the Hunspell
@@ -269,7 +307,7 @@ def main():
 
     accented_by_raw = _spellcheck_valid(lang, [w for w, _ in candidates])
 
-    best = {}  # word -> (count, accented)
+    best = {}  # word -> (count, accented, likely_proper_noun)
     excluded = 0
     for raw_word, raw_count in candidates:
         if accented_by_raw is not None:
@@ -281,8 +319,13 @@ def main():
             accented = raw_word
         count = float(raw_count)
         word = strip_accents(raw_word).upper()
+        # See PROPER_NOUN_SCORE_FACTOR/PROPER_NOUN_LANGS above: only
+        # meaningful when Hunspell had to capitalize the word itself to
+        # validate it (accented != raw_word) in a language where ordinary
+        # words aren't normally capitalized in running text.
+        likely_proper_noun = lang in PROPER_NOUN_LANGS and accented != raw_word
         if word not in best or count > best[word][0]:
-            best[word] = (count, accented)
+            best[word] = (count, accented, likely_proper_noun)
 
     # Blend in the frequency of each word's most probable canonical form —
     # see the FREQUENCY bullet in the module docstring. Also keep EVERY
@@ -295,29 +338,34 @@ def main():
     # highest-frequency candidate here would silently commit to one
     # meaning before the LLM ever sees the word in its actual clue-writing
     # context, which is the wrong layer to resolve a genuine ambiguity.
-    stems_by_form = _stem_map(lang, [accented for _, accented in best.values()])
+    stems_by_form = _stem_map(lang, [accented for _, accented, _ in best.values()])
     scored = {}
-    for word, (own_freq, accented) in best.items():
-        candidates = stems_by_form.get(accented, [])
+    for word, (own_freq, accented, likely_proper_noun) in best.items():
+        stem_candidates = stems_by_form.get(accented, [])
         canonical_freq = None
-        for stem in candidates:
+        for stem in stem_candidates:
             stem_entry = best.get(strip_accents(stem).upper())
             if stem_entry is not None and (canonical_freq is None or stem_entry[0] > canonical_freq):
                 canonical_freq = stem_entry[0]
         if canonical_freq is None:
             canonical_freq = own_freq
         score = CANONICAL_WEIGHT * canonical_freq + (1 - CANONICAL_WEIGHT) * own_freq
+        if likely_proper_noun:
+            score *= PROPER_NOUN_SCORE_FACTOR
         # Dedupe while preserving order; no stem found means the word is its own lemma.
-        canonical_forms = list(dict.fromkeys(candidates)) or [accented]
+        canonical_forms = list(dict.fromkeys(stem_candidates)) or [accented]
         scored[word] = (score, accented, canonical_forms)
 
     with open(dst, "w", encoding="utf-8") as out:
         for word, (score, accented, canonical_forms) in sorted(scored.items(), key=lambda kv: -kv[1][0]):
             out.write(f"{word}\t{accented}\t{score}\t{';'.join(canonical_forms)}\n")
 
+    proper_noun_count = sum(1 for _, _, likely_proper_noun in best.values() if likely_proper_noun)
     message = f"{len(best)} words written to {dst}"
     if accented_by_raw is not None:
         message += f" ({excluded} words not found in the {lang!r} dictionary filtered out)"
+    if lang in PROPER_NOUN_LANGS:
+        message += f" ({proper_noun_count} likely proper nouns scored at {PROPER_NOUN_SCORE_FACTOR:.0%})"
     print(message)
 
 

@@ -29,8 +29,12 @@ download would only ever cover words starting with the first few letters
 of the alphabet. Each is downloaded in full (multi-gigabyte), filtered
 down to just the lemmas this project's dictionaries actually use (a few
 hundred thousand words at most, vs. every word/sense Wiktionary has), and
-the raw download is deleted immediately after — only the small filtered
-result is kept.
+kept under DICS/ (project root, gitignored — same caching principle as
+build_sentence_corpus.py's CORPUS/) rather than deleted: a lemma already
+cached there is read from disk instead of re-downloaded, so a later
+rebuild (the wordlist's own CANONICAL column changed, MAX_GLOSSES_PER_
+WORD changed, etc.) doesn't need to re-fetch several gigabytes per
+language from kaikki.org every time.
 
 Usage:
     python3 build_gloss_dictionary.py fr
@@ -44,6 +48,13 @@ from pathlib import Path
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 GLOSS_DIR = DATA_DIR / "gloss_dictionary"
+# Raw, full Kaikki/Wiktionary dump cache — see the module docstring's
+# "kept under DICS/" paragraph. A project-root sibling of CORPUS/ (build_
+# sentence_corpus.py's own raw cache), not nested under data/: both are
+# purely local, gitignored working caches of upstream downloads, distinct
+# from GLOSS_DIR above, which stays the final, filtered, checked-into-git
+# output the rest of the pipeline actually reads.
+DICS_DIR = Path(__file__).resolve().parent / "DICS"
 
 # Kaikki source per language: (edition, word-language-name-in-that-edition).
 # English uses the primary (English-Wiktionary-sourced) extraction, already
@@ -95,8 +106,12 @@ def build_gloss_dictionary(lang):
     print(f"Looking for glosses for {len(lemmas)} lemmas", file=sys.stderr)
 
     GLOSS_DIR.mkdir(parents=True, exist_ok=True)
-    raw_path = GLOSS_DIR / f"{lang}_wiktionary.jsonl.part"
-    _download(_kaikki_url(lang), raw_path)
+    DICS_DIR.mkdir(parents=True, exist_ok=True)
+    raw_path = DICS_DIR / f"{lang}_wiktionary.jsonl"
+    if raw_path.exists():
+        print(f"Using cached Wiktionary dump: {raw_path}", file=sys.stderr)
+    else:
+        _download(_kaikki_url(lang), raw_path)
 
     found = {}  # lemma_lower -> {"word": natural spelling, "entries": [{"pos":..., "glosses":[...]}]}
     with open(raw_path, encoding="utf-8", errors="ignore") as f:
@@ -123,8 +138,6 @@ def build_gloss_dictionary(lang):
                 "pos": entry.get("pos", ""),
                 "glosses": glosses[:MAX_GLOSSES_PER_WORD],
             })
-
-    raw_path.unlink()
 
     dst = GLOSS_DIR / f"{lang}_glosses.jsonl"
     with open(dst, "w", encoding="utf-8") as out:

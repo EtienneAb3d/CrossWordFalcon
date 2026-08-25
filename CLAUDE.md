@@ -8,9 +8,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
 
 - `build_sentence_corpus.py` — one-off preprocessing script: downloads a partial
-  chunk (`--max-bytes`, default 50MB per source) of two OPUS (opus.nlpl.eu) corpora —
-  OpenSubtitles (colloquial/dialogue vocabulary) and Wikipedia (formal/technical
-  vocabulary, and rare-but-real words dialogue rarely uses) — per language, merges
+  chunk (`--max-bytes`, default 50MB per source) of three OPUS (opus.nlpl.eu) corpora —
+  OpenSubtitles (colloquial/dialogue vocabulary), Wikipedia (formal/technical
+  vocabulary, and rare-but-real words dialogue rarely uses), and Books (literary/
+  narrative prose, mostly older translated novels — a third, descriptive-vocabulary
+  register neither dialogue nor encyclopedic text tends to use; added at the user's
+  explicit request) — per language, merges
   them, and filters out sentences likely to contain a wrong-language part: dropped if
   either a contiguous run of `MAX_INVALID_RUN` (3+) words the language's own Hunspell
   dictionary doesn't recognize, or too high an overall fraction of them
@@ -20,7 +23,21 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   — generated, not source content). Used two ways: `build_wordlist_freq.py` counts
   word occurrences in it (`_count_word_frequencies`); `backend/example_sentences.py`
   looks up real usage examples of a specific inflected form in it (see
-  backend/clues.py).
+  backend/clues.py). Each source's own raw (pre-language-filter) sentences are also
+  cached under `CORPUS/` (project root, gitignored — added at the user's explicit
+  request, "keep the corpora for a possible later reprocessing"): a source already
+  cached there is read from disk instead of re-downloaded, so a future change to the
+  filtering strategy, the scoring, or an added source doesn't need to re-fetch
+  multi-hundred-thousand-line partial downloads from opus.nlpl.eu every single time —
+  distinct from `data/reference_corpus/`, which stays the final, filtered-and-merged
+  output the rest of the pipeline actually reads. Verified live: confirmed the OPUS
+  Books URL pattern (`https://object.pouta.csc.fi/OPUS-Books/v1/mono/{lang}.txt.gz`)
+  resolves (HTTP 200) for all 5 supported languages before wiring it in, then ran a
+  small (`--max-bytes 2000000`) smoke test end-to-end for Italian — confirmed the
+  Books source downloads and merges correctly, and that a second run reuses all 3
+  cached raw sources (`CORPUS/it_*.txt`) instead of re-downloading (~1.25s vs. the
+  first run's real network time) — before deleting that tiny smoke-test cache and
+  launching the real, full-scale reprocessing for all 5 languages.
 - `build_wordlist_freq.py` — one-off preprocessing script that reads a language's
   reference corpus (`data/reference_corpus/<lang>_sentences.txt`, counting word
   occurrences itself — `_count_word_frequencies`) and writes
@@ -56,7 +73,30 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   (correcting subtitle/dialogue-frequency distortion, e.g. French `déterminées` ranked
   far below its infinitive `déterminer` despite being an equally easy word) and, kept
   in full, so `backend/gloss_lookup.py` can look up a real definition by lemma without
-  the ambiguity being silently resolved at dictionary-build time.
+  the ambiguity being silently resolved at dictionary-build time. A likely proper noun
+  (person/place/brand name) has its final `FREQUENCE` multiplied by
+  `PROPER_NOUN_SCORE_FACTOR` (0.5), at the user's explicit request after "easy"
+  difficulty grids came out with too many proper nouns (see `backend/crossword_gen.py`'s
+  `DIFFICULTY_PRESETS`, which caps "easy" to the globally-highest-scored words —
+  demoting a proper noun's score is what actually keeps it out of that cutoff more
+  often, not a hard exclusion, so a genuinely very common name can still qualify).
+  Detection reuses a signal `_spellcheck_valid` already computes for every candidate
+  rather than adding real named-entity recognition: in French/English/Spanish/Italian
+  (`PROPER_NOUN_LANGS` — every `HUNSPELL_SOURCE` language except German), an ordinary
+  word is normally written lowercase in running text, so a candidate Hunspell only
+  recognized once title-cased is overwhelmingly likely to be a name that happened to
+  appear lowercased in the corpus, not a common word. Deliberately excludes German:
+  every German noun, common or proper, requires capitalization, so the exact same
+  "needed title-case" signal that identifies a likely proper noun in the other four
+  languages would just flag ordinary nouns (`Haus`) there — a discussion the user's
+  own request surfaced directly, since a blanket rule across all 5 languages would
+  have been wrong for German specifically. Verified live: ran the updated script
+  end-to-end for Italian (smoke-test-scale corpus) — 3,340 of 62,247 words were
+  flagged and scored at 50%, spot-checked a sample of the flagged words directly in
+  the output TSV (`ANNA`, `LOMBARDIA`, `ROMA`, `ITALIA`, `GIORGIO`, `GERMANIA`,
+  `MARIA`, `FRANCIA`, `CAMPANIA` — all genuine proper nouns, no false positives
+  spotted in the sample) — before deleting that smoke-test output and re-running for
+  real as part of the full 5-language reprocessing.
 - `backend/crossword_gen.py` — the core grid generator library/CLI (all the grid-generation
   business logic lives in `backend/`). `generate_grid()` is the reusable entry point (used
   by both the CLI `main()` and `backend/app.py`); it takes a word list and produces a
@@ -573,11 +613,22 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `build_sentence_corpus.py`'s sources — they're not sorted by frequency, so a partial
   download would only ever cover words starting with the first few letters of the
   alphabet — so each is downloaded in full (multi-gigabyte: ~3.2GB for English, ~3.2GB
-  French, ~3.3GB German, ~1.4GB Spanish, ~460MB Italian) and immediately filtered down
+  French, ~3.3GB German, ~1.4GB Spanish, ~460MB Italian) and filtered down
   to just the lemmas `data/wordlist_<lang>_full.tsv`'s `CANONIQUE` column actually
-  needs (a few hundred thousand words at most) — the raw download is deleted right
-  after, only the small filtered result (`data/gloss_dictionary/<lang>_glosses.jsonl`,
-  checked into the repo — see `backend/gloss_lookup.py` above) is kept.
+  needs (a few hundred thousand words at most) — the small filtered result
+  (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — see
+  `backend/gloss_lookup.py` above) is what the app itself reads. The raw download
+  itself is kept too, not deleted after filtering — cached under `DICS/` (project
+  root, gitignored, mirroring `build_sentence_corpus.py`'s own `CORPUS/` raw cache),
+  at the user's explicit request: a lemma set that changes again later (a wordlist
+  rebuild adds/drops words, `MAX_GLOSSES_PER_WORD` changes, etc.) can re-filter
+  against the already-downloaded dump instead of re-fetching several gigabytes per
+  language from kaikki.org every time — a source already cached there is read from
+  disk instead of downloaded again. This is why rule 6 of the project-best-practices
+  SKILL treats `build_sentence_corpus.py` → `build_wordlist_freq.py` →
+  `build_gloss_dictionary.py` as one atomic pipeline: a corpus-source change can
+  ripple all the way to which lemmas this script needs to look up, so all three
+  stages get re-run together, not just the first one or two.
 - `backend/svg_export.py` — `save_grid_svg()`, called by `backend/app.py` once a grid
   and its clues are both ready: renders a single self-contained SVG (no external
   assets/fonts) — a header (logo, "CrossWordFalcon", `VERSION.txt`'s version, the
@@ -766,7 +817,7 @@ hit it.
 # Full pipeline to rebuild one language's wordlist from scratch (only needed to
 # refresh the source corpus/frequencies; data/wordlist_*.tsv are already checked
 # into data/). Each language is independent — no particular build order required.
-python3 build_sentence_corpus.py fr    # downloads OpenSubtitles+Wikipedia, filters
+python3 build_sentence_corpus.py fr    # downloads OpenSubtitles+Wikipedia+Books, filters
 python3 build_wordlist_freq.py fr      # counts words, validates, writes wordlist_fr_full.tsv
 
 # Optional: rebuild a language's gloss dictionary from scratch (large
