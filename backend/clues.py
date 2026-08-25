@@ -237,14 +237,23 @@ def _chunks(items, size):
         yield items[i:i + size]
 
 
-def _contains_target_word(candidate, answer, accented):
-    """True if the word being defined — the grid's bare form or its
-    accented spelling, matched case- and accent-insensitively — appears
-    anywhere in `candidate` as a whole word: either the clue is just the
-    word itself (old "copy" case), or the word is embedded inside a longer
-    sentence (e.g. "je serais s'il pleuvait demain" to define "serais") —
-    both give away the answer and neither is an actual clue."""
+def _contains_target_word(candidate, answer, accented, canonical=()):
+    """True if the word being defined — its bare/accented spelling, or one
+    of its candidate canonical form(s)/lemma(s) (see backend/crossword_gen.
+    py's `words[i]["canonical"]`) — matched case- and accent-insensitively,
+    appears anywhere in `candidate` as a whole word: the clue is just the
+    word itself (old "copy" case), the word is embedded inside a longer
+    sentence (e.g. "je serais s'il pleuvait demain" to define "serais"), or
+    a same-family word from the same root is used instead (e.g. singular
+    "maman" to define plural "MAMANS" — rule 1 forbids this, but the model
+    does it anyway; `canonical` is what lets this specific case be caught
+    automatically, since "maman" is MAMANS' own Hunspell-derived lemma) —
+    all three give away the answer and none is an actual clue. This still
+    can't catch every same-family leak (only ones matching a known
+    canonical form exactly, not a fully general stem check), but is a real
+    improvement over checking the target word alone."""
     targets = {_normalize(answer), _normalize(accented)}
+    targets.update(_normalize(c) for c in canonical)
     tokens = {_normalize(t) for t in _WORD_TOKEN_RE.findall(candidate)}
     return bool(targets & tokens)
 
@@ -311,14 +320,14 @@ class LLMClueGenerator:
                 break
             for batch in _chunks(pending, _BATCH_SIZE):
                 entry = batch[0]
-                accented_to_answer = {entry[1]: entry[0]}
+                accented_to_entry = {entry[1]: entry}
                 system_prompt = self._build_system_prompt(difficulty, language)
                 user_message = self._build_user_message(entry, language)
                 max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * len(batch)
                 try:
                     content = self._call(system_prompt, user_message, max_tokens, timeout)
-                    raw = self._parse_response(content, accented_to_answer.keys())
-                    clues.update(self._pick_clues(raw, accented_to_answer))
+                    raw = self._parse_response(content, accented_to_entry.keys())
+                    clues.update(self._pick_clues(raw, accented_to_entry))
                 except ClueGenerationError as e:
                     errors.append(e)
                 if on_progress:
@@ -436,7 +445,15 @@ class LLMClueGenerator:
             f'a verb: its subject — {config["subject_pronouns"]} — and '
             "mood/tense; for a noun or adjective: singular or plural, and "
             "gender) and confirm your clue matches that exactly, not just "
-            "a same-meaning idea in a different form.\n"
+            "a same-meaning idea in a different form. Two specific traps: "
+            "(a) a generic dictionary-style definition of the bare action "
+            "or state (e.g. \"the act of doing X\") describes the "
+            "infinitive, not a specific conjugated form — rephrase it so "
+            "it is unmistakably tied to that exact person/tense instead; "
+            "(b) if your clue names a person or thing to carry the word's "
+            "adjective/participle (e.g. \"a house\", \"a runner\"), that "
+            "noun must itself carry the SAME gender and number as the "
+            "word being defined — never let it silently disagree.\n"
             "5. The clue must reflect the word's actual, real meaning — "
             "never an unrelated sentence that merely sounds plausible. "
             "Check any dictionary definition(s)/example(s) you were given "
@@ -549,26 +566,29 @@ class LLMClueGenerator:
         return result
 
     @staticmethod
-    def _pick_clues(raw, accented_to_answer):
+    def _pick_clues(raw, accented_to_entry):
         """Picks one of the (up to 3) candidate clues per word at random —
         favors variety across regenerations of the same word, and keeps the
         choice out of the LLM's hands as requested. Drops any candidate
         that isn't actually a clue: empty, non-Latin-script drift, or the
-        word being defined appearing anywhere in it, whether as the whole
-        clue or embedded in a longer sentence (the prompt forbids this, but
-        small local models sometimes do it anyway — see
-        `_contains_target_word`) — a word left with zero candidates after
-        filtering gets no entry here, which `generate()` reads as still
-        needing a clue and retries."""
+        word being defined (or a same-family word sharing its canonical
+        form/lemma, e.g. singular "maman" leaking into a clue for plural
+        MAMANS) appearing anywhere in it, whether as the whole clue or
+        embedded in a longer sentence (the prompt forbids this, but small
+        local models sometimes do it anyway — see `_contains_target_word`)
+        — a word left with zero candidates after filtering gets no entry
+        here, which `generate()` reads as still needing a clue and
+        retries."""
         clues = {}
         for key, candidates in raw.items():
-            answer = accented_to_answer.get(key) or accented_to_answer.get(key.upper())
-            if answer is None:
+            entry = accented_to_entry.get(key) or accented_to_entry.get(key.upper())
+            if entry is None:
                 continue
+            answer, _, canonical = entry
             candidates = [
                 c for c in candidates
                 if c and _NON_LATIN_RE.search(c) is None
-                and not _contains_target_word(c, answer, key)
+                and not _contains_target_word(c, answer, key, canonical)
             ]
             if candidates:
                 clues[answer] = random.choice(candidates)

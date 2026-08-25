@@ -316,6 +316,45 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   sentence lookup is by the exact inflected form instead, since Wiktionary is indexed by
   lemma but real usage sentences are not. Both sections are omitted entirely when
   nothing is found for a word — not every word has dictionary or corpus coverage.
+
+  Three real bad clues reported by hand after the schema/rule work above led to a
+  further round of filter/prompt fixes: (1) French `MAMANS` (plural "mums") got
+  "Personnes à qui l'on dit maman pour les appeler" — the singular `maman` (the exact
+  word's own Hunspell-derived lemma) leaking in unfiltered, a same-family-word case
+  rule 1 already forbids in the prompt but `_contains_target_word` never actually
+  checked for. Fixed in code, not just prompt text: `_contains_target_word` now also
+  takes the word's `canonical` form(s) (already computed per word for gloss lookup —
+  see `words[i]["canonical"]`) and blocks any of them appearing in the clue too, not
+  just the exact target spelling — `generate()`/`_pick_clues()` thread the whole
+  `(answer, accented, canonical)` entry through instead of just an accented→answer
+  map, so this is available where the filtering happens. Verified with an isolated
+  call: the literal MAMANS reproduction case is caught, a legitimate MAMANS clue that
+  doesn't touch the root isn't false-flagged, and the existing SERAIS-embedded-in-a-
+  sentence case still works. (2) French `SEMAI` (1st person singular passé simple of
+  "semer", "I sowed") got "Action de répandre des graines dans la terre" — a generic
+  dictionary-style definition of the infinitive, not phrased for the specific
+  conjugated form; the clue never contains "semer"/"semai" literally so no
+  containment filter could ever catch this — it's the same class of grammar-agreement
+  gap already documented above as an accepted, unfixed limitation ("no post-filter
+  for this... needs real parsing of the clue text"). (3) French `TENU` (MASCULINE
+  singular past participle of "tenir") got "Se dit d'une maison soignée et propre" —
+  `maison` is feminine, so the clue's own subject noun silently disagreed with the
+  masculine target. Both (2) and (3) are rule-4 grammar mismatches, not containment
+  leaks, so the fix for those two is prompt-only: rule 4 in `_build_system_prompt()`
+  now explicitly names both traps (a generic infinitive-style "the act of doing X"
+  definition standing in for a specific conjugated form; a clue's own subject noun
+  disagreeing in gender/number with the adjective/participle it's meant to describe),
+  and one new `rule_bad` illustration per trap was added to every language's prompt
+  config where the trap actually applies — the SEMAI-style infinitive-vs-conjugated
+  trap in all 5 (`SEMAI`/`SEMBRÉ`/`SEMINAI`/`SÄTE`/`SOWED`), the TENU-style gender-
+  disagreement trap only in the three languages with participle/adjective gender
+  agreement (`TENU`/`CANSADO`/`STANCO` — French/Spanish/Italian; German predicative
+  adjectives don't inflect for gender at all, and English has no grammatical gender,
+  so this trap can't occur in either). Verified live: resampled the exact `MAMANS`/
+  `TENU`/`SEMAI` words several times each through the real local LLM server after the
+  fix — no more root leak, correct masculine agreement, and (after one still-imperfect
+  present-tense sample, consistent with the known grammar-matching ceiling) correct
+  passé simple on repeat.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most

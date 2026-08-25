@@ -1747,3 +1747,33 @@ content (the French crossword words/clues, the web UI text) stays in French
   actual visual/hover check in a real browser is still owed and was
   explicitly flagged to the user as not done, rather than silently
   skipped or falsely claimed.
+
+- fixed three real bad clues the user reported by hand from live use
+  (French `MAMANS`/`SEMAI`/`TENU` — see the CLAUDE.md entry for the full
+  before/after text). Distinguished two different bug classes rather than
+  treating all three the same way: `MAMANS`'s clue leaked the word's own
+  singular root ("maman") — a same-family-word case rule 1 already
+  forbade in the prompt but the code-side filter never actually checked
+  for, since `_contains_target_word` only compared against the exact
+  target spelling. Fixed in code: it now also checks the word's
+  `canonical` form(s) (already computed per word for gloss lookup), so a
+  root-form leak like this is mechanically blocked, not just prompt-
+  requested. `SEMAI` (a generic infinitive-style "Action de..." clue for
+  a specific passé simple form) and `TENU` (a feminine subject noun
+  "maison" for a masculine participle) are a different class — neither
+  clue contains the target word or its root literally, so no containment
+  filter could ever catch them; both are rule-4 grammar-agreement misses,
+  the same category already documented as a known, accepted small-model
+  reliability ceiling. Fix there is prompt-only: rule 4's text now names
+  both specific traps explicitly, and one new `rule_bad` illustration per
+  trap was added per language, only where that language's own grammar
+  can actually produce the trap (the infinitive-vs-conjugated trap in all
+  5 languages; the gender-disagreement trap only in French/Spanish/
+  Italian, since German predicative adjectives don't inflect for gender
+  and English has none). Verified live, not just read back: resampled the
+  exact reported words several times each through the real local LLM
+  server after the change — no more root leak, correct gender agreement,
+  and correct passé simple tense on repeat (one still-imperfect sample
+  appeared once, consistent with this being a reliability ceiling, not a
+  fully solved problem — reported honestly rather than claiming a
+  complete fix).
