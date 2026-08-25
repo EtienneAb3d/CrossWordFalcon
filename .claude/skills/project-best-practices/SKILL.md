@@ -1590,3 +1590,38 @@ content (the French crossword words/clues, the web UI text) stays in French
   quality, especially on conjugation/agreement, at the cost of speed)
   is stated briefly in the README itself and in full in this SKILL's own
   entry on the model above, not re-derived from scratch in either place.
+
+- removed `run_llm.sh`'s own hardcoded default GGUF (`${LLAMA_GGUF_REPO:-
+  bartowski/Qwen_Qwen3.5-9B-GGUF}` and its two sibling `:-` defaults), at
+  the user's explicit request ("run_llm.sh must use the env.sh config,
+  not the default"). This was a real, previously-unnoticed design flaw:
+  every model swap this session required editing `run_llm.sh`'s hardcoded
+  fallback *and* `env_default.sh`'s active block *and* `env.sh`'s active
+  block in lockstep — three copies of the same fact, none of them
+  authoritative, that a missed edit could silently desynchronize (e.g.
+  `LLM_MODEL` naming one model while the GGUF actually served was a
+  different one, with nothing to catch the mismatch). Verified the
+  sourcing precedence was never actually broken before changing anything
+  — built a scratch copy of `env.sh` with a different model's block
+  active, sourced it, and confirmed `run_llm.sh`'s variable resolution
+  already picked it up correctly — so this was a maintainability/
+  duplication problem, not a functional bug in the override mechanism
+  itself. Fixed by: (1) `GGUF_REPO`/`GGUF_FILE`/`CHAT_TEMPLATE_KWARGS` are
+  now required (`${LLAMA_GGUF_REPO:?...}`-style, erroring clearly if
+  unset) rather than defaulted; (2) `run_llm.sh` sources `env_default.sh`
+  when `env.sh` doesn't exist yet, instead of relying on its own
+  duplicate copy of the default — `env_default.sh` is checked in and
+  always has a complete, valid four-line block active, so this loses
+  nothing; (3) `env_default.sh` and `env.sh` both now set all four of
+  `LLM_MODEL`/`LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE`/`LLAMA_CHAT_TEMPLATE_
+  KWARGS` directly in their active block (previously the three `LLAMA_*`
+  lines were commented out there too, relying on `run_llm.sh`'s now-
+  removed hardcoded default — the exact redundancy being eliminated).
+  Verified live: (a) with neither `env.sh` nor `env_default.sh` present,
+  the script now fails immediately with a clear "not set" error instead
+  of silently reaching for a stale value; (b) `./run_llm.sh` with the
+  real, restored `env.sh` still launches the correct model (Qwen3.5-9B);
+  (c) a full grid generated successfully end-to-end through the actual
+  running API afterward. Going forward, changing the default model only
+  ever requires editing `env_default.sh` (and matching `env.sh` if the
+  user wants to follow suit) — never `run_llm.sh` itself.

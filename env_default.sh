@@ -8,19 +8,19 @@
 # variables below to change provider, no code change needed.
 #
 # Default: the local llama.cpp server (see run_llm.sh) serving a quantized
-# Qwen3.5-9B GGUF (thinking disabled, see LLAMA_CHAT_TEMPLATE_KWARGS below)
-# — this project's very first default, restored here. No real API key
-# needed — llama.cpp ignores the bearer token unless you configured it to
-# require one.
+# Qwen3.5-9B GGUF (thinking disabled) — this project's very first default,
+# restored here. No real API key needed — llama.cpp ignores the bearer
+# token unless you configured it to require one. All four LLAMA_* /
+# LLM_MODEL lines below are the actual, sole source of truth for which
+# GGUF run_llm.sh serves — it has no separate hardcoded default of its
+# own, so these must always be kept in sync as a group (switch models by
+# commenting/uncommenting a full four-line block, never just one line).
 export LLM_BASE_URL="http://127.0.0.1:8002/v1/chat/completions"
 export LLM_MODEL="Qwen/Qwen3.5-9B"
 export LLM_API_KEY="EMPTY"
-
-# Which GGUF run_llm.sh downloads/serves — override to use a different
-# quantization or model (see run_llm.sh for the defaults).
-# export LLAMA_GGUF_REPO="bartowski/Qwen_Qwen3.5-9B-GGUF"
-# export LLAMA_GGUF_FILE="Qwen_Qwen3.5-9B-Q4_K_M.gguf"
-# export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
+export LLAMA_GGUF_REPO="bartowski/Qwen_Qwen3.5-9B-GGUF"
+export LLAMA_GGUF_FILE="Qwen_Qwen3.5-9B-Q4_K_M.gguf"
+export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 
 # To use Qwen3.8-27B instead (Unsloth Dynamic 2-bit quant — the strongest
 # observed clue-agreement quality of every model tried so far, at the cost

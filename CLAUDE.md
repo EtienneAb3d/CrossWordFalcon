@@ -343,35 +343,45 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   back in through a side door. `frontend/static/script.js`'s `renderClueLines()`
   mirrors the same fix client-side (`I18N[uiLanguage].noDefinition`, `script.js`
   below).
-- `run_llm.sh` — default local LLM launcher: downloads a quantized GGUF (default
-  `bartowski/Qwen_Qwen3.5-9B-GGUF`, `Q4_K_M`, ~5.75GB, into `models/`, gitignored) the
-  first time, then serves it via `llama_cpp.server` (llama.cpp's built-in
-  OpenAI-compatible server — no hand-written wrapper needed). This project's very
-  first default, restored here again after trying four alternatives (Qwen3.5-4B
-  unquantized, Qwen3-14B, DeepSeek-R1-Distill-Qwen-14B, Qwen3.8-27B) — all four remain
-  fully supported, see below; Qwen3.8-27B specifically is called out in README.md as a
-  good choice for anyone with a GPU with at least 12GB VRAM, since it showed the
-  strongest observed clue-agreement quality of every model tried (see the
-  project-best-practices SKILL) at the cost of being much slower (~20-40s/word vs.
-  this default's ~2s/word). One package (`requirements-llama.txt`) covers Linux and
-  macOS alike (Metal on Apple Silicon, CUDA on Linux with a GPU, CPU everywhere) — but
-  a plain `pip install` only builds llama-cpp-python for CPU; before starting the
-  server, the script checks `llama_cpp.llama_supports_gpu_offload()` against whether
-  a GPU should be present (macOS, or `nvidia-smi -L` succeeding) and force-reinstalls
-  with the right `CMAKE_ARGS` (`-DGGML_METAL=on` / `-DGGML_CUDA=on`) if they disagree,
-  so `--n_gpu_layers -1` below isn't silently a no-op. For CUDA specifically, also
+- `run_llm.sh` — default local LLM launcher: serves whichever quantized GGUF
+  `env.sh` (or, absent that, the checked-in `env_default.sh`) names, downloading it
+  into `models/` (gitignored) the first time, via `llama_cpp.server` (llama.cpp's
+  built-in OpenAI-compatible server — no hand-written wrapper needed). `run_llm.sh`
+  itself carries **no hardcoded model default** — `GGUF_REPO`/`GGUF_FILE`/the
+  `--chat_template_kwargs` value are all required (`${LLAMA_GGUF_REPO:?...}` etc.,
+  erroring clearly if genuinely unset) from `LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE`/
+  `LLAMA_CHAT_TEMPLATE_KWARGS`, sourced from `env.sh`/`env_default.sh` — not
+  duplicated as a second, separately-maintained fallback the way earlier versions of
+  this script did. That duplication was a real, previously-unnoticed footgun: every
+  time the project's chosen default model changed, both `env_default.sh`'s active
+  block *and* this script's own hardcoded `${VAR:-default}` values had to be updated
+  in lockstep, and a missed update wouldn't necessarily error — `LLM_MODEL` (the label
+  `backend/clues.py` sends) and the GGUF actually served could silently disagree.
+  `env_default.sh`'s active block is checked into the repo and always complete
+  (all four of `LLM_MODEL`/`LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE`/
+  `LLAMA_CHAT_TEMPLATE_KWARGS` set together, never just one), so falling back to it
+  when `env.sh` doesn't exist yet still gives a correct, current default with zero
+  duplication — verified directly: with neither file present the script now fails
+  immediately with a clear "not set" error rather than silently reaching for a stale
+  built-in value. This project's very first default (Qwen3.5-9B) is restored again
+  after trying four alternatives (Qwen3.5-4B unquantized, Qwen3-14B, DeepSeek-R1-
+  Distill-Qwen-14B, Qwen3.8-27B) — all four remain fully supported, see
+  `env_default.sh`; Qwen3.8-27B specifically is called out in README.md as a good
+  choice for anyone with a GPU with at least 12GB VRAM, since it showed the strongest
+  observed clue-agreement quality of every model tried (see the project-best-practices
+  SKILL) at the cost of being much slower (~20-40s/word vs. this default's ~2s/word).
+  One package (`requirements-llama.txt`) covers Linux and macOS alike (Metal on Apple
+  Silicon, CUDA on Linux with a GPU, CPU everywhere) — but a plain `pip install` only
+  builds llama-cpp-python for CPU; before starting the server, the script checks
+  `llama_cpp.llama_supports_gpu_offload()` against whether a GPU should be present
+  (macOS, or `nvidia-smi -L` succeeding) and force-reinstalls with the right
+  `CMAKE_ARGS` (`-DGGML_METAL=on` / `-DGGML_CUDA=on`) if they disagree, so
+  `--n_gpu_layers -1` below isn't silently a no-op. For CUDA specifically, also
   checks `nvcc`/`$CUDACXX` is actually available first (`nvidia-smi` only proves the
   driver is installed, not the CUDA Toolkit needed to compile) and never lets a
   failed rebuild abort the script — falls back to whatever's already installed and
-  runs on CPU rather than not starting at all. `GGUF_REPO`/`GGUF_FILE` are overridable
-  via `LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE` (see `env.sh`) — Qwen3.5-4B unquantized
-  (`bf16`, full precision, the fastest option tried), Qwen3-14B, DeepSeek-R1-Distill-
-  Qwen-14B (a reasoning model, see below), and Qwen3.8-27B (Unsloth Dynamic 2-bit
-  quant, `UD-Q2_K_XL`) are all still fully supported this way, see `env_default.sh`
-  for the exact override lines for any of them. `--chat_template_kwargs` is also
-  overridable (`LLAMA_CHAT_TEMPLATE_KWARGS`,
-  default `{"enable_thinking": false}`): Qwen3 and Qwen3.5 are hybrid thinking/non-
-  thinking models whose chat template reads an `enable_thinking` flag — verified
+  runs on CPU rather than not starting at all. Qwen3 and Qwen3.5 are hybrid thinking/
+  non-thinking models whose chat template reads an `enable_thinking` flag — verified
   directly by inspecting each GGUF's own embedded template (e.g. `{%- if
   enable_thinking is defined and enable_thinking is false %}` — an explicit check, not
   a guess) — without setting it `false`, the model burns the whole

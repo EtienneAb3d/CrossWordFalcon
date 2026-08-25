@@ -18,36 +18,34 @@ LLM_LOG="$LOG_DIR/llm.log"
 
 mkdir -p "$MODELS_DIR" "$LOG_DIR"
 
+# Which GGUF to serve is entirely env.sh's (or, absent that, env_default.sh's)
+# call — no separate hardcoded default lives here. That used to duplicate
+# whichever model env_default.sh's own active block named, in a second place
+# that had to be kept in sync by hand every time the default model changed
+# (a real, easy-to-miss source of drift: LLM_MODEL and the actual served
+# GGUF silently disagreeing if only one of the two copies got updated).
+# env_default.sh is checked into the repo and always has a complete, valid
+# block active, so falling back to it (rather than requiring env.sh to
+# exist) still gives a correct, current default with zero duplication.
 if [ -f env.sh ]; then
     source env.sh
+elif [ -f env_default.sh ]; then
+    source env_default.sh
 fi
-# Default: Qwen3.5-9B, Q4_K_M quantized by bartowski (~5.75GB — this
-# project's very first default, restored here). Override in env.sh to use a
-# different GGUF — Qwen3.5-4B unquantized (bf16, fastest of the options
-# tried), Qwen3-14B, DeepSeek-R1-Distill-Qwen-14B (a reasoning model, see
-# below), and Qwen3.8-27B (Unsloth Dynamic 2-bit quant — the strongest
-# observed clue-agreement quality so far, a good choice with a GPU with at
-# least 12GB VRAM, see README.md) are all still fully supported this way,
-# see env_default.sh for the exact override lines for any of them.
-GGUF_REPO="${LLAMA_GGUF_REPO:-bartowski/Qwen_Qwen3.5-9B-GGUF}"
-GGUF_FILE="${LLAMA_GGUF_FILE:-Qwen_Qwen3.5-9B-Q4_K_M.gguf}"
+GGUF_REPO="${LLAMA_GGUF_REPO:?LLAMA_GGUF_REPO not set — check env.sh (or env_default.sh)}"
+GGUF_FILE="${LLAMA_GGUF_FILE:?LLAMA_GGUF_FILE not set — check env.sh (or env_default.sh)}"
+CHAT_TEMPLATE_KWARGS="${LLAMA_CHAT_TEMPLATE_KWARGS:?LLAMA_CHAT_TEMPLATE_KWARGS not set — check env.sh (or env_default.sh)}"
 MODEL_PATH="$MODELS_DIR/$GGUF_FILE"
 # Qwen3 and Qwen3.5 are hybrid thinking/non-thinking models — their chat
 # template reads an `enable_thinking` flag, and backend/clues.py's
-# one-word-per-call design needs it off (see the flag below) or it burns the
-# whole per-call token budget on a `<think>` block before ever answering.
-# DeepSeek-R1-Distill has no such flag: it always reasons through a
-# `<think>...</think>` block — that key is simply absent from its own chat
-# template, not off by default the same way (see backend/clues.py's
-# REASONING_TOKEN_BUDGET/_strip_reasoning, needed only for that model).
-# `LLAMA_CHAT_TEMPLATE_KWARGS` lets env.sh override this per model (e.g. back
-# to `{}` when switching to DeepSeek). Not folded into a single `${VAR:-...}`
-# expansion — the JSON default's own quotes don't survive that unscathed.
-if [ -n "${LLAMA_CHAT_TEMPLATE_KWARGS:-}" ]; then
-    CHAT_TEMPLATE_KWARGS="$LLAMA_CHAT_TEMPLATE_KWARGS"
-else
-    CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
-fi
+# one-word-per-call design needs it off (see LLAMA_CHAT_TEMPLATE_KWARGS in
+# env.sh/env_default.sh) or it burns the whole per-call token budget on a
+# `<think>` block before ever answering. DeepSeek-R1-Distill has no such
+# flag: it always reasons through a `<think>...</think>` block — that key is
+# simply absent from its own chat template, not off by default the same way
+# (see backend/clues.py's REASONING_TOKEN_BUDGET/_strip_reasoning, needed
+# only for that model) — env_default.sh's DeepSeek block sets
+# LLAMA_CHAT_TEMPLATE_KWARGS to `{}` accordingly.
 
 pids=$(lsof -ti tcp:"$LLM_PORT" 2>/dev/null || true)
 if [ -n "$pids" ]; then
