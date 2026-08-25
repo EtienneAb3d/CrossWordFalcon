@@ -21,13 +21,34 @@ mkdir -p "$MODELS_DIR" "$LOG_DIR"
 if [ -f env.sh ]; then
     source env.sh
 fi
-# Default: Qwen3.5-9B (the closest official size to a "14B"-class model that
-# still comfortably fits a 12GB GPU at this quantization, with headroom for
-# the KV cache), Q4_K_M quantized by bartowski. Override in env.sh to use a
-# different GGUF.
-GGUF_REPO="${LLAMA_GGUF_REPO:-bartowski/Qwen_Qwen3.5-9B-GGUF}"
-GGUF_FILE="${LLAMA_GGUF_FILE:-Qwen_Qwen3.5-9B-Q4_K_M.gguf}"
+# Default: Qwen3.8-27B, Unsloth Dynamic 2-bit quant (`UD-Q2_K_XL`, ~9.8GB) —
+# the strongest observed clue-agreement quality of every model tried so far
+# (see the project-best-practices SKILL), at the cost of being the slowest
+# non-reasoning option (~20-40s/word). Override in env.sh to use a different
+# GGUF — Qwen3.5-9B (this project's very first default), Qwen3.5-4B
+# unquantized (bf16, fastest of the options tried), Qwen3-14B, and
+# DeepSeek-R1-Distill-Qwen-14B (a reasoning model, see below) are all still
+# fully supported this way, see env_default.sh for the exact override lines
+# for any of them.
+GGUF_REPO="${LLAMA_GGUF_REPO:-unsloth/Qwen3.8-27B-GGUF}"
+GGUF_FILE="${LLAMA_GGUF_FILE:-Qwen3.8-27B-UD-Q2_K_XL.gguf}"
 MODEL_PATH="$MODELS_DIR/$GGUF_FILE"
+# Qwen3 and Qwen3.5 are hybrid thinking/non-thinking models — their chat
+# template reads an `enable_thinking` flag, and backend/clues.py's
+# one-word-per-call design needs it off (see the flag below) or it burns the
+# whole per-call token budget on a `<think>` block before ever answering.
+# DeepSeek-R1-Distill has no such flag: it always reasons through a
+# `<think>...</think>` block — that key is simply absent from its own chat
+# template, not off by default the same way (see backend/clues.py's
+# REASONING_TOKEN_BUDGET/_strip_reasoning, needed only for that model).
+# `LLAMA_CHAT_TEMPLATE_KWARGS` lets env.sh override this per model (e.g. back
+# to `{}` when switching to DeepSeek). Not folded into a single `${VAR:-...}`
+# expansion — the JSON default's own quotes don't survive that unscathed.
+if [ -n "${LLAMA_CHAT_TEMPLATE_KWARGS:-}" ]; then
+    CHAT_TEMPLATE_KWARGS="$LLAMA_CHAT_TEMPLATE_KWARGS"
+else
+    CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
+fi
 
 pids=$(lsof -ti tcp:"$LLM_PORT" 2>/dev/null || true)
 if [ -n "$pids" ]; then
@@ -114,13 +135,22 @@ if [ ! -f "$MODEL_PATH" ]; then
 fi
 
 echo "Starting LLM server: model=$MODEL_PATH, port=$LLM_PORT"
+# `nohup` + `disown` + stdin from /dev/null, same as run_Falcon.sh — so this
+# keeps running after the launching shell/terminal closes, not just across a
+# background `&` (nohup alone only ignores SIGHUP, it doesn't detach from
+# the shell's job table).
+# n_ctx bumped from 4096 (Qwen3.5, thinking off) to 8192: DeepSeek-R1-Distill
+# reasons through a `<think>` block before every answer (see
+# backend/clues.py's REASONING_TOKEN_BUDGET/_strip_reasoning), so the prompt
+# plus that reasoning plus the actual answer needs more room to fit.
 nohup python3 -m llama_cpp.server \
     --model "$MODEL_PATH" \
     --host "$LLM_HOST" --port "$LLM_PORT" \
-    --n_ctx 4096 --n_gpu_layers -1 \
-    --chat_template_kwargs '{"enable_thinking": false}' \
-    > "$LLM_LOG" 2>&1 &
+    --n_ctx 8192 --n_gpu_layers -1 \
+    --chat_template_kwargs "$CHAT_TEMPLATE_KWARGS" \
+    < /dev/null > "$LLM_LOG" 2>&1 &
 LLM_PID=$!
+disown "$LLM_PID"
 
 echo "LLM server started (pid $LLM_PID, log: $LLM_LOG)"
 echo "Endpoint: http://$LLM_HOST:$LLM_PORT/v1/chat/completions"

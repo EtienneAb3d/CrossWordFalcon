@@ -138,7 +138,7 @@ async def _run_generate_job(job_id, req):
 
         progress("saving")
         try:
-            svg_path = await asyncio.to_thread(save_grid_svg, result, req.language)
+            svg_path = await asyncio.to_thread(save_grid_svg, result, req.language, req.difficulty)
             logger.info("[%s] saved %s", short_id, svg_path)
             try:
                 png_path = await asyncio.to_thread(save_grid_png, svg_path)

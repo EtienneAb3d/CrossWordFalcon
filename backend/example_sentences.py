@@ -2,7 +2,7 @@
 """
 Looks up real usage examples of a word's exact inflected form in the
 per-language reference sentence corpus built by build_sentence_corpus.py
-(data/opensubtitles_corpus/<lang>_sentences.txt) — used by
+(data/reference_corpus/<lang>_sentences.txt) — used by
 backend/clues.py to ground the clue-writing prompt with genuine context
 for rare/ambiguous words, instead of relying solely on the LLM's own
 (sometimes wrong) sense of what a word means. See the French "ARE" case
@@ -26,7 +26,7 @@ import random
 import re
 from pathlib import Path
 
-CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "opensubtitles_corpus"
+CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "reference_corpus"
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 

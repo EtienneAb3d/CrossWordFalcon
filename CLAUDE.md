@@ -115,16 +115,40 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   = 1`) rather than a bigger batch — even a handful of words per request degenerated
   (dropped entries, off-language text) on the small local model before finishing; one
   word per call is the size that's actually reliable, at the cost of one HTTP
-  round-trip per word (measured live: ~2s/word end to end — this is by far the
-  slowest phase of generating a grid, which is why `generate()` takes an optional
-  `on_progress(current, total)` callback, called after every word attempt, for
-  `backend/app.py` to surface live progress instead of one static "generating…"
-  message for what can be up to a couple of minutes). Output is plain text, not
+  round-trip per word — this is by far the slowest phase of generating a grid, which
+  is why `generate()` takes an optional `on_progress(current, total)` callback, called
+  after every word attempt, for `backend/app.py` to surface live progress instead of
+  one static "generating…" message. How slow varies a lot by model: measured live at
+  ~2s/word with Qwen3.5-9B (thinking disabled — this project's very first default),
+  ~3s/word with Qwen3.5-4B unquantized (thinking disabled — smallest model, close to
+  Qwen3.5-9B's speed despite being full-precision rather than quantized), ~8-9s/word
+  with Qwen3-14B (also thinking disabled — larger model, same non-reasoning behavior,
+  so slower per token but not per-word-reasoning-slow), ~20-40s/word (a 9×9 grid's 32
+  words took ~13 minutes of clue generation) with the current default, Qwen3.8-27B
+  (thinking disabled, Unsloth Dynamic `UD-Q2_K_XL` — the largest non-reasoning model
+  tried, and the slowest of the non-reasoning ones, but also the one with the
+  strongest observed clue quality so far, see the project-best-practices SKILL), and
+  20-70s/word (potentially 15-40+ minutes per grid) with
+  DeepSeek-R1-Distill-Qwen-14B, since it reasons through a `<think>` block before every
+  single word's answer — see `_strip_reasoning`/`REASONING_TOKEN_BUDGET` below and
+  `run_llm.sh`. Output is plain text, not
   JSON — one line per word, `word:
   clue 1; clue 2; clue 3` (`_parse_response`) — small local models without constrained
   decoding were unreliable at valid JSON syntax; the line format fails one word at a
   time instead of the whole response, and `_parse_response` tolerates a model that
-  answers with a numbered/bulleted multi-line list under the header instead. Each word
+  answers with a numbered/bulleted multi-line list under the header instead. `_call()`
+  strips a leading `<think>...</think>` block (`_strip_reasoning`) from the raw
+  response before it ever reaches `_parse_response` — a no-op for a model that doesn't
+  emit one (e.g. Qwen3.5 with thinking disabled), but load-bearing for
+  DeepSeek-R1-Distill: left in, the reasoning text itself risks false-triggering
+  `_WORD_LINE_RE` (the model thinking out loud about the word by name, followed by a
+  colon, reads exactly like a header line) and contaminating the parsed output with
+  reasoning fragments instead of the deliberate final answer. `max_tokens` includes a
+  dedicated `REASONING_TOKEN_BUDGET` (2048) on top of the per-word answer budget, sized
+  generously against DeepSeek-R1-Distill-Qwen-14B directly (measured live across several
+  words: a single word's full response, thinking included, ran anywhere from ~300 to
+  ~1300 tokens) —
+  harmless for a non-reasoning model, which simply stops well before using it. Each word
   is shown to the model by its accented/inflected spelling (`words[i]["accented"]`, not
   the grid's bare form) and the model is asked for 3 candidate clues per word; one is
   picked at random on our side (`_pick_clues`) — never the model's choice — filtering
@@ -137,11 +161,25 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   the filter is the actual guarantee). A word left with zero candidates after
   filtering, or that the model never answered at all, gets re-queried in a follow-up
   round — `generate()` loops up to 3 rounds, each re-sending only words still missing a
-  clue. The prompt (`_build_prompt`) explicitly forbids restating the
-  word/spelling, a bare grammatical label ("verbe avoir 2e personne..."), or
-  describing the word's spelling/letters instead of its meaning (e.g. "word starting
-  with T and ending in EE" for TEE — a real observed failure mode) and allows
-  synonyms. Also requires a conjugated verb form's clue to match its exact person,
+  clue. The prompt is split into a `system` message (`_build_system_prompt()` — role,
+  difficulty style, rules, worked examples: everything that's identical on every call)
+  and a `user` message (`_build_user_message()` — just this one word's accented
+  spelling plus its grounding block), rather than one long combined message; both are
+  phrased throughout for a single word, not a batch — there's only ever one word per
+  call (`_BATCH_SIZE = 1`), and earlier phrasing ("each word below", "Words:" as a
+  list, "one line per word") was a leftover from before that was true, since fixed at
+  the user's request. The rules and their illustrating examples are also no longer
+  interleaved prose — each rule is a short, numbered directive, and every "bad"/"good"
+  illustration lives in one clearly delimited `=== EXAMPLES ===` block afterward,
+  labeled by which rule it illustrates, so a rule reads as a rule and an example reads
+  as an example rather than the two being blended into the same sentence. The system
+  prompt explicitly forbids restating the
+  word/spelling, a bare grammatical label ("verbe avoir 2e personne...", or
+  "Pluriel du mot 'une fée'" for `FEES` — naming the grammatical operation instead of
+  defining the word, a real observed failure mode even though it's still just a label
+  by another name), or describing the word's spelling/letters instead of its meaning
+  (e.g. "word starting with T and ending in EE" for TEE — a real observed failure
+  mode) and allows synonyms. Also requires a conjugated verb form's clue to match its exact person,
   number, AND mood/tense together (and, for a noun or adjective, its number —
   singular/plural — and gender), not just the rough meaning (e.g. a third-person
   conditional like SERRERAIT needs a clue that's also third-person conditional, not a
@@ -153,17 +191,52 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   French verb) still failed most of a 6-sample re-test — plausibly harder to correct
   because the model has much stronger competing priors for that one verb specifically;
   `ANS` after the third (noun-number) iteration only reached ~3/8 clearly-plural
-  samples. No post-filter for this (unlike the copy-of-word/non-Latin checks):
+  samples; a fourth iteration added `MENTIRA` (third-person-singular FUTURE, e.g. "il
+  mentira") as a worked example after a bare-infinitive clue ("Cacher le vrai" instead
+  of future-tense "Cachera le vrai") was reported — this one sampled a clean 6/6
+  correctly future-tense, with no regression on a `SERRERAIT`/`ANS` re-test (6/6 and
+  ~half-plural respectively, matching earlier results). No post-filter for this (unlike
+  the copy-of-word/non-Latin checks):
   grammatical agreement needs real parsing of the *clue text*, not just the target
   word, which isn't a lightweight, reliable, five-languages-at-once check the way
-  those are.
+  those are. A separate rule requires the clue's *meaning* to actually correspond to
+  the word's real meaning, after `SERIONS` (conditional "nous serions", "we would be")
+  was given the clue "Il existe des solutions" — an unrelated, hallucinated sentence
+  with no connection to "être" at all, not merely a grammar mismatch. Verified live:
+  the specific reported symptom (an unrelated hallucinated clue) didn't reproduce in a
+  6-sample re-test, but two related issues remain — a bare grammatical label still
+  slipped through once each for `FEES` ("Pluriel de la fée.") and `SERIONS` ("Forme
+  hypothétique du verbe être pour le pluriel inclusif."), and twice `SERIONS` was
+  answered with a *different* verb's conjugation entirely ("dirions"/"dirons", from
+  "dire" — same "-rions"/"-rons" ending, wrong root) rather than "être" — a
+  same-family-verb confusion distinct from the reported bug, flagged but not
+  separately addressed this round. `_AGREEMENT_EXAMPLES` (module-level constant)
+  adds a further ~20 correct worked examples on top of the "bad example" failure
+  illustrations above — a French-only reference bank spanning several persons/tenses/
+  moods for regular `-er`/`-ir`/`-re` verbs plus "être"/"avoir" specifically, and
+  masculine/feminine singular/plural noun/adjective agreement including classic
+  irregular plurals (`nouveau`→`nouveaux`, `vieux`→`vieilles`, `cheval`→`chevaux`,
+  `travail`→`travaux`) — each clue hand-checked to never contain the target word or a
+  same-family form, and to itself be phrased in the matching mood/tense/number/gender,
+  not just gesture at the right idea. Verified live on both known-hard words and
+  brand-new ones not in the list itself (to check the model generalizes the *concept*
+  rather than memorizing the examples): `MENTIRA`/`SERRERAIT` both came back cleanly
+  correct on mood/tense every time sampled; `BELLES` and `CHANTAIENT` (novel words)
+  came back correctly agreed too; but `SERIONS` ("être" again) still produced a bare
+  grammatical label in 2/6 samples ("Forme conditionnelle du verbe être pour nous.")
+  even though the rule right above explicitly forbids exactly that, and two other
+  novel words, `MANGERIEZ` and `JOYEUSES`, came back without clearly matching mood/
+  number either — reported honestly as a real, partial improvement, not a fix: this
+  is still a small-model reliability ceiling, most visible on "être" specifically,
+  consistent with every previous iteration on this rule.
   Phrasing style is calibrated by `difficulty` (easy/medium/hard) via
   `DIFFICULTY_STYLE`, language by `LANGUAGE_NAMES[language]` (must match the grid's
   wordlist). The endpoint is configurable via `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY`
   (see `env.sh`) so it can target either the local llama.cpp server (default, see
   `run_llm.sh`) or a cloud API (e.g. Mistral) with no code change. Used only by
-  `backend/app.py` — the offline CLI (`crossword_gen.py`) never calls it. `_build_prompt`
-  also grounds the model with real definitions/examples when available
+  `backend/app.py` — the offline CLI (`crossword_gen.py`) never calls it.
+  `_build_user_message` also grounds the model with real definitions/examples when
+  available
   (`_build_gloss_block`/`_build_examples_block`, backed by `backend/gloss_lookup.py` and
   `backend/example_sentences.py`) — added after the small local model defined French
   `ARE` (the 100 m² land-area unit) as the English verb "to be", confirmed by direct
@@ -197,7 +270,18 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   memory bounded across tens of thousands of words while still returning a uniform
   random sample across every match — not just the first few encountered — each time
   `find_examples_for_words()` is called, so a common word doesn't always show the same
-  handful of examples.
+  handful of examples. `CORPUS_DIR` must point at `data/reference_corpus/` (the
+  directory `build_sentence_corpus.py` actually writes to) — it silently pointed at a
+  stale `data/opensubtitles_corpus/` (this corpus's pre-Wikipedia, OpenSubtitles-only
+  name) for some time, a leftover from before the corpus was renamed; since
+  `_build_index()` treats a missing directory as "no corpus available" (a legitimate,
+  documented degrade-gracefully case for a language nobody's built yet), this failed
+  silently — no error, just an empty example-sentences section on every single LLM
+  call, for every word, in every language, ever since. Caught only because the user
+  noticed examples were never actually appearing in a shown prompt; fixed by pointing
+  `CORPUS_DIR` at the real directory. There is no `data/opensubtitles_corpus/` on disk
+  either now or previously in this session — the mismatch was a pure stale code
+  reference, not a leftover directory to clean up.
 - `build_gloss_dictionary.py` — one-off preprocessing script: downloads a language's
   Wiktionary extract in full from Kaikki.org (kaikki.org, CC-BY-SA/GFDL like
   Wiktionary itself) — for English, the primary (English-Wiktionary-sourced)
@@ -216,20 +300,34 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   checked into the repo — see `backend/gloss_lookup.py` above) is kept.
 - `backend/svg_export.py` — `save_grid_svg()`, called by `backend/app.py` once a grid
   and its clues are both ready: renders a single self-contained SVG (no external
-  assets/fonts) — the empty puzzle (grid + clue lists, grouped/chained the same way
+  assets/fonts) — a header (logo, "CrossWordFalcon", `VERSION.txt`'s version, the
+  generation date, the grid's language in its own native name, and its difficulty
+  level — identifies a file at a glance rather than relying on its filename/timestamp
+  alone), the empty puzzle (grid + clue lists, grouped/chained the same way
   `frontend/static/script.js`'s `renderClueLines()` does, reimplemented in Python since
-  this is backend-only) followed by the fully-solved grid underneath — and writes it to
+  this is backend-only), then the fully-solved grid underneath — and writes it to
   `GRIDS/` (project root, gitignored — generated output, not source content), named
   `<timestamp>_<language>.svg` (microsecond precision so two grids finishing in the
   same second, e.g. from two browser tabs, don't collide). A durable record of every
   grid the app produces, since the web UI itself has no export feature and forgets the
-  grid the moment the tab closes. Clue-heading text (`_HEADINGS`) duplicates
+  grid the moment the tab closes. The logo is embedded as a base64 `data:` URI
+  (`_logo_data_uri()`, read from `frontend/static/logo.png` once per process and
+  cached) so the SVG stays self-contained even though the logo itself lives outside
+  `backend/`; the difficulty label and the language's native name (`_NATIVE_LANGUAGE_
+  NAMES`, `_DIFFICULTY_LABELS`) duplicate `frontend/static/index.html`'s `<select>`
+  option text and `i18n.js`'s `difficultyLabel`/`difficultyEasy`/etc. by hand, the same
+  pattern already used for the clue headings below — keep all of them in sync if any
+  of those strings ever change. Clue-heading text (`_HEADINGS`) duplicates
   `frontend/static/i18n.js`'s `acrossHeading`/`downHeading` strings by hand — keep both
   in sync if a heading ever changes. `save_grid_png()` additionally renders that SVG to
   a PNG of the same basename under `GRID_SAMPLES/` (project root) via the
   `rsvg-convert` CLI (part of `librsvg` — `brew install librsvg` / `apt-get install
   librsvg2-bin`; the same tool already used for `frontend/static/logo.png`, see the
-  style-guide SKILL) — unlike `GRIDS/`, `GRID_SAMPLES/` is deliberately **not**
+  style-guide SKILL), at `PNG_DPI` (300, print quality rather than the screen-oriented
+  96 DPI default) via `rsvg-convert -z (PNG_DPI / 96)` — `--dpi-x`/`--dpi-y` alone have
+  no effect here (verified directly) since the SVG's root has no physical width/height
+  unit (in/mm/pt) for librsvg to rescale against, only the zoom flag actually scales a
+  unitless SVG's pixel output — unlike `GRIDS/`, `GRID_SAMPLES/` is deliberately **not**
   gitignored: a growing, checked-in visual record of what the app actually produces,
   meant to be committed and evolve across versions, at the user's explicit request.
   Both saves are best-effort (a missing `rsvg-convert`, or any other failure, is logged
@@ -244,27 +342,47 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   back in through a side door. `frontend/static/script.js`'s `renderClueLines()`
   mirrors the same fix client-side (`I18N[uiLanguage].noDefinition`, `script.js`
   below).
-- `run_llm.sh` — default local LLM launcher: downloads a quantized GGUF (default
-  `bartowski/Qwen_Qwen3.5-9B-GGUF`, `Q4_K_M`, ~5.75GB, into `models/`, gitignored) the
-  first time, then serves it via `llama_cpp.server` (llama.cpp's built-in
-  OpenAI-compatible server — no hand-written wrapper needed). One package
-  (`requirements-llama.txt`) covers Linux and macOS alike (Metal on Apple Silicon, CUDA
-  on Linux with a GPU, CPU everywhere) — but a plain `pip install` only builds
-  llama-cpp-python for CPU; before starting the server, the script checks
-  `llama_cpp.llama_supports_gpu_offload()` against whether a GPU should be present
-  (macOS, or `nvidia-smi -L` succeeding) and force-reinstalls with the right
-  `CMAKE_ARGS` (`-DGGML_METAL=on` / `-DGGML_CUDA=on`) if they disagree, so
-  `--n_gpu_layers -1` below isn't silently a no-op. For CUDA specifically, also
+- `run_llm.sh` — default local LLM launcher: downloads a GGUF (default
+  `unsloth/Qwen3.8-27B-GGUF`, `UD-Q2_K_XL` — Unsloth Dynamic 2-bit quant, ~9.8GB, into
+  `models/`, gitignored) the first time, then serves it via `llama_cpp.server`
+  (llama.cpp's built-in OpenAI-compatible server — no hand-written wrapper needed).
+  The strongest observed clue-agreement quality of every model tried so far (see the
+  project-best-practices SKILL), at the cost of being the slowest non-reasoning
+  option (~20-40s/word, confirmed live: a 9×9 grid's 32 words took ~13 minutes of
+  clue generation). One package (`requirements-llama.txt`) covers Linux and macOS
+  alike (Metal on Apple Silicon, CUDA on Linux with a GPU, CPU everywhere) — but a
+  plain `pip install` only builds llama-cpp-python for CPU; before starting the
+  server, the script checks `llama_cpp.llama_supports_gpu_offload()` against whether
+  a GPU should be present (macOS, or `nvidia-smi -L` succeeding) and force-reinstalls
+  with the right `CMAKE_ARGS` (`-DGGML_METAL=on` / `-DGGML_CUDA=on`) if they disagree,
+  so `--n_gpu_layers -1` below isn't silently a no-op. For CUDA specifically, also
   checks `nvcc`/`$CUDACXX` is actually available first (`nvidia-smi` only proves the
   driver is installed, not the CUDA Toolkit needed to compile) and never lets a
   failed rebuild abort the script — falls back to whatever's already installed and
-  runs on CPU rather than not starting at all. Passes `--chat_template_kwargs
-  '{"enable_thinking": false}'` — Qwen3.5 is a reasoning model that otherwise burns the
-  whole token budget on a `<think>...</think>` block before ever answering, which
-  starved `backend/clues.py`'s calls of any usable output (verified: 28s and no
-  parsable line without the flag, 4s and a clean answer with it). This is the only
-  local LLM backend in the repo — see `LLM_BASE_URL` in `env.sh` to point at a cloud
-  API (e.g. Mistral) instead.
+  runs on CPU rather than not starting at all. `GGUF_REPO`/`GGUF_FILE` are overridable
+  via `LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE` (see `env.sh`) — Qwen3.5-9B (this project's
+  very first default, much faster), Qwen3.5-4B unquantized (`bf16`, full precision,
+  the fastest option tried), Qwen3-14B, and DeepSeek-R1-Distill-Qwen-14B (a reasoning
+  model, see below) are all still fully
+  supported this way, see `env_default.sh` for the exact override lines for any of
+  them. `--chat_template_kwargs` is also overridable (`LLAMA_CHAT_TEMPLATE_KWARGS`,
+  default `{"enable_thinking": false}`): Qwen3 and Qwen3.5 are hybrid thinking/non-
+  thinking models whose chat template reads an `enable_thinking` flag — verified
+  directly by inspecting each GGUF's own embedded template (e.g. `{%- if
+  enable_thinking is defined and enable_thinking is false %}` — an explicit check, not
+  a guess) — without setting it `false`, the model burns the whole
+  token budget on a `<think>...</think>` block before ever answering, starving
+  `backend/clues.py`'s calls of any usable output (verified on Qwen3.5: 28s and no
+  parsable line without the flag, 4s and a clean answer with it). DeepSeek-R1-Distill
+  has no such flag at all — its own chat template never references `enable_thinking`,
+  so passing it is silently ignored either way; it always reasons through a `<think>`
+  block before answering (see `backend/clues.py`'s `_strip_reasoning`/`REASONING_TOKEN_
+  BUDGET` below) — `--n_ctx` is kept at 8192 (bumped from an original 4096) so either
+  model's prompt + reasoning (when applicable) + answer has room to fit; this is a
+  shared setting, not swapped per model, since it's a safe/sufficient value for all
+  three GGUFs this project has actually run against. This is the only local LLM
+  backend in the repo — see `LLM_BASE_URL` in `env.sh` to point at a cloud API (e.g.
+  Mistral) instead.
 - `frontend/server.py` — **middleware** FastAPI server: serves the static UI
   (`frontend/static/index.html`, `script.js`, `style.css`) and proxies `/api/*` to the
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default

@@ -1065,6 +1065,23 @@ content (the French crossword words/clues, the web UI text) stays in French
   agreement needs real per-language parsing of the clue text, not a
   pattern match).
 
+- fourth iteration on the same inflection-agreement rule, at the user's
+  request after "Cacher le vrai" (a bare infinitive — no tense of its
+  own) was given as a clue for `MENTIRA` (French, third person singular
+  FUTURE of "mentir" — "il/elle mentira"): the correct phrasing would be
+  future-tense "Cachera le vrai". Added `MENTIRA` as a fourth worked
+  example, specifically covering the future tense (the three earlier
+  examples covered imperfect, conditional, and noun plurality — no
+  future-tense example existed yet). Verified live: 6/6 sampled clues
+  came back correctly future-tense ("Il cachera la vérité", "Elle dira le
+  faux", "Elle donnera un démenti", ...) — notably cleaner than the
+  ÉTAIS/ANS results, plausibly because "mentir" is a much less
+  overloaded verb than "être" and future tense marks itself clearly with
+  a distinctive "-ra" ending. Regression-checked `SERRERAIT` (6/6 still
+  correctly conditional) and `ANS` (still roughly half clearly plural,
+  matching the third iteration's own result) — no degradation from
+  adding the new example.
+
 - removed the "fall back to the bare answer" behavior for a word with no
   surviving clue, in both `frontend/static/script.js`'s `renderClueLines()`
   and `backend/svg_export.py`'s `_group_clue_lines()`, after the user
@@ -1129,4 +1146,396 @@ content (the French crossword words/clues, the web UI text) stays in French
   `backend/gloss_lookup.py` (true iff that language's loaded index is
   non-empty) and gating the filter on it in `crossword_gen.py`, verified
   by removing a gloss dictionary file locally and confirming the word
-  list now stays at its full size instead of emptying out.
+  list now stays at its full size instead of emptying out (the
+  `data/gloss_dictionary/` un-ignoring decision is logged separately
+  above).
+
+- `backend/svg_export.py`'s exported grids now open with a header (logo,
+  "CrossWordFalcon", version, generation date, grid language, difficulty
+  level), at the user's explicit request — a saved `GRIDS/*.svg` file can
+  now be identified at a glance instead of relying on its filename/
+  timestamp alone. The logo is embedded as a base64 `data:` URI read from
+  `frontend/static/logo.png` (cached per process,
+  `_logo_data_uri_cache`) rather than referenced externally, keeping the
+  file genuinely self-contained like the rest of this module. Language
+  and difficulty are shown using the exact same text the web UI itself
+  uses (native language name from `index.html`'s `<select>`, difficulty
+  label/name from `i18n.js`) — duplicated by hand in Python the same way
+  `_HEADINGS` already duplicates the clue-list headings, not derived
+  automatically, so keep all of these in sync if the UI strings change.
+  `render_grid_svg()`/`save_grid_svg()` gained a `difficulty` parameter
+  for this (threaded from `backend/app.py`'s `req.difficulty`) — verified
+  by rendering a real grid to SVG, converting it to PNG with
+  `rsvg-convert`, and visually inspecting the header.
+
+- fixed `run_Falcon.sh`/`run_llm.sh` so their background server processes
+  survive the launching shell/terminal closing, at the user's explicit
+  request. `nohup` alone only makes the process ignore `SIGHUP` — it
+  doesn't remove the job from the launching shell's own job table, so
+  some shells/terminals still act on it when they exit. Added `disown`
+  right after backgrounding each process, plus `< /dev/null` on stdin
+  (a fully detached process has no legitimate terminal to read from) —
+  verified live: after `disown`, `jobs -l` in the launching shell shows
+  nothing, and `ps` confirms the servers already report `PPID=1`
+  (reparented to init), independent of the shell that launched them.
+  `setsid` (a more complete detachment — new session, immune to
+  process-group-wide signals) was considered but isn't available on
+  macOS by default (it's a Linux/util-linux tool), so this stays the
+  portable, cross-platform fix rather than reaching for it.
+
+- `backend/svg_export.py`'s `save_grid_png()` now renders `GRID_SAMPLES/`
+  PNGs at 300 DPI (`PNG_DPI`) instead of `rsvg-convert`'s 96 DPI default,
+  at the user's request — this is a checked-in, print-quality visual
+  record (see the `GRID_SAMPLES/` decision above), not a screen-only
+  preview. Implemented as `rsvg-convert -z (PNG_DPI / 96)` (zoom), not
+  `--dpi-x`/`--dpi-y`: verified directly that those flags are a no-op
+  here, since the exported SVG's root `<svg>` has no physical unit
+  (in/mm/pt) on its width/height for librsvg to rescale against — only
+  `-z` actually scales a unitless (bare CSS-px) SVG's output pixel count.
+  Verified live: a 720×1046 px SVG now renders to a 2250×3269 px PNG
+  (720×300/96 = 2250), the exact factor a true 300 DPI would apply to a
+  document authored at the standard 96 CSS-px-per-inch baseline.
+
+- fifth/sixth round of prompt fixes in `backend/clues.py`, at the user's
+  request, addressing two distinct reported cases in one pass:
+  (1) `FEES` answered "Pluriel du mot 'une fée'" — a bare grammatical
+  description (naming the pluralization operation) rather than an actual
+  definition, added as a second worked example under the existing
+  "no bare grammatical/technical description" rule (previously only had
+  the "verbe avoir..." example). (2) `SERIONS` (conditional "nous
+  serions", "we would be") answered "Il existe des solutions" — a wholly
+  unrelated, hallucinated sentence with no connection to "être" at all;
+  this is a *meaning* error, not a grammar-agreement one, so it needed a
+  new rule (none of the four inflection-agreement iterations above cover
+  "the clue must actually mean the right thing"), instructing the model
+  to check the gloss/example grounding block before answering rather than
+  free-associating. Verified honestly, not declared fixed: the specific
+  reported hallucination didn't reproduce in a 6-sample `SERIONS` re-test,
+  and `FEES` went from (implicitly) reliably wrong to 5/6 correct — but a
+  bare-label clue still slipped through once each for `FEES` and
+  `SERIONS`, and twice `SERIONS` was answered with a completely different
+  verb's conjugation ("dirions"/"dirons", from "dire", sharing the same
+  "-rions"/"-rons" ending) instead of "être" — a same-family-verb
+  confusion distinct from the originally reported bug, noted but not
+  separately chased this round. Regression-checked `MENTIRA` (4/4) and
+  `SERRERAIT` (4/4) after adding both new rules/examples — no
+  degradation from the added prompt length.
+
+- replaced the default local LLM (`run_llm.sh`) with DeepSeek-R1-Distill-
+  Qwen-14B, Q4_K_M (bartowski, ~9GB), at the user's explicit request —
+  Qwen3.5-9B kept as a fully supported alternative, not removed: both
+  `GGUF_REPO`/`GGUF_FILE` and now `--chat_template_kwargs` are overridable
+  via env vars (`LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE`/`LLAMA_CHAT_TEMPLATE_
+  KWARGS`), with the exact Qwen override lines given as a ready-to-
+  uncomment block in both `env_default.sh` and the user's own `env.sh`.
+  Verified directly, not assumed, two things before calling this done:
+  (1) inspected the GGUF's own embedded chat template (logged at server
+  startup) and confirmed it never references `enable_thinking` at all —
+  unlike Qwen3.5's hybrid template, DeepSeek-R1-Distill has no flag to
+  disable its reasoning step, it always emits a `<think>...</think>`
+  block before answering; (2) actually downloaded and ran the model
+  end-to-end through `backend/clues.py` before considering the swap
+  finished, not just wiring up the config. That live test surfaced two
+  real, load-bearing findings that a blind swap would have missed
+  entirely: **(a)** the existing `max_tokens` budget (390 for one word)
+  was nowhere near enough for a `<think>` block plus answer — measured
+  live, a single word's full response ran anywhere from ~300 to ~1300
+  tokens — so a new `REASONING_TOKEN_BUDGET` (2048, comfortably above the
+  observed high end) was added on top, and `run_llm.sh`'s `--n_ctx` was
+  bumped 4096 → 8192 to fit prompt + reasoning + answer; **(b)** the raw
+  `<think>` block, left in, risks false-triggering `_parse_response`'s
+  header-line detection (the model reasoning about the word by name
+  followed by a colon reads exactly like a "word:" header) — fixed with
+  a new `_strip_reasoning()` step in `_call()` that removes everything up
+  to and including `</think>` before parsing (a no-op for Qwen, which
+  never emits the tag). **Reported honestly to the user, not glossed
+  over**: this is dramatically slower than Qwen (measured 19-67s/word vs.
+  Qwen's ~2s/word — a 7×7 grid's 16 words took roughly 8 minutes of clue
+  generation alone) and, on the exact hard grammatical-agreement cases
+  this project has iterated on repeatedly (`ANS` plural-noun framing,
+  `SERRERAIT` conditional mood, `ÉTAIS` person), did not clearly
+  outperform Qwen in a same-day side-by-side sample — the reasoning
+  didn't reliably fix what it, in principle, has more "room" to get
+  right. Shipped as explicitly requested (default changed, Qwen kept as
+  the alternative), with this trade-off on record for whoever revisits
+  the choice of default next.
+
+- default local LLM (`run_llm.sh`) changed again, at the user's explicit
+  request: Qwen3-14B, Q4_K_M (bartowski, ~9GB), replacing
+  DeepSeek-R1-Distill-Qwen-14B as the default — both DeepSeek-R1-Distill
+  and the original Qwen3.5-9B stay fully supported alternatives (same
+  `LLAMA_GGUF_REPO`/`LLAMA_GGUF_FILE`/`LLAMA_CHAT_TEMPLATE_KWARGS`
+  override mechanism, now with all three options' exact override lines
+  given in both `env_default.sh` and the user's own `env.sh`). Verified
+  directly rather than assumed: (1) downloaded and inspected Qwen3-14B's
+  own embedded chat template at server startup — it references
+  `enable_thinking` exactly like Qwen3.5's does (`{%- if enable_thinking
+  is defined and enable_thinking is false %}`), so the existing
+  thinking-disable mechanism applies unchanged, unlike the DeepSeek swap
+  where it didn't apply at all; (2) ran real clue-generation calls
+  end-to-end (both in isolation and through a full 7×7 grid via the
+  actual API) before calling this done. Measured live: ~8-9s/word — much
+  faster than DeepSeek-R1-Distill's 20-70s/word, but slower than
+  Qwen3.5-9B's ~2s/word (larger model, same non-reasoning behavior, so
+  the extra latency is pure per-token cost, not a reasoning step).
+  Reported honestly, not just the speed number: quality on this
+  project's known hard grammatical-agreement cases was mixed relative to
+  Qwen3.5-9B's own (separately) prompt-tuned behavior — `MENTIRA`
+  reverted to a bare-infinitive clue ("Cacher la réalité par des fausses
+  paroles", no future tense marker) and `SERRERAIT` came back with an
+  explicit "en conditionnel" tacked onto the clue text (the exact
+  bare-grammatical-label pattern the prompt forbids, just phrased
+  differently than the FEES case it was written against); `ANS` was
+  still singular-framed, consistent with the already-documented,
+  unresolved limitation. Not re-tuned specifically for Qwen3-14B this
+  round — the prompt's worked examples were calibrated against whichever
+  model was live at the time (originally Qwen3.5-9B), and different
+  models in the same family don't necessarily generalize identically;
+  left as a known gap for whoever next iterates on the clue prompt with
+  this specific model active, rather than re-running the full
+  ÉTAIS/SERRERAIT/MENTIRA/ANS/FEES/SERIONS calibration cycle unprompted.
+  `backend/clues.py`'s `DEFAULT_LLM_MODEL` updated to match
+  (`"Qwen/Qwen3-14B"`); `DEFAULT_TIMEOUT` (300s) and `REASONING_TOKEN_
+  BUDGET`/`_strip_reasoning` deliberately left as-is rather than reverted
+  — both are harmless, shared-safe defaults that work correctly
+  regardless of which of the three supported models is actually
+  configured (a fast non-reasoning model just never needs the extra
+  budget/timeout headroom, it doesn't slow it down).
+
+- added Qwen3.5-4B unquantized (`bf16`, bartowski, ~8.7GB) as a fourth
+  configurable/testable local LLM option, at the user's explicit
+  request — downloaded, verified its chat template references
+  `enable_thinking` the same way Qwen3-14B/Qwen3.5-9B do (so the existing
+  thinking-disable mechanism applies unchanged), then actually ran the
+  same 5-word test set used for the two previous model swaps
+  (`MENTIRA`/`SERRERAIT`/`ANS`/`FEES`/`SERIONS`) before writing anything
+  down. The request was to configure and test it, not to change the
+  active default — Qwen3-14B stays the default; this is documented as a
+  fourth override option in `env_default.sh`/`env.sh`/`run_llm.sh`'s
+  comments, same pattern as the other two alternatives. Measured live:
+  ~3s/word — the fastest of all four options, close to Qwen3.5-9B's own
+  ~2s/word despite being unquantized rather than 4-bit (the smaller
+  parameter count dominates over the quantization difference here).
+  Quality, reported honestly: `MENTIRA` came back correct (future tense,
+  via a valid synonym — "cachera la vérité" for "to lie"); `ANS` was
+  singular-framed as usual (the same unresolved, documented limitation
+  regardless of model); but `SERRERAIT` came back in the wrong mood
+  (future "fermera" instead of conditional "fermerait") and, most
+  notably, `SERIONS` ("nous serions", conditional of "être") was answered
+  with an entirely different, unrelated verb — "nous réussirions" (from
+  "réussir", to succeed) inside an otherwise well-formed "si... alors"
+  conditional sentence — the same "être gets confused with a different
+  verb in the same mood/person" failure pattern already seen with
+  DeepSeek-R1-Distill's `SERIONS` test, now also reproduced on a Qwen
+  model. `FEES` was grammatically plural but semantically vague ("gentle,
+  likeable people" — never actually conveying "fairy"/magical), a milder
+  version of the same meaning-drift concern the SERIONS/meaning-hallucination
+  prompt rule was written for. Overall: fastest option, but the smallest
+  model of the four, with correspondingly the weakest semantic grounding
+  observed so far — a real trade-off to weigh against its speed if this
+  is ever considered as a default, not chased further this round since
+  only configuration + testing was requested.
+
+- default local LLM (`run_llm.sh`) changed again, at the user's explicit
+  follow-up request: Qwen3.5-4B unquantized (`bf16`, bartowski, ~8.7GB)
+  is now the default, replacing Qwen3-14B — which, along with Qwen3.5-9B
+  and DeepSeek-R1-Distill-Qwen-14B, stays a fully supported alternative
+  (same override mechanism, `env_default.sh`/`env.sh` updated so the
+  now-4-way choice always shows the currently-inactive options as the
+  uncomment-to-switch blocks). This model had already been downloaded and
+  tested in the immediately preceding entry (configured, not yet made
+  default) — the trade-offs recorded there (fastest of the four, ~3s/
+  word, but weakest observed semantic grounding: `SERRERAIT`'s mood
+  mismatch, `SERIONS`'s wrong-verb confusion, `FEES`'s vague meaning)
+  apply unchanged here; nothing new to re-measure, this entry is the
+  "made it the default" follow-through, not a new evaluation.
+  `backend/clues.py`'s `DEFAULT_LLM_MODEL` updated to
+  `"Qwen/Qwen3.5-4B"` to match. Verified end-to-end after switching, not
+  just per-word in isolation: a real 9×9 grid (30 words) generated
+  successfully through the actual running API with the new default
+  live.
+
+- default local LLM reverted back to Qwen3.5-9B, Q4_K_M (this project's
+  very first default), at the user's explicit request — Qwen3.5-4B
+  unquantized, Qwen3-14B, and DeepSeek-R1-Distill-Qwen-14B all remain
+  fully supported alternatives (same 4-way override mechanism,
+  `env_default.sh`/`env.sh`/`run_llm.sh` updated to show whichever three
+  are currently inactive as the uncomment blocks). `backend/clues.py`'s
+  `DEFAULT_LLM_MODEL` updated to match. No new evaluation needed — this
+  model's behavior was already measured across every earlier entry in
+  this log (it's the baseline every other model was compared against).
+
+- enriched `backend/clues.py`'s inflection-agreement prompt rule with a
+  new `_AGREEMENT_EXAMPLES` bank of ~20 correct worked examples, at the
+  user's explicit request ("une vingtaine d'exemples précis impliquant
+  des conjugaisons et des accords en nombre et en genre") — a deliberate
+  shift from the established pattern of adding one negative ("bad
+  example") illustration at a time after a specific reported failure, to
+  adding many *positive* examples at once, on the theory that more varied
+  few-shot anchors of what success looks like helps a small model beyond
+  what rules-plus-counterexamples alone can teach. Covers, in French
+  only (like every other worked example in this rule — the model is
+  expected to generalize the underlying agreement *concept* to whichever
+  language it's actually writing in): `tu`/`nous`/`il`/`vous`/`ils`
+  across présent/imparfait/futur/conditionnel for regular `-er`/`-ir`/
+  `-re` verbs, `être`/`avoir` specifically (the two verbs every earlier
+  iteration flagged as hardest), and masculine/feminine singular/plural
+  noun/adjective agreement including classic irregular plurals
+  (`nouveau`→`nouveaux`, `vieux`→`vieilles`, `cheval`→`chevaux`,
+  `travail`→`travaux`). Each of the 20 clues was manually checked before
+  shipping — not just written and trusted — to (a) never contain the
+  target word or a same-family form of it (the existing copy-filter rule
+  the whole prompt already enforces), and (b) itself be phrased in the
+  exact matching mood/tense/number/gender, not merely gesture at the
+  right general idea (the same standard the "bad example" illustrations
+  hold themselves to). Verified live on both previously-known-hard words
+  (`MENTIRA`, `SERRERAIT`, `SERIONS`, `ANS`, `ÉTAIS`) and, importantly,
+  brand-new words never mentioned in the added examples themselves
+  (`BELLES`, `MANGERIEZ`, `CHANTAIENT`, `JOYEUSES`) — specifically to
+  check the model was generalizing the *concept*, not just echoing
+  memorized examples back on request. Results, reported honestly:
+  `MENTIRA` and `SERRERAIT` now come back cleanly correct consistently;
+  `BELLES` and `CHANTAIENT` (novel words) also came back correctly
+  agreed; but `ANS` and `ÉTAIS` are unchanged (still the same known,
+  unresolved limitations from earlier iterations), `SERIONS` ("être"
+  again) produced a bare grammatical label in 2/6 samples despite the
+  rule immediately above explicitly forbidding exactly that, and two
+  other novel words, `MANGERIEZ` and `JOYEUSES`, came back without
+  clearly matching mood/number either. Net assessment: a real,
+  measurable improvement on several cases, generalizing beyond the
+  literal added examples, but still not a fix — "être" in particular
+  remains the project's single hardest recurring case across every
+  model and every prompt iteration tried this project has attempted so
+  far. Verified the change doesn't break anything end-to-end: restarted
+  both the LLM server (back on Qwen3.5-9B, this entry's default swap)
+  and the app servers, then generated a real 9×9 grid (30 words)
+  successfully through the actual running API with the enriched prompt
+  live.
+
+- restructured `backend/clues.py`'s prompt in two ways at the user's
+  explicit request, both purely about clarity/structure, not new rules
+  or behavior. (1) Rephrased throughout for a single word, not a batch:
+  the prompt used to say "each word below", list "Words:\n- word" even
+  though it only ever contains one, and ask for "one line per word" —
+  leftover phrasing from before `_BATCH_SIZE` was fixed at 1 (see the
+  earlier entry on why: even a modest batch degraded on the small local
+  model). `_build_prompt(entries, ...)` (took a list) was split into
+  `_build_system_prompt(difficulty, language)` (no word-dependence at
+  all) and `_build_user_message(entry, language)` (takes a single
+  `(answer, accented, canonical)` tuple, not a list) — `_build_gloss_
+  block`/`_build_examples_block` simplified the same way, dropping the
+  now-pointless per-batch iteration. (2) Pulled every "bad"/"good"
+  illustration out of the rule sentences they used to be embedded in
+  (a rule and its example used to be one long run-on sentence) into a
+  single, clearly delimited `=== EXAMPLES ===` block after the now-short,
+  numbered rules, each illustration labeled by which rule it
+  demonstrates — so a rule reads as a directive and an example reads as
+  an example, rather than the two blended together the way they'd
+  accumulated over many one-at-a-time additions. Verified live, not just
+  read for correctness: printed the actual generated system+user
+  messages to confirm the new structure renders as intended, ran several
+  previously-tested words (`SERRERAIT`, `MENTIRA`, `ANS`, `FEES`) through
+  the real pipeline to confirm no regression from the restructuring
+  itself, then generated a full grid through the actual running API
+  end-to-end.
+
+- split `backend/clues.py`'s LLM call into a `system` message (the fixed
+  instructions from `_build_system_prompt()`) and a `user` message (the
+  per-word content from `_build_user_message()`), at the user's explicit
+  request — previously everything was sent as a single `user` message,
+  with no `system` message at all. `_call()`'s signature changed from
+  `_call(prompt, max_tokens, timeout)` to `_call(system_prompt,
+  user_message, max_tokens, timeout)`, sending `messages=[{"role":
+  "system", ...}, {"role": "user", ...}]` to the OpenAI-compatible
+  endpoint — every provider this project targets (the local llama.cpp
+  server and Mistral's cloud API, see `env.sh`) supports a `system` role
+  the same way. `_parse_response`'s "word: clue 1; clue 2; clue 3"
+  output format was deliberately left unchanged (only the *request*
+  side changed) — that format's self-labeling header line is a genuine
+  correctness check (it lets `_parse_response` verify the model actually
+  answered about the right word), not batch-era cruft, so there was no
+  reason to touch it. Verified live end-to-end the same way as the
+  restructuring entry above (real generated messages inspected, several
+  words tested through the real pipeline, a full grid generated through
+  the actual running API).
+
+- fixed a real, previously undetected bug in `backend/example_sentences.py`,
+  caught when the user noticed real example sentences never actually
+  appeared in a shown prompt: `CORPUS_DIR` pointed at
+  `data/opensubtitles_corpus/` — this corpus's name from before Wikipedia
+  was added as a second source — while `build_sentence_corpus.py` has
+  written to `data/reference_corpus/` this whole time. `_build_index()`
+  treats a missing corpus directory as "no corpus for this language" and
+  degrades gracefully (a legitimate case for a language nobody's built a
+  corpus for yet) — so this failed completely silently: no error, no log
+  line, just an empty examples section on every single LLM call, for
+  every word, in every language, for as long as this mismatch existed.
+  Confirmed directly (not assumed) that no `data/opensubtitles_corpus/`
+  ever existed on disk in this session — this was a pure stale code
+  reference (both the constant and the module docstring), not a leftover
+  directory needing migration. Fixed by pointing `CORPUS_DIR` at
+  `data/reference_corpus/`; verified live: `find_examples_for_words(['fils'],
+  'fr')` now returns real sentences (previously `{}`), the regenerated
+  `FILS` user-message example now shows a populated "Real example
+  sentences" section, and a full 9×9 grid was generated successfully
+  end-to-end through the actual running API after restarting the app
+  servers. A useful reminder that "returns no examples" and "silently
+  broken" look identical from the outside for a function whose whole
+  contract is "absence is a normal, expected outcome" — worth
+  double-checking a real, populated example the next time a
+  gracefully-degrading data source is touched, rather than trusting that
+  an empty result means "nothing available" by default.
+
+- added Qwen3.8-27B (`unsloth/Qwen3.8-27B-GGUF`, `UD-Q2_K_XL` — Unsloth
+  Dynamic 2-bit quant, ~9.8GB) as a fifth local LLM option, at the user's
+  explicit request — configured as an alternative (`env_default.sh`/
+  `env.sh`/`run_llm.sh` updated), the active default left unchanged
+  (Qwen3.5-9B). Verified its chat template references `enable_thinking`
+  the same way every other Qwen3/Qwen3.5 GGUF tried so far does, so the
+  existing thinking-disable mechanism applies unchanged. Download was
+  interrupted mid-transfer by a Wi-Fi change — the stalled `curl` process
+  didn't error out on its own (a dead TCP connection that never timed
+  out), so it had to be killed manually and resumed with `curl -C -`
+  from its last written byte rather than restarted from scratch; verified
+  directly that the resume picked up from the interrupted byte offset,
+  not from zero, before letting it run to completion.
+  Measured live: ~20-40s/word — slower than every other non-reasoning
+  model tried (Qwen3.5-9B ~2s, Qwen3.5-4B ~3s, Qwen3-14B ~8-9s), as
+  expected for a 27B model even at aggressive 2-bit quantization, but
+  **the strongest clue quality observed all session** on the two hardest
+  recurring cases: `ANS` (plural framing) came back correctly plural in
+  4/4 samples ("Durées de douze mois", "Durées écoulées en années", ...)
+  — no other model tested this session exceeded ~50% on this word;
+  `SERIONS` (conditional "être") came back with correctly matching mood
+  and person in 4/4 samples too, with no bare-grammatical-label slip and
+  no wrong-verb-entirely substitution (both real failures seen on other
+  models). `ÉTAIS` (imperfect "j'étais") remained the one exception —
+  2/4 correct, wrong person or number on the other two — consistent with
+  every prior finding that this specific verb form is uniquely hard
+  regardless of model or prompt iteration. Not proposed as a new default
+  this round (only configuration was requested), but flagged here as the
+  most promising quality/speed trade-off candidate if a future request
+  asks to optimize for clue-agreement quality specifically over raw
+  speed.
+
+- default local LLM changed again, at the user's explicit follow-up
+  request: Qwen3.8-27B (Unsloth Dynamic `UD-Q2_K_XL`) is now the default,
+  replacing Qwen3.5-9B — which, along with Qwen3.5-4B unquantized,
+  Qwen3-14B, and DeepSeek-R1-Distill-Qwen-14B, stays a fully supported
+  alternative (same 4-way override mechanism, `env_default.sh`/`env.sh`/
+  `run_llm.sh` updated to show whichever four are currently inactive as
+  the uncomment blocks). `backend/clues.py`'s `DEFAULT_LLM_MODEL` updated
+  to `"Qwen/Qwen3.8-27B"` to match. No new quality evaluation needed —
+  this model's behavior was already measured thoroughly in the
+  immediately preceding entry (configured, not yet made default), and
+  those results (4/4 correct on `ANS` and `SERIONS`, the two hardest
+  recurring cases, at the cost of ~20-40s/word) stand as the basis for
+  this decision. Verified end-to-end after switching, not just per-word
+  in isolation: a real 9×9 grid (32 words) generated successfully
+  through the actual running API with the new default live — took ~13
+  minutes of clue generation, matching the measured per-word speed; the
+  user checked in mid-generation ("Bloqué ?") since this is a
+  noticeably longer wait than every prior default, worth keeping in mind
+  when reporting progress on this model — the job genuinely was
+  progressing throughout (confirmed via the live status endpoint and
+  backend.log advancing word by word), not stalled.

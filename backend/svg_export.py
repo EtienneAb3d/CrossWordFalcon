@@ -14,6 +14,7 @@ so files sort chronologically by filename. A PNG rendering of the same
 grid is also saved under GRID_SAMPLES/ (project root, deliberately
 *not* gitignored — see save_grid_png) via `rsvg-convert`.
 """
+import base64
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -21,13 +22,23 @@ from xml.sax.saxutils import escape
 
 from .crossword_gen import BLACK
 
-GRIDS_DIR = Path(__file__).resolve().parent.parent / "GRIDS"
-GRID_SAMPLES_DIR = Path(__file__).resolve().parent.parent / "GRID_SAMPLES"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+GRIDS_DIR = PROJECT_ROOT / "GRIDS"
+GRID_SAMPLES_DIR = PROJECT_ROOT / "GRID_SAMPLES"
+_LOGO_PATH = PROJECT_ROOT / "frontend" / "static" / "logo.png"
+_VERSION_PATH = PROJECT_ROOT / "VERSION.txt"
 
 CELL_SIZE = 26
 LINE_HEIGHT = 16
 MARGIN = 16
 MIN_CANVAS_WIDTH = 720
+HEADER_LOGO_SIZE = 48
+HEADER_HEIGHT = HEADER_LOGO_SIZE + 16
+# rsvg-convert defaults to 96 DPI (screen resolution) when the source SVG has
+# no physical units — GRID_SAMPLES/ is a print-quality visual record (see
+# save_grid_png), so it's rendered at 300 DPI instead, scaling up the output
+# pixel dimensions (not the SVG's own layout) accordingly.
+PNG_DPI = 300
 
 # Mirrors frontend/static/script.js's I18N table (acrossHeading/downHeading,
 # noDefinition) — kept in sync by hand since this is Python, not JS; update
@@ -47,6 +58,41 @@ _NO_DEFINITION = {
     "es": "Definición no disponible",
     "it": "Definizione non disponibile",
 }
+
+# The language <select>'s own option labels in frontend/static/index.html are
+# always shown in that language's own native name, not translated per UI
+# language — mirrored here the same way.
+_NATIVE_LANGUAGE_NAMES = {
+    "fr": "Français",
+    "en": "English",
+    "de": "Deutsch",
+    "es": "Español",
+    "it": "Italiano",
+}
+
+# Mirrors frontend/static/i18n.js's difficultyLabel/difficultyEasy/
+# difficultyMedium/difficultyHard per language, for the metadata header line.
+_DIFFICULTY_LABELS = {
+    "fr": ("Difficulté", {"easy": "Facile", "medium": "Moyenne", "hard": "Difficile"}),
+    "en": ("Difficulty", {"easy": "Easy", "medium": "Medium", "hard": "Hard"}),
+    "de": ("Schwierigkeit", {"easy": "Leicht", "medium": "Mittel", "hard": "Schwer"}),
+    "es": ("Dificultad", {"easy": "Fácil", "medium": "Media", "hard": "Difícil"}),
+    "it": ("Difficoltà", {"easy": "Facile", "medium": "Media", "hard": "Difficile"}),
+}
+
+_logo_data_uri_cache = None
+
+
+def _logo_data_uri():
+    """Base64 data: URI for frontend/static/logo.png, so the exported SVG
+    stays self-contained (no external file reference) — read once per
+    process and cached, same pattern as backend/gloss_lookup.py's/
+    backend/example_sentences.py's lazy caches."""
+    global _logo_data_uri_cache
+    if _logo_data_uri_cache is None:
+        data = _LOGO_PATH.read_bytes()
+        _logo_data_uri_cache = f"data:image/png;base64,{base64.b64encode(data).decode('ascii')}"
+    return _logo_data_uri_cache
 
 
 def _group_clue_lines(words, direction, position_key, language):
@@ -129,9 +175,11 @@ def _grid_svg(pattern, letters, words, y_offset):
     return "".join(parts), CELL_SIZE + rows * CELL_SIZE, CELL_SIZE + cols * CELL_SIZE
 
 
-def render_grid_svg(result, language):
+def render_grid_svg(result, language, difficulty=None):
     """Builds the full SVG document (as a string) for one generate_grid()
-    result: title, empty grid, clue lists, then the solved grid."""
+    result: a header identifying the grid (logo, software name, version,
+    date, language, difficulty), the empty grid + clue lists, then the
+    solved grid."""
     words = result["words"]
     across_heading, down_heading, solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
     across_lines = _group_clue_lines(words, "across", "row", language)
@@ -141,12 +189,28 @@ def render_grid_svg(result, language):
     parts = []
     y = MARGIN
 
-    title = f"CrossWordFalcon — {language} — {result['width']}×{result['height']}"
+    # Header: logo + software name/version on one line, generation date +
+    # grid language + difficulty on the next — identifies the file at a
+    # glance without needing to trust its filename/timestamp alone.
+    logo_x, logo_y = MARGIN, y
     parts.append(
-        f'<text x="{MARGIN}" y="{y + 14}" font-size="16" font-family="sans-serif" '
-        f'font-weight="bold">{escape(title)}</text>'
+        f'<image x="{logo_x}" y="{logo_y}" width="{HEADER_LOGO_SIZE}" height="{HEADER_LOGO_SIZE}" '
+        f'href="{_logo_data_uri()}"/>'
     )
-    y += 32
+    text_x = logo_x + HEADER_LOGO_SIZE + 12
+    version = _VERSION_PATH.read_text(encoding="utf-8").strip()
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    language_name = _NATIVE_LANGUAGE_NAMES.get(language, language)
+    difficulty_label, difficulty_names = _DIFFICULTY_LABELS.get(language, _DIFFICULTY_LABELS["en"])
+    difficulty_name = difficulty_names.get(difficulty, difficulty or "")
+    parts.append(
+        f'<text x="{text_x}" y="{logo_y + 20}" font-size="18" font-family="sans-serif" '
+        f'font-weight="bold">CrossWordFalcon</text>'
+        f'<text x="{text_x}" y="{logo_y + 38}" font-size="12" font-family="sans-serif" '
+        f'fill="#4b5563">v{escape(version)} — {escape(date_str)} — {escape(language_name)} — '
+        f'{escape(difficulty_label)} : {escape(difficulty_name)}</text>'
+    )
+    y += HEADER_HEIGHT
 
     def add_heading(text):
         nonlocal y
@@ -196,7 +260,7 @@ def render_grid_svg(result, language):
     )
 
 
-def save_grid_svg(result, language, grids_dir=GRIDS_DIR):
+def save_grid_svg(result, language, difficulty=None, grids_dir=GRIDS_DIR):
     """Renders and writes the SVG for `result`, named
     `<timestamp>_<language>.svg` (sortable, one file per generated grid).
     Returns the written Path."""
@@ -208,7 +272,7 @@ def save_grid_svg(result, language, grids_dir=GRIDS_DIR):
     # another's file.
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     path = grids_dir / f"{timestamp}_{language}.svg"
-    path.write_text(render_grid_svg(result, language), encoding="utf-8")
+    path.write_text(render_grid_svg(result, language, difficulty), encoding="utf-8")
     return path
 
 
@@ -233,7 +297,16 @@ def save_grid_png(svg_path, grid_samples_dir=GRID_SAMPLES_DIR):
     png_path = grid_samples_dir / f"{svg_path.stem}.png"
     try:
         subprocess.run(
-            ["rsvg-convert", "-o", str(png_path), str(svg_path)],
+            # `--dpi-x`/`--dpi-y` only rescale physical units (in/mm/pt) —
+            # this SVG's root <svg> has none (its width/height are bare
+            # numbers, i.e. CSS px), so librsvg's default of "1 px = 1/96
+            # inch" means those flags alone would have no effect (verified
+            # directly: identical output size with or without them). `-z`
+            # (zoom) is what actually scales pixel output on a unitless
+            # SVG — PNG_DPI/96 reproduces the same effect a true 300 DPI
+            # setting would have on a document authored at the standard
+            # 96 CSS-px-per-inch baseline.
+            ["rsvg-convert", "-z", str(PNG_DPI / 96), "-o", str(png_path), str(svg_path)],
             check=True, capture_output=True,
         )
     except FileNotFoundError as e:

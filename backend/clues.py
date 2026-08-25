@@ -10,6 +10,16 @@ number, and conjugation. The model is asked for 3 candidate clues per word
 (for variety across regenerations); one is picked at random on our side —
 the LLM doesn't pick for itself.
 
+Each call sends two chat messages, not one: a `system` message
+(`_build_system_prompt()`) holding everything that's the same on every
+call — role, difficulty style, rules, worked examples — and a `user`
+message (`_build_user_message()`) holding only what's specific to this
+one word — its accented spelling plus its grounding block (dictionary
+definitions/example sentences, when available). Both are written for a
+single word throughout, not a batch — there is only ever one word per
+call (`_BATCH_SIZE = 1` below), and the wording reflects that rather than
+describing a list of words that never actually arrives.
+
 Output format is deliberately plain text, not JSON: one line per word,
 "WORD: clue 1; clue 2; clue 3". Small local models without constrained
 decoding were unreliable at producing syntactically valid JSON (mismatched
@@ -38,9 +48,26 @@ from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
 
 DEFAULT_LLM_BASE_URL = "http://127.0.0.1:8002/v1/chat/completions"
-DEFAULT_LLM_MODEL = "Qwen/Qwen3.5-9B"
+DEFAULT_LLM_MODEL = "Qwen/Qwen3.8-27B"
 DEFAULT_LLM_API_KEY = "EMPTY"
-DEFAULT_TIMEOUT = 120.0
+# Generous relative to a non-reasoning model's ~2s/word (Qwen3/Qwen3.5 with
+# thinking disabled): kept high enough to also cover DeepSeek-R1-Distill (a
+# supported alternative, see env.sh), which reasons through a `<think>` block
+# (see _strip_reasoning below) before every single word's answer — a request
+# to whichever model is actually configured simply returns well before this
+# ceiling, so one shared value works for both rather than needing to track
+# which model is active.
+DEFAULT_TIMEOUT = 300.0
+
+# Added on top of the per-word answer budget below (max_tokens formula in
+# generate()) so a reasoning model's `<think>` block has room to finish
+# before the answer itself is due — a non-reasoning model (e.g. Qwen3.5 with
+# `enable_thinking: false`) simply never uses this much and stops earlier,
+# so it's harmless to always include. Calibrated against
+# DeepSeek-R1-Distill-Qwen-14B directly: measured live across several words,
+# a single word's full response (thinking + answer) ran anywhere from ~300
+# to ~1300 tokens — kept comfortably above that observed high end.
+REASONING_TOKEN_BUDGET = 2048
 
 # Kept low (rather than a high-temperature "creative" setting) because the
 # 3-candidates-per-word instruction in the prompt is what drives variety —
@@ -92,6 +119,45 @@ LANGUAGE_NAMES = {
     "it": "Italian",
 }
 
+# A broad, varied bank of correct worked examples for the inflection-
+# agreement rule in _build_system_prompt — added on top of the "bad example"
+# failure illustrations (each added one at a time, after a specific
+# reported failure) to give the model many more anchors for what success
+# looks like, not just what to avoid. Covers a spread of persons/tenses/
+# moods for regular -er/-ir/-re verbs plus the two hardest, most-overloaded
+# irregular verbs (être, avoir); and masculine/feminine, singular/plural
+# noun and adjective agreement, including classic irregular plurals
+# (nouveau/nouveaux, vieux/vieilles, cheval/chevaux, travail/travaux).
+# French-only, like every other worked example here — the model is
+# expected to generalize the same underlying concept (person/number/mood/
+# gender agreement) to whichever language the request is actually in.
+# Each clue was manually checked to (a) never contain the target word or a
+# same-family form of it, and (b) itself be phrased in a mood/tense/number/
+# gender that actually matches its target, not just gesture at the general
+# meaning.
+_AGREEMENT_EXAMPLES = """
+- PARLES (tu, présent) : Ce que tu fais en ce moment pour te faire comprendre
+- PARLIONS (nous, imparfait) : Ce que nous faisions ensemble chaque soir, enfants
+- PARLERA (il/elle, futur) : Ce qu'il fera devant le micro demain soir
+- PARLERIEZ (vous, conditionnel) : Ce que vous feriez si on vous cédait le micro
+- FINISSIEZ (vous, imparfait) : Ce que vous faisiez avec vos devoirs, enfants, chaque soir
+- FINIRONT (ils/elles, futur) : Ce qu'ils feront de leur repas avant de sortir de table
+- VENDIONS (nous, imparfait) : Ce que nous faisions au marché chaque samedi matin
+- VENDRONT (ils/elles, futur) : Ce qu'ils feront de leur maison l'année prochaine
+- AVAIS (je/tu, imparfait, verbe avoir) : Ce que je possédais, enfant, dans ma tirelire
+- AURONS (nous, futur, verbe avoir) : Ce que nous posséderons une fois le prêt remboursé
+- SERAIENT (ils/elles, conditionnel, verbe être) : Ce qu'ils deviendraient dans un monde plus juste
+- RENDRIEZ (vous, conditionnel) : Ce que vous feriez avec un objet qui ne vous appartient pas
+- GRAND (masculin singulier) : Se dit d'un immeuble qui domine toute la ville
+- GRANDES (féminin pluriel) : Se dit de plusieurs maisons qui dominent le quartier
+- PETITES (féminin pluriel) : Se dit de plusieurs chambres où l'on tient à peine
+- HEUREUSES (féminin pluriel) : Se dit de plusieurs femmes comblées par la vie
+- NOUVEAUX (masculin pluriel irrégulier) : Se dit de plusieurs appareils tout juste sortis en magasin
+- VIEILLES (féminin pluriel irrégulier) : Se dit de plusieurs pierres usées par le temps
+- CHEVAUX (masculin pluriel irrégulier) : Ce que l'on trouve, en nombre, dans un haras
+- TRAVAUX (masculin pluriel irrégulier) : Ce qui occupe plusieurs ouvriers sur un chantier
+""".strip()
+
 # One line per word: "word: clue 1; clue 2; clue 3", tolerating a leading
 # bullet/number the model adds despite being asked not to (e.g. "- word:"
 # or "1. word:"). Matched against the batch's known words (case-insensitive)
@@ -109,6 +175,31 @@ _LIST_ITEM_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])?\s*(.+)$")
 # model numbers clues within the semicolon-separated line itself instead of
 # (or as well as) using separate lines.
 _LEADING_MARKER_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
+
+# DeepSeek-R1-distill models (unlike Qwen3.5 with `enable_thinking: false`,
+# see run_llm.sh) always reason through a `<think>...</think>` block before
+# the actual answer — there's no template flag to turn this off. Left in,
+# the reasoning text itself risks false-triggering `_WORD_LINE_RE` (a model
+# thinking out loud about the word by name, followed by a colon, reads
+# exactly like a header line) and contaminating `_parse_response`'s output
+# with reasoning fragments instead of the deliberate final answer.
+_THINK_BLOCK_RE = re.compile(r"^.*?</think>", re.DOTALL)
+
+
+def _strip_reasoning(content):
+    """Removes a leading `<think>...</think>` reasoning block, if present,
+    so only the model's actual final answer ever reaches `_parse_response`.
+    A no-op for a model that doesn't emit one (e.g. Qwen3.5 with thinking
+    disabled) — `<think>` never appears in its output at all. If the closing
+    `</think>` is missing (the reasoning itself ran out of `max_tokens`
+    before ever reaching an answer), returns "" rather than the raw
+    in-progress reasoning text — `_parse_response` already treats empty/
+    unparsable content as "no clue yet, retry next round", which is the
+    correct outcome here."""
+    if "<think>" not in content:
+        return content
+    stripped, count = _THINK_BLOCK_RE.subn("", content, count=1)
+    return stripped if count else ""
 
 
 def _normalize(word):
@@ -217,11 +308,13 @@ class LLMClueGenerator:
             if not pending:
                 break
             for batch in _chunks(pending, _BATCH_SIZE):
-                accented_to_answer = {accented: answer for answer, accented, _ in batch}
-                prompt = self._build_prompt(batch, difficulty, language)
-                max_tokens = 300 + 90 * len(batch)
+                entry = batch[0]
+                accented_to_answer = {entry[1]: entry[0]}
+                system_prompt = self._build_system_prompt(difficulty, language)
+                user_message = self._build_user_message(entry, language)
+                max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * len(batch)
                 try:
-                    content = self._call(prompt, max_tokens, timeout)
+                    content = self._call(system_prompt, user_message, max_tokens, timeout)
                     raw = self._parse_response(content, accented_to_answer.keys())
                     clues.update(self._pick_clues(raw, accented_to_answer))
                 except ClueGenerationError as e:
@@ -235,158 +328,195 @@ class LLMClueGenerator:
         return clues
 
     @staticmethod
-    def _build_examples_block(entries, language):
+    def _build_examples_block(entry, language):
         """Real sentences (from the OpenSubtitles+Wikipedia reference
-        corpus, see backend/example_sentences.py) using each word's exact
+        corpus, see backend/example_sentences.py) using this word's exact
         accented form, if any exist — grounds the model's sense of what a
         rare or ambiguous word actually means instead of leaving it to
         guess (a real, observed failure: the small local model defined
         French `are` — the 100 m² land-area unit — as the English verb "to
         be", since it had never reliably learned the rare French sense).
         Returns "" (no section added) when no example sentences were found
-        for any word in this batch — not every word has one."""
-        examples_by_word = find_examples_for_words(
-            [accented for _, accented, _ in entries], language
-        )
-        if not examples_by_word:
+        for this word."""
+        _, accented, _ = entry
+        sentences = find_examples_for_words([accented], language).get(accented)
+        if not sentences:
             return ""
-        parts = []
-        for _, accented, _ in entries:
-            sentences = examples_by_word.get(accented)
-            if sentences:
-                lines = "\n".join(f"- {s}" for s in sentences)
-                parts.append(f'Real example sentences using "{accented}":\n{lines}')
-        if not parts:
-            return ""
+        lines = "\n".join(f"- {s}" for s in sentences)
         return (
-            "\n\n" + "\n\n".join(parts) + "\n\nThese are genuine sentences, "
-            "not hints about difficulty or style — use them only to confirm "
-            "what the word actually means (this matters most for short or "
-            "unusual words that might look like a word from another "
-            "language) before writing your clues."
+            f'Real example sentences using "{accented}":\n{lines}\n\n'
+            "These are genuine sentences, not hints about difficulty or "
+            "style — use them only to confirm what the word actually means "
+            "(this matters most for short or unusual words that might look "
+            "like a word from another language) before writing your clues."
         )
 
     @staticmethod
-    def _build_gloss_block(entries, language):
+    def _build_gloss_block(entry, language):
         """Real dictionary definitions (from Wiktionary via Kaikki.org, see
-        backend/gloss_lookup.py) for each word's candidate canonical
+        backend/gloss_lookup.py) for this word's candidate canonical
         form(s), if any exist. Looked up by canonical form/lemma, not the
         grid's inflected spelling — a genuinely ambiguous word (French
         "suis" -> "être" or "suivre") can have more than one candidate, in
         which case every one found is shown so the model resolves the
         ambiguity using the word's actual clue-writing context, rather
         than a definition dictionary silently picking one for it in
-        advance. Returns "" when none of this batch's words have any
-        canonical form with dictionary coverage."""
-        all_canonicals = {c for _, _, canonical in entries for c in canonical}
-        glosses_by_lemma = find_glosses_for_canonicals(all_canonicals, language)
-        if not glosses_by_lemma:
-            return ""
-        parts = []
-        for _, accented, canonical in entries:
-            word_parts = []
-            for lemma in canonical:
-                for sense in glosses_by_lemma.get(lemma, []):
-                    for gloss in sense["glosses"]:
-                        word_parts.append(f'- "{lemma}" ({sense["pos"]}): {gloss}')
-            if word_parts:
-                parts.append(f'Dictionary definition(s) related to "{accented}":\n' + "\n".join(word_parts))
-        if not parts:
+        advance. Returns "" when this word has no canonical form with
+        dictionary coverage."""
+        _, accented, canonical = entry
+        glosses_by_lemma = find_glosses_for_canonicals(canonical, language)
+        word_parts = [
+            f'- "{lemma}" ({sense["pos"]}): {gloss}'
+            for lemma in canonical
+            for sense in glosses_by_lemma.get(lemma, [])
+            for gloss in sense["glosses"]
+        ]
+        if not word_parts:
             return ""
         return (
-            "\n\n" + "\n\n".join(parts) + "\n\nThese are real dictionary "
+            f'Dictionary definition(s) related to "{accented}":\n'
+            + "\n".join(word_parts) + "\n\nThese are real dictionary "
             "definitions of the word's root form(s) — use them to confirm "
             "the actual meaning before writing your clues. If more than one "
             "is shown, only one may be the meaning that fits this particular "
             "word; use the one that makes sense, ignore the others."
         )
 
-    def _build_prompt(self, entries, difficulty, language):
-        """All of the crossword-clue-writing instructions live here, kept
-        separate from the HTTP/parsing plumbing below."""
+    def _build_system_prompt(self, difficulty, language):
+        """All of the crossword-clue-writing instructions that don't depend
+        on the specific word — role, difficulty style, rules, and a
+        clearly delimited EXAMPLES section illustrating them — sent as the
+        `system` message; kept separate from the HTTP/parsing plumbing
+        below. Pairs with `_build_user_message()`, which carries the one
+        thing that *does* vary per call: the word itself plus its
+        grounding block."""
         style = DIFFICULTY_STYLE.get(difficulty, DIFFICULTY_STYLE["medium"])
         language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
-        words_block = "\n".join(f"- {accented}" for _, accented, _ in entries)
-        grounding_block = (
-            self._build_gloss_block(entries, language)
-            + self._build_examples_block(entries, language)
-        )
         return (
             f"You are a crossword compiler writing in {language_name}, at "
             f"{difficulty.upper()} difficulty. This difficulty level is the "
             f"single most important constraint on every clue you write:\n"
             f"{style}\n\n"
-            "Each word below is given in its correctly accented, inflected "
-            "written form (right gender, number, and conjugation) — use "
-            "that to write grammatically accurate clues."
-            f"{grounding_block}\n\n"
-            "For each word, propose exactly 3 different possible crossword "
-            "clues, all matching the difficulty level above. Rules for "
-            "every clue:\n"
-            "- NEVER include the word being defined anywhere in the clue — "
-            "not as the whole answer, and not embedded inside a longer "
+            "The user message will give you a single word to write a clue "
+            "for, in its correctly accented, inflected written form (right "
+            "gender, number, and conjugation) — use that to write "
+            "grammatically accurate clues. It may also include real "
+            "dictionary definitions and/or real example sentences for that "
+            "word; use them to confirm its actual meaning before writing.\n\n"
+            "Propose exactly 3 different possible crossword clues for that "
+            "single word, all matching the difficulty level above.\n\n"
+            "Rules:\n"
+            "1. Never include the word being defined anywhere in the clue "
+            "— not as the whole answer, and not embedded inside a longer "
             "sentence either — in any spelling, case, or with/without "
-            "accents (bad example: for CHAT, answering \"CHAT\", \"chat\", "
-            "or \"Chat\"; bad example: for SERAIS, answering \"Je serais "
-            "s'il pleuvait demain\" — SERAIS itself must never appear in "
-            "the clue text, even as part of a sentence). A same-family "
-            "word (a different form of the same root) is also forbidden.\n"
-            "- Do not write a bare grammatical/technical description "
-            '(bad example: "verbe avoir à la deuxième personne du présent '
-            'de l\'indicatif" for a verb form) — write an actual clue a '
-            "crossword solver would enjoy, not a label.\n"
-            "- Do not describe the word's spelling or letters instead of "
-            'its meaning (bad example: for TEE, "Mot qui commence par T et '
-            'se termine par EE." — that describes how the word is written, '
-            "not what it means). A clue must always be about the meaning, "
-            "never the letters.\n"
-            "- The clue must match the word's EXACT inflected form in "
+            "accents. A same-family word (a different form of the same "
+            "root) is also forbidden.\n"
+            "2. Do not write a bare grammatical/technical description — "
+            "write an actual clue a crossword solver would enjoy, not a "
+            "label. Describe what the word actually means.\n"
+            "3. Do not describe the word's spelling or letters instead of "
+            "its meaning. A clue must always be about the meaning, never "
+            "the letters.\n"
+            "4. The clue must match the word's EXACT inflected form in "
             "every way that applies — for a verb: person, number, AND "
             "mood/tense together; for a noun or adjective: number "
-            "(singular/plural) and gender — getting the general meaning "
-            "right is never enough if the grammar doesn't match. Bad "
-            "example: for ÉTAIS — first person singular imperfect, "
-            '"j\'étais" — answering "On a célébré la fin des examens" or '
-            '"Elle n\'était plus la même après son voyage": both describe '
-            "a past state but neither is first person singular, so "
-            "neither fits. Bad example: for SERRERAIT — third person "
-            'singular CONDITIONAL, "il/elle serrerait" — answering "Je '
-            'rapprocherai les chaises": wrong person (je instead of il/'
-            "elle) AND wrong mood/tense (future \"rapprocherai\" instead of "
-            "conditional \"serrerait\") — getting only the rough idea "
-            '("bringing things closer together") right is not enough. Bad '
-            'example: for ANS — PLURAL, "years" — answering "Durée de '
-            'douze mois": that describes a single 12-month period, i.e. '
-            'ONE year ("un an", singular), not several years — the clue '
-            "must itself refer to more than one to fit a plural word, e.g. "
-            'something like "Ce que l\'on compte pour son âge" or any '
-            "phrasing that's unambiguously plural, not just numerically "
-            "adjacent to the idea of a year. Before answering, check the "
-            "specific grammatical form the word has been given — for a "
-            'verb, its subject ("je", "tu", "il/elle", "nous", "vous", or '
-            '"ils/elles") and mood/tense; for a noun or adjective, whether '
-            "it's singular or plural, and its gender — and confirm your "
-            "clue matches that exactly, not just a same-meaning idea in a "
-            "different form.\n"
-            "- A synonym or near-synonym is a perfectly good clue.\n"
-            "- One short line each.\n\n"
-            "Words:\n" + words_block + "\n\n"
-            "Respond with exactly one line per word, in this exact plain-text "
-            "format (no JSON, no markdown, no numbering, no extra commentary):\n"
+            "(singular/plural) and gender. Getting the general meaning "
+            "right is never enough if the grammar doesn't match. Before "
+            "answering, identify the word's specific grammatical form (for "
+            'a verb: its subject — "je", "tu", "il/elle", "nous", "vous", '
+            'or "ils/elles" — and mood/tense; for a noun or adjective: '
+            "singular or plural, and gender) and confirm your clue matches "
+            "that exactly, not just a same-meaning idea in a different "
+            "form.\n"
+            "5. The clue must reflect the word's actual, real meaning — "
+            "never an unrelated sentence that merely sounds plausible. "
+            "Check any dictionary definition(s)/example(s) you were given "
+            "and confirm your clue actually corresponds to that meaning, "
+            "rather than free-associating a clue that merely sounds like "
+            "it could be one.\n"
+            "6. A synonym or near-synonym is a perfectly good clue.\n"
+            "7. Keep each candidate clue to one short line.\n\n"
+            "=== EXAMPLES ===\n"
+            "These illustrate the rules above using words other than the "
+            "one you are actually being asked about — never reuse them as "
+            "your answer.\n\n"
+            "Rule 1 (never repeat the word) — bad:\n"
+            '- For CHAT, answering "CHAT", "chat", or "Chat".\n'
+            '- For SERAIS, answering "Je serais s\'il pleuvait demain" — '
+            "SERAIS itself must never appear in the clue text, even as "
+            "part of a sentence.\n\n"
+            "Rule 2 (never a bare grammatical label) — bad vs. good:\n"
+            '- Bad: "verbe avoir à la deuxième personne du présent de '
+            'l\'indicatif" for a verb form.\n'
+            '- Bad: for FEES, "Pluriel du mot \'une fée\'" — naming the '
+            "grammatical operation (pluralization) and repeating the "
+            "singular form is still a label, not a clue.\n"
+            '- Good: for FEES, "Personnages magiques des contes." (in the '
+            "correct plural form, per rule 4).\n\n"
+            "Rule 3 (never describe spelling/letters) — bad:\n"
+            '- For TEE, "Mot qui commence par T et se termine par EE." — '
+            "that describes how the word is written, not what it means.\n\n"
+            "Rule 4 (exact conjugation/number/gender agreement) — bad:\n"
+            '- For ÉTAIS — first person singular imperfect, "j\'étais" — '
+            'answering "On a célébré la fin des examens" or "Elle n\'était '
+            'plus la même après son voyage": both describe a past state '
+            "but neither is first person singular, so neither fits.\n"
+            '- For SERRERAIT — third person singular CONDITIONAL, "il/elle '
+            'serrerait" — answering "Je rapprocherai les chaises": wrong '
+            "person (je instead of il/elle) AND wrong mood/tense (future "
+            '"rapprocherai" instead of conditional "serrerait") — getting '
+            'only the rough idea ("bringing things closer together") '
+            "right is not enough.\n"
+            '- For MENTIRA — third person singular FUTURE, "il/elle '
+            'mentira" — answering "Cacher le vrai" (a bare infinitive, no '
+            "tense at all): the clue itself must be phrased in the future "
+            'tense to match, e.g. "Cachera le vrai".\n'
+            '- For ANS — PLURAL, "years" — answering "Durée de douze '
+            'mois": that describes a single 12-month period, i.e. ONE year '
+            '("un an", singular), not several years — the clue must itself '
+            "refer to more than one to fit a plural word.\n\n"
+            "Rule 4 (exact conjugation/number/gender agreement) — good:\n"
+            f"{_AGREEMENT_EXAMPLES}\n\n"
+            "Rule 5 (the real meaning, not an invented one) — bad:\n"
+            '- For SERIONS — first person plural CONDITIONAL of "être" '
+            '(to be), "nous serions" — answering "Il existe des '
+            'solutions": that has no connection at all to the meaning of '
+            '"to be", it is simply a different, unrelated idea.\n\n'
+            "=== END OF EXAMPLES ===\n\n"
+            "Respond with exactly one line, in this exact plain-text "
+            "format (no JSON, no markdown, no numbering, no extra "
+            "commentary):\n"
             "word: clue 1; clue 2; clue 3\n"
-            "One line per word listed above, using the exact accented "
-            "spelling given above before the colon, and the 3 clues after "
-            "it separated by semicolons."
+            "Use the exact accented spelling you were given before the "
+            "colon, then the 3 clues separated by semicolons."
         )
 
-    def _call(self, prompt, max_tokens, timeout):
+    def _build_user_message(self, entry, language):
+        """The one thing that varies per call: the word itself, plus its
+        grounding block (real dictionary definitions/example sentences,
+        when available) — sent as the `user` message, paired with the
+        fixed `system` message from `_build_system_prompt()`."""
+        _, accented, _ = entry
+        parts = [f"Word: {accented}"]
+        gloss_block = self._build_gloss_block(entry, language)
+        if gloss_block:
+            parts.append(gloss_block)
+        examples_block = self._build_examples_block(entry, language)
+        if examples_block:
+            parts.append(examples_block)
+        return "\n\n".join(parts)
+
+    def _call(self, system_prompt, user_message, max_tokens, timeout):
         try:
             response = httpx.post(
                 self.base_url,
                 headers={"Authorization": f"Bearer {self.api_key}"},
                 json={
                     "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
                     "temperature": TEMPERATURE,
                     "max_tokens": max_tokens,
                 },
@@ -400,7 +530,8 @@ class LLMClueGenerator:
                 "sure it's running (./run_llm.sh); otherwise check "
                 "LLM_BASE_URL/LLM_MODEL/LLM_API_KEY in env.sh."
             ) from e
-        return response.json()["choices"][0]["message"]["content"]
+        content = response.json()["choices"][0]["message"]["content"]
+        return _strip_reasoning(content)
 
     @staticmethod
     def _parse_response(content, known_words):
