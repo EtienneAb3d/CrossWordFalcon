@@ -64,6 +64,51 @@ h1 {
   white-space: nowrap;
 }
 
+.info-badge {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  color: #555;
+  cursor: default;
+}
+
+.info-badge:hover,
+.info-badge:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+/* Hidden by default; shown on hover/keyboard-focus of the badge itself —
+   a pure-CSS tooltip, no JS needed to open/close it (script.js only fills
+   in its text once, from /api/system_info, see the style-guide SKILL). */
+.info-tooltip {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 0.5rem;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.info-badge:hover .info-tooltip,
+.info-badge:focus-visible .info-tooltip {
+  display: block;
+}
+
 form {
   display: flex;
   flex-wrap: wrap;

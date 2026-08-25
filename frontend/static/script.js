@@ -13,6 +13,11 @@ function applyTranslations() {
     const key = el.getAttribute("data-i18n");
     if (t[key]) el.textContent = t[key];
   });
+  document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-aria");
+    if (t[key]) el.setAttribute("aria-label", t[key]);
+  });
+  renderSystemInfoTooltip();
 }
 
 const form = document.getElementById("generate-form");
@@ -27,6 +32,8 @@ const cluesDown = document.getElementById("clues-down");
 const solutionBtn = document.getElementById("solution-btn");
 const checkBtn = document.getElementById("check-btn");
 const versionBadge = document.getElementById("version-badge");
+const infoBadge = document.getElementById("info-badge");
+const infoTooltip = document.getElementById("info-tooltip");
 
 fetch("/api/version")
   .then((r) => r.json())
@@ -35,6 +42,42 @@ fetch("/api/version")
       versionBadge.textContent = `v${data.version}`;
       versionBadge.hidden = false;
     }
+  })
+  .catch(() => {});
+
+// Filled in once the fetch below resolves; kept as raw data (not
+// pre-rendered text) so renderSystemInfoTooltip() can redraw it in
+// whichever language the user later switches the UI to, without a
+// second network round-trip.
+let systemInfo = null;
+
+function renderSystemInfoTooltip() {
+  if (!systemInfo) return;
+  const t = I18N[uiLanguage];
+  const lines = [t.systemInfoModel(systemInfo.llm_model)];
+  lines.push(systemInfo.compute === "gpu" ? t.systemInfoComputeGpu : t.systemInfoComputeCpu);
+  if (systemInfo.compute === "gpu" && systemInfo.gpu_name) {
+    lines.push(t.systemInfoGpuName(systemInfo.gpu_name));
+    if (systemInfo.gpu_vram_mb) {
+      const gb = Math.round(systemInfo.gpu_vram_mb / 1024);
+      lines.push(systemInfo.unified_memory ? t.systemInfoUnifiedMemory(gb) : t.systemInfoVram(gb));
+    }
+  }
+  infoTooltip.replaceChildren(
+    ...lines.map((line) => {
+      const div = document.createElement("div");
+      div.textContent = line;
+      return div;
+    })
+  );
+}
+
+fetch("/api/system_info")
+  .then((r) => r.json())
+  .then((data) => {
+    systemInfo = data;
+    renderSystemInfoTooltip();
+    infoBadge.hidden = false;
   })
   .catch(() => {});
 

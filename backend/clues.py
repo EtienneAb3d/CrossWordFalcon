@@ -139,7 +139,7 @@ LANGUAGE_NAMES = {
 # content was authored to fit that language's own grammar rather than
 # forcing a French-shaped template onto it (e.g. English and German have
 # no single-word synthetic future/conditional for most verbs, unlike
-# French/Spanish/Italian, so their rule4_bad/rule4_good examples lean on
+# French/Spanish/Italian, so their rule_bad/rule_good examples lean on
 # what those languages actually have: modal auxiliaries, participles,
 # Konjunktiv II, irregular plurals).
 PROMPT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -402,10 +402,6 @@ class LLMClueGenerator:
         diff_examples = config["difficulty_examples"]
         diff_example = diff_examples.get(difficulty, diff_examples["medium"])
         style_line = f'{style} Example: for {diff_example["word"]}, "{diff_example["clue"]}"'
-        rule2_lines = (
-            [f"Bad: {b}" for b in config["rule2_bad"]]
-            + [f"Good: {g}" for g in config["rule2_good"]]
-        )
         return (
             f"You are a crossword compiler writing in {language_name}, at "
             f"{difficulty.upper()} difficulty. This difficulty level is the "
@@ -453,18 +449,12 @@ class LLMClueGenerator:
             "These illustrate the rules above using words other than the "
             "one you are actually being asked about — never reuse them as "
             "your answer.\n\n"
-            "Rule 1 (never repeat the word) — bad:\n"
-            f"{_bullets(config['rule1_bad'])}\n\n"
-            "Rule 2 (never a bare grammatical label) — bad vs. good:\n"
-            f"{_bullets(rule2_lines)}\n\n"
-            "Rule 3 (never describe spelling/letters) — bad:\n"
-            f"{_bullets(config['rule3_bad'])}\n\n"
-            "Rule 4 (exact conjugation/number/gender agreement) — bad:\n"
-            f"{_bullets(config['rule4_bad'])}\n\n"
-            "Rule 4 (exact conjugation/number/gender agreement) — good:\n"
-            f"{_bullets(config['rule4_good'])}\n\n"
-            "Rule 5 (the real meaning, not an invented one) — bad:\n"
-            f"{_bullets(config['rule5_bad'])}\n\n"
+            "Examples of what NOT to do:\n"
+            f"{_bullets(config['rule_bad'])}\n\n"
+            "Examples of what TO do (correct conjugation, number, and "
+            "gender agreement, and a real definition rather than a "
+            "grammatical label):\n"
+            f"{_bullets(config['rule_good'])}\n\n"
             "=== END OF EXAMPLES ===\n\n"
             "Respond with exactly one line, in this exact plain-text "
             "format (no JSON, no markdown, no numbering, no extra "

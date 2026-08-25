@@ -107,7 +107,32 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   never fails the request — it's a nice-to-have record, not the point of asking for a
   grid. If the LLM
   call fails, the job ends in `status: "error"` (the old direct 502 doesn't apply
-  anymore now that the request itself always returns 202 immediately).
+  anymore now that the request itself always returns 202 immediately). `GET
+  /api/system_info` returns `backend/system_info.py`'s `get_system_info(clue_
+  generator.model)` — computed fresh per request (a couple of cheap subprocess
+  probes, not worth caching) rather than once at startup, since the info badge this
+  feeds (`frontend/static/script.js`) is a nice-to-have status display that could
+  plausibly reflect a hardware change (e.g. a hot-swapped external GPU) across a
+  long-running server process's lifetime.
+- `backend/system_info.py` — `get_system_info(llm_model)`, best-effort *local
+  machine* hardware detection for that info badge: `nvidia-smi --query-gpu=name,
+  memory.total` for a discrete NVIDIA GPU's exact name and dedicated VRAM if present,
+  else (on macOS) `system_profiler SPDisplaysDataType`'s `Chipset Model:` line for
+  Apple Silicon's on-die GPU name — verified directly that this output has no VRAM
+  figure to parse for Apple Silicon (unlike a discrete GPU), since it shares the
+  machine's own RAM rather than having dedicated video memory, so `sysctl -n hw.
+  memsize` (total system RAM) is reported instead, flagged via `unified_memory: true`
+  so the frontend labels it correctly ("unified memory", not "VRAM"). This is **not**
+  a live query of the separate LLM server process (`llama_cpp.server`, see
+  `run_llm.sh`) — that process exposes no such endpoint — so it reports what hardware
+  is present and, per `run_llm.sh`'s own `GPU_CMAKE_ARGS` detection, would normally
+  be used; on a machine where `run_llm.sh` actually fell back to CPU despite a GPU
+  being present (a missing CUDA Toolkit/Xcode Command Line Tools, see `run_llm.sh`),
+  this can overstate GPU usage — a documented, accepted limitation, not a bug, since
+  there's no cheaper way to know for certain without instrumenting the LLM server
+  process itself. A probe failing (missing binary, non-zero exit, timeout) is treated
+  as "no GPU found" — never an error, since this is a status display, not worth
+  failing a request over.
 - `backend/clues.py` — `LLMClueGenerator`, the one class that owns all LLM handling
   (endpoint config, prompt text, the HTTP call, response parsing); `backend/app.py`
   builds a single instance at module scope and calls `.generate()` per grid. Talks to
@@ -249,13 +274,20 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `subject_pronouns` (a pre-formatted string for rule 4, e.g. French's `"je", "tu",
   "il/elle", "nous", "vous", or "ils/elles"`), `difficulty_examples` (one `{word,
   clue}` pair per `easy`/`medium`/`hard`, appended to `DIFFICULTY_STYLE`'s now-generic
-  English description), and `rule1_bad`/`rule2_bad`/`rule2_good`/`rule3_bad`/
-  `rule4_bad`/`rule4_good`/`rule5_bad` (lists of bullet-content strings). The four
+  English description), and `rule_bad`/`rule_good` — two flat lists of bullet-content
+  strings, covering every rule's illustrations together rather than one list per rule
+  number. Deliberately *not* `rule1_bad`/`rule2_bad`/.../`rule5_bad` (an earlier,
+  short-lived version of this schema): a fixed one-list-per-rule-number contract would
+  force every language to supply exactly the same shape of illustration for exactly
+  the same rules, when in practice different languages need different *numbers* of
+  examples for a given point (or an example that doesn't map cleanly onto a single
+  rule) — the flat lists let each language's file be sized to what that language
+  actually needs, with no cross-language structural coupling. The four
   non-French files were authored to fit each language's *own* grammar rather than
   forcing the French template onto it — verified directly rather than assumed: English
   and German have no single-word synthetic future/conditional for most verbs (unlike
-  French/Spanish/Italian's `mentira`/`serrerait`-style forms), so their `rule4_bad`/
-  `rule4_good` lean on what those two languages actually have instead (modal
+  French/Spanish/Italian's `mentira`/`serrerait`-style forms), so their examples lean
+  on what those two languages actually have instead (modal
   auxiliaries — `WILL`/`WOULD`/`COULD`; participles distinct from simple past —
   `SUNG` vs `SANG`; German's Konjunktiv II, which *does* exist as a single word for
   common irregular verbs — `WÄRE`, `KÄME`; irregular plurals — `MICE`, `PFERDE`).
@@ -440,8 +472,9 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   back end stays on `127.0.0.1` only, it's never meant to be reached directly. Proxies
   both `POST /api/generate` (now fast — the backend responds immediately with a
   `job_id`, see above — so this needs only a short timeout, not the long one a single
-  blocking call used to require) and the new `GET /api/generate/status/{job_id}` the
-  frontend polls for progress. A blanket `@app.middleware("http")` sets
+  blocking call used to require), `GET /api/generate/status/{job_id}` the
+  frontend polls for progress, and `GET /api/system_info` (see `backend/system_info.py`
+  below) for the info badge's tooltip. A blanket `@app.middleware("http")` sets
   `Cache-Control: no-store` (plus `Pragma`/`Expires`) on every response — static files
   and `/api/*` alike — so the browser never caches a stale `script.js`/`style.css`/etc.
   while the app is being edited directly. Static files are

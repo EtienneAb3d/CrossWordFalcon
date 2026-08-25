@@ -14,27 +14,20 @@
       "clue": "Siempre cae de pie."
     }
   },
-  "rule1_bad": [
+  "rule_bad": [
     "For GATO, answering \"GATO\", \"gato\", or \"Gato\".",
-    "For SERÍA, answering \"Yo sería si lloviera mañana\" — SERÍA itself must never appear in the clue text, even as part of a sentence."
-  ],
-  "rule2_bad": [
+    "For SERÍA, answering \"Yo sería si lloviera mañana\" — SERÍA itself must never appear in the clue text, even as part of a sentence.",
     "\"verbo haber en segunda persona del presente de indicativo\" for a verb form.",
-    "for HADAS, \"Plural de 'hada'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue."
-  ],
-  "rule2_good": [
-    "for HADAS, \"Personajes mágicos de los cuentos.\" (in the correct plural form, per rule 4)."
-  ],
-  "rule3_bad": [
-    "For TARDE, \"Palabra que empieza por T y termina en E.\" — that describes how the word is written, not what it means."
-  ],
-  "rule4_bad": [
+    "For HADAS, \"Plural de 'hada'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue.",
+    "For TARDE, \"Palabra que empieza por T y termina en E.\" — that describes how the word is written, not what it means.",
     "For ERA — first/third person singular IMPERFECT of \"ser\" (to be) — answering \"Celebramos el final de los exámenes\" (\"we celebrated the end of exams\", plural) or \"Ellas ya no eran las mismas después del viaje\" (\"they were no longer the same after the trip\", plural): both describe a past state but neither is singular, so neither fits.",
     "For APRETARÍA — third person singular CONDITIONAL, \"él/ella apretaría\" — answering \"Acercaré las sillas\" (\"I will bring the chairs closer\", future tense, wrong person too): wrong person (yo instead of él/ella) AND wrong mood/tense (future \"acercaré\" instead of conditional \"apretaría\") — getting only the rough idea (\"bringing things closer together\") right is not enough.",
     "For MENTIRÁ — third person singular FUTURE, \"él/ella mentirá\" — answering \"Ocultar la verdad\" (a bare infinitive, no tense at all): the clue itself must be phrased in the future tense to match, e.g. \"Ocultará la verdad\" — the word's meaning (hiding the truth, i.e. lying) is right, but a clue with no tense marking of its own doesn't fit a word that is specifically future tense.",
-    "For AÑOS — PLURAL, \"years\" — answering \"Período de doce meses\" (\"a 12-month period\"): that describes a single 12-month period, i.e. ONE year (\"un año\", singular), not several years — the clue must itself refer to more than one to fit a plural word."
+    "For AÑOS — PLURAL, \"years\" — answering \"Período de doce meses\" (\"a 12-month period\"): that describes a single 12-month period, i.e. ONE year (\"un año\", singular), not several years — the clue must itself refer to more than one to fit a plural word.",
+    "For SERÍAMOS — first person plural CONDITIONAL of \"ser\" (to be), \"nosotros seríamos\" — answering \"Existen soluciones\" (\"there are solutions\"): that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea."
   ],
-  "rule4_good": [
+  "rule_good": [
+    "For HADAS, \"Personajes mágicos de los cuentos.\" (in the correct plural form, per rule 4).",
     "HABLAS (tú, presente) : Lo que haces ahora mismo para hacerte entender",
     "HABLÁBAMOS (nosotros, imperfecto) : Lo que hacíamos juntos cada noche, de niños",
     "HABLARÁ (él/ella, futuro) : Lo que hará frente al micrófono mañana por la noche",
@@ -55,8 +48,5 @@
     "VIEJAS (femenino plural) : Se dice de varias piedras desgastadas por el tiempo",
     "CABALLOS (masculino plural) : Lo que se encuentra, en gran número, en una yeguada",
     "TRABAJOS (masculino plural) : Lo que ocupa a varios obreros en una obra"
-  ],
-  "rule5_bad": [
-    "For SERÍAMOS — first person plural CONDITIONAL of \"ser\" (to be), \"nosotros seríamos\" — answering \"Existen soluciones\" (\"there are solutions\"): that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea."
   ]
 }

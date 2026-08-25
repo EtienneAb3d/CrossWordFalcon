@@ -14,27 +14,20 @@
       "clue": "Cade sempre in piedi."
     }
   },
-  "rule1_bad": [
+  "rule_bad": [
     "For GATTO, answering \"GATTO\", \"gatto\", or \"Gatto\".",
-    "For SAREI, answering \"Io sarei se domani piovesse\" — SAREI itself must never appear in the clue text, even as part of a sentence."
-  ],
-  "rule2_bad": [
+    "For SAREI, answering \"Io sarei se domani piovesse\" — SAREI itself must never appear in the clue text, even as part of a sentence.",
     "\"verbo avere alla seconda persona del presente indicativo\" for a verb form.",
-    "for FATE, \"Plurale di 'fata'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue."
-  ],
-  "rule2_good": [
-    "for FATE, \"Personaggi magici delle fiabe.\" (in the correct plural form, per rule 4)."
-  ],
-  "rule3_bad": [
-    "For TALE, \"Parola che inizia con T e finisce con E.\" — that describes how the word is written, not what it means."
-  ],
-  "rule4_bad": [
+    "For FATE, \"Plurale di 'fata'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue.",
+    "For TALE, \"Parola che inizia con T e finisce con E.\" — that describes how the word is written, not what it means.",
     "For ERA — first/third person singular IMPERFECT of \"essere\" (to be) — answering \"Abbiamo festeggiato la fine degli esami\" (\"we celebrated the end of exams\", plural) or \"Loro non erano più le stesse dopo il viaggio\" (\"they were no longer the same after the trip\", plural): both describe a past state but neither is singular, so neither fits.",
     "For STRINGEREBBE — third person singular CONDITIONAL, \"lui/lei stringerebbe\" — answering \"Avvicinerò le sedie\" (\"I will bring the chairs closer\", future tense, wrong person too): wrong person (io instead of lui/lei) AND wrong mood/tense (future \"avvicinerò\" instead of conditional \"stringerebbe\") — getting only the rough idea (\"bringing things closer together\") right is not enough.",
     "For MENTIRÀ — third person singular FUTURE, \"lui/lei mentirà\" — answering \"Nascondere la verità\" (a bare infinitive, no tense at all): the clue itself must be phrased in the future tense to match, e.g. \"Nasconderà la verità\" — the word's meaning (hiding the truth, i.e. lying) is right, but a clue with no tense marking of its own doesn't fit a word that is specifically future tense.",
-    "For ANNI — PLURAL, \"years\" — answering \"Periodo di dodici mesi\" (\"a 12-month period\"): that describes a single 12-month period, i.e. ONE year (\"un anno\", singular), not several years — the clue must itself refer to more than one to fit a plural word."
+    "For ANNI — PLURAL, \"years\" — answering \"Periodo di dodici mesi\" (\"a 12-month period\"): that describes a single 12-month period, i.e. ONE year (\"un anno\", singular), not several years — the clue must itself refer to more than one to fit a plural word.",
+    "For SAREMMO — first person plural CONDITIONAL of \"essere\" (to be), \"noi saremmo\" — answering \"Esistono soluzioni\" (\"there are solutions\"): that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea."
   ],
-  "rule4_good": [
+  "rule_good": [
+    "For FATE, \"Personaggi magici delle fiabe.\" (in the correct plural form, per rule 4).",
     "PARLI (tu, presente) : Quello che fai in questo momento per farti capire",
     "PARLAVAMO (noi, imperfetto) : Quello che facevamo insieme ogni sera, da bambini",
     "PARLERÀ (lui/lei, futuro) : Quello che farà davanti al microfono domani sera",
@@ -55,8 +48,5 @@
     "VECCHIE (femminile plurale) : Si dice di diverse pietre consumate dal tempo",
     "CAVALLI (maschile plurale) : Quello che si trova, in gran numero, in un allevamento",
     "LAVORI (maschile plurale) : Quello che occupa diversi operai in un cantiere"
-  ],
-  "rule5_bad": [
-    "For SAREMMO — first person plural CONDITIONAL of \"essere\" (to be), \"noi saremmo\" — answering \"Esistono soluzioni\" (\"there are solutions\"): that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea."
   ]
 }

@@ -183,3 +183,32 @@ English (see `project-best-practices`).
   the browser window instead of capping out at a fixed pixel width, so it
   fills more of the screen on wide displays. Still centered via
   `margin: 0 auto`; no other layout change.
+
+- added an info badge (`#info-badge`, a circled-"i" inline SVG icon, no
+  external icon font/library) next to `#version-badge` in `#page-header`,
+  at the user's explicit request — `h1`'s existing `margin-right: auto`
+  already pushes everything after it to the right, so no new layout code
+  was needed to place it top-right, just adding the element after the
+  version badge in source order. On hover/keyboard-focus, a dark tooltip
+  (`.info-tooltip`, `position: absolute; top: 100%; right: 0`) drops down
+  from the badge showing a small technical report — LLM model, CPU/GPU,
+  and (if GPU) its name and available VRAM, from a new `GET /api/
+  system_info` endpoint (see `backend/system_info.py` in CLAUDE.md) —
+  populated once on page load by `script.js` and redrawn (not re-fetched)
+  on every UI language change via `renderSystemInfoTooltip()`, the same
+  "fetch once, redraw per language" pattern already used for clue-related
+  strings. Pure-CSS hover/focus toggle (`:hover`/`:focus-visible` reveal
+  `.info-tooltip`, no JS needed to open/close it) — `tabindex="0"
+  role="button"` on the badge itself so it's keyboard-focusable and
+  reachable by assistive tech, with `data-i18n-aria` (a new, second
+  translation-attribute convention alongside the existing `data-i18n`
+  for text content) driving its `aria-label` per UI language. Right-
+  aligned tooltip (`right: 0`) specifically because the badge sits at the
+  page's own right edge — a left- or center-aligned tooltip would risk
+  overflowing the viewport on a narrow window. **Not visually verified in
+  an actual browser**: this session's environment has no `chromium-cli`,
+  `node`, or Python `playwright` available, so positioning/overlap could
+  only be checked by reading the served HTML/CSS directly and manually
+  tracing `renderSystemInfoTooltip()`'s logic against the real `/api/
+  system_info` response — both checked out, but an actual visual/hover
+  check is still owed before fully trusting this on a real display.

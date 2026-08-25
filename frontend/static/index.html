@@ -12,6 +12,14 @@
       <img src="logo.svg" alt="CrossWordFalcon" id="logo">
       <h1 data-i18n="pageTitle">CrossWordFalcon — générateur de grilles de mots croisés</h1>
       <span id="version-badge" class="badge" hidden></span>
+      <span id="info-badge" class="info-badge" hidden tabindex="0" role="button" data-i18n-aria="infoBadgeLabel">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="2"></circle>
+          <line x1="12" y1="11" x2="12" y2="17" stroke="currentColor" stroke-width="2" stroke-linecap="round"></line>
+          <circle cx="12" cy="7.5" r="1.25" fill="currentColor"></circle>
+        </svg>
+        <div id="info-tooltip" class="info-tooltip" role="tooltip"></div>
+      </span>
     </header>
 
     <form id="generate-form">

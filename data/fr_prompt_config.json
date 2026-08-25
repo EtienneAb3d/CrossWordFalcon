@@ -14,27 +14,20 @@
       "clue": "Il retombe toujours sur ses pattes."
     }
   },
-  "rule1_bad": [
+  "rule_bad": [
     "For CHAT, answering \"CHAT\", \"chat\", or \"Chat\".",
-    "For SERAIS, answering \"Je serais s'il pleuvait demain\" — SERAIS itself must never appear in the clue text, even as part of a sentence."
-  ],
-  "rule2_bad": [
+    "For SERAIS, answering \"Je serais s'il pleuvait demain\" — SERAIS itself must never appear in the clue text, even as part of a sentence.",
     "\"verbe avoir à la deuxième personne du présent de l'indicatif\" for a verb form.",
-    "for FEES, \"Pluriel du mot 'une fée'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue."
-  ],
-  "rule2_good": [
-    "for FEES, \"Personnages magiques des contes.\" (in the correct plural form, per rule 4)."
-  ],
-  "rule3_bad": [
-    "For TEE, \"Mot qui commence par T et se termine par EE.\" — that describes how the word is written, not what it means."
-  ],
-  "rule4_bad": [
+    "For FEES, \"Pluriel du mot 'une fée'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue.",
+    "For TEE, \"Mot qui commence par T et se termine par EE.\" — that describes how the word is written, not what it means.",
     "For ÉTAIS — first person singular imperfect, \"j'étais\" — answering \"On a célébré la fin des examens\" or \"Elle n'était plus la même après son voyage\": both describe a past state but neither is first person singular, so neither fits.",
     "For SERRERAIT — third person singular CONDITIONAL, \"il/elle serrerait\" — answering \"Je rapprocherai les chaises\": wrong person (je instead of il/elle) AND wrong mood/tense (future \"rapprocherai\" instead of conditional \"serrerait\") — getting only the rough idea (\"bringing things closer together\") right is not enough.",
     "For MENTIRA — third person singular FUTURE, \"il/elle mentira\" — answering \"Cacher le vrai\" (a bare infinitive, no tense at all): the clue itself must be phrased in the future tense to match, e.g. \"Cachera le vrai\" — the word's meaning (hiding the truth, i.e. lying) is right, but a clue with no tense marking of its own doesn't fit a word that is specifically future tense.",
-    "For ANS — PLURAL, \"years\" — answering \"Durée de douze mois\": that describes a single 12-month period, i.e. ONE year (\"un an\", singular), not several years — the clue must itself refer to more than one to fit a plural word."
+    "For ANS — PLURAL, \"years\" — answering \"Durée de douze mois\": that describes a single 12-month period, i.e. ONE year (\"un an\", singular), not several years — the clue must itself refer to more than one to fit a plural word.",
+    "For SERIONS — first person plural CONDITIONAL of \"être\" (to be), \"nous serions\" — answering \"Il existe des solutions\": that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea."
   ],
-  "rule4_good": [
+  "rule_good": [
+    "For FEES, \"Personnages magiques des contes.\" (in the correct plural form, per rule 4).",
     "PARLES (tu, présent) : Ce que tu fais en ce moment pour te faire comprendre",
     "PARLIONS (nous, imparfait) : Ce que nous faisions ensemble chaque soir, enfants",
     "PARLERA (il/elle, futur) : Ce qu'il fera devant le micro demain soir",
@@ -55,8 +48,5 @@
     "VIEILLES (féminin pluriel irrégulier) : Se dit de plusieurs pierres usées par le temps",
     "CHEVAUX (masculin pluriel irrégulier) : Ce que l'on trouve, en nombre, dans un haras",
     "TRAVAUX (masculin pluriel irrégulier) : Ce qui occupe plusieurs ouvriers sur un chantier"
-  ],
-  "rule5_bad": [
-    "For SERIONS — first person plural CONDITIONAL of \"être\" (to be), \"nous serions\" — answering \"Il existe des solutions\": that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea."
   ]
 }

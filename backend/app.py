@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from .clues import ClueGenerationError, LLMClueGenerator
 from .crossword_gen import DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, generate_grid
 from .svg_export import save_grid_png, save_grid_svg
+from .system_info import get_system_info
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("crosswordfalcon")
@@ -79,6 +80,19 @@ class GenerateRequest(BaseModel):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/system_info")
+def system_info():
+    """Best-effort local hardware/model report for the web UI's info
+    badge (see frontend/static/script.js) — not on the hot path of any
+    grid generation, just a nice-to-have status display, so this is
+    computed fresh per request rather than cached: it's cheap (a couple
+    of subprocess probes, see backend/system_info.py) and a user could
+    plausibly ask about a machine's hardware changing (e.g. hot-swapped
+    external GPU) across the lifetime of one long-running server
+    process."""
+    return get_system_info(clue_generator.model)
 
 
 def _new_job():

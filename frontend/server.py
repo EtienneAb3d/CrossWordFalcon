@@ -92,6 +92,16 @@ async def proxy_health():
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/system_info")
+async def proxy_system_info():
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/system_info")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # Montée en dernier : les routes /api/* déclarées ci-dessus restent prioritaires,
 # tout le reste est résolu dans static/ (404 si le fichier n'y existe pas).
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

@@ -1685,3 +1685,65 @@ content (the French crossword words/clues, the web UI text) stays in French
   the actual running API, and spot-checked several of its real clues for
   basic grammatical coherence (e.g. a past-tense clue correctly paired
   with a past-tense-marked answer).
+
+- flattened `data/<lang>_prompt_config.json`'s schema from one list per
+  rule number (`rule1_bad`/`rule2_bad`/`rule2_good`/`rule3_bad`/
+  `rule4_bad`/`rule4_good`/`rule5_bad`) to just two lists, `rule_bad` and
+  `rule_good`, at the user's explicit request — the per-rule-number
+  contract from the entry above forced every language to supply exactly
+  the same shape of illustration for exactly the same rules, which
+  doesn't hold up: different languages legitimately need different
+  *numbers* of examples for a given point (or an example that doesn't
+  map cleanly onto a single rule), so a rigid 7-key-per-language
+  structure was the wrong fit almost immediately. `backend/clues.py`'s
+  `_build_system_prompt()` updated to match: the five "Rule N (...) —
+  bad/good:" subsections collapsed into two, "Examples of what NOT to
+  do:" (`rule_bad`) and "Examples of what TO do (...):" (`rule_good`) —
+  each bad/good example's own text already names or implies which rule
+  it illustrates (e.g. "naming the grammatical operation... is still a
+  label, not a clue" is unambiguously about the no-bare-label rule even
+  without an explicit "Rule 2" header), so the explicit per-rule grouping
+  wasn't pulling its weight once the schema no longer required it.
+  Content itself is unchanged, just regrouped — rule2's bullets lost the
+  "Bad: "/"Good: " sentence-prefix they used to need (now redundant with
+  the two-section headers) and were recapitalized ("for FEES" → "For
+  FEES") to read correctly as standalone bullets, matching every other
+  bullet's existing capitalization; every other example's text is
+  byte-identical to before. Verified live: rebuilt and read the full
+  system prompt for all 5 languages after the schema change, ran a real
+  `generate()` call through the actual LLM server, and restarted the app
+  servers.
+
+- added a `GET /api/system_info` endpoint (`backend/system_info.py`) and
+  a hover-triggered info badge in the web UI, at the user's explicit
+  request — reports the LLM model in use, whether it's likely running on
+  CPU or GPU, and (if GPU) the GPU's name and VRAM/unified memory.
+  Detection is local-machine hardware probing (`nvidia-smi`, or on macOS
+  `system_profiler`/`sysctl`), not a live query of the separate LLM
+  server process (`llama_cpp.server` exposes no such endpoint) — a
+  documented, accepted approximation (see the CLAUDE.md entry for the
+  exact edge case: `run_llm.sh` falling back to CPU despite a GPU being
+  present would make this endpoint overstate GPU usage). Verified a real,
+  non-obvious platform detail before writing the Apple Silicon branch,
+  rather than assuming symmetry with the NVIDIA branch: `system_profiler
+  SPDisplaysDataType` reports a `VRAM (Total)` line for discrete GPUs but
+  *no VRAM line at all* on this session's own Apple Silicon Mac (checked
+  directly, not assumed) — Apple Silicon has no dedicated video memory to
+  report, so `sysctl -n hw.memsize` (total system RAM) is used instead,
+  tagged `unified_memory: true` so the frontend labels it correctly
+  rather than presenting shared system RAM as if it were dedicated VRAM.
+  `frontend/server.py` proxies the new route the same way as the
+  existing `/api/*` routes (each one explicitly declared, no wildcard
+  proxy in this codebase). Frontend: `script.js` fetches `/api/system_
+  info` once on page load and redraws (not re-fetches) the tooltip text
+  on every UI language change, via a new `data-i18n-aria` convention
+  (parallel to the existing `data-i18n` for text content) for the
+  badge's accessible label — see the style-guide SKILL for the visual
+  details. **This session's environment has no browser-automation
+  tooling** (`chromium-cli`, `node`, and Python `playwright` are all
+  absent) — verified as thoroughly as possible without one (served HTML/
+  CSS inspected directly, `renderSystemInfoTooltip()`'s logic hand-traced
+  against the real `/api/system_info` response, both correct), but an
+  actual visual/hover check in a real browser is still owed and was
+  explicitly flagged to the user as not done, rather than silently
+  skipped or falsely claimed.
