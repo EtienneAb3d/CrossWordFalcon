@@ -99,6 +99,19 @@ REASONING_TOKEN_BUDGET = 2048
 # especially on small local models without constrained decoding.
 TEMPERATURE = 0.4
 
+# A real, observed failure mode: for a hard/ambiguous word, the model can
+# lapse into writing out its reasoning as if it were the answer itself
+# (e.g. "Given the length (3 letters), it's likely an abbreviation... "
+# "However, looking at the prompt rules: ...") instead of a short clue —
+# several sentences long, sometimes quoting these very instructions back.
+# A genuine crossword clue is always short; nothing legitimate needs more
+# than a handful of words, so a hard word-count ceiling is a safe,
+# language-agnostic way to reject this whole failure mode outright rather
+# than trying to detect "sounds like reasoning" — see _pick_clue. Also
+# spelled out in the prompt itself (_build_system_prompt's rule 7) so the
+# model is asked for this directly, not just filtered after the fact.
+MAX_CLUE_WORDS = 20
+
 # Even a modest batch (5-6 words) was unreliable on the small local model —
 # it would produce good clues for the first couple of words then degrade
 # into empty/off-topic/malformed lines for the rest of the same response.
@@ -350,8 +363,8 @@ class LLMClueGenerator:
                         else:
                             logger.warning(
                                 "clue round %d/3: %r (%r) — all %d candidate(s) "
-                                "rejected by the copy/non-Latin/same-family "
-                                "filter: %r",
+                                "rejected by the too-long/copy/non-Latin/"
+                                "same-family filter: %r",
                                 _round + 1, answer, accented, len(candidates), candidates,
                             )
                 except ClueGenerationError as e:
@@ -515,7 +528,16 @@ class LLMClueGenerator:
             "rather than free-associating a clue that merely sounds like "
             "it could be one.\n"
             "6. A synonym or near-synonym is a perfectly good clue.\n"
-            "7. Keep each candidate clue to one short line.\n\n"
+            f"7. Keep each candidate clue short: a single clause or "
+            f"sentence, at most {MAX_CLUE_WORDS} words. Never write out "
+            f"your reasoning or think out loud about the word (its "
+            f"length, its letters, whether it might be an abbreviation, "
+            f"etc.), never discuss or quote these instructions — write "
+            f"only the finished clue text itself, nothing else.\n"
+            f"8. Write every clue entirely in {language_name} — the same "
+            f"language as the word itself — from the very first word to "
+            f"the last. Never switch to another language partway "
+            f"through, even for a single stray word.\n\n"
             "=== EXAMPLES ===\n"
             "These illustrate the rules above using words other than the "
             "one you are actually being asked about — never reuse them as "
@@ -598,18 +620,21 @@ class LLMClueGenerator:
         """Picks one of this word's (up to 3) candidate clues at random —
         favors variety across regenerations of the same word, and keeps
         the choice out of the LLM's hands as requested. Drops any
-        candidate that isn't actually a clue: non-Latin-script drift, or
-        the word being defined (or a same-family word sharing its
-        canonical form/lemma, e.g. singular "maman" leaking into a clue
-        for plural MAMANS) appearing anywhere in it, whether as the whole
-        clue or embedded in a longer sentence (the prompt forbids this,
-        but small local models sometimes do it anyway — see
-        `_contains_target_word`). Returns None if every candidate was
-        rejected, which `generate()` reads as still needing a clue and
-        retries."""
+        candidate that isn't actually a clue: longer than `MAX_CLUE_WORDS`
+        words (a real, observed failure mode — the model writing out its
+        reasoning, several sentences long, instead of a short clue — see
+        `MAX_CLUE_WORDS`'s comment), non-Latin-script drift, or the word
+        being defined (or a same-family word sharing its canonical
+        form/lemma, e.g. singular "maman" leaking into a clue for plural
+        MAMANS) appearing anywhere in it, whether as the whole clue or
+        embedded in a longer sentence (the prompt forbids this, but small
+        local models sometimes do it anyway — see `_contains_target_word`).
+        Returns None if every candidate was rejected, which `generate()`
+        reads as still needing a clue and retries."""
         candidates = [
             c for c in candidates
-            if c and _NON_LATIN_RE.search(c) is None
+            if c and len(c.split()) <= MAX_CLUE_WORDS
+            and _NON_LATIN_RE.search(c) is None
             and not _contains_target_word(c, answer, accented, canonical)
         ]
         return random.choice(candidates) if candidates else None

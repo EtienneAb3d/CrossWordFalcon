@@ -180,7 +180,14 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   is shown to the model by its accented/inflected spelling (`words[i]["accented"]`, not
   the grid's bare form) and the model is asked for 3 candidate clues per word; one is
   picked at random on our side (`_pick_clue`) — never the model's choice — filtering
-  out anything that isn't a recognizable clue: non-Latin-script characters (a
+  out anything that isn't a recognizable clue: longer than `MAX_CLUE_WORDS` (20) words
+  — a real, observed failure mode on a hard/ambiguous word: the model writing out its
+  reasoning as if it were the answer itself ("Given the length (3 letters), it's
+  likely an abbreviation or a specific proper noun/brand, but in crossword contexts...
+  However, looking at the prompt rules: ...") instead of a short clue, sometimes even
+  quoting these very instructions back — a hard word-count ceiling rejects this whole
+  failure mode outright, language-agnostically, rather than trying to detect "sounds
+  like reasoning" — non-Latin-script characters (a
   drift failure mode seen in testing), or the word itself appearing anywhere in the
   clue — as the whole clue, or embedded inside a longer sentence (e.g. "je serais s'il
   pleuvait demain" for `SERAIS`) — in any case/accent (`_contains_target_word`,
@@ -447,6 +454,33 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   20-word grid end-to-end through the actual running API (`POST /api/generate` →
   polled to completion) — 20/20 words got a clue, zero warnings logged, SVG/PNG saved
   successfully.
+
+  Reported next: a real clue that came back as a multi-sentence reasoning trace
+  instead of a short definition (a hard/ambiguous word, several dozen words long,
+  reading like the model thinking out loud in English: "Given the length (3 letters),
+  it's likely an abbreviation or a specific proper noun/brand, but in crossword
+  contexts, 3-letter words are often abbreviations or short common nouns. However,
+  looking at the prompt rules: 'The user message will give you a single word...'" —
+  even quoting this very prompt's own instructions back). Two fixes, one per the
+  user's own two-part request: (1) a hard length ceiling, `MAX_CLUE_WORDS = 20`,
+  wired into `_pick_clue()` alongside the existing non-Latin/same-family checks —
+  language-agnostic and structural, so it rejects this whole failure mode outright
+  regardless of *why* the model rambled, rather than trying to pattern-match
+  "sounds like reasoning" text; (2) `_build_system_prompt()`'s rule 7 (previously
+  just "keep each candidate clue to one short line") now spells out the same
+  `MAX_CLUE_WORDS` limit explicitly and explicitly forbids writing out reasoning,
+  discussing the word's letters/length, or quoting these instructions, and a new
+  rule 8 explicitly requires every clue to stay entirely in the target language,
+  start to finish, forbidding a language switch even for a single word — direct
+  reinforcement of the "answer in the right language" requirement, since the
+  reported example itself was in English regardless of the target word's own
+  language. Verified live: unit-tested `_pick_clue()` against the exact reported
+  30-word example (rejected) and a normal 5-word clue (kept); rebuilt and read the
+  new rule 7/8 text; then ran a 10-word live batch through the real local LLM server
+  (including several short/abbreviation-like words — `ABC`/`ETC`/`ONU`/`PDG` — the
+  kind of word most likely to trigger this exact "is it an abbreviation?" reasoning
+  spiral) — 10/10 resolved, every clue well under the 20-word cap, no reasoning
+  leaks or language drift observed.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most

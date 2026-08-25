@@ -1904,3 +1904,25 @@ content (the French crossword words/clues, the web UI text) stays in French
   20-word grid generated end-to-end through the actual running API
   (`POST /api/generate`, polled to completion) — 20/20 words got a
   clue, zero warnings, SVG/PNG saved successfully.
+
+- added a hard clue-length cap (`MAX_CLUE_WORDS = 20`) and strengthened
+  the language-consistency instruction, at the user's explicit two-part
+  request, after they reported a real clue that came back as a multi-
+  sentence English reasoning trace instead of a short definition (a
+  hard/ambiguous word — the model thinking out loud about whether it
+  might be an abbreviation, even quoting the system prompt's own
+  instructions back). Fixed both structurally and via the prompt, not
+  one or the other: `_pick_clue()` now rejects any candidate over
+  `MAX_CLUE_WORDS` words outright (language-agnostic — doesn't try to
+  detect "sounds like reasoning" text, just caps length, since no
+  legitimate clue is ever that long), and `_build_system_prompt()`'s
+  rule 7 explicitly states that same limit and forbids writing out
+  reasoning/discussing the word's letters/quoting the instructions; a
+  new rule 8 requires every clue to stay entirely in the target
+  language from start to finish. Verified live: unit-tested
+  `_pick_clue()` against the exact reported 30-word example (rejected)
+  and a normal short clue (kept), then ran a 10-word batch through the
+  real LLM server including several abbreviation-like words
+  (`ABC`/`ETC`/`ONU`/`PDG` — the exact kind of word likely to trigger
+  this "is it an abbreviation?" spiral) — 10/10 resolved, all well
+  under the cap, no reasoning leaks or language drift.
