@@ -37,10 +37,12 @@ env.sh at the project root):
 This lets the same code target a local llama.cpp server or a cloud API
 (e.g. Mistral) just by changing env.sh, with no code change.
 """
+import json
 import os
 import random
 import re
 import unicodedata
+from pathlib import Path
 
 import httpx
 
@@ -89,22 +91,25 @@ _BATCH_SIZE = 1
 # A worked example per level, not just an abstract description — small
 # models follow a concrete style anchor far more reliably than an adjective
 # list (verified: without an example, "easy" and "hard" clues came out
-# barely distinguishable for the same word).
+# barely distinguishable for the same word). The style description itself
+# is language-agnostic prose (this project's engineering language); the
+# worked example word/clue pair appended to it is language-specific and
+# comes from PROMPT_CONFIG_DIR/<lang>_prompt_config.json's
+# "difficulty_examples" instead (see _load_prompt_config/_build_system_
+# prompt) — it used to be hardcoded here in French only, regardless of
+# which language the grid/clue was actually in.
 DIFFICULTY_STYLE = {
     "easy": (
         "very easy: simple, literal, everyday vocabulary, no wordplay, no "
-        'ambiguity — a clue a child could answer. Example: for CHAT, '
-        '"Animal domestique qui miaule."'
+        "ambiguity — a clue a child could answer."
     ),
     "medium": (
         "medium: classic newspaper-crossword style — reworded and a "
-        "little indirect, but still fair, no trick needed to get it. "
-        'Example: for CHAT, "Compagnon à quatre pattes qui ronronne."'
+        "little indirect, but still fair, no trick needed to get it."
     ),
     "hard": (
         "hard: elliptical and witty — puns, double meanings, misdirection, "
-        "figurative or cultural references, expert-level grid style. "
-        'Example: for CHAT, "Il retombe toujours sur ses pattes."'
+        "figurative or cultural references, expert-level grid style."
     ),
 }
 
@@ -119,44 +124,41 @@ LANGUAGE_NAMES = {
     "it": "Italian",
 }
 
-# A broad, varied bank of correct worked examples for the inflection-
-# agreement rule in _build_system_prompt — added on top of the "bad example"
-# failure illustrations (each added one at a time, after a specific
-# reported failure) to give the model many more anchors for what success
-# looks like, not just what to avoid. Covers a spread of persons/tenses/
-# moods for regular -er/-ir/-re verbs plus the two hardest, most-overloaded
-# irregular verbs (être, avoir); and masculine/feminine, singular/plural
-# noun and adjective agreement, including classic irregular plurals
-# (nouveau/nouveaux, vieux/vieilles, cheval/chevaux, travail/travaux).
-# French-only, like every other worked example here — the model is
-# expected to generalize the same underlying concept (person/number/mood/
-# gender agreement) to whichever language the request is actually in.
-# Each clue was manually checked to (a) never contain the target word or a
-# same-family form of it, and (b) itself be phrased in a mood/tense/number/
-# gender that actually matches its target, not just gesture at the general
-# meaning.
-_AGREEMENT_EXAMPLES = """
-- PARLES (tu, présent) : Ce que tu fais en ce moment pour te faire comprendre
-- PARLIONS (nous, imparfait) : Ce que nous faisions ensemble chaque soir, enfants
-- PARLERA (il/elle, futur) : Ce qu'il fera devant le micro demain soir
-- PARLERIEZ (vous, conditionnel) : Ce que vous feriez si on vous cédait le micro
-- FINISSIEZ (vous, imparfait) : Ce que vous faisiez avec vos devoirs, enfants, chaque soir
-- FINIRONT (ils/elles, futur) : Ce qu'ils feront de leur repas avant de sortir de table
-- VENDIONS (nous, imparfait) : Ce que nous faisions au marché chaque samedi matin
-- VENDRONT (ils/elles, futur) : Ce qu'ils feront de leur maison l'année prochaine
-- AVAIS (je/tu, imparfait, verbe avoir) : Ce que je possédais, enfant, dans ma tirelire
-- AURONS (nous, futur, verbe avoir) : Ce que nous posséderons une fois le prêt remboursé
-- SERAIENT (ils/elles, conditionnel, verbe être) : Ce qu'ils deviendraient dans un monde plus juste
-- RENDRIEZ (vous, conditionnel) : Ce que vous feriez avec un objet qui ne vous appartient pas
-- GRAND (masculin singulier) : Se dit d'un immeuble qui domine toute la ville
-- GRANDES (féminin pluriel) : Se dit de plusieurs maisons qui dominent le quartier
-- PETITES (féminin pluriel) : Se dit de plusieurs chambres où l'on tient à peine
-- HEUREUSES (féminin pluriel) : Se dit de plusieurs femmes comblées par la vie
-- NOUVEAUX (masculin pluriel irrégulier) : Se dit de plusieurs appareils tout juste sortis en magasin
-- VIEILLES (féminin pluriel irrégulier) : Se dit de plusieurs pierres usées par le temps
-- CHEVAUX (masculin pluriel irrégulier) : Ce que l'on trouve, en nombre, dans un haras
-- TRAVAUX (masculin pluriel irrégulier) : Ce qui occupe plusieurs ouvriers sur un chantier
-""".strip()
+# Every worked example in the system prompt below — the difficulty-style
+# example, every "bad"/"good" illustration for rules 1-5, the ~20-example
+# inflection-agreement bank, and the list of subject pronouns rule 4 names
+# — used to be hardcoded in French, regardless of which language the grid/
+# clue was actually being generated in (the model was just expected to
+# generalize the underlying grammatical *concept* to the target language).
+# Moved out to one JSON file per language
+# (PROMPT_CONFIG_DIR/<lang>_prompt_config.json) so a German, Spanish,
+# Italian, or English request is illustrated with real, grammatically
+# verified words and clues in that language instead. See
+# data/fr_prompt_config.json for the schema (every key this loader/
+# _build_system_prompt expects) — each of the other four languages'
+# content was authored to fit that language's own grammar rather than
+# forcing a French-shaped template onto it (e.g. English and German have
+# no single-word synthetic future/conditional for most verbs, unlike
+# French/Spanish/Italian, so their rule4_bad/rule4_good examples lean on
+# what those languages actually have: modal auxiliaries, participles,
+# Konjunktiv II, irregular plurals).
+PROMPT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "data"
+_prompt_config_cache = {}
+
+
+def _load_prompt_config(language):
+    if language not in _prompt_config_cache:
+        path = PROMPT_CONFIG_DIR / f"{language}_prompt_config.json"
+        if not path.exists():
+            language = "fr"
+            path = PROMPT_CONFIG_DIR / "fr_prompt_config.json"
+        with open(path, encoding="utf-8") as f:
+            _prompt_config_cache[language] = json.load(f)
+    return _prompt_config_cache.get(language) or _prompt_config_cache["fr"]
+
+
+def _bullets(items):
+    return "\n".join(f"- {item}" for item in items)
 
 # One line per word: "word: clue 1; clue 2; clue 3", tolerating a leading
 # bullet/number the model adds despite being asked not to (e.g. "- word:"
@@ -389,14 +391,26 @@ class LLMClueGenerator:
         `system` message; kept separate from the HTTP/parsing plumbing
         below. Pairs with `_build_user_message()`, which carries the one
         thing that *does* vary per call: the word itself plus its
-        grounding block."""
+        grounding block.
+
+        Every concrete word/clue example (and the subject-pronoun list
+        rule 4 names) comes from PROMPT_CONFIG_DIR/<language>_prompt_
+        config.json, not hardcoded here — see _load_prompt_config."""
+        config = _load_prompt_config(language)
         style = DIFFICULTY_STYLE.get(difficulty, DIFFICULTY_STYLE["medium"])
         language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
+        diff_examples = config["difficulty_examples"]
+        diff_example = diff_examples.get(difficulty, diff_examples["medium"])
+        style_line = f'{style} Example: for {diff_example["word"]}, "{diff_example["clue"]}"'
+        rule2_lines = (
+            [f"Bad: {b}" for b in config["rule2_bad"]]
+            + [f"Good: {g}" for g in config["rule2_good"]]
+        )
         return (
             f"You are a crossword compiler writing in {language_name}, at "
             f"{difficulty.upper()} difficulty. This difficulty level is the "
             f"single most important constraint on every clue you write:\n"
-            f"{style}\n\n"
+            f"{style_line}\n\n"
             "The user message will give you a single word to write a clue "
             "for, in its correctly accented, inflected written form (right "
             "gender, number, and conjugation) — use that to write "
@@ -423,11 +437,10 @@ class LLMClueGenerator:
             "(singular/plural) and gender. Getting the general meaning "
             "right is never enough if the grammar doesn't match. Before "
             "answering, identify the word's specific grammatical form (for "
-            'a verb: its subject — "je", "tu", "il/elle", "nous", "vous", '
-            'or "ils/elles" — and mood/tense; for a noun or adjective: '
-            "singular or plural, and gender) and confirm your clue matches "
-            "that exactly, not just a same-meaning idea in a different "
-            "form.\n"
+            f'a verb: its subject — {config["subject_pronouns"]} — and '
+            "mood/tense; for a noun or adjective: singular or plural, and "
+            "gender) and confirm your clue matches that exactly, not just "
+            "a same-meaning idea in a different form.\n"
             "5. The clue must reflect the word's actual, real meaning — "
             "never an unrelated sentence that merely sounds plausible. "
             "Check any dictionary definition(s)/example(s) you were given "
@@ -441,47 +454,17 @@ class LLMClueGenerator:
             "one you are actually being asked about — never reuse them as "
             "your answer.\n\n"
             "Rule 1 (never repeat the word) — bad:\n"
-            '- For CHAT, answering "CHAT", "chat", or "Chat".\n'
-            '- For SERAIS, answering "Je serais s\'il pleuvait demain" — '
-            "SERAIS itself must never appear in the clue text, even as "
-            "part of a sentence.\n\n"
+            f"{_bullets(config['rule1_bad'])}\n\n"
             "Rule 2 (never a bare grammatical label) — bad vs. good:\n"
-            '- Bad: "verbe avoir à la deuxième personne du présent de '
-            'l\'indicatif" for a verb form.\n'
-            '- Bad: for FEES, "Pluriel du mot \'une fée\'" — naming the '
-            "grammatical operation (pluralization) and repeating the "
-            "singular form is still a label, not a clue.\n"
-            '- Good: for FEES, "Personnages magiques des contes." (in the '
-            "correct plural form, per rule 4).\n\n"
+            f"{_bullets(rule2_lines)}\n\n"
             "Rule 3 (never describe spelling/letters) — bad:\n"
-            '- For TEE, "Mot qui commence par T et se termine par EE." — '
-            "that describes how the word is written, not what it means.\n\n"
+            f"{_bullets(config['rule3_bad'])}\n\n"
             "Rule 4 (exact conjugation/number/gender agreement) — bad:\n"
-            '- For ÉTAIS — first person singular imperfect, "j\'étais" — '
-            'answering "On a célébré la fin des examens" or "Elle n\'était '
-            'plus la même après son voyage": both describe a past state '
-            "but neither is first person singular, so neither fits.\n"
-            '- For SERRERAIT — third person singular CONDITIONAL, "il/elle '
-            'serrerait" — answering "Je rapprocherai les chaises": wrong '
-            "person (je instead of il/elle) AND wrong mood/tense (future "
-            '"rapprocherai" instead of conditional "serrerait") — getting '
-            'only the rough idea ("bringing things closer together") '
-            "right is not enough.\n"
-            '- For MENTIRA — third person singular FUTURE, "il/elle '
-            'mentira" — answering "Cacher le vrai" (a bare infinitive, no '
-            "tense at all): the clue itself must be phrased in the future "
-            'tense to match, e.g. "Cachera le vrai".\n'
-            '- For ANS — PLURAL, "years" — answering "Durée de douze '
-            'mois": that describes a single 12-month period, i.e. ONE year '
-            '("un an", singular), not several years — the clue must itself '
-            "refer to more than one to fit a plural word.\n\n"
+            f"{_bullets(config['rule4_bad'])}\n\n"
             "Rule 4 (exact conjugation/number/gender agreement) — good:\n"
-            f"{_AGREEMENT_EXAMPLES}\n\n"
+            f"{_bullets(config['rule4_good'])}\n\n"
             "Rule 5 (the real meaning, not an invented one) — bad:\n"
-            '- For SERIONS — first person plural CONDITIONAL of "être" '
-            '(to be), "nous serions" — answering "Il existe des '
-            'solutions": that has no connection at all to the meaning of '
-            '"to be", it is simply a different, unrelated idea.\n\n'
+            f"{_bullets(config['rule5_bad'])}\n\n"
             "=== END OF EXAMPLES ===\n\n"
             "Respond with exactly one line, in this exact plain-text "
             "format (no JSON, no markdown, no numbering, no extra "

@@ -1625,3 +1625,63 @@ content (the French crossword words/clues, the web UI text) stays in French
   running API afterward. Going forward, changing the default model only
   ever requires editing `env_default.sh` (and matching `env.sh` if the
   user wants to follow suit) — never `run_llm.sh` itself.
+
+- moved every French-specific worked example in `backend/clues.py`'s LLM
+  prompt (`_AGREEMENT_EXAMPLES`, plus every "bad"/"good" illustration for
+  rules 1-5 and the difficulty-style example, all previously hardcoded in
+  French only regardless of the request's actual language) into
+  `data/fr_prompt_config.json`, and authored four equivalent files —
+  `data/{en,de,es,it}_prompt_config.json` — at the user's explicit
+  request. `backend/clues.py` gained `_load_prompt_config()` (cached per
+  language, falls back to `fr` if a language's file is missing) and a
+  `_bullets()` helper; `_build_system_prompt()` now assembles the
+  EXAMPLES section from whichever language's config was loaded instead
+  of French text baked into the method itself. `DIFFICULTY_STYLE` lost
+  its embedded "Example: for CHAT, ..." clause — the style descriptions
+  are now pure English prose (this project's engineering language) with
+  the concrete word/clue example appended dynamically from each
+  language's `difficulty_examples`. Rule 4's subject-pronoun list ("je",
+  "tu", "il/elle", ...) — previously hardcoded French pronouns baked
+  directly into the rule's own prose, not just its examples — also moved
+  to config (`subject_pronouns`), one native pronoun set per language.
+  Verified the refactor itself introduced no regression before writing
+  any new content: rebuilt French's config as a byte-for-byte extraction
+  of the existing, already-validated text (confirmed by diffing the
+  freshly generated French system prompt against the pre-refactor
+  version — identical after fixing one cosmetic capitalization slip in
+  rule 2's "Bad:"/"Good:" prefix, present in all 5 languages' files).
+  The four new languages' content was authored to fit each language's
+  *own* grammar, not a French-shaped template forced onto it: English
+  and German have no single-word synthetic future or conditional for
+  most verbs (unlike French/Spanish/Italian, which all have genuine
+  `mentira`/`serrerait`-style one-word forms), so their `rule4_bad`/
+  `rule4_good` lean on what those two languages actually possess instead
+  — English modal auxiliaries (`WILL`, `WOULD`, `COULD`) and the simple-
+  past-vs-past-participle distinction (`SANG` vs `SUNG`, a genuinely
+  tricky, common English error); German's Konjunktiv II, which *does*
+  give a handful of common irregular verbs (`sein`, `haben`, `kommen`) a
+  real single-word conditional (`WÄRE`, `HÄTTE`, `KÄME`) even though
+  regular weak verbs don't have one; irregular plurals in both (`MICE`,
+  `GEESE`, `CHILDREN` / `PFERDE`, `BÜCHER`). Spanish and Italian, being
+  full-conjugation Romance languages like French, could mirror the
+  French structure closely (`mentirá`/`mentirà`, `apretaría`/
+  `stringerebbe` as direct `serrerait`-equivalents). Every one of the
+  ~20 agreement examples per language (100 total across the 4 new files)
+  was manually checked the same way the original French set was: never
+  containing the target word or an obvious same-family form, and
+  actually phrased in the mood/tense/number/gender it claims to
+  demonstrate — caught and fixed a few same-family leaks while drafting
+  (e.g. an early Spanish `HABLARÍAIS` draft used "la palabra" — "the
+  floor/word" — which shares a root with `hablar`, replaced; an early
+  Spanish `SERÍAN` draft used "a ser" — literally the infinitive of the
+  target's own root — replaced with `convertirse en`). Verified live,
+  not just read for correctness: generated the full system prompt for
+  all 5 languages and read every one in full; ran an isolated
+  `generate()` call per language (fr/en/de/es/it, using real words from
+  each language's own wordlist) through the actual running local LLM
+  server and confirmed every one returned a valid, parseable clue; then
+  generated a full 9×9 grid end-to-end in German specifically (the
+  language that most exercises the newly-added non-French path) through
+  the actual running API, and spot-checked several of its real clues for
+  basic grammatical coherence (e.g. a past-tense clue correctly paired
+  with a past-tense-marked answer).

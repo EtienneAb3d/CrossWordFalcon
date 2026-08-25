@@ -1,0 +1,62 @@
+{
+  "subject_pronouns": "\"ich\", \"du\", \"er/sie/es\", \"wir\", \"ihr\", or \"sie/Sie\"",
+  "difficulty_examples": {
+    "easy": {
+      "word": "KATZE",
+      "clue": "Haustier, das miaut."
+    },
+    "medium": {
+      "word": "KATZE",
+      "clue": "Vierbeiniger Begleiter, der schnurrt."
+    },
+    "hard": {
+      "word": "KATZE",
+      "clue": "Sie landet immer auf ihren Pfoten."
+    }
+  },
+  "rule1_bad": [
+    "For KATZE, answering \"KATZE\", \"katze\", or \"Katze\".",
+    "For WÄRE, answering \"Ich wäre, wenn es morgen regnete\" — WÄRE itself must never appear in the clue text, even as part of a sentence."
+  ],
+  "rule2_bad": [
+    "\"Verb 'haben' in der zweiten Person Singular Präsens\" for a verb form.",
+    "for FEEN, \"Plural von 'die Fee'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue."
+  ],
+  "rule2_good": [
+    "for FEEN, \"Magische Wesen aus Märchen.\" (in the correct plural form, per rule 4)."
+  ],
+  "rule3_bad": [
+    "For TEE, \"Wort, das mit T beginnt und mit EE endet.\" — that describes how the word is written, not what it means."
+  ],
+  "rule4_bad": [
+    "For WAR — first/third person singular PAST (Präteritum) of \"sein\" (to be) — answering \"Wir feierten das Ende der Prüfungen\" (\"we celebrated the end of exams\", plural) or \"Sie waren nach der Reise nicht mehr dieselben\" (\"they were no longer the same after the trip\", plural): both describe a past state but neither is singular, so neither fits.",
+    "For KÄME — third person singular CONDITIONAL (Konjunktiv II) of \"kommen\" (to come) — answering \"Er wird morgen kommen\" (\"he will come tomorrow\", future tense): wrong mood — the clue must itself be phrased in the conditional (e.g. \"Was er täte, wenn es keinen Stau gäbe\") to match, not the future indicative.",
+    "For LOG — third person singular PAST (Präteritum) of \"lügen\" (to lie) — answering \"Er verheimlicht die Wahrheit\" (\"he is hiding the truth\", present tense, no past marking at all): the clue itself must be phrased in the past tense to match, e.g. \"Er verheimlichte die Wahrheit\" — the word's meaning (hiding the truth, i.e. lying) is right, but a clue with no past tense marking of its own doesn't fit a word that is specifically past tense.",
+    "For JAHRE — PLURAL, \"years\" — answering \"Zeitraum von zwölf Monaten\" (\"a 12-month period\"): that describes a single 12-month period, i.e. ONE year (\"ein Jahr\", singular), not several years — the clue must itself refer to more than one to fit a plural word."
+  ],
+  "rule4_good": [
+    "SPRICHST (du, Präsens, sprechen) : Was du gerade tust, um dich verständlich zu machen",
+    "SPRACHEN (wir, Präteritum, sprechen) : Was wir als Kinder jeden Abend miteinander taten",
+    "GEHT (er/sie/es, Präsens, gehen) : Was sie jetzt tut, um pünktlich zur Arbeit zu kommen",
+    "GINGEN (sie/Sie, Präteritum, gehen) : Was sie letzten Sommer jeden Tag am Strand taten",
+    "MACHTET (ihr, Präteritum, machen) : Was ihr als Kinder mit euren Hausaufgaben tatet",
+    "MACHEN (wir, Präsens, machen) : Was wir gerade mit diesem Problem tun",
+    "HATTE (ich/er/sie/es, Präteritum, haben) : Was ich als Kind in meiner Spardose besaß",
+    "HÄTTEN (wir, Konjunktiv II, haben) : Was wir besäßen, wäre der Kredit einmal abbezahlt",
+    "WÄREN (wir, Konjunktiv II, sein) : Der Zustand, in dem wir uns nach der Anstrengung befänden",
+    "KÄME (er/sie/es, Konjunktiv II, kommen) : Was der Zug täte, gäbe es keine Verspätung",
+    "LOG (er/sie/es, Präteritum, lügen) : Was er tat, als er die Wahrheit verheimlichte",
+    "LOGEN (sie/Sie, Präteritum, lügen) : Was sie taten, um sich aus der Affäre zu ziehen",
+    "GROSSES (Neutrum Singular, attributiv) : Beschreibung für ein Gebäude, das die ganze Stadt überragt",
+    "GROSSE (Plural, attributiv) : Beschreibung für mehrere Gebäude, die den Stadtteil überragen",
+    "KLEINE (Plural, attributiv) : Beschreibung für mehrere Räume, in denen man sich kaum bewegen kann",
+    "GLÜCKLICHE (Plural, attributiv) : Beschreibung für mehrere Frauen, die vom Leben beschenkt wurden",
+    "NEUE (Plural, attributiv) : Beschreibung für mehrere Geräte, die gerade erst auf den Markt gekommen sind",
+    "ALTE (Plural, attributiv) : Beschreibung für mehrere Steine, die von der Zeit gezeichnet sind",
+    "PFERDE (Plural, unregelmäßig: das Pferd → die Pferde) : Was man in großer Zahl auf einem Gestüt findet",
+    "BÜCHER (Plural, unregelmäßig: das Buch → die Bücher) : Was mehrere Regale in einer gut sortierten Bibliothek füllt"
+  ],
+  "rule5_bad": [
+    "For SPRÄCHEN — first/third person plural CONDITIONAL (Konjunktiv II) of \"sprechen\" (to speak), \"wir/sie sprächen\" — answering \"Im Geschäft gekauft\" (\"bought at the store\"): that has no connection at all to the meaning of \"to speak\", it is simply a different, unrelated idea."
+  ]
+}

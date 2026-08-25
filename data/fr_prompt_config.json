@@ -1,0 +1,62 @@
+{
+  "subject_pronouns": "\"je\", \"tu\", \"il/elle\", \"nous\", \"vous\", or \"ils/elles\"",
+  "difficulty_examples": {
+    "easy": {
+      "word": "CHAT",
+      "clue": "Animal domestique qui miaule."
+    },
+    "medium": {
+      "word": "CHAT",
+      "clue": "Compagnon à quatre pattes qui ronronne."
+    },
+    "hard": {
+      "word": "CHAT",
+      "clue": "Il retombe toujours sur ses pattes."
+    }
+  },
+  "rule1_bad": [
+    "For CHAT, answering \"CHAT\", \"chat\", or \"Chat\".",
+    "For SERAIS, answering \"Je serais s'il pleuvait demain\" — SERAIS itself must never appear in the clue text, even as part of a sentence."
+  ],
+  "rule2_bad": [
+    "\"verbe avoir à la deuxième personne du présent de l'indicatif\" for a verb form.",
+    "for FEES, \"Pluriel du mot 'une fée'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue."
+  ],
+  "rule2_good": [
+    "for FEES, \"Personnages magiques des contes.\" (in the correct plural form, per rule 4)."
+  ],
+  "rule3_bad": [
+    "For TEE, \"Mot qui commence par T et se termine par EE.\" — that describes how the word is written, not what it means."
+  ],
+  "rule4_bad": [
+    "For ÉTAIS — first person singular imperfect, \"j'étais\" — answering \"On a célébré la fin des examens\" or \"Elle n'était plus la même après son voyage\": both describe a past state but neither is first person singular, so neither fits.",
+    "For SERRERAIT — third person singular CONDITIONAL, \"il/elle serrerait\" — answering \"Je rapprocherai les chaises\": wrong person (je instead of il/elle) AND wrong mood/tense (future \"rapprocherai\" instead of conditional \"serrerait\") — getting only the rough idea (\"bringing things closer together\") right is not enough.",
+    "For MENTIRA — third person singular FUTURE, \"il/elle mentira\" — answering \"Cacher le vrai\" (a bare infinitive, no tense at all): the clue itself must be phrased in the future tense to match, e.g. \"Cachera le vrai\" — the word's meaning (hiding the truth, i.e. lying) is right, but a clue with no tense marking of its own doesn't fit a word that is specifically future tense.",
+    "For ANS — PLURAL, \"years\" — answering \"Durée de douze mois\": that describes a single 12-month period, i.e. ONE year (\"un an\", singular), not several years — the clue must itself refer to more than one to fit a plural word."
+  ],
+  "rule4_good": [
+    "PARLES (tu, présent) : Ce que tu fais en ce moment pour te faire comprendre",
+    "PARLIONS (nous, imparfait) : Ce que nous faisions ensemble chaque soir, enfants",
+    "PARLERA (il/elle, futur) : Ce qu'il fera devant le micro demain soir",
+    "PARLERIEZ (vous, conditionnel) : Ce que vous feriez si on vous cédait le micro",
+    "FINISSIEZ (vous, imparfait) : Ce que vous faisiez avec vos devoirs, enfants, chaque soir",
+    "FINIRONT (ils/elles, futur) : Ce qu'ils feront de leur repas avant de sortir de table",
+    "VENDIONS (nous, imparfait) : Ce que nous faisions au marché chaque samedi matin",
+    "VENDRONT (ils/elles, futur) : Ce qu'ils feront de leur maison l'année prochaine",
+    "AVAIS (je/tu, imparfait, verbe avoir) : Ce que je possédais, enfant, dans ma tirelire",
+    "AURONS (nous, futur, verbe avoir) : Ce que nous posséderons une fois le prêt remboursé",
+    "SERAIENT (ils/elles, conditionnel, verbe être) : Ce qu'ils deviendraient dans un monde plus juste",
+    "RENDRIEZ (vous, conditionnel) : Ce que vous feriez avec un objet qui ne vous appartient pas",
+    "GRAND (masculin singulier) : Se dit d'un immeuble qui domine toute la ville",
+    "GRANDES (féminin pluriel) : Se dit de plusieurs maisons qui dominent le quartier",
+    "PETITES (féminin pluriel) : Se dit de plusieurs chambres où l'on tient à peine",
+    "HEUREUSES (féminin pluriel) : Se dit de plusieurs femmes comblées par la vie",
+    "NOUVEAUX (masculin pluriel irrégulier) : Se dit de plusieurs appareils tout juste sortis en magasin",
+    "VIEILLES (féminin pluriel irrégulier) : Se dit de plusieurs pierres usées par le temps",
+    "CHEVAUX (masculin pluriel irrégulier) : Ce que l'on trouve, en nombre, dans un haras",
+    "TRAVAUX (masculin pluriel irrégulier) : Ce qui occupe plusieurs ouvriers sur un chantier"
+  ],
+  "rule5_bad": [
+    "For SERIONS — first person plural CONDITIONAL of \"être\" (to be), \"nous serions\" — answering \"Il existe des solutions\": that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea."
+  ]
+}

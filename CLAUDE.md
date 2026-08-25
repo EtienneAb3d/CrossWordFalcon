@@ -211,15 +211,17 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   answered with a *different* verb's conjugation entirely ("dirions"/"dirons", from
   "dire" — same "-rions"/"-rons" ending, wrong root) rather than "être" — a
   same-family-verb confusion distinct from the reported bug, flagged but not
-  separately addressed this round. `_AGREEMENT_EXAMPLES` (module-level constant)
-  adds a further ~20 correct worked examples on top of the "bad example" failure
-  illustrations above — a French-only reference bank spanning several persons/tenses/
-  moods for regular `-er`/`-ir`/`-re` verbs plus "être"/"avoir" specifically, and
-  masculine/feminine singular/plural noun/adjective agreement including classic
-  irregular plurals (`nouveau`→`nouveaux`, `vieux`→`vieilles`, `cheval`→`chevaux`,
-  `travail`→`travaux`) — each clue hand-checked to never contain the target word or a
-  same-family form, and to itself be phrased in the matching mood/tense/number/gender,
-  not just gesture at the right idea. Verified live on both known-hard words and
+  separately addressed this round. A further ~20 correct worked examples were added
+  on top of the "bad example" failure illustrations above — originally a French-only
+  module-level constant (`_AGREEMENT_EXAMPLES`), later moved into the per-language
+  JSON config described below once every other worked example followed — spanning
+  several persons/tenses/moods for regular `-er`/`-ir`/`-re` verbs plus "être"/"avoir"
+  specifically, and masculine/feminine singular/plural noun/adjective agreement
+  including classic irregular plurals (`nouveau`→`nouveaux`, `vieux`→`vieilles`,
+  `cheval`→`chevaux`, `travail`→`travaux`) — each clue hand-checked to never contain
+  the target word or a same-family form, and to itself be phrased in the matching
+  mood/tense/number/gender, not just gesture at the right idea. Verified live on both
+  known-hard words and
   brand-new ones not in the list itself (to check the model generalizes the *concept*
   rather than memorizing the examples): `MENTIRA`/`SERRERAIT` both came back cleanly
   correct on mood/tense every time sampled; `BELLES` and `CHANTAIENT` (novel words)
@@ -230,6 +232,39 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   number either — reported honestly as a real, partial improvement, not a fix: this
   is still a small-model reliability ceiling, most visible on "être" specifically,
   consistent with every previous iteration on this rule.
+
+  Every *concrete* worked example in `_build_system_prompt()` — the difficulty-style
+  example word/clue, every "bad"/"good" illustration for rules 1-5, the ~20-example
+  agreement bank, and the subject-pronoun list rule 4 names — used to be hardcoded in
+  French only, regardless of which of the 5 languages the request was actually in (the
+  model was just expected to generalize the underlying grammatical *concept*, e.g.
+  "match person and mood", to whichever language it was writing in). These now live in
+  `data/<lang>_prompt_config.json` (one file per supported language: fr/en/de/es/it),
+  loaded and cached per language by `_load_prompt_config()` (falls back to `fr` if a
+  language's file is missing) and assembled by `_build_system_prompt()` via a small
+  `_bullets()` helper — the *structure*/explanatory prose of the prompt (the numbered
+  rules, the English-language "why this is wrong" reasoning) stays in
+  `backend/clues.py` itself, since that's this project's engineering language; only
+  the concrete target-language words and clue text moved out. Each JSON file has:
+  `subject_pronouns` (a pre-formatted string for rule 4, e.g. French's `"je", "tu",
+  "il/elle", "nous", "vous", or "ils/elles"`), `difficulty_examples` (one `{word,
+  clue}` pair per `easy`/`medium`/`hard`, appended to `DIFFICULTY_STYLE`'s now-generic
+  English description), and `rule1_bad`/`rule2_bad`/`rule2_good`/`rule3_bad`/
+  `rule4_bad`/`rule4_good`/`rule5_bad` (lists of bullet-content strings). The four
+  non-French files were authored to fit each language's *own* grammar rather than
+  forcing the French template onto it — verified directly rather than assumed: English
+  and German have no single-word synthetic future/conditional for most verbs (unlike
+  French/Spanish/Italian's `mentira`/`serrerait`-style forms), so their `rule4_bad`/
+  `rule4_good` lean on what those two languages actually have instead (modal
+  auxiliaries — `WILL`/`WOULD`/`COULD`; participles distinct from simple past —
+  `SUNG` vs `SANG`; German's Konjunktiv II, which *does* exist as a single word for
+  common irregular verbs — `WÄRE`, `KÄME`; irregular plurals — `MICE`, `PFERDE`).
+  Verified live for all 5 languages: generated a real system prompt per language and
+  read it in full, then ran an isolated `generate()` call per language through the
+  actual local LLM server (confirming correct JSON loading and assembly, not
+  exhaustive grammar grading the way the French agreement rule's own iterations were)
+  and a full grid generated end-to-end in German specifically, since that most
+  exercises the newly-added non-French path.
   Phrasing style is calibrated by `difficulty` (easy/medium/hard) via
   `DIFFICULTY_STYLE`, language by `LANGUAGE_NAMES[language]` (must match the grid's
   wordlist). The endpoint is configurable via `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY`

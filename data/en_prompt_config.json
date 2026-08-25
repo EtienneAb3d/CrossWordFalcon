@@ -1,0 +1,62 @@
+{
+  "subject_pronouns": "\"I\", \"you\", \"he/she/it\", \"we\", or \"they\"",
+  "difficulty_examples": {
+    "easy": {
+      "word": "CAT",
+      "clue": "Pet animal that meows."
+    },
+    "medium": {
+      "word": "CAT",
+      "clue": "Furry companion that purrs on your lap."
+    },
+    "hard": {
+      "word": "CAT",
+      "clue": "It always lands on its feet."
+    }
+  },
+  "rule1_bad": [
+    "For CAT, answering \"CAT\", \"cat\", or \"Cat\".",
+    "For WOULD, answering \"I would if it rained tomorrow\" — WOULD itself must never appear in the clue text, even as part of a sentence."
+  ],
+  "rule2_bad": [
+    "\"third person singular present tense of a verb\" for a verb form.",
+    "for FAIRIES, \"Plural of 'fairy'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue."
+  ],
+  "rule2_good": [
+    "for FAIRIES, \"Magical beings from folk tales.\" (in the correct plural form, per rule 4)."
+  ],
+  "rule3_bad": [
+    "For TEE, \"Word that starts with T and ends with EE.\" — that describes how the word is written, not what it means."
+  ],
+  "rule4_bad": [
+    "For WAS — first/third person singular PAST of \"to be\" — answering \"We celebrated the end of exams\" or \"They were no longer the same after the trip\": both describe a past state but neither is singular (\"we\"/\"they\" need WERE, not WAS), so neither fits.",
+    "For SUNG — past PARTICIPLE of \"sing\" (used with a helper verb, e.g. \"has sung\") — answering \"The bird sang at dawn\" (that's the simple past, SANG): wrong form — the clue must itself imply a helper verb, e.g. \"What a choir has done by the end of the concert\", not a stand-alone past-tense action.",
+    "For WILL — future modal auxiliary — answering \"What lies hide\" (a timeless present-tense statement): the clue itself must carry future framing (e.g. \"What tomorrow holds\") to match a word that specifically marks futurity, not a generic present-tense description.",
+    "For MICE — PLURAL (irregular: mouse → mice) — answering \"A small rodent\": that describes ONE mouse, not several — the clue must itself refer to more than one to fit a plural word, e.g. \"Small rodents said to play while the cat's away.\""
+  ],
+  "rule4_good": [
+    "RUNS (he/she/it, present) : What a marathon competitor does each morning before work",
+    "WALKED (past, regular) : What tourists did along the beach at sunset yesterday",
+    "RAN (past, irregular) : What she did to catch the last train",
+    "WRITTEN (past participle, used with has/have/had) : What a novel is, once an author has finished it",
+    "SPOKEN (past participle, used with has/have/had) : What words are, once someone has said them aloud",
+    "SINGING (present participle) : What a choir is doing during rehearsal right now",
+    "TEACHES (he/she/it, present) : What a professor does every semester",
+    "WENT (past, irregular) : What the whole family did on vacation last summer",
+    "EATEN (past participle, used with has/have/had) : What a meal is, once every last bite has been finished",
+    "WOULD (conditional modal) : What you'd say to describe a hypothetical outcome, given the chance",
+    "COULD (past/conditional modal of ability) : What she said about her chances of winning, before the results came in",
+    "SHOULD (modal of obligation/advice) : What a doctor tells a patient about taking their medicine",
+    "MICE (plural, irregular: mouse → mice) : Small rodents said to play while the cat's away",
+    "GEESE (plural, irregular: goose → geese) : Migratory birds that fly together in a V formation",
+    "CHILDREN (plural, irregular: child → children) : Young people who eventually stop believing department-store Santas are real",
+    "TEETH (plural, irregular: tooth → teeth) : What a dentist examines, one by one, during a checkup",
+    "FEET (plural, irregular: foot → feet) : What shoes are meant to protect, both of them",
+    "WOMEN (plural, irregular: woman → women) : Attendees at a conference held specifically for female entrepreneurs",
+    "WAS (I/he/she/it, past) : One traveler's state, right after the long journey",
+    "WERE (we/you/they, past) : Several travelers' state, right after the long journey"
+  ],
+  "rule5_bad": [
+    "For MIGHT — modal verb expressing possibility (\"it might rain\") — answering \"Purchased at the corner shop\": that has no connection at all to the meaning of possibility, it is simply a different, unrelated idea."
+  ]
+}
