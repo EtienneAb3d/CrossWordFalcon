@@ -12,8 +12,14 @@ machine where run_llm.sh fell back to CPU despite a GPU being present (a
 missing CUDA Toolkit or Xcode Command Line Tools, see run_llm.sh), this
 can overstate GPU usage. A documented limitation, not a bug: there's no
 cheaper way to know for certain without instrumenting the LLM server
-process itself.
+process itself — *except* for LLAMA_FORCE_CPU (see run_llm.sh), which is
+a deliberate, known-in-advance choice rather than a hardware-capability
+guess, so get_system_info() checks it directly and reports "cpu"
+unconditionally when it's set, skipping GPU detection entirely — this
+works because run_Falcon.sh (which starts this very process) sources the
+same env.sh run_llm.sh does, so the flag reaches both processes alike.
 """
+import os
 import platform
 import re
 import shutil
@@ -86,7 +92,18 @@ def get_system_info(llm_model):
     when compute is "cpu", or when a present GPU's details couldn't be
     determined (a probe failing is treated as "no GPU found", not an
     error — this is a nice-to-have status display, never worth failing
-    a request over)."""
+    a request over). LLAMA_FORCE_CPU forces "cpu" outright, skipping GPU
+    detection — a real, deliberate choice made ahead of time (see
+    run_llm.sh), not a guess about hardware capability the way the probes
+    below are."""
+    if os.environ.get("LLAMA_FORCE_CPU"):
+        return {
+            "llm_model": llm_model,
+            "compute": "cpu",
+            "gpu_name": None,
+            "gpu_vram_mb": None,
+            "unified_memory": False,
+        }
     gpu = _detect_nvidia_gpu() or _detect_apple_gpu()
     return {
         "llm_model": llm_model,

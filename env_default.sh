@@ -66,3 +66,11 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export LLM_BASE_URL="https://api.mistral.ai/v1/chat/completions"
 # export LLM_MODEL="mistral-small-latest"
 # export LLM_API_KEY="your-mistral-api-key-here"
+
+# run_llm.sh uses a GPU by default when one is detected (Metal on Apple
+# Silicon, CUDA on Linux with an NVIDIA card — see run_llm.sh's own
+# detection/rebuild logic). To always run on CPU instead — e.g. to free
+# up the GPU for another process, or to sidestep a flaky/unsupported GPU
+# build — uncomment this line (any non-empty value forces CPU; the GPU
+# detection/rebuild step is skipped entirely, not just ignored):
+# export LLAMA_FORCE_CPU=1

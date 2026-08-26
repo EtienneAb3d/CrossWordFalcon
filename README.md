@@ -55,6 +55,11 @@ that only happens once. On an NVIDIA card, this rebuild needs the full
 missing, the script says so and carries on with your CPU instead of
 getting stuck.
 
+**Want to force CPU even if you have a graphics card?** Open `env.sh` and
+uncomment `LLAMA_FORCE_CPU=1` — useful if you'd rather keep the GPU free
+for something else. Comment it out again (or remove it) to go back to
+using the GPU.
+
 **Have a graphics card with at least 12GB of VRAM?** The default model
 favors speed, but a larger one — `Qwen/Qwen3.8-27B`, quantized to fit that
 much VRAM — writes noticeably better clues, especially on trickier

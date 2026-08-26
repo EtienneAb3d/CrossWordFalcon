@@ -41,13 +41,29 @@ _index_cache = {}  # language -> {word_lower: [sentence, ...]}
 
 
 def _load_wordlist_words(language):
+    """The wordlist's ACCENTED column (2nd of 4 — build_wordlist_freq.py's
+    natural, accented/inflected spelling), not its bare MOT column (1st —
+    accent-stripped, uppercase, the grid's own form). A real, previously
+    unnoticed bug: reading MOT here meant `targets` only ever held accent-
+    stripped forms ("elu"), while _build_index's corpus scan tokenizes and
+    lowercases actual corpus text without stripping accents ("élu") — the
+    two could only ever agree for words with no diacritics to begin with,
+    so every genuinely accented word (a large fraction of French/Spanish/
+    Italian/German vocabulary) silently never matched, no error, just an
+    empty examples section on every LLM call for that word. Caught only
+    because the user noticed a specific word's ("élu") missing example-
+    sentence section in a real failure log despite the corpus visibly
+    containing it — the same class of silent gap as the CORPUS_DIR
+    mix-up documented in CLAUDE.md's history for this file."""
     path = DATA_DIR / f"wordlist_{language}_full.tsv"
     words = set()
     with open(path, encoding="utf-8") as f:
         for line in f:
-            word = line.split("\t", 1)[0].strip()
-            if word:
-                words.add(word.lower())
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                accented = parts[1].strip()
+                if accented:
+                    words.add(accented.lower())
     return words
 
 

@@ -2155,3 +2155,53 @@ content (the French crossword words/clues, the web UI text) stays in French
   resampled both exact reported words (`ABATTRA`, `RIT`) — no
   self-correction, no person mismatch, no regression on prior fixed
   cases.
+
+- added `LLAMA_FORCE_CPU` to `run_llm.sh`/`env.sh`/`env_default.sh`, at
+  the user's explicit request: GPU stays the default when detected, but
+  setting this (any non-empty value) skips GPU detection/rebuild
+  entirely and forces `--n_gpu_layers 0`. Verified live: ran the script
+  with it set, confirmed via `ps` the server actually launched with
+  `--n_gpu_layers 0` and served a real request, then ran it again unset
+  to confirm it went back to `-1`.
+
+- reinforced rule 4's gender/number-agreement trap (b) further, at the
+  user's explicit request, after another real gender-mismatch clue: "Se
+  dit d'une herbe privée d'humidité" (feminine) for `SEC` (masculine) —
+  the same class `TENU`/`LÉGALE` already illustrate, but this time the
+  ask was to strengthen the *instruction* itself, not just add another
+  example. Added an explicit final self-check step to the rule text, and
+  called out that the mismatch is just as easy to make with an ordinary
+  noun ("grass") as an obviously-gendered one. One new `rule_bad`
+  example (`SEC`/`SECO`/`SECCO`) added to French/Spanish/Italian, same
+  language split as `TENU`/`CANSADO`/`STANCO`. Verified live: resampled
+  `SEC` 5 times — all correctly masculine — then re-tested
+  `TENU`/`LÉGALE`/`RIT` for regression.
+
+- fixed a real, significant bug in `backend/example_sentences.py`, caught
+  by the user reading a `LOG/*_ERROR.md` failure file directly: French
+  `élu` was missing its "Real example sentences" section despite the
+  corpus genuinely containing sentences using it. Root cause:
+  `_load_wordlist_words()` read the wordlist's accent-stripped `MOT`
+  column instead of its natural `ACCENTED` column, so the target set
+  used to build the corpus index never contained any accented word form
+  — meaning every genuinely accented word, in every one of the 4
+  accented languages, has silently gotten zero grounding examples since
+  this file was written (the same silent-failure shape as the earlier
+  `CORPUS_DIR` mix-up in this same file, logged above). This is exactly
+  the kind of gap the new `LOG/*_ERROR.md` failure-log feature was built
+  to surface — it worked as intended the first time it mattered.
+  Verified live: `élu` now finds real examples; spot-checked accented
+  words across all 4 affected languages (fr/es/it/de) — all now find
+  examples where they previously found none; confirmed via a real
+  generated user prompt that the section actually appears end to end.
+
+- fixed the info badge showing "GPU" even with `LLAMA_FORCE_CPU` set,
+  reported by the user right after actually using the option for the
+  first time. `get_system_info()` never checked the flag at all — now it
+  does, and reports "cpu" unconditionally when set, since that's a real,
+  deliberate choice rather than a hardware-capability guess (unlike the
+  rest of this function's probing). Works because `run_Falcon.sh` sources
+  the same `env.sh` `run_llm.sh` does. Verified live: restarted the real
+  servers with `LLAMA_FORCE_CPU=1` actually set — `/api/system_info`
+  correctly reports `"compute":"cpu"`, matching the real running
+  `llama_cpp.server` process's own `--n_gpu_layers 0` (checked via `ps`).

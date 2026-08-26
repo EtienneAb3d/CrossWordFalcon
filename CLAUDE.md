@@ -173,6 +173,21 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   process itself. A probe failing (missing binary, non-zero exit, timeout) is treated
   as "no GPU found" — never an error, since this is a status display, not worth
   failing a request over.
+
+  One exception to "no cheaper way to know for certain": `LLAMA_FORCE_CPU` (see
+  `run_llm.sh`) is a deliberate, known-in-advance choice, not a hardware-capability
+  guess — reported next as a real bug: after adding `LLAMA_FORCE_CPU`, the info badge
+  kept showing "GPU" even with it set, since `get_system_info()` never looked at it at
+  all. Fixed: `get_system_info()` now checks `os.environ.get("LLAMA_FORCE_CPU")` first
+  and returns `compute: "cpu"` unconditionally when set, skipping GPU detection
+  entirely — this works because `run_Falcon.sh` (which starts this very process)
+  sources the same `env.sh` `run_llm.sh` does, so the flag reaches both processes
+  alike without needing to pass it through any other channel. Verified live: unit-
+  tested both branches directly, then restarted the real servers with `LLAMA_FORCE_
+  CPU=1` actually set in `env.sh` — confirmed `/api/system_info` (both the direct
+  backend port and the proxied frontend port) reports `"compute":"cpu"`, and
+  cross-checked via `ps` that the actual running `llama_cpp.server` process was
+  genuinely launched with `--n_gpu_layers 0` to match.
 - `backend/clues.py` — `LLMClueGenerator`, the one class that owns all LLM handling
   (endpoint config, prompt text, the HTTP call, response parsing); `backend/app.py`
   builds a single instance at module scope and calls `.generate()` per grid. Talks to
@@ -638,6 +653,22 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   clue text ("what you do...") and its correction ("what he/she does...") read
   naturally in each language. Verified live: resampled `RIT` (the exact reported word)
   4 times — all correctly third person, no second-person leak.
+
+  Next reported: another gender-mismatch clue — "Se dit d'une herbe privée
+  d'humidité" (feminine "herbe") for `SEC` (masculine "dry") — the exact class rule
+  4's trap (b) and the `TENU`/`LÉGALE` examples already cover, but the user asked to
+  reinforce the instruction itself, not just add one more example. Trap (b)'s text
+  now explicitly calls out that the offending noun can be just as easily an ordinary,
+  unremarkable one ("grass", "soil") as an obviously-gendered one, and adds an
+  explicit final self-check step: before finalizing each candidate, check the target
+  word's own gender/number against the gender/number of the noun the clue names, and
+  rewrite if they don't match exactly. One new `rule_bad` illustration
+  (`SEC`/`SECO`/`SECCO`) added to French/Spanish/Italian — the same three-language
+  split as `TENU`/`CANSADO`/`STANCO`, since German/English have no predicative gender
+  agreement to violate. Verified live: resampled `SEC` 5 times through the real local
+  LLM server — every sample used a correctly masculine noun (one, coincidentally,
+  matched the `rule_bad` entry's own corrected suggestion word-for-word) — then
+  re-tested `TENU`/`LÉGALE`/`RIT` to confirm no regression.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -672,6 +703,27 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `CORPUS_DIR` at the real directory. There is no `data/opensubtitles_corpus/` on disk
   either now or previously in this session — the mismatch was a pure stale code
   reference, not a leftover directory to clean up.
+
+  A second, similarly silent gap of the same shape was found next, reported by the
+  user from a real `LOG/*_ERROR.md` failure file: French `élu` had no "Real example
+  sentences" section in its user prompt, despite the corpus visibly containing real
+  sentences using it. Root cause: `_load_wordlist_words()` indexed the wordlist's bare
+  `MOT` column (1st — accent-stripped, uppercase, e.g. `ELU`) as its target set, while
+  `_build_index()`'s corpus scan tokenizes and lowercases actual corpus text *without*
+  stripping accents (e.g. `élu` stays `élu`) — the two could only ever agree for words
+  with no diacritics to begin with, so every genuinely accented word (a large fraction
+  of French/Spanish/Italian/German vocabulary) silently never matched anything, no
+  error, just an empty examples section on every single LLM call for that word, in
+  every language, apparently since this file was written. Fixed by reading the
+  wordlist's `ACCENTED` column (2nd) instead — the natural, accented spelling that
+  actually matches what appears in the corpus and what `find_examples_for_words()` is
+  called with in the first place. Verified live: `élu` now finds 5 real examples
+  (e.g. "Le 16 novembre 1995, Liamine Zéroual fut élu président..."); spot-checked
+  more accented words across every language (`déterminées`/`être` in French,
+  `más`/`año`/`está` in Spanish, `città`/`più`/`perché` in Italian, `über`/`für` in
+  German) — all now find real examples where they previously found none; confirmed via
+  `_build_user_message()` directly that a real generated prompt for `élu` now includes
+  the full "Real example sentences" section end to end.
 - `build_gloss_dictionary.py` — one-off preprocessing script: downloads a language's
   Wiktionary extract in full from Kaikki.org (kaikki.org, CC-BY-SA/GFDL like
   Wiktionary itself) — for English, the primary (English-Wiktionary-sourced)
@@ -819,7 +871,21 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   shared setting, not swapped per model, since it's a safe/sufficient value for all
   three GGUFs this project has actually run against. This is the only local LLM
   backend in the repo — see `LLM_BASE_URL` in `env.sh` to point at a cloud API (e.g.
-  Mistral) instead.
+  Mistral) instead. GPU is used by default whenever the detection above finds one
+  (Metal/CUDA); `LLAMA_FORCE_CPU` (`env.sh`/`env_default.sh`, unset by default — any
+  non-empty value counts as set) forces CPU regardless, at the user's explicit
+  request — e.g. to free the GPU for another process, or sidestep a flaky/unsupported
+  GPU build. Computed once, early, into `N_GPU_LAYERS` (`-1` = offload every layer
+  llama.cpp can, the GPU-preferring default; `0` = CPU-only), which the final
+  `--n_gpu_layers` flag then just passes through — when `LLAMA_FORCE_CPU` is set, the
+  entire GPU detection/rebuild block (Metal/CUDA probing, the `llama-cpp-python`
+  rebuild-with-CMAKE_ARGS step) is skipped outright rather than run and then
+  discarded, since there's no point probing for or rebuilding GPU support that will
+  go unused anyway. Verified live: ran the script directly with `LLAMA_FORCE_CPU=1`
+  set — confirmed the "running on CPU regardless of detected hardware" message
+  printed, the actual server process launched with `--n_gpu_layers 0` (checked via
+  `ps`), and it served a real request correctly — then restarted normally (unset)
+  and confirmed the process went back to `--n_gpu_layers -1`.
 - `frontend/server.py` — **middleware** FastAPI server: serves the static UI
   (`frontend/static/index.html`, `script.js`, `style.css`) and proxies `/api/*` to the
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default
