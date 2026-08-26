@@ -17,7 +17,13 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   but prepared/explanatory rather than casual back-and-forth dialogue, closer to how
   someone actually explains something aloud to a broad audience; added at the user's
   explicit request) — per language, merges
-  them, and filters out sentences likely to contain a wrong-language part: dropped if
+  them, keeps only sentences between `MIN_WORDS_PER_SENTENCE` (5) and
+  `MAX_WORDS_PER_SENTENCE` (50) words — the lower bound added at the user's explicit
+  request, dropping fragments too thin to carry real meaning ("Oui.", "Ça va ?", a lone
+  name) as either a grounding example or a word-frequency data point; OpenSubtitles
+  (dialogue-heavy, lots of short exchanges) lost roughly half its candidate sentences
+  to this, Wikipedia/Books/TED2013 far less (~5-10%) — and filters out sentences likely
+  to contain a wrong-language part: dropped if
   either a contiguous run of `MAX_INVALID_RUN` (3+) words the language's own Hunspell
   dictionary doesn't recognize, or too high an overall fraction of them
   (`MAX_INVALID_WORD_FRACTION`), calibrated by hand against real contamination (English
@@ -212,10 +218,11 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   is why `generate()` takes an optional `on_progress(current, total)` callback, called
   after every word attempt, for `backend/app.py` to surface live progress instead of
   one static "generating…" message. How slow varies a lot by model: measured live at
-  ~2s/word with the current default, Qwen3.5-9B (thinking disabled — this project's
-  very first default), ~3s/word with Qwen3.5-4B unquantized (thinking disabled —
-  smallest model, close to Qwen3.5-9B's speed despite being full-precision rather
-  than quantized), ~8-9s/word with Qwen3-14B (also thinking disabled — larger model,
+  ~2s/word with Qwen3.5-9B (thinking disabled — this project's very first default, and
+  its default again for a long stretch of this project's history), ~3s/word with
+  Qwen3.5-4B unquantized (thinking disabled — smallest model tried at the time, close
+  to Qwen3.5-9B's speed despite being full-precision rather than quantized), ~8-9s/word
+  with Qwen3-14B (also thinking disabled — larger model,
   same non-reasoning behavior, so slower per token but not per-word-reasoning-slow),
   ~20-40s/word (a 9×9 grid's 32 words took ~13 minutes of clue generation) with
   Qwen3.8-27B (thinking disabled, Unsloth Dynamic `UD-Q2_K_XL` — the largest
@@ -225,7 +232,23 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   20-70s/word (potentially 15-40+ minutes per grid) with
   DeepSeek-R1-Distill-Qwen-14B, since it reasons through a `<think>` block before every
   single word's answer — see `_strip_reasoning`/`REASONING_TOKEN_BUDGET` below and
-  `run_llm.sh`. Output is plain text, not
+  `run_llm.sh`. A genuinely surprising result from measuring two much smaller models
+  added later, Qwen3.5-0.8B and Qwen3.5-2B (both unquantized bf16, thinking disabled):
+  **not faster** than Qwen3.5-9B despite being far smaller — measured live at
+  25-40s/word for Qwen3.5-0.8B (~25-29s/word on GPU/Metal, ~39-40s/word forced onto
+  CPU), in the same ballpark as Qwen3.8-27B despite being ~34x smaller. Root cause
+  isn't runaway generation (the raw logged output stays short and clean, no repetition
+  or reasoning leakage) — almost certainly this project's own system prompt, which is
+  unusually long (many worked rule examples per language), makes prompt *processing*
+  (prefill), not answer generation, the dominant cost per call; prefill time doesn't
+  shrink proportionally with parameter count the way decode speed does, so a tiny
+  model gains little to nothing here despite its much lower per-token compute cost.
+  This means "smaller = faster" does not reliably hold for this project's specific
+  workload — verify live with your own hardware before assuming a smaller model will
+  be quicker in practice. Qwen3.5-0.8B is still the project's default regardless
+  (chosen at the user's explicit request specifically so a fresh checkout can generate
+  a clue end-to-end on CPU alone with no GPU required — it does that, just not
+  quickly), see env_default.sh. Output is plain text, not
   JSON, and — since a redesign, see the long entry below — not even a single delimited
   line anymore: the model is asked for exactly 3 plain lines, one candidate clue per
   line, nothing else (`_parse_response`) — small local models without constrained

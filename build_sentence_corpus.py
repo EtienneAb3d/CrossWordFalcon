@@ -45,7 +45,14 @@ final, filtered-and-merged-across-all-sources output the rest of the
 pipeline actually reads.
 
 Kept sentences must be:
-- under 50 words (--max-words) — drops very long/merged blocks;
+- between 5 and 50 words (MIN_WORDS_PER_SENTENCE/MAX_WORDS_PER_SENTENCE) —
+  drops very long/merged blocks, and drops very short fragments ("Oui.",
+  "Ça va ?", a lone name) that are too thin to carry real meaning: this
+  corpus's whole purpose downstream is grounding backend/clues.py's
+  clue-writing prompt with a genuine usage example (see
+  backend/example_sentences.py) and giving build_wordlist_freq.py a
+  meaningful sentence to count word occurrences in — a 1-2 word fragment
+  serves neither well;
 - valid words of their own language, mostly: none of the three sources is
   perfectly monolingual per language file (dialogue/article/prose text in
   another language leaks into every language's split — the same
@@ -90,6 +97,11 @@ SOURCES = {
 
 DEFAULT_MAX_BYTES = 50_000_000
 MAX_WORDS_PER_SENTENCE = 50
+# A sentence under this many words is too thin to be a meaningful usage
+# example or a useful word-frequency data point ("Oui.", "Ça va ?", a lone
+# name) — see the module docstring's "Kept sentences must be" list. Added
+# at the user's explicit request.
+MIN_WORDS_PER_SENTENCE = 5
 # A sentence is dropped as likely containing a wrong-language *part* if
 # EITHER condition holds — two complementary signals, calibrated by hand
 # against real contaminated examples (English dialogue/quotes leaking into
@@ -134,7 +146,7 @@ def _decompress_partial(compressed_path):
     return bytes(out)
 
 
-def _split_sentences(raw_bytes, max_words):
+def _split_sentences(raw_bytes, max_words, min_words):
     lines = raw_bytes.decode("utf-8", errors="ignore").splitlines()
     if lines:
         lines = lines[:-1]  # last line is likely truncated mid-sentence
@@ -143,7 +155,8 @@ def _split_sentences(raw_bytes, max_words):
         line = line.strip()
         if not line:
             continue
-        if len(line.split()) < max_words:
+        word_count = len(line.split())
+        if min_words <= word_count < max_words:
             kept.append(line)
     return kept
 
@@ -204,7 +217,7 @@ def _fetch_source_sentences(source_name, url_template, lang, max_bytes, tmp_dir)
     _download_partial(url, max_bytes, compressed_path)
     raw = _decompress_partial(compressed_path)
     compressed_path.unlink()
-    sentences = _split_sentences(raw, MAX_WORDS_PER_SENTENCE)
+    sentences = _split_sentences(raw, MAX_WORDS_PER_SENTENCE, MIN_WORDS_PER_SENTENCE)
     print(f"  {len(sentences)} candidate sentences from {source_name}", file=sys.stderr)
 
     RAW_CORPUS_DIR.mkdir(parents=True, exist_ok=True)

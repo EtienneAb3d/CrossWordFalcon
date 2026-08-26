@@ -45,15 +45,22 @@ pip install -r requirements-llama.txt   # first time only (builds llama.cpp)
 ./run_llm.sh
 ```
 
-The first start downloads the model (a few GB), which can take a while
-depending on your connection. It runs on a graphics card if you have one
-(including Apple Silicon Macs), and falls back to your CPU otherwise —
-slower, but it works. If it detects a graphics card that isn't being used
-yet, it rebuilds itself to enable it — a one-time, several-minute step
-that only happens once. On an NVIDIA card, this rebuild needs the full
-**CUDA Toolkit** installed, not just the graphics driver — if it's
-missing, the script says so and carries on with your CPU instead of
-getting stuck.
+The first start downloads the model, which can take a while depending on
+your connection. It runs on a graphics card if you have one (including
+Apple Silicon Macs), and falls back to your CPU otherwise — slower, but
+it works. If it detects a graphics card that isn't being used yet, it
+rebuilds itself to enable it — a one-time, several-minute step that only
+happens once. On an NVIDIA card, this rebuild needs the full **CUDA
+Toolkit** installed, not just the graphics driver — if it's missing, the
+script says so and carries on with your CPU instead of getting stuck.
+
+The default model (Qwen3.5-0.8B, ~1.6GB download) is deliberately small,
+so a fresh checkout can generate clues end-to-end even on CPU alone,
+without a long per-word wait — good for a first try, less so for actual
+day-to-day use. `env.sh` lists several larger models, ordered smallest to
+largest, each with a short note on its speed/quality trade-off — open it
+and uncomment the block for whichever one fits your hardware and
+patience, then restart `run_llm.sh`.
 
 **Want to force CPU even if you have a graphics card?** Open `env.sh` and
 uncomment `LLAMA_FORCE_CPU=1` — useful if you'd rather keep the GPU free

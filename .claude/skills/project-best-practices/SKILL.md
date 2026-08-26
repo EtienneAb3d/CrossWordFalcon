@@ -2445,3 +2445,122 @@ content (the French crossword words/clues, the web UI text) stays in French
   GitHub's 100MB hard limit. Not committed/pushed as part of this
   change — no explicit instruction to do so this time (see the earlier
   entries above for when that *was* asked for explicitly).
+
+- `env.sh`/`env_default.sh` restructured at the user's explicit request:
+  the CPU/GPU toggle (`LLAMA_FORCE_CPU`) moved to the top of the file
+  (was at the bottom), the model blocks reordered smallest-to-largest by
+  parameter count, and two new models added — Qwen3.5-0.8B and
+  Qwen3.5-2B — both below the existing Qwen3.5-4B in the new ordering.
+  Repo/file names verified directly against the HuggingFace API (not
+  just a WebFetch summary, which had silently dropped the `Qwen_` repo
+  prefix from the filenames it reported — caught by cross-checking with
+  a direct API call): `bartowski/Qwen_Qwen3.5-0.8B-GGUF` and
+  `bartowski/Qwen_Qwen3.5-2B-GGUF`. Per a follow-up instruction, every
+  model below 9B (0.8B/2B/4B) uses its unquantized `bf16` file rather
+  than a quantized cut, since at that size the extra download cost is
+  cheap and avoids stacking quantization loss on an already-small
+  model's weaker baseline (4B already did this; 0.8B/2B switched to
+  match). Separately clarified with the user whether "official Qwen
+  models" for these bf16 files meant converting from Qwen's own
+  safetensors locally (a real architecture change to `run_llm.sh` — new
+  dependency, conversion step, more first-run time/disk) or keeping
+  bartowski's bf16 GGUF (a lossless container-format conversion, bit-
+  identical to Qwen's own official weights since bf16-to-GGUF doesn't
+  quantize anything) — user chose to keep bartowski's, so no `run_llm.sh`
+  change was needed for this part. Qwen3.5-0.8B set as the new default,
+  replacing Qwen3.5-9B, specifically so a fresh checkout can generate a
+  clue end-to-end on CPU alone with no GPU required.
+
+  Verified live, and found something genuinely worth flagging: measured
+  the new 0.8B default end-to-end through the real local LLM server, both
+  on GPU (Metal, ~25-29s/word) and forced onto CPU (~39-40s/word) — in
+  both cases dramatically *slower* than the previous Qwen3.5-9B default's
+  ~2s/word, not faster, despite being ~11x smaller. Ruled out the obvious
+  suspect first (a small model failing to stop and burning its whole
+  token budget on repetition/reasoning leakage) by checking the raw
+  logged output directly — it stayed short and clean, 3 plain lines, no
+  garbage. The real explanation is almost certainly that this project's
+  own system prompt is unusually long (many worked rule/agreement
+  examples per language, built up over this whole session), making
+  prompt *processing* (prefill), not answer generation, the dominant cost
+  per call — and prefill time doesn't shrink proportionally with
+  parameter count the way decode speed does, so a much smaller model
+  gains little here. Also caught and fixed a methodology bug in the
+  benchmark itself along the way: the first two timing runs were made
+  without sourcing `env.sh` first, so `backend/clues.py`'s own
+  `DEFAULT_LLM_MODEL` fallback (`"Qwen/Qwen3.5-9B"`, a separate hardcoded
+  value, last-resort only) leaked into the logged model name even though
+  the request correctly reached the real 0.8B server on the right port —
+  the timing numbers were still valid, but re-ran with `env.sh` properly
+  sourced afterward to get a cleanly labeled measurement too. Documented
+  this "smaller ≠ faster for this workload" finding directly in CLAUDE.md
+  rather than silently accept the assumption behind the original request
+  — the 0.8B default stands as asked, but with an honest caveat instead
+  of an unverified "should be fast" claim.
+
+- `build_sentence_corpus.py` gained a minimum sentence length
+  (`MIN_WORDS_PER_SENTENCE = 5`, alongside the existing `MAX_WORDS_PER_
+  SENTENCE = 50`), at the user's explicit request: a sentence needs to
+  "carry meaning" to be useful, either as a grounding example
+  (`backend/example_sentences.py`) or a word-frequency data point
+  (`build_wordlist_freq.py`) — a 1-4 word fragment ("Oui.", "Ça va ?", a
+  lone name) serves neither well. Realized mid-task that `CORPUS/`'s raw
+  per-source cache stores already-split, already-filtered sentence lists
+  (not the raw undecoded bytes), so a cache hit would silently bypass the
+  new filter entirely — rather than deleting the whole cache and
+  re-downloading everything from opus.nlpl.eu again, re-filtered every
+  cached `CORPUS/<lang>_<source>.txt` file in place (same word-count
+  check, applied directly to the already-cached sentence lines) before
+  rerunning `build_sentence_corpus.py`, avoiding a full re-download for a
+  filter change that never needed one. OpenSubtitles (dialogue-heavy, lots
+  of short exchanges) lost roughly half its candidate sentences to this;
+  Wikipedia/Books/TED2013 far less (~5-10%) — consistent with dialogue
+  naturally containing far more short utterances than prose. Explicitly
+  asked the user whether this should also trigger a full downstream
+  pipeline recompute (`build_wordlist_freq.py`/`build_gloss_dictionary.py`
+  per rule 6 above), since removing short sentences measurably shifts
+  word-frequency counts for words that lean heavily on short-utterance
+  usage (interjections especially) — user chose to skip that this time,
+  scope stayed to just `reference_corpus` + the per-language `tar.xz`
+  archives, so `data/wordlist_*.tsv`/`data/gloss_dictionary/` are now
+  slightly stale relative to the newly-filtered corpus (a known,
+  deliberately-accepted state, not an oversight).
+
+- `env.sh`/`env_default.sh` model-selection comments rewritten to be much
+  shorter, at the user's explicit request: each block now gets one
+  hardware/quality-tradeoff line (e.g. "ultra-fast, including with no GPU
+  at all, but results are often poor quality" for 0.8B) instead of a
+  multi-sentence paragraph. Asked the user to clarify scope before
+  touching content, since their 6-tier list (0.8B/2B/4B/9B/14B/Mistral)
+  didn't mention two blocks the file already had (Qwen3.8-27B,
+  DeepSeek-R1-Distill-Qwen-14B) — resolved as: keep Qwen3.8-27B (its own
+  short line added, describing it as needing the same ~12GB+ VRAM as
+  Qwen3-14B but much slower and the best quality observed so far), drop
+  DeepSeek-R1-Distill-Qwen-14B entirely (a reasoning model already noted
+  elsewhere as "not clearly better... much slower", a natural cut in a
+  simplification pass). `env.sh` (the user's own live file) had already
+  been hand-edited to make Qwen3.5-2B the active block instead of the
+  0.8B default — preserved as-is per standing guidance to treat an
+  out-of-band env.sh change as deliberate; `env_default.sh` (the checked-
+  in template) keeps Qwen3.5-0.8B as the active default. Verified live:
+  sourced both files after the rewrite and confirmed each resolves the
+  correct active `LLM_MODEL`/`LLAMA_GGUF_FILE` pair.
+
+- Qwen3-14B (the non-3.5 line) removed from both `env.sh`/`env_default.sh`
+  entirely, at the user's explicit request: judged clearly worse than
+  even the smaller Qwen3.5 models, not worth keeping as a preconfigured
+  option. Qwen3.8-27B's own comment (which referenced Qwen3-14B for its
+  VRAM comparison) reworded to stand on its own. Only the 3.5-branded
+  models remain as local preconfigured blocks now: 0.8B/2B/4B/9B/27B,
+  plus Mistral. Historical CLAUDE.md mentions of Qwen3-14B (past speed
+  benchmarks, past default-switching narrative) left untouched — they
+  describe what was true when written, not current config, matching this
+  file's standing convention for narrative entries. Verified: `bash -n`
+  on both files, grepped for any remaining `Qwen3-14B` reference (none),
+  confirmed each file's active default still resolves correctly.
+
+- Rebuilt all 5 `data/reference_corpus_<lang>.tar.xz` archives from the
+  min-word-filtered corpus (see the `build_sentence_corpus.py` entry
+  above) — sizes shrank slightly along with the corpus itself: fr=45MB,
+  en=74MB, de=47MB, es=42MB, it=45MB, all verified with `xz -t` and still
+  comfortably under GitHub's 100MB limit.
