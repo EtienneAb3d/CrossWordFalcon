@@ -1167,7 +1167,7 @@ maps each grid-usable word to its natural accented/inflected spelling (threaded 
 canonical form(s)/lemma(s) (`words[i]["canonical"]`) — both used by `backend/clues.py`.
 `--difficulty` (`easy`/`medium`/`hard`) caps how many of the most frequent words are
 kept — fewer words means more recognizable vocabulary but a harder-to-fill grid; `hard`
-keeps the entire lexicon. The cap (`DIFFICULTY_PRESETS`: easy=25 000, medium=50 000,
+keeps the entire lexicon. The cap (`DIFFICULTY_PRESETS`: easy=40 000, medium=80 000,
 hard=uncapped) is applied *globally* (ranked across all lengths together), not per
 length — a per-length cap doesn't actually restrict short lengths that have fewer total
 words than the cap itself (a real bug: French has only ~700 3-letter words, so an

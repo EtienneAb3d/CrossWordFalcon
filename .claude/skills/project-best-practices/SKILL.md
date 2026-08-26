@@ -2406,3 +2406,15 @@ content (the French crossword words/clues, the web UI text) stays in French
   `save_grid_svg()`/`save_grid_png()` and read the resulting PNG directly
   — the long clue wrapped into 3 lines, correctly indented, nothing
   clipped by the canvas edge.
+
+- `DIFFICULTY_PRESETS` (`backend/crossword_gen.py`) raised at the user's
+  explicit request, following a change to how the underlying frequency
+  tables are prepared: easy 25 000 -> 40 000, medium 50 000 -> 80 000
+  (hard stays uncapped) — first set to a straight doubling (50 000/
+  100 000), then adjusted down to 40 000/80 000 in the same exchange,
+  before ever being committed. Same global-ranking-not-per-length
+  application as before, unchanged. Verified live (against the
+  doubled values, still valid after the follow-up adjustment since
+  nothing about the mechanism changed): reloaded the module and
+  confirmed the new preset values, then generated a real offline
+  `easy` grid end-to-end with no errors.

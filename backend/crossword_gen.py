@@ -41,8 +41,8 @@ DEFAULT_HEIGHT = 10
 # Moins de mots -> vocabulaire plus reconnaissable mais grille parfois plus
 # dure à remplir ; "hard"/None garde tout le lexique.
 DIFFICULTY_PRESETS = {
-    "easy": 25_000,
-    "medium": 50_000,
+    "easy": 40_000,
+    "medium": 80_000,
     "hard": None,
 }
 
