@@ -21,20 +21,25 @@ call (`_BATCH_SIZE = 1` below), and the wording reflects that rather than
 describing a list of words that never actually arrives.
 
 Output format is the simplest thing that could work, given there's only
-ever one word per call: 3 plain-text lines, one candidate clue per line,
-nothing else — no JSON, and no word/label to echo back either.
-`_parse_response()` just splits the response into lines; every non-empty
-line is trusted directly as one candidate, no header or delimiter syntax
-to get right. This replaced an earlier single-line "WORD: clue 1; clue 2;
-clue 3" format that needed the model to echo the target word as a header
-before any of the response could be trusted as belonging to it — a real,
-observed failure mode on the local model: it would sometimes echo the
-format template's own literal placeholder text ("word:", or a bare
-"clue 2") instead of filling it in, which made an otherwise-fine answer
-unparseable. With one word and 3 plain lines, there's no header to get
-wrong and no template text left to leak (see the project-best-practices
-SKILL for the two incidents that motivated dropping the structured
-format rather than continuing to patch around it).
+ever one word per call: 3 lines, one candidate clue per line, nothing
+else — no JSON, and no *word* to echo back either. Each line is asked to
+start with a "C1="/"C2="/"C3=" label (see the OUTPUT FORMAT block in
+`_build_system_prompt()`) purely to help a small model understand the
+expected shape — not because parsing needs it: `_parse_response()` just
+splits the response into lines and strips a leading label
+(`_LEADING_MARKER_RE`) if present, but every non-empty line is trusted
+directly as one candidate regardless, no header/delimiter syntax to get
+right, no label ever required. This replaced an earlier single-line
+"WORD: clue 1; clue 2; clue 3" format that needed the model to echo the
+*target word itself* as a header before any of the response could be
+trusted as belonging to it — a real, observed failure mode on the local
+model: it would sometimes echo the format template's own literal
+placeholder text ("word:", or a bare "clue 2") instead of filling it in,
+which made an otherwise-fine answer unparseable. With one word per call
+and no target-word echo required, there's no header to get wrong and no
+template text left to leak (see the project-best-practices SKILL for the
+two incidents that motivated dropping the structured format rather than
+continuing to patch around it).
 
 The LLM endpoint is configurable via three environment variables (see
 env.sh at the project root):
@@ -211,12 +216,16 @@ def _bullets(items):
 
 # A "1. "/"2)"/"- " marker (or an em/en-dash variant of the same thing —
 # "— " and "– ", both real, observed introductory-dash styles distinct
-# from a plain hyphen) left on an individual line — happens when the
-# model numbers/bullets its 3 lines despite being asked for plain,
-# unnumbered ones. The only structural cleanup _parse_response still
-# does, now that there's no header/delimiter syntax left to validate —
-# everything else in a non-empty line is trusted as-is.
-_LEADING_MARKER_RE = re.compile(r"^\s*(?:[-–—*•]|\d+[.)])\s*")
+# from a plain hyphen), or a "C1="/"C2="/"C3=" label (the OUTPUT FORMAT
+# block in _build_system_prompt() asks for one per line, to help a small
+# model understand the expected shape — this strips it if the model
+# echoes it back, without ever requiring/parsing for it: a line missing
+# its label, or in the wrong order, is still trusted just the same).
+# Left on an individual line — the only structural cleanup
+# _parse_response still does, now that there's no header/delimiter
+# syntax left to validate — everything else in a non-empty line is
+# trusted as-is.
+_LEADING_MARKER_RE = re.compile(r"^\s*(?:[-–—*•]|\d+[.)]|[Cc][123]\s*=)\s*")
 
 # A leaked "word - " (or "word:"/"word,") label at the very start of a
 # candidate — the model restating the word it's defining as if labeling
@@ -632,16 +641,21 @@ class LLMClueGenerator:
         every call — not done, since rebuilding a string is cheap relative
         to the LLM call it precedes.
 
-        The output-format instructions ask for exactly 3 plain lines, one
-        candidate clue per line — no word/label for the model to echo
-        back, unlike an earlier "word: clue 1; clue 2; clue 3" format that
-        needed the target word repeated as a header before any of the
-        response could be trusted (a real, observed failure mode: the
-        model would sometimes echo the format template's own literal
-        placeholder text instead of filling it in correctly). See
-        `_parse_response()` and the project-best-practices SKILL for the
-        two incidents that motivated dropping the structured single-line
-        format entirely.
+        The output-format instructions ask for exactly 3 lines, each
+        labeled "C1="/"C2="/"C3=" — a concrete template, to help a small
+        model understand the shape of the expected answer, but never the
+        *target word* itself for the model to echo back, unlike an
+        earlier "word: clue 1; clue 2; clue 3" format that needed the
+        target word repeated as a header before any of the response could
+        be trusted (a real, observed failure mode: the model would
+        sometimes echo the format template's own literal placeholder text
+        instead of filling it in correctly). `_parse_response()` strips a
+        leading "C1="/"C2="/"C3=" label if the model echoes it back
+        (`_LEADING_MARKER_RE`), but never requires or parses for it — a
+        line missing its label, or out of order, is still trusted just
+        the same. See `_parse_response()` and the project-best-practices
+        SKILL for the two incidents that motivated dropping the
+        structured single-line format entirely.
 
         Every concrete word/clue example (and the subject-pronoun list
         rule 4 names) comes from PROMPT_CONFIG_DIR/<language>_prompt_
@@ -746,11 +760,17 @@ class LLMClueGenerator:
             "grammatical label):\n"
             f"{_bullets(config['rule_good'])}\n\n"
             "=== END OF EXAMPLES ===\n\n"
-            "Respond with exactly 3 lines and nothing else: one candidate "
-            "clue per line, in plain text. No JSON, no markdown, no "
-            "numbering or bullets, no blank lines, no repeating the word "
+            "OUTPUT FORMAT — respond with exactly these 3 lines and "
+            "nothing else:\n"
+            "C1=short sentence (even a single word) indirectly defining "
+            "the target word without giving it away\n"
+            "C2=short sentence (even a single word) indirectly defining "
+            "the target word without giving it away\n"
+            "C3=short sentence (even a single word) indirectly defining "
+            "the target word without giving it away\n\n"
+            "No JSON, no markdown, no blank lines, no repeating the word "
             "itself anywhere, and no extra commentary before, between, or "
-            "after the 3 lines — just the 3 clues, one per line."
+            "after these 3 lines."
         )
 
     def _build_user_message(self, entry, language):
@@ -884,8 +904,11 @@ class LLMClueGenerator:
         a line is trusted: normalizing a non-breaking space (U+00A0,
         which `str.strip()` alone doesn't remove — some models emit these
         instead of a plain space) to a regular one, then stripping a
-        leading numbered/bulleted/dash marker (`_LEADING_MARKER_RE`) the
-        model sometimes adds despite being asked for plain lines —
+        leading numbered/bulleted/dash marker, or a "C1="/"C2="/"C3="
+        label (`_LEADING_MARKER_RE`) — the label is asked for in the
+        prompt (see the OUTPUT FORMAT block in `_build_system_prompt()`)
+        purely to help the model, never required here: a line missing
+        it, or with a different one, is trusted just the same —
         everything else is used as-is, no delimiter syntax to get right.
         Returns a list of candidate strings (empty if the model's response
         had no non-empty lines at all)."""

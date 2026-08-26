@@ -2337,3 +2337,20 @@ content (the French crossword words/clues, the web UI text) stays in French
   (`XZ_OPT=-T0 tar -cJf data/reference_corpus_<lang>.tar.xz -C data
   reference_corpus/<lang>_sentences.txt`), confirmed every resulting file
   is 44-50MB, and pushed successfully.
+
+- `backend/clues.py`'s OUTPUT FORMAT instructions now spell out a
+  concrete per-line template — `C1=`/`C2=`/`C3=` — instead of just
+  prose ("exactly 3 plain lines"), at the user's explicit request, to
+  give a small model a clearer shape to follow. Critically, this is
+  advisory only, the same defensive posture as every earlier format
+  change in this file's history (see the two incidents in the module
+  docstring that motivated dropping the old header/delimiter format
+  entirely): `_parse_response()` never requires or parses for the
+  `C1=`/`C2=`/`C3=` label, it just strips one if present
+  (`_LEADING_MARKER_RE`, extended with a `[Cc][123]\s*=` alternative
+  alongside the existing dash/bullet/numbered-marker cases) — a line
+  missing its label, mislabeled, or out of order is still trusted just
+  the same. Verified live end-to-end against the real local LLM server
+  (French, CHAT): the model echoed the `C1=`/`C2=`/`C3=` labels exactly
+  as asked, `LOG_LLM`'s raw-output section confirmed it, and all 3
+  candidates parsed cleanly with the labels stripped, one selected.
