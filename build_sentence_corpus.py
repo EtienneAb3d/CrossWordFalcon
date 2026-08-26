@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """
-Builds a reference sentence corpus per language from three OPUS
-(opus.nlpl.eu) sources — OpenSubtitles, Wikipedia, and Books — merged
-together. Used two ways downstream: backend/example_sentences.py looks up
-real usage examples of a word's exact inflected form in it (to ground
-backend/clues.py's clue-writing prompt for rare/ambiguous words — see the
-French "ARE" case in the project-best-practices SKILL); build_wordlist_
-freq.py counts word occurrences in it to build this project's own
+Builds a reference sentence corpus per language from four OPUS
+(opus.nlpl.eu) sources — OpenSubtitles, Wikipedia, Books, and TED2013 —
+merged together. Used two ways downstream: backend/example_sentences.py
+looks up real usage examples of a word's exact inflected form in it (to
+ground backend/clues.py's clue-writing prompt for rare/ambiguous words —
+see the French "ARE" case in the project-best-practices SKILL); build_
+wordlist_freq.py counts word occurrences in it to build this project's own
 word-frequency source, replacing the previously-used HermitDave
 FrequencyWords lists (see the project-best-practices SKILL for why).
 
-Wikipedia and Books are deliberate additional sources, not a replacement
-for OpenSubtitles: subtitle dialogue is colloquial and covers everyday
-vocabulary (conjugated verbs, casual nouns) that encyclopedic text rarely
-uses, while Wikipedia covers formal/technical vocabulary (and rare-but-
-real words like French "are", the land-area unit) that dialogue almost
-never does; Books (literary prose, mostly older translated novels) adds a
-third, narrative/descriptive register — richer written vocabulary than
-either dialogue or encyclopedic text tends to use — each of the three
-fills a real gap the other two have.
+Wikipedia, Books, and TED2013 are deliberate additional sources, not a
+replacement for OpenSubtitles: subtitle dialogue is colloquial and covers
+everyday vocabulary (conjugated verbs, casual nouns) that encyclopedic
+text rarely uses, while Wikipedia covers formal/technical vocabulary (and
+rare-but-real words like French "are", the land-area unit) that dialogue
+almost never does; Books (literary prose, mostly older translated novels)
+adds a third, narrative/descriptive register — richer written vocabulary
+than either dialogue or encyclopedic text tends to use. TED2013 (TED talk
+transcripts) adds a fourth register distinct from all three: spoken, but
+prepared and explanatory rather than casual back-and-forth dialogue —
+first-person narrative aimed at a broad audience, closer to how someone
+actually *explains* something aloud than either OpenSubtitles' short
+conversational exchanges or Wikipedia's third-person encyclopedic prose.
+Each of the four fills a real gap the others have.
 
 The full per-language source is multi-gigabyte (compressed) for any of
 the three corpora; downloading all of it for every language would be
@@ -80,6 +85,7 @@ SOURCES = {
     "opensubtitles": "https://object.pouta.csc.fi/OPUS-OpenSubtitles/v2018/mono/{lang}.txt.gz",
     "wikipedia": "https://object.pouta.csc.fi/OPUS-Wikipedia/v1.0/mono/{lang}.txt.gz",
     "books": "https://object.pouta.csc.fi/OPUS-Books/v1/mono/{lang}.txt.gz",
+    "ted2013": "https://object.pouta.csc.fi/OPUS-TED2013/v1.1/mono/{lang}.txt.gz",
 }
 
 DEFAULT_MAX_BYTES = 50_000_000

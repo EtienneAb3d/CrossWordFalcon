@@ -8,11 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
 
 - `build_sentence_corpus.py` — one-off preprocessing script: downloads a partial
-  chunk (`--max-bytes`, default 50MB per source) of three OPUS (opus.nlpl.eu) corpora —
+  chunk (`--max-bytes`, default 50MB per source) of four OPUS (opus.nlpl.eu) corpora —
   OpenSubtitles (colloquial/dialogue vocabulary), Wikipedia (formal/technical
-  vocabulary, and rare-but-real words dialogue rarely uses), and Books (literary/
+  vocabulary, and rare-but-real words dialogue rarely uses), Books (literary/
   narrative prose, mostly older translated novels — a third, descriptive-vocabulary
   register neither dialogue nor encyclopedic text tends to use; added at the user's
+  explicit request), and TED2013 (TED talk transcripts — a fourth register, spoken
+  but prepared/explanatory rather than casual back-and-forth dialogue, closer to how
+  someone actually explains something aloud to a broad audience; added at the user's
   explicit request) — per language, merges
   them, and filters out sentences likely to contain a wrong-language part: dropped if
   either a contiguous run of `MAX_INVALID_RUN` (3+) words the language's own Hunspell
@@ -37,7 +40,17 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   Books source downloads and merges correctly, and that a second run reuses all 3
   cached raw sources (`CORPUS/it_*.txt`) instead of re-downloading (~1.25s vs. the
   first run's real network time) — before deleting that tiny smoke-test cache and
-  launching the real, full-scale reprocessing for all 5 languages.
+  launching the real, full-scale reprocessing for all 5 languages. TED2013 (TED talk
+  transcripts) was added the same way later: confirmed the OPUS TED2013 URL pattern
+  (`https://object.pouta.csc.fi/OPUS-TED2013/v1.1/mono/{lang}.txt.gz` — note the
+  `v1.1` version, unlike Books' plain `v1`) resolves for all 5 languages first, then
+  ran the same small Italian smoke test (confirmed TED2013 downloads/merges
+  correctly, and that a second run reuses all 4 cached raw sources, `CORPUS/it_*.txt`,
+  this time) before deleting that cache and launching the real, full-scale
+  reprocessing for all 5 languages — `build_wordlist_freq.py` and
+  `build_gloss_dictionary.py` (both below) rebuilt for every language too, per rule 6
+  of the project-best-practices SKILL (the corpus source list changed, so the entire
+  downstream pipeline is recomputed, not just this first stage).
 - `build_wordlist_freq.py` — one-off preprocessing script that reads a language's
   reference corpus (`data/reference_corpus/<lang>_sentences.txt`, counting word
   occurrences itself — `_count_word_frequencies`) and writes
@@ -1077,7 +1090,7 @@ hit it.
 # Full pipeline to rebuild one language's wordlist from scratch (only needed to
 # refresh the source corpus/frequencies; data/wordlist_*.tsv are already checked
 # into data/). Each language is independent — no particular build order required.
-python3 build_sentence_corpus.py fr    # downloads OpenSubtitles+Wikipedia+Books, filters
+python3 build_sentence_corpus.py fr    # downloads OpenSubtitles+Wikipedia+Books+TED2013, filters
 python3 build_wordlist_freq.py fr      # counts words, validates, writes wordlist_fr_full.tsv
 
 # Optional: rebuild a language's gloss dictionary from scratch (large

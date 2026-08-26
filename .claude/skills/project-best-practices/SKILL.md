@@ -2418,3 +2418,30 @@ content (the French crossword words/clues, the web UI text) stays in French
   nothing about the mechanism changed): reloaded the module and
   confirmed the new preset values, then generated a real offline
   `easy` grid end-to-end with no errors.
+
+- added a 4th OPUS source, TED2013 (TED talk transcripts — a spoken but
+  prepared/explanatory register, distinct from OpenSubtitles' casual
+  dialogue, Wikipedia's encyclopedic prose, and Books' literary
+  narrative), to `build_sentence_corpus.py`'s `SOURCES`, at the user's
+  explicit request — same pattern as adding Books earlier: verified the
+  URL (`OPUS-TED2013/v1.1/mono/{lang}.txt.gz` — `v1.1`, not `v1` like
+  Books) resolves for all 5 languages, ran a small Italian smoke test to
+  confirm it downloads/merges and the raw-cache mechanism (`CORPUS/`)
+  picks it up on a second run, then deleted that smoke-test cache. Per
+  rule 6 (recompute the *entire* pipeline when the source list changes),
+  reran `build_sentence_corpus.py` -> `build_wordlist_freq.py` ->
+  `build_gloss_dictionary.py` for all 5 languages (`build_gloss_
+  dictionary.py` reused its `DICS/` cached raw Wiktionary dumps rather
+  than re-downloading multi-GB files, since the lemma set changing
+  doesn't invalidate the raw dump itself), then rebuilt all 5
+  `data/reference_corpus_<lang>.tar.xz` archives (see the earlier
+  per-language-split decision above) from the new, larger corpus files.
+  One rebuild attempt (`it`) got killed by a 10-minute command timeout
+  mid-compression, caught by verifying every archive with `xz -t` after
+  the fact rather than assuming completion from exit status alone —
+  found the truncated file this way, rebuilt just that one language with
+  a longer timeout, then re-verified all 5. Final archive sizes:
+  fr=50MB, en=79MB, de=54MB, es=48MB, it=52MB — all comfortably under
+  GitHub's 100MB hard limit. Not committed/pushed as part of this
+  change — no explicit instruction to do so this time (see the earlier
+  entries above for when that *was* asked for explicitly).
