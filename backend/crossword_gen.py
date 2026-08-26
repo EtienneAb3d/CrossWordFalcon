@@ -57,19 +57,34 @@ PARALLEL_ATTEMPTS = int(os.environ.get("CROSSWORDFALCON_PARALLEL_ATTEMPTS", "10"
 
 # ---------- Dictionnaire ----------
 
-# Presets de difficulté : nombre max de mots conservés au total (classement
-# global par fréquence, toutes longueurs confondues), pas par longueur — un
-# plafond par longueur ne filtre rien pour les longueurs qui ont moins de
-# mots au total que le plafond lui-même (ex. il n'existe que ~700 mots de 3
-# lettres en français, donc un ancien plafond de 600 "par longueur" laissait
-# passer TOUS les mots de 3 lettres, y compris des mots obscurs comme "ABD" —
-# bug réel signalé par l'utilisateur, score 103, ~33 000e position globale).
+# Presets de difficulté : fraction du lexique conservée (classement global
+# par fréquence, toutes longueurs confondues), pas par longueur — un plafond
+# par longueur ne filtre rien pour les longueurs qui ont moins de mots au
+# total que le plafond lui-même (ex. il n'existe que ~700 mots de 3 lettres
+# en français, donc un ancien plafond de 600 "par longueur" laissait passer
+# TOUS les mots de 3 lettres, y compris des mots obscurs comme "ABD" — bug
+# réel signalé par l'utilisateur, score 103, ~33 000e position globale).
 # Moins de mots -> vocabulaire plus reconnaissable mais grille parfois plus
-# dure à remplir ; "hard"/None garde tout le lexique.
+# dure à remplir ; "hard" garde tout le lexique (100 %).
+#
+# Volontairement une FRACTION du lexique de chaque langue, pas un nombre
+# absolu de mots — à la demande explicite de l'utilisateur, après avoir
+# constaté qu'un seuil fixe (ex. 80 000 mots) n'a pas du tout le même effet
+# suivant la langue : le français a ~113 000 mots dans sa table de
+# fréquences, l'allemand ~436 000 (l'allemand compose énormément de mots
+# composés, ce qui gonfle son vocabulaire) — un même seuil absolu de 80 000
+# garderait ~70 % du lexique français mais seulement ~18 % de l'allemand,
+# rendant "facile" nettement plus dur en allemand qu'en français sans que ce
+# soit voulu. `load_wordlist()` calcule le nombre de mots réel à partir de
+# cette fraction une fois le lexique de la langue effectivement chargé (donc
+# après le filtrage `require_gloss` de "easy", le cas échéant) — voir
+# `max_words` dans `load_wordlist()`, qui distingue une fraction (float,
+# 0 < x <= 1) d'un nombre absolu (int, toujours le comportement de
+# `--max-words` en ligne de commande) par son type.
 DIFFICULTY_PRESETS = {
-    "easy": 80_000,
-    "medium": 100_000,
-    "hard": None,
+    "easy": 0.66,
+    "medium": 0.80,
+    "hard": 1.0,
 }
 
 
@@ -104,7 +119,17 @@ def load_wordlist(path, max_words=None, require_gloss=False):
     backend/gloss_lookup.py — la fréquence seule ne suffit pas à repérer un
     mot courant mais indéfinissable, ex. l'abréviation "ABD"), en repli
     silencieux si la langue ne peut pas être déduite du nom de fichier ou si
-    aucun dictionnaire de définitions n'a été construit pour elle. Retourne
+    aucun dictionnaire de définitions n'a été construit pour elle. `max_words`
+    accepte deux types, avec des sens différents : un `int` est un nombre
+    absolu de mots à garder (comportement historique, utilisé par
+    `--max-words` en ligne de commande) ; un `float` (0 < x <= 1, voir
+    DIFFICULTY_PRESETS) est une *fraction* du lexique effectivement chargé
+    pour cette langue — le nombre absolu correspondant n'est calculé qu'ici,
+    une fois la taille réelle du lexique connue (donc après dédoublonnage et
+    après le filtrage `require_gloss` le cas échéant), pour que la même
+    valeur de `difficulty` retienne une proportion comparable du vocabulaire
+    quelle que soit la langue, plutôt qu'un nombre de mots fixe qui n'a pas
+    le même effet suivant la taille du lexique de chaque langue. Retourne
     (by_length, accents, canonicals) :
     - by_length = {longueur: [mots]} — seuls les `max_words` mots les plus
       fréquents *au global* (toutes longueurs confondues), si fourni, sont
@@ -182,6 +207,12 @@ def load_wordlist(path, max_words=None, require_gloss=False):
     # shuffles its candidate list with the seeded rng before trying them.
     ranked = sorted(best.items(), key=lambda kv: -kv[1][1])
     if max_words:
+        # Un float est une fraction du lexique réel (DIFFICULTY_PRESETS),
+        # résolue ici en nombre absolu maintenant que la taille réelle du
+        # lexique (post dédoublonnage/require_gloss) est connue ; un int
+        # reste un nombre absolu de mots (--max-words).
+        if isinstance(max_words, float):
+            max_words = round(len(ranked) * max_words)
         ranked = ranked[:max_words]
 
     result = defaultdict(list)
@@ -806,12 +837,21 @@ def main():
     ap.add_argument("--wordlist", default="data/wordlist_fr_full.tsv",
                      help="lexique MOT<TAB>ACCENTUE<TAB>FREQUENCE généré par "
                           "build_wordlist_freq.py (ou fichier texte libre en repli)")
-    ap.add_argument("--difficulty", choices=sorted(DIFFICULTY_PRESETS), default="easy",
-                     help="limite le vocabulaire aux N mots les plus fréquents au global "
-                          "(toutes longueurs confondues) : easy={} (défaut), medium={}, "
-                          "hard=tout le lexique".format(
-                              DIFFICULTY_PRESETS["easy"], DIFFICULTY_PRESETS["medium"]
-                          ))
+    _difficulty_help = (
+        "limite le vocabulaire à une fraction des mots les plus fréquents au "
+        "global (toutes longueurs confondues), calculée sur la taille réelle "
+        "du lexique de la langue chargée : easy={:.0%} (défaut), medium={:.0%}, "
+        "hard=100% (tout le lexique)"
+    ).format(DIFFICULTY_PRESETS["easy"], DIFFICULTY_PRESETS["medium"])
+    ap.add_argument(
+        "--difficulty", choices=sorted(DIFFICULTY_PRESETS), default="easy",
+        # argparse fait lui-même une passe de substitution % sur les help
+        # strings (pour %(default)s etc.) — un "%" litéral issu de {:.0%}
+        # ci-dessus doit être échappé en "%%" *après* le formatage (jamais
+        # dans le format-spec de .format() lui-même, qui n'accepte que "%"),
+        # sinon argparse lève une ValueError.
+        help=_difficulty_help.replace("%", "%%"),
+    )
     ap.add_argument("--max-words", type=int, default=None,
                      help="surcharge manuelle du nombre max de mots au global "
                           "(prioritaire sur --difficulty)")

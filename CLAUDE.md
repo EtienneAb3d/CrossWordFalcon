@@ -8,15 +8,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
 
 - `build_sentence_corpus.py` — one-off preprocessing script: downloads a partial
-  chunk (`--max-bytes`, default 50MB per source) of four OPUS (opus.nlpl.eu) corpora —
+  chunk (`--max-bytes`, default 50MB per source) of five OPUS (opus.nlpl.eu) corpora —
   OpenSubtitles (colloquial/dialogue vocabulary), Wikipedia (formal/technical
   vocabulary, and rare-but-real words dialogue rarely uses), Books (literary/
   narrative prose, mostly older translated novels — a third, descriptive-vocabulary
   register neither dialogue nor encyclopedic text tends to use; added at the user's
-  explicit request), and TED2013 (TED talk transcripts — a fourth register, spoken
+  explicit request), TED2013 (TED talk transcripts — a fourth register, spoken
   but prepared/explanatory rather than casual back-and-forth dialogue, closer to how
   someone actually explains something aloud to a broad audience; added at the user's
-  explicit request) — per language, merges
+  explicit request), and CCMatrix (large-scale bitext mined from CommonCrawl — a
+  fifth register, contemporary general-purpose written web text (news, blogs,
+  product/service descriptions, forum posts) covering a far broader mix of topics
+  and vocabulary than any of the other four alone; its full per-language file dwarfs
+  every other source's, 10-37GB depending on the language, verified live, but
+  `--max-bytes`'s partial-download-via-HTTP-Range mechanism is unaffected by a
+  source's total size either way; added at the user's explicit request) — per
+  language, merges
   them, keeps only sentences between `MIN_WORDS_PER_SENTENCE` (5) and
   `MAX_WORDS_PER_SENTENCE` (50) words — the lower bound added at the user's explicit
   request, dropping fragments too thin to carry real meaning ("Oui.", "Ça va ?", a lone
@@ -56,7 +63,19 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   reprocessing for all 5 languages — `build_wordlist_freq.py` and
   `build_gloss_dictionary.py` (both below) rebuilt for every language too, per rule 6
   of the project-best-practices SKILL (the corpus source list changed, so the entire
-  downstream pipeline is recomputed, not just this first stage).
+  downstream pipeline is recomputed, not just this first stage). CCMatrix was added
+  the same way again later: confirmed the OPUS CCMatrix URL pattern
+  (`https://object.pouta.csc.fi/OPUS-CCMatrix/v1/mono/{lang}.txt.gz`) resolves for
+  all 5 languages first (also checked each language's full file size directly —
+  10-37GB, by far the largest source in this pipeline, since CCMatrix is mined at
+  CommonCrawl scale — confirming the `--max-bytes` partial-download mechanism was
+  the right call even more so here than for the smaller sources), ran the same small
+  Italian smoke test (confirmed CCMatrix downloads/merges correctly — 56,848
+  candidate sentences from just a 2MB partial download, denser than any other single
+  source at that same byte budget — and that a second run reuses all 5 cached raw
+  sources) before deleting that cache and launching the real, full-scale
+  reprocessing for all 5 languages, again rebuilding `build_wordlist_freq.py` and
+  `build_gloss_dictionary.py` for every language per rule 6.
 - `build_wordlist_freq.py` — one-off preprocessing script that reads a language's
   reference corpus (`data/reference_corpus/<lang>_sentences.txt`, counting word
   occurrences itself — `_count_word_frequencies`) and writes
@@ -1302,8 +1321,29 @@ maps each grid-usable word to its natural accented/inflected spelling (threaded 
 canonical form(s)/lemma(s) (`words[i]["canonical"]`) — both used by `backend/clues.py`.
 `--difficulty` (`easy`/`medium`/`hard`) caps how many of the most frequent words are
 kept — fewer words means more recognizable vocabulary but a harder-to-fill grid; `hard`
-keeps the entire lexicon. The cap (`DIFFICULTY_PRESETS`: easy=80 000, medium=100 000,
-hard=uncapped) is applied *globally* (ranked across all lengths together), not per
+keeps the entire lexicon (100%). The cap (`DIFFICULTY_PRESETS`: easy=66%, medium=80%,
+hard=100%) is a *fraction* of the lexicon, not a fixed word count — changed from a
+previous fixed-count design (easy=80 000, medium=100 000) at the user's explicit
+request, after noticing a fixed count doesn't have a comparable effect across
+languages: French's frequency table has ~127 000 words, German's ~436 000 (German
+compounds words heavily, inflating its vocabulary size) — the same absolute 80 000
+cap would keep ~63% of French's words but only ~18% of German's, making "easy"
+considerably harder in German than in French without that being the intent.
+`load_wordlist()` resolves the fraction to an absolute count itself, once it knows
+the *actual* size of the candidate pool for that call (`max_words` accepts either an
+`int`, an absolute count — the historical behavior, still what `--max-words` passes
+— or a `float` between 0 and 1, a fraction, resolved via `round(len(ranked) *
+max_words)`, dispatched on the value's Python type). This resolution happens *after*
+"easy"'s own `require_gloss` filtering (see below) has already dropped whatever
+words have no findable definition — so easy's 66% is 66% of the gloss-filtered pool,
+not 66% of the raw frequency table; verified live this really does produce a
+comparable, non-degenerate result across languages with very different gloss
+coverage rates (French: 66% cap ≈ 65% of its ~127k raw table, since French's gloss
+coverage is high; German: 66% cap ≈ 28% of its ~436k raw table, since a much smaller
+fraction of German's compound-heavy vocabulary has Wiktionary coverage in the first
+place — a real, expected consequence of resolving the fraction post-filter, not a
+bug). The cap (whichever type it resolves to) is applied *globally* (ranked across all
+lengths together), not per
 length — a per-length cap doesn't actually restrict short lengths that have fewer total
 words than the cap itself (a real bug: French has only ~700 3-letter words, so an
 earlier 600-per-length "easy" cap let through every one of them, including obscure

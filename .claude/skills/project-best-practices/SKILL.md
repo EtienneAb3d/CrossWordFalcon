@@ -2821,3 +2821,92 @@ content (the French crossword words/clues, the web UI text) stays in French
   reloaded the module and confirmed the new preset values, generated a
   real offline `easy` grid end-to-end, and ran `--help` to confirm the
   CLI text now shows the correct numbers pulled from the dict itself.
+
+- Added a 5th OPUS source, CCMatrix (large-scale CommonCrawl-mined
+  bitext — a fifth register, contemporary general-purpose written web
+  text: news, blogs, product descriptions, forum posts), to
+  `build_sentence_corpus.py`'s `SOURCES`, at the user's explicit
+  request — same verified pattern as every prior source addition
+  (Books, TED2013): confirmed the URL
+  (`OPUS-CCMatrix/v1/mono/{lang}.txt.gz`) resolves for all 5 languages,
+  also checked each language's *full* file size directly out of caution
+  given how unusually large CommonCrawl-scale corpora tend to be —
+  confirmed 10-37GB per language, by far the largest source in this
+  pipeline — then ran the small Italian smoke test (56,848 candidate
+  sentences from just a 2MB partial download, the densest single source
+  seen yet at that byte budget) and confirmed cache reuse on a second
+  run, before deleting the smoke-test cache and launching the real,
+  full-scale reprocessing for all 5 languages: `build_sentence_corpus.py`
+  -> `build_wordlist_freq.py` -> `build_gloss_dictionary.py`, per rule 6.
+  Rebuilt all 5 `data/reference_corpus_<lang>.tar.xz` archives afterward
+  from the larger corpus (each language's `data/reference_corpus/
+  <lang>_sentences.txt` grew substantially with CCMatrix folded in — up
+  to 498MB raw for English, verified directly, comfortably the largest of
+  the 5). Compressing with the same `XZ_OPT=-T0 tar -cJf ...` command used
+  for every prior archive rebuild produced an English archive of
+  106,711,116 bytes — just *over* GitHub's 100MB hard limit, the first
+  time in this whole session a single archive has actually landed on the
+  wrong side of it. Root-caused rather than just cranking compression
+  blindly: this machine's `tar` is `bsdtar`/libarchive, not GNU tar —
+  confirmed directly (`tar --version`) — and libarchive's built-in `-J`
+  (xz) filter does not honor the `XZ_OPT` environment variable at all;
+  re-running the *exact same* `XZ_OPT=-T0 tar -cJf` command a second time
+  produced a byte-for-byte identical 106,711,116-byte file, proving the
+  env var had silently done nothing this entire session, on every
+  archive ever built this way — the actual compression level in use the
+  whole time was whatever libarchive's own internal xz default is, never
+  level 9/multi-threaded as the command's own naming implied. Fixed by
+  piping `tar`'s uncompressed output directly into the real `xz` CLI with
+  explicit flags instead of relying on `tar`'s built-in filter at all —
+  `tar -cf - -C data reference_corpus/<lang>_sentences.txt | xz -9e -T0 >
+  data/reference_corpus_<lang>.tar.xz` — which gives real, verified
+  control over the compression level/threading regardless of which `tar`
+  implementation is installed. Immediately produced a materially better
+  ratio, not just a different one: English dropped from 106,711,116 to
+  76,776,716 bytes (~28% smaller) with the exact same input, confirming
+  this was a genuine compression-quality bug, not merely a threading
+  artifact. Recompressed all 5 languages with the corrected command for
+  consistency (not just the one that happened to exceed the limit) — final
+  sizes, all verified with `xz -t`: fr=70,577,552, en=76,776,716,
+  de=73,813,192, es=66,605,860, it=69,352,392 bytes, every one now with
+  more comfortable headroom under the 100MB limit than the old (broken)
+  command ever gave. `XZ_OPT=-T0 tar -cJf` should not be reused for this
+  purpose going forward on a machine with `bsdtar` — the piped-through-`xz`
+  form above is the one that actually works.
+
+- `DIFFICULTY_PRESETS` (`backend/crossword_gen.py`) changed from fixed
+  absolute word counts to *fractions* of each language's own lexicon, at
+  the user's explicit request: easy=0.66, medium=0.80, hard=1.0
+  (replacing easy=80 000, medium=100 000, hard=uncapped). Motivation:
+  fixed counts don't have a comparable effect across languages with very
+  different vocabulary sizes — French's frequency table has ~127k words,
+  German's ~436k (heavy compounding) — so the same 80 000 cap kept ~63%
+  of French but only ~18% of German, making "easy" much harder in German
+  without that being intended. `load_wordlist()`'s `max_words` parameter
+  now dispatches on Python type: an `int` stays an absolute count
+  (`--max-words`'s existing behavior, unchanged), a `float` (0 < x <= 1)
+  is resolved to an absolute count via `round(len(ranked) * max_words)`
+  — computed *after* "easy"'s own `require_gloss` filtering has already
+  dropped undefinable words, so easy's 66% is 66% of the gloss-filtered
+  candidate pool, not 66% of the raw frequency table. This has a real,
+  worth-flagging consequence verified live: French's 66% cap works out
+  to ≈65% of its raw ~127k-line table (high gloss coverage), but
+  German's works out to only ≈28% of its raw ~436k-line table (much
+  lower gloss coverage on its compound-heavy vocabulary) — an accepted,
+  expected result of resolving the fraction post-gloss-filter (consistent
+  with the pre-existing require-gloss-before-cap ordering already in the
+  code, unchanged by this fix), not a bug, but flagged directly to the
+  user rather than silently assumed to be "66% of the raw table"
+  uniformly. Also fixed a real bug hit while implementing the CLI help
+  text update: argparse runs its own `%`-substitution pass on help
+  strings (for `%(default)s` etc.), so a literal `%` from `{:.0%}`
+  formatting crashed `add_argument()` with `ValueError: unsupported
+  format character` — fixed by formatting the percentage string first,
+  then `.replace("%", "%%")` on the *result* before handing it to
+  `help=` (escaping inside `.format()`'s own spec mini-language doesn't
+  work — `{:.0%%}` is invalid there, only `%%` in the final string is
+  valid for argparse's separate pass). Verified live: confirmed the
+  percentage-based cap resolves correctly for both French and German
+  (including cross-checking the exact math against each language's raw
+  and gloss-filtered pool sizes), and confirmed `--help` now renders
+  correctly instead of crashing.
