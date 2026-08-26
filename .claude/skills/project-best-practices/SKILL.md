@@ -2205,3 +2205,84 @@ content (the French crossword words/clues, the web UI text) stays in French
   servers with `LLAMA_FORCE_CPU=1` actually set — `/api/system_info`
   correctly reports `"compute":"cpu"`, matching the real running
   `llama_cpp.server` process's own `--n_gpu_layers 0` (checked via `ps`).
+
+- extended the per-candidate diagnostic logging further, at the user's
+  explicit request: every rejected candidate is now logged individually
+  with the specific reason(s) it failed (too long / non-Latin / contains
+  the target word — all applicable ones, not just the first), and the
+  candidate ultimately selected is logged too. `_pick_clue()` used to
+  filter with one silent list comprehension; now it classifies each
+  candidate one at a time so nothing about *why* is lost. Verified live:
+  unit-tested a synthetic 4-candidate mix (one clean, one leaking the
+  target word, one too long, one non-Latin) — each logged with its own
+  correct reason; tested a candidate failing two checks at once — both
+  reasons appeared together; then confirmed the format against a real
+  LLM call.
+
+- expanded the `LOG/*.md` diagnostic file from failure-only to *every*
+  LLM call, at the user's explicit request ("liste tous les appels LLM,
+  pas seulement les erreurs"). `_write_failure_log()` (once per word,
+  after exhausting retries) became `_write_call_log()` (once per
+  attempt, unconditionally), with a new `outcome` field. Filename
+  simplified from `<timestamp>_<answer>_ERROR.md` to
+  `<timestamp>_<answer>.md` per the same request ("le mot recherché ...
+  à la fin du nom de fichier") — `answer` was already the accent-
+  stripped uppercase form needed, no extra work required. Verified live:
+  a successful `CHAT` call now writes its own file too, with the
+  selected clue recorded in `**Outcome**`.
+
+- fixed French `SLIPS` coming back with every candidate labeled
+  `"slips - "` before the actual definition — correctly rejected by the
+  existing containment filter, but wasting a whole retry round instead
+  of salvaging what were otherwise good definitions. Fixed both ways
+  the user asked: rule 1 in the prompt now explicitly forbids this
+  labeling pattern, and a new `_strip_leading_word_label()` salvages a
+  candidate that only fails because of it. One `rule_bad` example added
+  per language, each a plural noun so it reinforces number agreement
+  too. Verified live: the exact reported case cleaned correctly, no
+  false positives on several adversarial inputs, a real `SLIPS` call
+  resolved cleanly end to end.
+
+- added `_detect_wrong_language()` to `_pick_clue()`, at the user's
+  explicit request for "un typage de langue", after a candidate leaked
+  English meta-commentary for a French word that neither the non-Latin
+  check nor the length cap could catch. Deliberately a small hardcoded
+  per-language stopword list, not a real language-ID library or a
+  Hunspell-based check — the backend has never had a runtime dependency
+  on Hunspell (only the offline `build_*.py` scripts do), and this
+  doesn't need one either. Caught a real false positive in the first
+  draft before shipping: legitimate Spanish was flagged as French
+  because "de"/"que" are identical cognates in both — fixed by computing
+  cross-language word overlap *programmatically* (any word in more than
+  one language's list gets dropped from all of them) rather than trusting
+  manual review, so a future list edit can't silently reintroduce the
+  same class of bug. Verified live: the reported example now correctly
+  flags as `en`, the Spanish false positive is gone, and a dozen more
+  real clues across all 5 languages (including several generated earlier
+  in this session) triggered zero false positives.
+
+- refined `LOG/`'s per-call files further, both at the user's explicit
+  request: every filename now ends with `_SUCCES` or `_ERROR` (that
+  specific attempt did/didn't produce a usable clue), and each file's
+  last section lists every candidate proposed with its own verdict
+  (selected / accepted-not-selected / rejected + reason), not just the
+  header's one-line outcome summary. Needed `_pick_clue()` to return
+  `(chosen, details)` instead of just `chosen` — tracked by index into
+  the details list, not by candidate text, so two textually-identical
+  candidates can't both get marked "selected". Verified live: unit-
+  tested the new return shape against a 3-way mix (rejected/accepted-
+  not-chosen/selected) — correct verdicts, original order preserved;
+  forced a real success and a real total failure — confirmed
+  `_SUCCES.md`/`_ERROR.md` filenames and a correct Candidates section
+  in each.
+
+- renamed the `LOG/` folder to `LOG_LLM/` (`.gitignore` updated to
+  match), at the user's explicit request — this project could plausibly
+  grow other, unrelated kinds of logs later, and `LOG_LLM/` says
+  specifically what this one is for. Simple mechanical rename: updated
+  `CALL_LOG_DIR`'s path, deleted the old (test-artifacts-only) `LOG/`
+  directory rather than migrate it, updated every *current-state*
+  mention of the folder name in CLAUDE.md/this SKILL — left the
+  *historical* narrative entries describing the folder from before this
+  rename as `LOG/` unchanged, since that's what it was actually called
+  at the time each of those entries was written.

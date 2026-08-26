@@ -1,0 +1,1 @@
+rm GRIDS/* GRID_SAMPLES/* LOG_LLM/*

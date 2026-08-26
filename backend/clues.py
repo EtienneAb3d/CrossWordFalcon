@@ -180,12 +180,19 @@ LANGUAGE_NAMES = {
 PROMPT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "data"
 _prompt_config_cache = {}
 
-# Where a word that exhausts all 3 retry attempts without ever getting a
-# clue gets its own diagnostic Markdown file — see generate()'s call to
-# _write_failure_log(). Project root, gitignored — a debugging artifact
-# for reproducing a specific failure by hand, not source content or a
-# durable record like GRIDS/ or GRID_SAMPLES/.
-FAILURE_LOG_DIR = Path(__file__).resolve().parent.parent / "LOG"
+# Where every single LLM call gets its own diagnostic Markdown file — see
+# generate()'s call to _write_call_log(). Project root, gitignored — a
+# debugging artifact for reproducing a specific call by hand or reviewing
+# a whole grid's worth of calls after the fact, not source content or a
+# durable record like GRIDS/ or GRID_SAMPLES/. Originally written only
+# for a word that exhausted all 3 retries, extended at the user's
+# explicit request to cover every call, successes included — one file
+# per attempt, not per word, since a word retried across multiple rounds
+# makes more than one call. Folder renamed from the original "LOG" to
+# "LOG_LLM" (also at the user's request) once it became clear this
+# project could plausibly grow other, unrelated kinds of logs later —
+# "LOG_LLM" says specifically what this one is for.
+CALL_LOG_DIR = Path(__file__).resolve().parent.parent / "LOG_LLM"
 
 
 def _load_prompt_config(language):
@@ -210,6 +217,40 @@ def _bullets(items):
 # does, now that there's no header/delimiter syntax left to validate —
 # everything else in a non-empty line is trusted as-is.
 _LEADING_MARKER_RE = re.compile(r"^\s*(?:[-–—*•]|\d+[.)])\s*")
+
+# A leaked "word - " (or "word:"/"word,") label at the very start of a
+# candidate — the model restating the word it's defining as if labeling
+# its own answer, before the actual definition, e.g. "slips -
+# sous-vêtement féminin" for SLIPS. Matches the leading token plus a
+# separating punctuation mark (colon, comma, or a hyphen/en-dash/em-dash
+# variant) and any surrounding whitespace — whether that leading token
+# actually *is* the target word is checked separately (see
+# _strip_leading_word_label), since a plain regex has no way to know
+# that on its own.
+_LEADING_LABEL_RE = re.compile(r"^\s*(\S+)\s*[:,\-–—]\s*")
+
+
+def _strip_leading_word_label(candidate, answer, accented, canonical):
+    """Salvages a candidate that only fails `_contains_target_word`
+    because it opens with exactly this leaked "word - definition" label
+    pattern: strips the label and returns just the definition that
+    follows, so a perfectly good definition isn't thrown away — and a
+    whole retry round wasted — over a mechanically fixable formatting
+    slip. Returns `candidate` unchanged if it doesn't start with the
+    target word (or its accented spelling, or a candidate canonical
+    form) followed by one of those punctuation marks — this must stay
+    narrow, matching only that exact leading-label shape, so it can
+    never accidentally rewrite an unrelated candidate that legitimately
+    starts with a colon/dash/comma of its own."""
+    match = _LEADING_LABEL_RE.match(candidate)
+    if not match:
+        return candidate
+    targets = {_normalize(answer), _normalize(accented)}
+    targets.update(_normalize(c) for c in canonical)
+    if _normalize(match.group(1)) not in targets:
+        return candidate
+    rest = candidate[match.end():].strip()
+    return rest or candidate
 
 
 # DeepSeek-R1-distill models (unlike Qwen3.5 with `enable_thinking: false`,
@@ -273,6 +314,89 @@ _NON_LATIN_RE = re.compile(
 # mentioning "château" shouldn't be flagged just because it contains the
 # letters of "chat".
 _WORD_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# A real, observed failure mode `_NON_LATIN_RE` can't catch (still Latin
+# script) and the length cap can't catch either (can be short): the model
+# lapsing into a *different* language mid-response — including leaked
+# meta-commentary that isn't even an attempted clue, e.g. "All good. Let
+# me also make sure they're short (≤20 words each)" for a French word.
+# Not a full language-ID model (no new runtime dependency — see
+# _detect_wrong_language's docstring for why this deliberately doesn't
+# reuse build_sentence_corpus.py's Hunspell-based approach) — just each
+# language's most common function words, written naturally per language
+# without worrying about overlap by hand (see the auto-dedup below).
+_LANGUAGE_STOPWORDS_RAW = {
+    "fr": {
+        "le", "la", "les", "de", "des", "un", "une", "et", "que", "qui",
+        "est", "dans", "pour", "avec", "sur", "cette", "ne", "pas", "plus",
+        "vous", "nous", "elle", "il", "être", "leur", "alors", "aussi",
+        "mais", "donc", "était", "sont",
+    },
+    "en": {
+        "the", "a", "an", "is", "are", "of", "and", "to", "that", "in",
+        "let", "me", "also", "make", "sure", "they", "their", "each",
+        "with", "all", "good", "you", "we", "was", "were", "your", "but",
+        "then",
+    },
+    "de": {
+        "der", "die", "das", "und", "ist", "ein", "eine", "mit", "für",
+        "auf", "nicht", "zu", "von", "im", "den", "dem", "sie", "wir",
+        "sind", "war", "aber", "dann", "auch",
+    },
+    "es": {
+        "el", "la", "los", "las", "un", "una", "que", "es", "y", "para",
+        "con", "en", "no", "por", "más", "usted", "nosotros", "ella",
+        "está", "son", "era", "también", "pero", "entonces",
+    },
+    "it": {
+        "il", "lo", "la", "gli", "le", "di", "un", "una", "che", "è", "e",
+        "per", "con", "non", "in", "del", "della", "voi", "noi", "lei",
+        "sono", "anche", "però", "quindi", "questo",
+    },
+}
+# Several function words are spelled identically across two Romance
+# languages purely by coincidence of shared Latin origin (e.g. "que" in
+# both French and Spanish, "il" in both French and Italian) — such a word
+# matching would be genuinely ambiguous between the two, undermining the
+# whole point of this check, so it's dropped from every language's set
+# entirely rather than left in either. Done programmatically, not just by
+# careful hand-picking, so a future edit to either list can't silently
+# reintroduce a collision unnoticed.
+_ambiguous_stopwords = {
+    w for words in _LANGUAGE_STOPWORDS_RAW.values() for w in words
+    if sum(w in other for other in _LANGUAGE_STOPWORDS_RAW.values()) > 1
+}
+_LANGUAGE_STOPWORDS = {
+    lang: words - _ambiguous_stopwords
+    for lang, words in _LANGUAGE_STOPWORDS_RAW.items()
+}
+
+# How many *distinct* stopwords from one other language must show up
+# before a candidate is treated as "looks like that language instead" —
+# more than one guards against a single coincidental match even after
+# the cross-language dedup above.
+_WRONG_LANGUAGE_MIN_STOPWORDS = 2
+
+
+def _detect_wrong_language(candidate, target_language):
+    """Best-effort check for a candidate written in a different language
+    than `target_language`: counts how many of each *other* language's
+    common function words appear as whole tokens in `candidate`; if any
+    other language reaches `_WRONG_LANGUAGE_MIN_STOPWORDS` distinct hits,
+    returns that language's code. Returns None if no other language's
+    stopwords showed up strongly enough (including when `target_language`
+    has no stopword list of its own — nothing to compare against)."""
+    if target_language not in _LANGUAGE_STOPWORDS:
+        return None
+    tokens = {t.lower() for t in _WORD_TOKEN_RE.findall(candidate)}
+    if not tokens:
+        return None
+    for lang, stopwords in _LANGUAGE_STOPWORDS.items():
+        if lang == target_language:
+            continue
+        if len(tokens & stopwords) >= _WRONG_LANGUAGE_MIN_STOPWORDS:
+            return lang
+    return None
 
 
 def _contains_target_word(candidate, answer, accented, canonical=()):
@@ -363,51 +487,68 @@ class LLMClueGenerator:
             answer, accented, canonical = entry
             system_prompt = self._build_system_prompt(difficulty, language)
             user_message = self._build_user_message(entry, language)
-            last_content = None
-            last_error = None
             for attempt in range(3):
-                last_content = None
-                last_error = None
+                content = None
+                error = None
+                candidate_details = []
                 try:
                     content = self._call(
                         answer, accented, attempt + 1,
                         system_prompt, user_message, max_tokens, timeout,
                     )
-                    last_content = content
                     candidates = self._parse_response(content)
                     if not candidates:
+                        outcome = "model gave no candidate lines at all"
                         logger.warning(
                             "clue round %d/3: %r (%r) — model gave no "
                             "candidate lines at all",
                             attempt + 1, answer, accented,
                         )
                     else:
-                        clue = self._pick_clue(candidates, answer, accented, canonical)
+                        clue, candidate_details = self._pick_clue(
+                            candidates, answer, accented, canonical, language, attempt + 1,
+                        )
                         if clue:
                             clues[answer] = clue
+                            outcome = f"selected: {clue!r}"
                         else:
+                            # Each candidate's own rejection reason was already
+                            # logged individually inside _pick_clue() — this is
+                            # just the round-level "so none of them worked" verdict.
+                            outcome = (
+                                f"all {len(candidates)} candidate(s) rejected "
+                                "(see the Candidates section below, or backend.log)"
+                            )
                             logger.warning(
                                 "clue round %d/3: %r (%r) — all %d candidate(s) "
-                                "rejected by the too-long/copy/non-Latin/"
-                                "same-family filter: %r",
-                                attempt + 1, answer, accented, len(candidates), candidates,
+                                "rejected (see the per-candidate reasons just above)",
+                                attempt + 1, answer, accented, len(candidates),
                             )
                 except ClueGenerationError as e:
                     errors.append(e)
-                    last_error = e
+                    error = e
+                    outcome = f"LLM call failed: {e}"
                     logger.warning(
                         "clue round %d/3: %r (%r) — LLM call failed: %s",
                         attempt + 1, answer, accented, e,
                     )
+                # Every single call gets its own record, successes included —
+                # not just failures — at the user's explicit request, so a
+                # whole grid's worth of calls can be reviewed after the fact,
+                # not just the ones that went wrong. `success` (this specific
+                # attempt produced a usable clue) drives the filename's own
+                # SUCCES/ERROR suffix — also requested explicitly, so a
+                # directory listing alone shows which calls need attention
+                # without opening every file.
+                self._write_call_log(
+                    answer, accented, language, difficulty, attempt + 1,
+                    system_prompt, user_message, content, error, outcome,
+                    candidate_details, success=answer in clues,
+                )
                 if on_progress:
                     on_progress(len(clues), total)
                 if answer in clues:
                     break
-            if answer not in clues:
-                self._write_failure_log(
-                    answer, accented, language, difficulty,
-                    system_prompt, user_message, last_content, last_error,
-                )
 
         missing = [e for e in entries if e[0] not in clues]
         if missing:
@@ -534,7 +675,13 @@ class LLMClueGenerator:
             "feminine target, or a different tense/person of the same "
             "verb): a near-identical variant still gives the answer away "
             "just as much as the exact spelling would, even though it "
-            "isn't byte-for-byte the same.\n"
+            "isn't byte-for-byte the same. This also means never opening "
+            "a candidate with the word itself as a label, followed by a "
+            "colon, comma, or dash, before the actual definition (e.g. "
+            "\"word - definition\" or \"word: definition\") — that is "
+            "still the word appearing in the clue, just as a prefix "
+            "instead of embedded in a sentence; write only the "
+            "definition itself, with nothing labeling it.\n"
             "2. Do not write a bare grammatical/technical description — "
             "write an actual clue a crossword solver would enjoy, not a "
             "label. Describe what the word actually means.\n"
@@ -660,54 +807,73 @@ class LLMClueGenerator:
         )
         return _strip_reasoning(content)
 
-    def _write_failure_log(self, answer, accented, language, difficulty,
-                            system_prompt, user_message, content, error):
-        """Writes a self-contained Markdown diagnostic file for a word
-        that exhausted all 3 retry attempts without ever getting a clue —
-        at the user's explicit request, so a specific failure can be
-        analyzed and reproduced by hand without digging through backend.
-        log. Captures the *last* attempt specifically (the complete
-        system + user prompt — identical across all 3 attempts, since
-        nothing about the prompt varies between retries — plus that
-        attempt's raw output and/or error, e.g. a timeout): the retry
-        loop already logs every attempt's own outcome as it happens (see
-        _call()/generate()), so this file's job isn't to repeat that —
-        it's a single artifact with everything needed to replay the
-        exact request that ultimately failed. Written to FAILURE_LOG_DIR
-        (LOG/, project root, gitignored — a debugging artifact, not a
-        durable record like GRIDS/), one file per failed word, named
-        `<timestamp>_<answer>_ERROR.md`. Best-effort, like backend/svg_
-        export.py's own saves: a failure to write this is logged, never
-        allowed to break grid generation, since a missing diagnostic
-        file is far less important than the grid itself finishing."""
-        FAILURE_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    def _write_call_log(self, answer, accented, language, difficulty, round_number,
+                         system_prompt, user_message, content, error, outcome,
+                         candidate_details, success):
+        """Writes a self-contained Markdown record of one LLM call — every
+        single call `generate()` makes, successes included, not just
+        failures (originally this only fired for a word that exhausted
+        all 3 retries; extended to cover every call at the user's
+        explicit request, so a whole grid's worth of calls can be
+        reviewed after the fact, not just the ones that went wrong).
+        Captures everything needed to replay this *specific* call by
+        hand: the complete system + user prompt, the raw LLM output (or
+        `None` if the call itself errored), any `ClueGenerationError`,
+        a one-line outcome summary, and — as the very last section, at
+        the user's explicit request ("précise les propositions
+        rejetées, et la proposition finalement retenue") —
+        `candidate_details` (`_pick_clue()`'s own `[(candidate, verdict),
+        ...]`, empty when the model gave no parsable candidates or the
+        call errored outright) rendered as one bullet per candidate, so
+        every rejected proposal and the one finally selected are all
+        visible together at a glance, not just the outcome line's own
+        summary. Written to CALL_LOG_DIR (LOG_LLM/, project root, gitignored
+        — a debugging artifact, not a durable record like GRIDS/), one
+        file per call (so a word retried across multiple rounds gets
+        more than one), named `<timestamp>_<answer>_<SUCCES|ERROR>.md` —
+        `answer` is the grid's bare uppercase, accent-stripped form
+        already (crossword convention), so no extra normalization was
+        needed to put it in the filename as requested; the trailing
+        SUCCES/ERROR suffix (`success`, also requested explicitly) lets
+        a directory listing alone show which calls need attention
+        without opening every file — SUCCES means this specific attempt
+        produced a usable clue, ERROR covers every other outcome (no
+        candidates, all rejected, or the call itself failed). Best-
+        effort, like backend/svg_export.py's own saves: a failure to
+        write this is logged, never allowed to break grid generation,
+        since a missing diagnostic file is far less important than the
+        grid itself finishing."""
+        CALL_LOG_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        path = FAILURE_LOG_DIR / f"{timestamp}_{answer}_ERROR.md"
-        error_section = (
-            str(error) if error is not None else
-            "None — a response was received from the LLM, but it produced "
-            "no usable clue (see backend.log for the exact rejection "
-            "reason: no candidate lines, or every candidate filtered out "
-            "as too long/a copy/non-Latin/same-family)."
-        )
+        suffix = "SUCCES" if success else "ERROR"
+        path = CALL_LOG_DIR / f"{timestamp}_{answer}_{suffix}.md"
+        error_section = str(error) if error is not None else "None"
         output_section = content if content is not None else "(no response — see error above)"
+        if candidate_details:
+            candidates_section = "\n".join(
+                f"- **{verdict}**: {c!r}" for c, verdict in candidate_details
+            )
+        else:
+            candidates_section = "(none — see Error above, or the model gave no parsable candidate lines)"
         body = (
-            f"# Clue generation failure — {answer} ({accented})\n\n"
+            f"# Clue generation call — {answer} ({accented})\n\n"
             f"- **Date**: {datetime.now().isoformat()}\n"
             f"- **Language**: {language}\n"
             f"- **Difficulty**: {difficulty}\n"
             f"- **LLM endpoint**: {self.base_url}\n"
             f"- **Model**: {self.model}\n"
-            f"- **Attempts**: 3/3 failed\n\n"
-            f"## Error (last attempt)\n\n{error_section}\n\n"
-            f"## System prompt (last attempt)\n\n```\n{system_prompt}\n```\n\n"
-            f"## User message (last attempt)\n\n```\n{user_message}\n```\n\n"
-            f"## Raw LLM output (last attempt)\n\n```\n{output_section}\n```\n"
+            f"- **Attempt**: {round_number}/3\n"
+            f"- **Outcome**: {outcome}\n\n"
+            f"## Error\n\n{error_section}\n\n"
+            f"## System prompt\n\n```\n{system_prompt}\n```\n\n"
+            f"## User message\n\n```\n{user_message}\n```\n\n"
+            f"## Raw LLM output\n\n```\n{output_section}\n```\n\n"
+            f"## Candidates\n\n{candidates_section}\n"
         )
         try:
             path.write_text(body, encoding="utf-8")
         except OSError as e:
-            logger.warning("failed to write failure log for %r: %s", answer, e)
+            logger.warning("failed to write call log for %r: %s", answer, e)
 
     @staticmethod
     def _parse_response(content):
@@ -730,25 +896,88 @@ class LLMClueGenerator:
         ]
 
     @staticmethod
-    def _pick_clue(candidates, answer, accented, canonical):
+    def _pick_clue(candidates, answer, accented, canonical, language, round_number):
         """Picks one of this word's (up to 3) candidate clues at random —
         favors variety across regenerations of the same word, and keeps
         the choice out of the LLM's hands as requested. Drops any
         candidate that isn't actually a clue: longer than `MAX_CLUE_WORDS`
         words (a real, observed failure mode — the model writing out its
         reasoning, several sentences long, instead of a short clue — see
-        `MAX_CLUE_WORDS`'s comment), non-Latin-script drift, or the word
-        being defined (or a same-family word sharing its canonical
-        form/lemma, e.g. singular "maman" leaking into a clue for plural
-        MAMANS) appearing anywhere in it, whether as the whole clue or
-        embedded in a longer sentence (the prompt forbids this, but small
-        local models sometimes do it anyway — see `_contains_target_word`).
-        Returns None if every candidate was rejected, which `generate()`
-        reads as still needing a clue and retries."""
-        candidates = [
-            c for c in candidates
-            if c and len(c.split()) <= MAX_CLUE_WORDS
-            and _NON_LATIN_RE.search(c) is None
-            and not _contains_target_word(c, answer, accented, canonical)
-        ]
-        return random.choice(candidates) if candidates else None
+        `MAX_CLUE_WORDS`'s comment), non-Latin-script drift, written in a
+        different language than `language` (see
+        `_detect_wrong_language` — a real, observed failure mode neither
+        of the previous two checks catches, since leaked meta-commentary
+        in another Latin-script language can be short and script-valid,
+        e.g. "All good. Let me also make sure they're short" for a
+        French word), or the word being defined (or a same-family word
+        sharing its canonical form/lemma, e.g. singular "maman" leaking
+        into a clue for plural MAMANS) appearing anywhere in it, whether
+        as the whole clue or embedded in a longer sentence (the prompt
+        forbids this, but small local models sometimes do it anyway —
+        see `_contains_target_word`). Every rejected candidate is logged
+        individually with a qualifier naming which check(s) it failed (a
+        candidate can fail more than one at once — all of them are
+        named, not just the first found), and the one ultimately chosen
+        is logged too — so a deployed instance's log always shows the
+        full fate of every candidate the model proposed, not just the
+        final verdict. Before any of that, each candidate is first run
+        through `_strip_leading_word_label()` — a candidate that would
+        otherwise be rejected purely for opening with a leaked "word -
+        definition" label gets that label stripped instead, salvaging
+        what's usually a perfectly good definition rather than burning a
+        whole retry round on a mechanically fixable formatting slip.
+        Returns `(chosen, details)`: `chosen` is the selected clue text,
+        or None if every candidate was rejected (which `generate()` reads
+        as still needing a clue and retries); `details` is `[(candidate,
+        verdict), ...]` for every candidate in order — `verdict` is
+        `"selected"`, `"accepted (not selected)"` (a candidate that
+        passed every check but wasn't the one randomly chosen), or
+        `"rejected: <reason(s)>"` — passed straight through to
+        `_write_call_log()` so its own diagnostic file can show the full
+        list of what was proposed and rejected, not just the final pick,
+        at the user's explicit request."""
+        details = []
+        accepted_indices = []
+        for c in candidates:
+            if c:
+                stripped = _strip_leading_word_label(c, answer, accented, canonical)
+                if stripped != c:
+                    logger.info(
+                        "clue round %d/3: %r (%r) — stripped leaked word-label "
+                        "prefix: %r -> %r",
+                        round_number, answer, accented, c, stripped,
+                    )
+                    c = stripped
+            reasons = []
+            if not c:
+                reasons.append("empty")
+            else:
+                word_count = len(c.split())
+                if word_count > MAX_CLUE_WORDS:
+                    reasons.append(f"too long ({word_count} words > {MAX_CLUE_WORDS})")
+                if _NON_LATIN_RE.search(c) is not None:
+                    reasons.append("non-Latin script")
+                wrong_lang = _detect_wrong_language(c, language)
+                if wrong_lang:
+                    reasons.append(f"looks like {wrong_lang} instead of {language}")
+                if _contains_target_word(c, answer, accented, canonical):
+                    reasons.append("contains the target word (copy/same-family/embedded)")
+            if reasons:
+                logger.info(
+                    "clue round %d/3: %r (%r) — candidate rejected (%s): %r",
+                    round_number, answer, accented, "; ".join(reasons), c,
+                )
+                details.append((c, "rejected: " + "; ".join(reasons)))
+            else:
+                accepted_indices.append(len(details))
+                details.append((c, "accepted (not selected)"))
+        if not accepted_indices:
+            return None, details
+        chosen_index = random.choice(accepted_indices)
+        chosen = details[chosen_index][0]
+        logger.info(
+            "clue round %d/3: %r (%r) — candidate selected: %r",
+            round_number, answer, accented, chosen,
+        )
+        details[chosen_index] = (chosen, "selected")
+        return chosen, details

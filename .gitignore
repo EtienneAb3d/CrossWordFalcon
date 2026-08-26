@@ -7,5 +7,5 @@ env.sh
 /CORPUS/
 /DICS/
 /GRIDS/
-/LOG/
+/LOG_LLM/
 *.log

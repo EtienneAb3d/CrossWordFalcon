@@ -564,6 +564,29 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   response *before* any success/failure verdict is logged, for every call, matching
   what was asked for.
 
+  Extended further at the user's explicit request: `_pick_clue()` used to filter
+  rejected candidates with a single list comprehension, silently discarding *why* any
+  one of them didn't make it — only a round-level summary ("all N candidate(s)
+  rejected by the too-long/copy/non-Latin/same-family filter") was ever logged,
+  naming every *possible* reason rather than which one(s) actually applied to which
+  candidate. Rewritten to classify each candidate individually and log it right away
+  — `logger.info("clue round %d/3: %r (%r) — candidate rejected (%s): %r", ...)` with
+  every applicable reason joined together (a candidate can fail more than one check
+  at once — too long *and* containing the target word, say — and all of them are
+  named, not just the first found), then a matching "candidate selected: %r" line for
+  whichever one was ultimately chosen. `round_number` threaded into `_pick_clue()` as
+  a parameter for the same reason it was threaded into `_call()` before — tying the
+  line to the same round identifier used everywhere else. The round-level summary
+  warning stayed, simplified to just point at the per-candidate detail just above it
+  rather than re-listing every possible reason generically. Verified live: unit-
+  tested `_pick_clue()` directly with a synthetic 4-candidate mix (one clean, one
+  containing the target word, one too long, one non-Latin) — each rejected candidate
+  logged with its own correct, specific reason, the clean one logged as selected;
+  also tested a candidate deliberately failing two checks at once (too long *and*
+  containing the target word) — both reasons appeared together, joined with "; ";
+  then ran a real end-to-end call through the local LLM server to confirm the format
+  holds for genuine model output, not just synthetic test data.
+
   Another reported bad clue: French `RASÉE` (FEMININE past participle of "raser", "to
   shave") got "Il est rasé de près pour la fête" — leaking "rasé", a *different
   inflection* (masculine) of this exact same word, not a different lexeme like
@@ -590,19 +613,65 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   previously-fixed case.
 
   A word that exhausts all 3 retry attempts without ever getting a clue now also gets
-  its own diagnostic Markdown file (`LLMClueGenerator._write_failure_log()`), at the
-  user's explicit request, so a specific failure can be inspected and reproduced by
-  hand without digging through `backend.log`: the *last* attempt's complete system +
-  user prompt (identical across all 3 attempts, since nothing about the prompt varies
-  between retries), its raw LLM output (or `None` if the call itself errored, e.g. a
-  timeout), and any `ClueGenerationError` message. Written to `LOG/` (project root,
-  gitignored — a debugging artifact, not a durable record like `GRIDS/`), one file per
-  failed word, named `<timestamp>_<answer>_ERROR.md` — best-effort like `backend/svg_
-  export.py`'s own saves, a write failure is logged but never allowed to break grid
-  generation. Verified live: unit-tested the file format directly with synthetic
-  data, then forced a *real* total failure (pointed `base_url` at an unreachable port)
-  — confirmed all 3 attempts logged the connection error and the resulting `LOG/
+  its own diagnostic Markdown file (originally `LLMClueGenerator._write_failure_log()`
+  — see below for how this was later generalized), at the user's explicit request, so
+  a specific failure can be inspected and reproduced by hand without digging through
+  `backend.log`: the *last* attempt's complete system + user prompt (identical across
+  all 3 attempts, since nothing about the prompt varies between retries), its raw LLM
+  output (or `None` if the call itself errored, e.g. a timeout), and any
+  `ClueGenerationError` message. Written to `LOG/` (project root, gitignored — a
+  debugging artifact, not a durable record like `GRIDS/`), one file per failed word,
+  named `<timestamp>_<answer>_ERROR.md` — best-effort like `backend/svg_export.py`'s
+  own saves, a write failure is logged but never allowed to break grid generation.
+  Verified live: unit-tested the file format directly with synthetic data, then
+  forced a *real* total failure (pointed `base_url` at an unreachable port) —
+  confirmed all 3 attempts logged the connection error and the resulting `LOG/
   <timestamp>_CET_ERROR.md` correctly captured the exact endpoint/model/prompt/error.
+
+  Later expanded well beyond failures, at the user's explicit request: "liste tous les
+  appels LLM (et pas seulement les erreurs)" — every single call now gets its own
+  file, not just the ones a word never recovered from, so a whole grid's worth of
+  calls can be reviewed after the fact. `_write_failure_log()` (only called once per
+  word, after all retries were exhausted) became `_write_call_log()` (called once per
+  *attempt*, unconditionally, right after each one finishes — up to 3 files per word
+  now, one per round), with a new `outcome` field summarizing what `generate()` did
+  with that specific attempt (`"selected: ..."` / `"all N candidate(s) rejected"` /
+  `"LLM call failed: ..."`). Filename generalized from `<timestamp>_<answer>_ERROR.md`
+  to `<timestamp>_<answer>.md` (the "_ERROR" suffix no longer fit a file that's just
+  as often a success) — `answer` is already the grid's bare, accent-stripped uppercase
+  form (crossword convention), so it already matched "le mot recherché (forme
+  majuscule sans accent) à la fin du nom de fichier" with no extra normalization
+  needed. `CALL_LOG_DIR` (renamed from `FAILURE_LOG_DIR`) still points at the same
+  `LOG/` folder — no path change, just no longer a misnomer. Verified live: generated
+  a real clue for `CHAT` end to end — confirmed exactly one file was written even
+  though the call *succeeded*, named `<timestamp>_CHAT.md`, with `**Outcome**:
+  selected: '...'` and the full prompt/raw-output content intact.
+
+  Refined twice more, both at the user's explicit request. First: every filename now
+  ends with `_SUCCES` or `_ERROR` (`<timestamp>_<answer>_SUCCES.md` /
+  `<timestamp>_<answer>_ERROR.md`) — SUCCES means that specific attempt produced a
+  usable clue, ERROR covers every other outcome (no candidates at all, every
+  candidate rejected, or the HTTP call itself failing), so a directory listing alone
+  shows which calls need attention without opening every file. Second: each file's
+  very last section now lists every candidate the model proposed for that call, each
+  tagged `selected` / `accepted (not selected)` / `rejected: <reason(s)>` — not just
+  the header's one-line `Outcome` summary. This needed `_pick_clue()` itself to
+  change shape: it used to just return the chosen clue (or `None`); now it returns
+  `(chosen, details)`, `details` being `[(candidate, verdict), ...]` for every
+  candidate in order, tracked by *index* into that list (not by comparing candidate
+  text) specifically so two candidates that happen to be textually identical can't
+  both get mismarked as "selected". `generate()` threads `candidate_details` through
+  to `_write_call_log()` unchanged; the "no candidates at all" and "HTTP call failed"
+  branches pass an empty list, rendered as "(none — see Error above...)". Third,
+  separately: the folder itself was renamed from `LOG/` to `LOG_LLM/` (`.gitignore`
+  updated to match) once it became clear this project could plausibly grow other,
+  unrelated kinds of logs later — `LOG_LLM/` says specifically what this one is for.
+  Verified live: unit-tested `_pick_clue()`'s new `(chosen, details)` return directly
+  against a 3-candidate mix (one rejected, one accepted-but-not-chosen, one selected)
+  — all 3 verdicts correct and in the original order; forced both a real success and
+  a real total failure end to end — confirmed `_SUCCES.md`/`_ERROR.md` filenames
+  respectively, and confirmed the Candidates section at the bottom of a real
+  generated file correctly listed all 3 raw candidates with their true verdicts.
 
   Separately, tightened artifact filtering ahead of any content analysis, at the
   user's request after reviewing the new raw-response logging output. Found and fixed
@@ -669,6 +738,56 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   LLM server — every sample used a correctly masculine noun (one, coincidentally,
   matched the `rule_bad` entry's own corrected suggestion word-for-word) — then
   re-tested `TENU`/`LÉGALE`/`RIT` to confirm no regression.
+
+  Next reported: French `SLIPS` came back with every one of its 3 candidates opening
+  with `"slips - "` before the actual definition (e.g. `"slips - sous-vêtement
+  féminin"`) — the model labeling its own answer before defining it, which
+  `_contains_target_word` correctly flagged and rejected every single time (the word
+  genuinely is in there), but that meant burning a whole retry round over a
+  mechanically fixable formatting slip rather than salvaging what were otherwise 3
+  perfectly good definitions. Fixed two ways, matching the user's two-part request:
+  rule 1 in `_build_system_prompt()` now explicitly forbids opening a candidate with
+  the word itself as a label before a colon/comma/dash (not just embedding it
+  mid-sentence, which the rule already covered), and `_pick_clue()` now runs every
+  candidate through a new `_strip_leading_word_label()` first — if a candidate opens
+  with exactly the target word (or its accented spelling or a canonical form)
+  followed by one of those punctuation marks, the label is stripped and the
+  definition underneath is kept, rather than the whole candidate being thrown away.
+  Deliberately narrow (matches only that exact leading shape) so it can never rewrite
+  an unrelated candidate that happens to start with its own colon/dash/comma. One new
+  `rule_bad` example added per language (`SLIPS`/`OWLS`/`EULEN`/`BÚHOS`/`GUFI`, all
+  plural nouns, so the example reinforces number agreement too — the original
+  `"slips - sous-vêtement féminin"` mistake was also singular for a plural target).
+  Verified live: unit-tested `_strip_leading_word_label()` against the exact reported
+  example (all 3 leaked-label candidates correctly cleaned) and several false-
+  positive-risk cases (an unrelated leading word + comma, no label at all, a
+  different word sharing letters) — none wrongly rewritten; a real end-to-end call
+  for `SLIPS` resolved cleanly with a correctly plural, unlabeled definition.
+
+  Also reported: a candidate that wasn't even an attempted clue — leaked English
+  meta-commentary ("All good. Let me also make sure they're short (≤20 words each)")
+  for a French word. Neither `_NON_LATIN_RE` (still Latin script) nor `MAX_CLUE_WORDS`
+  (short enough) could catch this, so at the user's explicit request for "un typage
+  de langue" (a language-typing check), `_pick_clue()` gained a new
+  `_detect_wrong_language()` check: counts how many of each *other* supported
+  language's common function words appear in a candidate as whole tokens, and flags
+  it if any one language reaches `_WRONG_LANGUAGE_MIN_STOPWORDS` (2) distinct hits.
+  Deliberately not a real language-ID library or a Hunspell-based check like
+  `build_sentence_corpus.py`'s own `_filter_by_language` — either would add a new
+  *runtime* dependency this backend has never needed (Hunspell has only ever run at
+  preprocessing time, in the one-off `build_*.py` scripts); a small hardcoded
+  stopword list needs neither. First draft produced a real false positive of its
+  own, caught before shipping: legitimate Spanish ("Compañero de cuatro patas que
+  ronronea.") was flagged as French, because "de" and "que" are spelled identically
+  in both languages by shared Latin origin. Fixed by computing cross-language overlap
+  *programmatically* — `_LANGUAGE_STOPWORDS_RAW`'s 5 lists are written naturally per
+  language with no manual overlap-checking, then any word appearing in more than one
+  language's list is dropped from all of them (`_ambiguous_stopwords`) before use —
+  robust against a future edit to any list reintroducing a collision unnoticed, not
+  just correct for today's specific lists. Verified live: the exact reported example
+  now correctly flags as `en`; the Spanish false positive no longer triggers; swept a
+  dozen more real clues (including several generated earlier in this very session,
+  across all 5 languages) with zero further false positives.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -705,7 +824,7 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   reference, not a leftover directory to clean up.
 
   A second, similarly silent gap of the same shape was found next, reported by the
-  user from a real `LOG/*_ERROR.md` failure file: French `élu` had no "Real example
+  user from a real `LOG_LLM/*_ERROR.md` failure file: French `élu` had no "Real example
   sentences" section in its user prompt, despite the corpus visibly containing real
   sentences using it. Root cause: `_load_wordlist_words()` indexed the wordlist's bare
   `MOT` column (1st — accent-stripped, uppercase, e.g. `ELU`) as its target set, while
