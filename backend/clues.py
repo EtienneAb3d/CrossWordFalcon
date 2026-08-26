@@ -189,7 +189,7 @@ _prompt_config_cache = {}
 # generate()'s call to _write_call_log(). Project root, gitignored — a
 # debugging artifact for reproducing a specific call by hand or reviewing
 # a whole grid's worth of calls after the fact, not source content or a
-# durable record like GRIDS/ or GRID_SAMPLES/. Originally written only
+# durable record like GRID_SVG/ or GRID_PNG/. Originally written only
 # for a word that exhausted all 3 retries, extended at the user's
 # explicit request to cover every call, successes included — one file
 # per attempt, not per word, since a word retried across multiple rounds
@@ -861,7 +861,7 @@ class LLMClueGenerator:
         every rejected proposal and the one finally selected are all
         visible together at a glance, not just the outcome line's own
         summary. Written to CALL_LOG_DIR (LOG_LLM/, project root, gitignored
-        — a debugging artifact, not a durable record like GRIDS/), one
+        — a debugging artifact, not a durable record like GRID_SVG/), one
         file per call (so a word retried across multiple rounds gets
         more than one), named `<timestamp>_<answer>_<SUCCES|ERROR>.md` —
         `answer` is the grid's bare uppercase, accent-stripped form

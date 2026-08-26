@@ -8,11 +8,14 @@ record of each grid the app produces; the web UI itself has no export
 feature and never persists a grid once the browser tab is closed.
 
 Called by backend/app.py after a grid + its clues are both ready; saved
-under GRIDS/ (project root, gitignored — these are generated artifacts,
-not source content), one file per grid, named `<timestamp>_<language>.svg`
-so files sort chronologically by filename. A PNG rendering of the same
-grid is also saved under GRID_SAMPLES/ (project root, deliberately
-*not* gitignored — see save_grid_png) via `rsvg-convert`.
+under GRID_SVG/ (project root, gitignored — these are generated
+artifacts, not source content), one file per grid, named
+`<timestamp>_<language>.svg` so files sort chronologically by filename.
+A PNG rendering of the same grid is also saved under GRID_PNG/ (project
+root, gitignored too — see save_grid_png) via `rsvg-convert`. Neither
+directory is GRID_SAMPLES/: that one is a separate, hand-curated
+selection of examples, never written to by this module — see
+save_grid_png's own docstring.
 """
 import base64
 import subprocess
@@ -23,8 +26,8 @@ from xml.sax.saxutils import escape
 from .crossword_gen import BLACK
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-GRIDS_DIR = PROJECT_ROOT / "GRIDS"
-GRID_SAMPLES_DIR = PROJECT_ROOT / "GRID_SAMPLES"
+GRID_SVG_DIR = PROJECT_ROOT / "GRID_SVG"
+GRID_PNG_DIR = PROJECT_ROOT / "GRID_PNG"
 _LOGO_PATH = PROJECT_ROOT / "frontend" / "static" / "logo.png"
 _VERSION_PATH = PROJECT_ROOT / "VERSION.txt"
 
@@ -35,7 +38,7 @@ MIN_CANVAS_WIDTH = 720
 HEADER_LOGO_SIZE = 48
 HEADER_HEIGHT = HEADER_LOGO_SIZE + 16
 # rsvg-convert defaults to 96 DPI (screen resolution) when the source SVG has
-# no physical units — GRID_SAMPLES/ is a print-quality visual record (see
+# no physical units — GRID_PNG/ is a print-quality visual record (see
 # save_grid_png), so it's rendered at 300 DPI instead, scaling up the output
 # pixel dimensions (not the SVG's own layout) accordingly.
 PNG_DPI = 300
@@ -79,6 +82,47 @@ _DIFFICULTY_LABELS = {
     "es": ("Dificultad", {"easy": "Fácil", "medium": "Media", "hard": "Difícil"}),
     "it": ("Difficoltà", {"easy": "Facile", "medium": "Media", "hard": "Difficile"}),
 }
+
+# Rough per-character width estimates (as a fraction of font-size), used only
+# to decide where a clue line needs to wrap — not pixel-perfect (that depends
+# on the actual font metrics of whichever renderer draws the SVG/PNG), but
+# biased slightly high on purpose: wrapping a touch earlier than strictly
+# necessary just leaves a little unused margin, while underestimating would
+# let a line run past the canvas edge and get clipped — the exact bug this
+# is meant to fix. Bold text (the clue-number prefix) is a little wider per
+# character than regular text at the same font-size.
+_CHAR_WIDTH_FACTOR = 0.58
+_BOLD_CHAR_WIDTH_FACTOR = 0.65
+
+
+def _text_width(text, font_size, bold=False):
+    """Estimated rendered width in px for plain sans-serif `text` at
+    `font_size` — see _CHAR_WIDTH_FACTOR above for why this is an estimate,
+    not a measurement."""
+    factor = _BOLD_CHAR_WIDTH_FACTOR if bold else _CHAR_WIDTH_FACTOR
+    return len(text) * font_size * factor
+
+
+def _wrap_line(text, font_size, max_width):
+    """Greedy word-wrap of `text` into as many lines as needed to each fit
+    within `max_width` px at `font_size` (per _text_width's estimate).
+    A single word wider than `max_width` on its own is kept whole rather
+    than split mid-word — this only ever avoids an overflowing *line*, it
+    doesn't guarantee every individual word fits. Always returns at least
+    one (possibly empty) line."""
+    words = text.split(" ")
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if current and _text_width(candidate, font_size) > max_width:
+            lines.append(current)
+            current = word
+        else:
+            current = candidate
+    lines.append(current)
+    return lines
+
 
 _logo_data_uri_cache = None
 
@@ -223,14 +267,31 @@ def render_grid_svg(result, language, difficulty=None):
     def add_lines(lines):
         # Bold row (across) / column (down) index prefix, matching the
         # grid's own row/column header numbers, so a line can be matched
-        # back to a specific row/column on the grid above.
+        # back to a specific row/column on the grid above. A clue line can
+        # run long — several same-row/column clues chained with " — ", or
+        # just a wordy generated clue — so it's word-wrapped to fit within
+        # the canvas rather than left to overflow past the right edge and
+        # get clipped in the PNG export; wrapped continuation lines are
+        # indented to align under the first line's own text (not under the
+        # bold number), each on its own row.
         nonlocal y
+        font_size = 11
+        available_width = canvas_width - 2 * MARGIN
         for pos, line in lines:
+            prefix = f"{pos + 1} "
+            indent = _text_width(prefix, font_size, bold=True)
+            wrapped = _wrap_line(line, font_size, available_width - indent)
             parts.append(
-                f'<text x="{MARGIN}" y="{y + 10}" font-size="11" font-family="sans-serif">'
-                f'<tspan font-weight="bold">{pos + 1}</tspan> {escape(line)}</text>'
+                f'<text x="{MARGIN}" y="{y + 10}" font-size="{font_size}" font-family="sans-serif">'
+                f'<tspan font-weight="bold">{pos + 1}</tspan> {escape(wrapped[0])}</text>'
             )
             y += LINE_HEIGHT
+            for continuation in wrapped[1:]:
+                parts.append(
+                    f'<text x="{MARGIN + indent:.1f}" y="{y + 10}" font-size="{font_size}" '
+                    f'font-family="sans-serif">{escape(continuation)}</text>'
+                )
+                y += LINE_HEIGHT
         y += 10
 
     empty_grid_svg, grid_height, _ = _grid_svg(result["pattern"], None, words, y)
@@ -281,31 +342,34 @@ def render_grid_svg(result, language, difficulty=None):
     )
 
 
-def save_grid_svg(result, language, difficulty=None, grids_dir=GRIDS_DIR):
+def save_grid_svg(result, language, difficulty=None, grid_svg_dir=GRID_SVG_DIR):
     """Renders and writes the SVG for `result`, named
     `<timestamp>_<language>.svg` (sortable, one file per generated grid).
     Returns the written Path."""
-    grids_dir = Path(grids_dir)
-    grids_dir.mkdir(parents=True, exist_ok=True)
+    grid_svg_dir = Path(grid_svg_dir)
+    grid_svg_dir.mkdir(parents=True, exist_ok=True)
     # Microsecond precision, not just seconds — two requests (different
     # browser tabs, or the polling architecture overlapping two jobs) can
     # otherwise finish within the same second and silently overwrite one
     # another's file.
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    path = grids_dir / f"{timestamp}_{language}.svg"
+    path = grid_svg_dir / f"{timestamp}_{language}.svg"
     path.write_text(render_grid_svg(result, language, difficulty), encoding="utf-8")
     return path
 
 
-def save_grid_png(svg_path, grid_samples_dir=GRID_SAMPLES_DIR):
+def save_grid_png(svg_path, grid_png_dir=GRID_PNG_DIR):
     """Renders `svg_path` (a file already written by save_grid_svg) to a
-    PNG of the same basename under GRID_SAMPLES/ (project root) — unlike
-    GRIDS/, this directory is deliberately *not* gitignored: a growing,
-    version-controlled visual record of what the app actually produces,
-    kept in the repo itself rather than only on whichever machine
-    generated it, at the user's request. Requires the `rsvg-convert` CLI
-    tool (part of `librsvg` — `brew install librsvg` / `apt-get install
-    librsvg2-bin`), the same one already used to render
+    PNG of the same basename under GRID_PNG/ (project root, gitignored —
+    a generated artifact like GRID_SVG/, not source content). This is
+    *not* GRID_SAMPLES/: that directory is a separate, hand-curated
+    selection of example grids, kept in the repo (deliberately not
+    gitignored) but no longer written to automatically — every grid the
+    app generates used to be copied there, growing without bound; now
+    only whichever examples someone deliberately picks and adds live
+    there, at the user's explicit request. Requires the `rsvg-convert`
+    CLI tool (part of `librsvg` — `brew install librsvg` / `apt-get
+    install librsvg2-bin`), the same one already used to render
     frontend/static/logo.png (see the style-guide SKILL for why
     `rsvg-convert` specifically, over e.g. macOS's `qlmanage -t`).
     Raises OSError if `rsvg-convert` is missing or fails — callers should
@@ -313,9 +377,9 @@ def save_grid_png(svg_path, grid_samples_dir=GRID_SAMPLES_DIR):
     move on, never fail the actual request over a sample image. Returns
     the written Path."""
     svg_path = Path(svg_path)
-    grid_samples_dir = Path(grid_samples_dir)
-    grid_samples_dir.mkdir(parents=True, exist_ok=True)
-    png_path = grid_samples_dir / f"{svg_path.stem}.png"
+    grid_png_dir = Path(grid_png_dir)
+    grid_png_dir.mkdir(parents=True, exist_ok=True)
+    png_path = grid_png_dir / f"{svg_path.stem}.png"
     try:
         subprocess.run(
             # `--dpi-x`/`--dpi-y` only rescale physical units (in/mm/pt) —

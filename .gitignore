@@ -6,6 +6,7 @@ env.sh
 /data/reference_corpus/
 /CORPUS/
 /DICS/
-/GRIDS/
+/GRID_SVG/
+/GRID_PNG/
 /LOG_LLM/
 *.log

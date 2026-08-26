@@ -2371,3 +2371,38 @@ content (the French crossword words/clues, the web UI text) stays in French
   animal-themed, one correctly pulling the zodiac-sign meaning straight
   from the dictionary block), confirming the model actually diversifies
   now rather than collapsing to one sense.
+
+- `backend/svg_export.py`'s `GRIDS/` renamed to `GRID_SVG/`, and the PNG
+  export moved from `GRID_SAMPLES/` to a new `GRID_PNG/`, both at the
+  user's explicit request. `GRID_SAMPLES/` still exists and stays
+  git-tracked (deliberately not gitignored), but the app no longer
+  writes to it automatically — before this, every single generated
+  grid's PNG accumulated there without bound; now it's purely a
+  hand-curated selection of examples, populated only when someone
+  deliberately picks a grid and adds it manually. `GRID_SVG/`/`GRID_PNG/`
+  are both gitignored, same treatment `GRIDS/` always had. Verified
+  live: confirmed `GRIDS/` was empty and untracked before removing it,
+  ran a real offline grid generation end-to-end through
+  `save_grid_svg()`/`save_grid_png()` — output landed in `GRID_SVG/`/
+  `GRID_PNG/` correctly, `GRID_SAMPLES/`'s pre-existing content was
+  untouched.
+
+- fixed a real bug in the same file, reported by the user: a long clue
+  line (several same-row/column clues chained with " — ", or just a
+  wordy generated clue) had no wrapping at all — it just ran past the
+  canvas's right edge, invisibly overflowing the raw SVG and visibly
+  clipped once rasterized to PNG (a fixed-size render, unlike an SVG
+  viewed directly, which some viewers may not clip). Added `_text_width()`
+  (a rough per-character pixel-width estimate, deliberately biased
+  slightly high — wrapping a touch early is a harmless waste of margin,
+  underestimating reproduces the exact bug) and `_wrap_line()` (a greedy
+  word-wrapper using that estimate) — `add_lines()` now wraps each clue
+  line to fit the canvas, indenting continuation lines to align under the
+  first line's own text rather than under the bold row/column-number
+  prefix. Verified live: unit-tested `_wrap_line()` against a realistic
+  long chained clue (confirmed every wrapped sub-line's estimated width
+  stayed under the canvas's available width), then generated a real grid
+  with a deliberately very long injected clue end-to-end through
+  `save_grid_svg()`/`save_grid_png()` and read the resulting PNG directly
+  — the long clue wrapped into 3 lines, correctly indented, nothing
+  clipped by the canvas edge.

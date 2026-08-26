@@ -141,8 +141,8 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   by uvicorn's stdout redirect, see `run_Falcon.sh`) and updates the job's `step` field
   for the next status poll to pick up — see `generate_grid()`'s and
   `LLMClueGenerator.generate()`'s `on_progress` parameter. After a grid and its clues
-  are both ready, it calls `backend/svg_export.py` to save a durable copy to `GRIDS/`,
-  then a PNG rendering of that same SVG to `GRID_SAMPLES/` (`save_grid_png`, via
+  are both ready, it calls `backend/svg_export.py` to save a durable copy to `GRID_SVG/`,
+  then a PNG rendering of that same SVG to `GRID_PNG/` (`save_grid_png`, via
   `rsvg-convert`), before marking the job done; a failure to save either is logged but
   never fails the request — it's a nice-to-have record, not the point of asking for a
   grid. If the LLM
@@ -878,7 +878,7 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   alone), the empty puzzle (grid + clue lists, grouped/chained the same way
   `frontend/static/script.js`'s `renderClueLines()` does, reimplemented in Python since
   this is backend-only), then the fully-solved grid underneath — and writes it to
-  `GRIDS/` (project root, gitignored — generated output, not source content), named
+  `GRID_SVG/` (project root, gitignored — generated output, not source content), named
   `<timestamp>_<language>.svg` (microsecond precision so two grids finishing in the
   same second, e.g. from two browser tabs, don't collide). A durable record of every
   grid the app produces, since the web UI itself has no export feature and forgets the
@@ -892,16 +892,21 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   of those strings ever change. Clue-heading text (`_HEADINGS`) duplicates
   `frontend/static/i18n.js`'s `acrossHeading`/`downHeading` strings by hand — keep both
   in sync if a heading ever changes. `save_grid_png()` additionally renders that SVG to
-  a PNG of the same basename under `GRID_SAMPLES/` (project root) via the
+  a PNG of the same basename under `GRID_PNG/` (project root, gitignored, same as
+  `GRID_SVG/`) via the
   `rsvg-convert` CLI (part of `librsvg` — `brew install librsvg` / `apt-get install
   librsvg2-bin`; the same tool already used for `frontend/static/logo.png`, see the
   style-guide SKILL), at `PNG_DPI` (300, print quality rather than the screen-oriented
   96 DPI default) via `rsvg-convert -z (PNG_DPI / 96)` — `--dpi-x`/`--dpi-y` alone have
   no effect here (verified directly) since the SVG's root has no physical width/height
   unit (in/mm/pt) for librsvg to rescale against, only the zoom flag actually scales a
-  unitless SVG's pixel output — unlike `GRIDS/`, `GRID_SAMPLES/` is deliberately **not**
-  gitignored: a growing, checked-in visual record of what the app actually produces,
-  meant to be committed and evolve across versions, at the user's explicit request.
+  unitless SVG's pixel output. `GRID_SAMPLES/` (project root) is a separate directory,
+  never written to by either function: a small, hand-curated selection of example
+  grids, deliberately **not** gitignored so it stays checked into the repo — until this
+  split, every single generated grid's PNG accumulated there without bound; now that's
+  `GRID_PNG/`'s job (gitignored, one per request, like `GRID_SVG/`), and `GRID_SAMPLES/`
+  only grows when someone deliberately picks an example and adds it by hand, at the
+  user's explicit request.
   Both saves are best-effort (a missing `rsvg-convert`, or any other failure, is logged
   as a warning by `backend/app.py`, never fails the request). `_group_clue_lines()`
   takes the grid's `language` and shows a translated "no definition available"
@@ -1063,7 +1068,7 @@ Run everything with the venv's Python (`.venv`, Python 3.14). `pip install -r
 requirements.txt` (or `./Install.sh`) installs `fastapi`, `uvicorn[standard]`, `httpx`.
 `./Install.sh` also installs the `librsvg` system package (`rsvg-convert`) if missing
 — a real runtime dependency, not just a dev tool: `backend/app.py` calls it after
-every generated grid to save a `GRID_SAMPLES/` PNG (see `backend/svg_export.py`
+every generated grid to save a `GRID_PNG/` PNG (see `backend/svg_export.py`
 below), best-effort so a missing binary only logs a warning rather than failing the
 request — which is exactly why this was easy to go unnoticed until a fresh machine
 hit it.
