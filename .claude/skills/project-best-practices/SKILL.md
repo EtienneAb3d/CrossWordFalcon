@@ -2354,3 +2354,20 @@ content (the French crossword words/clues, the web UI text) stays in French
   (French, CHAT): the model echoed the `C1=`/`C2=`/`C3=` labels exactly
   as asked, `LOG_LLM`'s raw-output section confirmed it, and all 3
   candidates parsed cleanly with the labels stripped, one selected.
+
+- `_build_gloss_block()`'s instruction on multiple dictionary senses was
+  flagged by the user as counter-productive: it told the model "only one
+  may be the meaning that fits... ignore the others" — forcing
+  disambiguation down to a single sense even for a word that genuinely
+  has several (e.g. French "chat": domestic animal, an online chat, a
+  zodiac sign). Reversed at the user's explicit request: the model is
+  now told to treat multiple real senses as an opportunity for variety,
+  drawing on different ones across its 3 candidates instead of writing 3
+  variations on one meaning — while still requiring each candidate stay
+  true to one of the word's real, genuine senses (never invent one).
+  Verified live against the real local LLM server with CHAT (a word with
+  clearly distinct senses: animal / online chat / zodiac sign) — the raw
+  output drew on two different senses across its 3 candidates (two
+  animal-themed, one correctly pulling the zodiac-sign meaning straight
+  from the dictionary block), confirming the model actually diversifies
+  now rather than collapsing to one sense.

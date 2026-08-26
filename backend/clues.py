@@ -603,12 +603,19 @@ class LLMClueGenerator:
         backend/gloss_lookup.py) for this word's candidate canonical
         form(s), if any exist. Looked up by canonical form/lemma, not the
         grid's inflected spelling — a genuinely ambiguous word (French
-        "suis" -> "être" or "suivre") can have more than one candidate, in
-        which case every one found is shown so the model resolves the
-        ambiguity using the word's actual clue-writing context, rather
-        than a definition dictionary silently picking one for it in
-        advance. Returns "" when this word has no canonical form with
-        dictionary coverage."""
+        "suis" -> "être" or "suivre") can have more than one candidate
+        lemma, and a single lemma can itself carry several distinct senses
+        (French "chat" -> domestic animal, an online chat, a zodiac sign,
+        ...) — every definition found, for every candidate lemma, is shown.
+        The accompanying prompt text asks the model to treat multiple
+        senses as an opportunity for variety across its 3 candidates
+        (drawing on different real senses instead of 3 variations on one),
+        rather than collapsing to a single "best" sense and discarding the
+        rest — an earlier version of this instruction did exactly that
+        ("only one may be the meaning that fits... ignore the others"),
+        found to be counter-productive at the user's explicit request.
+        Returns "" when this word has no canonical form with dictionary
+        coverage."""
         _, accented, canonical = entry
         glosses_by_lemma = find_glosses_for_canonicals(canonical, language)
         word_parts = [
@@ -623,9 +630,15 @@ class LLMClueGenerator:
             f'Dictionary definition(s) related to "{accented}":\n'
             + "\n".join(word_parts) + "\n\nThese are real dictionary "
             "definitions of the word's root form(s) — use them to confirm "
-            "the actual meaning before writing your clues. If more than one "
-            "is shown, only one may be the meaning that fits this particular "
-            "word; use the one that makes sense, ignore the others."
+            "the word's actual meaning(s) before writing your clues. If "
+            "more than one distinct sense is shown, the word may genuinely "
+            "have several different meanings — use this as an opportunity: "
+            "make your 3 candidates as different from each other as "
+            "possible by drawing on different senses across them, rather "
+            "than writing 3 variations of the same single meaning. Each "
+            "candidate must still stay true to one of the word's real, "
+            "genuine senses shown above — never invent a meaning that "
+            "isn't actually there."
         )
 
     def _build_system_prompt(self, difficulty, language):
