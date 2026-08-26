@@ -67,8 +67,8 @@ PARALLEL_ATTEMPTS = int(os.environ.get("CROSSWORDFALCON_PARALLEL_ATTEMPTS", "10"
 # Moins de mots -> vocabulaire plus reconnaissable mais grille parfois plus
 # dure à remplir ; "hard"/None garde tout le lexique.
 DIFFICULTY_PRESETS = {
-    "easy": 40_000,
-    "medium": 80_000,
+    "easy": 80_000,
+    "medium": 100_000,
     "hard": None,
 }
 
@@ -808,8 +808,10 @@ def main():
                           "build_wordlist_freq.py (ou fichier texte libre en repli)")
     ap.add_argument("--difficulty", choices=sorted(DIFFICULTY_PRESETS), default="easy",
                      help="limite le vocabulaire aux N mots les plus fréquents au global "
-                          "(toutes longueurs confondues) : easy=25000 (défaut), "
-                          "medium=50000, hard=tout le lexique")
+                          "(toutes longueurs confondues) : easy={} (défaut), medium={}, "
+                          "hard=tout le lexique".format(
+                              DIFFICULTY_PRESETS["easy"], DIFFICULTY_PRESETS["medium"]
+                          ))
     ap.add_argument("--max-words", type=int, default=None,
                      help="surcharge manuelle du nombre max de mots au global "
                           "(prioritaire sur --difficulty)")

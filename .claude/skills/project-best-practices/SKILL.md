@@ -2806,3 +2806,18 @@ content (the French crossword words/clues, the web UI text) stays in French
   that predate this change describe a hardcoded 5-way batch — flagged as
   such rather than silently left ambiguous about which count they
   measured.
+
+- `DIFFICULTY_PRESETS` raised again at the user's explicit request: easy
+  40 000 -> 80 000, medium 80 000 -> 100 000 (hard stays uncapped). While
+  in there, fixed a real, long-standing staleness bug found along the
+  way: the CLI's own `--difficulty` help text had hardcoded
+  `easy=25000`/`medium=50000` — the *original* values from before this
+  session's very first `DIFFICULTY_PRESETS` change, never updated across
+  any of the several changes since. Fixed properly this time instead of
+  patching in new hardcoded numbers a third time: the help string now
+  formats `DIFFICULTY_PRESETS["easy"]`/`["medium"]` directly, so it can
+  never drift out of sync with the actual dict again. Also updated
+  `CLAUDE.md`'s current-state mention of the cap values. Verified live:
+  reloaded the module and confirmed the new preset values, generated a
+  real offline `easy` grid end-to-end, and ran `--help` to confirm the
+  CLI text now shows the correct numbers pulled from the dict itself.
