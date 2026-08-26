@@ -39,18 +39,28 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# data/reference_corpus.tar.xz (optional) — a pre-built snapshot of
-# data/reference_corpus/ (build_sentence_corpus.py's output), so a fresh
-# clone can skip the multi-source OPUS download/filter pass instead of
-# always rebuilding it from scratch. If present, unpack it in place; if
-# absent, this is a no-op — build_sentence_corpus.py (then
-# build_wordlist_freq.py) remains the from-scratch path, see CLAUDE.md.
-if [ -f data/reference_corpus.tar.xz ]; then
-    echo "Extracting data/reference_corpus.tar.xz..."
-    tar -xJf data/reference_corpus.tar.xz -C data
-else
-    echo "No data/reference_corpus.tar.xz found — skipping (optional; run"
-    echo "build_sentence_corpus.py per language to build it from scratch)."
+# data/reference_corpus_<lang>.tar.xz (optional, one archive per language) —
+# a pre-built snapshot of data/reference_corpus/ (build_sentence_corpus.py's
+# output), so a fresh clone can skip the multi-source OPUS download/filter
+# pass instead of always rebuilding it from scratch. Split per language
+# (rather than one combined archive) so each file stays under GitHub's
+# 100MB hard file-size limit. Each language is unpacked independently if its
+# archive is present; a language with no archive just falls back to the
+# from-scratch path (build_sentence_corpus.py, then build_wordlist_freq.py —
+# see CLAUDE.md) for that language only.
+found_corpus_archive=0
+for lang in fr en de es it; do
+    archive="data/reference_corpus_${lang}.tar.xz"
+    if [ -f "$archive" ]; then
+        echo "Extracting $archive..."
+        tar -xJf "$archive" -C data
+        found_corpus_archive=1
+    fi
+done
+if [ "$found_corpus_archive" -eq 0 ]; then
+    echo "No data/reference_corpus_<lang>.tar.xz archives found — skipping"
+    echo "(optional; run build_sentence_corpus.py per language to build the"
+    echo "reference corpus from scratch)."
 fi
 
 echo "Install complete. Activate the venv with: source .venv/bin/activate"

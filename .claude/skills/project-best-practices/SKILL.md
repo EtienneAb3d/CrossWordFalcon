@@ -2316,3 +2316,24 @@ content (the French crossword words/clues, the web UI text) stays in French
   this was written — the previous incident above is exactly why that
   needs a deliberate choice, not a default: even `xz`-compressed, this
   corpus could easily still exceed GitHub's ~100MB soft file-size limit.
+
+- the single combined `data/reference_corpus.tar.xz` above turned out to
+  actually hit that risk: committing it (227MB) got rejected outright by
+  GitHub's pre-receive hook (`GH001: Large files detected` — a **hard**
+  100MB-per-file limit, not just a soft warning), confirmed by attempting
+  a real push and reading the server's own rejection message rather than
+  guessing from the generic "fetch first" error the git client showed
+  first. Fixed by uncommitting (`git reset HEAD~1`, still safe/local-only
+  each time this happened) and splitting the archive into one
+  `data/reference_corpus_<lang>.tar.xz` per language instead of one
+  combined file — each language's own corpus compresses to ~44-50MB
+  alone, comfortably under the 100MB limit, so all 5 can now be
+  git-tracked directly (this resolves the "still undecided" question
+  above: yes, tracked in git, one file per language, under `data/`).
+  `Install.sh` extracts each present archive independently (a missing
+  archive for one language just falls back to that language's own
+  from-scratch `build_sentence_corpus.py` path, not an all-or-nothing
+  gate). Verified live: recompressed all 5 languages
+  (`XZ_OPT=-T0 tar -cJf data/reference_corpus_<lang>.tar.xz -C data
+  reference_corpus/<lang>_sentences.txt`), confirmed every resulting file
+  is 44-50MB, and pushed successfully.

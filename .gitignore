@@ -4,7 +4,6 @@ env.sh
 /models/
 /data/hunspell_cache/
 /data/reference_corpus/
-/data/reference_corpus.tar.xz
 /CORPUS/
 /DICS/
 /GRIDS/
