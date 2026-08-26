@@ -39,6 +39,20 @@ source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
+# data/reference_corpus.tar.xz (optional) — a pre-built snapshot of
+# data/reference_corpus/ (build_sentence_corpus.py's output), so a fresh
+# clone can skip the multi-source OPUS download/filter pass instead of
+# always rebuilding it from scratch. If present, unpack it in place; if
+# absent, this is a no-op — build_sentence_corpus.py (then
+# build_wordlist_freq.py) remains the from-scratch path, see CLAUDE.md.
+if [ -f data/reference_corpus.tar.xz ]; then
+    echo "Extracting data/reference_corpus.tar.xz..."
+    tar -xJf data/reference_corpus.tar.xz -C data
+else
+    echo "No data/reference_corpus.tar.xz found — skipping (optional; run"
+    echo "build_sentence_corpus.py per language to build it from scratch)."
+fi
+
 echo "Install complete. Activate the venv with: source .venv/bin/activate"
 echo "Start the app: ./run_Falcon.sh"
 echo

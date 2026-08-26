@@ -2286,3 +2286,33 @@ content (the French crossword words/clues, the web UI text) stays in French
   *historical* narrative entries describing the folder from before this
   rename as `LOG/` unchanged, since that's what it was actually called
   at the time each of those entries was written.
+
+- a real incident: a locally-made commit ("reference_corpus was lacking")
+  removed `.gitignore`'s `/data/reference_corpus/` line and committed all
+  5 languages' reference corpus text files directly (~1.2GB, ~27M lines
+  total) — almost certainly the cause of a reported `git push` 408
+  timeout. Diagnosed via `git show --stat HEAD` and confirmed safe to
+  undo (`git status` showed the commit was still local-only, 1 ahead of
+  `origin/main`, never pushed) before touching anything. Fixed with a
+  plain mixed `git reset HEAD~1` (uncommits without touching working-tree
+  files, so the corpus files stayed on disk as untracked) followed by
+  `git checkout HEAD -- .gitignore` to restore the correct ignore line —
+  no history rewrite/force-push needed since nothing had left the local
+  repo. Reinforces the standing convention that `data/reference_corpus/`
+  (like `CORPUS/`, `DICS/`, `GRIDS/`, `LOG_LLM/`, `models/`,
+  `data/hunspell_cache/`) is generated/regenerable data, never committed
+  directly.
+
+- added an optional `data/reference_corpus.tar.xz` fast-path to
+  `Install.sh`, at the user's explicit request, right after the venv/
+  `pip install` step: if that archive is present, it's unpacked in place
+  (`tar -xJf data/reference_corpus.tar.xz -C data`) so a fresh clone can
+  skip `build_sentence_corpus.py`'s multi-source OPUS download/filter
+  pass entirely; if absent, `Install.sh` just logs that it's skipping it
+  and moves on — `build_sentence_corpus.py` (then `build_wordlist_freq.py`)
+  remains the correct from-scratch path either way, this is purely an
+  optional shortcut. The archive's own path (project root vs. `data/`)
+  and whether it should be git-tracked were both still undecided when
+  this was written — the previous incident above is exactly why that
+  needs a deliberate choice, not a default: even `xz`-compressed, this
+  corpus could easily still exceed GitHub's ~100MB soft file-size limit.
