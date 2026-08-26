@@ -3,6 +3,17 @@
 # Copy it to env.sh (which is gitignored) and edit as needed:
 #   cp env_default.sh env.sh
 #
+# backend/crossword_gen.py's grid generator tries several independent
+# black-square patterns in parallel (separate processes) at each black-cell
+# ratio step, rather than one at a time — the machine is typically far from
+# saturating its CPU with just one attempt in flight, so running more at
+# once finds a fillable pattern in about the same wall-clock time as a
+# single attempt. Raise this if you have a lot of idle CPU cores and want
+# more (and better — the best of the batch is kept) attempts per step;
+# lower it on a machine with few cores, where too many at once could start
+# competing with each other instead of running truly in parallel.
+export CROSSWORDFALCON_PARALLEL_ATTEMPTS=10
+
 # run_llm.sh uses a GPU by default when one is detected (Metal on Apple
 # Silicon, CUDA on Linux with an NVIDIA card — see run_llm.sh's own
 # detection/rebuild logic). To always run on CPU instead — e.g. to free up

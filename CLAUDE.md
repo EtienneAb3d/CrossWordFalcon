@@ -1159,19 +1159,108 @@ There is no test suite, linter, or build step in this repo.
 
 `backend/crossword_gen.py` runs a two-phase pipeline, driven by `main()`:
 
-1. **Black-square pattern generation** (`make_symmetric_pattern`): places black
-   cells in 180°-symmetric pairs, rejecting any placement that violates
-   `is_structurally_valid` (no white run shorter than 3 cells, and all white cells must
-   stay 4-connected). Picks each cell from a 32-cell look-ahead window (lowest
-   row+column black-cell count wins) rather than strict shuffle order — a soft bias
-   against black cells piling up in a few rows/columns ("walls" that split the grid
-   into disconnected-looking blocks and force many neighboring words to share the
-   same length). Real but partial fix: `minimize_black_squares` below washes out
-   much of this bias since it removes cells by fillability alone, not aesthetics —
-   see the `project-best-practices` SKILL for what was tried and rejected (a hard
+1. **Black-square pattern generation** (`make_pattern`): places black cells one at a
+   time, independently — **not** in 180°-symmetric pairs (that constraint was
+   deliberately dropped at the user's explicit request: with the CSP fill this fast,
+   trying more patterns is cheap, and a non-symmetric search can reach a much lower
+   black-cell ratio while staying structurally valid than pairing every cell with its
+   mirror ever could) — rejecting any placement that violates `is_structurally_valid`,
+   whose own rules changed too, at the user's explicit request: the original hard rule
+   ("no white run shorter than 3 cells, or the whole grid is invalid") is now a
+   tolerance budget instead, `MAX_SHORT_ZONE_COUNT = {1: 4, 2: 4}` — up to 4 white
+   zones of exactly 1 letter and up to 4 of exactly 2 letters are allowed *in the
+   whole grid* (rows and columns combined), a 5th of either length makes the grid
+   invalid. A 1-letter zone is still never a real slot (`extract_slots` never creates
+   one — it's purely a passthrough cell, filled only by the word crossing it in the
+   other direction, at the user's explicit confirmation it should never carry its own
+   clue); a 2-letter zone, by contrast, *is* now a real slot (`extract_slots`'s
+   threshold lowered from `>= 3` to `>= 2`) — a genuine, cluable 2-letter word ("et",
+   "ou", "no", ...), which needed `build_wordlist_freq.py`'s own minimum word length
+   lowered to match (see below) and both the wordlist and gloss dictionary rebuilt for
+   all 5 languages. One invariant was kept absolute, not folded into the tolerance
+   budget: a white cell can never be short (1 letter) in *both* directions at once (a
+   fully isolated cell, surrounded by black on all 4 sides) — such a cell would belong
+   to no slot at all in either direction and could never receive a letter, a
+   correctness bug, not a style choice, so `is_structurally_valid` rejects it
+   unconditionally regardless of the short-zone budget. Picks each cell from a 32-cell look-ahead window rather than strict shuffle
+   order, ranked by the *original* row+column black-cell-totals heuristic as the
+   primary criterion, with `_black_neighbor_count` (fewest already-black
+   orthogonal/4-side neighbors) as a secondary tie-break. The primary criterion
+   itself now discounts `FREE_BLACK_PER_LINE` (2) black cells per row/column before
+   they count at all — `max(0, row_black - 2) + max(0, col_black - 2)` — at the
+   user's explicit request: up to 2 black cells on a given row/column is normal, not
+   something to balance away starting from the very first one; only past that does
+   adding another to an already-loaded line start losing to a less-loaded one.
+   Deliberately lets some parts of the grid fragment more (shorter words) while
+   other parts stay comparatively open (longer words) instead of pushing every
+   row/column toward an identical count — verified live: a 15×10 grid's column
+   black-cell counts ranged 0-3 after this change (0 meaning a full-height word with
+   no black cell interrupting it at all), vs. a noticeably tighter spread before,
+   with only a modest timing cost (50.8s vs. the ~42.6s undiscounted baseline, same
+   grid/seed). This whole primary/secondary ordering is the final state of a
+   three-iteration, fully live-tested exploration at the user's explicit request,
+   each iteration verified on the same 15×10 grid/seed before moving to the next:
+   (1) adjacency alone as the *only* criterion, ties broken by shuffle order —
+   turned out to degenerate to near-pure-random placement (most candidates have 0
+   black neighbors while the pattern is still sparse, which is most of the search
+   at this low a starting ratio, so the criterion rarely differentiated anything);
+   measured 43.5s (original row/column heuristic) -> 262-277s with this version, a
+   ~6x regression, with *no* actual reduction in black-cell adjacency either; (2)
+   adjacency primary, row/column totals as tie-break — fixed the degenerate-tie
+   problem (row/column totals are a continuous, rarely-tied signal), measured
+   72.5s: a real fix, but still slower than the original heuristic, since
+   prioritizing adjacency over row/column balance has a genuine cost of its own;
+   (3) **current**: row/column totals primary, adjacency as tie-break instead —
+   measured 42.6s, landing back in the same ballpark as the original heuristic
+   with no regression, since row/column totals rarely tie in the first place; the
+   touching-black-cell-pair count in that same run (18) was similar to, not
+   clearly better than, the other two orderings — with adjacency demoted to a
+   tie-break, it only gets to influence a placement when row/column totals already
+   tied, so this ordering favors speed over visibly reducing black-cell adjacency.
+   Real but partial fix either way: `minimize_black_squares` below washes out much
+   of this bias since it removes cells by fillability alone, not aesthetics — see
+   the `project-best-practices` SKILL for the full iteration-by-iteration numbers,
+   and for what was tried and rejected even before any of this (a hard
    per-row/column cap cut alignment much further but cost ~55% more generation
-   time). Retries with an increasing black-cell ratio (`--black-ratio`, up to
-   `--attempts` times) until a fillable pattern is found.
+   time, back when the heuristic was row/column-only with no adjacency term at
+   all).
+   Starts from a deliberately low black-cell ratio (`--black-ratio`, default 0.05 —
+   also lowered at the user's explicit request, from a previous 0.22 default) and
+   retries with an increasing ratio (up to `--attempts` times, default 40 — each an
+   independent *palier*/step) until a fillable pattern is found. The increment itself
+   went through two live-tuned revisions after the original +0.02: widened to +0.05
+   when +0.02 turned out to make nearly every attempt below ~20-30% hit `try_fill`'s
+   own search deadline without resolving either way (not proven infeasible, just
+   inconclusive), then narrowed again to **+0.03** at the user's explicit request (a
+   finer-grained search of the low-ratio region) — this last change trades some
+   wall-clock time for that finer granularity, since more steps are typically needed
+   to reach a fillable ratio: measured 70.6s on the same 15×10 grid/seed used
+   throughout this whole exploration, up from the ~42-51s seen with +0.05, an
+   expected consequence of the smaller step, not a regression to fix. At each
+   step, `PARALLEL_ATTEMPTS` independent attempts — different `random.Random`
+   seeds, each its own full motif + CSP fill — run concurrently in separate
+   processes (`concurrent.futures.ProcessPoolExecutor`, `_pattern_attempt`/
+   `_init_worker`), at the user's explicit request after noting the machine was far
+   from saturating its CPU with only one attempt in flight at a time; the pool waits
+   for all of them before deciding whether the step succeeded (bounded by the
+   *slowest* one, not the fastest — a deliberate simplicity/safety tradeoff over an
+   early-return design, which would need to either wait for or explicitly kill
+   still-running worker processes). `PARALLEL_ATTEMPTS` itself is configurable via
+   `CROSSWORDFALCON_PARALLEL_ATTEMPTS` (`env.sh`/`env_default.sh`, at the very top of
+   the file — a non-LLM setting placed there deliberately, at the user's explicit
+   request; sourced by `run_Falcon.sh` before starting the backend, same as every
+   other `env.sh` value), default 10 — it was a hardcoded 5 (with no override
+   mechanism at all) when the specific timings cited in this section were measured,
+   so those numbers describe a 5-way batch, not today's 10-way default; re-measure
+   before assuming they transfer directly. When more than one attempt in a step
+   succeeds, the one kept is no longer just whichever finished first: at the user's
+   explicit request, it's whichever maximizes the sum of squares of every one of its
+   words' lengths (`sum(len(slot) ** 2 for slot in result[0])`) — a scoring choice
+   that rewards concentrating letters into a few long words over spreading the same
+   letter count across many short ones (a single 10-letter word scores 100; ten
+   2-letter words covering the same 20 letters only scores 40). See the
+   `project-best-practices` SKILL for the full measured progression across all
+   changes to this function.
 
 2. **CSP fill** (`Filler` / `_backtrack`): `extract_slots` turns the black/white pattern
    into across/down word slots; `build_index` pre-indexes the word list by
@@ -1179,19 +1268,29 @@ There is no test suite, linter, or build step in this repo.
    instead of a linear scan (needed because the full lexicon is 100k+ words). Backtracking
    search picks the most-constrained slot first (MRV heuristic) and respects a
    `deadline_checks` budget so a bad grid pattern fails fast instead of hanging. `Filler`
-   takes the same seeded `rng` as pattern generation (not the global `random` module —
-   that was a real bug: unreproducible fills and, in the web server, a shared-state race
-   across concurrent requests) and shuffles candidate words with it. At the 15×10
-   default, `_domain()` is still called for every unassigned slot at every backtracking
-   node (MRV's cost), so a single `/api/generate` request commonly takes 15-35 seconds —
-   this is expected, not a hang; don't "fix" it by adding a timeout without addressing
-   the actual solver cost.
+   takes its own seeded `rng` (see `_pattern_attempt` above — one independent RNG per
+   parallel attempt, not the global `random` module or a single shared instance:
+   both would be real bugs, unreproducible fills and, across either concurrent
+   requests or concurrent parallel attempts within one request, a shared-state race)
+   and shuffles candidate words with it. At the 15×10 default, `_domain()` is still
+   called for every unassigned slot at every backtracking node (MRV's cost); a single
+   failed pattern attempt at a low black-cell ratio routinely burns its *entire*
+   `deadline_checks` budget (very few black cells means very long word slots, which
+   are dramatically harder to satisfy than short ones). Measured live across the
+   whole progression on a real 15×10 grid: ~107-140s right after black-square
+   placement started this low (sequential, +0.02 ratio increment) → ~57s after
+   widening the increment to +0.05 → ~44s after adding the 5-way parallel attempts
+   per step — still slower than the ~15-35s typical before black-square placement
+   started this low, but the gap has narrowed a lot across these three tuning
+   passes. This is expected, not a hang; don't "fix" it by adding a timeout without
+   addressing the actual solver cost.
 
 3. **Minimization** (`minimize_black_squares`): after a successful fill, greedily tries
-   removing each symmetric pair of black cells and re-running the CSP fill; a removal is
-   kept only if the grid is still structurally valid and fillable, otherwise it's
-   reverted. This densifies the grid (fewer black squares) without ever downgrading from
-   a known-good solution.
+   removing each black cell individually (independently, not by symmetric pair — kept
+   consistent with `make_pattern` no longer placing cells in pairs either) and
+   re-running the CSP fill; a removal is kept only if the grid is still structurally
+   valid and fillable, otherwise it's reverted. This densifies the grid (fewer black
+   squares) without ever downgrading from a known-good solution.
 
 Word lists are loaded via `load_wordlist`, which expects the
 `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE` format produced by `build_wordlist_freq.py`
@@ -1230,8 +1329,12 @@ no gloss dictionary built produced `wordlist_loaded {'word_count': 0, ...}` in
 
 `build_wordlist_freq.py` counts word occurrences directly from a language's reference
 corpus (`data/reference_corpus/<lang>_sentences.txt`, `_count_word_frequencies`) —
-strips accents/diacritics and uppercases (crossword convention), excludes words under 3
-letters after normalization, and keeps the occurrence count as the frequency. All five
+strips accents/diacritics and uppercases (crossword convention), excludes words under 2
+letters after normalization (raised from a previous under-3 exclusion, at the user's
+explicit request — 2-letter grid slots are now real, cluable words, see
+`backend/crossword_gen.py`'s `MAX_SHORT_ZONE_COUNT` discussion below; a bare 1-letter
+word is still excluded, since a 1-letter grid zone never becomes a slot at all), and
+keeps the occurrence count as the frequency. All five
 languages (fr/en/de/es/it) go through this same script. This pipeline used to read the
 third-party HermitDave FrequencyWords lists as a persisted `data/raw/<lang>_50k.txt`
 (and before that, French alone used Lexique383 via a since-removed `build_wordlist.py`)

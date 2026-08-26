@@ -3,11 +3,25 @@
 Générateur de grilles de mots croisés denses.
 
 Approche en deux temps :
-  1. Génération d'un motif de cases noires symétrique (180°) respectant les règles
-     structurelles (aucune séquence blanche < 3, grille blanche connexe).
+  1. Génération d'un motif de cases noires (sans contrainte de symétrie — chaque
+     case noire est placée indépendamment) respectant les règles structurelles
+     (au plus MAX_SHORT_ZONE_COUNT zones blanches de 1 ou 2 lettres au total,
+     aucune case blanche orpheline dans les deux sens à la fois, grille blanche
+     connexe — voir is_structurally_valid). On part d'un ratio de
+     cases noires très bas (5 % par défaut) et on l'augmente par paliers (+3 points
+     à chaque échec) jusqu'à trouver un motif remplissable, jusqu'à 40 paliers. À
+     chaque palier, `PARALLEL_ATTEMPTS` (10 par défaut, paramétrable via
+     CROSSWORDFALCON_PARALLEL_ATTEMPTS dans env.sh) tentatives indépendantes
+     (motif + remplissage CSP complet) sont lancées en parallèle sur des
+     processus séparés — la machine étant loin de saturer son CPU avec une
+     seule tentative à la fois, ce parallélisme donne plusieurs chances par
+     palier pour un coût en temps réel proche de celui d'une seule tentative ;
+     si plusieurs réussissent au même palier, celle qui maximise la somme des
+     carrés des longueurs de tous ses mots est retenue, pas simplement la
+     première trouvée.
   2. Remplissage par CSP (backtracking + heuristique MRV) avec un vrai dictionnaire,
-     puis minimisation locale : on essaie de retirer chaque paire de cases noires
-     symétriques et on ne garde le retrait que si la grille reste remplissable.
+     puis minimisation locale : on essaie de retirer chaque case noire une par une
+     et on ne garde le retrait que si la grille reste remplissable.
 
 La grille peut être rectangulaire : `width` (nombre de colonnes, horizontal) et
 `height` (nombre de lignes, vertical) se règlent indépendamment (15x10 par défaut).
@@ -16,6 +30,7 @@ Usage (depuis la racine du projet) :
     python3 backend/crossword_gen.py --width 15 --height 10 --wordlist data/wordlist_fr_full.tsv
 """
 import argparse
+import concurrent.futures
 import os
 import random
 import re
@@ -27,6 +42,17 @@ WHITE = "."
 
 DEFAULT_WIDTH = 15
 DEFAULT_HEIGHT = 10
+
+# Nombre de tentatives (motif + remplissage CSP) lancées en parallèle à chaque
+# palier de ratio de cases noires — voir generate_grid(). Choisi à la demande
+# explicite de l'utilisateur, la machine étant loin de saturer son CPU avec
+# une seule tentative séquentielle à la fois. Paramétrable via la variable
+# d'environnement CROSSWORDFALCON_PARALLEL_ATTEMPTS (voir env.sh/env_default.sh
+# — sourcée par run_Falcon.sh avant de lancer le back, donc effective pour
+# l'API web ; le CLI, lancé directement, la lit aussi si elle est déjà
+# exportée dans le shell courant), à la demande explicite de l'utilisateur —
+# 10 par défaut si la variable n'est pas définie.
+PARALLEL_ATTEMPTS = int(os.environ.get("CROSSWORDFALCON_PARALLEL_ATTEMPTS", "10"))
 
 
 # ---------- Dictionnaire ----------
@@ -170,29 +196,91 @@ def load_wordlist(path, max_words=None, require_gloss=False):
 
 # ---------- Génération du motif de cases noires ----------
 
+# Nombre maximal, sur la grille entière (lignes et colonnes confondues), de
+# zones blanches de 1 lettre / de 2 lettres — au-delà, on n'autorise plus
+# d'en créer de nouvelles. Remplace l'ancienne règle stricte ("aucune zone
+# blanche de moins de 3 lettres, sinon toute la grille est invalide") par un
+# budget tolérant, à la demande explicite de l'utilisateur : une zone d'une
+# seule lettre ne devient jamais un emplacement à définir (extract_slots
+# l'exclut toujours, voir plus bas), elle sert juste de passage pour un mot
+# plus long dans l'autre sens — mais une zone de DEUX lettres devient un
+# véritable emplacement à part entière (extract_slots, seuil abaissé à
+# >= 2), rempli par un vrai mot de 2 lettres du dictionnaire et doté de sa
+# propre définition ("et", "ou", "no", etc. — build_wordlist_freq.py garde
+# désormais aussi les mots de 2 lettres, plus seulement 3+), tout en restant
+# limitée en nombre pour laisser make_pattern répartir les zones plus
+# grandes restantes ailleurs sur la grille.
+MAX_SHORT_ZONE_COUNT = {1: 4, 2: 4}
+
+
 def is_structurally_valid(grid, rows, cols):
+    """Une grille est valide si :
+    - au plus MAX_SHORT_ZONE_COUNT[1] zones blanches de 1 lettre et
+      MAX_SHORT_ZONE_COUNT[2] de 2 lettres au total (lignes + colonnes) ;
+    - aucune case blanche ne se retrouve à la fois dans une zone de 1 lettre
+      horizontalement ET de 1 lettre verticalement (une case blanche
+      totalement isolée, entourée de cases noires des 4 côtés) : une telle
+      case ne ferait partie d'aucun emplacement d'au moins 2 lettres (voir
+      extract_slots, dont le seuil est désormais >= 2, pas >= 3 — une zone
+      de 2 lettres est un vrai mot à définir) et ne recevrait donc jamais de
+      lettre — contrainte de correction (une case blanche sans emplacement
+      est un bug), jamais assouplie même dans le budget de tolérance
+      ci-dessus ;
+    - la grille blanche reste entièrement connexe."""
+    row_run_len = [[0] * cols for _ in range(rows)]
+    col_run_len = [[0] * cols for _ in range(rows)]
+    short_zone_count = {1: 0, 2: 0}
+
     for r in range(rows):
         run = 0
+        run_start = 0
         for c in range(cols):
             if grid[r][c] == WHITE:
+                if run == 0:
+                    run_start = c
                 run += 1
             else:
-                if 0 < run < 3:
-                    return False
+                if 0 < run <= 2:
+                    short_zone_count[run] += 1
+                    if short_zone_count[run] > MAX_SHORT_ZONE_COUNT[run]:
+                        return False
+                for cc in range(run_start, run_start + run):
+                    row_run_len[r][cc] = run
                 run = 0
-        if 0 < run < 3:
-            return False
+        if 0 < run <= 2:
+            short_zone_count[run] += 1
+            if short_zone_count[run] > MAX_SHORT_ZONE_COUNT[run]:
+                return False
+        for cc in range(run_start, run_start + run):
+            row_run_len[r][cc] = run
+
     for c in range(cols):
         run = 0
+        run_start = 0
         for r in range(rows):
             if grid[r][c] == WHITE:
+                if run == 0:
+                    run_start = r
                 run += 1
             else:
-                if 0 < run < 3:
-                    return False
+                if 0 < run <= 2:
+                    short_zone_count[run] += 1
+                    if short_zone_count[run] > MAX_SHORT_ZONE_COUNT[run]:
+                        return False
+                for rr in range(run_start, run_start + run):
+                    col_run_len[rr][c] = run
                 run = 0
-        if 0 < run < 3:
-            return False
+        if 0 < run <= 2:
+            short_zone_count[run] += 1
+            if short_zone_count[run] > MAX_SHORT_ZONE_COUNT[run]:
+                return False
+        for rr in range(run_start, run_start + run):
+            col_run_len[rr][c] = run
+
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] == WHITE and row_run_len[r][c] < 2 and col_run_len[r][c] < 2:
+                return False
 
     white = [(r, c) for r in range(rows) for c in range(cols) if grid[r][c] == WHITE]
     if not white:
@@ -210,34 +298,101 @@ def is_structurally_valid(grid, rows, cols):
     return len(seen) == len(white)
 
 
-def make_symmetric_pattern(rows, cols, black_ratio, rng):
-    """Places black cells one symmetric pair at a time, biased to keep the
-    number of black cells roughly even across rows and across columns.
+def _black_neighbor_count(grid, rows, cols, r, c):
+    """How many of (r, c)'s up-to-4 orthogonal neighbors are already black
+    — used by make_pattern to prefer isolated black cells over ones that
+    would touch another black cell side-on-side (diagonal contact doesn't
+    count)."""
+    count = 0
+    for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nr, nc = r + dr, c + dc
+        if 0 <= nr < rows and 0 <= nc < cols and grid[nr][nc] == BLACK:
+            count += 1
+    return count
+
+
+# make_pattern's row/column-balancing score discounts this many black cells
+# per row/column before they count against it — at the user's explicit
+# request: having up to 2 black cells on a given row/column is normal, not
+# something to actively balance away from the very first black cell placed
+# there. Only once a row/column already has more than this many black cells
+# does adding another start being penalized relative to emptier ones. The
+# intent, per the user, is to let some parts of the grid fragment a bit more
+# (shorter words) while other parts stay comparatively open (long words),
+# instead of pushing every row/column toward the same black-cell count.
+FREE_BLACK_PER_LINE = 2
+
+
+def make_pattern(rows, cols, black_ratio, rng):
+    """Places black cells one at a time, independently (no symmetry
+    constraint — dropped at the user's explicit request, since the CSP
+    fill is fast enough that trying more patterns is cheap, and a
+    non-symmetric search can reach a much lower black-cell ratio while
+    staying structurally valid, in a way pairing every cell with its
+    180° mirror could not always do), biased to keep black cells apart
+    from each other.
 
     A purely random placement order (just shuffling every cell) tends to
-    let black cells pile up by chance in a handful of rows/columns while
-    others get none, especially at the black ratios needed for larger
-    grids. That reads as "walls" of aligned black squares — which is also
-    exactly what forces many neighboring words to share the same length
-    (the length is just the gap between black cells in that row/column).
-    Balancing the density instead spreads black cells out, which both
-    reduces alignment and, as a side effect, varies neighboring word
-    lengths more.
+    let black cells end up touching each other by chance, forming small
+    clumps/"walls" — which both look worse and force many neighboring
+    words to share the same length (the length is just the gap between
+    black cells in that row/column). Keeping black cells apart avoids
+    that directly.
 
     Implemented as a small look-ahead: at each step, sample a window of
     still-untried cells and place the one whose row+column currently have
-    the fewest black cells, instead of taking cells in strict shuffle
-    order. Falls back to shuffle order once the window is exhausted, so
-    this is a soft preference, not a hard constraint — it never makes a
-    fillable ratio/size combination infeasible.
+    the fewest black cells (the original heuristic) as the *primary*
+    criterion, breaking ties with `_black_neighbor_count` (fewest already-
+    black orthogonal/4-side neighbors) as a *secondary* criterion, instead
+    of taking cells in strict shuffle order. The primary criterion discounts
+    `FREE_BLACK_PER_LINE` (2) black cells per row/column before they count
+    at all (`max(0, row_black - 2) + max(0, col_black - 2)`), at the user's
+    explicit request: having up to 2 black cells on a given line is normal,
+    not something to balance away from the very first one — only beyond
+    that does adding another black cell to an already-loaded row/column
+    start losing to a less-loaded one. Deliberately lets some parts of the
+    grid fragment a bit more than before (shorter words there) while other
+    parts stay comparatively open (longer words), rather than pushing every
+    row/column toward an identical black-cell count from the outset.
 
-    Window size of 32 was picked empirically (measuring the variance of
-    black-cell counts per row/column across many generated patterns): too
-    small a window barely improves on pure shuffling, too large trends
-    back toward a full argmin at each step, which paradoxically balances
-    *worse* on rectangular grids (ties cascade into clustering). 32 cut
-    row-count variance by ~30% and column-count variance by ~20-25%
-    compared to no look-ahead at all, on a 15x10 grid."""
+    This two-criterion ordering — row/column totals first, direct
+    adjacency second — is itself the result of two live-tested iterations
+    at the user's explicit request, not a first guess: an earlier version
+    used adjacency *alone* (no row/column signal at all), which turned out
+    to have a serious flaw — the vast majority of candidates have 0 black
+    neighbors whenever the pattern is still sparse (true for most of the
+    search, since generation now starts at a 5% ratio, see
+    generate_grid), so an adjacency-only criterion barely ever
+    differentiates candidates and the look-ahead degenerates to near-pure-
+    shuffle placement almost the entire time. Measured live on the same
+    15×10 grid/seed throughout: 43.5s (row/column-only, the very first
+    heuristic) -> 262-277s (adjacency-only, ties broken by shuffle order —
+    a ~6x regression, and the result *still* didn't noticeably reduce
+    black-cell adjacency) -> 72.5s (adjacency as primary, row/column as
+    tie-break — fixed the degenerate-tie problem, but still slower than
+    row/column-only, since prioritizing adjacency over row/column balance
+    has a real, inherent cost) -> 42.6s with the current ordering
+    (row/column primary, adjacency as tie-break instead) — confirmed live
+    to land back in the same ballpark as the original row/column-only
+    heuristic (43.5s), with no regression: row/column totals are a
+    continuous, rarely-tied signal even when the pattern is still sparse,
+    so this ordering never had the adjacency-only version's degenerate-
+    tie problem to begin with. Touching-pair count in that same run (18)
+    was similar to, not clearly better than, the other orderings tried —
+    with adjacency demoted to a tie-break, it only gets to influence a
+    placement when row/column totals already tied, so don't expect this
+    ordering to visibly reduce black-cell adjacency the way the request
+    for this rule originally intended; it mainly restores the original
+    heuristic's speed while keeping adjacency as a (minor) secondary
+    factor. Falls back to shuffle order
+    only once the window is exhausted, so even with two criteria this is
+    a soft preference, not a hard constraint — it never makes a fillable
+    ratio/size combination infeasible.
+
+    Window size of 32 was picked empirically for the original row/column-
+    only heuristic (see the project-best-practices SKILL) — not
+    re-measured against any of the later two-criterion orderings; may not
+    be the ideal window size for them specifically."""
     grid = [[WHITE] * cols for _ in range(rows)]
     row_black = [0] * rows
     col_black = [0] * cols
@@ -250,29 +405,34 @@ def make_symmetric_pattern(rows, cols, black_ratio, rng):
         sample_size = min(window, len(remaining))
         best_idx = min(
             range(sample_size),
-            key=lambda i: row_black[remaining[i][0]] + col_black[remaining[i][1]],
+            key=lambda i: (
+                max(0, row_black[remaining[i][0]] - FREE_BLACK_PER_LINE)
+                + max(0, col_black[remaining[i][1]] - FREE_BLACK_PER_LINE),
+                _black_neighbor_count(grid, rows, cols, *remaining[i]),
+            ),
         )
         r, c = remaining.pop(best_idx)
         if grid[r][c] == BLACK:
             continue
-        r2, c2 = rows - 1 - r, cols - 1 - c
-        saved = (grid[r][c], grid[r2][c2])
+        saved = grid[r][c]
         grid[r][c] = BLACK
-        grid[r2][c2] = BLACK
         if is_structurally_valid(grid, rows, cols):
             row_black[r] += 1
-            row_black[r2] += 1
             col_black[c] += 1
-            col_black[c2] += 1
-            placed += 1 if (r, c) == (r2, c2) else 2
+            placed += 1
         else:
-            grid[r][c], grid[r2][c2] = saved
+            grid[r][c] = saved
     return grid
 
 
 # ---------- Extraction des cases (slots across / down) ----------
 
 def extract_slots(grid, rows, cols):
+    """A white run of exactly 2 cells is now a real, cluable slot (a 2-letter
+    word — "et", "ou", "no", etc.), not just a passthrough for a crossing
+    word; a run of exactly 1 cell never becomes a slot at all (see
+    is_structurally_valid's MAX_SHORT_ZONE_COUNT/orphan-check discussion for
+    why both are tolerated in the grid at all)."""
     slots = []
     for r in range(rows):
         c = 0
@@ -281,7 +441,7 @@ def extract_slots(grid, rows, cols):
                 start = c
                 while c < cols and grid[r][c] == WHITE:
                     c += 1
-                if c - start >= 3:
+                if c - start >= 2:
                     slots.append([(r, cc) for cc in range(start, c)])
             else:
                 c += 1
@@ -292,7 +452,7 @@ def extract_slots(grid, rows, cols):
                 start = r
                 while r < rows and grid[r][c] == WHITE:
                     r += 1
-                if r - start >= 3:
+                if r - start >= 2:
                     slots.append([(rr, c) for rr in range(start, r)])
             else:
                 r += 1
@@ -435,10 +595,12 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=
 # ---------- Minimisation locale des cases noires ----------
 
 def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks=6_000):
-    """Retire itérativement des paires de cases noires symétriques tant que la
-    grille reste remplissable, en gardant la dernière solution connue (on évite
-    ainsi un nouveau try_fill final qui pourrait échouer sur une recherche
-    difficile alors qu'une solution vient d'être trouvée)."""
+    """Retire itérativement des cases noires une par une (indépendamment,
+    sans les apparier avec une case miroir — cohérent avec make_pattern,
+    qui ne pose plus les cases noires par paires symétriques) tant que la
+    grille reste remplissable, en gardant la dernière solution connue (on
+    évite ainsi un nouveau try_fill final qui pourrait échouer sur une
+    recherche difficile alors qu'une solution vient d'être trouvée)."""
     slots, assignment = result
     improved = True
     while improved:
@@ -448,17 +610,15 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
         for (r, c) in black_cells:
             if grid[r][c] != BLACK:
                 continue
-            r2, c2 = rows - 1 - r, cols - 1 - c
-            saved = (grid[r][c], grid[r2][c2])
+            saved = grid[r][c]
             grid[r][c] = WHITE
-            grid[r2][c2] = WHITE
             if is_structurally_valid(grid, rows, cols):
                 new_result = try_fill(grid, rows, cols, index, rng, deadline_checks)
                 if new_result is not None:
                     slots, assignment = new_result
                     improved = True
                     continue
-            grid[r][c], grid[r2][c2] = saved
+            grid[r][c] = saved
     return grid, slots, assignment
 
 
@@ -516,8 +676,36 @@ def build_letters_grid(rows, cols, slots, assignment):
     return letters
 
 
+# ---------- Tentatives (motif + remplissage) en parallèle ----------
+#
+# `index` (le lexique pré-indexé, potentiellement 100 000+ mots) est envoyé
+# une seule fois par worker via l'initializer du pool, plutôt que repicklé à
+# chaque tâche soumise — il ne change jamais pendant un generate_grid().
+_worker_index = None
+
+
+def _init_worker(index):
+    global _worker_index
+    _worker_index = index
+
+
+def _pattern_attempt(rows, cols, ratio, seed):
+    """Une tentative indépendante (motif + remplissage CSP complet), exécutée
+    dans un processus worker séparé — voir PARALLEL_ATTEMPTS/generate_grid().
+    Chaque tentative a son propre `random.Random(seed)`, dérivé du seed
+    global par l'appelant, pour rester reproductible tout en étant
+    différente des autres tentatives du même palier. Retourne
+    (grid, result, diagnostics) ; `result` est None en cas d'échec, même
+    contrat que try_fill."""
+    rng = random.Random(seed)
+    grid = make_pattern(rows, cols, ratio, rng)
+    diag = {}
+    result = try_fill(grid, rows, cols, _worker_index, rng, diagnostics=diag)
+    return grid, result, diag
+
+
 def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
-                   max_words=None, black_ratio=0.22, attempts=40, seed=None,
+                   max_words=None, black_ratio=0.05, attempts=40, seed=None,
                    wordlist_path="data/wordlist_fr_full.tsv", on_progress=None):
     """Génère une grille remplie de bout en bout (motif + CSP + minimisation).
     `width` est le nombre de colonnes (horizontal), `height` le nombre de lignes
@@ -553,17 +741,36 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     ratio = black_ratio
     best, best_result = None, None
     last_diag = None
-    for attempt in range(attempts):
-        progress("pattern", attempt=attempt + 1, attempts=attempts)
-        grid = make_symmetric_pattern(rows, cols, ratio, rng)
-        diag = {}
-        result = try_fill(grid, rows, cols, index, rng, diagnostics=diag)
-        last_diag = diag
-        if result is not None:
-            best, best_result = grid, result
-            break
-        progress("pattern_attempt_failed", attempt=attempt + 1, ratio=round(ratio, 3), **diag)
-        ratio = min(ratio + 0.02, 0.45)
+    # Chaque palier lance PARALLEL_ATTEMPTS tentatives indépendantes en
+    # parallèle (processus séparés, un seed dérivé de `rng` chacune) plutôt
+    # qu'une seule tentative séquentielle : la machine est loin de saturer
+    # son CPU avec une seule tentative à la fois, donc plusieurs chances par
+    # palier ne coûtent, en temps réel, quasiment que le temps de la
+    # tentative la plus lente du lot — pas la somme des cinq.
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker, initargs=(index,)
+    ) as executor:
+        for attempt in range(attempts):
+            progress("pattern", attempt=attempt + 1, attempts=attempts, parallel=PARALLEL_ATTEMPTS)
+            seeds = [rng.randrange(2**31) for _ in range(PARALLEL_ATTEMPTS)]
+            futures = [executor.submit(_pattern_attempt, rows, cols, ratio, s) for s in seeds]
+            outcomes = [f.result() for f in futures]
+            successes = [(g, r) for g, r, d in outcomes if r is not None]
+            if successes:
+                # Plusieurs des PARALLEL_ATTEMPTS tentatives peuvent réussir au
+                # même palier ; on ne garde pas simplement la première trouvée
+                # mais celle qui maximise la somme des carrés des longueurs de
+                # tous ses mots, à la demande explicite de l'utilisateur — ce
+                # score favorise quelques mots longs plutôt que beaucoup de
+                # mots courts pour le même nombre total de lettres (un mot de
+                # 10 lettres pèse 100, dix mots de 2 lettres ne pèsent que 40).
+                best, best_result = max(
+                    successes, key=lambda gr: sum(len(slot) ** 2 for slot in gr[1][0])
+                )
+                break
+            last_diag = outcomes[-1][2]
+            progress("pattern_attempt_failed", attempt=attempt + 1, ratio=round(ratio, 3), **last_diag)
+            ratio = min(ratio + 0.03, 0.45)
 
     if best is None:
         progress("pattern_failed", attempts=attempts, last_attempt=last_diag)
@@ -606,7 +813,7 @@ def main():
     ap.add_argument("--max-words", type=int, default=None,
                      help="surcharge manuelle du nombre max de mots au global "
                           "(prioritaire sur --difficulty)")
-    ap.add_argument("--black-ratio", type=float, default=0.22,
+    ap.add_argument("--black-ratio", type=float, default=0.05,
                      help="densité de cases noires visée au départ (0-1)")
     ap.add_argument("--attempts", type=int, default=40,
                      help="nombre de motifs essayés avant d'abandonner")

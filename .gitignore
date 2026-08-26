@@ -9,4 +9,5 @@ env.sh
 /GRID_SVG/
 /GRID_PNG/
 /LOG_LLM/
+/DOC_ALGO/
 *.log

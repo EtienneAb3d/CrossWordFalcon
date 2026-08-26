@@ -301,7 +301,12 @@ def main():
     candidates = []  # (raw_word, raw_count)
     for raw_word, raw_count in _count_word_frequencies(lang):
         word = strip_accents(raw_word).upper()
-        if not word.isalpha() or len(word) < 3:
+        # 2-letter words are kept (grid slots as short as 2 cells are now
+        # allowed — MAX_SHORT_ZONE_COUNT in backend/crossword_gen.py — and,
+        # unlike 1-letter zones, are real cluable words: "et", "ou", "no",
+        # etc.); a bare 1-letter zone never becomes a slot at all, so a
+        # 1-letter word would never be looked up — excluded here too.
+        if not word.isalpha() or len(word) < 2:
             continue
         candidates.append((raw_word, raw_count))
 

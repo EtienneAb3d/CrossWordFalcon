@@ -2564,3 +2564,245 @@ content (the French crossword words/clues, the web UI text) stays in French
   above) — sizes shrank slightly along with the corpus itself: fr=45MB,
   en=74MB, de=47MB, es=42MB, it=45MB, all verified with `xz -t` and still
   comfortably under GitHub's 100MB limit.
+
+- `backend/crossword_gen.py`'s black-square placement changed significantly
+  at the user's explicit request, in three successive tuning passes within
+  the same task (each verified live before moving to the next):
+
+  1. Dropped the 180°-symmetry constraint entirely (`make_symmetric_pattern`
+     renamed `make_pattern`; `minimize_black_squares` updated to remove
+     black cells one at a time too, for consistency — it can no longer
+     assume a cell's mirror is also black) and lowered the starting
+     `black_ratio` from 0.22 to 0.05 — the user's reasoning: the CSP fill
+     is fast, so more attempts are affordable, and independent (non-paired)
+     placement can reach much sparser patterns than symmetric pairing ever
+     could. First live test (15×10, real wordlist) immediately surfaced a
+     serious, unanticipated regression: 139.86s for one grid (vs. the
+     ~15-35s documented as typical before), because very low black-cell
+     ratios produce very long word slots, which are dramatically harder
+     for the CSP to satisfy — not easier. A second live test with full
+     per-attempt tracing (`on_progress`) showed why concretely: 12 of 15
+     escalation attempts hit `try_fill`'s `deadline_checks` budget
+     (~200,000 checks each) without resolving either way, and the ratio
+     still had to climb back to ~23-33% before succeeding — the original
+     `+0.02`-per-attempt increment was far too fine-grained for this much
+     lower starting point, burning enormous time re-proving the same
+     "still too sparse" conclusion over and over.
+
+  2. Presented this finding directly (not silently reverted) and asked the
+     user how to adjust; they chose widening the ratio increment. Changed
+     `+0.02` to `+0.05` per failed attempt. Re-tested live with the exact
+     same seed as the diagnostic run above: 15 attempts → 7, 107.15s →
+     56.78s, same ballpark final ratio (~0.20-0.23) and word count — a
+     real, verified improvement, but still well short of the original
+     15-35s baseline (nearly every attempt below the successful ratio
+     still hits the full search deadline; a coarser increment reaches that
+     ratio in fewer *attempts*, but each individual attempt is no faster).
+
+  3. Mid-task, the user separately observed the machine was far from
+     saturating its CPU and asked to generate `PARALLEL_ATTEMPTS` (5) grids
+     concurrently at each step. Added `_pattern_attempt`/`_init_worker`
+     (module-level, picklable) and a `concurrent.futures.ProcessPoolExecutor`
+     around the attempt loop in `generate_grid()` — the word-list `index`
+     (can be 100k+ words) is sent to each worker process exactly once via
+     the pool's `initializer`, not repickled per task; each of the 5
+     parallel attempts gets its own `random.Random` seed derived from the
+     caller's `rng`, keeping the whole run reproducible given the same top-
+     level `seed`. Deliberately scoped to the pattern-search loop only, not
+     `minimize_black_squares`: minimization tests sequential, *dependent*
+     modifications to a shared grid (removing cell A can change whether
+     cell B is safely removable), so naively parallelizing candidate
+     removals and applying every independent "success" could silently
+     produce an invalid combined grid — flagged this scoping decision
+     directly rather than either silently skipping it or naively
+     parallelizing something dependent. Also deliberately waits for all 5
+     attempts in a step before deciding success/failure, rather than
+     returning as soon as the first succeeds and abandoning the rest —
+     simpler and leak-free (`ProcessPoolExecutor` can't cleanly kill an
+     already-running task, only cancel ones not yet started; an early-return
+     design would either need to accept orphaned worker processes finishing
+     in the background or add real cancellation-tracking complexity).
+     Verified live with the same seed as both prior benchmarks: 56.78s ->
+     43.52s, and the per-attempt diagnostics for that run showed
+     `search_exhausted` (a genuine, fast, conclusive dead end) far more
+     often than `deadline_exceeded` — with 5 independent shuffles tried per
+     step instead of 1, a step is less likely to spend its entire budget
+     hitting the *same* inconclusive wall.
+
+  Net effect across all three passes, same seed, same 15×10 grid: 139.86s
+  -> 107.15s (increment tuning alone would have been measured from a
+  different seed's 107s->56.78s, both cited above) -> 43.52s with all three
+  changes combined — real, substantial, and independently verified progress
+  toward the original ~15-35s baseline, but still slower than it, an honest
+  gap left open rather than closed by assumption. `CLAUDE.md`'s Architecture
+  section and `DOC_ALGO/FR/ReadMe.md` (the user-facing French algorithm
+  writeup) were both updated to describe the new non-symmetric,
+  low-start-ratio, 5-way-parallel algorithm accurately, not the old one.
+
+- `make_pattern`'s look-ahead scoring criterion changed at the user's
+  explicit request, judging the row+column black-cell-total heuristic
+  counter-productive: replaced with `_black_neighbor_count` (fewest
+  already-black orthogonal/4-side neighbors wins) as the *primary*
+  criterion. First implementation (adjacency only, ties broken by
+  shuffle order — i.e. whichever candidate happened to come first in the
+  window) was verified live and found to be a serious, unanticipated
+  regression: since the vast majority of candidates have 0 black
+  neighbors whenever the pattern is still sparse (true for most of the
+  search now that generation starts at 5%), the primary criterion barely
+  ever differentiates candidates, so the look-ahead degenerated to near-
+  pure-shuffle placement almost the entire time — measured on the same
+  15×10 grid/seed already used for prior benchmarks in this same task:
+  43.5s (row/column heuristic) -> 262-277s (adjacency-only, no smarter
+  tie-break) for the CSP fill, *and* the resulting grid still had a
+  similar number of touching black-cell pairs (17) to what a naive
+  reading of the new rule was meant to reduce — a full trace showed why:
+  the ratio escalated all the way to its 45% cap by attempt 9 and then
+  stayed pinned there for ~19 further attempts, most hitting
+  `deadline_exceeded`, because the underlying patterns were no better
+  than unbiased-random ones for the CSP to fill. Presented this finding
+  directly (root cause, both benchmark numbers, and the full escalation
+  trace) rather than silently reverting or silently keeping a broken
+  result, and asked the user how to fix it; they chose the recommended
+  option: keep adjacency as the primary criterion exactly as they
+  specified, but break ties with the *old* row+column-totals heuristic
+  instead of shuffle order — restores `row_black`/`col_black` tracking
+  (removed in the adjacency-only version) purely as a tie-break, key
+  becomes a tuple `(_black_neighbor_count(...), row_black[r] +
+  col_black[c])`. Re-verified live with the same grid/seed: 262-277s ->
+  72.5s — a large, real fix, though still meaningfully slower than
+  row/column-only (43.5s) — confirmed via the same live test that this
+  residual gap is an inherent cost of prioritizing adjacency over
+  row/column balance, not a leftover tie-breaking artifact. `CLAUDE.md`
+  and `DOC_ALGO/FR/ReadMe.md` updated again to describe the two-part
+  (adjacency primary, row+column tie-break) criterion and cite the real
+  measured numbers, not just the user's originally-requested rule in
+  isolation.
+
+- One more iteration on the same `make_pattern` scoring, at the user's
+  explicit request: swapped the two-criterion order back to row/column
+  totals as primary, `_black_neighbor_count` (direct adjacency) as
+  tie-break — the exact reverse of the immediately preceding entry.
+  Re-verified live on the same 15×10 grid/seed used throughout this whole
+  exploration: 42.6s, landing back in the same ballpark as the very
+  first, original heuristic (43.5s) with no regression — expected and
+  confirmed rather than assumed, since row/column totals are a
+  continuous, rarely-tied signal and were never suspected of the
+  degenerate-tie problem the adjacency-only version had. Touching-
+  black-cell-pair count in that same run (18) was similar to the other
+  two orderings, not clearly better — noted honestly in both `CLAUDE.md`
+  and `DOC_ALGO/FR/ReadMe.md`: with adjacency demoted to a tie-break, it
+  only influences a placement on the (comparatively rare) row/column
+  ties, so this final ordering favors matching the original heuristic's
+  speed over visibly reducing black-cell adjacency. `make_pattern`'s
+  docstring, `CLAUDE.md`'s Architecture section, and `DOC_ALGO/FR/
+  ReadMe.md` all now walk through the full three-iteration history
+  (adjacency-alone -> adjacency-primary/row-column-tiebreak -> row-
+  column-primary/adjacency-tiebreak) with each iteration's real measured
+  time and touching-pair count, not just the final state in isolation.
+
+- Replaced `is_structurally_valid`'s hard "no white run under 3 cells"
+  rule with a tolerance budget, at the user's explicit request:
+  `MAX_SHORT_ZONE_COUNT = {1: 4, 2: 4}` — up to 4 zones of exactly 1
+  letter and up to 4 of exactly 2 letters allowed in the whole grid
+  (rows + columns combined), a 5th of either length invalidates the
+  grid. A 1-letter zone stays a pure passthrough cell (`extract_slots`
+  never creates a slot for it, per the user's explicit confirmation it
+  should never carry its own clue) — but a 2-letter zone is now a real,
+  cluable slot: the user clarified mid-task that 2-letter zones "must be
+  valid words with a definition (et, or, ou, no, etc.)", so
+  `extract_slots`'s threshold dropped from `>= 3` to `>= 2`. Added one
+  invariant `is_structurally_valid` enforces unconditionally, outside the
+  tolerance budget entirely, because relaxing it would produce a
+  genuinely broken grid rather than just a stylistic one: a white cell
+  can never be short (1 letter) in *both* directions simultaneously (a
+  cell fully surrounded by black on all 4 sides) — such a cell would
+  belong to no slot in either direction and could never receive a
+  letter; `build_letters_grid` would have silently rendered it as a
+  black cell instead of the intended (but unfillable) white one. Flagged
+  this correctness requirement directly rather than silently folding it
+  into the requested budget or silently dropping it.
+
+  Enabling real 2-letter words required two upstream changes, both
+  applied and the full pipeline rerun for all 5 languages (not just
+  French): `build_wordlist_freq.py`'s minimum word length dropped from 3
+  to 2 (a bare 1-letter word is still excluded, since it can never
+  become a slot); then `build_gloss_dictionary.py` rerun per language to
+  pick up glosses for the newly-included 2-letter lemmas (reused each
+  language's cached `DICS/` raw Wiktionary dump, no re-download needed).
+  Verified live at each step rather than assuming: (1) unit-tested the
+  new structural-validity logic directly (an isolated single white cell
+  correctly rejected regardless of budget; budget-exceeded cases
+  correctly rejected); (2) rebuilt French first, confirmed real 2-letter
+  function words ("et", "de", "la", "un", "il"...) appear in the
+  regenerated wordlist; (3) confirmed those exact words have real
+  Wiktionary glosses after rebuilding the gloss dictionary (initially
+  grepped the wrong JSON key by mistake, `"lemma"` instead of `"word"`,
+  and caught it before wrongly concluding gloss lookup was broken); (4)
+  generated a real 15×10 grid end-to-end (46.21s, no timing regression
+  from the ~42.6s baseline) — 4 genuine 2-letter words placed, 0
+  1-letter words (as designed), and confirmed `find_glosses_for_
+  canonicals` finds a real definition for every one of them; (5) reran
+  `build_wordlist_freq.py`/`build_gloss_dictionary.py` for the remaining
+  4 languages. `CLAUDE.md`, `DOC_ALGO/FR/ReadMe.md`, and this file all
+  updated to describe the new tolerance-budget rule and the 2-letter
+  word pipeline change, not the old hard "always >= 3" rule.
+
+- `make_pattern`'s primary row/column-balancing criterion changed once
+  more, at the user's explicit request: added `FREE_BLACK_PER_LINE` (2)
+  — the score now discounts up to 2 black cells per row/column before
+  they count at all (`max(0, row_black - 2) + max(0, col_black - 2)`),
+  so a line with 0, 1, or 2 black cells is treated identically, and only
+  a 3rd+ black cell on the same line starts losing to a less-loaded one.
+  User's stated intent: let some parts of the grid fragment more than
+  before (shorter words there) while other parts stay comparatively
+  open (longer words, sometimes a whole line with zero black cells) —
+  the previous heuristic pushed every row/column toward an identical
+  count from the very first black cell, which worked against exactly
+  this kind of intentional unevenness. Verified live on the same 15×10
+  grid/seed used throughout this whole exploration: column black-cell
+  counts ranged 0-3 after the change (0 meaning a full-height word with
+  no interruption at all) — a visibly wider spread than before — at a
+  modest timing cost (50.8s vs. the ~42.6s undiscounted baseline, same
+  grid/seed), not a regression on the scale seen in earlier iterations
+  of this same heuristic. `CLAUDE.md`'s Architecture section and
+  `DOC_ALGO/FR/ReadMe.md` both updated with the discount rule and these
+  measured numbers.
+
+- Two more `generate_grid()` tuning changes, both at the user's explicit
+  request: (1) when more than one of the `PARALLEL_ATTEMPTS` (5)
+  concurrent attempts at a step succeeds, the one kept is no longer
+  arbitrarily "whichever came first" — it's now whichever maximizes the
+  sum of squares of every one of its words' lengths (`sum(len(slot) ** 2
+  for slot in result[0])`), rewarding a few long words over many short
+  ones covering the same total letter count; (2) the black-cell ratio
+  increment narrowed from +0.05 to +0.03 per failed step, for a finer-
+  grained search of the low-ratio region. Verified live on the same
+  15×10 grid/seed used throughout this whole exploration: 70.56s (up
+  from the ~42-51s range seen with +0.05 — expected, since a smaller
+  increment typically needs more steps to reach a fillable ratio, not a
+  regression to chase down), sum-of-squares score 1406, word lengths
+  spanning 2 to 11 with three separate 10+-letter words. `CLAUDE.md`'s
+  Architecture section and `DOC_ALGO/FR/ReadMe.md` both updated with the
+  new selection rule and increment value, plus these measured numbers.
+
+- `PARALLEL_ATTEMPTS` (`backend/crossword_gen.py`) made configurable, at
+  the user's explicit request: reads `CROSSWORDFALCON_PARALLEL_ATTEMPTS`
+  from the environment (`int(os.environ.get(..., "10"))`), default
+  raised from the previous hardcoded 5 to 10 in the same change. Added
+  to `env.sh`/`env_default.sh`, then — per a follow-up request — moved
+  from the end of the file to the very top, ahead of even the
+  `LLAMA_FORCE_CPU` block: a deliberate placement, since this setting is
+  about `backend/crossword_gen.py`'s own grid-generation parallelism,
+  unrelated to any of the LLM clue-generation config that fills the rest
+  of the file. `run_Falcon.sh` already sources `env.sh` before starting
+  the backend, so no other wiring was needed for the web API path; the
+  CLI picks it up too if the variable happens to already be exported in
+  the calling shell. Verified live: `bash -n` on both files, confirmed
+  the default (10) when unset, confirmed an explicit override value
+  propagates all the way into `generate_grid()`'s actual parallel-pool
+  size (not just that the Python constant reads correctly) via a real
+  end-to-end grid generation with `CROSSWORDFALCON_PARALLEL_ATTEMPTS=3`.
+  Historical timing figures elsewhere in this file and in `CLAUDE.md`
+  that predate this change describe a hardcoded 5-way batch — flagged as
+  such rather than silently left ambiguous about which count they
+  measured.
