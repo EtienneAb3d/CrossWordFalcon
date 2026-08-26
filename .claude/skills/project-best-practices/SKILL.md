@@ -2139,3 +2139,19 @@ content (the French crossword words/clues, the web UI text) stays in French
   `_strip_reasoning()` branches plus dash/NBSP handling in
   `_parse_response()`, then re-ran a 5-word live batch with no
   regression.
+
+- added two more `rule_bad` worked examples per language (all 5, not
+  just Romance ones), at the user's request, after two more real bad
+  clues: (1) visible inline self-correction leaking into the answer
+  itself ("Elle raserait... (wait, no) -> Elle l'abattra..." — not a
+  `<think>` tag, just stream-of-consciousness drafting left in the final
+  line) — rule 7 now explicitly names and forbids this pattern, not just
+  "thinking out loud" generically; (2) a wrong-*person* conjugation ("Ce
+  que tu fais..." for `RIT`, which needs "il/elle") — the same rule-4
+  class as `ÉTAIS`/`SERRERAIT` but specifically "right periphrastic
+  template, wrong pronoun slot", plausible since `rule_good`'s own
+  examples repeat that template across many different pronouns. See the
+  CLAUDE.md entry for the exact words used per language. Verified live:
+  resampled both exact reported words (`ABATTRA`, `RIT`) — no
+  self-correction, no person mismatch, no regression on prior fixed
+  cases.

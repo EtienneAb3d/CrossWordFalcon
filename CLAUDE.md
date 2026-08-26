@@ -610,6 +610,34 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   tags at all) plus `_parse_response()` against a mix of em-dash/en-dash bullets and
   an embedded non-breaking space — all handled correctly — then re-ran a 5-word live
   batch through the real LLM server to confirm no regression.
+
+  A related bad clue reported next: a full visible self-correction inside the answer
+  itself — "Elle raserait... (wait, no) -> Elle l'abattra au sol d'un geste sec" — not
+  a `<think>` tag at all, just stream-of-consciousness drafting left in the final
+  line. Rule 7 in `_build_system_prompt()` already told the model not to "think out
+  loud", but didn't name this specific pattern; it now explicitly forbids inline
+  self-correction ("starting one answer, then writing something like 'wait, no' or
+  'actually' before giving a different one") and instructs deciding the final answer
+  entirely before writing anything down. One new `rule_bad` illustration was added to
+  all 5 languages (not just Romance ones — this failure mode isn't tied to any
+  particular grammar, so every language gets it): `ABATTRA`/`FELLED`/`FÄLLTE`/
+  `DERRIBARÁ`/`ABBATTERÀ`, each built around a "knock down/fell" verb so the corrected
+  answer stays close to the reported example's own domain. Verified live: resampled
+  `ABATTRA` (the exact reported word) alongside `RASÉE`/`SEMAI`/`LÉGALE`/`TENU` (prior
+  fixed cases) — all 5 resolved with no visible self-correction and no regression.
+
+  Separately reported: a wrong-*person* conjugation mismatch — "Ce que tu fais quand
+  une blague te fait plaisir" (second person, "tu") for `RIT` (third person, "il/elle
+  rit"). This is the same rule-4 grammar-agreement class `ÉTAIS`/`SERRERAIT` already
+  illustrate, but specifically the "right periphrastic template, wrong pronoun slot"
+  failure — plausible since `rule_good`'s own worked examples repeat a "Ce que
+  tu/il/elle/nous/vous/ils font..." template across many different pronouns, and the
+  model can pick the wrong one for a new word. One new `rule_bad` illustration added
+  per language, again all 5 (person mismatch isn't Romance-specific either):
+  `RIT`/`LAUGHS`/`LACHT`/`RÍE`/`RIDE`, all built around "to laugh" so the wrong-person
+  clue text ("what you do...") and its correction ("what he/she does...") read
+  naturally in each language. Verified live: resampled `RIT` (the exact reported word)
+  4 times — all correctly third person, no second-person leak.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
