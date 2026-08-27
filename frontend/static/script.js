@@ -210,14 +210,31 @@ function setStatus(message, isError) {
 // is an array of [row, col] pairs, highlighted with a light red background
 // (same --incorrect-bg token already used for a wrong letter on the real
 // grid, at the user's explicit request) — the cells of whichever slot(s)
-// had no candidate word left at all at this snapshot.
-function renderAttemptPreview(exampleGrid, impossibleCells) {
+// had no candidate word left at all at this snapshot. `forcedCells`
+// (diagnostics["forced_cells"], possibly empty/undefined — see
+// build_partial_letters_grid's own docstring — now *every* cell
+// sample_letter_biases forced, whether or not the search later covered it
+// with a real letter, after a live report that the previous "only cells
+// still unconfirmed" version made the highlight nearly vanish as a
+// generation progressed) is likewise an array of [row, col] pairs,
+// highlighted with a thick blue inset border (--accent, see style.css's
+// .cell.white.forced) at the user's explicit request — cells whose shown
+// letter came from the statistical pre-fill, whether or not a real letter
+// also ended up there. Applied in a dedicated final pass, *after* every
+// cell already exists in the grid (see the loop below) — at the user's
+// own explicit follow-up request, so the border is unambiguously an
+// overlay on top of everything already drawn (letters, black cells,
+// .impossible) rather than a class applied inline while each cell is
+// first being built, removing any doubt about draw order affecting
+// whether it's visible.
+function renderAttemptPreview(exampleGrid, impossibleCells, forcedCells) {
   if (!exampleGrid || !exampleGrid.length) return;
   const height = exampleGrid.length;
   const width = exampleGrid[0].length;
   const impossibleSet = new Set((impossibleCells || []).map(([r, c]) => `${r},${c}`));
   attemptPreviewGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
   attemptPreviewGrid.innerHTML = "";
+  const cellElementsByCoord = new Map();
   for (let r = 0; r < height; r++) {
     for (let c = 0; c < width; c++) {
       const ch = exampleGrid[r][c];
@@ -228,9 +245,17 @@ function renderAttemptPreview(exampleGrid, impossibleCells) {
         cell.className = "cell white";
         if (ch !== ".") cell.textContent = ch;
         if (impossibleSet.has(`${r},${c}`)) cell.classList.add("impossible");
+        cellElementsByCoord.set(`${r},${c}`, cell);
       }
       attemptPreviewGrid.appendChild(cell);
     }
+  }
+  // Final overlay pass: every previously-built cell already sits in the
+  // DOM at this point, so adding .forced here can never be affected by
+  // where this runs relative to the loop above.
+  for (const [r, c] of forcedCells || []) {
+    const cell = cellElementsByCoord.get(`${r},${c}`);
+    if (cell) cell.classList.add("forced");
   }
   attemptPreview.hidden = false;
 }
@@ -585,7 +610,9 @@ async function pollJob(jobId, t) {
     // preview reliably stays populated with the last attempt's own grid
     // through to the error message on total failure, not just during live
     // progress and not only when the timing happens to line up.
-    if (data.last_example_grid) renderAttemptPreview(data.last_example_grid, data.last_impossible_cells);
+    if (data.last_example_grid) {
+      renderAttemptPreview(data.last_example_grid, data.last_impossible_cells, data.last_forced_cells);
+    }
     if (data.status === "error") {
       throw new Error(describeErrorCode(t, data.error_code, data.error));
     }

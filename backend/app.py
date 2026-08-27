@@ -104,6 +104,7 @@ def _new_job():
         "status": "running", "step": {"code": "starting"}, "result": None,
         "error": None, "error_code": None,
         "last_example_grid": None, "last_impossible_cells": None,
+        "last_forced_cells": None,
     }
     return job_id
 
@@ -142,6 +143,9 @@ async def _run_generate_job(job_id, req):
         impossible_cells = _latest(data, "impossible_cells")
         if impossible_cells is not None:
             job["last_impossible_cells"] = impossible_cells
+        forced_cells = _latest(data, "forced_cells")
+        if forced_cells is not None:
+            job["last_forced_cells"] = forced_cells
         logger.info("[%s] %s %s", short_id, step, data)
 
     try:

@@ -344,14 +344,15 @@ def _black_neighbor_count(grid, rows, cols, r, c):
 
 # make_pattern's row/column-balancing score discounts this many black cells
 # per row/column before they count against it — at the user's explicit
-# request: having up to 2 black cells on a given row/column is normal, not
+# request: having up to 1 black cell on a given row/column is normal, not
 # something to actively balance away from the very first black cell placed
 # there. Only once a row/column already has more than this many black cells
 # does adding another start being penalized relative to emptier ones. The
 # intent, per the user, is to let some parts of the grid fragment a bit more
 # (shorter words) while other parts stay comparatively open (long words),
 # instead of pushing every row/column toward the same black-cell count.
-FREE_BLACK_PER_LINE = 2
+# Lowered from 2 to 1 at the user's explicit request.
+FREE_BLACK_PER_LINE = 1
 
 
 def make_pattern(rows, cols, black_ratio, rng):
@@ -376,13 +377,14 @@ def make_pattern(rows, cols, black_ratio, rng):
     criterion, breaking ties with `_black_neighbor_count` (fewest already-
     black orthogonal/4-side neighbors) as a *secondary* criterion, instead
     of taking cells in strict shuffle order. The primary criterion discounts
-    `FREE_BLACK_PER_LINE` (2) black cells per row/column before they count
-    at all (`max(0, row_black - 2) + max(0, col_black - 2)`), at the user's
-    explicit request: having up to 2 black cells on a given line is normal,
-    not something to balance away from the very first one — only beyond
-    that does adding another black cell to an already-loaded row/column
-    start losing to a less-loaded one. Deliberately lets some parts of the
-    grid fragment a bit more than before (shorter words there) while other
+    `FREE_BLACK_PER_LINE` (1 — lowered from 2 at the user's explicit request)
+    black cell per row/column before they count at all (`max(0, row_black - 1)
+    + max(0, col_black - 1)`), at the user's explicit request: having up to 1
+    black cell on a given line is normal, not something to balance away from
+    the very first one — only beyond that does adding another black cell to
+    an already-loaded row/column start losing to a less-loaded one. Deliberately
+    lets some parts of the grid fragment a bit more than before (shorter words
+    there) while other
     parts stay comparatively open (longer words), rather than pushing every
     row/column toward an identical black-cell count from the outset.
 
@@ -536,10 +538,17 @@ LOW_DOMAIN_MRV_THRESHOLD = 10
 
 
 class Filler:
-    def __init__(self, slots, index, rng):
+    def __init__(self, slots, index, rng, forced_letters=None):
         self.slots = slots
         self.index = index
         self.rng = rng
+        # case -> lettre "conseillée" par l'échantillonnage statistique
+        # préalable (voir sample_letter_biases) — un simple indice utilisé
+        # par _domain pour orienter la recherche dès le départ, jamais une
+        # affectation réelle : dès qu'un emplacement croisé est vraiment
+        # assigné, sa propre lettre prend le pas sur cet indice (voir
+        # _domain ci-dessous).
+        self.forced_letters = forced_letters or {}
         # cell -> [(slot_index, position_within_that_slot), ...]. Precomputed
         # once here rather than looked up with list.index() inside _domain
         # (the hot path, called millions of times per grid) since a cell's
@@ -577,7 +586,12 @@ class Filler:
 
     def _domain(self, i):
         """Ensemble/liste des mots compatibles avec les lettres déjà connues de
-        la case i (sans encore exclure les mots utilisés ailleurs — voir _pick)."""
+        la case i (sans encore exclure les mots utilisés ailleurs — voir _pick).
+        Une lettre "conseillée" par self.forced_letters (voir __init__) compte
+        comme une contrainte au même titre qu'une lettre vraiment imposée par
+        un emplacement croisé déjà assigné — mais seulement tant qu'aucun
+        emplacement croisé n'est réellement assigné à cette case : une vraie
+        affectation l'emporte toujours sur un simple indice statistique."""
         cells = self.slots[i]
         length = len(cells)
         idx = self.index.get(length)
@@ -585,9 +599,15 @@ class Filler:
             return ()
         constraints = {}
         for pos, cell in enumerate(cells):
+            letter = None
             for j, other_pos in self.cell_to_slots[cell]:
                 if j != i and self.assignment[j] is not None:
-                    constraints[pos] = self.assignment[j][other_pos]
+                    letter = self.assignment[j][other_pos]
+                    break
+            if letter is None:
+                letter = self.forced_letters.get(cell)
+            if letter is not None:
+                constraints[pos] = letter
         if not constraints:
             return idx["words"]
         sets = []
@@ -737,7 +757,114 @@ class Filler:
         return False
 
 
-def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=None):
+# ---------- Pré-remplissage statistique avant le CSP ----------
+
+# Nombre de mots tirés au hasard par emplacement (uniquement filtrés par
+# longueur, sans aucune validation contre les autres emplacements) pour
+# estimer, par simple sondage, quelle lettre a le plus de chances d'occuper
+# chaque case avant même de lancer le remplissage réel — à la demande
+# explicite de l'utilisateur.
+LETTER_BIAS_SAMPLE_SIZE = 100
+
+# Fraction du nombre total de cases blanches de la grille que l'on fige
+# d'avance avec la lettre la plus fréquemment observée à cet endroit dans
+# l'échantillonnage ci-dessus — seules les cases où cette lettre est
+# ressortie le plus souvent (au sens large : cases les plus "consensuelles"
+# en premier) sont retenues, jusqu'à atteindre cette fraction. Abaissée de
+# 10 % à 5 % à la demande explicite de l'utilisateur.
+LETTER_BIAS_FORCE_FRACTION = 0.05
+
+# Nombre minimal de mots de l'échantillon de LETTER_BIAS_SAMPLE_SIZE qui
+# doivent partager la lettre retenue pour qu'une case soit éligible à être
+# figée — à la demande explicite de l'utilisateur, en plus de la limite
+# d'une seule case forcée par emplacement : un consensus trop faible (une
+# lettre qui ne l'emporte que parce que les autres étaient encore plus
+# dispersées, sans réellement dominer) ne garantit pas qu'il reste assez de
+# mots compatibles pour remplir l'emplacement une fois cette lettre figée.
+LETTER_BIAS_MIN_COUNT = 10
+
+
+def sample_letter_biases(grid, rows, cols, index, rng,
+                          sample_size=LETTER_BIAS_SAMPLE_SIZE,
+                          force_fraction=LETTER_BIAS_FORCE_FRACTION):
+    """Avant de lancer le remplissage CSP réel sur une grille de cases
+    noires/blanches fraîchement choisie, à la demande explicite de
+    l'utilisateur : pour chaque emplacement, tire au hasard `sample_size`
+    mots de la bonne longueur (uniquement filtrés par longueur, sans les
+    valider les uns contre les autres — un simple sondage, pas un
+    remplissage), compte pour chaque case de cet emplacement quelle lettre
+    y apparaît le plus souvent dans l'échantillon, ne retient que les cases
+    dont cette lettre dépasse `LETTER_BIAS_MIN_COUNT` (10) occurrences (un
+    consensus trop faible — une lettre qui ne l'emporte que parce que les
+    autres étaient encore plus dispersées — ne garantit pas qu'il reste
+    assez de mots compatibles une fois cette lettre figée), puis pioche au
+    hasard parmi ces cases éligibles jusqu'à couvrir `force_fraction` du
+    nombre total de cases blanches de la grille — au plus UNE case forcée
+    par emplacement (jamais deux cases forcées sur le même mot). Le tirage
+    au hasard (plutôt que les cases au consensus le plus fort en premier,
+    une version précédente de cette règle) est à la demande explicite de
+    l'utilisateur, après un rapport : pour une longueur donnée, prendre
+    systématiquement les cases les plus consensuelles en premier revenait
+    trop souvent à figer la même lettre dominante (la plus fréquente de la
+    langue à cette position) sur la plupart des emplacements de cette
+    longueur, au lieu de varier. La limite d'une seule case forcée par
+    emplacement reste nécessaire pour la même raison qu'avant : plusieurs
+    cases forcées indépendamment sur un même emplacement long peuvent ne
+    correspondre à aucun mot réel (chaque case est choisie indépendamment
+    des autres, sans qu'aucun mot réel n'ait forcément toutes ces lettres à
+    la fois), ce qui a été mesuré en direct : jusqu'à 9 tentatives sur 10
+    échouaient dès la toute première vérification. Une case appartenant à
+    deux emplacements (croisement) consomme le quota des deux à la fois —
+    si l'un des deux a déjà sa case forcée, l'autre ne peut plus en
+    proposer une nouvelle, même sur une case différente. Le nombre de cases
+    réellement forcées peut donc rester en dessous de `force_fraction` —
+    soit parce que la grille n'a pas assez d'emplacements distincts pour
+    l'atteindre (rare en pratique), soit parce que peu de cases atteignent
+    le seuil de consensus (plus fréquent, et volontaire : mieux vaut forcer
+    moins de cases que d'en forcer une sur un consensus faible).
+
+    Retourne un dict {case: lettre} — les "indices" que Filler traite comme
+    des contraintes tant qu'aucun emplacement croisé n'est réellement
+    assigné à cette case (voir Filler._domain), pas comme des lettres
+    définitivement posées."""
+    slots = extract_slots(grid, rows, cols)
+    cell_to_slots = defaultdict(list)
+    for slot_idx, cells in enumerate(slots):
+        for cell in cells:
+            cell_to_slots[cell].append(slot_idx)
+
+    eligible = []  # (compte, case, lettre) — cases dépassant LETTER_BIAS_MIN_COUNT
+    for cells in slots:
+        length = len(cells)
+        idx = index.get(length)
+        if not idx or not idx["words"]:
+            continue
+        sample = rng.choices(idx["words"], k=sample_size)
+        for pos, cell in enumerate(cells):
+            letter, count = Counter(word[pos] for word in sample).most_common(1)[0]
+            if count > LETTER_BIAS_MIN_COUNT:
+                eligible.append((count, cell, letter))
+    rng.shuffle(eligible)
+
+    total_white = sum(row.count(WHITE) for row in grid)
+    target = round(total_white * force_fraction)
+    forced = {}
+    used_slots = set()
+    for count, cell, letter in eligible:
+        if len(forced) >= target:
+            break
+        if cell in forced:
+            continue
+        touching = cell_to_slots[cell]
+        if any(slot_idx in used_slots for slot_idx in touching):
+            continue
+        forced[cell] = letter
+        used_slots.update(touching)
+    return forced
+
+
+def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=None,
+             forced_letters=None):
     """`diagnostics`, if given a dict, is filled in with data useful to
     understand *why* a fill attempt failed (see generate_grid's
     "pattern_failed" logging): `slot_count`/`length_counts` (the CSP's
@@ -754,7 +881,16 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=
     `impossible_cells` (`Filler.impossible_zone_cells()`), the cells of
     whichever unassigned slot(s), at that same snapshot, had no candidate
     word left at all, for the UI to highlight (may be empty — see that
-    method's own docstring for why)."""
+    method's own docstring for why).
+
+    `forced_letters`, if given (see `sample_letter_biases`), seeds the
+    search with a statistically-guessed letter for a subset of cells,
+    treated by `Filler` as a soft hint rather than a real assignment (see
+    `Filler._domain`) — also overlaid onto `example_grid` on failure (cells
+    no real assignment already covers), with their own coordinates listed
+    separately in `forced_cells`, at the user's explicit request, so the UI
+    can show *which* letters in the preview are statistical hints rather
+    than real progress from the search."""
     slots = extract_slots(grid, rows, cols)
     if diagnostics is not None:
         diagnostics["slot_count"] = len(slots)
@@ -765,8 +901,9 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=
             diagnostics["reason"] = "no_slots"
             diagnostics["example_grid"] = grid
             diagnostics["impossible_cells"] = []
+            diagnostics["forced_cells"] = []
         return None
-    filler = Filler(slots, index, rng)
+    filler = Filler(slots, index, rng, forced_letters=forced_letters)
     solved = filler.solve(deadline_checks)
     if diagnostics is not None:
         diagnostics["checks"] = filler.checks
@@ -776,7 +913,11 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=
             else "search_exhausted"
         )
         if not solved:
-            diagnostics["example_grid"] = build_partial_letters_grid(grid, slots, filler.best_assignment)
+            example_grid, forced_cells = build_partial_letters_grid(
+                grid, slots, filler.best_assignment, forced_letters
+            )
+            diagnostics["example_grid"] = example_grid
+            diagnostics["forced_cells"] = forced_cells
             diagnostics["impossible_cells"] = filler.impossible_zone_cells()
     if solved:
         return slots, filler.assignment
@@ -867,7 +1008,7 @@ def build_letters_grid(rows, cols, slots, assignment):
     return letters
 
 
-def build_partial_letters_grid(grid, slots, assignment):
+def build_partial_letters_grid(grid, slots, assignment, forced_letters=None):
     """Comme build_letters_grid, mais pour un remplissage abandonné en
     cours de route (voir try_fill, diagnostics["example_grid"]) — à la
     demande explicite de l'utilisateur, pour donner un aperçu de ce qui a
@@ -876,14 +1017,44 @@ def build_partial_letters_grid(grid, slots, assignment):
     `None` (emplacement jamais atteint par la recherche) : part du motif
     noir/blanc réel (`grid`, où chaque case blanche non encore déterminée
     reste WHITE) plutôt que de tout initialiser à BLACK en supposant que
-    chaque emplacement sera rempli."""
+    chaque emplacement sera rempli.
+
+    `forced_letters` (voir sample_letter_biases), si fourni, est superposé
+    sur les cases qu'aucune affectation réelle ne couvre déjà — à la
+    demande explicite de l'utilisateur, pour que l'aperçu d'une tentative
+    échouée montre aussi les indices statistiques, pas seulement les
+    lettres réellement posées par la recherche. Une affectation réelle
+    l'emporte toujours sur la lettre affichée (une case ne peut de toute
+    façon jamais contredire l'indice qui l'a contrainte — voir
+    Filler._domain — mais l'ordre de priorité reste explicite ici).
+
+    Retourne (grille_lettres, cases_forcées) — le second élément est la
+    liste triée de TOUTES les cases de `forced_letters`, qu'elles soient
+    encore visibles dans la grille retournée ou déjà recouvertes par une
+    affectation réelle — à la demande explicite de l'utilisateur, après
+    avoir constaté qu'une version précédente (ne renvoyant que les cases
+    "encore non confirmées") faisait quasiment disparaître l'affichage des
+    lettres forcées côté interface au fur et à mesure que la recherche
+    progressait, alors que le sondage statistique lui-même restait stable :
+    mesuré en direct, jusqu'à 7 cases forcées par sample_letter_biases à
+    chaque tentative, contre parfois 0 encore "visibles" une fois filtrées.
+    Voir try_fill, diagnostics["forced_cells"], et script.js pour
+    l'encadrement affiché sur toutes ces cases, y compris celles qui
+    montrent désormais une vraie lettre plutôt que l'indice d'origine."""
     letters = [row[:] for row in grid]
+    covered = set()
     for cells, word in zip(slots, assignment):
         if word is None:
             continue
         for (r, c), ch in zip(cells, word):
             letters[r][c] = ch
-    return letters
+            covered.add((r, c))
+    if forced_letters:
+        for cell, letter in forced_letters.items():
+            if cell not in covered:
+                r, c = cell
+                letters[r][c] = letter
+    return letters, sorted(forced_letters) if forced_letters else []
 
 
 # ---------- Tentatives (motif + remplissage) en parallèle ----------
@@ -906,11 +1077,19 @@ def _pattern_attempt(rows, cols, ratio, seed):
     global par l'appelant, pour rester reproductible tout en étant
     différente des autres tentatives du même palier. Retourne
     (grid, result, diagnostics) ; `result` est None en cas d'échec, même
-    contrat que try_fill."""
+    contrat que try_fill.
+
+    Avant de lancer le remplissage réel sur ce motif fraîchement choisi, à
+    la demande explicite de l'utilisateur : un sondage statistique
+    (`sample_letter_biases`) propose une lettre pour 10 % des cases de la
+    grille, que le remplissage traite comme des indices plutôt que comme
+    des affectations réelles (voir Filler._domain)."""
     rng = random.Random(seed)
     grid = make_pattern(rows, cols, ratio, rng)
+    forced_letters = sample_letter_biases(grid, rows, cols, _worker_index, rng)
     diag = {}
-    result = try_fill(grid, rows, cols, _worker_index, rng, diagnostics=diag)
+    result = try_fill(grid, rows, cols, _worker_index, rng, diagnostics=diag,
+                       forced_letters=forced_letters)
     return grid, result, diag
 
 

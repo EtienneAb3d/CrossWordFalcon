@@ -566,3 +566,77 @@ English (see `project-best-practices`).
   still awaits a second live-browser confirmation from the user, same as
   every other visual change made without direct browser access this
   session.
+
+- Added highlighting for statistical-hint letters in the attempt preview,
+  at the user's explicit request: cells whose shown letter came from
+  `sample_letter_biases` (CLAUDE.md) rather than a real placement by the
+  search get a light blue background — reusing `--selected` (the same
+  token already used for cell selection on the real, playable grid) rather
+  than a new color, distinct from `.impossible`'s red. `renderAttemptPreview()`
+  takes a third `forcedCells` parameter (mirrors `impossibleCells`'s own
+  shape — an array of `[row, col]` pairs, possibly empty/absent) and adds
+  `.forced` to the matching cells; declared *before* `.cell.white.impossible`
+  in the stylesheet so a cell matching both (rare, but possible — a
+  statistically-forced cell can in principle also belong to an impossible
+  zone) shows the red, the more important signal of the two. Verified live
+  against the real backend (restarted to pick up the change): polled an
+  actual failing job and confirmed `last_forced_cells` appears alongside
+  `last_example_grid` and correctly shrinks as later attempts' own
+  best-assignment snapshots cover more of the previously-forced cells with
+  real letters (9 → 8 across consecutive polls). Rendering itself still
+  unverified in an actual browser, per every other visual change made
+  without direct browser access this session.
+
+- Reworked `.cell.white.forced` from a background fill to a thick inset
+  border, at the user's explicit follow-up request, specifically so it
+  survives being combined with `.impossible`'s red background on the same
+  cell — two competing `background` declarations mean whichever rule is
+  declared last simply wins outright, silently hiding the other state,
+  whereas a border (`box-shadow: inset 0 0 0 2px ...`, the same technique
+  `#grid`'s own `.word-highlight` already uses on the real, playable grid)
+  composes independently of whatever fill sits underneath it. Switched the
+  color token in step, from `--selected` (a pastel meant for background
+  fills) to `--accent` (the same blue `.word-highlight` already borders
+  with) — the right token changed along with the technique, not just the
+  CSS property. `LETTER_BIAS_FORCE_FRACTION` also lowered from 10% to 5% in
+  the same request (`backend/crossword_gen.py`) — fewer forced cells shown
+  in the preview as a result. Verified live against the real backend
+  (restarted to pick up both changes): a real failing job's polled
+  `last_forced_cells` count (4) was noticeably lower than prior polls seen
+  at the old 10% setting (8-9), consistent with the halved target: and the
+  served `style.css`/`script.js` both reflect the new border-based styling
+  and comment. Rendering itself still unverified in an actual browser, per
+  every other visual change made without direct browser access this
+  session.
+
+- Reported next: the preview showed few forced-cell borders, decreasing to
+  none as generation progressed through higher black-cell ratios, opposite
+  the expected direction (shorter slots at a higher ratio should, if
+  anything, make the statistical sample *more* consensual). Diagnosed with
+  a direct trace rather than guessing which layer was at fault: `sample_
+  letter_biases` itself stayed stable (6-7 forced cells per attempt across
+  every ratio from 5% to 40% tested) — not a generation bug — but the
+  *reported* `forced_cells` (then filtered down to "still showing the
+  guessed letter, not yet covered by a real one") dropped to 0-2 at several
+  ratios, since a higher ratio's shorter slots are also easier for the
+  search to make real progress on, covering more of the originally-forced
+  cells with confirmed letters before giving up. Correct computation, but
+  a confusing signal — indistinguishable from a broken pre-fill by looking
+  at the preview alone. Fixed exactly as the user proposed:
+  `build_partial_letters_grid` (CLAUDE.md) now returns *every* cell
+  `forced_letters` ever set, not just the still-unconfirmed subset, and
+  `renderAttemptPreview()` was restructured so the `.forced` border is
+  added in a dedicated **final pass** over `forcedCells`, after every cell
+  element already exists in the grid (tracked via a `cellElementsByCoord`
+  map built during the main per-cell loop) — a genuine overlay applied on
+  top of everything already drawn, at the user's own explicit follow-up
+  request, removing any doubt about draw order. Verified live against the
+  real backend (restarted to pick up the change): a direct trace across
+  the same ratio range confirmed `diagnostics["forced_cells"]` now exactly
+  matches `sample_letter_biases`'s own raw count at every ratio (previously
+  it could fall well short); polled a real job and confirmed
+  `last_forced_cells` (7) stayed stable and populated across consecutive
+  polls, and the served `script.js` reflects the new overlay-pass
+  structure. Rendering itself still unverified in an actual browser, per
+  every other visual change made without direct browser access this
+  session.

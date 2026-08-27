@@ -3466,3 +3466,97 @@ content (the French crossword words/clues, the web UI text) stays in French
   candidates, not pinned down to one — reported honestly as risk
   mitigation, not a confirmed fix. `CLAUDE.md` updated to describe both
   changes and the reasoning.
+
+- Added a statistical pre-fill step before the CSP search even starts, at
+  the user's explicit request: `sample_letter_biases` draws 100 random
+  same-length words per slot (no cross-validation, a plain uniform sample),
+  tallies the most common letter per cell, and locks in the most
+  "consensual" 10% of the grid's white cells as a soft hint
+  (`Filler.forced_letters`) rather than a real assignment. First live test
+  (no per-slot cap) was a serious, structural failure: 9 of 10 benchmark
+  seeds failed the very first `_backtrack` check outright (`checks=1`) —
+  confirmed by direct inspection that some long slot's independently-forced
+  cells, combined, matched *zero* real words (each cell's forced letter is
+  the mode of its own 100-word sample, taken position-blind — nothing ties
+  multiple forced positions on the same slot to any single real word).
+  Reported immediately via `AskUserQuestion` rather than silently patching
+  or shipping a broken feature; the user chose the simplest fix — at most
+  one forced cell per slot (a crossing cell spends both touching slots'
+  quota at once), which structurally rules out the multi-position
+  inconsistency entirely, at the cost of not always reaching the full 10%
+  target on a grid with few slots (rare in practice). Verified live: the
+  same 10 seeds that included 9 instant failures now have zero (checks
+  ranging from 175 to the full 50,000-check budget, same range as ordinary
+  hard-pattern attempts); a real `generate_grid()` run (15×10, seed 2)
+  succeeded in 305.44s — structurally valid, every word matching the
+  solution grid, but slower than the 191.79s baseline measured for the
+  same seed immediately before this feature. Reported honestly rather than
+  framed as a speedup: this specific measurement suggests a real cost, not
+  (yet) a benefit, though this machine's wall-clock timing has repeatedly
+  proven noisy across this session (see the retry-mechanism-removal entry)
+  and a single comparison isn't a rigorous verdict either way. `CLAUDE.md`
+  and `DOC_ALGO/FR/ReadMe.md` updated to describe the mechanism, the
+  one-per-slot cap and why it was needed, and this result.
+
+- Added a second eligibility constraint to the same mechanism, at the
+  user's explicit request: alongside the one-forced-cell-per-slot cap, a
+  cell's winning letter must also exceed `LETTER_BIAS_MIN_COUNT` (10) out
+  of the 100-word sample to be eligible at all — a weak consensus (won only
+  because every other letter was even more scattered) doesn't reliably
+  mean enough real words remain once forced. Since `candidates` is already
+  sorted by count descending, implemented as a simple early `break` the
+  moment the threshold is crossed. Verified live: a direct trace on the
+  standard benchmark found 265 of 280 real candidates above the threshold
+  and 15 at or below it (confirming the filter is meaningfully selective on
+  real data, not vacuous), while the achieved forced-cell count held at the
+  same 14-cell target across 5 seeds — on this specific benchmark the
+  one-per-slot cap remains the binding constraint, not this new threshold,
+  though it should bind more on sparser vocabulary (very long words, or
+  languages/lengths with fewer candidates). A real `generate_grid()` run
+  (15×10, seed 2) succeeded in 275.98s — structurally valid, every word
+  matching the solution grid, close to the 305.44s measured for the same
+  seed just before this constraint (consistent with the constraint barely
+  binding here, per the trace above — no meaningful change expected on
+  this specific benchmark, and none observed within this machine's already-
+  documented measurement noise). `CLAUDE.md` and `DOC_ALGO/FR/ReadMe.md`
+  updated to describe the new threshold and this result.
+
+- Two follow-up refinements to the same mechanism, both at the user's
+  explicit request in one combined message. (1) `LETTER_BIAS_FORCE_FRACTION`
+  lowered from 10% to 5% — a straightforward constant change. (2) A real
+  reported problem with the selection itself: "pour une taille donnée, ça
+  sera souvent la même lettre forcée" (for a given slot length, it'll often
+  be the same forced letter) — taking eligible candidates sorted by tally
+  descending meant the single most statistically dominant letter at a given
+  position (whichever letter happens to be commonest in the language there)
+  tended to win on most same-length slots, run after run, rather than
+  varying. Fixed exactly as specified: keep the `LETTER_BIAS_MIN_COUNT`
+  eligibility filter, but instead of sorting eligible candidates by count
+  and taking the top ones, shuffle them (`rng.shuffle`) and draw in that
+  random order — same one-forced-cell-per-slot cap and same target-fraction
+  cutoff as before, just a random draw among eligible candidates instead of
+  a ranked one. Verified live with a direct, quantified before/after
+  comparison across the same 15 patterns/seeds: for length-10 slots (the
+  most common length on the standard benchmark), the old sorted-first
+  version forced only 4 distinct letters across 55 forced cells, with one
+  letter ('S') dominating 58% of them; the new random version reached 8
+  distinct letters across 60 forced cells, with the top letter down to 40%
+  — roughly double the variety, directly addressing the reported problem,
+  not just plausibly related to it. A real `generate_grid()` run (15×10,
+  seed 2) succeeded in 261.15s — structurally valid, every word matching
+  the solution grid. `CLAUDE.md` and `DOC_ALGO/FR/ReadMe.md` updated to
+  describe both changes and the diversity comparison.
+
+- `FREE_BLACK_PER_LINE` lowered from 2 to 1, at the user's explicit
+  request — `make_pattern`'s row/column-balancing score now only discounts
+  1 black cell per row/column before counting against it (`max(0,
+  row_black - 1) + max(0, col_black - 1)`), rather than 2, meaning a
+  row/column starts being penalized relative to emptier ones from its 2nd
+  black cell onward instead of its 3rd. A single constant change (both its
+  own comment and the docstring copy of the same explanation in
+  `make_pattern` updated together, since both had spelled out "2" in
+  prose, not just the constant). Verified live: a real `generate_grid()`
+  run (15×10, seed 2) succeeded in 308.29s — structurally valid, every
+  word matching the solution grid, within this exploration's established
+  range. `CLAUDE.md` and `DOC_ALGO/FR/ReadMe.md` updated to describe the
+  new value.

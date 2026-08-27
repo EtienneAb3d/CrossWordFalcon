@@ -310,6 +310,23 @@ button:disabled {
   cursor: default;
 }
 
+/* Cells whose shown letter is a statistical hint (sample_letter_biases,
+   see CLAUDE.md), not a letter really placed by the search — see
+   script.js's renderAttemptPreview(), build_partial_letters_grid() — at
+   the user's explicit request. A thick inset border rather than a
+   background fill (as it first shipped) — reworked at the user's explicit
+   follow-up request specifically so this state survives being combined
+   with .impossible's red background below on the same cell (a background-
+   color would simply be overwritten by whichever of the two rules is
+   declared last; a border composes independently of the fill underneath
+   it, same technique already used for #grid's own .word-highlight). Reuses
+   --accent (the same blue already used for that .word-highlight border on
+   the real, playable grid) rather than --selected, since --selected is a
+   pastel meant specifically for background fills, not a border color. */
+#attempt-preview-grid .cell.white.forced {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 /* Cells of an "impossible zone" (a slot with no candidate word left at all
    at the shown snapshot — see script.js's renderAttemptPreview(),
    Filler.impossible_zone_cells()) at the user's explicit request — reuses

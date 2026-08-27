@@ -197,8 +197,22 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   mechanism in `backend/app.py` (as `job["last_impossible_cells"]`, sharing a small
   `_latest()` helper rather than duplicating the direct-vs-`last_attempt`-nested lookup
   a second time), at the user's explicit request, to highlight those specific cells in
-  the web UI. See `frontend/static/script.js`'s `renderAttemptPreview()` (style-guide
-  SKILL) for how the web UI displays both of these.
+  the web UI. `build_partial_letters_grid` also takes the same `forced_letters` dict
+  (see `sample_letter_biases` above) and overlays it onto `example_grid` for any cell no
+  real assignment already covers, returning `(letters_grid, forced_cells)` — the latter
+  becomes `diagnostics["forced_cells"]`, persisted the same way as the other two
+  (`job["last_forced_cells"]`) — at the user's explicit request, so the preview also
+  shows *which* letters are statistical hints rather than real search progress.
+  `forced_cells` lists *every* cell `forced_letters` ever set, not only the ones still
+  showing the guessed letter (a covered cell shows its real, confirmed letter instead) —
+  this replaced an initial version that only reported the still-unconfirmed subset, after
+  a live report that doing so made the preview's highlight nearly disappear as a
+  generation progressed: `sample_letter_biases` itself kept producing a stable 6-7 forced
+  cells per attempt across every black-cell ratio tested, but the "still-unconfirmed"
+  filter alone could and did legitimately reach zero once a search made enough real
+  progress to cover most of them — a correct computation, but a confusing signal, since
+  it looked indistinguishable from a broken pre-fill. See `frontend/static/script.js`'s
+  `renderAttemptPreview()` (style-guide SKILL) for how the web UI displays all three.
 - `backend/app.py` — **back** FastAPI server: exposes `generate_grid()` as a JSON API
   via a relative import (`from .crossword_gen import ...`). No static files, no
   `/docs`/`/openapi.json` (disabled) — any other path 404s by default. The request's
@@ -1263,11 +1277,12 @@ There is no test suite, linter, or build step in this repo.
    order, ranked by the *original* row+column black-cell-totals heuristic as the
    primary criterion, with `_black_neighbor_count` (fewest already-black
    orthogonal/4-side neighbors) as a secondary tie-break. The primary criterion
-   itself now discounts `FREE_BLACK_PER_LINE` (2) black cells per row/column before
-   they count at all — `max(0, row_black - 2) + max(0, col_black - 2)` — at the
-   user's explicit request: up to 2 black cells on a given row/column is normal, not
-   something to balance away starting from the very first one; only past that does
-   adding another to an already-loaded line start losing to a less-loaded one.
+   itself now discounts `FREE_BLACK_PER_LINE` (1 — lowered from 2 at the user's
+   explicit request) black cell per row/column before they count at all —
+   `max(0, row_black - 1) + max(0, col_black - 1)` — at the user's explicit request:
+   up to 1 black cell on a given row/column is normal, not something to balance away
+   starting from the very first one; only past that does adding another to an
+   already-loaded line start losing to a less-loaded one.
    Deliberately lets some parts of the grid fragment more (shorter words) while
    other parts stay comparatively open (longer words) instead of pushing every
    row/column toward an identical count — verified live: a 15×10 grid's column
@@ -1369,7 +1384,42 @@ There is no test suite, linter, or build step in this repo.
 2. **CSP fill** (`Filler` / `_backtrack`): `extract_slots` turns the black/white pattern
    into across/down word slots; `build_index` pre-indexes the word list by
    `(length, position, letter)` so slot domains can be computed by set intersection
-   instead of a linear scan (needed because the full lexicon is 100k+ words). Backtracking
+   instead of a linear scan (needed because the full lexicon is 100k+ words). Before the
+   real search even starts, `_pattern_attempt` calls `sample_letter_biases` (at the user's
+   explicit request) to seed it with a statistical guess: for every slot, draw
+   `LETTER_BIAS_SAMPLE_SIZE` (100) words at random — filtered only by length, not validated
+   against any other slot, a plain uniform sample, not weighted by the wordlist's own
+   frequency column — then tally, per cell, which letter came up most often in that sample.
+   Any cell whose winning letter's tally exceeds `LETTER_BIAS_MIN_COUNT` (10) out of the
+   100-word sample is *eligible* to be locked in as a soft hint (not a real assignment — see
+   `Filler.forced_letters`/`_domain` below) — a weak consensus (a letter that only "won"
+   because every other letter was even more scattered, not because it genuinely dominates)
+   doesn't reliably mean enough real words remain once forced. Eligible cells are then drawn
+   **at random** (not "highest tally first", an earlier version of this rule — see below) up
+   to `LETTER_BIAS_FORCE_FRACTION` (5% — lowered from 10% at the user's explicit request) of
+   the grid's white-cell count, **at most one forced cell per slot** — a crossing cell spends
+   the quota of *both* slots touching it. That one-per-slot cap was added after live testing
+   found the literal per-cell-independent version broken: two or more cells forced
+   independently on the same long slot are each just "the mode of 100 separate, position-
+   blind samples," with no guarantee any single real word actually has all of those letters
+   at once — measured directly, one 15-letter slot's forced letters matched *zero* real
+   words, and up to 9 of 10 benchmark seeds failed the very first `_backtrack` check outright
+   (`checks=1`) before the cap; zero such instant failures after it, verified on the same 10
+   seeds. The random draw (`rng.shuffle(eligible)` before the same one-per-slot selection
+   loop) replaced an earlier "sort eligible candidates by tally descending, take the highest
+   first" version, at the user's explicit request, after a reported problem: taking the
+   strongest consensus first meant the *same* dominant letter of the language (whichever
+   letter happens to be most common at a given position across many same-length slots) ended
+   up forced onto most slots of that length, run after run — not much actual variety.
+   Verified live with a direct before/after comparison across 15 patterns: for length-10
+   slots (the most common length on the standard benchmark), the old sorted-first version
+   forced only 4 distinct letters across 55 forced cells with one letter ('S') dominating
+   58% of them; the random version reached 8 distinct letters across 60 forced cells with
+   the top letter down to 40% — roughly double the variety, less dominated by any one
+   letter. `Filler.forced_letters` (a `{cell: letter}` dict, empty by default)
+   is folded into `_domain`'s own constraint-gathering as a fallback: a cell's real crossing
+   assignment (once made) always wins over the forced hint, which only applies as long as
+   neither slot through that cell has actually been assigned yet. Backtracking
    search runs a 5-tier selection rule at every pick, at the user's explicit request:
    `LOW_DOMAIN_MRV_THRESHOLD` (10 — raised from 5 earlier in the same exploration, after a
    report of fill attempts failing too often, to switch to MRV earlier, while a shrinking
