@@ -470,7 +470,14 @@ languageSelect.addEventListener("change", () => {
 
 applyTranslations();
 
-const POLL_INTERVAL_MS = 700;
+// Raised from 700ms to 2000ms at the user's explicit request, after a
+// reported sporadic 502 on /api/generate/status with no corresponding trace
+// at all in the backend's own log (see frontend/server.py's PROXY_TIMEOUT_S
+// for the full diagnosis) — the user doesn't need sub-second status
+// updates, and polling less often means fewer chances to catch the backend
+// mid-stall during a heavy generation (up to PARALLEL_ATTEMPTS parallel CSP
+// search processes, see crossword_gen.py).
+const POLL_INTERVAL_MS = 2000;
 
 // Hard ceiling on any single fetch to this origin (the /api/generate and
 // /api/generate/status polls) — without this, a fetch left hanging (server
@@ -478,10 +485,10 @@ const POLL_INTERVAL_MS = 700;
 // other stall between browser and server) never resolves nor rejects on its
 // own, leaving pollJob's loop stuck on an unresolved await indefinitely with
 // no way for the user to recover short of reloading the page. Set above
-// frontend/server.py's own outbound proxy timeout to the backend (10s) so a
-// legitimately slow-but-healthy round trip through the proxy doesn't race
-// against this client-side abort.
-const FETCH_TIMEOUT_MS = 15000;
+// frontend/server.py's own outbound proxy timeout to the backend
+// (PROXY_TIMEOUT_S, 30s as of this value) so a legitimately slow-but-healthy
+// round trip through the proxy doesn't race against this client-side abort.
+const FETCH_TIMEOUT_MS = 35000;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

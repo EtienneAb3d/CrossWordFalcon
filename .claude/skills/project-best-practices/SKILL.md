@@ -3429,3 +3429,40 @@ content (the French crossword words/clues, the web UI text) stays in French
   comment existed directly alongside it to update. `CLAUDE.md` and
   `DOC_ALGO/FR/ReadMe.md` updated to describe the new increment and this
   live-verified result.
+
+- A user report of a sporadic `502 Bad Gateway` on `/api/generate/status`
+  (on a separate deployment this session had no direct access to — all
+  diagnosis was code-reading plus the user's own log excerpts, not live
+  reproduction) was worked through jointly: several consecutive `200 OK`
+  responses for the same `job_id`, then one `502`, with **zero**
+  corresponding line in the backend's own access log for that exact
+  request — ruling out "backend was just slow but eventually handled it"
+  (uvicorn logs every request it actually processes, however late) and
+  narrowing it to either a backend restart or its single event loop being
+  briefly too CPU-starved (up to `PARALLEL_ATTEMPTS` parallel CSP-search
+  processes per generation) to `accept()` a new connection before
+  `frontend/server.py`'s then-10s proxy timeout fired — either way, the
+  connection never reached the FastAPI layer at all. The user proposed two
+  concrete mitigations rather than asking for root-cause certainty first
+  (not achievable without access to the affected machine): (1) poll less
+  often — sub-second status freshness was never actually needed; (2)
+  lengthen the middleware-to-backend timeouts to give more margin. Both
+  implemented: `frontend/static/script.js`'s `POLL_INTERVAL_MS` raised
+  700ms → 2000ms; `frontend/server.py`'s four separate `httpx.AsyncClient`
+  timeouts (10s for generate/status, 5s for health/system_info — no strong
+  reason for the split) consolidated into one shared `PROXY_TIMEOUT_S =
+  30.0` constant, all four call sites updated to use it. `script.js`'s own
+  `FETCH_TIMEOUT_MS` (browser→middleware) raised in step, 15000ms →
+  35000ms, to stay comfortably above `PROXY_TIMEOUT_S` — otherwise the
+  browser's own abort could fire *before* the middleware's proxy call even
+  finished waiting, racing against the very fix meant to help. Verified
+  live on this session's own dev deployment (restarted the frontend server
+  to pick up the change): confirmed the served `script.js` reflects both
+  new constants, a direct `GET /api/health` round-trips normally end to
+  end through the updated proxy, and a real `POST /api/generate` →
+  `GET /api/generate/status/{job_id}` job starts and polls correctly.
+  Can't confirm this actually prevents a recurrence on the affected
+  deployment specifically, since the root cause there was narrowed to two
+  candidates, not pinned down to one — reported honestly as risk
+  mitigation, not a confirmed fix. `CLAUDE.md` updated to describe both
+  changes and the reasoning.

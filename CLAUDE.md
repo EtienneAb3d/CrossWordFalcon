@@ -1112,11 +1112,24 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `http://127.0.0.1:8001`) so the browser only ever talks to one origin. `run_Falcon.sh`
   binds it to `0.0.0.0` (LAN-reachable, e.g. from a phone on the same network) — the
   back end stays on `127.0.0.1` only, it's never meant to be reached directly. Proxies
-  both `POST /api/generate` (now fast — the backend responds immediately with a
-  `job_id`, see above — so this needs only a short timeout, not the long one a single
-  blocking call used to require), `GET /api/generate/status/{job_id}` the
-  frontend polls for progress, and `GET /api/system_info` (see `backend/system_info.py`
-  below) for the info badge's tooltip. A blanket `@app.middleware("http")` sets
+  both `POST /api/generate` (fast — the backend responds immediately with a `job_id`,
+  see above), `GET /api/generate/status/{job_id}` the frontend polls for progress, and
+  `GET /api/system_info` (see `backend/system_info.py` below) for the info badge's
+  tooltip. Every proxied call shares one `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S)`
+  (30s) — raised from a previous 10s/5s split (shorter for `/api/health`/
+  `/api/system_info`, per the reasoning that only `/api/generate`/`/api/generate/status`
+  needed a longer one) at the user's explicit request, after a sporadic
+  `/api/generate/status` 502 was reported with *zero* corresponding trace in the
+  backend's own access log — meaning that specific connection never reached FastAPI at
+  all, pointing at either a backend restart or (more likely, given `generate_grid()` can
+  run up to `PARALLEL_ATTEMPTS` parallel CSP-search processes, see `crossword_gen.py`)
+  its single event loop being briefly too CPU-starved to `accept()` a new connection
+  before the old, shorter timeout fired. One shared value everywhere now, rather than a
+  per-endpoint split with no strong reason to differ. Verified live: restarted the
+  frontend server to pick up the change, confirmed a real generation job still starts
+  and polls correctly end to end through the updated proxy (`GET /api/health` and a
+  real `POST /api/generate` → `GET /api/generate/status/{job_id}` round trip both
+  returned normally). A blanket `@app.middleware("http")` sets
   `Cache-Control: no-store` (plus `Pragma`/`Expires`) on every response — static files
   and `/api/*` alike — so the browser never caches a stale `script.js`/`style.css`/etc.
   while the app is being edited directly. Static files are
@@ -1127,7 +1140,11 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   (`script.js` tracks `userLetters` separately from the API's `solution`), with "Solution"
   and "Vérification" toggle buttons to reveal/check answers. After submitting the form,
   `script.js`'s `pollJob()` repeatedly polls the status endpoint (every
-  `POLL_INTERVAL_MS`, 700ms) and turns each `{code, ...data}` step into a localized
+  `POLL_INTERVAL_MS`, 2000ms — raised from 700ms at the user's explicit request
+  alongside the `PROXY_TIMEOUT_S` change above, since sub-second status freshness
+  isn't actually needed and polling less often means fewer chances to catch the
+  backend mid-stall during a heavy generation) and turns each `{code, ...data}` step
+  into a localized
   message via `describeStep()` — falls back to the generic "generating…" message for a
   step code it doesn't recognize, so an older frontend build never breaks against a
   newer backend. Errors are localized the same way: a backend/proxy error carries a

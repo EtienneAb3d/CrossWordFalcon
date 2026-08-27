@@ -24,6 +24,23 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 VERSION_PATH = Path(__file__).resolve().parent.parent / "VERSION.txt"
 BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:8001")
 
+# Délai maximal accordé à un appel proxy vers le back avant d'abandonner et de
+# renvoyer un 502 au navigateur — à la demande explicite de l'utilisateur,
+# suite à un rapport de 502 sporadiques sur /api/generate/status sans aucune
+# trace correspondante dans le log du back (voir CLAUDE.md / le
+# project-best-practices SKILL) : rien dans le log applicatif signifie que la
+# connexion n'a jamais atteint la couche FastAPI, ce qui pointe soit vers un
+# redémarrage du process back, soit vers son event-loop ponctuellement trop
+# chargé pour accepter une nouvelle connexion à temps (une génération peut
+# lancer jusqu'à PARALLEL_ATTEMPTS processus CSP en parallèle — voir
+# crossword_gen.py) — relevé à 30s (contre 10s/5s selon l'endpoint
+# auparavant) pour laisser de la marge dans les deux cas, la même valeur pour
+# tous les appels proxy plutôt que des délais différents sans raison claire.
+# Voir aussi FETCH_TIMEOUT_MS dans frontend/static/script.js, qui doit rester
+# strictement supérieur pour ne jamais expirer côté navigateur avant ce
+# délai-ci côté proxy.
+PROXY_TIMEOUT_S = 30.0
+
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
@@ -47,10 +64,11 @@ async def proxy_generate(request: Request):
     # The backend runs generation as a background job and responds almost
     # immediately with a job_id (see backend/app.py) — the browser then
     # polls /api/generate/status/{job_id} for progress and the final
-    # result, so this call no longer needs a long timeout itself.
+    # result. PROXY_TIMEOUT_S is generous anyway (see its own comment),
+    # covering the rare case this specific call itself gets delayed too.
     body = await request.body()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(
                 f"{BACKEND_URL}/api/generate",
                 content=body,
@@ -67,7 +85,7 @@ async def proxy_generate(request: Request):
 @app.get("/api/generate/status/{job_id}")
 async def proxy_generate_status(job_id: str):
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/generate/status/{job_id}")
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
@@ -85,7 +103,7 @@ async def version():
 @app.get("/api/health")
 async def proxy_health():
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/health")
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail="Serveur back indisponible.")
@@ -95,7 +113,7 @@ async def proxy_health():
 @app.get("/api/system_info")
 async def proxy_system_info():
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/system_info")
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
