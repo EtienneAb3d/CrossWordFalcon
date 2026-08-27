@@ -18,6 +18,21 @@ function applyTranslations() {
     if (t[key]) el.setAttribute("aria-label", t[key]);
   });
   renderSystemInfoTooltip();
+  // Only redraws the idle-state placeholder, never a live hover
+  // definition (that's puzzle content, in the grid's own language, not
+  // interface chrome — see highlightWordAt()/clearHighlights() below).
+  if (!hoveredGridCell) renderHoverDefinitionPlaceholder();
+}
+
+// Idle state for #hover-definition (see the style-guide SKILL) — shown
+// initially, and restored by clearHighlights() whenever the mouse leaves
+// a hoverable word. Kept as its own function, called from applyTranslations()
+// too, so a UI language change re-translates it live (mirrors
+// renderSystemInfoTooltip()'s "fetch/compute once, redraw per language"
+// pattern) without touching a definition currently being shown.
+function renderHoverDefinitionPlaceholder() {
+  hoverDefinition.textContent = I18N[uiLanguage].hoverDefinitionPlaceholder;
+  hoverDefinition.classList.add("placeholder");
 }
 
 const form = document.getElementById("generate-form");
@@ -27,6 +42,7 @@ const status = document.getElementById("status");
 const result = document.getElementById("result");
 const stats = document.getElementById("stats");
 const gridEl = document.getElementById("grid");
+const hoverDefinition = document.getElementById("hover-definition");
 const cluesAcross = document.getElementById("clues-across");
 const cluesDown = document.getElementById("clues-down");
 const solutionBtn = document.getElementById("solution-btn");
@@ -34,6 +50,8 @@ const checkBtn = document.getElementById("check-btn");
 const versionBadge = document.getElementById("version-badge");
 const infoBadge = document.getElementById("info-badge");
 const infoTooltip = document.getElementById("info-tooltip");
+const attemptPreview = document.getElementById("attempt-preview");
+const attemptPreviewGrid = document.getElementById("attempt-preview-grid");
 
 fetch("/api/version")
   .then((r) => r.json())
@@ -119,6 +137,7 @@ function wordCellsAt(row, col, direction) {
 function clearHighlights() {
   document.querySelectorAll(".cell.word-highlight").forEach((el) => el.classList.remove("word-highlight"));
   document.querySelectorAll(".clue-segment.hover-highlight").forEach((el) => el.classList.remove("hover-highlight"));
+  renderHoverDefinitionPlaceholder();
 }
 
 // Shared by both hover directions (grid -> clue list and clue list ->
@@ -127,7 +146,13 @@ function clearHighlights() {
 // the matching clue-segment span by its own data-row/col/direction — set
 // from the same word-start position wordCellsAt() itself resolves to
 // (cells[0]), so this never needs to search puzzle.words to find "which
-// word is this".
+// word is this". Also fills #hover-definition with that same segment's
+// own text (reused as-is, "(N) clue text", rather than a fresh
+// puzzle.words lookup — one less place that needs the noDefinition
+// fallback logic already applied once in renderClueLines()) — the
+// user's explicit request for a fixed 3-line panel under the grid, so a
+// player can read the currently-hovered word's definition without the
+// full across/down clue lists in view at the same time.
 function highlightWordAt(row, col, direction) {
   clearHighlights();
   if (!puzzle || !isWhite(row, col)) return;
@@ -139,7 +164,11 @@ function highlightWordAt(row, col, direction) {
   const start = cells[0];
   const selector = `.clue-segment[data-row="${start.row}"][data-col="${start.col}"][data-direction="${direction}"]`;
   const segment = document.querySelector(selector);
-  if (segment) segment.classList.add("hover-highlight");
+  if (segment) {
+    segment.classList.add("hover-highlight");
+    hoverDefinition.textContent = segment.textContent;
+    hoverDefinition.classList.remove("placeholder");
+  }
 }
 
 // Vertical word on Shift or CapsLock (either one), horizontal otherwise —
@@ -165,6 +194,50 @@ function updateHoverForModifierKey(event) {
 function setStatus(message, isError) {
   status.textContent = message;
   status.classList.toggle("error", Boolean(isError));
+}
+
+// Shows a small, read-only snapshot of the most-filled-in state a failed
+// generation attempt reached before giving up (see backend/crossword_gen.py's
+// try_fill, diagnostics["example_grid"]) — at the user's explicit request,
+// so a slow or ultimately-failing generation isn't a black box: the player
+// gets a visual sense of what was tried. `exampleGrid` is a 2D array of
+// single characters — "#" for black, "." for a white cell whose word wasn't
+// yet determined, any other character for a placed letter — the same shape
+// backend/crossword_gen.py already uses for `pattern`/`solution` on a
+// successful grid, so no separate parsing is needed here. `impossibleCells`
+// (diagnostics["impossible_cells"], possibly empty/undefined — see
+// Filler.impossible_zone_cells()'s own docstring for when it can be empty)
+// is an array of [row, col] pairs, highlighted with a light red background
+// (same --incorrect-bg token already used for a wrong letter on the real
+// grid, at the user's explicit request) — the cells of whichever slot(s)
+// had no candidate word left at all at this snapshot.
+function renderAttemptPreview(exampleGrid, impossibleCells) {
+  if (!exampleGrid || !exampleGrid.length) return;
+  const height = exampleGrid.length;
+  const width = exampleGrid[0].length;
+  const impossibleSet = new Set((impossibleCells || []).map(([r, c]) => `${r},${c}`));
+  attemptPreviewGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
+  attemptPreviewGrid.innerHTML = "";
+  for (let r = 0; r < height; r++) {
+    for (let c = 0; c < width; c++) {
+      const ch = exampleGrid[r][c];
+      const cell = document.createElement("div");
+      if (ch === BLACK) {
+        cell.className = "cell black";
+      } else {
+        cell.className = "cell white";
+        if (ch !== ".") cell.textContent = ch;
+        if (impossibleSet.has(`${r},${c}`)) cell.classList.add("impossible");
+      }
+      attemptPreviewGrid.appendChild(cell);
+    }
+  }
+  attemptPreview.hidden = false;
+}
+
+function hideAttemptPreview() {
+  attemptPreview.hidden = true;
+  attemptPreviewGrid.innerHTML = "";
 }
 
 function isWhite(r, c) {
@@ -230,6 +303,7 @@ function renderGrid() {
   // any hover state referring to it) is about to become stale.
   cellElements = new Map();
   hoveredGridCell = null;
+  renderHoverDefinitionPlaceholder();
 
   const corner = document.createElement("div");
   corner.className = "cell header-cell";
@@ -291,6 +365,25 @@ function renderGrid() {
       gridEl.appendChild(cell);
     }
   }
+
+  // #hover-definition's CSS width: 100% (stretching to #grid-column's own
+  // auto-computed width) turned out not to be enough to make long
+  // definitions wrap, even with min-width: 0 on the panel itself — reported
+  // live by the user, the box still grew to fit unwrapped text. Root cause:
+  // #grid-column is *itself* a flex item (of #board, flex-shrink: 0) with
+  // the browser's default min-width: auto, so its own auto-computed width
+  // can still be pulled wide by an unwrapped child's natural size before
+  // any child-level min-width: 0 gets a chance to matter — a compounding
+  // version of the same flexbox gotcha across two nested containers, not
+  // fixed by patching only the inner one. Sidesteps the whole
+  // auto-sizing/stretch ambiguity by setting #hover-definition's width
+  // explicitly, in pixels, to #grid's own actual rendered width — read
+  // *after* every cell above has been appended, so offsetWidth reflects
+  // the grid's final layout, not a partial one. Guaranteed correct
+  // regardless of any flex/grid intrinsic-sizing subtlety, since it's an
+  // explicit measured value rather than something left for the browser to
+  // infer from content.
+  hoverDefinition.style.width = `${gridEl.offsetWidth}px`;
 }
 
 // Format habituel des mots croisés : les définitions horizontales sont
@@ -379,8 +472,29 @@ applyTranslations();
 
 const POLL_INTERVAL_MS = 700;
 
+// Hard ceiling on any single fetch to this origin (the /api/generate and
+// /api/generate/status polls) — without this, a fetch left hanging (server
+// process killed mid-connection rather than cleanly refusing it, or any
+// other stall between browser and server) never resolves nor rejects on its
+// own, leaving pollJob's loop stuck on an unresolved await indefinitely with
+// no way for the user to recover short of reloading the page. Set above
+// frontend/server.py's own outbound proxy timeout to the backend (10s) so a
+// legitimately slow-but-healthy round trip through the proxy doesn't race
+// against this client-side abort.
+const FETCH_TIMEOUT_MS = 15000;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Turns one backend progress step ({code, ...data} — see
@@ -438,11 +552,33 @@ function describeErrorCode(t, code, fallbackText) {
 // grid.
 async function pollJob(jobId, t) {
   while (true) {
-    const response = await fetch(`/api/generate/status/${jobId}`);
+    let response;
+    try {
+      response = await fetchWithTimeout(`/api/generate/status/${jobId}`, {}, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      // Covers both a hard timeout (AbortError, see FETCH_TIMEOUT_MS) and an
+      // outright connection failure (e.g. the server process died) — either
+      // way there's no response to read a structured error code from, so a
+      // dedicated, translated message stands in for describeErrorCode's
+      // usual backend-error-code lookup.
+      throw new Error(t.errorConnectionLost);
+    }
     const data = await response.json();
     if (!response.ok) {
       throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
     }
+    // A failed generation attempt's own diagnostics (see backend/
+    // crossword_gen.py's try_fill, diagnostics["example_grid"]) are
+    // persisted server-side as `last_example_grid` (backend/app.py) rather
+    // than read off `data.step` directly — `step` reflects only the single
+    // latest progress event, and the very next one (e.g. the next palier's
+    // "pattern" step) can overwrite it before this poll ever sees it, at a
+    // cadence a POLL_INTERVAL_MS-spaced client can easily miss outright.
+    // `last_example_grid` instead always holds the most recent one, so the
+    // preview reliably stays populated with the last attempt's own grid
+    // through to the error message on total failure, not just during live
+    // progress and not only when the timing happens to line up.
+    if (data.last_example_grid) renderAttemptPreview(data.last_example_grid, data.last_impossible_cells);
     if (data.status === "error") {
       throw new Error(describeErrorCode(t, data.error_code, data.error));
     }
@@ -468,13 +604,19 @@ form.addEventListener("submit", async (event) => {
   solutionBtn.hidden = true;
   checkBtn.hidden = true;
   setStatus(t.statusGenerating, false);
+  hideAttemptPreview();
 
   try {
-    const response = await fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ language, width, height, difficulty }),
-    });
+    let response;
+    try {
+      response = await fetchWithTimeout("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language, width, height, difficulty }),
+      }, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      throw new Error(t.errorConnectionLost);
+    }
 
     const data = await response.json();
 
@@ -492,10 +634,23 @@ form.addEventListener("submit", async (event) => {
     solutionBtn.classList.remove("active");
     checkBtn.classList.remove("active");
 
+    hideAttemptPreview();
+    // #result (and so #grid, its descendant) must already be visible before
+    // renderGrid() runs: it measures gridEl.offsetWidth to size #hover-
+    // definition (see renderGrid()'s own comment) — while #result is still
+    // `hidden`, every element inside it lays out at zero size regardless of
+    // how many cells were appended, so that measurement would silently
+    // read 0 and leave #hover-definition's width stuck at "0px" (an inline
+    // style, not a stylesheet rule, which is exactly why it wasn't obvious
+    // from reading the CSS alone) — reported live from an actual browser.
+    // Showing #result a few statements earlier than before causes no
+    // visible flash: nothing awaits between here and renderGrid()/
+    // renderClues() actually repopulating it, so the browser never paints
+    // an intermediate empty frame.
+    result.hidden = false;
     renderGrid();
     renderClues(gridData.words);
     stats.textContent = t.stats(gridData.word_count, gridData.black_count, (gridData.black_ratio * 100).toFixed(1));
-    result.hidden = false;
     solutionBtn.hidden = false;
     checkBtn.hidden = false;
     setStatus(t.statusGenerated, false);

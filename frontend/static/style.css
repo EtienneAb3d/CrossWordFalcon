@@ -206,12 +206,73 @@ button:disabled {
   margin-top: 1rem;
 }
 
+/* Wraps #grid and #hover-definition so the definition panel sits directly
+   below the grid specifically (not the whole #board row, which also
+   includes the #clues sidebar) — a plain flex column, no explicit width:
+   #grid sizes itself from its own grid-template-columns, and
+   #hover-definition's width: 100% below then stretches to match it via
+   the column's default align-items: stretch. */
+#grid-column {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+
 #grid {
   display: inline-grid;
   flex-shrink: 0;
   gap: 2px;
   background: var(--border);
   border: 2px solid var(--border);
+}
+
+/* Fixed-height, always-3-lines-tall panel showing the definition of
+   whichever word is currently hovered (grid cell or clue line — both
+   paths go through highlightWordAt()/clearHighlights() in script.js), at
+   the user's explicit request: lets a player read the current word's
+   definition without needing the full across/down clue lists in view at
+   the same time. Height is fixed (not auto-growing with the text) so the
+   layout never shifts as different definitions are shown; line-height is
+   given in rem (not a unitless multiplier) so "3 lines" maps to an exact,
+   predictable height. overflow-y: auto rather than clipping, so an
+   unusually long definition can still be read by scrolling within the
+   fixed window instead of being cut off outright.
+   min-width: 0 is load-bearing, not decoration: #grid-column sizes itself
+   from its children's natural width (see the comment above it), and a
+   block element's natural/max-content width for that computation is how
+   wide its text would be laid out on a *single unwrapped line* — without
+   overriding the flex/grid default of min-width: auto, a long definition
+   made the whole box (and #grid-column with it) stretch wide enough to
+   fit the text on one line instead of wrapping within the fixed 3-line
+   height, exactly the bug reported live. min-width: 0 lets this element
+   shrink below that unwrapped width, so normal text wrapping actually
+   takes effect at the width #grid already dictates. overflow-wrap:
+   break-word is defensive, for the rare case of one single "word" (e.g.
+   a run-on LLM artifact) wider than the box on its own. */
+#hover-definition {
+  margin: 0;
+  width: 100%;
+  min-width: 0;
+  overflow-wrap: break-word;
+  height: 4.5rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--white-cell);
+  color: var(--fg);
+  font-size: 0.9rem;
+  line-height: 1.5rem;
+  overflow-y: auto;
+}
+
+/* Idle state (nothing currently hovered) reads as a hint, not a real
+   definition — lighter, italic text distinguishes it from the moment a
+   real clue is shown, so a player never mistakes the placeholder for an
+   actual (oddly generic) clue. */
+#hover-definition.placeholder {
+  color: #777;
+  font-style: italic;
 }
 
 .cell {
@@ -223,6 +284,47 @@ button:disabled {
   justify-content: center;
   font-weight: 600;
   font-size: 1rem;
+}
+
+/* Live preview of a failed generation attempt's most-filled-in state (see
+   script.js's renderAttemptPreview()), at the user's explicit request — a
+   glimpse of what was tried, not a real interactive grid: reuses the same
+   .cell/.white/.black classes/colors as #grid for visual consistency, but
+   scoped smaller (1.1rem vs. 2rem) since this is a quick, secondary
+   glance, not the main puzzle, and non-interactive (no cursor: pointer,
+   no hover/selection states — those only make sense for a real playable
+   grid). No row/column headers either, for the same "quick glance" reason. */
+#attempt-preview-grid {
+  display: inline-grid;
+  gap: 1px;
+  background: var(--border);
+  border: 2px solid var(--border);
+  margin-top: 0.5rem;
+}
+
+#attempt-preview-grid .cell {
+  width: 1.1rem;
+  height: 1.1rem;
+  font-size: 0.6rem;
+  font-weight: 500;
+  cursor: default;
+}
+
+/* Cells of an "impossible zone" (a slot with no candidate word left at all
+   at the shown snapshot — see script.js's renderAttemptPreview(),
+   Filler.impossible_zone_cells()) at the user's explicit request — reuses
+   --incorrect-bg (the same light red already used for a wrong letter on
+   the real, playable grid) rather than introducing a new color token, so
+   "something is wrong here" reads consistently across both contexts. */
+#attempt-preview-grid .cell.white.impossible {
+  background: var(--incorrect-bg);
+}
+
+#attempt-preview-label {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #777;
+  font-style: italic;
 }
 
 .cell.white {

@@ -456,6 +456,7 @@ def make_pattern(rows, cols, black_ratio, rng):
     return grid
 
 
+
 # ---------- Extraction des cases (slots across / down) ----------
 
 def extract_slots(grid, rows, cols):
@@ -510,6 +511,30 @@ def build_index(by_length):
 
 # ---------- CSP : remplissage par backtracking + MRV ----------
 
+# Règle de sélection unifiée de Filler._backtrack, à la demande explicite de
+# l'utilisateur ("tirer les emplacements toujours avec le même principe :
+# probabilité sur les longueurs, le MRV prend la main si des emplacements
+# passent en dessous de ce nombre de possibilités") : à CHAQUE tirage, sans
+# exception ni fenêtre de tirages particuliers (contrairement à plusieurs
+# versions précédentes de cette règle — voir le project-best-practices SKILL
+# pour l'historique complet), on tire au hasard parmi les emplacements non
+# assignés, pondéré par la longueur (favorise les emplacements les plus
+# longs) — SAUF si un seul emplacement non assigné, n'importe lequel, est
+# tombé sous ce nombre de mots possibles restants : dans ce cas, présélection
+# MRV (uniquement parmi le ou les emplacements avec le moins de mots
+# possibles restants), toujours départagée par le même tirage pondéré par la
+# longueur. Ce seuil est ce qui reste de l'ancien filet de sécurité — la
+# fenêtre de tirages (10 premiers, avec un sous-régime encore différent pour
+# les 2 tout premiers) qui l'entourait auparavant a été supprimée dans cette
+# simplification. Relevé de 5 à 10 à la demande explicite de l'utilisateur
+# après un rapport de tentatives de remplissage qui échouaient trop souvent —
+# bascule vers le MRV (recherche du prochain emplacement le plus contraint)
+# plus tôt, dès qu'un emplacement a encore 10 mots possibles ou moins, plutôt
+# que d'attendre qu'il n'en reste que 5, pour repérer un emplacement en train
+# de se resserrer dangereusement plus tôt dans le remplissage.
+LOW_DOMAIN_MRV_THRESHOLD = 10
+
+
 class Filler:
     def __init__(self, slots, index, rng):
         self.slots = slots
@@ -523,9 +548,32 @@ class Filler:
         for i, cells in enumerate(slots):
             for pos, cell in enumerate(cells):
                 self.cell_to_slots[cell].append((i, pos))
+        # "across" ou "down" par emplacement, précalculé une fois pour
+        # l'alternance horizontal/vertical de _backtrack (voir plus bas) —
+        # même convention que build_word_entries : un emplacement de plus
+        # d'une case est horizontal si sa 2e case est sur la même ligne que
+        # la 1re, vertical sinon (un emplacement d'une seule case — cas
+        # inexistant ici puisque extract_slots exige au moins 2 cases — n'a
+        # pas d'importance pour ce cas de figure).
+        self.directions = [
+            "across" if len(cells) > 1 and cells[1][0] == cells[0][0] else "down"
+            for cells in slots
+        ]
         self.assignment = [None] * len(slots)
         self.used_words = set()
         self.checks = 0
+        # Copie de l'assignation au moment où le plus grand nombre
+        # d'emplacements ont été remplis simultanément au cours de toute la
+        # recherche, quel que soit l'endroit exact où elle a fini par
+        # échouer — contrairement à self.assignment (qui revient à
+        # [None, ...] une fois la recherche entièrement défaite par le
+        # backtracking), best_assignment garde la trace de l'état le plus
+        # avancé atteint. Pur diagnostic, à la demande explicite de
+        # l'utilisateur : ne déclenche aucune tentative de récupération (ni
+        # retouche, ni retry) — seulement un aperçu à faire remonter en cas
+        # d'échec, voir try_fill/diagnostics["example_grid"].
+        self.best_assignment = list(self.assignment)
+        self.best_assigned_count = 0
 
     def _domain(self, i):
         """Ensemble/liste des mots compatibles avec les lettres déjà connues de
@@ -556,29 +604,128 @@ class Filler:
                 return ()
         return result
 
+    def _placed_letter_count(self, i):
+        """Nombre de cases de l'emplacement i dont la lettre est déjà connue
+        (imposée par un emplacement croisé déjà assigné) — utilisé par
+        _backtrack comme critère de sélection principal (voir ci-dessous),
+        pas par _domain (qui a besoin du détail case->lettre, pas juste du
+        compte)."""
+        cells = self.slots[i]
+        count = 0
+        for cell in cells:
+            for j, _ in self.cell_to_slots[cell]:
+                if j != i and self.assignment[j] is not None:
+                    count += 1
+                    break
+        return count
+
     def solve(self, deadline_checks):
         return self._backtrack(deadline_checks)
+
+    def impossible_zone_cells(self):
+        """Cases appartenant à un emplacement non assigné, dans l'état
+        self.best_assignment (le point le plus avancé atteint avant
+        l'abandon — voir __init__), dont le domaine est vide (aucun mot ne
+        convient compte tenu des lettres déjà fixées par les emplacements
+        croisés) — les "zones impossibles" à mettre en évidence dans
+        l'aperçu d'une tentative échouée (voir try_fill,
+        diagnostics["impossible_cells"]), à la demande explicite de
+        l'utilisateur. Peut être vide : le point le plus avancé atteint
+        n'est pas forcément celui où la recherche a fini par échouer — par
+        exemple un échec par épuisement du budget de vérifications
+        (`deadline_exceeded`) peut survenir alors que tous les domaines à
+        ce moment-là restaient non vides, juste pas encore résolus à
+        temps."""
+        saved = self.assignment
+        self.assignment = self.best_assignment
+        cells = set()
+        for i, word in enumerate(self.best_assignment):
+            if word is None and not self._domain(i):
+                cells.update(self.slots[i])
+        self.assignment = saved
+        return sorted(cells)
 
     def _backtrack(self, deadline_checks):
         self.checks += 1
         if self.checks > deadline_checks:
             return False
         unassigned = [i for i in range(len(self.slots)) if self.assignment[i] is None]
+        assigned_count = len(self.slots) - len(unassigned)
+        if assigned_count > self.best_assigned_count:
+            self.best_assigned_count = assigned_count
+            self.best_assignment = list(self.assignment)
         if not unassigned:
             return True
 
-        # MRV : on ne matérialise/filtre (mots déjà utilisés) que le domaine
-        # de la case retenue, pas ceux de toutes les cases non assignées.
-        best_i, best_domain, best_size = None, None, None
+        # On calcule le domaine de chaque emplacement non assigné ici (et on
+        # échoue immédiatement si l'un d'eux est déjà à sec), pour détecter
+        # une branche morte le plus tôt possible — que ce domaine serve
+        # ensuite à une présélection MRV ou pas (voir ci-dessous).
+        domains = {}
         for i in unassigned:
             domain = self._domain(i)
-            size = len(domain)
-            if size == 0:
+            if not domain:
                 return False
-            if best_size is None or size < best_size:
-                best_i, best_domain, best_size = i, domain, size
+            domains[i] = domain
 
-        cands = [w for w in best_domain if w not in self.used_words]
+        # Règle de sélection à 5 niveaux, à la demande explicite de
+        # l'utilisateur :
+        # 1. le MRV garde la priorité absolue (voir LOW_DOMAIN_MRV_THRESHOLD
+        #    ci-dessus) : dès qu'un emplacement non assigné — n'importe
+        #    lequel, pas nécessairement celui qui serait choisi — est tombé
+        #    sous ce nombre de mots possibles restants, on se restreint
+        #    au(x) emplacement(s) avec le moins de mots possibles restants,
+        #    et on saute directement les niveaux suivants ;
+        # 2. sinon, on alterne d'abord horizontal/vertical : on tire la
+        #    catégorie (across ou down) au hasard, avec une probabilité
+        #    proportionnelle au nombre d'emplacements encore libres dans
+        #    chacune des 2 catégories (self.directions, précalculé dans
+        #    __init__) — une catégorie qui a encore beaucoup d'emplacements
+        #    non remplis a plus de chances d'être choisie que l'autre, ce
+        #    qui tend naturellement à alterner/équilibrer les deux au fil du
+        #    remplissage sans figer un ordre strict ;
+        # 3. à l'intérieur de la catégorie tirée, priorité aux emplacements
+        #    qui ont le plus de cases encore blanches (non déterminées par
+        #    un croisement déjà assigné) — ce sont ceux qui courent le plus
+        #    grand risque de se retrouver bloqués à cause des tirages
+        #    suivants (plus une case reste longtemps non déterminée, plus
+        #    elle peut encore recevoir une contrainte défavorable d'un
+        #    emplacement croisé qui n'est pas encore posé), donc autant les
+        #    traiter tôt pendant qu'ils ont encore le plus de marge ;
+        # 4. à égalité sur ce critère, priorité aux emplacements qui ont déjà
+        #    le plus de lettres fixées par des emplacements croisés déjà
+        #    assignés (_placed_letter_count) — un emplacement presque
+        #    entièrement déterminé par ses croisements est traité avant un
+        #    emplacement encore complètement vierge ;
+        # 5. à égalité sur ce dernier critère (ou dans le cas MRV du niveau
+        #    1, à nombre de mots possibles restants égal), tirage au hasard
+        #    pondéré par la longueur (favorise les emplacements les plus
+        #    longs) — même formule de poids partout, seul le bassin de
+        #    candidats change selon le critère qui s'applique.
+        min_size = min(len(d) for d in domains.values())
+        if min_size < LOW_DOMAIN_MRV_THRESHOLD:
+            candidates = [i for i in unassigned if len(domains[i]) == min_size]
+        else:
+            free_across = [i for i in unassigned if self.directions[i] == "across"]
+            free_down = [i for i in unassigned if self.directions[i] == "down"]
+            if free_across and free_down:
+                direction_pool = self.rng.choices(
+                    [free_across, free_down],
+                    weights=[len(free_across), len(free_down)],
+                    k=1,
+                )[0]
+            else:
+                direction_pool = free_across or free_down
+            placed_counts = {i: self._placed_letter_count(i) for i in direction_pool}
+            free_cell_counts = {i: len(self.slots[i]) - placed_counts[i] for i in direction_pool}
+            max_free = max(free_cell_counts.values())
+            free_pool = [i for i in direction_pool if free_cell_counts[i] == max_free]
+            max_placed = max(placed_counts[i] for i in free_pool)
+            candidates = [i for i in free_pool if placed_counts[i] == max_placed]
+        weights = [len(self.slots[i]) for i in candidates]
+        best_i = self.rng.choices(candidates, weights=weights, k=1)[0]
+
+        cands = [w for w in domains[best_i] if w not in self.used_words]
         self.rng.shuffle(cands)
         for w in cands:
             self.assignment[best_i] = w
@@ -594,12 +741,20 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=
     """`diagnostics`, if given a dict, is filled in with data useful to
     understand *why* a fill attempt failed (see generate_grid's
     "pattern_failed" logging): `slot_count`/`length_counts` (the CSP's
-    shape, independent of the word list), and `checks`/`reason` (how far
+    shape, independent of the word list), `checks`/`reason` (how far
     the search got — "search_exhausted" means every candidate was tried
     within budget and none worked, a genuine dead end for this pattern;
     "deadline_exceeded" means the `deadline_checks` budget ran out first,
     inconclusive; "no_slots" means the pattern had no white run >= 3
-    cells at all)."""
+    cells at all), and, on failure only, `example_grid` — a snapshot
+    (`build_partial_letters_grid`) of the most-filled-in state the search
+    ever reached before giving up, at the user's explicit request, so a
+    failed attempt can be shown to the user (not just logged) instead of
+    disappearing with no visible trace of what was tried — and
+    `impossible_cells` (`Filler.impossible_zone_cells()`), the cells of
+    whichever unassigned slot(s), at that same snapshot, had no candidate
+    word left at all, for the UI to highlight (may be empty — see that
+    method's own docstring for why)."""
     slots = extract_slots(grid, rows, cols)
     if diagnostics is not None:
         diagnostics["slot_count"] = len(slots)
@@ -608,6 +763,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=
         if diagnostics is not None:
             diagnostics["checks"] = 0
             diagnostics["reason"] = "no_slots"
+            diagnostics["example_grid"] = grid
+            diagnostics["impossible_cells"] = []
         return None
     filler = Filler(slots, index, rng)
     solved = filler.solve(deadline_checks)
@@ -618,6 +775,9 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=200_000, diagnostics=
             else "deadline_exceeded" if filler.checks >= deadline_checks
             else "search_exhausted"
         )
+        if not solved:
+            diagnostics["example_grid"] = build_partial_letters_grid(grid, slots, filler.best_assignment)
+            diagnostics["impossible_cells"] = filler.impossible_zone_cells()
     if solved:
         return slots, filler.assignment
     return None
@@ -702,6 +862,25 @@ def print_grid(grid):
 def build_letters_grid(rows, cols, slots, assignment):
     letters = [[BLACK] * cols for _ in range(rows)]
     for cells, word in zip(slots, assignment):
+        for (r, c), ch in zip(cells, word):
+            letters[r][c] = ch
+    return letters
+
+
+def build_partial_letters_grid(grid, slots, assignment):
+    """Comme build_letters_grid, mais pour un remplissage abandonné en
+    cours de route (voir try_fill, diagnostics["example_grid"]) — à la
+    demande explicite de l'utilisateur, pour donner un aperçu de ce qui a
+    été tenté avant qu'une tentative échoue, affiché côté interface.
+    Contrairement à build_letters_grid, `assignment` peut contenir des
+    `None` (emplacement jamais atteint par la recherche) : part du motif
+    noir/blanc réel (`grid`, où chaque case blanche non encore déterminée
+    reste WHITE) plutôt que de tout initialiser à BLACK en supposant que
+    chaque emplacement sera rempli."""
+    letters = [row[:] for row in grid]
+    for cells, word in zip(slots, assignment):
+        if word is None:
+            continue
         for (r, c), ch in zip(cells, word):
             letters[r][c] = ch
     return letters
@@ -801,7 +980,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 break
             last_diag = outcomes[-1][2]
             progress("pattern_attempt_failed", attempt=attempt + 1, ratio=round(ratio, 3), **last_diag)
-            ratio = min(ratio + 0.03, 0.45)
+            ratio = min(ratio + 0.02, 0.45)
 
     if best is None:
         progress("pattern_failed", attempts=attempts, last_attempt=last_diag)

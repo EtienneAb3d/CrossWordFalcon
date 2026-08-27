@@ -327,3 +327,242 @@ English (see `project-best-practices`).
   from both a word's start cell and a middle cell. The actual pixel-level
   hover appearance in a real browser is still unverified and owed, same
   caveat as the info badge.
+
+- added a fixed-height, always-3-lines-tall panel (`#hover-definition`)
+  directly below the grid, at the user's explicit request: shows the
+  definition of whichever word is currently hovered (grid cell or clue
+  line — both hover paths already went through the same `highlightWordAt()`
+  /`clearHighlights()` pair, see the entry above, so this needed hooking
+  into exactly those two functions and nothing else), so a player can read
+  the current word's clue without keeping the full across/down clue lists
+  in view. Placed "under the grid" literally, not under the whole
+  `#board` row (which also has the `#clues` sidebar): wrapped `#grid` and
+  the new panel in a new `#grid-column` flex column, so the panel's
+  `width: 100%` stretches to match `#grid`'s own intrinsic width via the
+  column's default `align-items: stretch`, rather than the sidebar's
+  width or the row's full remaining space. Height is a fixed `4.5rem`
+  (3 × a `1.5rem` line-height given in rem, not a unitless multiplier, so
+  "3 lines" is an exact, predictable height) rather than auto-growing
+  with the text, so the layout never shifts as different definitions are
+  shown; `overflow-y: auto` lets an unusually long definition still be
+  read by scrolling within the fixed window instead of being cut off.
+  Idle state (nothing hovered) shows a translated placeholder
+  (`hoverDefinitionPlaceholder`, all 5 languages) in lighter italic text
+  (`.placeholder`) so it reads as a hint, never mistaken for a real
+  (oddly generic) clue — reuses the `renderSystemInfoTooltip()`-style
+  "compute/set once, redraw on language change" pattern via a new
+  `renderHoverDefinitionPlaceholder()`, called from `applyTranslations()`
+  (only when nothing is currently hovered — a live definition is puzzle
+  content, in the grid's own language, never touched by a UI-chrome
+  language change), from `clearHighlights()` (the idle state after a
+  hover ends), and from `renderGrid()`'s own reset block (so a freshly
+  generated/regenerated grid never shows a stale definition left over
+  from the previous one). Reuses the matching `.clue-segment`'s own
+  `textContent` (`"(N) clue text"`) directly for the shown definition
+  rather than a fresh `puzzle.words` lookup — one less place needing the
+  `noDefinition` fallback logic already applied once in
+  `renderClueLines()`. Verified: JS syntax-checked via a temporarily
+  `pip install`ed `esprima` (removed again after, same as the earlier
+  hover-highlighting work — not a runtime dependency), and confirmed via
+  a real HTTP request to the running frontend server that the served page
+  actually contains the new `#grid-column`/`#hover-definition` markup
+  (not just that the source files parse). Same caveat as the two entries
+  above: no browser-automation tooling in this environment, so the actual
+  rendered layout/hover interaction in a real browser is still unverified
+  and owed.
+
+- fixed a real bug in `#hover-definition` above, reported by the user
+  from actual use: a long definition stretched the whole box (and
+  `#grid-column` with it) wide instead of wrapping within the fixed
+  3-line height. Root cause is the classic flexbox/intrinsic-sizing
+  gotcha: `#grid-column` sizes itself from its children's natural width
+  (see that entry's own comment), and a block element's natural/max-
+  content contribution to that computation is how wide its text would be
+  laid out on a *single unwrapped line* — flex/grid items default to
+  `min-width: auto`, which (for this purpose) doesn't let the element
+  shrink below that unwrapped width, so a long clue could force the box
+  wider rather than wrap. Fixed with `min-width: 0` on `#hover-definition`
+  itself (the standard, well-documented fix for this exact class of bug),
+  which lets it shrink below its content's preferred width so normal text
+  wrapping actually takes effect at the width `#grid` already dictates;
+  added `overflow-wrap: break-word` too, defensively, for the rare case
+  of one single unbreakable "word" wider than the box on its own.
+  Verified structurally (confirmed via a real request to the running
+  frontend server that the served CSS contains the fix) — actual visual
+  wrapping in a real browser is still unverified, same standing caveat as
+  the rest of this feature.
+
+- the `min-width: 0` fix above did *not* actually resolve the bug — the
+  user reported, from real use, that long definitions still stretched
+  the box instead of wrapping. Root cause was a compounding version of
+  the same flexbox gotcha: `#grid-column` is *itself* a flex item (of
+  `#board`, `flex-shrink: 0`) with the browser's default
+  `min-width: auto`, so its own auto-computed width could still be pulled
+  wide by `#hover-definition`'s unwrapped content before the inner
+  element's own `min-width: 0` got a chance to matter — patching only the
+  innermost element wasn't enough once there were two nested
+  intrinsically-sized flex containers involved. Replaced the CSS-only
+  approach with an explicit, JS-set pixel width instead of relying on any
+  further flexbox auto-sizing fix: `renderGrid()` now sets
+  `hoverDefinition.style.width = gridEl.offsetWidth + "px"` right after
+  every cell has been appended (so `offsetWidth` reflects the grid's
+  final rendered width, not a partial layout) — an inline style, so it
+  overrides the CSS `width: 100%` rule outright. This sidesteps the
+  auto-sizing ambiguity entirely rather than fighting it: once
+  `#hover-definition` has a fixed pixel width, its contribution to
+  `#grid-column`'s own sizing is that same fixed number, not its text's
+  unwrapped max-content width, so neither element can be pulled wide by
+  long text anymore, and normal text wrapping applies inside the now-
+  fixed-width box. Left the earlier `min-width: 0`/`overflow-wrap:
+  break-word` CSS in place too (harmless, and a reasonable fallback for
+  the brief window before `renderGrid()` first runs). Also checked for
+  and ruled out an unrelated possible cause first: no `white-space:
+  nowrap` rule anywhere in the stylesheet applies to `#hover-definition`
+  or any of its ancestors (the only two `nowrap` rules in the file are
+  scoped to `.badge`/`.info-tooltip`). Verified: JS syntax-checked via
+  the same temporary-`esprima` method as before, and confirmed via a real
+  request to the running frontend server that it serves the updated
+  `renderGrid()`. Still no browser-automation tooling in this
+  environment, so — unlike the previous attempt at this same bug — this
+  fix is *not yet confirmed against an actual rendered browser*; flagged
+  clearly rather than declared fixed a second time on theory alone.
+
+- Reported: killing the frontend server (port 8000) while a generation
+  request is in progress crashed Firefox entirely (a full OS-level process
+  crash, per the user's own clarification — not just a hung/unresponsive
+  tab). Investigated the JS: `pollJob()`'s polling loop already wraps its
+  `fetch` in the surrounding `try`/`catch` and doesn't retry in a tight
+  loop on failure, so nothing in this codebase's own JS explained an actual
+  browser-process crash — that pointed toward a Firefox/OS-level issue
+  outside this app's control. Tried to get a concrete diagnostic from the
+  user (a Mozilla `about:crashes` report ID, then the macOS
+  `~/Library/Logs/DiagnosticReports/*.ips` crash log matching the UUID-
+  format ID the user did find, which confirmed this really was an OS-level
+  crash rather than a Firefox-internal one) — searched
+  `~/Library/Logs/DiagnosticReports/` directly by the given identifier and
+  found no matching Firefox report (only unrelated `cmTC_*` files from a
+  different date), and the user couldn't dig further themselves. With both
+  diagnostic avenues exhausted, added a defensive hardening regardless of
+  confirmed root cause, since it can only help: `fetchWithTimeout()`
+  (`AbortController` + `setTimeout`) now wraps every fetch to this origin
+  (`/api/generate`, `/api/generate/status/{job}` in `pollJob`'s loop), at
+  `FETCH_TIMEOUT_MS` (15s — deliberately above `frontend/server.py`'s own
+  10s outbound proxy timeout, so a legitimately slow-but-healthy round trip
+  through the proxy can't race against this client-side abort). A timeout
+  or an outright connection failure is now caught explicitly and mapped to
+  a new, translated `errorConnectionLost` string (added to all 5 languages
+  in `i18n.js`) instead of leaving `pollJob` to propagate whatever raw,
+  untranslated error message the browser's own `fetch` implementation
+  happened to throw. Verified: JS syntax-checked via the same temporary-
+  `esprima` method used elsewhere in this file (`10_000` had to become
+  `10000` — numeric separators aren't valid ES syntax to this aging parser,
+  though they are to a real browser; kept the plain form anyway purely so
+  this project's own verification method keeps working). Explicitly **not**
+  confirmed to fix the reported crash itself — no browser-automation
+  tooling in this environment, and, per the investigation above, the actual
+  root cause looks like it lives in Firefox/the OS rather than in this
+  app's code; this closes off "a fetch could hang forever" as one
+  contributing mechanism this app's own code could control, nothing more.
+
+- Added a live "attempt preview" (`#attempt-preview`/`#attempt-preview-grid`,
+  `renderAttemptPreview()`/`hideAttemptPreview()` in `script.js`), at the
+  user's explicit request — "pour affichage dans l'interface, afin de se
+  faire une idée de ce qui a été tenté" (so the interface can give a sense
+  of what was tried): whenever a generation attempt fails (see
+  `backend/crossword_gen.py`'s `try_fill`, `diagnostics["example_grid"]`,
+  CLAUDE.md), the poll response's `step.example_grid` (mid-generation, one
+  palier out of several failing) or `step.last_attempt.example_grid`
+  (terminal failure, right before the job errors out) is rendered as a
+  small read-only grid — the most-filled-in state that specific attempt
+  reached before giving up. Placed between `#status` and `#result`, shown
+  as soon as the first such event arrives and left visible through a
+  terminal error (so the last attempt stays on screen next to the error
+  message), only cleared at the very start of a new generation
+  (`hideAttemptPreview()` in the form submit handler) or once a generation
+  actually succeeds (the real interactive `#grid` takes over at that
+  point). Deliberately reuses `#grid`'s own `.cell`/`.white`/`.black`
+  classes/colors for visual consistency (this reads as "a crossword grid",
+  not an unrelated new widget) but scopes them smaller
+  (`#attempt-preview-grid .cell`, 1.1rem vs. `#grid`'s 2rem) and strips
+  every interactive affordance (`cursor: default`, no hover/selection
+  states, no row/column headers) — this is a quick, secondary glance at
+  what the solver tried, not a second playable grid. A single new
+  `attemptPreviewLabel` string added to all 5 languages in `i18n.js`,
+  wired through the existing `data-i18n` convention. Verified: JS syntax-
+  checked via the same temporary-`esprima` method used elsewhere in this
+  file, confirmed the running frontend server serves every updated file
+  (`index.html`/`style.css`/`script.js`/`i18n.js`), and confirmed against
+  the *real* backend end-to-end — started an actual generation job over
+  the API, and both `backend.log` and a direct poll of `GET /api/generate/
+  status/{job_id}` showed a genuine `pattern_attempt_failed` event
+  carrying a well-formed, letter-populated `example_grid` (and, forcing a
+  terminal failure with `attempts=1` in a direct Python call, confirmed the
+  nested `last_attempt.example_grid` shape too) — the frontend-side
+  rendering itself is still unverified in an actual browser, same
+  documented limitation as every other visual feature added in this
+  session (no browser-automation tooling in this environment).
+
+- Reported next: the preview never actually appeared, `#attempt-preview`
+  observed stuck at `display: none`. Root cause was a polling race, not a
+  CSS bug: `backend/app.py`'s `job["step"]` gets fully overwritten by
+  *every* progress event, so a failed attempt's `example_grid` only lived
+  in the API response for the single poll window before the next event
+  (often the next palier's plain "pattern" step) overwrote it — a client
+  polling every `POLL_INTERVAL_MS` could easily poll right past that
+  narrow window every single time, never once catching it, which reads
+  from the browser exactly like "this never renders." Fixed on the backend
+  (CLAUDE.md has the detail) by persisting the most recent one separately
+  as `job["last_example_grid"]`, which — unlike `job["step"]` — only ever
+  changes when a *new* one actually arrives. `script.js` simplified to
+  match: reads `data.last_example_grid` directly instead of the previous
+  `data.step.example_grid || data.step.last_attempt.example_grid` check.
+  Verified live against the real backend (restarted to pick up the fix):
+  polled an actual failing job 20 times in a row after the field first
+  turned non-null — stayed non-null on all 20, confirming the preview data
+  is now reliably available regardless of polling timing. The rendering
+  itself is still unverified in an actual browser, per the entry above.
+
+- Added highlighting for "impossible zones" within the attempt preview
+  above, at the user's explicit request: cells belonging to a slot that had
+  no candidate word left at all, at the snapshot shown, get a light red
+  background — reusing `--incorrect-bg` (`.cell.white.impossible`), the
+  same token already used for a wrong letter on the real, playable grid,
+  rather than a new color, so "something is wrong here" reads consistently
+  across both contexts (permanent rule 2: no new literal color if a token
+  already fits). Backend side: `Filler.impossible_zone_cells()` (see
+  CLAUDE.md) computes this from `best_assignment`, persisted the same way
+  as `example_grid` (`job["last_impossible_cells"]` in `backend/app.py`,
+  sharing the just-added `_latest()` helper rather than duplicating the
+  same "check `data`, then `data["last_attempt"]`" logic a second time).
+  `renderAttemptPreview()` takes a second `impossibleCells` parameter (an
+  array of `[row, col]` pairs, possibly empty/absent) and adds `.impossible`
+  to the matching white cells. Verified live against the real backend
+  (restarted to pick up the change): polled a real failing job repeatedly
+  and confirmed `last_impossible_cells` appears alongside
+  `last_example_grid`, with a genuinely non-zero, growing cell count across
+  the run (15 → 16) as later attempts contributed their own impossible
+  zones. Rendering itself still unverified in an actual browser, per the
+  entries above.
+
+- Fixed a real bug reported live from an actual browser (the first visual
+  confirmation any of this session's UI-only additions had actually
+  received): `#hover-definition` showed an inline `width: 0px` instead of
+  the grid's real width. Root cause: `renderGrid()`'s own width-measurement
+  fix (`hoverDefinition.style.width = gridEl.offsetWidth + "px"`, added
+  earlier in this project's history) ran *before* `result.hidden = false`
+  in the form submit handler — while `#result` is still `hidden`,
+  everything inside it (including `#grid`) lays out at zero size
+  regardless of how many cells were just appended, so the measurement
+  silently read 0. Every *other* `renderGrid()` call site (cell selection,
+  typing, the solution/checking toggles) was already safe, since those are
+  only reachable once a grid — and so a visible `#result` — already exists;
+  only the very first render, right after a new grid finishes generating,
+  had the ordering wrong. Fixed by moving `result.hidden = false` a few
+  statements earlier, right before `renderGrid()` instead of after —
+  causes no visible flash, since nothing `await`s between the two
+  statements and `renderGrid()`/`renderClues()` repopulate the now-visible
+  container synchronously in the same tick. JS syntax-checked via the same
+  temporary-`esprima` method used throughout this file; the fix itself
+  still awaits a second live-browser confirmation from the user, same as
+  every other visual change made without direct browser access this
+  session.

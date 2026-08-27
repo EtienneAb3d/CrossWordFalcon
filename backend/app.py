@@ -103,6 +103,7 @@ def _new_job():
     JOBS[job_id] = {
         "status": "running", "step": {"code": "starting"}, "result": None,
         "error": None, "error_code": None,
+        "last_example_grid": None, "last_impossible_cells": None,
     }
     return job_id
 
@@ -111,8 +112,36 @@ async def _run_generate_job(job_id, req):
     job = JOBS[job_id]
     short_id = job_id[:8]
 
+    def _latest(data, key):
+        """A failed attempt's diagnostics (example_grid/impossible_cells —
+        see crossword_gen.py's try_fill, CLAUDE.md) are otherwise only
+        visible in `job["step"]` for the single progress event that
+        carries them — the very next event (e.g. the next palier's plain
+        "pattern" step, which carries neither) overwrites `job["step"]`
+        entirely, so a client polling every POLL_INTERVAL_MS (frontend/
+        static/script.js) can easily miss that narrow window outright,
+        especially when paliers resolve faster than the poll interval.
+        Looks for `key` directly on `data` (mid-generation) or nested under
+        `data["last_attempt"]` (the terminal "pattern_failed" step)."""
+        value = data.get(key)
+        if value is None:
+            last_attempt = data.get("last_attempt")
+            if isinstance(last_attempt, dict):
+                value = last_attempt.get(key)
+        return value
+
     def progress(step, **data):
         job["step"] = {"code": step, **data}
+        # Persisted separately (see _latest's docstring above), updated
+        # only when a new value actually arrives, so the frontend's
+        # renderAttemptPreview() always has the most recent one available
+        # regardless of polling timing.
+        example_grid = _latest(data, "example_grid")
+        if example_grid is not None:
+            job["last_example_grid"] = example_grid
+        impossible_cells = _latest(data, "impossible_cells")
+        if impossible_cells is not None:
+            job["last_impossible_cells"] = impossible_cells
         logger.info("[%s] %s %s", short_id, step, data)
 
     try:

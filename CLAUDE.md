@@ -157,7 +157,48 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `backend.log` next time instead of re-deriving it by hand. `generate_grid()` also
   logs the loaded word list's `length_counts` once per request (`wordlist_loaded`)
   so a `require_gloss`/`max_words` combination that starves a specific slot length
-  down to very few (or zero) words is visible without guessing.
+  down to very few (or zero) words is visible without guessing. On failure,
+  `diagnostics` also carries `example_grid` — a letter/black-cell snapshot
+  (`build_partial_letters_grid`) of whichever point during the search had the most
+  slots simultaneously filled in (`Filler.best_assignment`, a lightweight, purely
+  diagnostic high-water-mark tracked in `_backtrack` — this is *not* the retry/patch
+  mechanism explored and fully reverted earlier in this project's history, just a
+  snapshot, no behavior change), regardless of exactly where the search eventually
+  gave up — added at the user's explicit request so a failed attempt has some visible
+  trace of what was tried instead of vanishing outright. `generate_grid()`'s
+  `progress("pattern_attempt_failed", ...)` call already spreads every diagnostics key
+  (including this one) into the event, and `progress("pattern_failed", ...,
+  last_attempt=last_diag)` nests it the same way on total failure — reaching
+  `job["step"]` in `backend/app.py` either way with no further backend wiring needed
+  for logging. Surfacing it to the *polled* API needed one more step, though: a bug
+  reported live (the frontend preview never actually appeared) traced back to
+  `job["step"]` being fully overwritten by every single progress event, including the
+  very next one after a failure (e.g. the next palier's plain "pattern" step, which
+  carries no `example_grid` of its own) — a client polling every
+  `POLL_INTERVAL_MS` (`frontend/static/script.js`) could easily poll right past that
+  one-event-wide window and never see it at all. Fixed by persisting it separately as
+  `job["last_example_grid"]`, updated only when a *new* one actually arrives (checking
+  both the direct and `last_attempt`-nested shapes) and otherwise left untouched, so
+  the polled API's `last_example_grid` field always reflects the most recent one
+  regardless of exactly when a client happens to poll. Verified live against the real
+  running backend, restarted to pick up the fix: polled a real failing generation job
+  repeatedly and confirmed `last_example_grid` turned non-null at one poll and then
+  stayed that way on every subsequent poll (20/20), unlike the old
+  `job["step"]`-only version, which — confirmed separately by direct testing — could
+  show it on one poll and lose it on the very next. `diagnostics` also carries
+  `impossible_cells` on failure — the cells of whichever unassigned slot(s), at that
+  same `best_assignment` snapshot, had an empty domain (no candidate word fit at all,
+  given the letters already fixed by assigned crossing slots), computed by
+  `Filler.impossible_zone_cells()`. Can legitimately be empty: the snapshot's own
+  high-water-mark point isn't necessarily where the search finally gave up (e.g. a
+  `deadline_exceeded` failure can occur with every domain at that point still
+  non-empty, just not resolved in time), so absence of any impossible cell there
+  doesn't mean anything is wrong. Persisted through the same `job["last_example_grid"]`
+  mechanism in `backend/app.py` (as `job["last_impossible_cells"]`, sharing a small
+  `_latest()` helper rather than duplicating the direct-vs-`last_attempt`-nested lookup
+  a second time), at the user's explicit request, to highlight those specific cells in
+  the web UI. See `frontend/static/script.js`'s `renderAttemptPreview()` (style-guide
+  SKILL) for how the web UI displays both of these.
 - `backend/app.py` — **back** FastAPI server: exposes `generate_grid()` as a JSON API
   via a relative import (`from .crossword_gen import ...`). No static files, no
   `/docs`/`/openapi.json` (disabled) — any other path 404s by default. The request's
@@ -1247,15 +1288,23 @@ There is no test suite, linter, or build step in this repo.
    also lowered at the user's explicit request, from a previous 0.22 default) and
    retries with an increasing ratio (up to `--attempts` times, default 40 — each an
    independent *palier*/step) until a fillable pattern is found. The increment itself
-   went through two live-tuned revisions after the original +0.02: widened to +0.05
-   when +0.02 turned out to make nearly every attempt below ~20-30% hit `try_fill`'s
-   own search deadline without resolving either way (not proven infeasible, just
-   inconclusive), then narrowed again to **+0.03** at the user's explicit request (a
-   finer-grained search of the low-ratio region) — this last change trades some
-   wall-clock time for that finer granularity, since more steps are typically needed
-   to reach a fillable ratio: measured 70.6s on the same 15×10 grid/seed used
-   throughout this whole exploration, up from the ~42-51s seen with +0.05, an
-   expected consequence of the smaller step, not a regression to fix. At each
+   went through several live-tuned revisions: the original +0.02 was widened to +0.05
+   when it turned out to make nearly every attempt below ~20-30% hit `try_fill`'s own
+   search deadline without resolving either way (not proven infeasible, just
+   inconclusive), then narrowed to +0.03 at the user's explicit request (a
+   finer-grained search of the low-ratio region — this traded some wall-clock time for
+   that finer granularity, since more steps are typically needed to reach a fillable
+   ratio: measured 70.6s on the same 15×10 grid/seed used throughout this whole
+   exploration, up from the ~42-51s seen with +0.05), and — after several other,
+   independent changes made to `Filler._backtrack`'s own selection rule and to
+   `make_pattern`'s heuristic since that measurement (all documented above/in the
+   project-best-practices SKILL) — narrowed again to **+0.02** at the user's explicit
+   request, back to the very first value tried in this whole exploration. Verified
+   live rather than assuming the original +0.02-was-too-slow finding still holds
+   unchanged after everything else that's since been revised: a real `generate_grid()`
+   run (15×10, seed 2) succeeded in 191.79s, still comfortably within this whole
+   exploration's measured range and no worse than the finer-grained +0.03 step it
+   replaced. At each
    step, `PARALLEL_ATTEMPTS` independent attempts — different `random.Random`
    seeds, each its own full motif + CSP fill — run concurrently in separate
    processes (`concurrent.futures.ProcessPoolExecutor`, `_pattern_attempt`/
@@ -1281,11 +1330,66 @@ There is no test suite, linter, or build step in this repo.
    `project-best-practices` SKILL for the full measured progression across all
    changes to this function.
 
+   A "patch the same pattern in place on fill failure" mechanism was tried this
+   session and then reverted, at the user's explicit request, once live measurement
+   showed it was too costly even after being capped: on a fill failure,
+   `_pattern_attempt` would add a black cell restricted to whichever slots had
+   actually held a letter at the deepest point the search reached (rather than
+   letting the outer palier loop regenerate an entirely fresh pattern), then retry —
+   up to a capped number of times per attempt. A single isolated worker chained 44
+   such patches over 448.77s and still failed; even capped at 5 patches per attempt,
+   full end-to-end `generate_grid()` runs on the standard benchmark seed swung
+   between under 600s and over 1500s (too costly and too unpredictable to keep) — the
+   user asked for the whole mechanism to be removed rather than tuned further. Fully
+   reverted: no `add_restricted_black_cell` function, no `Filler.best_assignment`
+   tracking, no `try_fill` `filled_cells` diagnostic, no `MAX_RESTRICTED_PATCHES`
+   constant — `_pattern_attempt` is back to exactly one `make_pattern` + `try_fill`
+   call per attempt, letting the ratio-ladder loop below handle every failure by
+   regenerating a fresh pattern at the next palier, same as before this session. See
+   the `project-best-practices` SKILL for the full episode (what was tried, measured,
+   and why it was removed).
+
 2. **CSP fill** (`Filler` / `_backtrack`): `extract_slots` turns the black/white pattern
    into across/down word slots; `build_index` pre-indexes the word list by
    `(length, position, letter)` so slot domains can be computed by set intersection
    instead of a linear scan (needed because the full lexicon is 100k+ words). Backtracking
-   search picks the most-constrained slot first (MRV heuristic) and respects a
+   search runs a 5-tier selection rule at every pick, at the user's explicit request:
+   `LOW_DOMAIN_MRV_THRESHOLD` (10 — raised from 5 earlier in the same exploration, after a
+   report of fill attempts failing too often, to switch to MRV earlier, while a shrinking
+   slot still has more room to be caught before it starves completely) still takes absolute
+   priority — if *any* unassigned slot's domain (not just the one that would otherwise be
+   picked) has dropped below it, the candidate pool narrows to just the slot(s) tied for the
+   smallest domain (classic MRV pre-selection), skipping every later tier entirely.
+   Otherwise, the pool is first narrowed by *direction*: `Filler.directions` (precomputed
+   once per slot in `__init__`, same across-vs-down convention as `build_word_entries`) picks
+   between the still-unassigned across slots and the still-unassigned down slots with a
+   weighted random draw — probability proportional to how many free slots remain in each of
+   the two categories (`self.rng.choices([free_across, free_down], weights=[len(free_across),
+   len(free_down)])`) — so the fill naturally alternates/self-balances between the two
+   categories over the course of a search rather than exhausting one before touching the
+   other, without pinning down a strict fixed order. Within whichever direction was drawn,
+   the next priority is *most remaining free (still-undetermined) cells* — `len(slot) -
+   Filler._placed_letter_count(i)` — on the reasoning that a slot with many cells not yet
+   fixed by a crossing is more exposed to picking up an unfavorable constraint from a
+   not-yet-placed crossing slot later on, so it's worth resolving while it still has the most
+   room to maneuver. Only *then*, among whichever slot(s) tie on that, does
+   `Filler._placed_letter_count(i)` itself (the most already-placed letters) break the tie —
+   this is deliberately the *opposite* preference from the tier just above (most free cells
+   vs. most placed letters), so it only ever matters among slots that already tied on free-
+   cell count, not as a competing global ranking. Whichever tier ends up mattering, the final
+   draw among the resulting candidate pool is the same length-weighted random choice used
+   throughout this whole exploration (favors longer slots) — one shared weight formula, only
+   the candidate pool differs depending on which tier applies. This replaced a 4-tier design
+   (MRV, then direction, then placed-letter-count directly, no free-cell-count step at all)
+   that itself had replaced a simpler 3-tier one, which itself had replaced a single-tier
+   design, which itself had replaced a much more elaborate pick-count-windowed design; see the
+   project-best-practices SKILL for the full history of this whole area. Verified live: a
+   real-search trace (15,160 picks) against an independently recomputed "which slots should be
+   eligible" check, now covering every one of the 5 tiers (direction consistency, then the
+   free-cell-count pool, then the placed-letter-count pool within it) — zero mismatches; a
+   real `generate_grid()` run (15×10, seed 2) succeeded in 151.02s, structurally valid, every
+   placed word matching the solution grid. And
+   respects a
    `deadline_checks` budget so a bad grid pattern fails fast instead of hanging. `Filler`
    takes its own seeded `rng` (see `_pattern_attempt` above — one independent RNG per
    parallel attempt, not the global `random` module or a single shared instance:

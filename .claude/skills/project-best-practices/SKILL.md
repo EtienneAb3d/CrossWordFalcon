@@ -2910,3 +2910,522 @@ content (the French crossword words/clues, the web UI text) stays in French
   (including cross-checking the exact math against each language's raw
   and gloss-filtered pool sizes), and confirmed `--help` now renders
   correctly instead of crashing.
+
+- `Filler._backtrack`'s slot-selection (`backend/crossword_gen.py`)
+  changed at the user's explicit request, in two parts: (1) ties on the
+  MRV criterion (multiple unassigned slots with the same smallest domain
+  size) are now broken by a random draw weighted by the *square* of the
+  slot's length (`self.rng.choices(tied, weights=[len(self.slots[i])**2
+  for i in tied])`) — favoring longer slots — instead of the previous
+  deterministic "first one found in slot-index order" tie-break; (2) an
+  exception for the first two slots picked in the whole fill (nothing
+  assigned yet, then exactly one assigned): the first is always the
+  longest *across* slot in the grid, the second always the longest
+  *down* slot, bypassing MRV entirely for just those two picks (falls
+  back to the normal rule if no slot exists in the required direction).
+  Reused the length-squared weighting already established elsewhere in
+  this file for "favor longer" scoring (the parallel-attempt grid
+  selection) for consistency. Added `_direction()` (same across/down
+  convention as `build_word_entries`) and `_longest_in_direction()`
+  helpers; restructured the per-node domain scan to keep every
+  unassigned slot's domain in a dict (`domains`) instead of discarding
+  all but the best one, so the eventually-chosen slot's domain is never
+  recomputed a second time — same number of `_domain()` calls overall as
+  the original code, just retained rather than thrown away. Verified
+  live in stages: unit-tested `_longest_in_direction()` directly against
+  a real generated pattern (confirmed it matches a brute-force scan for
+  both directions); statistically verified the weighted random tie-break
+  over 20,000 draws against three slots of length 3/5/8 — observed
+  proportions (9.2%/25.6%/65.2%) matched the theoretical length² weights
+  (9.2%/25.5%/65.3%) closely; then ran two real end-to-end 15×10 grid
+  generations. Found a real, consistent cost: 104.16s and 110.74s, both
+  well above the ~70.6s baseline measured immediately before this change
+  (same grid size/wordlist) — not a one-off, both runs landed in the
+  same range, so reported honestly as the real cost of this feature as
+  specified (overriding MRV's own smallest-domain choice for the first
+  two picks, and for ties elsewhere, likely steers the search away from
+  whichever slot MRV alone would have picked to minimize backtracking)
+  rather than silently accepted or hidden. `CLAUDE.md`'s Architecture
+  section updated with the same measured numbers.
+
+- Extended the long-word bias above from the first 2 picks to the first
+  `LONG_WORD_FIRST_PICKS` picks, at the user's explicit request (sent
+  mid-turn while unrelated frontend work was in progress — finished that
+  first, then switched to this). Picks 1-2 keep their exact prior
+  deterministic behavior (longest across, then longest down) unchanged;
+  picks 3 through `LONG_WORD_FIRST_PICKS` now draw at random, weighted by
+  length², from *every* unassigned slot — not just MRV-tied ones, which
+  is what the existing tie-break already did — extending the same
+  weighting mechanism to be the dominant selection signal for this early
+  window rather than only a tie-breaker. First set to 10 (matching the
+  user's literal request); verified live on the same two 15×10 grid/seed
+  pairs used throughout this whole exploration and found a serious cost:
+  166.95s and 358.82s, both far above the ~104-111s measured for the
+  2-pick-only version and up to ~5x the ~70.6s original baseline.
+  Presented this data directly and asked how to proceed (keep as-is,
+  reduce the pick count, or revert to 2) rather than silently shipping or
+  reverting; user chose to reduce toward 4-5. Set to 5, re-verified with
+  the same two seeds: 164.97s and 162.17s — a real improvement over 10
+  for one seed, essentially no improvement for the other, and still
+  clearly above the 2-pick baseline either way. Reported this honestly
+  too rather than declaring the reduction a full fix: 5 is a real,
+  accepted cost, not a cost fully resolved by reducing from 10. All three
+  measurement rounds recorded in `LONG_WORD_FIRST_PICKS`'s own comment,
+  `CLAUDE.md`'s Architecture section, and `DOC_ALGO/FR/ReadMe.md` (which
+  also explains, in plain French, why picks 3-5 are still random/
+  probabilistic rather than a fixed deterministic order like picks 1-2).
+
+- Reverted the extension above back to exactly 2 forced picks, at the
+  user's explicit request, sent mid-turn while an unrelated frontend bug
+  fix was in progress (finished that first, then switched). Given
+  `LONG_WORD_FIRST_PICKS = 2` makes the "picks 3 through N, weighted-
+  random among all unassigned slots" branch permanently unreachable
+  (`assigned_count` is never simultaneously outside {0, 1} *and* `< 2`),
+  removed that branch and the `LONG_WORD_FIRST_PICKS` constant entirely
+  rather than leave inert, never-taken code around for a parameter no
+  longer in use — back to the exact original 2-pick-only implementation
+  (deterministic longest-across, then longest-down, falling back to the
+  MRV/weighted-tie-break rule for every pick after). Verified live:
+  compiled cleanly, confirmed no remaining references to the removed
+  constant, and re-ran the same 15×10/seed=2 benchmark used throughout
+  this whole exploration — 97.52s, back in line with the original
+  104-111s 2-pick range (not the 162-359s range measured for the 5- and
+  10-pick versions). `CLAUDE.md`'s Architecture section and
+  `DOC_ALGO/FR/ReadMe.md` both reverted to describe the 2-pick-only
+  behavior, keeping a brief historical note that wider versions were
+  tried and measured before landing back here, rather than erasing that
+  record entirely.
+
+- Redesigned `Filler._backtrack`'s slot selection once more, at the
+  user's explicit request, sent mid-turn while a frontend hover-panel bug
+  fix was in progress (finished that first, then switched). Two changes
+  combined: (1) reintroduced `LONG_WORD_FIRST_PICKS` (10), but with a
+  different mechanism than the earlier 10/5-pick versions — no MRV
+  pre-selection at all for these picks, just a direct weighted-random
+  draw over *every* unassigned slot (removing the deterministic
+  longest-across/longest-down 2-pick anchor entirely, since the new rule
+  covers picks 1-2 the same way as 3-10); past `LONG_WORD_FIRST_PICKS`,
+  reverted to the original MRV-preselect-then-weighted-tiebreak rule.
+  (2) Changed the length weighting from squared (`len(slot) ** 2`) to
+  linear (`len(slot)`) everywhere it's used — both in the first-10-picks
+  draw and the MRV tie-break — at the user's explicit request. Removed
+  `_direction()`/`_longest_in_direction()` entirely along with the
+  deterministic anchor, since nothing else used them. Verified live:
+  unit-tested the linear weighting statistically (20,000 draws over
+  lengths 3/5/8 — observed 19.0%/30.8%/50.2% vs. theoretical
+  18.75%/31.25%/50%, matching closely), then ran two real 15×10 grid
+  generations on the same benchmark seeds used throughout this whole
+  exploration — 358.75s and 161.25s, landing in essentially the same
+  range as the earlier *squared*-weighting 10-pick version (167-359s),
+  confirming the dominant cost driver is bypassing MRV for 10 whole
+  picks, not the weighting exponent — still well above the ~104-111s
+  2-pick baseline. Reported this plainly rather than re-opening another
+  AskUserQuestion round, since the user had just been through the same
+  cost/benefit tradeoff for a closely related design and explicitly
+  chose to revisit a 10-pick approach with full context. `CLAUDE.md`'s
+  Architecture section and `DOC_ALGO/FR/ReadMe.md` updated to describe
+  this current design and its real measured cost, with the fuller
+  iteration history (2 deterministic → squared-weighted 10 → squared-
+  weighted 5 → back to 2 deterministic → this linear-weighted 10)
+  summarized rather than repeated in full for the third time.
+
+- Two more quick iterations on the same selection logic, both at the
+  user's explicit request, sent in immediate succession: (1) "add back
+  drawing among the longest words for the first 2 attempts" — added a
+  distinct first tier back for picks 1-2 specifically: restrict candidates
+  to whichever unassigned slots share the current *maximum* length (not
+  the single deterministic longest-across/longest-down slot from an
+  earlier version, and not folded into the general picks-1-10 pool
+  either), the weighted-random draw over the rest of picks 3-10 kept
+  unrestricted; verified live that picks 1-2 do come out at the true max
+  length each time (traced via monkey-patching `rng.choices`) before
+  moving on. (2) "on steps 3 to 10, draw the smallest slots first" — a
+  genuine reversal of direction for that specific window: changed the
+  weight formula for picks 3-`LONG_WORD_FIRST_PICKS` from `len(slot)`
+  (favor longest) to `1 / len(slot)` (favor shortest) — picks 1-2 and the
+  MRV-tie-break for picks past 10 both keep favoring *longest*, unchanged;
+  only the 3-10 window flipped. Verified live: statistically confirmed the
+  inverse weighting (lengths 3/5/8 → observed 50.3%/30.3%/19.3%, favoring
+  the shortest, vs. the previous version's inverse ordering), traced a
+  real pattern's first 12 picks (picks 3-10 now visibly shorter — mostly
+  3-6 — than the immediately preceding version), then ran a real 15×10
+  grid end-to-end: 269.94s, essentially unchanged from the immediately
+  preceding (longest-favoring, unrestricted-picks-1-10) version's 270.90s
+  — confirming again, on yet another variant, that the dominant cost is
+  bypassing MRV for a window of picks at all, not which direction or how
+  strongly the length weighting points within that window. `CLAUDE.md`'s
+  Architecture section and `DOC_ALGO/FR/ReadMe.md` both updated to
+  describe this 3-tier design (picks 1-2 restricted-to-max-length,
+  picks 3-10 inverse-weighted toward shortest, picks 11+ back to the
+  original MRV+longest-weighted-tiebreak rule) and its measured cost,
+  condensing rather than repeating the now-long iteration history in full
+  each time.
+
+- A `LOW_DOMAIN_MRV_THRESHOLD = 5` safety valve was added next ("in steps 3
+  to 10, if slots drop below 5 possible remaining words, apply MRV"): within
+  the picks-3-10 window, if any unassigned slot's domain dropped below 5,
+  the pick fell back to MRV instead of the window's normal favor-shortest
+  draw. A live trace confirmed exact correlation between the fallback firing
+  and the true domain size. The user then corrected the scope ("starting
+  from cycle 2, not only 3 to 10") — pick 2 had been left out of the
+  original version, still using the max-length-restricted regime
+  unconditionally; fixed by restructuring the condition so the low-domain
+  override applies to any pick from the 2nd onward (never the 1st). Both
+  versions were short-lived: superseded almost immediately by the full
+  unified-rule redesign below, at the user's own next request, before either
+  one's timing could be cleanly finalized (concurrent background load on the
+  test machine made the wall-clock numbers gathered for the "cycle 2" fix
+  unreliable — see the note on measurement noise below).
+
+- **The whole pick-count-windowed design (pick 1 restricted-to-max-length,
+  picks 2-10 favor-shortest-with-MRV-safety-valve, picks past 10 MRV) was
+  replaced by a single unified rule**, at the user's explicit request:
+  "tirer les emplacements toujours avec le même principe : probabilité sur
+  les longueurs, le MRV prend la main si des emplacements passent en
+  dessous de 5 possibilités" (always draw with the same principle —
+  probability weighted by length — MRV takes over once any slot drops below
+  5 remaining words). This removed `LONG_WORD_FIRST_PICKS` entirely (no more
+  special-casing by pick number, including the very first pick, which had
+  always been restricted to max-length slots in every earlier version) —
+  `Filler._backtrack` now always draws from every unassigned slot,
+  length-weighted, unless any slot's domain has dropped below
+  `LOW_DOMAIN_MRV_THRESHOLD` (5), in which case the candidate pool narrows
+  to the MRV-tied slot(s) first, using the identical length-weighted
+  tie-break either way — the two branches now share one weight formula,
+  differing only in which slots are eligible. Verified live: traced 3,867
+  real picks against a live-recomputed domain-size check at each decision
+  point — zero mismatches between "MRV branch taken" and "some slot's
+  domain was actually below 5".
+
+- **Failed fill attempts now patch the same pattern instead of being
+  discarded outright**, at the user's explicit request: "si une tentative
+  de remplissage échoue, mémoriser les emplacements où il y a des lettres,
+  pour ne tirer une nouvelle case noire que sur ces emplacements (avec les
+  mêmes règles appliquées à ces emplacements que quand on prenait en compte
+  toute la grille)". Implementation: `Filler` now tracks `best_assignment`/
+  `best_assigned_count` — a snapshot taken (cheaply, only on a new high
+  water mark) of whichever point during the whole search had the most slots
+  simultaneously assigned, regardless of why the search eventually failed
+  (this matters because `self.assignment` itself is always back to all-`None`
+  by the time `solve()` returns `False` — backtracking undoes every
+  assignment as it unwinds, so the final state alone can't tell you which
+  slots ever held a letter). `try_fill` exposes this on failure as
+  `diagnostics["filled_cells"]` — every grid cell belonging to a slot that
+  had a letter at that snapshot. A new function, `add_restricted_black_cell`,
+  mirrors `make_pattern`'s exact per-step selection rule (32-cell window,
+  row/column-balance discount as primary criterion, direct adjacency as
+  tie-break) but restricted to a given cell set, returning whether it
+  managed to add one valid cell. `_pattern_attempt` now loops: on a failed
+  `try_fill`, call `add_restricted_black_cell` with the failed attempt's own
+  `filled_cells`, then retry `try_fill` on the patched pattern; repeat until
+  success, until `add_restricted_black_cell` can't find a valid cell in the
+  restricted set, or until `filled_cells` is empty. The reasoning behind
+  targeting *filled* slots specifically (not the never-reached ones): it's
+  the fixed letters from slots that *did* get assigned that constrain the
+  never-assigned slots into failure, so relaxing that specific pressure is
+  where a new black cell actually helps; a black cell dropped into a region
+  the search never even reached relaxes nothing.
+
+  Verified correctness live at each step before measuring cost: `filled_cells`
+  always resolved to genuine white cells from the failed pattern;
+  `add_restricted_black_cell` never touched a cell outside the allowed set
+  and correctly returned `False`/left the grid untouched when given an empty
+  set; the full retry loop terminated correctly (bounded — every iteration
+  turns one white cell black, and the grid has finitely many).
+
+  Left uncapped, this loop turned out to be expensive: a single isolated
+  worker (no multiprocessing, seed 42) chained 44 restricted-cell patches
+  over 448.77s and still failed (`deadline_exceeded` on the last try_fill
+  call); a full `generate_grid()` run (10 parallel workers + the outer
+  ratio-ladder loop, seed 2) went from the historical ~150-270s range to
+  573.31s on the very first real measurement. Reported this transparently
+  via `AskUserQuestion` rather than silently shipping or silently reverting
+  — offered keeping it as-is, shrinking the per-retry `deadline_checks`
+  budget, capping the number of restricted patches per attempt, or dropping
+  the mechanism entirely (keeping only the unified-rule simplification
+  above). The user chose capping the patch count. Added
+  `MAX_RESTRICTED_PATCHES = 5` (a plain module constant, not
+  env-configurable, matching `LOW_DOMAIN_MRV_THRESHOLD`'s precedent rather
+  than `PARALLEL_ATTEMPTS`'s — nothing in the request asked for runtime
+  tuning) and threaded a `patches` counter into `_pattern_attempt`'s retry
+  loop. Verified on the *same* seed-42 single-worker case used to measure
+  the uncapped cost: 69.23s (vs. 448.77s uncapped), black cell count
+  confirming the loop stopped at exactly 5 patches as designed
+  (`8 initial + 5 = 13` black cells, matching `round(150 * 0.05) = 8`
+  starting cells plus the cap).
+
+  Full end-to-end `generate_grid()` numbers with the cap in place were
+  **not** reliable enough to report as a clean before/after figure: repeat
+  measurements of the identical seed/code swung from under 600s to over
+  1500s across different runs, including one case where running two
+  benchmark seeds *concurrently* produced numbers that, counter to the
+  initial contamination hypothesis, were actually *faster* than running the
+  same seed alone immediately afterward — evidence the noise source is
+  broader than simple CPU contention between the two test processes.
+  Real, plausible contributors present throughout this measurement session:
+  the project's own LLM server (`llama_cpp.server`) and both web servers
+  (`uvicorn backend.app:app`, `uvicorn frontend.server:app`) were all
+  running continuously in the background (started earlier in this same
+  session, outside this specific piece of work), each holding real CPU/RAM,
+  on a machine already asked to run up to `PARALLEL_ATTEMPTS` (10) parallel
+  CSP-search worker processes per palier — plausibly oversubscribing
+  available cores once combined with everything else competing for the same
+  hardware. Rather than presenting a noisy number as if it were a clean
+  comparison, the honest, low-noise single-worker figure above (448.77s →
+  69.23s, same seed, no multiprocessing involved) is what's cited in
+  `CLAUDE.md`/`DOC_ALGO/FR/ReadMe.md` as the verified evidence the cap
+  works as intended — full end-to-end timing on this specific machine, at
+  this specific point in the session, simply couldn't be trusted for a
+  tight before/after claim, and that limitation is documented rather than
+  papered over with a cherry-picked number.
+
+- **The restricted-cell retry-on-failure mechanism above was fully removed
+  again immediately after**, at the user's explicit request ("L'ajout de
+  case noire sans réinitialiser la grille est trop coûteuse. Retire cette
+  partie de l'algo.") — even capped at `MAX_RESTRICTED_PATCHES = 5`, the
+  cost/unpredictability wasn't acceptable: the capped single-worker number
+  (69.23s) had looked promising, but full `generate_grid()` runs with the
+  cap in place still swung between under 600s and over 1500s for the same
+  seed. Rather than tune further (smaller cap, shorter per-retry
+  `deadline_checks`, etc.), the user chose to drop the whole approach. Fully
+  reverted, leaving no trace: removed `add_restricted_black_cell` entirely;
+  removed `Filler.best_assignment`/`best_assigned_count` (added purely to
+  support this mechanism — `_backtrack`'s `assigned_count` local, also only
+  needed for that tracking, went with it); removed `try_fill`'s
+  `filled_cells` diagnostic and its docstring mention; removed
+  `MAX_RESTRICTED_PATCHES`; `_pattern_attempt` is back to exactly one
+  `make_pattern` + `try_fill` call, matching its pre-session form exactly.
+  Verified: `grep` for every symbol tied to this mechanism
+  (`add_restricted_black_cell`, `MAX_RESTRICTED_PATCHES`, `filled_cells`,
+  `best_assignment`, `best_assigned_count`) returns nothing in
+  `backend/crossword_gen.py`; `py_compile` clean; a real `generate_grid()`
+  call still produces a valid grid. The unified-selection-rule
+  simplification from the same session (the *other* half of that request —
+  "tirer les emplacements toujours avec le même principe...") was not
+  affected and stays in place; only the retry-on-failure mechanism was in
+  scope for this removal. `CLAUDE.md` and `DOC_ALGO/FR/ReadMe.md` updated
+  to drop every mention of the removed mechanism, keeping only a short
+  historical note (tried, measured, too costly, removed) rather than
+  describing dead behavior as current.
+
+- After reports of fill attempts failing too often, `LOW_DOMAIN_MRV_
+  THRESHOLD` was raised from 5 to 10, at the user's explicit request — the
+  unified selection rule (see above) switches to MRV pre-selection sooner,
+  as soon as any unassigned slot's domain has 10 or fewer remaining
+  candidate words instead of waiting until it's down to 5, catching a
+  tightening slot earlier while it still has more room to be corrected
+  before it starves completely. Verified: compiles cleanly, and a real
+  `generate_grid()` run on the standard 15×10/seed-2 benchmark succeeded in
+  206.13s — a valid, successful result, landing within the range of prior
+  successful runs on this same benchmark. `CLAUDE.md` and
+  `DOC_ALGO/FR/ReadMe.md` updated to describe the new value and the
+  reasoning behind raising it.
+
+- The unified selection rule became a 3-tier rule, at the user's explicit
+  request: "choisir en priorité les emplacements qui ont le plus de lettres
+  déjà placées ; à nombre de lettres égale, appliquer le tirage
+  statistiquement contraint par la longueur ; le MRV prend la priorité
+  quand des emplacements passent en dessous de 10 possibilités." Added
+  `Filler._placed_letter_count(i)` — counts how many of a slot's cells
+  already have a letter fixed by an assigned crossing slot, deliberately
+  separate from `_domain(i)` (which needs the full cell→letter mapping, not
+  just a count, and is already computed for every unassigned slot regardless
+  of which tier ends up mattering). `_backtrack`'s selection became: MRV
+  (unchanged, `LOW_DOMAIN_MRV_THRESHOLD` = 10, still absolute top priority)
+  first; otherwise, restrict to whichever unassigned slot(s) have the
+  *maximum* `_placed_letter_count`; either way, the same length-weighted
+  random draw as always breaks the tie within whichever candidate pool
+  resulted. Verified live: traced 25,109 real picks (seed 7) against an
+  independently recomputed "which slots should be eligible" check at each
+  decision point (both the MRV branch and the new placed-letter-count
+  branch) — zero mismatches. A real `generate_grid()` run on the standard
+  benchmark (15×10, seed 2) succeeded in 102.82s — notably faster than the
+  two immediately preceding successful runs on the same benchmark (206.13s,
+  297.42s) — a promising single data point, reported honestly as exactly
+  that (one run, on a machine already established this session to have
+  noisy wall-clock timing — see the retry-mechanism-removal entry above —
+  not a rigorously confirmed speedup). `CLAUDE.md` and
+  `DOC_ALGO/FR/ReadMe.md` updated to describe the new 3-tier rule.
+
+- A second, architecturally deeper "patch on impossibility" mechanism was
+  built, iterated on twice for cost, and then fully reverted — all within
+  this same session, without ever reaching the documentation-update step
+  (hence no trace of it in `CLAUDE.md`/`DOC_ALGO/FR/ReadMe.md` to clean up;
+  this SKILL entry is its only remaining record). At the user's explicit,
+  carefully-clarified request (spread across several follow-up messages):
+  when `_backtrack` finds exactly one unassigned slot with an empty domain
+  (an "impossible zone"), try rescuing the search by turning one of that
+  zone's own free cells black (never a cell whose crossing slot already
+  holds a letter) — never chain a second cell onto the same event; if
+  *multiple* zones are simultaneously impossible, give up immediately, no
+  patch attempted at all; if a patch's local check passes (resulting
+  sub-slot(s), if any, still have a non-empty domain, and the grid stays
+  `is_structurally_valid`), continue the search from there, and if a later
+  zone in the same run also goes impossible, patch it too (so more than one
+  black cell could accumulate over one run); among multiple candidates that
+  each lead all the way to a complete grid, keep whichever used the fewest
+  total black cells.
+
+  Implementation was substantial: `Filler` gained `grid`/`rows`/`cols`
+  (it previously only saw already-extracted slots, never the underlying
+  grid), a `_REMOVED_SLOT` sentinel (an already-split slot stays in
+  `self.slots` at its old index — to avoid renumbering every other slot —
+  but is marked dead in `self.assignment` and permanently excluded from
+  "unassigned"), `_blacken_and_split(cell)` (turns a cell black and splits
+  every slot that crossed it — up to two, one per direction — into 0, 1, or
+  2 new sub-slots per the project's own >=2-letters-is-a-real-slot rule,
+  rewiring `cell_to_slots` for every affected cell), and a `_clone`/`_adopt`
+  pair (since comparing multiple full candidate solutions against each
+  other means the search can no longer just mutate-and-undo in place the
+  way plain word-choice backtracking does — each candidate needs its own
+  fully independent, deep-copied state to explore without disturbing the
+  others, while still sharing `index` (read-only) and, critically, `rng`
+  and the check-budget counter (`_checks_ref`, a shared one-element list)
+  so randomness stays a single evolving sequence and `deadline_checks`
+  still bounds the *entire* search across every candidate branch combined,
+  not a fresh budget per branch).
+
+  Verified thoroughly with unit tests *before* any expensive live run, given
+  the real risk of subtle correctness bugs in this class of change:
+  splitting a slot at a middle cell (two new sub-slots), at an end cell (one
+  new sub-slot), at a position leaving both remainders length-1 (no new
+  slots — correctly falls back to plain passthrough cells), and a crossing
+  cell shared by both an across- and a down-slot (both correctly split/
+  shrunk together, since a single grid cell can never belong to two slots
+  in the same direction at once); a monkey-patched `_domain` forcing one
+  specific slot artificially empty, confirming the mechanism actually
+  rescues the search end-to-end with exactly one black cell added and a
+  valid final grid; multiple simultaneously-empty domains correctly causing
+  zero patch attempts; a candidate cell whose crossing slot was already
+  assigned correctly excluded before ever being tried; and the fewest-
+  black-cells comparison correctly picking the minimum among several
+  artificially-forced "successful" candidates. All passed. A live trace
+  also caught a **test-methodology** bug worth recording for next time: the
+  first attempt at re-verifying the (still-independent) MRV/placed-letter-
+  count selection rule under this new mechanism showed 22,935/31,844
+  "mismatches" — alarming, until traced to the test itself, not the
+  algorithm: since clones share the *same* `rng` object with the original
+  `Filler` (by design), a naive trace wrapper closing over the single
+  top-level object was comparing a clone's real live choice against the
+  *original* (unrelated, stale) object's state. Fixed by tracking which
+  `Filler` instance (original or clone) is actually executing via a
+  wrapped `_backtrack`; the corrected trace showed 0/28,968 mismatches —
+  the selection rule itself was never broken.
+
+  Cost, not correctness, is what killed this mechanism. First measurement
+  (`MAX_ZONE_PATCH_CANDIDATES = 3`, no cap on total cells added): a single
+  `try_fill` on the standard hard benchmark (15×10, seed 2, 5% starting
+  ratio — already known from much earlier in this project to be a
+  frequently-failing ratio even *without* any patch mechanism) took 30.83s
+  and made 34,972 patch attempts before still failing, ending with
+  `black_cells_added = 0` — every single attempted patch failed to lead
+  anywhere. Per the user's explicit request, added
+  `MAX_BLACK_CELLS_PER_FILL = 3` (refuse to even try patching once this
+  many cells have been successfully added along a path) — this made
+  essentially no difference (31.50s, 40,467 patch attempts, still
+  `black_cells_added = 0`), because the cost in this scenario was never
+  from *chains of successful* patches (the cap's target) but from the
+  sheer *volume of attempts*, nearly all of which failed immediately. This
+  finding was reported back rather than silently accepted or reverted
+  unilaterally — the user chose, in response, to lower
+  `MAX_ZONE_PATCH_CANDIDATES` from 3 to 1 instead (fewer candidate cells
+  cloned and checked per impossible-zone event), which did help, but only
+  modestly (25.69s, ~17-19% faster — patch *attempts* actually rose to
+  45,543, since each individual attempt got cheaper, letting more of them
+  fit in the same check budget before the deadline). Even with both caps
+  at their tightest sensible settings (1 candidate per zone, 3 cells total
+  per run), a full end-to-end `generate_grid()` call on the same benchmark
+  seed still ran long enough with no result that the user judged it not
+  working and asked to stop the run and remove the mechanism entirely.
+
+  Fully reverted, confirmed by `grep` to leave zero trace of any symbol
+  tied to it (`MAX_ZONE_PATCH_CANDIDATES`, `MAX_BLACK_CELLS_PER_FILL`,
+  `_REMOVED_SLOT`, `_try_patch_impossible_zone`, `_blacken_and_split`,
+  `_clone`, `_adopt`, `black_cells_added`, `_checks_ref`) in
+  `backend/crossword_gen.py`: `Filler.__init__` is back to its original
+  3-argument form (`slots, index, rng`, no `grid`/`rows`/`cols`), `checks`
+  is a plain instance attribute again (not a property backed by a shared
+  list), `_backtrack`'s domain loop is back to failing immediately on the
+  first empty domain found (no multi-zone-impossibility bookkeeping), and
+  `try_fill` constructs `Filler` with 3 arguments and returns its `slots`/
+  `assignment` directly (no `_REMOVED_SLOT` filtering, since nothing can
+  produce that sentinel anymore). Re-verified post-revert: the MRV/placed-
+  letter-count selection trace is clean again (0/13,928 mismatches), and a
+  real `generate_grid()` call still produces a valid, fully-checked grid
+  (structurally valid, every placed word matches its slot's letters in the
+  solution grid). Two lessons for any future attempt at this same idea:
+  (1) the actual cost driver in a hard-ratio scenario is attempt *volume*,
+  not successful-chain *depth* — a cap on the latter alone does nothing;
+  (2) a mechanism that shares mutable state (like `rng`) across cloned
+  search branches needs any live-tracing verification to track the
+  *actual* executing instance, not assume a single top-level object stays
+  representative throughout.
+
+- The 3-tier selection rule became 4-tier, at the user's explicit request:
+  "alterner les choix horizontaux/verticaux avec une probabilité liée aux
+  nombres d'emplacements restants libres dans chacune des 2 catégories."
+  Added `Filler.directions` — "across"/"down" per slot, precomputed once in
+  `__init__` (same convention `build_word_entries` already uses: a slot's
+  2nd cell on the same row as its 1st means across, otherwise down) rather
+  than recomputed per call. `_backtrack`'s non-MRV branch now draws a
+  direction first — `self.rng.choices([free_across, free_down],
+  weights=[len(free_across), len(free_down)])` — before applying the
+  existing `_placed_letter_count`-based priority *within* that direction
+  only; MRV's own absolute-priority branch is untouched (still spans both
+  directions when it fires, consistent with every prior iteration on this
+  rule always treating MRV as inviolable). Verified live in two parts: (1)
+  an isolated statistical check of the weighted draw alone (no real search
+  needed) — a 30/70 free-slot split landed at 29.72%/70.28% observed over
+  20,000 draws, matching the target probability closely; (2) a real-search
+  trace (12,776 picks, seed 7) had to be corrected once — the first attempt
+  crashed, since the trace wrapper assumed every `rng.choices` call was a
+  slot-index draw, when a new *second* kind of call (the `[free_across,
+  free_down]` direction draw itself) now also flows through the same
+  method; fixed by distinguishing the two call shapes, after which the
+  trace independently verified both that every non-MRV pick's candidates
+  share one single direction and that they're exactly the max-placed-
+  letter set within that direction — zero mismatches. A real
+  `generate_grid()` run (15×10, seed 2) succeeded in 102.91s, structurally
+  valid, every word matching the solution grid. `CLAUDE.md` and
+  `DOC_ALGO/FR/ReadMe.md` updated to describe the new 4-tier rule.
+
+- The 4-tier rule became 5-tier, at the user's explicit request: insert a
+  new tier 3 (priority to slots with the *most remaining free/undetermined
+  cells*, i.e. `len(slot) - Filler._placed_letter_count(i)`) between the
+  direction-alternation tier and the existing most-placed-letters tier
+  (now tier 4), on the stated reasoning that a slot with many still-
+  undetermined cells is more exposed to picking up an unfavorable
+  constraint from a not-yet-placed crossing slot later on — worth
+  resolving early, while it still has room to maneuver. This is
+  deliberately the *opposite* preference from tier 4 (most free cells vs.
+  most placed letters) — the request was explicit that both stay, tier 4
+  only ever breaking a tie left by tier 3, not competing with it as a
+  parallel ranking. Implementation: within the direction-drawn pool,
+  compute `free_cell_counts` from the already-needed `placed_counts`
+  (`len(slots[i]) - placed_counts[i]`), narrow to the max, *then* apply the
+  existing max-placed-letters narrowing within that survivor pool.
+  Verified live: a real-search trace (15,160 picks) against an
+  independently recomputed check covering all 5 tiers (MRV, direction
+  consistency, the free-cell-count pool, then the placed-letter-count pool
+  within it) found zero mismatches; a real `generate_grid()` run (15×10,
+  seed 2) succeeded in 151.02s, structurally valid, every word matching
+  the solution grid. `CLAUDE.md` and `DOC_ALGO/FR/ReadMe.md` updated to
+  describe the new 5-tier rule.
+
+- The black-ratio ladder's step increment was narrowed from +0.03 back to
+  **+0.02**, at the user's explicit request — the very first value tried in
+  this whole exploration, originally abandoned because it made nearly
+  every attempt below ~20-30% hit `try_fill`'s deadline inconclusively (see
+  the entry earlier in this SKILL), widened to +0.05 then narrowed to
+  +0.03 since. Rather than assume that original finding still holds after
+  everything else that's changed about `Filler._backtrack`'s own selection
+  rule since then (unified rule → placed-letter-count tier → direction
+  alternation → free-cell-count tier, each its own entry in this SKILL),
+  verified live: a real `generate_grid()` run (15×10, seed 2) succeeded in
+  191.79s — comfortably within this exploration's measured range and no
+  worse than the +0.03 step it replaces, unlike the original +0.02
+  attempt's inconclusive-deadline problem. A single line change (only the
+  ratio-ladder loop in `generate_grid`, no other code touched) — no
+  comment existed directly alongside it to update. `CLAUDE.md` and
+  `DOC_ALGO/FR/ReadMe.md` updated to describe the new increment and this
+  live-verified result.

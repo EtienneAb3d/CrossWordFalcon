@@ -60,6 +60,11 @@
 
     <p id="status" role="status"></p>
 
+    <section id="attempt-preview" hidden>
+      <p id="attempt-preview-label" data-i18n="attemptPreviewLabel"></p>
+      <div id="attempt-preview-grid"></div>
+    </section>
+
     <section id="result" hidden>
       <p id="stats"></p>
       <div id="board">
@@ -67,7 +72,10 @@
           <h2 data-i18n="acrossHeading">Horizontalement</h2>
           <div id="clues-across" class="clue-lines"></div>
         </div>
-        <div id="grid"></div>
+        <div id="grid-column">
+          <div id="grid"></div>
+          <p id="hover-definition"></p>
+        </div>
       </div>
       <div id="down-clues-section">
         <h2 data-i18n="downHeading">Verticalement</h2>
