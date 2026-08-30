@@ -104,6 +104,22 @@ async def proxy_generate_cancel(job_id: str):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/generate/continue/{job_id}")
+async def proxy_generate_continue(job_id: str):
+    """Relaie le bouton "Continuer" de l'interface (voir script.js) vers le
+    back — même schéma que les autres routes de ce proxy. Sans cette route
+    explicite, une requête POST vers ce chemin tombait dans le `app.mount`
+    `StaticFiles` monté en dernier (aucune route déclarée ne correspondait),
+    qui ne répond qu'en GET/HEAD — d'où le "Method Not Allowed" (405)
+    signalé en direct plutôt qu'un vrai relais vers le back."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(f"{BACKEND_URL}/api/generate/continue/{job_id}")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.get("/api/version")
 async def version():
     try:

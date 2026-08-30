@@ -1773,6 +1773,36 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   all) that `describeErrorCode()` maps to the UI's current language, falling back to
   whatever raw text the backend sent for a code it doesn't recognize. UI
   styling decisions live in the `style-guide` SKILL, not here.
+
+  A real bug was reported live right after the "Continuer" button (see
+  `backend/crossword_gen.py`'s `_serialize_resume_state`/`backend/app.py`'s
+  `POST /api/generate/continue/{job_id}`) shipped: clicking it in the
+  actual browser produced "Method Not Allowed" instead of relaunching a
+  generation. Root cause: this file only ever proxies the small, explicit
+  set of `/api/*` routes declared above (`proxy_generate`/
+  `proxy_generate_status`/`proxy_generate_cancel`/etc.) — the new backend
+  endpoint had no matching proxy route here at all, so a `POST` to
+  `/api/generate/continue/{job_id}` fell through to the catch-all
+  `app.mount("/", StaticFiles(...))` mounted at the very end of this file,
+  which only ever serves `GET`/`HEAD` for on-disk files — hence the 405,
+  not a connectivity problem with the back end at all (confirmed live: the
+  same request sent directly to the back end's own port, 3001, worked
+  correctly the whole time). Fixed by adding `proxy_generate_continue`, a
+  `POST /api/generate/continue/{job_id}` route mirroring `proxy_generate_
+  cancel`'s own shape exactly (same `PROXY_TIMEOUT_S`, same `httpx.
+  RequestError` → 502 `{"code": "backend_unavailable"}` handling). This is
+  a straightforward instance of a pattern this file's own design already
+  makes easy to miss: every new backend endpoint needs an explicit,
+  hand-written matching proxy route here, since there's no generic
+  passthrough — only the routes actually written down ever proxy correctly,
+  everything else silently falls through to the static-file mount instead
+  of erroring in an obviously-backend-shaped way. Verified live: restarted
+  both servers and confirmed `POST /api/generate/continue/doesnotexist`
+  against the frontend's own port (3000) now returns the backend's real
+  404 (`"job inconnu (expiré ou jamais existé)"`) instead of a 405; a full
+  real generation submitted through the frontend (`POST /api/generate` →
+  polled `GET /api/generate/status/{job_id}` to `"done"`) confirmed no
+  regression to the ordinary, successful path from this same change.
 - `frontend/static/i18n.js` — the internationalization config: every user-visible
   interface string (labels, buttons, headings, progress/status messages, error
   messages), for every supported language (fr/en/de/es/it), as one `I18N` object —
@@ -4226,6 +4256,33 @@ There is no test suite, linter, or build step in this repo.
    15×10 benchmark confirmed no regression (0 empty white cells and 0
    mismatches each: seed 2 in 135.6s, 53 words; seed 7 in 133.6s, 62
    words).
+
+   **This cap was lowered back down, from 50 to 10**, much later in this
+   project's history, at the user's explicit request: "Nettoyage avec
+   cases noires tous les 10 cycles (au lieu de 50)." Same minimal change
+   as every previous adjustment to this cap — only
+   `consecutive_continue_paliers >= 50` became `>= 10`, nothing else in
+   the mechanic touched. Verified: the same isolated simulation, re-run
+   with the restored threshold, confirmed the sequence of chosen modes is
+   once again exactly 10 "continue" then 1 forced "nettoyage", repeating
+   every cycle (the same pattern this cap produced the first time it was
+   set to 10, earlier in this same history); a real `generate_grid()` run
+   on both seeds of the standard 15×10 benchmark confirmed no regression
+   (0 empty white cells and 0 mismatches each: seed 2 in 32.0s, 53 words;
+   seed 7 in 19.5s, 48 words).
+
+   **This cap was lowered once more, from 10 to 5**, right after, at the
+   user's explicit request: "5 cycles au lieu de 10." Same minimal change
+   as every previous adjustment — only `consecutive_continue_paliers >= 10`
+   became `>= 5`. Verified: the same isolated simulation, re-run with the
+   new threshold, confirmed the sequence of chosen modes is now exactly 5
+   "continue" then 1 forced "nettoyage", repeating every cycle; a real
+   `generate_grid()` run on both seeds of the standard 15×10 benchmark
+   confirmed no regression (0 empty white cells and 0 mismatches each: seed
+   2 in 119.1s, 59 words — noticeably slower than the cap-of-10 measurement
+   just above, consistent with a lower cap forcing a full pattern-
+   regenerating cleanup more often, each of which costs more than simply
+   continuing on the same pattern; seed 7 in 42.8s, 53 words).
 
    **A live investigation into a user-reported symptom** ("après un
    nettoyage, la grille ne montre que les mots restants du tour précédent,

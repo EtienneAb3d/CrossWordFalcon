@@ -149,6 +149,19 @@ project's engineering language.
     to English as part of this decision, the same "applies going forward,
     not retrofitted" stance already taken for rule 13's citations.
 
+15. **Every new `backend/app.py` endpoint needs a matching proxy route in
+    `frontend/server.py`, added in the same change** — `frontend/server.py`
+    has no generic passthrough, only a small hand-written list of proxy
+    routes (`proxy_generate`/`proxy_generate_status`/`proxy_generate_
+    cancel`/etc.); a backend route with no matching proxy silently falls
+    through to the catch-all `StaticFiles` mount at the end of that file,
+    which only serves `GET`/`HEAD` — so a browser request to it fails with
+    a confusing 405 "Method Not Allowed" instead of an obviously
+    backend-shaped error. Found live exactly this way when `POST /api/
+    generate/continue/{job_id}` shipped without its own proxy route (see
+    CLAUDE.md's `frontend/server.py` entry for the full incident) — check
+    for this whenever a new backend endpoint is added.
+
 ## Decisions
 
 ### Architecture

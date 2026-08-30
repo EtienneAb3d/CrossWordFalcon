@@ -3166,7 +3166,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # "pattern_failed" progress event further below) rather than starting
     # every one of them at `None`. `consecutive_continue_paliers` (below)
     # deliberately still starts at 0 regardless: this "Continuer" click
-    # gets its own fresh budget of up to 50 consecutive "reprise
+    # gets its own fresh budget of up to 5 consecutive "reprise
     # telle-quelle" paliers before a forced cleanup, exactly like any other
     # top-level `generate_grid()` call, rather than carrying over wherever
     # the previous run's own counter happened to be.
@@ -3469,13 +3469,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # same conclusion before this palier is even allowed to finish.
             if failed_real and all(d["reason"] == "abandoned_too_unfillable" for _, d in failed_real):
                 still_has_hope = False
-            # Plafond de 50 paliers "continue" consécutifs (relevé de 5 à
-            # 10 puis à 50, à la demande explicite de l'utilisateur) — même
-            # quand `still_has_hope` reste `True`, on force un nettoyage dès
-            # que ce plafond est atteint, plutôt que de laisser la reprise
+            # Plafond de 5 paliers "continue" consécutifs (relevé de 5 à
+            # 10 puis à 50, puis ramené à 10 puis à 5, toujours à la
+            # demande explicite de l'utilisateur) — même quand
+            # `still_has_hope` reste `True`, on force un nettoyage dès que
+            # ce plafond est atteint, plutôt que de laisser la reprise
             # "telle quelle" s'enchaîner indéfiniment sur un motif qui ne
             # progresse peut-être plus vraiment d'un palier à l'autre.
-            if consecutive_continue_paliers >= 50:
+            if consecutive_continue_paliers >= 5:
                 still_has_hope = False
 
             if still_has_hope:
