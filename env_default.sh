@@ -32,11 +32,15 @@ export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_P
 # ratio step, rather than one at a time — the machine is typically far from
 # saturating its CPU with just one attempt in flight, so running more at
 # once finds a fillable pattern in about the same wall-clock time as a
-# single attempt. Raise this if you have a lot of idle CPU cores and want
-# more (and better — the best of the batch is kept) attempts per step;
-# lower it on a machine with few cores, where too many at once could start
-# competing with each other instead of running truly in parallel.
-export CROSSWORDFALCON_PARALLEL_ATTEMPTS=10
+# single attempt. Left unset here on purpose, at the user's explicit
+# request: crossword_gen.py's own PARALLEL_ATTEMPTS already defaults to
+# this machine's own CPU count (`os.cpu_count()`) whenever this variable
+# isn't set, which fits any deployment's actual hardware automatically
+# rather than a single fixed number picked for one particular machine.
+# Uncomment and set an explicit value only to override that per-machine
+# default — e.g. to leave some cores free for something else, or to force
+# a specific number regardless of core count:
+# export CROSSWORDFALCON_PARALLEL_ATTEMPTS=10
 
 # run_llm.sh uses a GPU by default when one is detected (Metal on Apple
 # Silicon, CUDA on Linux with an NVIDIA card — see run_llm.sh's own

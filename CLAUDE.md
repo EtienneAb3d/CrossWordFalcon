@@ -2120,6 +2120,39 @@ There is no test suite, linter, or build step in this repo.
    `project-best-practices` SKILL for the full measured progression across all
    changes to this function.
 
+   **`PARALLEL_ATTEMPTS`'s own default was changed from a fixed 10 to this
+   machine's own CPU count**, much later in this project's history, at the
+   user's explicit request: "Nombre de process lancés en parallèle = nombre
+   de processeurs de la machine (au lieu de 10)." A fixed default had no
+   relationship to the actual hardware a given deployment runs on — too low
+   on a many-core machine (leaving cores idle that could run another
+   attempt), potentially too high on a machine with very few cores (more
+   attempts than cores means some of them compete for the same core instead
+   of running truly in parallel). `PARALLEL_ATTEMPTS = int(os.environ[
+   "CROSSWORDFALCON_PARALLEL_ATTEMPTS"]) if os.environ.get(
+   "CROSSWORDFALCON_PARALLEL_ATTEMPTS") else (os.cpu_count() or 1)` — the
+   `CROSSWORDFALCON_PARALLEL_ATTEMPTS` override mechanism itself is
+   unchanged (still read the same way, still sourced from `env.sh`/
+   `env_default.sh` by `run_Falcon.sh`), only the *fallback* used when it's
+   unset changed, from the literal string `"10"` to a live `os.cpu_count()`
+   call; `or 1` guards `os.cpu_count()`'s own documented edge case (it can
+   return `None` when the count truly can't be determined), so this can
+   never resolve to `0` and crash `ProcessPoolExecutor(max_workers=0)`.
+   `env_default.sh`/`env.sh` no longer `export` a hardcoded value at all —
+   the line is now commented out, shown only as an example of how to
+   override the new per-machine default, not as the default itself.
+   Verified: reloading `crossword_gen` with the environment variable unset
+   confirmed `PARALLEL_ATTEMPTS` matches `os.cpu_count()` exactly (10 on the
+   machine this was tested on); reloading again with it set to `"4"`
+   confirmed the override still works, unchanged; monkeypatching
+   `os.cpu_count()` to return `None` confirmed the fallback resolves to `1`,
+   never `0` or an error. Two real `generate_grid()` runs on the standard
+   15×10 benchmark (both seeds, with the override left unset — so
+   `PARALLEL_ATTEMPTS` really did resolve from live hardware detection, not
+   a hardcoded test value) confirmed no regression: `0` mismatches, `0`
+   empty white cells each (seed 2 in 24.8s, 54 words; seed 7 in 59.5s, 57
+   words).
+
    **The "wait for the slowest attempt" design described just above was
    reversed much later in this project's history**, at the user's explicit
    request, quoting this exact paragraph back and asking to "interrupt every

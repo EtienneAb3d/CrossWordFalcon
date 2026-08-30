@@ -27,8 +27,9 @@ Approche en deux temps :
      après un rapport de cycles se bloquant très vite — certaines grilles
      ont besoin de nettement plus de paliers que 40 pour trouver une issue
      via le mécanisme de reprise inter-palier). À
-     chaque palier, `PARALLEL_ATTEMPTS` (10 par défaut, paramétrable via
-     CROSSWORDFALCON_PARALLEL_ATTEMPTS dans env.sh) tentatives indépendantes
+     chaque palier, `PARALLEL_ATTEMPTS` (le nombre de processeurs de la
+     machine par défaut, paramétrable via CROSSWORDFALCON_PARALLEL_ATTEMPTS
+     dans env.sh) tentatives indépendantes
      (motif + remplissage CSP complet) sont lancées en parallèle sur des
      processus séparés — la machine étant loin de saturer son CPU avec une
      seule tentative à la fois, ce parallélisme donne plusieurs chances par
@@ -80,16 +81,28 @@ class GenerationCancelled(Exception):
 DEFAULT_WIDTH = 15
 DEFAULT_HEIGHT = 10
 
-# Nombre de tentatives (motif + remplissage CSP) lancées en parallèle à chaque
-# palier de ratio de cases noires — voir generate_grid(). Choisi à la demande
-# explicite de l'utilisateur, la machine étant loin de saturer son CPU avec
-# une seule tentative séquentielle à la fois. Paramétrable via la variable
-# d'environnement CROSSWORDFALCON_PARALLEL_ATTEMPTS (voir env.sh/env_default.sh
-# — sourcée par run_Falcon.sh avant de lancer le back, donc effective pour
-# l'API web ; le CLI, lancé directement, la lit aussi si elle est déjà
-# exportée dans le shell courant), à la demande explicite de l'utilisateur —
-# 10 par défaut si la variable n'est pas définie.
-PARALLEL_ATTEMPTS = int(os.environ.get("CROSSWORDFALCON_PARALLEL_ATTEMPTS", "10"))
+# Number of attempts (pattern + CSP fill) launched in parallel at each
+# black-cell-ratio palier — see generate_grid(). The machine is typically far
+# from saturating its CPU with a single sequential attempt at a time, so
+# running one attempt per available CPU makes full use of it. Defaults to
+# `os.cpu_count()` (the number of CPUs this machine reports, at the user's
+# explicit request: "Nombre de process lancés en parallèle = nombre de
+# processeurs de la machine" — replacing a previous fixed default of 10,
+# which had no relationship to the actual hardware a given deployment runs
+# on) — `or 1` guards the documented edge case where `os.cpu_count()` itself
+# can't determine a count and returns `None`, so this never becomes `0` (which
+# would make `ProcessPoolExecutor(max_workers=0)` fail outright). Still
+# overridable via the CROSSWORDFALCON_PARALLEL_ATTEMPTS environment variable
+# (see env.sh/env_default.sh — sourced by run_Falcon.sh before starting the
+# back end, so effective for the web API; the CLI, launched directly, reads
+# it too if already exported in the current shell), at the user's own earlier
+# explicit request, for a deployment that wants a different number regardless
+# of the machine's own core count.
+PARALLEL_ATTEMPTS = (
+    int(os.environ["CROSSWORDFALCON_PARALLEL_ATTEMPTS"])
+    if os.environ.get("CROSSWORDFALCON_PARALLEL_ATTEMPTS")
+    else (os.cpu_count() or 1)
+)
 
 # Nombre d'exemples de tentatives échouées montrés en aperçu (voir
 # generate_grid's "pattern_attempt_failed"/"pattern_failed", et
@@ -99,9 +112,12 @@ PARALLEL_ATTEMPTS = int(os.environ.get("CROSSWORDFALCON_PARALLEL_ATTEMPTS", "10"
 # qu'une autre) ; affiché maintenant sur 2 lignes de 3 grilles, un aperçu
 # différent par tentative parallèle plutôt qu'une seule vue répétée, pour
 # donner une idée plus représentative de la diversité des motifs essayés à
-# ce palier. Chaque palier lance PARALLEL_ATTEMPTS (10 par défaut) tentatives
-# en parallèle, largement de quoi fournir 6 échecs distincts dès qu'aucune ne
-# réussit.
+# ce palier. Chaque palier lance PARALLEL_ATTEMPTS (le nombre de processeurs
+# de la machine par défaut) tentatives en parallèle — largement de quoi
+# fournir 6 échecs distincts dès qu'aucune ne réussit sur une machine à 6
+# cœurs ou plus ; sur une machine à moins de cœurs, l'aperçu affiche
+# naturellement moins de 6 grilles (le tri `[:FAILED_ATTEMPT_EXAMPLES]`
+# plus bas se contente de ce qui existe, sans jamais en inventer).
 FAILED_ATTEMPT_EXAMPLES = 6
 
 
@@ -3463,7 +3479,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # usually holds just the handful of attempts that completed
             # before `interrupt_threshold` was reached (up to
             # PALIER_ATTEMPT_INTERRUPT_FRACTION of PARALLEL_ATTEMPTS, e.g. 3
-            # out of 10 by default) rather than all PARALLEL_ATTEMPTS — a
+            # out of 10 on a 10-core machine) rather than all PARALLEL_ATTEMPTS — a
             # faster-firing version of the same original intent, no longer
             # needing every single attempt to each independently reach that
             # same conclusion before this palier is even allowed to finish.

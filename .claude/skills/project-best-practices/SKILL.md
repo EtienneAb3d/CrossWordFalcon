@@ -219,9 +219,13 @@ project's engineering language.
   port once updates every URL built from it. `run_Falcon.sh`/`run_llm.sh`/
   `frontend/server.py`/`backend/clues.py` each fall back to the same literal
   defaults only if neither env file was ever sourced.
-- `CROSSWORDFALCON_PARALLEL_ATTEMPTS` (default 10) controls how many
-  parallel pattern/CSP-fill attempts `backend/crossword_gen.py` runs per
-  palier; also declared at the top of `env.sh`/`env_default.sh`.
+- `CROSSWORDFALCON_PARALLEL_ATTEMPTS` (default: this machine's own CPU
+  count, `os.cpu_count()` — changed from a fixed 10 at the user's explicit
+  request, so a deployment automatically uses as many parallel attempts as
+  it has cores instead of a number picked for one particular machine)
+  controls how many parallel pattern/CSP-fill attempts `backend/
+  crossword_gen.py` runs per palier; mentioned (commented out, as an
+  override example) at the top of `env.sh`/`env_default.sh`.
 - `env.sh` (project root) holds `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY` and
   is gitignored (real secrets); `env_default.sh` is the checked-in template
   with placeholder credentials only, copied to `env.sh` on a fresh clone.
@@ -406,8 +410,9 @@ the current defaults/behavior to know before touching this code.
   pre-fill alone already placed more cells than the target percentage of
   the *original* white-cell count calls for, no further cells are added
   for this reason at all.
-- `PARALLEL_ATTEMPTS` (default 10, see env vars above) independent attempts
-  run concurrently per palier via `ProcessPoolExecutor`; `attempts` (paliers)
+- `PARALLEL_ATTEMPTS` (default: this machine's CPU count, see env vars
+  above) independent attempts run concurrently per palier via
+  `ProcessPoolExecutor`; `attempts` (paliers)
   defaults to 200 (raised from an original 40 — some grids need many quick,
   unproductive cycles before a workable state emerges).
 - **Cross-palier retry**: when a palier's search fails, if the best failed
