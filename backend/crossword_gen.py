@@ -640,38 +640,50 @@ PREFILL_MIN_WORD_COUNT = 10
 POST_PREFILL_BLACK_FRACTION = 0.10
 
 
-def _slot_candidate_count(index, length, cells, locked_letters):
-    """Nombre de mots candidats pour un emplacement de longueur `length`
-    couvrant `cells`, en tenant compte des lettres déjà verrouillées à
-    certaines de ses cases (`locked_letters`, un dict case->lettre) — pas
-    seulement de sa longueur. Même logique d'intersection par position que
-    `Filler._domain`, mais utilisée ici *avant* même que la recherche CSP ne
-    démarre, pendant la génération du motif : à la demande explicite de
-    l'utilisateur, après un bug réel constaté en direct (voir
-    `_has_slot_without_candidate` plus bas pour le contexte complet). Ne
-    calcule que ce qui est nécessaire pour savoir si le compte atteint
-    `PREFILL_MIN_WORD_COUNT` ou non (voir son propre appelant) — pas un
-    besoin de connaître le compte exact au-delà de ce seuil."""
+def _slot_candidates(index, length, cells, known_letters):
+    """Mots candidats réels pour un emplacement de longueur `length`
+    couvrant `cells`, compte tenu des lettres déjà connues à certaines de
+    ses cases (`known_letters`, un dict case->lettre) — pas seulement de sa
+    longueur. Même logique d'intersection par position que `Filler._domain`
+    (`idx["pos"][pos][lettre]`, filtré/intersecté position par position),
+    mais utilisable ici en dehors de toute recherche CSP en cours (avant
+    même qu'elle démarre, pendant la génération du motif, ou pour le
+    sondage statistique des graines) — voir `_slot_candidate_count`
+    (compte seulement) et `_force_single_candidate_slots`/
+    `sample_letter_biases` (mots réels, pas seulement leur nombre) qui s'en
+    servent tous les trois plutôt que de dupliquer cette même intersection.
+    Renvoie `idx["words"]` (le lexique entier de cette longueur, une liste)
+    si aucune case de cet emplacement n'est encore connue ; un ensemble
+    vide si l'index n'a aucun mot de cette longueur, ou si les lettres
+    connues ne correspondent à aucun mot réel."""
     idx = index.get(length)
     if idx is None:
-        return 0
+        return ()
     constraints = {}
     for pos, cell in enumerate(cells):
-        letter = locked_letters.get(cell)
+        letter = known_letters.get(cell)
         if letter is not None:
             constraints[pos] = letter
     if not constraints:
-        return len(idx["words"])
+        return idx["words"]
     sets = [idx["pos"][pos].get(ch) for pos, ch in constraints.items()]
     if any(not s for s in sets):
-        return 0
-    sets.sort(key=len)
+        return ()
+    sets = sorted(sets, key=len)
     result = sets[0]
     for s in sets[1:]:
         result = result & s
         if not result:
-            return 0
-    return len(result)
+            return ()
+    return result
+
+
+def _slot_candidate_count(index, length, cells, locked_letters):
+    """Nombre de mots candidats pour un emplacement — voir `_slot_candidates`
+    pour la logique elle-même ; ne calcule que ce qui est nécessaire pour
+    savoir si le compte atteint `PREFILL_MIN_WORD_COUNT` ou non (voir son
+    propre appelant), pas un besoin de connaître les mots eux-mêmes."""
+    return len(_slot_candidates(index, length, cells, locked_letters))
 
 
 def _has_slot_without_candidate(grid, rows, cols, available_lengths, index=None, locked_letters=None):
@@ -1874,20 +1886,72 @@ LETTER_BIAS_FORCE_FRACTION = 0.05
 LETTER_BIAS_MIN_COUNT = 10
 
 
+def _force_single_candidate_slots(slots, index, known_letters, excluded_slots=None):
+    """À la demande explicite de l'utilisateur : "Avant de calculer les
+    statistiques pour placer les graines, ajouter un traitement : quand un
+    emplacement valide ne possède plus qu'une seule possibilité de mot,
+    forcer les lettres restantes pour placer ce mot." Contrairement au
+    sondage statistique de `sample_letter_biases` (un simple consensus sur
+    100 mots tirés au hasard, jamais une certitude), un emplacement dont les
+    lettres déjà connues (`known_letters`) ne laissent plus qu'un seul mot
+    du dictionnaire possible n'est plus une question de probabilité : c'est
+    ce mot-là, ou aucun. Force alors directement les lettres pas encore
+    connues de cet emplacement dans le dict renvoyé — au même titre qu'une
+    lettre déjà verrouillée par un palier précédent, pas comme un simple
+    indice statistique.
+
+    Répété jusqu'à ce qu'un passage complet sur tous les emplacements ne
+    change plus rien : forcer les lettres d'un emplacement peut, via une
+    case de croisement, faire elle aussi passer un emplacement voisin pas
+    encore résolu à une seule possibilité — un seul passage pourrait rater
+    ce genre de réaction en chaîne selon l'ordre de balayage.
+
+    Un emplacement de `excluded_slots` (déjà connu impossible — voir
+    `Filler.excluded_slots`) n'est jamais testé : il ne sera de toute façon
+    jamais tenté par la recherche, inutile d'y chercher une déduction. Un
+    emplacement déjà entièrement connu (chaque case déjà dans
+    `known_letters`) n'a lui non plus plus rien à déduire — il ne reste
+    plus qu'à vérifier, ailleurs (voir `_pattern_attempt`'s propre
+    `preseed_assignment`), que le mot qu'il épelle est bien réel.
+
+    Ne modifie jamais `known_letters` sur place : renvoie un nouveau dict,
+    copié une seule fois au tout début, laissant l'appelant décider quoi
+    faire de l'original (par exemple le comparer à la version augmentée
+    pour savoir si quelque chose a changé)."""
+    excluded = excluded_slots or set()
+    known = dict(known_letters or {})
+    changed = True
+    while changed:
+        changed = False
+        for slot_idx, cells in enumerate(slots):
+            if slot_idx in excluded:
+                continue
+            if all(cell in known for cell in cells):
+                continue
+            candidates = _slot_candidates(index, len(cells), cells, known)
+            if len(candidates) != 1:
+                continue
+            word = next(iter(candidates))
+            for pos, cell in enumerate(cells):
+                if cell not in known:
+                    known[cell] = word[pos]
+                    changed = True
+    return known
+
+
 def sample_letter_biases(grid, rows, cols, index, rng,
                           sample_size=LETTER_BIAS_SAMPLE_SIZE,
                           force_fraction=LETTER_BIAS_FORCE_FRACTION,
-                          excluded_slots=None):
+                          excluded_slots=None, known_letters=None):
     """Avant de lancer le remplissage CSP réel sur une grille de cases
     noires/blanches fraîchement choisie, à la demande explicite de
     l'utilisateur : pour chaque emplacement, tire au hasard `sample_size`
-    mots de la bonne longueur (uniquement filtrés par longueur, sans les
-    valider les uns contre les autres — un simple sondage, pas un
-    remplissage), compte pour chaque case de cet emplacement quelle lettre
-    y apparaît le plus souvent dans l'échantillon, ne retient que les cases
-    dont cette lettre dépasse `LETTER_BIAS_MIN_COUNT` (10) occurrences (un
-    consensus trop faible — une lettre qui ne l'emporte que parce que les
-    autres étaient encore plus dispersées — ne garantit pas qu'il reste
+    mots de la bonne longueur, compte pour chaque case de cet emplacement
+    quelle lettre y apparaît le plus souvent dans l'échantillon, ne retient
+    que les cases dont cette lettre dépasse `LETTER_BIAS_MIN_COUNT` (10)
+    occurrences (un consensus trop faible — une lettre qui ne l'emporte que
+    parce que les autres étaient encore plus dispersées — ne garantit pas
+    qu'il reste
     assez de mots compatibles une fois cette lettre figée), puis pioche au
     hasard parmi ces cases éligibles jusqu'à couvrir `force_fraction` du
     nombre total de cases blanches de la grille — au plus UNE case forcée
@@ -1933,6 +1997,42 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     vide et aucune graine n'est posée du tout, plutôt que de forcer une
     case sur un emplacement injouable faute d'alternative.
 
+    `known_letters` (un dict {case: lettre}, `None` par défaut — aucun
+    effet pour un appelant qui n'en fournit pas), à la demande explicite de
+    l'utilisateur : "Ne tirer que des mots valides par rapport aux lettres
+    déjà en place sur les emplacements." Auparavant, l'échantillon d'un
+    emplacement était tiré au hasard parmi *tous* les mots de la bonne
+    longueur, sans tenir compte des lettres déjà connues à certaines de ses
+    cases (`_pattern_attempt`'s `locked_letters`, reporté d'un palier à
+    l'autre par le mécanisme de reprise — voir `generate_grid` — ou les
+    lettres déjà fixées par `_pattern_continue`'s `preseed_assignment`) —
+    un sondage moins informatif que nécessaire, puisqu'une bonne partie des
+    100 mots tirés pouvait déjà être incompatible avec ce qui était pourtant
+    déjà su avec certitude. Pour un emplacement dont au moins une case
+    figure dans `known_letters`, l'échantillon est désormais tiré
+    uniquement parmi les mots réellement compatibles avec ces lettres
+    (même intersection par position que `Filler._domain`/
+    `_slot_candidate_count`) plutôt que parmi le lexique entier de cette
+    longueur. Si aucun mot ne correspond — un emplacement réputé impossible
+    au sens propre du terme, puisque ses lettres déjà en place ne
+    correspondent à aucun mot réel — l'échantillon est simplement vide et
+    cet emplacement ne contribue ni à `forced` ni à `letter_scores` pour ce
+    palier : à la demande explicite de l'utilisateur ("ne pas tester les
+    emplacements réputés impossible... la modification doit rendre
+    impossible les tirages valides"), ce filtrage suffit à lui seul à
+    garantir qu'aucun tirage valide n'est possible sur un tel emplacement,
+    sans avoir besoin d'un test explicite séparé — contrairement à
+    `excluded_slots` ci-dessus (dont le rôle reste nécessaire pour
+    `_pattern_continue` : un emplacement qui y figure peut être impossible
+    pour une raison structurelle plus large que ses seules lettres déjà
+    connues prises isolément, auquel cas ce filtrage-ci ne suffit pas à lui
+    seul à l'exclure de l'échantillonnage). Une case déjà présente dans
+    `known_letters` n'est jamais non plus proposée comme candidate à
+    `eligible` (voir plus bas) : le mot déjà connu à cette position n'a
+    besoin d'aucun indice statistique supplémentaire, et la retenir aurait
+    gaspillé le quota d'une seule graine par emplacement au profit d'une
+    case qui, elle, en aurait réellement eu besoin.
+
     Retourne `(forced, letter_scores)` :
     - `forced` : un dict {case: lettre} — les "indices" que Filler traite
       comme des contraintes tant qu'aucun emplacement croisé n'est
@@ -1955,6 +2055,7 @@ def sample_letter_biases(grid, rows, cols, index, rng,
             cell_to_slots[cell].append(slot_idx)
 
     excluded = excluded_slots or set()
+    known = known_letters or {}
     eligible = []  # (compte, case, lettre) — cases dépassant LETTER_BIAS_MIN_COUNT
     letter_scores = defaultdict(Counter)
     for slot_idx, cells in enumerate(slots):
@@ -1962,12 +2063,25 @@ def sample_letter_biases(grid, rows, cols, index, rng,
         idx = index.get(length)
         if not idx or not idx["words"]:
             continue
-        sample = rng.choices(idx["words"], k=sample_size)
+        # Restreint le lexique tiré aux mots réellement compatibles avec les
+        # lettres déjà connues de cet emplacement (`_slot_candidates`, même
+        # intersection par position que `Filler._domain`), à la demande
+        # explicite de l'utilisateur — voir la docstring de `known_letters`
+        # ci-dessus. Aucune contrainte connue : retombe sur le lexique
+        # entier de cette longueur, exactement comme avant cette
+        # fonctionnalité. Un ensemble vide (aucun mot réel ne correspond
+        # aux lettres déjà en place — cet emplacement est impossible au
+        # sens propre du terme) : aucun tirage valide n'existe, donc aucun
+        # n'est fait (ni `forced` ni `letter_scores` pour lui à ce palier).
+        pool = _slot_candidates(index, length, cells, known)
+        if not pool:
+            continue
+        sample = rng.choices(list(pool), k=sample_size)
         for pos, cell in enumerate(cells):
             counts = Counter(word[pos] for word in sample)
             letter_scores[cell].update(counts)
             letter, count = counts.most_common(1)[0]
-            if count > LETTER_BIAS_MIN_COUNT and slot_idx not in excluded:
+            if cell not in known and count > LETTER_BIAS_MIN_COUNT and slot_idx not in excluded:
                 eligible.append((count, cell, letter))
     rng.shuffle(eligible)
 
@@ -2890,10 +3004,26 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     # transmis — à la demande explicite de l'utilisateur : "les graines ne
     # doivent être placées que sur des emplacements réputés jouables (si
     # possible), donc, non verrouillés comme injouables."
+    # Avant même de calculer preseed_assignment ou le sondage statistique
+    # des graines plus bas, à la demande explicite de l'utilisateur : "quand
+    # un emplacement valide ne possède plus qu'une seule possibilité de
+    # mot, forcer les lettres restantes pour placer ce mot." Appelé
+    # inconditionnellement (pas seulement `if locked_letters:`) — même sans
+    # aucune lettre déjà connue au départ, une longueur dont le dictionnaire
+    # n'a qu'un seul mot en tout (un cas réel de ce projet, voir
+    # `available_lengths`/`PREFILL_MIN_WORD_COUNT` plus haut) est déjà, en
+    # elle-même, une "seule possibilité" à forcer. `locked_letters or {}` :
+    # `_force_single_candidate_slots` renvoie toujours un dict (jamais
+    # `None`), donc `locked_letters` devient ici un dict à coup sûr — les
+    # vérifications `if locked_letters:` plus bas continuent de fonctionner
+    # à l'identique (un dict vide reste "faux"), aucune régression pour le
+    # cas où rien n'a pu être déduit.
+    slots = extract_slots(grid, rows, cols)
+    locked_letters = _force_single_candidate_slots(slots, _worker_index, locked_letters or {})
+
     preseed_assignment = None
     locked_impossible_slots = set()
     if locked_letters:
-        slots = extract_slots(grid, rows, cols)
         preseed_assignment = [None] * len(slots)
         for i, cells in enumerate(slots):
             if all(cell in locked_letters for cell in cells):
@@ -2904,7 +3034,7 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                     locked_impossible_slots.add(i)
     forced_letters, letter_scores = sample_letter_biases(
         grid, rows, cols, _worker_index, rng, force_fraction=force_letters_fraction,
-        excluded_slots=locked_impossible_slots,
+        excluded_slots=locked_impossible_slots, known_letters=locked_letters,
     )
     if locked_letters:
         forced_letters = {**forced_letters, **locked_letters}
@@ -2969,10 +3099,67 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     exclu n'a de domaine non vide), auquel cas le palier suivant repasse par
     le nettoyage existant (`_build_retry_seed`) et un motif neuf."""
     rng = random.Random(seed)
+    # Lettres déjà connues avec certitude à ce stade (voir `known_letters`
+    # dans la docstring de `sample_letter_biases`) : tout emplacement déjà
+    # entièrement rempli par `preseed_assignment` — verrouillé tel quel,
+    # jamais remis en question par cette recherche (voir plus haut). Un
+    # second appel à `extract_slots` sur le même motif noir/blanc (déjà
+    # recalculé de toute façon par `try_fill` juste en dessous) — un calcul
+    # bon marché, pas la peine de le faire remonter par un paramètre
+    # supplémentaire juste pour l'éviter ici.
+    slots = extract_slots(seed_grid, rows, cols)
+    known_letters = {
+        cell: letter
+        for cells, word in zip(slots, preseed_assignment)
+        if word is not None
+        for cell, letter in zip(cells, word)
+    }
+    # Avant le sondage statistique des graines, à la demande explicite de
+    # l'utilisateur (voir _force_single_candidate_slots) : force les
+    # emplacements dont les lettres déjà connues ne laissent plus qu'une
+    # seule possibilité réelle dans le dictionnaire.
+    known_letters = _force_single_candidate_slots(
+        slots, _worker_index, known_letters, excluded_slots=excluded_slots,
+    )
+    # Un emplacement fraîchement entièrement déterminé par la déduction
+    # ci-dessus (pas seulement par `preseed_assignment` d'origine) devient
+    # lui aussi une véritable affectation, pas seulement un indice
+    # statistique — même principe que `_pattern_attempt`'s propre
+    # préremplissage : sans cette promotion, `Filler._domain` ne verrait ces
+    # lettres que comme un indice (voir `forced_letters` plus bas), jamais
+    # comme la certitude qu'elles sont réellement. Revalidé exactement comme
+    # `_pattern_attempt` (`_slot_candidate_count(...) > 0`) plutôt que
+    # simplement assigné tel quel : un emplacement peut se retrouver
+    # entièrement connu par le seul jeu des croisements, sans que
+    # `_force_single_candidate_slots` lui-même ait jamais vérifié que cette
+    # combinaison précise correspond à un vrai mot pour SA propre longueur
+    # (son propre passage l'aurait alors simplement ignoré comme "déjà
+    # connu", sans le valider) — laissé à `None` si invalide : `try_fill`
+    # le retrouvera de lui-même comme un domaine vide, exactement comme
+    # n'importe quel autre emplacement bloqué. Les emplacements de
+    # `excluded_slots` ne sont jamais promus ainsi, par cohérence avec
+    # `_force_single_candidate_slots` qui ne les traite déjà jamais.
+    preseed_assignment = list(preseed_assignment)
+    excluded = excluded_slots or set()
+    for i, cells in enumerate(slots):
+        if i in excluded or preseed_assignment[i] is not None:
+            continue
+        if all(cell in known_letters for cell in cells):
+            word = "".join(known_letters[cell] for cell in cells)
+            if _slot_candidate_count(_worker_index, len(cells), cells, known_letters) > 0:
+                preseed_assignment[i] = word
     forced_letters, letter_scores = sample_letter_biases(
         seed_grid, rows, cols, _worker_index, rng, force_fraction=force_letters_fraction,
-        excluded_slots=excluded_slots,
+        excluded_slots=excluded_slots, known_letters=known_letters,
     )
+    # Les lettres déjà connues (y compris celles tout juste déduites
+    # ci-dessus) l'emportent toujours sur le sondage statistique — même
+    # principe que la fusion équivalente dans `_pattern_attempt`. Sans
+    # cette fusion, une lettre déduite ici mais dont l'emplacement reste
+    # partiellement connu (pas assez pour rejoindre `preseed_assignment`
+    # ci-dessus) n'aurait autrement aucun moyen d'atteindre `Filler` comme
+    # contrainte réelle.
+    forced_letters = {**forced_letters, **known_letters}
     diag = {}
     result = try_fill(seed_grid, rows, cols, _worker_index, rng, deadline_checks=deadline_checks,
                        diagnostics=diag,

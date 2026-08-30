@@ -4367,6 +4367,245 @@ There is no test suite, linter, or build step in this repo.
    in place, confirmed no regression (0 empty white cells and 0 mismatches
    each: seed 2 in 39.2s, 62 words; seed 7 in 51.4s, 54 words).
 
+   Right after this, the user pointed out a related property worth
+   confirming explicitly: "A la toute première initialisation, chaque
+   process démarre avec une grille initialisée indépendamment des autres."
+   This turned out to already be true of the existing code, requiring no
+   change — `reset_count` above is always `0` at the very first palier
+   (`just_cleaned` starts `False`), but that's not a gap: `carry_seed_grid`/
+   `carry_locked_letters` are themselves already `None` for every worker at
+   that point (no cleanup has ever run yet to set them to anything else),
+   so `make_pattern` already builds a brand-new blank grid
+   (`grid = [[WHITE] * cols for _ in range(rows)]`, a fresh object, never
+   shared or aliased across workers) independently for every one of them —
+   the only thing that ever differs between workers is each one's own
+   `random.Random(seed)`, seeded independently by `generate_grid`'s own
+   `rng.randrange(2**31)` draws. Verified live rather than assumed: called
+   `make_pattern` directly `PARALLEL_ATTEMPTS` times with `seed_grid=None`
+   and 10 different real seeds (the real French wordlist, the standard
+   15×10 benchmark's own dimensions) — all 10 resulting patterns were
+   pairwise distinct (`len(set(patterns)) == 10`), confirming genuine
+   independence rather than an accidental convergence on the same layout;
+   a second check through the full, real `_pattern_attempt` pipeline (not
+   just `make_pattern` in isolation) on the same 10 seeds confirmed the
+   same result — 10 distinct patterns out of 10 workers. DOC_ALGO/FR/
+   ReadMe.md's own "Plusieurs tentatives en parallèle par palier" section
+   was clarified with an explicit paragraph stating this, right after the
+   diversity-injection mechanism above, so a reader doesn't mistake
+   `reset_count=0` at palier 1 for "0% of workers start independently" —
+   in reality all of them already do, for a more fundamental reason than
+   the 20%-reset mechanism (which only ever matters once a cleanup has
+   actually produced a non-blank carried-forward state to reset away from).
+
+   **`sample_letter_biases`'s own 100-word sample was made to respect
+   already-known letters**, at the user's explicit request, quoting the
+   DOC_ALGO "graines" paragraph back: "Ne tirer que des mots valides par
+   rapport aux lettres déjà en place sur les emplacements. Ne pas tester
+   les emplacements réputés impossible (si ce n'est pas déjà le cas, mais
+   de toute façon, la modification doit rendre impossible les tirages
+   valides)." Previously, every slot's 100-word sample was drawn from
+   `idx["words"]` — *every* word of the right length, filtered only by
+   length, with no regard for any letter already known at one of that
+   slot's own cells (`_pattern_attempt`'s own `locked_letters`, carried
+   forward across paliers by the cross-palier retry mechanism, or
+   `_pattern_continue`'s `preseed_assignment`, a fully-known word for an
+   already-assigned crossing slot) — a real waste, since a good share of
+   those 100 words could already be known to be incompatible with a letter
+   the grid already has settled for certain.
+
+   `sample_letter_biases` gained a new `known_letters` parameter (a `{cell:
+   letter}` dict, `None` by default — no effect for any pre-existing
+   caller). For a slot with at least one of its cells in `known_letters`,
+   the sample is now drawn only from words that actually match those
+   letters at their respective positions — the same per-position
+   set-intersection already used by `Filler._domain`/
+   `_slot_candidate_count` (`idx["pos"][pos][letter]`, intersected across
+   every known position of that slot), rather than `idx["words"]`
+   unfiltered. A slot with no known letters at all falls back to exactly
+   the previous behavior (the full lexicon of that length) — this
+   parameter changes nothing for a caller/slot that never supplies one.
+
+   This directly satisfies the second half of the request without any
+   separate "is this slot impossible?" check: if no real word matches the
+   combination of letters already known at a slot, the intersection is
+   empty, so there is nothing to sample — that slot contributes neither to
+   `letter_scores` nor to `eligible` for this palier, exactly "rendre
+   impossible les tirages valides." The pre-existing `excluded_slots`
+   parameter (see its own entry above) is *not* redundant with this and was
+   deliberately left as its own separate mechanism: for `_pattern_attempt`,
+   `excluded_slots` is always `locked_impossible_slots` — a slot fully
+   locked by `locked_letters` whose combination doesn't match any real
+   word — which the new `known_letters` filtering *already* reduces to an
+   empty sample on its own, making the explicit exclusion redundant only
+   for that specific caller; but for `_pattern_continue`, `excluded_slots`
+   carries forward a slot proven impossible by the *whole previous CSP
+   search* (every interacting constraint across the grid), which can still
+   have only *partial* letters known locally — the new filtering alone
+   would not necessarily empty its sample in that case, so the explicit
+   `excluded_slots` check in the `eligible` step remains necessary there.
+   One further, smaller correctness fix came along for free: a cell
+   already present in `known_letters` is now also excluded from `eligible`
+   outright (`if cell not in known and count > LETTER_BIAS_MIN_COUNT and
+   slot_idx not in excluded`) — every word in a filtered sample already
+   shares the known letter at that position by construction, so that
+   position's own "most common" letter would always be the already-known
+   one at the full sample size, wastefully consuming that slot's one-seed-
+   per-slot budget on a cell that already has a real, certain answer
+   instead of a genuinely still-unknown one.
+
+   `_pattern_attempt` passes `known_letters=locked_letters` directly (a
+   parameter it already had for its own other purposes). `_pattern_continue`
+   had no such per-cell dict available at all — only `preseed_assignment`
+   (a word-or-`None` per slot) — so it now builds one via `extract_slots
+   (seed_grid, rows, cols)` (a second, cheap call on the same grid `try_fill`
+   re-extracts anyway right afterward — not worth threading through as a
+   parameter just to avoid it) zipped against `preseed_assignment`, keeping
+   only the already-assigned slots' own cell/letter pairs.
+
+   Verified: three isolated `sample_letter_biases` calls against a small,
+   fully controlled 5-word dictionary (HELLO/HOUSE/MOUSE/HORSE/HOIST, all
+   length 5, one slot, no crossings) — with no `known_letters`, both `H`
+   and `M` appear at position 0 (the unfiltered baseline); with `known_
+   letters={(0,0): "H"}`, position 1's `letter_scores` only ever shows `E`/
+   `O` (HELLO/HOUSE/HORSE/HOIST's own letters there — MOUSE, the one word
+   not starting with `H`, never contributes), and cell `(0,0)` itself never
+   appears in `forced` despite being a 100%-consensus cell; with `known_
+   letters={(0,0): "Z"}` (no real word starts with `Z`), the call returns
+   completely empty `letter_scores`/`forced` for that slot — confirming an
+   impossible combination truly produces zero draws. A fourth isolated call
+   confirmed `excluded_slots` still suppresses `eligible` even when `known_
+   letters` itself yields real, valid candidates (the `_pattern_continue`
+   case described above) — `letter_scores` non-empty, `forced` empty. A
+   direct call to `_pattern_continue` against the real French wordlist (a
+   real word preseeded onto one slot of a blank 5×5 grid) completed without
+   error, confirming the new `known_letters` construction from `preseed_
+   assignment` works against real data, not just the small hand-built
+   dictionary above. Two full end-to-end `generate_grid()` runs on the
+   standard 15×10 benchmark confirmed no regression (0 empty white cells
+   and 0 mismatches each: seed 2 in 35.7s, 57 words; seed 7 in 25.4s, 58
+   words).
+
+   **A deterministic pre-step was added right before the seed statistics**,
+   at the user's explicit request: "Avant de calculer les statistiques pour
+   placer les graines, ajouter un traitement : quand un emplacement valide
+   ne possède plus qu'une seule possibilité de mot, forcer les lettres
+   restantes pour placer ce mot. Ne pas tester les emplacements réputés
+   impossible (si ce n'est pas déjà le cas, mais de toute façon, la
+   modification doit rendre impossible les tirages valides)." Unlike
+   `sample_letter_biases`'s own 100-word sample (a plain statistical
+   consensus a real word can still contradict), a slot whose already-known
+   letters leave exactly one real dictionary word possible is no longer a
+   matter of probability at all — it's that word, or none.
+
+   Two shared helpers were factored out first, since three different call
+   sites now need essentially the same per-position set-intersection that
+   used to live only inside `_slot_candidate_count`: `_slot_candidates
+   (index, length, cells, known_letters)` (new) returns the actual matching
+   words/set — `idx["words"]` unfiltered if no cell of the slot is in
+   `known_letters` yet, `()` if the index has no words of that length or
+   none match — and `_slot_candidate_count` (pre-existing, used by the
+   pre-fill mechanism and `_pattern_attempt`'s own preseed-assignment
+   validation) was rewritten as a one-line `len(_slot_candidates(...))`
+   around it, preserving its exact previous behavior while removing the
+   duplicated intersection logic. `sample_letter_biases`'s own `known_
+   letters`-based filtering (added just above) was simplified to call
+   `_slot_candidates` too, instead of repeating the same set-intersection
+   inline a third time.
+
+   A new `_force_single_candidate_slots(slots, index, known_letters,
+   excluded_slots=None)` — placed right before `sample_letter_biases` in
+   the file, since it's conceptually the deterministic counterpart run
+   immediately ahead of it — copies its input dict once (never mutates the
+   caller's own), then repeatedly scans every non-excluded, not-yet-fully-
+   known slot: if `_slot_candidates` narrows to exactly one real word, every
+   one of that slot's still-unknown cells is filled in with that word's own
+   letters. Repeated in a `while changed:` loop, not just a single pass —
+   forcing one slot's letters can, via a shared crossing cell, push a
+   neighboring not-yet-resolved slot down to one candidate too, which a
+   single left-to-right scan could miss depending purely on which slot
+   happened to be visited first; the loop keeps re-scanning until a full
+   pass makes no further change. A slot in `excluded_slots` (already known
+   impossible — see `Filler.excluded_slots`) is never examined at all: it
+   will never be attempted by the search regardless, so there's nothing
+   useful to deduce for it. This directly satisfies the second half of the
+   request without a separate explicit check: once a slot's own known
+   letters already rule out every real word (an impossible combination),
+   `_slot_candidates` returns an empty set, `len(...) != 1`, and nothing is
+   forced — the filtering already "rend[s] impossible les tirages valides"
+   for such a slot on its own.
+
+   Wired into both `_pattern_attempt` and `_pattern_continue`, each in a way
+   that lets a newly-fully-determined slot flow into the *exact same*
+   already-existing "is this slot now a real, validated assignment"
+   machinery those two functions already had, rather than introducing a
+   second, parallel promotion path:
+   - `_pattern_attempt` already computed `slots = extract_slots(grid, rows,
+     cols)` and a `preseed_assignment`/`locked_impossible_slots` pass
+     immediately afterward, validating every slot whose cells are *all* in
+     `locked_letters` via `_slot_candidate_count(...) > 0` before promoting
+     it to a real assignment. `_force_single_candidate_slots` is now called
+     right there, reassigning `locked_letters` to its own augmented return
+     value (`locked_letters or {}` as the seed, since the function always
+     returns a dict, never `None`) *before* that existing preseed-assignment
+     loop runs — a slot that becomes fully known only through this new
+     deduction is picked up and re-validated by that same pre-existing loop
+     with no further code needed, exactly as if it had arrived fully locked
+     from a previous palier's own carry-forward state. Called
+     unconditionally (not gated behind `if locked_letters:`) specifically so
+     the zero-prior-knowledge case (a length with only one dictionary word
+     at all — a real, non-hypothetical case in this project, see below) is
+     also covered, not only the "narrowed down via already-known letters"
+     case.
+   - `_pattern_continue` had no equivalent validated-promotion loop of its
+     own at all — its existing `known_letters` (derived from `preseed_
+     assignment`) only ever fed `sample_letter_biases`'s sampling, never
+     `Filler` itself as a real constraint, because those cells were already
+     authoritative via `preseed_assignment`'s own direct effect on `Filler.
+     assignment`. A newly-deduced letter has no such backing yet, so two
+     things were added: (1) a promotion loop mirroring `_pattern_attempt`'s
+     own — for every non-excluded slot not already in `preseed_assignment`,
+     if the augmented `known_letters` now covers all its cells, the
+     resulting word is validated via `_slot_candidate_count(...) > 0`
+     (never just assigned unchecked — a slot can become "fully known"
+     purely through crossing cells without `_force_single_candidate_slots`
+     itself ever having validated *that specific combination* against this
+     slot's own length, since its own loop skips any slot already fully
+     known without checking it) and only promoted to `preseed_assignment`
+     if genuinely real, left as `None` otherwise so `try_fill`'s own
+     empty-domain detection naturally reports it through the usual
+     `impossible_slots` diagnostic path; (2) `forced_letters = {**forced_
+     letters, **known_letters}` right after the `sample_letter_biases`
+     call, mirroring `_pattern_attempt`'s own equivalent merge — without
+     it, a letter deduced for a slot that *doesn't* become fully known
+     (still missing some other cell) would have no way to reach `Filler`
+     as a real constraint at all, only ever influencing the sample pool.
+
+   Verified: four isolated `_force_single_candidate_slots` tests against a
+   small hand-built dictionary — two known letters narrowing a 3-word,
+   length-5 lexicon down to exactly one match correctly force the
+   remaining letters; a length with only one dictionary word in the whole
+   (tiny) lexicon is fully forced even with zero prior known letters; a
+   slot passed via `excluded_slots` is left completely untouched despite
+   otherwise resolving to one candidate; a two-slot crossing scenario
+   (deliberately designed so slot A only resolves to one candidate from
+   its *own* known letters, none of which are shared with slot B) confirmed
+   the fixed-point loop correctly propagates A's own newly-forced crossing
+   letter into narrowing B down to one candidate too — a single pass alone
+   would have missed slot B entirely. A direct check against the real,
+   full French wordlist confirmed `_slot_candidates`/`_slot_candidate_count`
+   preserve their exact prior behavior after the refactor (no constraints,
+   narrowed-to-one, impossible, and unknown-length cases all matched
+   expectations) and, separately, found and exercised a genuine real case:
+   length 22 has exactly one word in the actual French dictionary
+   (`ANTICONSTITUTIONNELLES`) — confirmed `_force_single_candidate_slots`
+   correctly forces its entire content from zero prior knowledge. A direct
+   call to `_pattern_continue` against the real wordlist (a real word
+   preseeded onto one slot of a blank grid) completed without error,
+   confirming the new promotion loop runs correctly against real data. Two
+   full end-to-end `generate_grid()` runs on the standard 15×10 benchmark
+   confirmed no regression (0 empty white cells and 0 mismatches each: seed
+   2 in 38.4s, 56 words; seed 7 in 31.8s, 60 words).
+
    **A live investigation into a user-reported symptom** ("après un
    nettoyage, la grille ne montre que les mots restants du tour précédent,
    pas de nouveaux mots") directly motivated the two rules described next.
