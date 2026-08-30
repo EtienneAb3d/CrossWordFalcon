@@ -10,7 +10,7 @@ défaut de StaticFiles pour les fichiers absents, et de FastAPI pour les
 routes inconnues).
 
 Usage :
-    uvicorn frontend.server:app --port 8000
+    uvicorn frontend.server:app --port 3000
 """
 import os
 from pathlib import Path
@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 VERSION_PATH = Path(__file__).resolve().parent.parent / "VERSION.txt"
-BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:8001")
+BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:3001")
 
 # Délai maximal accordé à un appel proxy vers le back avant d'abandonner et de
 # renvoyer un 502 au navigateur — à la demande explicite de l'utilisateur,
@@ -87,6 +87,18 @@ async def proxy_generate_status(job_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/generate/status/{job_id}")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/generate/cancel/{job_id}")
+async def proxy_generate_cancel(job_id: str):
+    """Relaie le bouton "Stop" de l'interface (voir script.js) vers le
+    back — même schéma que les autres routes de ce proxy."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(f"{BACKEND_URL}/api/generate/cancel/{job_id}")
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
     return JSONResponse(status_code=resp.status_code, content=resp.json())

@@ -13,6 +13,7 @@
   --correct-fg: #14532d;
   --incorrect-bg: #fecaca;
   --incorrect-fg: #7f1d1d;
+  --locked: #ea580c;
 }
 
 * {
@@ -165,6 +166,26 @@ input {
   width: 6rem;
 }
 
+/* Wraps a free-text percentage input ("Taux noir"/"Graines")
+   with a visible "%" suffix, at the user's explicit request when these two
+   fields moved from a fixed-choice <select> to a free-entry integer input —
+   the unit needs to stay visible even though it's no longer baked into an
+   <option>'s own text. */
+.input-with-suffix {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.input-with-suffix input {
+  width: 4rem;
+}
+
+.input-suffix {
+  color: var(--fg);
+  opacity: 0.7;
+}
+
 button {
   background: var(--accent);
   color: var(--accent-fg);
@@ -176,6 +197,16 @@ button {
 button:disabled {
   opacity: 0.6;
   cursor: wait;
+}
+
+/* Distinct red (--error, already used for #status.error/.cell.incorrect)
+   rather than the shared blue every other button uses — at the user's
+   explicit request for a "Stop" button, so it reads as an interrupting
+   action rather than blending in with the neutral generate/toggle
+   buttons next to it. */
+#stop-btn {
+  background: var(--error);
+  border-color: var(--error);
 }
 
 #status {
@@ -190,6 +221,19 @@ button:disabled {
 #stats {
   font-size: 0.9rem;
   color: #555;
+}
+
+/* Rapport des temps de génération, à la demande explicite de
+   l'utilisateur : "en petits caractères sur une seule ligne", juste après
+   le rapport "% mots placés"/"% cases noires" (#stats ci-dessus) — même
+   traitement visuel que .attempt-preview-stats (petit, discret), pour
+   rester cohérent avec l'autre endroit de l'interface qui affiche déjà ce
+   genre de métadonnée secondaire. */
+#generation-times {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--fg);
+  opacity: 0.7;
 }
 
 .toggle-btn.active {
@@ -222,6 +266,7 @@ button:disabled {
 #grid {
   display: inline-grid;
   flex-shrink: 0;
+  align-self: flex-start;
   gap: 2px;
   background: var(--border);
   border: 2px solid var(--border);
@@ -286,23 +331,70 @@ button:disabled {
   font-size: 1rem;
 }
 
-/* Live preview of a failed generation attempt's most-filled-in state (see
-   script.js's renderAttemptPreview()), at the user's explicit request — a
-   glimpse of what was tried, not a real interactive grid: reuses the same
-   .cell/.white/.black classes/colors as #grid for visual consistency, but
-   scoped smaller (1.1rem vs. 2rem) since this is a quick, secondary
-   glance, not the main puzzle, and non-interactive (no cursor: pointer,
-   no hover/selection states — those only make sense for a real playable
-   grid). No row/column headers either, for the same "quick glance" reason. */
-#attempt-preview-grid {
+/* Live preview of up to FAILED_ATTEMPT_EXAMPLES (6, see crossword_gen.py)
+   failed generation attempts' most-filled-in state, laid out 2 rows of 3,
+   at the user's explicit request — before this, a single example; now one
+   mini-grid per parallel attempt, for a more representative glimpse of
+   what was tried at that step, not a real interactive grid.
+   #attempt-preview-grids is the wrapper holding one .attempt-preview-grid
+   per example — a fixed 3-column CSS grid (not flex-wrap) specifically so
+   6 examples always lay out as 2 full rows of 3 regardless of viewport
+   width, exactly as requested, rather than however many happen to fit per
+   row at a given window size. Also reused as-is for a single-grid preview
+   (the "minimizing"/"clues" steps, see CLAUDE.md) — one grid then simply
+   occupies the first of the 3 columns, no special-casing needed.
+   `justify-items: start` overrides CSS Grid's own default (`stretch`) for
+   grid items — without it, each `auto`-sized column stretches its
+   `.attempt-preview-grid` item to fill the column's full width (sized to
+   whichever row's mini-grid happens to be widest), and since that element's
+   own background is the gray `--border` gap-line color (see below), the
+   stretched, content-less remainder painted visibly as a wide gray block
+   next to a narrower grid — reported directly by the user from a real
+   screenshot. `start` keeps each mini-grid at its own intrinsic width
+   instead. */
+#attempt-preview-grids {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  justify-items: start;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+/* Wraps one .attempt-preview-stats line above its own .attempt-preview-grid
+   — this wrapper, not the mini-grid itself, is now the actual grid item of
+   #attempt-preview-grids, at the user's explicit request to show a fill-
+   rate readout above each preview. A plain flex column keeps the stats
+   line and the grid stacked tightly, and lets each item's own intrinsic
+   width still drive #attempt-preview-grids' `justify-items: start` layout
+   exactly as before this change. */
+.attempt-preview-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.attempt-preview-stats {
+  margin: 0;
+  font-size: 0.7rem;
+  color: var(--fg);
+  opacity: 0.7;
+}
+
+/* Each individual mini-grid: reuses the same .cell/.white/.black classes/
+   colors as #grid for visual consistency, but scoped smaller (1.1rem vs.
+   2rem) since this is a quick, secondary glance, not the main puzzle, and
+   non-interactive (no cursor: pointer, no hover/selection states — those
+   only make sense for a real playable grid). No row/column headers
+   either, for the same "quick glance" reason. */
+.attempt-preview-grid {
   display: inline-grid;
   gap: 1px;
   background: var(--border);
   border: 2px solid var(--border);
-  margin-top: 0.5rem;
+  align-content: start;
 }
 
-#attempt-preview-grid .cell {
+.attempt-preview-grid .cell {
   width: 1.1rem;
   height: 1.1rem;
   font-size: 0.6rem;
@@ -323,7 +415,7 @@ button:disabled {
    --accent (the same blue already used for that .word-highlight border on
    the real, playable grid) rather than --selected, since --selected is a
    pastel meant specifically for background fills, not a border color. */
-#attempt-preview-grid .cell.white.forced {
+.attempt-preview-grid .cell.white.forced {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
@@ -333,12 +425,29 @@ button:disabled {
    --incorrect-bg (the same light red already used for a wrong letter on
    the real, playable grid) rather than introducing a new color token, so
    "something is wrong here" reads consistently across both contexts. */
-#attempt-preview-grid .cell.white.impossible {
+.attempt-preview-grid .cell.white.impossible {
   background: var(--incorrect-bg);
 }
 
+/* Cells carried over verbatim from a previous palier's own real assignment
+   via the "reprise telle-quelle" mechanism (see script.js's
+   renderAttemptPreview(), crossword_gen.py's try_fill/preseed_assignment),
+   at the user's explicit request — a genuinely different mechanism from
+   .forced above (a real, previously-confirmed letter, not a statistical
+   guess from sample_letter_biases), so it gets its own color (orange)
+   rather than reusing --accent's blue, which stays specific to .forced. A
+   thick inset border (like .forced), not a background fill — reworked at
+   the user's own explicit follow-up request, from an initial background-
+   fill version, so a .locked cell's border still lets .impossible's red
+   background show through underneath rather than covering it outright,
+   the same reasoning that already made .forced border-only instead of a
+   fill. */
+.attempt-preview-grid .cell.white.locked {
+  box-shadow: inset 0 0 0 2px var(--locked);
+}
+
 #attempt-preview-label {
-  margin: 0;
+  margin: 0 0 0.4rem 0;
   font-size: 0.9rem;
   color: #777;
   font-style: italic;

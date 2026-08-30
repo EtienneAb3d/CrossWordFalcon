@@ -36,7 +36,24 @@ LINE_HEIGHT = 16
 MARGIN = 16
 MIN_CANVAS_WIDTH = 720
 HEADER_LOGO_SIZE = 48
-HEADER_HEIGHT = HEADER_LOGO_SIZE + 16
+# +18 (une ligne de texte supplémentaire) à la demande explicite de
+# l'utilisateur — la 3e ligne d'information (mode + durées, voir
+# render_grid_svg) fait désormais dépasser la hauteur du texte au-delà de
+# celle du logo lui-même (48px), qui dictait seule HEADER_HEIGHT jusqu'ici.
+HEADER_HEIGHT = HEADER_LOGO_SIZE + 16 + 18
+# Layout mirroring the web UI's own #board (frontend/static/style.css), at
+# the user's explicit request: the across clues sit in a sidebar to the
+# *left* of the empty grid (like #clues next to #grid), and the down
+# clues span the full row's width in 2 columns underneath (like
+# #down-clues-section's own CSS multi-column layout) rather than every
+# clue list being stacked in one single column below the grid, as this
+# export used to do. The across sidebar and the grid each take 50% of that
+# row's width, at the user's own explicit follow-up request — since the
+# grid itself can't stretch (it's a fixed number of fixed-size cells), an
+# even 50/50 split means giving the sidebar exactly the grid's own
+# rendered width (see render_grid_svg), not a separately-chosen constant.
+GRID_SIDEBAR_GAP = 24
+DOWN_COLUMN_GAP = 24
 # rsvg-convert defaults to 96 DPI (screen resolution) when the source SVG has
 # no physical units — GRID_PNG/ is a print-quality visual record (see
 # save_grid_png), so it's rendered at 300 DPI instead, scaling up the output
@@ -83,6 +100,59 @@ _DIFFICULTY_LABELS = {
     "it": ("Difficoltà", {"easy": "Facile", "medium": "Media", "hard": "Difficile"}),
 }
 
+# Mirrors frontend/static/i18n.js's modeLabel/modeFlash/modeTurbo/modeFast/
+# modeMedium/modeUltra per language, for the metadata header line (see
+# backend/app.py's BUDGET_MODES for the internal key -> budget mapping).
+_MODE_LABELS = {
+    "fr": ("Mode", {
+        "flash": "Flash", "turbo": "Turbo", "fast": "Rapide",
+        "medium": "Moyen", "ultra": "Ultra",
+    }),
+    "en": ("Mode", {
+        "flash": "Flash", "turbo": "Turbo", "fast": "Fast",
+        "medium": "Medium", "ultra": "Ultra",
+    }),
+    "de": ("Modus", {
+        "flash": "Flash", "turbo": "Turbo", "fast": "Schnell",
+        "medium": "Mittel", "ultra": "Ultra",
+    }),
+    "es": ("Modo", {
+        "flash": "Flash", "turbo": "Turbo", "fast": "Rápido",
+        "medium": "Medio", "ultra": "Ultra",
+    }),
+    "it": ("Modalità", {
+        "flash": "Flash", "turbo": "Turbo", "fast": "Veloce",
+        "medium": "Medio", "ultra": "Ultra",
+    }),
+}
+
+# Mirrors frontend/static/script.js's gridGenerationTime/gridOptimizationTime/
+# cluesGenerationTime labels per language, for the metadata header line.
+_DURATION_LABELS = {
+    "fr": ("Grille générée en", "Optimisation en", "Définitions générées en"),
+    "en": ("Grid generated in", "Optimized in", "Definitions generated in"),
+    "de": ("Gitter erzeugt in", "Optimiert in", "Definitionen erzeugt in"),
+    "es": ("Crucigrama generado en", "Optimizado en", "Definiciones generadas en"),
+    "it": ("Griglia generata in", "Ottimizzata in", "Definizioni generate in"),
+}
+
+
+def _format_duration(seconds):
+    """Mirrors frontend/static/script.js's formatDuration exactly (same
+    "XhXmnXs" format, leading-zero units omitted) — a separate
+    implementation since this file has no access to the frontend's own JS,
+    not a shared one; keep both in sync if the format ever changes."""
+    total = max(0, round(seconds or 0))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    out = ""
+    if h > 0:
+        out += f"{h}h"
+    if h > 0 or m > 0:
+        out += f"{m}mn"
+    out += f"{s}s"
+    return out
+
 # Rough per-character width estimates (as a fraction of font-size), used only
 # to decide where a clue line needs to wrap — not pixel-perfect (that depends
 # on the actual font metrics of whichever renderer draws the SVG/PNG), but
@@ -122,6 +192,48 @@ def _wrap_line(text, font_size, max_width):
             current = candidate
     lines.append(current)
     return lines
+
+
+def _heading_svg(x, y, text):
+    """A single bold clue-list heading ("Horizontalement"/"Verticalement"/
+    "Solution") at (x, y) — its own small helper since render_grid_svg now
+    places a heading in more than one distinct layout position (the across
+    sidebar, the down clues spanning the full row, the solution heading)."""
+    return (
+        f'<text x="{x}" y="{y + 12}" font-size="13" font-family="sans-serif" '
+        f'font-weight="bold">{escape(text)}</text>'
+    )
+
+
+def _clue_lines_svg(x, width, y0, lines, font_size=11):
+    """Word-wrapped clue lines (no heading — see _heading_svg for that)
+    rendered in a column starting at (x, y0), each at most `width` px wide.
+    Returns (svg_markup, height_px) so a caller laying out more than one
+    such column side by side (the across sidebar next to the grid, or the
+    down clues' own 2 columns — see render_grid_svg) can size/align them
+    against whatever else shares that same row. Bold row/column-number
+    prefix, wrapped continuation lines indented under the first line's own
+    text — same convention as before this function existed, just no
+    longer tied to a single shared `y`/`parts` closure so it can run more
+    than once per document with independent coordinates."""
+    parts = []
+    y = y0
+    for pos, line in lines:
+        prefix = f"{pos + 1} "
+        indent = _text_width(prefix, font_size, bold=True)
+        wrapped = _wrap_line(line, font_size, width - indent)
+        parts.append(
+            f'<text x="{x}" y="{y + 10}" font-size="{font_size}" font-family="sans-serif">'
+            f'<tspan font-weight="bold">{pos + 1}</tspan> {escape(wrapped[0])}</text>'
+        )
+        y += LINE_HEIGHT
+        for continuation in wrapped[1:]:
+            parts.append(
+                f'<text x="{x + indent:.1f}" y="{y + 10}" font-size="{font_size}" '
+                f'font-family="sans-serif">{escape(continuation)}</text>'
+            )
+            y += LINE_HEIGHT
+    return "".join(parts), y - y0
 
 
 _logo_data_uri_cache = None
@@ -166,16 +278,21 @@ def _group_clue_lines(words, direction, position_key, language):
     return lines
 
 
-def _grid_svg(pattern, letters, words, y_offset):
+def _grid_svg(pattern, letters, words, y_offset, x_offset=MARGIN):
     """SVG markup for one grid (black/white cells, clue numbers, and
     1-based row/column index headers matching the web UI) starting at
-    `y_offset`; `letters` fills in each white cell's letter when given
-    (the solution view), or leaves cells blank when None (the empty
-    puzzle). Returns (markup, height_in_px, width_in_px)."""
+    `(x_offset, y_offset)`; `letters` fills in each white cell's letter
+    when given (the solution view), or leaves cells blank when None (the
+    empty puzzle). Returns (markup, height_in_px, width_in_px). `x_offset`
+    (defaults to `MARGIN`, the original always-at-the-left placement) lets
+    render_grid_svg's empty-puzzle grid start further right, next to the
+    across clues sidebar, at the user's explicit request — the solution
+    grid at the bottom keeps the default, since it has no sidebar next to
+    it."""
     rows, cols = len(pattern), len(pattern[0])
     number_by_cell = {(w["row"], w["col"]): w["number"] for w in words}
     parts = []
-    grid_x0 = MARGIN + CELL_SIZE
+    grid_x0 = x_offset + CELL_SIZE
     grid_y0 = y_offset + CELL_SIZE
 
     for c in range(cols):
@@ -187,7 +304,7 @@ def _grid_svg(pattern, letters, words, y_offset):
     for r in range(rows):
         y = grid_y0 + r * CELL_SIZE
         parts.append(
-            f'<text x="{MARGIN + CELL_SIZE / 2}" y="{y + CELL_SIZE / 2 + 4}" font-size="10" '
+            f'<text x="{x_offset + CELL_SIZE / 2}" y="{y + CELL_SIZE / 2 + 4}" font-size="10" '
             f'font-family="sans-serif" text-anchor="middle" fill="#4b5563">{r + 1}</text>'
         )
 
@@ -219,17 +336,36 @@ def _grid_svg(pattern, letters, words, y_offset):
     return "".join(parts), CELL_SIZE + rows * CELL_SIZE, CELL_SIZE + cols * CELL_SIZE
 
 
-def render_grid_svg(result, language, difficulty=None):
+def render_grid_svg(result, language, difficulty=None, mode=None):
     """Builds the full SVG document (as a string) for one generate_grid()
     result: a header identifying the grid (logo, software name, version,
     date, language, difficulty), the empty grid + clue lists, then the
-    solved grid."""
+    solved grid.
+
+    `mode` (`None` par défaut — le CLI/toute génération sans budget choisi
+    n'affiche alors pas cette 3e ligne du tout), à la demande explicite de
+    l'utilisateur : la clé interne du sélecteur "Mode" de l'interface web
+    (voir backend/app.py's BUDGET_MODES), affichée avec les 3 durées déjà
+    présentes sur `result` (`generation_duration_seconds`/
+    `optimization_duration_seconds`/`clues_duration_seconds`, ajoutées par
+    backend/app.py — absentes pour tout appelant qui ne les fournit pas,
+    auquel cas cette ligne entière est omise plutôt que d'afficher des
+    zéros trompeurs)."""
     words = result["words"]
     across_heading, down_heading, solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
     across_lines = _group_clue_lines(words, "across", "row", language)
     down_lines = _group_clue_lines(words, "down", "col", language)
 
-    canvas_width = max(result["width"] * CELL_SIZE + CELL_SIZE + 2 * MARGIN, MIN_CANVAS_WIDTH)
+    # The across sidebar and the empty grid each take 50% of their shared
+    # row's width, at the user's explicit request — since the grid itself
+    # is a fixed number of fixed-size cells (it can't stretch to fit a
+    # percentage), an even split means giving the sidebar exactly the
+    # grid's own rendered width, not the other way around.
+    grid_width_px = CELL_SIZE + result["width"] * CELL_SIZE
+    sidebar_width = grid_width_px
+    canvas_width = max(
+        2 * grid_width_px + GRID_SIDEBAR_GAP + 2 * MARGIN, MIN_CANVAS_WIDTH
+    )
     parts = []
     y = MARGIN
 
@@ -254,60 +390,77 @@ def render_grid_svg(result, language, difficulty=None):
         f'fill="#4b5563">v{escape(version)} — {escape(date_str)} — {escape(language_name)} — '
         f'{escape(difficulty_label)} : {escape(difficulty_name)}</text>'
     )
+    # 3e ligne : mode choisi + les 3 durées, à la demande explicite de
+    # l'utilisateur — omise entièrement si l'appelant n'a fourni ni `mode`
+    # ni les durées sur `result` (le CLI, qui ne connaît ni l'un ni les
+    # autres), plutôt que d'afficher une ligne à moitié vide ou des zéros
+    # trompeurs.
+    mode_label, mode_names = _MODE_LABELS.get(language, _MODE_LABELS["en"])
+    grid_label, optimization_label, clues_label = _DURATION_LABELS.get(
+        language, _DURATION_LABELS["en"]
+    )
+    info_bits = []
+    if mode is not None:
+        info_bits.append(f"{mode_label} {mode_names.get(mode, mode)}")
+    if "generation_duration_seconds" in result:
+        info_bits.append(f"{grid_label} {_format_duration(result['generation_duration_seconds'])}")
+    if "optimization_duration_seconds" in result:
+        info_bits.append(
+            f"{optimization_label} {_format_duration(result['optimization_duration_seconds'])}"
+        )
+    if "clues_duration_seconds" in result:
+        info_bits.append(f"{clues_label} {_format_duration(result['clues_duration_seconds'])}")
+    if info_bits:
+        parts.append(
+            f'<text x="{text_x}" y="{logo_y + 56}" font-size="12" font-family="sans-serif" '
+            f'fill="#4b5563">{escape(" — ".join(info_bits))}</text>'
+        )
     y += HEADER_HEIGHT
 
-    def add_heading(text):
-        nonlocal y
-        parts.append(
-            f'<text x="{MARGIN}" y="{y + 12}" font-size="13" font-family="sans-serif" '
-            f'font-weight="bold">{escape(text)}</text>'
-        )
-        y += 22
+    # Row: across clues sidebar (left, 50% width) + empty grid (right, 50%
+    # width) side by side — matching the web UI's own #board layout
+    # (#clues next to #grid, see frontend/static/style.css), at the user's
+    # explicit request. The heading + lines share the sidebar's own local
+    # y-cursor, independent of the grid's, since the two run down the page
+    # at different rates — the row only advances past both once the
+    # taller of the two finishes.
+    sidebar_heading_svg = _heading_svg(MARGIN, y, across_heading)
+    parts.append(sidebar_heading_svg)
+    across_lines_svg, across_lines_height = _clue_lines_svg(
+        MARGIN, sidebar_width, y + 22, across_lines
+    )
+    parts.append(across_lines_svg)
+    sidebar_height = 22 + across_lines_height
 
-    def add_lines(lines):
-        # Bold row (across) / column (down) index prefix, matching the
-        # grid's own row/column header numbers, so a line can be matched
-        # back to a specific row/column on the grid above. A clue line can
-        # run long — several same-row/column clues chained with " — ", or
-        # just a wordy generated clue — so it's word-wrapped to fit within
-        # the canvas rather than left to overflow past the right edge and
-        # get clipped in the PNG export; wrapped continuation lines are
-        # indented to align under the first line's own text (not under the
-        # bold number), each on its own row.
-        nonlocal y
-        font_size = 11
-        available_width = canvas_width - 2 * MARGIN
-        for pos, line in lines:
-            prefix = f"{pos + 1} "
-            indent = _text_width(prefix, font_size, bold=True)
-            wrapped = _wrap_line(line, font_size, available_width - indent)
-            parts.append(
-                f'<text x="{MARGIN}" y="{y + 10}" font-size="{font_size}" font-family="sans-serif">'
-                f'<tspan font-weight="bold">{pos + 1}</tspan> {escape(wrapped[0])}</text>'
-            )
-            y += LINE_HEIGHT
-            for continuation in wrapped[1:]:
-                parts.append(
-                    f'<text x="{MARGIN + indent:.1f}" y="{y + 10}" font-size="{font_size}" '
-                    f'font-family="sans-serif">{escape(continuation)}</text>'
-                )
-                y += LINE_HEIGHT
-        y += 10
-
-    empty_grid_svg, grid_height, _ = _grid_svg(result["pattern"], None, words, y)
+    grid_x0 = MARGIN + sidebar_width + GRID_SIDEBAR_GAP
+    empty_grid_svg, grid_height, _ = _grid_svg(result["pattern"], None, words, y, x_offset=grid_x0)
     parts.append(empty_grid_svg)
-    y += grid_height + 24
 
-    add_heading(across_heading)
-    add_lines(across_lines)
-    add_heading(down_heading)
-    add_lines(down_lines)
+    y += max(sidebar_height, grid_height) + 24
+
+    # Down clues span the row's full width, in 2 columns — matching the web
+    # UI's own #down-clues-section (CSS multi-column), at the user's
+    # explicit request. Split by count into two halves rather than
+    # balancing by rendered height (CSS's own column-count only balances
+    # approximately too) — simple and deterministic, and each half still
+    # reads top-to-bottom in row/column order within its own column.
+    parts.append(_heading_svg(MARGIN, y, down_heading))
+    y += 22
+    half = (len(down_lines) + 1) // 2
+    down_col_width = (canvas_width - 2 * MARGIN - DOWN_COLUMN_GAP) / 2
+    left_svg, left_height = _clue_lines_svg(MARGIN, down_col_width, y, down_lines[:half])
+    right_x = MARGIN + down_col_width + DOWN_COLUMN_GAP
+    right_svg, right_height = _clue_lines_svg(right_x, down_col_width, y, down_lines[half:])
+    parts.append(left_svg)
+    parts.append(right_svg)
+    y += max(left_height, right_height) + 10
 
     y += 8
     parts.append(f'<line x1="{MARGIN}" y1="{y}" x2="{canvas_width - MARGIN}" y2="{y}" stroke="#9ca3af"/>')
     y += 24
 
-    add_heading(solution_heading)
+    parts.append(_heading_svg(MARGIN, y, solution_heading))
+    y += 22
     solution_grid_svg, solution_height, _ = _grid_svg(result["pattern"], result["solution"], words, y)
     parts.append(solution_grid_svg)
     y += solution_height + MARGIN
@@ -342,10 +495,11 @@ def render_grid_svg(result, language, difficulty=None):
     )
 
 
-def save_grid_svg(result, language, difficulty=None, grid_svg_dir=GRID_SVG_DIR):
+def save_grid_svg(result, language, difficulty=None, mode=None, grid_svg_dir=GRID_SVG_DIR):
     """Renders and writes the SVG for `result`, named
     `<timestamp>_<language>.svg` (sortable, one file per generated grid).
-    Returns the written Path."""
+    Returns the written Path. `mode` (see render_grid_svg's own docstring)
+    threaded straight through."""
     grid_svg_dir = Path(grid_svg_dir)
     grid_svg_dir.mkdir(parents=True, exist_ok=True)
     # Microsecond precision, not just seconds — two requests (different
@@ -354,7 +508,7 @@ def save_grid_svg(result, language, difficulty=None, grid_svg_dir=GRID_SVG_DIR):
     # another's file.
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     path = grid_svg_dir / f"{timestamp}_{language}.svg"
-    path.write_text(render_grid_svg(result, language, difficulty), encoding="utf-8")
+    path.write_text(render_grid_svg(result, language, difficulty, mode), encoding="utf-8")
     return path
 
 

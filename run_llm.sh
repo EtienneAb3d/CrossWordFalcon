@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 LLM_HOST="${LLM_HOST:-127.0.0.1}"
-LLM_PORT="${LLM_PORT:-8002}"
+LLM_PORT="${LLM_PORT:-3002}"
 MODELS_DIR="models"
 LOG_DIR="logs"
 LLM_LOG="$LOG_DIR/llm.log"

@@ -62,6 +62,7 @@ from pathlib import Path
 
 import httpx
 
+from .crossword_gen import GenerationCancelled
 from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
 
@@ -76,7 +77,7 @@ from .gloss_lookup import find_glosses_for_canonicals
 # fail?
 logger = logging.getLogger("crosswordfalcon.clues")
 
-DEFAULT_LLM_BASE_URL = "http://127.0.0.1:8002/v1/chat/completions"
+DEFAULT_LLM_BASE_URL = "http://127.0.0.1:3002/v1/chat/completions"
 DEFAULT_LLM_MODEL = "Qwen/Qwen3.5-9B"
 DEFAULT_LLM_API_KEY = "EMPTY"
 # Generous relative to a non-reasoning model's ~2s/word (Qwen3/Qwen3.5 with
@@ -449,7 +450,7 @@ class LLMClueGenerator:
         self.api_key = os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
 
     def generate(self, word_entries, difficulty, language="fr", timeout=DEFAULT_TIMEOUT,
-                 on_progress=None):
+                 on_progress=None, cancel_event=None):
         """`word_entries` is an iterable of (answer, accented, canonical)
         triples — `answer` is the grid's bare uppercase form (used as the
         returned dict's key, to match backend/crossword_gen.py's
@@ -467,7 +468,19 @@ class LLMClueGenerator:
         after every attempt (one LLM call each, `_BATCH_SIZE=1`) —
         `current` is how many words have a clue so far, `total` how many
         were asked for; used to surface live progress (see backend/app.py)
-        since this is by far the slowest phase of grid generation."""
+        since this is by far the slowest phase of grid generation.
+
+        `cancel_event` (a `threading.Event`, `None` by default — no effect
+        for any pre-existing caller), at the user's explicit request:
+        checked once per word, right before starting its own round of up
+        to 3 LLM calls — raises `crossword_gen.GenerationCancelled` (see
+        its own docstring) rather than continuing, letting the "Stop"
+        button interrupt clue generation too, not just pattern search/
+        minimization (see backend/app.py). This is by far the slowest
+        phase of a generation (see this module's docstring), so a coarse,
+        once-per-word checkpoint is still frequent enough in practice —
+        the interruption can take up to one word's own remaining LLM
+        round-trip(s) to actually take effect, never mid-call."""
         entries = list({
             (answer.upper(), accented, tuple(canonical))
             for answer, accented, canonical in word_entries
@@ -493,6 +506,8 @@ class LLMClueGenerator:
         # silently moved on, when it's really just two different words'
         # first attempts).
         for entry in entries:
+            if cancel_event is not None and cancel_event.is_set():
+                raise GenerationCancelled()
             answer, accented, canonical = entry
             system_prompt = self._build_system_prompt(difficulty, language)
             user_message = self._build_user_message(entry, language)

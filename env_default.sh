@@ -3,6 +3,30 @@
 # Copy it to env.sh (which is gitignored) and edit as needed:
 #   cp env_default.sh env.sh
 #
+# Ports used by this project's own processes — the single place to change
+# any of them, at the user's explicit request: every script/file that needs
+# one reads it from an environment variable (each with its own hardcoded
+# fallback matching the value below, for a caller that runs without ever
+# sourcing this file — run_Falcon.sh, run_llm.sh, frontend/server.py,
+# backend/clues.py) rather than hardcoding a separate literal of its own —
+# change a port once, here, and every script/URL derived from it follows.
+# `${VAR:-default}` (not a bare `export VAR=default`) so a value already set
+# in the calling shell's own environment before this file is sourced is
+# preserved, not silently clobbered. Moved off an original 8000/8001/8002
+# range to this 3000/3001/3002 range, at the user's explicit request, after
+# diagnosing a real collision live: a VS Code helper process was also
+# listening on 127.0.0.1:8000 (see the project-best-practices SKILL for the
+# full diagnosis), shadowing the real, otherwise perfectly healthy server
+# for the browser.
+export CROSSWORDFALCON_FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
+export CROSSWORDFALCON_BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
+export LLM_PORT="${LLM_PORT:-3002}"
+
+# Derived from CROSSWORDFALCON_BACKEND_PORT just above — change the port
+# there, not here, and this follows automatically. Read by
+# frontend/server.py to know where to proxy /api/* requests.
+export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_PORT}"
+
 # backend/crossword_gen.py's grid generator tries several independent
 # black-square patterns in parallel (separate processes) at each black-cell
 # ratio step, rather than one at a time — the machine is typically far from
@@ -41,7 +65,7 @@ export CROSSWORDFALCON_PARALLEL_ATTEMPTS=10
 
 # Qwen3.5-0.8B — ultra-fast, including with no GPU at all, but results are
 # often poor quality. Good for a first try or for testing, not for real use.
-export LLM_BASE_URL="http://127.0.0.1:8002/v1/chat/completions"
+export LLM_BASE_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
 export LLM_MODEL="Qwen/Qwen3.5-0.8B"
 export LLM_API_KEY="EMPTY"
 export LLAMA_GGUF_REPO="bartowski/Qwen_Qwen3.5-0.8B-GGUF"

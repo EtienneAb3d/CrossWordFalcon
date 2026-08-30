@@ -3,13 +3,26 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-BACKEND_PORT=8001
-FRONTEND_PORT=8000
 LOG_DIR="logs"
 BACKEND_LOG="$LOG_DIR/backend.log"
 FRONTEND_LOG="$LOG_DIR/frontend.log"
 
 mkdir -p "$LOG_DIR"
+
+source .venv/bin/activate
+
+if [ -f env.sh ]; then
+    source env.sh
+else
+    echo "Warning: env.sh missing, LLM_* variables not set (clue generation will fail)."
+fi
+
+# Ports are configured in one place — env.sh (or env_default.sh) — see its
+# own comment there; these fallbacks only matter if neither was sourced at
+# all (env.sh missing and env_default.sh absent too, which shouldn't happen
+# on a normal checkout).
+BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
+FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
 
 stop_port() {
     local port="$1"
@@ -28,14 +41,6 @@ stop_port() {
 stop_port "$BACKEND_PORT"
 stop_port "$FRONTEND_PORT"
 
-source .venv/bin/activate
-
-if [ -f env.sh ]; then
-    source env.sh
-else
-    echo "Warning: env.sh missing, LLM_* variables not set (clue generation will fail)."
-fi
-
 echo "Starting back end on port $BACKEND_PORT..."
 # `nohup` alone only ignores SIGHUP — it doesn't detach from the shell's job
 # table, so some shells/terminals still signal it on exit. `disown` removes
@@ -49,9 +54,9 @@ disown "$BACKEND_PID"
 
 echo "Starting middleware on port $FRONTEND_PORT..."
 # --host 0.0.0.0 so the UI is reachable from other machines on the network,
-# not just from this one. The back end (port 8001) stays on 127.0.0.1 only —
-# it's an internal implementation detail, browsers only ever talk to the
-# middleware (see CLAUDE.md).
+# not just from this one. The back end ($BACKEND_PORT) stays on 127.0.0.1
+# only — it's an internal implementation detail, browsers only ever talk to
+# the middleware (see CLAUDE.md).
 nohup uvicorn frontend.server:app --host 0.0.0.0 --port "$FRONTEND_PORT" < /dev/null > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
 disown "$FRONTEND_PID"

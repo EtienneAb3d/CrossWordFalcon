@@ -88,11 +88,11 @@ a personal secret, like a password.
 ./run_Falcon.sh
 ```
 
-Then open your browser at: **http://127.0.0.1:8000**
+Then open your browser at: **http://127.0.0.1:3000**
 
 Other devices on the same network can also reach it — the script prints
 the address to use for that when it finds one (something like
-`http://192.168.1.23:8000`).
+`http://192.168.1.23:3000`).
 
 This script also takes care of cleanly stopping any version of the app that
 might already be running before starting a new one — feel free to rerun it
@@ -109,7 +109,13 @@ On the page:
    language). A full grid with all its definitions can take anywhere from
    a few seconds to a couple of minutes, depending on its size — the
    status line above the grid keeps updating (building the grid, then
-   writing each definition) so you can see it's still working, not stuck.
+   writing each definition, including a running count of how many grid
+   layouts have failed so far) so you can see it's still working, not
+   stuck. While the grid layout is being searched for, a live preview
+   shows up to 6 small snapshots of layouts tried so far; once a layout is
+   found, the same preview switches to a single, letters-free view of that
+   final grid for the rest of the process (optimizing it, then writing its
+   definitions).
 3. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
    ready to be filled in. Clues follow the usual crossword format:

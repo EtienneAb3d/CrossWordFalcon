@@ -36,12 +36,12 @@
 
       <label for="width">
         <span data-i18n="widthLabel">Largeur</span>
-        <input type="number" id="width" name="width" min="5" max="25" step="1" value="15" required>
+        <input type="number" id="width" name="width" min="5" step="1" value="15" required>
       </label>
 
       <label for="height">
         <span data-i18n="heightLabel">Hauteur</span>
-        <input type="number" id="height" name="height" min="5" max="25" step="1" value="10" required>
+        <input type="number" id="height" name="height" min="5" step="1" value="10" required>
       </label>
 
       <label for="difficulty">
@@ -53,20 +53,55 @@
         </select>
       </label>
 
+      <label for="black-enrichment">
+        <span data-i18n="blackEnrichmentLabel">Taux noir</span>
+        <span class="input-with-suffix">
+          <input type="number" id="black-enrichment" name="black_enrichment_percent"
+                 min="0" max="100" step="1" value="14">
+          <span class="input-suffix">%</span>
+        </span>
+      </label>
+
+      <label for="force-letters">
+        <span data-i18n="forceLettersLabel">Graines</span>
+        <span class="input-with-suffix">
+          <input type="number" id="force-letters" name="force_letters_percent"
+                 min="0" max="100" step="1" value="1">
+          <span class="input-suffix">%</span>
+        </span>
+      </label>
+
+      <label for="mode">
+        <span data-i18n="modeLabel">Mode</span>
+        <select id="mode" name="mode">
+          <option value="flash" data-i18n="modeFlash">Flash</option>
+          <option value="turbo" data-i18n="modeTurbo">Turbo</option>
+          <option value="fast" data-i18n="modeFast">Rapide</option>
+          <option value="medium" selected data-i18n="modeMedium">Moyen</option>
+          <option value="ultra" data-i18n="modeUltra">Ultra</option>
+        </select>
+      </label>
+
       <button type="submit" id="generate-btn" data-i18n="generateBtn">Générer la grille</button>
+      <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
+              data-i18n="attemptPreviewRevealBtn">Lettres</button>
+      <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
+      <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
       <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
       <button type="button" id="solution-btn" class="toggle-btn" data-i18n="solutionBtn" hidden>Solution</button>
+      <button type="button" id="definitions-btn" class="toggle-btn" data-i18n="definitionsBtn" hidden>Définitions</button>
     </form>
 
     <p id="status" role="status"></p>
 
     <section id="attempt-preview" hidden>
       <p id="attempt-preview-label" data-i18n="attemptPreviewLabel"></p>
-      <div id="attempt-preview-grid"></div>
+      <div id="attempt-preview-grids"></div>
     </section>
 
     <section id="result" hidden>
       <p id="stats"></p>
+      <p id="generation-times"></p>
       <div id="board">
         <div id="clues">
           <h2 data-i18n="acrossHeading">Horizontalement</h2>

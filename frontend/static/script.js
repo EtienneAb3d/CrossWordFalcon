@@ -41,17 +41,38 @@ const button = document.getElementById("generate-btn");
 const status = document.getElementById("status");
 const result = document.getElementById("result");
 const stats = document.getElementById("stats");
+const generationTimes = document.getElementById("generation-times");
 const gridEl = document.getElementById("grid");
 const hoverDefinition = document.getElementById("hover-definition");
 const cluesAcross = document.getElementById("clues-across");
 const cluesDown = document.getElementById("clues-down");
 const solutionBtn = document.getElementById("solution-btn");
 const checkBtn = document.getElementById("check-btn");
+const definitionsBtn = document.getElementById("definitions-btn");
+const stopBtn = document.getElementById("stop-btn");
+const continueBtn = document.getElementById("continue-btn");
+const cluesEl = document.getElementById("clues");
+const downCluesSection = document.getElementById("down-clues-section");
 const versionBadge = document.getElementById("version-badge");
 const infoBadge = document.getElementById("info-badge");
 const infoTooltip = document.getElementById("info-tooltip");
 const attemptPreview = document.getElementById("attempt-preview");
-const attemptPreviewGrid = document.getElementById("attempt-preview-grid");
+const attemptPreviewGrids = document.getElementById("attempt-preview-grids");
+const attemptPreviewRevealBtn = document.getElementById("attempt-preview-reveal-btn");
+const widthInput = document.getElementById("width");
+const heightInput = document.getElementById("height");
+const blackEnrichmentInput = document.getElementById("black-enrichment");
+
+// "Taux noir" (anciennement "Ajout noires", renommé à la demande explicite
+// de l'utilisateur) est un champ de saisie libre (un entier, plutôt qu'une
+// liste de pourcentages prédéfinis) initialisé à une valeur fixe de 14 %
+// (voir sa valeur `value` dans index.html), à la demande explicite de
+// l'utilisateur — remplace une précédente formule dépendante de la
+// taille de la grille (0.3 * sqrt(largeur * hauteur)), recalculée à
+// chaque changement de largeur/hauteur : plus de recalcul automatique
+// désormais, la même valeur par défaut s'applique quelle que soit la
+// taille de grille choisie, modifiable librement par le joueur comme
+// n'importe quel autre champ.
 
 fetch("/api/version")
   .then((r) => r.json())
@@ -105,6 +126,11 @@ let userLetters = []; // [row][col] -> letter typed by the player, or ""
 let selected = null; // { row, col } or null
 let showSolution = false;
 let checking = false;
+// Hidden by default once a grid is ready to play, at the user's explicit
+// request — the hover-definition bar under the grid already gives a
+// definition on demand, so the full across/down clue lists are no longer
+// shown up front; #definitions-btn (below) brings them back.
+let showDefinitions = false;
 
 // Grid <-> clue-list hover highlighting. cellElements lets highlightWordAt()
 // look up a cell's DOM node by position without a fresh querySelector per
@@ -196,22 +222,28 @@ function setStatus(message, isError) {
   status.classList.toggle("error", Boolean(isError));
 }
 
-// Shows a small, read-only snapshot of the most-filled-in state a failed
-// generation attempt reached before giving up (see backend/crossword_gen.py's
-// try_fill, diagnostics["example_grid"]) — at the user's explicit request,
-// so a slow or ultimately-failing generation isn't a black box: the player
-// gets a visual sense of what was tried. `exampleGrid` is a 2D array of
-// single characters — "#" for black, "." for a white cell whose word wasn't
-// yet determined, any other character for a placed letter — the same shape
-// backend/crossword_gen.py already uses for `pattern`/`solution` on a
-// successful grid, so no separate parsing is needed here. `impossibleCells`
-// (diagnostics["impossible_cells"], possibly empty/undefined — see
-// Filler.impossible_zone_cells()'s own docstring for when it can be empty)
-// is an array of [row, col] pairs, highlighted with a light red background
-// (same --incorrect-bg token already used for a wrong letter on the real
-// grid, at the user's explicit request) — the cells of whichever slot(s)
-// had no candidate word left at all at this snapshot. `forcedCells`
-// (diagnostics["forced_cells"], possibly empty/undefined — see
+// Shows small, read-only snapshots of the most-filled-in state a batch of
+// failed generation attempts reached before giving up (see
+// backend/crossword_gen.py's try_fill, diagnostics["example_grid"]) — at
+// the user's explicit request, so a slow or ultimately-failing generation
+// isn't a black box: the player gets a visual sense of what was tried.
+// `examples` is an array of up to FAILED_ATTEMPT_EXAMPLES (6, see
+// crossword_gen.py) `{example_grid, impossible_cells, forced_cells,
+// locked_cells}` objects — one per parallel attempt at the same palier when
+// every one of them failed, laid out 2 rows of 3 (see #attempt-preview-grids
+// in style.css); a single-element array for the "minimizing"/"clues" steps'
+// one-grid preview of the actual, successful pattern. Each `example_grid`
+// is a 2D array of single characters — "#" for black, "." for a white cell
+// whose word wasn't yet determined, any other character for a placed
+// letter — the same shape backend/crossword_gen.py already uses for
+// `pattern`/`solution` on a successful grid, so no separate parsing is
+// needed here. Each `impossible_cells` (diagnostics["impossible_cells"],
+// possibly empty — see Filler.impossible_zone_cells()'s own docstring for
+// when it can be empty) is an array of [row, col] pairs, highlighted with a
+// light red background (same --incorrect-bg token already used for a wrong
+// letter on the real grid, at the user's explicit request) — the cells of
+// whichever slot(s) had no candidate word left at all at this snapshot.
+// Each `forced_cells` (diagnostics["forced_cells"], possibly empty — see
 // build_partial_letters_grid's own docstring — now *every* cell
 // sample_letter_biases forced, whether or not the search later covered it
 // with a real letter, after a live report that the previous "only cells
@@ -220,49 +252,145 @@ function setStatus(message, isError) {
 // highlighted with a thick blue inset border (--accent, see style.css's
 // .cell.white.forced) at the user's explicit request — cells whose shown
 // letter came from the statistical pre-fill, whether or not a real letter
-// also ended up there. Applied in a dedicated final pass, *after* every
-// cell already exists in the grid (see the loop below) — at the user's
-// own explicit follow-up request, so the border is unambiguously an
-// overlay on top of everything already drawn (letters, black cells,
-// .impossible) rather than a class applied inline while each cell is
-// first being built, removing any doubt about draw order affecting
-// whether it's visible.
-function renderAttemptPreview(exampleGrid, impossibleCells, forcedCells) {
-  if (!exampleGrid || !exampleGrid.length) return;
-  const height = exampleGrid.length;
-  const width = exampleGrid[0].length;
-  const impossibleSet = new Set((impossibleCells || []).map(([r, c]) => `${r},${c}`));
-  attemptPreviewGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
-  attemptPreviewGrid.innerHTML = "";
-  const cellElementsByCoord = new Map();
-  for (let r = 0; r < height; r++) {
-    for (let c = 0; c < width; c++) {
-      const ch = exampleGrid[r][c];
-      const cell = document.createElement("div");
-      if (ch === BLACK) {
-        cell.className = "cell black";
-      } else {
-        cell.className = "cell white";
-        if (ch !== ".") cell.textContent = ch;
-        if (impossibleSet.has(`${r},${c}`)) cell.classList.add("impossible");
-        cellElementsByCoord.set(`${r},${c}`, cell);
+// also ended up there. Each `locked_cells` (diagnostics["locked_cells"],
+// possibly empty — see try_fill's own docstring) is likewise an array of
+// [row, col] pairs, highlighted with a thick orange inset border (--locked,
+// see style.css's .cell.white.locked — a border rather than a background
+// fill, at the user's own explicit follow-up request, so it never covers
+// up .impossible's red background underneath) at the user's explicit
+// request — cells whose shown letter was carried over verbatim, real and
+// already confirmed, from a *previous* palier via the "reprise
+// telle-quelle" mechanism (crossword_gen.py's preseed_assignment), a
+// genuinely different mechanism from `forced_cells`'s statistical guess,
+// so it gets a visually distinct color rather than reusing --accent.
+// Applied in a dedicated final pass per mini-grid, *after* every cell of
+// that mini-grid already exists in the DOM (see the loop below) — at the
+// user's own explicit follow-up request, so the overlay is unambiguously
+// on top of everything already drawn (letters, black cells, .impossible)
+// rather than a class applied inline while each cell is first being built,
+// removing any doubt about draw order affecting whether it's visible.
+//
+// Letters themselves are hidden unless `showPreviewLetters` is on (see
+// #attempt-preview-reveal-btn, now shown from page load right next to
+// #generate-btn rather than only appearing once a preview exists — at the
+// user's own explicit follow-up request, so the choice can be made
+// *before* generating, not only reacted to once letters are already on
+// screen). Once the "reprise telle-quelle" mechanism can carry forward a
+// large, mostly-real fraction of the final grid across several paliers,
+// these preview grids stopped being purely diagnostic and started risking
+// spoiling the actual solution before the player ever gets to play it.
+// Hiding the letters doesn't touch the .impossible/.forced/.locked
+// highlight classes above — those convey *where* something happened, not
+// *what* letter is there, so they stay visible regardless of the toggle.
+//
+// Each mini-grid also gets a small stats line above it (`.attempt-preview-
+// stats`, in a new `.attempt-preview-item` wrapper alongside the grid), at
+// the user's explicit request: the black-cell rate and the letter-fill
+// rate, both computed against the *same* denominator (total cells in that
+// example_grid) so the two percentages stay directly comparable — reading
+// "62% noir, 30% rempli" also implicitly says 8% is still blank. The fill
+// count is derived straight from `example_grid` (any character other than
+// "." or "#"), independent of `showPreviewLetters` — it reflects the
+// search's real progress at that snapshot, not whatever the toggle
+// currently reveals on screen.
+let lastPreviewExamples = null;
+
+function renderAttemptPreview(examples) {
+  if (!examples || !examples.length) return;
+  lastPreviewExamples = examples;
+  attemptPreviewGrids.innerHTML = "";
+  for (const {
+    example_grid: exampleGrid,
+    impossible_cells: impossibleCells,
+    forced_cells: forcedCells,
+    locked_cells: lockedCells,
+  } of examples) {
+    if (!exampleGrid || !exampleGrid.length) continue;
+    const height = exampleGrid.length;
+    const width = exampleGrid[0].length;
+    const impossibleSet = new Set((impossibleCells || []).map(([r, c]) => `${r},${c}`));
+    const item = document.createElement("div");
+    item.className = "attempt-preview-item";
+    const miniGrid = document.createElement("div");
+    miniGrid.className = "attempt-preview-grid";
+    miniGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
+    const cellElementsByCoord = new Map();
+    // Taux affichés au-dessus de chaque grille, à la demande explicite de
+    // l'utilisateur — cases noires / total, cases blanches déjà pourvues
+    // d'une vraie lettre / total, et cases réputées injouables / total (le
+    // même dénominateur pour les trois, afin qu'ils restent directement
+    // comparables). Une case blanche non déterminée ("." dans example_grid)
+    // ne compte jamais comme "remplie", que showPreviewLetters affiche sa
+    // lettre ou non — ce taux reflète le vrai progrès de la recherche, pas
+    // ce que le joueur voit à l'écran à cet instant. Le taux de cases
+    // injouables vient directement de `impossibleSet` (déjà calculé
+    // ci-dessus pour la classe .impossible) — pas un second calcul.
+    let blackCount = 0;
+    let filledCount = 0;
+    for (let r = 0; r < height; r++) {
+      for (let c = 0; c < width; c++) {
+        const ch = exampleGrid[r][c];
+        const cell = document.createElement("div");
+        if (ch === BLACK) {
+          cell.className = "cell black";
+          blackCount++;
+        } else {
+          cell.className = "cell white";
+          if (ch !== ".") filledCount++;
+          if (showPreviewLetters && ch !== ".") cell.textContent = ch;
+          if (impossibleSet.has(`${r},${c}`)) cell.classList.add("impossible");
+          cellElementsByCoord.set(`${r},${c}`, cell);
+        }
+        miniGrid.appendChild(cell);
       }
-      attemptPreviewGrid.appendChild(cell);
     }
-  }
-  // Final overlay pass: every previously-built cell already sits in the
-  // DOM at this point, so adding .forced here can never be affected by
-  // where this runs relative to the loop above.
-  for (const [r, c] of forcedCells || []) {
-    const cell = cellElementsByCoord.get(`${r},${c}`);
-    if (cell) cell.classList.add("forced");
+    // Final overlay pass: every previously-built cell already sits in the
+    // DOM at this point, so adding .forced/.locked here can never be
+    // affected by where this runs relative to the loop above.
+    for (const [r, c] of forcedCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("forced");
+    }
+    for (const [r, c] of lockedCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("locked");
+    }
+    const totalCells = height * width;
+    const blackPercent = Math.round((100 * blackCount) / totalCells);
+    const fillPercent = Math.round((100 * filledCount) / totalCells);
+    const impossiblePercent = Math.round((100 * impossibleSet.size) / totalCells);
+    const stats = document.createElement("p");
+    stats.className = "attempt-preview-stats";
+    stats.textContent = I18N[uiLanguage].attemptPreviewStats(blackPercent, fillPercent, impossiblePercent);
+    item.appendChild(stats);
+    item.appendChild(miniGrid);
+    attemptPreviewGrids.appendChild(item);
   }
   attemptPreview.hidden = false;
 }
 
+// Bi-stable toggle (same pattern as solutionBtn/checkBtn below), at the
+// user's explicit request — default off, and re-renders whichever batch
+// of examples is currently on screen so the effect is immediate, without
+// waiting for the next poll to bring in new data. Unlike solutionBtn/
+// checkBtn, this one is never reset between generations (see
+// hideAttemptPreview() below): it's meant as a standing preference the
+// player sets once, decided *before* a generation even starts, not a
+// per-generation state that should snap back to hidden every time.
+let showPreviewLetters = false;
+
+function togglePreviewLetters() {
+  showPreviewLetters = !showPreviewLetters;
+  attemptPreviewRevealBtn.classList.toggle("active", showPreviewLetters);
+  if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
+}
+
+attemptPreviewRevealBtn.addEventListener("click", togglePreviewLetters);
+
 function hideAttemptPreview() {
   attemptPreview.hidden = true;
-  attemptPreviewGrid.innerHTML = "";
+  attemptPreviewGrids.innerHTML = "";
+  lastPreviewExamples = null;
 }
 
 function isWhite(r, c) {
@@ -484,13 +612,35 @@ function toggleChecking() {
   renderGrid();
 }
 
+// Applies showDefinitions to the DOM — called both from the toggle below
+// and right after a new grid is rendered (see the form submit handler),
+// so a fresh grid always starts with the clue lists hidden regardless of
+// whatever the *previous* grid's own toggle state happened to be.
+function applyDefinitionsVisibility() {
+  cluesEl.hidden = !showDefinitions;
+  downCluesSection.hidden = !showDefinitions;
+  definitionsBtn.classList.toggle("active", showDefinitions);
+}
+
+function toggleDefinitions() {
+  showDefinitions = !showDefinitions;
+  applyDefinitionsVisibility();
+}
+
 solutionBtn.addEventListener("click", toggleSolution);
 checkBtn.addEventListener("click", toggleChecking);
+definitionsBtn.addEventListener("click", toggleDefinitions);
 document.addEventListener("keydown", handleKeydown);
 
 languageSelect.addEventListener("change", () => {
   uiLanguage = languageSelect.value;
   applyTranslations();
+  // attemptPreviewStats is a parameterized string (see i18n.js), rendered
+  // directly inside renderAttemptPreview() rather than through the generic
+  // [data-i18n] walker applyTranslations() just ran — so a language switch
+  // while a preview is showing needs its own explicit re-render, same as
+  // togglePreviewLetters() already does below.
+  if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
 });
 
 applyTranslations();
@@ -515,8 +665,33 @@ const POLL_INTERVAL_MS = 2000;
 // round trip through the proxy doesn't race against this client-side abort.
 const FETCH_TIMEOUT_MS = 35000;
 
+// `job["step"]["code"]` values reached only once pattern search is truly
+// over (see pollJob below) — "starting"/"pattern"/"pattern_attempt_failed"/
+// "pattern_found" are deliberately excluded, since the search-phase
+// backlog-draining behavior pollJob relies on for those still applies.
+const POST_SEARCH_STEP_CODES = new Set(["minimizing", "grid_ready", "clues", "saving"]);
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// "XhXmnXs" (heures/minutes/secondes), à la demande explicite de
+// l'utilisateur, pour afficher les durées de génération de la grille et
+// des définitions (voir gridData.generation_duration_seconds/
+// clues_duration_seconds, calculées côté back — backend/app.py). Les
+// unités à zéro en tête sont omises (ex. "45s" plutôt que "0h0mn45s")
+// plutôt que toujours afficher les trois, pour rester lisible sur le cas
+// courant (quelques dizaines de secondes à quelques minutes).
+function formatDuration(seconds) {
+  const total = Math.max(0, Math.round(seconds || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  let out = "";
+  if (h > 0) out += `${h}h`;
+  if (h > 0 || m > 0) out += `${m}mn`;
+  out += `${s}s`;
+  return out;
 }
 
 async function fetchWithTimeout(url, options, timeoutMs) {
@@ -540,9 +715,9 @@ function describeStep(t, step) {
     case "starting":
       return t.statusStarting;
     case "pattern":
-      return t.statusPattern(step.attempt, step.attempts);
+      return t.statusPattern(step.attempt, step.attempts, step.total_attempts);
     case "pattern_found":
-      return t.statusPatternFound(step.attempt);
+      return t.statusPatternFound(step.attempt, step.total_attempts);
     case "minimizing":
       return t.statusMinimizing;
     case "grid_ready":
@@ -577,12 +752,55 @@ function describeErrorCode(t, code, fallbackText) {
   }
 }
 
+// Distinguishes a user-requested stop (see stopBtn below) from a genuine
+// failure — the submit handler's own catch block uses this to skip the
+// error styling (#status.error, red text) for a cancellation, which isn't
+// an error at all, just a choice the player made.
+class CancelledError extends Error {}
+
+// Carries a failed job's own id/error code alongside the localized message
+// a plain Error would already have — at the user's explicit request, for
+// the "Continuer" button (see continueBtn below): runGeneration()'s catch
+// block needs to know *which* job just failed and *why* to decide whether
+// to offer resuming it, which a bare Error (message only) can't convey.
+class GenerationFailedError extends Error {
+  constructor(message, jobId, errorCode) {
+    super(message);
+    this.jobId = jobId;
+    this.errorCode = errorCode;
+  }
+}
+
+// job_id of whichever generation is currently in flight, or null — set
+// right after POST /api/generate resolves, cleared once the whole submit
+// handler finishes (see its own finally block). stopBtn's click handler
+// (below) needs this to know *which* job to cancel, since it can be
+// clicked at any point while pollJob() is still awaiting its own poll
+// loop, well before that loop returns control to the submit handler.
+let currentJobId = null;
+
 // Generation runs as a background job on the backend (grid + clue
 // generation together can take anywhere from a few seconds to a few
 // minutes) — this polls its status until it's done, updating the on-screen
 // status message with each step along the way, and returns the finished
 // grid.
 async function pollJob(jobId, t) {
+  // How many of `examples_history`'s entries this poll loop has already
+  // shown — at the user's explicit request, after a real, reported
+  // confusion this caused: a naive "always show the *latest* entry"
+  // approach means a palier that resolves fast enough (several paliers can
+  // complete within a single POLL_INTERVAL_MS window — observed directly)
+  // can have its own preview silently skipped, overwritten before this
+  // client ever polls it — so the very first preview a user ever sees can
+  // already belong to a *later* palier than palier 1, misleadingly making
+  // palier 1 itself look like it started out already forced/locked, which
+  // it never did. `examples_history` (backend/app.py) instead accumulates
+  // every palier's own end state, in order, never overwritten — this
+  // client-local counter lets the loop below show exactly one *new* entry
+  // per poll (the oldest one not yet shown), walking through the full
+  // history in order rather than jumping straight to whatever is newest,
+  // so every palier's own preview gets its moment on screen at least once.
+  let nextExampleIndex = 0;
   while (true) {
     let response;
     try {
@@ -599,22 +817,35 @@ async function pollJob(jobId, t) {
     if (!response.ok) {
       throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
     }
-    // A failed generation attempt's own diagnostics (see backend/
-    // crossword_gen.py's try_fill, diagnostics["example_grid"]) are
-    // persisted server-side as `last_example_grid` (backend/app.py) rather
-    // than read off `data.step` directly — `step` reflects only the single
-    // latest progress event, and the very next one (e.g. the next palier's
-    // "pattern" step) can overwrite it before this poll ever sees it, at a
-    // cadence a POLL_INTERVAL_MS-spaced client can easily miss outright.
-    // `last_example_grid` instead always holds the most recent one, so the
-    // preview reliably stays populated with the last attempt's own grid
-    // through to the error message on total failure, not just during live
-    // progress and not only when the timing happens to line up.
-    if (data.last_example_grid) {
-      renderAttemptPreview(data.last_example_grid, data.last_impossible_cells, data.last_forced_cells);
+    const history = data.examples_history || [];
+    // Once the job has moved past raw pattern search (minimizing/grid_ready/
+    // clues/saving), catch the preview cursor up to whatever is most recent
+    // instead of continuing to drain the search-phase backlog one entry per
+    // poll — at the user's explicit report of a real regression: paliers
+    // that fail fast (see the 30%-unfillable abandon rule and the
+    // 5-consecutive-continue cap, both added this session) can leave a much
+    // larger backlog of unseen search-phase examples than before, so by the
+    // time optimisation/clue-generation actually starts, this loop could
+    // still be many polls away from draining it — making it look like "the
+    // search keeps going" long after it actually finished. `Math.max` never
+    // moves the cursor *backwards*: during the search phase itself, this is
+    // a no-op (POST_SEARCH_STEP_CODES doesn't match yet), preserving the
+    // original one-at-a-time behavior that guarantees every palier's own
+    // preview gets shown at least once.
+    if (data.step && POST_SEARCH_STEP_CODES.has(data.step.code)) {
+      nextExampleIndex = Math.max(nextExampleIndex, history.length - 1);
+    }
+    if (history.length > nextExampleIndex) {
+      renderAttemptPreview(history[nextExampleIndex]);
+      nextExampleIndex++;
     }
     if (data.status === "error") {
-      throw new Error(describeErrorCode(t, data.error_code, data.error));
+      throw new GenerationFailedError(
+        describeErrorCode(t, data.error_code, data.error), jobId, data.error_code,
+      );
+    }
+    if (data.status === "cancelled") {
+      throw new CancelledError(t.statusCancelled);
     }
     if (data.status === "done") {
       return data.result;
@@ -624,41 +855,42 @@ async function pollJob(jobId, t) {
   }
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-
-  const language = languageSelect.value;
-  const width = Number(document.getElementById("width").value);
-  const height = Number(document.getElementById("height").value);
-  const difficulty = document.getElementById("difficulty").value;
+// Shared by the form's own submit handler and continueBtn's click handler
+// (both further below) — at the user's explicit request: "Continuer"
+// relaunches a fresh job from a failed one's own resume state, but from
+// here on it needs exactly the same UI setup, polling, rendering, and
+// error handling as a brand new generation, not a separate code path that
+// could quietly drift out of sync with it. `startJob(t)` is the one part
+// that actually differs between the two callers — it does whatever HTTP
+// call starts the job and resolves to its job_id (or throws), everything
+// else here is identical either way.
+async function runGeneration(startJob) {
   const t = I18N[uiLanguage];
 
   button.disabled = true;
   result.hidden = true;
   solutionBtn.hidden = true;
   checkBtn.hidden = true;
+  definitionsBtn.hidden = true;
+  // Shown again in case a *previous* generation's own result already
+  // hid it (see below) — the player can still change their mind about
+  // seeing preview letters for this new run, right from the start.
+  attemptPreviewRevealBtn.hidden = false;
+  stopBtn.hidden = false;
+  stopBtn.disabled = false;
+  // Hidden on every fresh attempt (a new form submission or a "Continuer"
+  // click alike) — only shown again if *this* run itself ends in the
+  // specific "no_fillable_grid" failure the button exists for (see the
+  // catch block below).
+  continueBtn.hidden = true;
+  currentJobId = null;
   setStatus(t.statusGenerating, false);
   hideAttemptPreview();
 
   try {
-    let response;
-    try {
-      response = await fetchWithTimeout("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language, width, height, difficulty }),
-      }, FETCH_TIMEOUT_MS);
-    } catch (err) {
-      throw new Error(t.errorConnectionLost);
-    }
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
-    }
-
-    const gridData = await pollJob(data.job_id, t);
+    const jobId = await startJob(t);
+    currentJobId = jobId;
+    const gridData = await pollJob(jobId, t);
 
     puzzle = gridData;
     userLetters = Array.from({ length: gridData.height }, () => Array(gridData.width).fill(""));
@@ -685,12 +917,127 @@ form.addEventListener("submit", async (event) => {
     renderGrid();
     renderClues(gridData.words);
     stats.textContent = t.stats(gridData.word_count, gridData.black_count, (gridData.black_ratio * 100).toFixed(1));
+    generationTimes.textContent = t.generationTimes(
+      formatDuration(gridData.generation_duration_seconds),
+      formatDuration(gridData.optimization_duration_seconds),
+      formatDuration(gridData.clues_duration_seconds),
+    );
     solutionBtn.hidden = false;
     checkBtn.hidden = false;
+    definitionsBtn.hidden = false;
+    // Hidden by default on every fresh grid, at the user's explicit
+    // request, regardless of whatever the *previous* grid's own toggle
+    // state was left at.
+    showDefinitions = false;
+    applyDefinitionsVisibility();
+    // The solution is established now — solutionBtn takes over revealing
+    // letters from here on, at the user's explicit request, so the
+    // preview-only toggle has nothing left to control.
+    attemptPreviewRevealBtn.hidden = true;
     setStatus(t.statusGenerated, false);
   } catch (err) {
-    setStatus(err.message, true);
+    // A user-requested stop isn't an error — no red #status.error styling
+    // for it (see CancelledError above).
+    setStatus(err.message, !(err instanceof CancelledError));
+    // "Continuer" button, at the user's explicit request: only offered for
+    // the one specific failure it can actually do something about — a
+    // total search failure (every one of `attempts`, 200 by default,
+    // paliers exhausted) genuinely has a resume state to pick up from (see
+    // backend/crossword_gen.py's `_serialize_resume_state`); any other
+    // failure (a lost connection, an internal error, clue generation
+    // failing) has nothing meaningful to resume, so the button stays
+    // hidden for those, leaving "submit the form again" as the only option
+    // exactly as before this feature.
+    if (err instanceof GenerationFailedError && err.errorCode === "no_fillable_grid") {
+      continueBtn.dataset.jobId = err.jobId;
+      continueBtn.hidden = false;
+    }
   } finally {
     button.disabled = false;
+    stopBtn.hidden = true;
+    currentJobId = null;
+  }
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const language = languageSelect.value;
+  const width = Number(widthInput.value);
+  const height = Number(heightInput.value);
+  const difficulty = document.getElementById("difficulty").value;
+  const mode = document.getElementById("mode").value;
+  const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
+  const forceLettersPercent = Number(document.getElementById("force-letters").value);
+
+  await runGeneration(async (t) => {
+    let response;
+    try {
+      response = await fetchWithTimeout("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language, width, height, difficulty, mode,
+          black_enrichment_percent: blackEnrichmentPercent,
+          force_letters_percent: forceLettersPercent,
+        }),
+      }, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      throw new Error(t.errorConnectionLost);
+    }
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+    }
+    return data.job_id;
+  });
+});
+
+// "Continuer" button, at the user's explicit request: relaunches another
+// `attempts` (200 by default) paliers from the exact state the just-failed
+// job left off at (backend/app.py's POST /api/generate/continue/{job_id}),
+// rather than starting a brand new generation from a blank grid. Reuses
+// `runGeneration()` — same setup/polling/rendering/error handling as the
+// form's own submit handler, only the HTTP call that starts the job
+// differs. `continueBtn.dataset.jobId` (set in runGeneration()'s own catch
+// block above) always refers to whichever job most recently failed with
+// "no_fillable_grid" — if this new attempt fails the same way again, that
+// same catch block updates it to the new job's own id, so clicking
+// "Continuer" repeatedly keeps chaining from the latest failure rather
+// than always retrying the original one.
+continueBtn.addEventListener("click", async () => {
+  const jobId = continueBtn.dataset.jobId;
+  if (!jobId) return;
+
+  await runGeneration(async (t) => {
+    let response;
+    try {
+      response = await fetchWithTimeout(
+        `/api/generate/continue/${jobId}`, { method: "POST" }, FETCH_TIMEOUT_MS,
+      );
+    } catch (err) {
+      throw new Error(t.errorConnectionLost);
+    }
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+    }
+    return data.job_id;
+  });
+});
+
+// Fire-and-forget: the actual UI transition (hiding stopBtn, showing the
+// final status) happens once pollJob()'s own loop sees status "cancelled"
+// on its next poll, not here — this only asks the backend to stop.
+stopBtn.addEventListener("click", async () => {
+  if (!currentJobId) return;
+  const t = I18N[uiLanguage];
+  stopBtn.disabled = true;
+  setStatus(t.statusCancelling, false);
+  try {
+    await fetchWithTimeout(`/api/generate/cancel/${currentJobId}`, { method: "POST" }, FETCH_TIMEOUT_MS);
+  } catch (err) {
+    // Best-effort — if the connection itself is down, pollJob()'s own
+    // error handling will surface that on its next poll anyway.
   }
 });
