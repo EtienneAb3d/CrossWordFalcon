@@ -1219,6 +1219,20 @@ PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500
 # les tentatives." See attempt_done_event/generate_grid.
 PALIER_ATTEMPT_INTERRUPT_FRACTION = 0.30
 
+# Fraction of PARALLEL_ATTEMPTS that, right after a full cleanup ("nettoyage
+# complet" — see generate_grid's own `else:` branch, as opposed to "reprise
+# telle quelle"), start the very next palier from a completely blank grid
+# instead of the just-cleaned seed_grid/locked_letters every other worker of
+# that palier gets — at the user's explicit request: "A chaque nettoyage
+# complet (tous les 5 cycles) redémarrer 20% des process avec une grille
+# réinitialisée totalement." All PARALLEL_ATTEMPTS workers normally start
+# from the exact same carried-forward state after a cleanup (only their own
+# random seed differs), which can make every one of them converge on the
+# same kind of dead end again and again — deliberately sacrificing a small
+# share of the batch to a genuinely fresh start gives the search a chance to
+# escape that instead. See generate_grid's own `just_cleaned` flag.
+FULL_RESET_ATTEMPT_FRACTION = 0.20
+
 
 def _slots_touching(slots, target_indices):
     """Renvoie l'ensemble des indices d'emplacement (hors `target_indices`
@@ -3197,6 +3211,17 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # nettoyage a réellement lieu (voir plus bas) — ce compteur ne mesure
     # que la série en cours, pas un total cumulé sur toute la génération.
     consecutive_continue_paliers = 0
+    # True right after a palier that did a full cleanup ("nettoyage
+    # complet", the `else:` branch below), False right after one that did
+    # "reprise telle quelle" instead — at the user's explicit request (see
+    # FULL_RESET_ATTEMPT_FRACTION's own docstring): used only once, by the
+    # very next palier's own worker-submission code below, to decide
+    # whether a fraction of that palier's PARALLEL_ATTEMPTS workers should
+    # start from a blank grid instead of the just-cleaned carry_seed_grid/
+    # carry_locked_letters every other worker gets. Always overwritten
+    # again at the end of every single palier (whichever branch runs), so
+    # this never lingers past the one palier it's meant for.
+    just_cleaned = False
     # Voir _worker_batch_abandoned_event — un seul Event pour toute la
     # génération (créé ici, jamais recréé palier après palier, pour la
     # même raison technique que cancel_event : un Event soumis en argument
@@ -3234,11 +3259,28 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     for s in seeds
                 ]
             else:
+                # A fraction of this palier's own workers start from a
+                # totally blank grid instead of the just-cleaned
+                # carry_seed_grid/carry_locked_letters every other worker
+                # gets, right after a full cleanup — at the user's explicit
+                # request, see FULL_RESET_ATTEMPT_FRACTION's own docstring.
+                # No particular reason to prefer one seed over another for
+                # which of them get reset — `seeds` are already
+                # independently random, so simply resetting the first
+                # `reset_count` of them is as good as any other choice.
+                # Never applies right after a "reprise telle quelle"
+                # palier (`just_cleaned` is only ever True right after the
+                # `else:`/nettoyage branch below) nor on the very first
+                # palier of a call with no prior cleanup at all.
+                reset_count = round(FULL_RESET_ATTEMPT_FRACTION * PARALLEL_ATTEMPTS) if just_cleaned else 0
                 futures = [
-                    executor.submit(_pattern_attempt, rows, cols, ratio, s, force_letters_fraction,
-                                     carry_seed_grid, carry_locked_letters, black_enrichment_fraction,
-                                     deadline_checks)
-                    for s in seeds
+                    executor.submit(
+                        _pattern_attempt, rows, cols, ratio, s, force_letters_fraction,
+                        None if i < reset_count else carry_seed_grid,
+                        None if i < reset_count else carry_locked_letters,
+                        black_enrichment_fraction, deadline_checks,
+                    )
+                    for i, s in enumerate(seeds)
                 ]
             # Récupérés dans l'ordre d'achèvement (`as_completed`), pas
             # l'ordre de soumission, à la demande explicite de l'utilisateur
@@ -3497,6 +3539,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
 
             if still_has_hope:
                 consecutive_continue_paliers += 1
+                just_cleaned = False
                 # Nettoyage automatique des emplacements bloqués, mais pas
                 # des cases noires (à l'exception du verrouillage d'une
                 # seule case, voir plus bas), à la demande explicite de
@@ -3739,6 +3782,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     carry_seed_grid, rows, cols,
                     winning_blank_impossible_cells, winning_lettered_impossible_cells, rng,
                 )
+                just_cleaned = True
             # Le ratio cible ne progresse plus d'un palier à l'autre (reste
             # fixé à `black_ratio`, 0.0 par défaut), à la demande explicite
             # de l'utilisateur : le pré-remplissage (au moins

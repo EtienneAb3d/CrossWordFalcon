@@ -4317,6 +4317,56 @@ There is no test suite, linter, or build step in this repo.
    regenerating cleanup more often, each of which costs more than simply
    continuing on the same pattern; seed 7 in 42.8s, 53 words).
 
+   **A diversity-injection mechanism was added on top of every full
+   cleanup**, at the user's explicit request: "A chaque nettoyage complet
+   (tous les 5 cycles) redémarrer 20% des process avec une grille
+   réinitialisée totalement." Normally, every one of a palier's
+   `PARALLEL_ATTEMPTS` workers dispatched via `_pattern_attempt` (the
+   "motif neuf" branch, as opposed to `_pattern_continue`'s own "reprise
+   telle quelle") receives the exact same `carry_seed_grid`/`carry_locked_
+   letters` right after a cleanup — only their own random seed differs —
+   which risks every one of them converging on the same kind of dead end
+   again, especially now that the consecutive-continue cap forces a
+   cleanup as often as every 5 paliers (see the cap history just above). A
+   new `FULL_RESET_ATTEMPT_FRACTION` (0.20) and a new `just_cleaned` flag
+   (set `True` at the end of the `else:`/nettoyage branch, `False` at the
+   end of the `if still_has_hope:`/continue branch — so it always reflects
+   exactly the palier that just finished, consumed once by the very next
+   palier's own worker-submission code and then naturally overwritten
+   again) together decide, only for a palier dispatched via
+   `_pattern_attempt` right after a nettoyage, that
+   `round(FULL_RESET_ATTEMPT_FRACTION * PARALLEL_ATTEMPTS)` of its workers
+   (2 out of 10 on a 10-core machine) are submitted with `seed_grid=None,
+   locked_letters=None` — a totally blank grid, exactly `_pattern_attempt`'s
+   own from-scratch behavior — instead of the carried-forward state every
+   other worker of that same palier still receives. No particular reason
+   to prefer one seed over another for which workers get reset, since
+   `seeds` are already independently random — the first `reset_count` of
+   them are simply the ones reset, positionally. Never applies right after
+   a "reprise telle quelle" palier (`just_cleaned` is only ever `True`
+   right after a genuine nettoyage) nor on the very first palier of a call,
+   which has no prior cleanup to speak of.
+
+   Verified: an isolated check of the reset-count arithmetic across several
+   `PARALLEL_ATTEMPTS` values (1→0, 2→0, 3→1, 4→1, 5→1, 10→2, 20→4) and of
+   the per-worker dispatch logic itself (confirming exactly `reset_count`
+   of the submitted argument-tuples carry `(None, None)` and the rest carry
+   the real carried-forward grid/locked-letters, for both `just_cleaned`
+   states) both matched expectations. Since a `ProcessPoolExecutor`
+   target must be a real, picklable top-level function — ruling out a
+   monkeypatched local closure as a way to observe which grids actual
+   worker processes received — the dispatch decision itself was instead
+   confirmed with a temporary, since-removed debug print placed right at
+   `reset_count`'s own computation, run against a real `generate_grid()`
+   call (15×10, seed 7): palier 1 correctly showed `just_cleaned=False,
+   reset_count=0` (no prior cleanup yet), and every one of paliers 2
+   through 11 — each dispatched via `_pattern_attempt` because the
+   palier immediately before it had just done a full nettoyage — correctly
+   showed `just_cleaned=True, reset_count=2`. A real `generate_grid()` run
+   on both seeds of the standard 15×10 benchmark, with the mechanism fully
+   in place, confirmed no regression (0 empty white cells and 0 mismatches
+   each: seed 2 in 39.2s, 62 words; seed 7 in 51.4s, 54 words).
+
    **A live investigation into a user-reported symptom** ("après un
    nettoyage, la grille ne montre que les mots restants du tour précédent,
    pas de nouveaux mots") directly motivated the two rules described next.
