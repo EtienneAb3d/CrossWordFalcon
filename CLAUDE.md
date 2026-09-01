@@ -9335,3 +9335,150 @@ when its own raw frequency happens to exceed its infinitive's (verified: French
 "suis"/"était" both dropped somewhat, since "être"'s own raw count is lower than
 either) — an accepted, symmetric consequence of weighting toward the canonical form,
 not a bug.
+
+`FULL_RESET_ATTEMPT_FRACTION` (0.20, "20% of a palier's workers restart from
+a blank grid right after a full cleanup") was replaced by a fixed count,
+`FULL_RESET_ATTEMPT_COUNT = 1`, at the user's explicit request: "Réduire le
+nombre de process qui calculent une grille totalement nouvelle à 1 seul (au
+lieu de 20%)." `generate_grid`'s own `reset_count = round(FULL_RESET_
+ATTEMPT_FRACTION * PARALLEL_ATTEMPTS) if just_cleaned else 0` became
+`reset_count = FULL_RESET_ATTEMPT_COUNT if just_cleaned else 0` — a plain
+one-line change, every surrounding mechanic (which of `seeds` gets reset —
+still simply the first `reset_count` of them, `just_cleaned`'s own
+True/False gating, the "pattern_generated" preview's own per-process-vs-
+single-grid branching) untouched. On a 10-core machine this drops the
+reset share from 2 workers per cleanup down to 1 — still enough to give
+the search a genuinely independent escape route from a repeated dead end,
+at a smaller cost to the batch's own carried-forward progress than
+sacrificing 2+ workers to it every single cleanup. Verified: an isolated
+check confirmed `reset_count` now resolves to exactly 1 regardless of
+`PARALLEL_ATTEMPTS` (1, 4, 10, 20 all tested); a real `generate_grid()` run
+on both seeds of the standard 15×10 benchmark (Flash mode,
+`deadline_checks=1000`) confirmed no regression: 0 mismatches, 0 empty
+white cells each — seed 2 in 21.3s, 56 words, 44 black cells; seed 7 in
+15.4s, 57 words, 50 black cells.
+
+`PALIER_ATTEMPT_INTERRUPT_FRACTION` (already a named constant, 0.30 —
+"once this fraction of a palier's PARALLEL_ATTEMPTS attempts have finished,
+interrupt every other still-running attempt") was changed from 0.30 to
+**1.0**, at the user's explicit request: "Donner un nom de variable à la
+quantité de process qui échouent avant de décider d'interrompre tous les
+process (actuellement 30%). Fixer cette proportion pour le moment à 100%
+(on attend que tous les process terminent)." The constant already carried
+a name from when it was first introduced — only its value changed here.
+With `interrupt_threshold = max(1, math.ceil(PALIER_ATTEMPT_INTERRUPT_
+FRACTION * len(futures)))`, a fraction of 1.0 makes `interrupt_threshold`
+always equal the full batch size (`math.ceil(1.0 * n) == n` for every
+`n`), so `attempt_done_event` is only ever set once every attempt of the
+palier has already completed on its own — in practice, no early
+interruption ever happens anymore; the palier always waits for the full
+batch, exactly "on attend que tous les process terminent." A deliberately
+temporary, conservative setting per the user's own "pour le moment"
+wording — not necessarily the final value. This also means `failed_pairs`/
+`failed_unique`/the "all attempts abandoned via the 30%-unfillable rule"
+force-cleanup check (see `UNFILLABLE_ABANDON_FRACTION`, a separate,
+unrelated 30% constant, left untouched) now regularly see the *entire*
+`PARALLEL_ATTEMPTS`-sized batch of real, naturally-concluded outcomes
+instead of just the handful that happened to finish before an early
+interruption — a wider, more representative sample for both the "best
+failed candidate" selection and the force-cleanup rule, at the cost of a
+palier now always waiting for its own slowest attempt (the exact trade-off
+`PALIER_ATTEMPT_INTERRUPT_FRACTION` was originally introduced to avoid).
+Verified: an isolated check confirmed `interrupt_threshold` now equals
+`PARALLEL_ATTEMPTS` exactly for every tested batch size (1, 4, 5, 10, 20);
+a real `generate_grid()` run on both seeds of the standard 15×10 benchmark
+(Flash mode) confirmed no regression (0 mismatches, 0 empty white cells
+each — same run as above, both changes verified together in the same
+benchmark pass).
+
+A new last-resort recovery mechanism, `_plug_isolated_cells`, was added at
+the end of every failed palier, right before the "reprise telle quelle"
+vs. "nettoyage complet" decision, at the user's explicit request:
+"Lorsque toutes les recherches échouent en laissant une grille avec [ne
+reste] plus que des cases blanches isolées, boucher les cases isolées
+avec une case noire. Si le résultat donne une grille où tous les
+emplacements possibles sont remplis et valides, déclarer la grille
+réussie." An "isolated" unfilled white cell is defined as one with no
+orthogonal neighbor that is also unfilled — every one of its 4 neighbors
+is either already black or already covered by a real, confirmed letter
+(via some assigned slot, across or down). This definition is deliberately
+conservative: as soon as an unfilled cell has even one unfilled neighbor,
+that reveals a genuine, still-open slot of at least 2 cells somewhere
+nearby — a real word that could, in principle, still be found — and this
+mechanism leaves the entire grid untouched in that case, not just that
+one cell.
+
+`_plug_isolated_cells(grid, rows, cols, slots, assignment, index)`:
+builds `known` (a cell→letter map from every currently-assigned slot,
+exactly the same construction already used by `_close_implied_slots`/
+`_clean_blocked_slots`), then the set of `unfilled` white cells (not
+covered by `known`) — if none exists, returns `None` immediately (nothing
+to do, degenerate case that shouldn't normally be reached here anyway,
+since a fully-filled `selected_diag` would already have been a `try_fill`
+success). If any unfilled cell has an unfilled orthogonal neighbor,
+returns `None` without touching anything — the "more than isolated
+cells" condition from the user's request. Otherwise, builds a fresh copy
+of the grid with every unfilled cell turned `BLACK`, checks it's still
+structurally valid at the strictest level (`is_structurally_valid(...,
+min_interior_free=1)` — full connectivity of the white-cell graph, no
+orphaned cell anywhere else) — since plugging a bridge cell can
+disconnect the grid into two components, this check is not a formality —
+and, if valid, re-derives the slot structure (`extract_slots` on the new
+grid) and validates every single one of its slots: each must have every
+cell already present in `known` (a slot that shrank from a longer,
+partially-known one, or one entirely unaffected by the plugging, both
+count) *and* the word its known letters spell must be a real dictionary
+entry (`_slot_candidates`, the same per-position set-intersection tool
+`Filler._domain`/`_force_single_candidate_slots`/`sample_letter_biases`
+all already share) — not merely "known," since a slot's letters coming
+purely from independent crossings could, in principle, spell a
+non-existent word. Any failure of either check aborts with `None`; only
+when every single slot of the new pattern is fully known and forms a
+real word does it return `(new_grid, new_slots, new_assignment)`.
+
+Wired into `generate_grid` right after `selected_grid, selected_diag =
+failed_pairs[0]` (the same best-failed-candidate computation the
+"reprise telle quelle"/nettoyage decision already reads) — a non-`None`
+result short-circuits the rest of the palier entirely: `best, best_result
+= new_grid, (new_slots, new_assignment)` then `break`, exactly mirroring
+the pre-existing `if successes: ... break` path, so every downstream
+step (the `"pattern_found"` progress event, the "before optimization"
+preview, `minimize_black_squares`, `build_word_entries`, clue
+generation) treats this exactly like an ordinary, fully-resolved CSP
+success — no special-casing needed anywhere else in the file, since
+`best_result`'s contract (`(slots, assignment)`, matching `try_fill`'s
+own return shape) is honored exactly.
+
+Verified: 7 isolated unit tests against small, fully hand-built
+dictionaries/grids — (1) a single isolated unfilled cell (a down-slot's
+own unassigned last cell, boxed in by an already-lettered neighbor and
+black cells on every other side) correctly plugged, producing a
+1-slot grid whose sole remaining word matches the dictionary; (2) a
+genuine 2-cell open slot (both cells unfilled and mutually adjacent)
+correctly left completely untouched (`None`); (3) a scenario where
+plugging the one candidate cell would disconnect the white-cell graph
+into two components correctly rejected via the connectivity check; (4) a
+scenario with two independently-isolated cells on two different sides of
+an already-assigned slot, neither adjacent to the other, both correctly
+plugged at once; (5)-(6) a scenario engineered so plugging one isolated
+cell shrinks a 4-length unassigned slot down to a *new*, still-multi-cell
+3-length slot whose letters are already fully known via 3 independent
+crossing assignments — confirmed the new slot is validated against the
+real dictionary and the whole operation succeeds when that word is
+present, and is correctly rejected (`None`) when it is not, proving the
+validation genuinely checks *real dictionary membership*, not merely
+"every cell has some letter." A live diagnostic (`_plug_isolated_cells`
+monkeypatched to record every call/outcome) run across 8 real
+`generate_grid()` calls (9×9, Flash-scale `deadline_checks=200` to
+force many failed paliers) confirmed the hook fires correctly at every
+single failed palier across all 8 seeds (6-16 calls per run, 0 crashes)
+— proving the wiring reaches real, varied `selected_diag`/`selected_grid`
+shapes correctly, even though none of these particular short runs
+happened to land in the specific "nothing left but isolated cells" state
+needed to actually trigger a plug (an inherently rare state to hit by
+chance in a small grid/short budget — the isolated unit tests above are
+what directly exercises the success path itself). A full end-to-end
+`generate_grid()` run on both seeds of the standard 15×10 benchmark
+(Flash mode) confirmed no regression to the ordinary case: 0 mismatches,
+0 empty white cells each — seed 2 in 24.0s, 63 words, 38 black cells;
+seed 7 in 13.0s, 52 words, 47 black cells.

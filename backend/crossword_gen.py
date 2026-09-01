@@ -1636,7 +1636,21 @@ PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500
 # initial design (interrupt as soon as the very first attempt finishes):
 # "à partir de 30% des tentatives qui se terminent... interrompre toutes
 # les tentatives." See attempt_done_event/generate_grid.
-PALIER_ATTEMPT_INTERRUPT_FRACTION = 0.30
+#
+# Fixed, for the time being, at 1.0 (100%) — i.e. every single attempt of
+# the batch must finish before any interruption ever happens, which in
+# practice means it never fires at all (the batch's own last attempt to
+# finish has, by definition, nothing left to interrupt) — at the user's
+# explicit later request: "Donner un nom de variable à la quantité de
+# process qui échouent avant de décider d'interrompre tous les process
+# (actuellement 30%). Fixer cette proportion pour le moment à 100% (on
+# attend que tous les process terminent)." The variable already had a name
+# from the original request above; only the value changed here. With
+# `math.ceil(1.0 * len(futures)) == len(futures)`, `interrupt_threshold`
+# below always equals the full batch size, so `attempt_done_event` is only
+# ever set once every attempt has already completed on its own — a
+# temporary, deliberately conservative setting the user may revisit later.
+PALIER_ATTEMPT_INTERRUPT_FRACTION = 1.0
 
 # Délai de grâce (secondes) laissé au drainage de `best_state_queue` (voir
 # generate_grid) pour rattraper un message publié juste avant qu'un worker
@@ -1691,19 +1705,29 @@ BEST_STATE_QUEUE_DRAIN_GRACE_S = 0.02
 # the full mechanism and the live evidence that motivated it.
 MAX_CONSECUTIVE_CONTINUE_PALIERS = 0
 
-# Fraction of PARALLEL_ATTEMPTS that, right after a full cleanup ("nettoyage
-# complet" — see generate_grid's own `else:` branch, as opposed to "reprise
-# telle quelle"), start the very next palier from a completely blank grid
-# instead of the just-cleaned seed_grid/locked_letters every other worker of
-# that palier gets — at the user's explicit request: "A chaque nettoyage
-# complet (tous les 5 cycles) redémarrer 20% des process avec une grille
-# réinitialisée totalement." All PARALLEL_ATTEMPTS workers normally start
-# from the exact same carried-forward state after a cleanup (only their own
-# random seed differs), which can make every one of them converge on the
-# same kind of dead end again and again — deliberately sacrificing a small
-# share of the batch to a genuinely fresh start gives the search a chance to
-# escape that instead. See generate_grid's own `just_cleaned` flag.
-FULL_RESET_ATTEMPT_FRACTION = 0.20
+# Number of PARALLEL_ATTEMPTS workers that, right after a full cleanup
+# ("nettoyage complet" — see generate_grid's own `else:` branch, as opposed
+# to "reprise telle quelle"), start the very next palier from a completely
+# blank grid instead of the just-cleaned seed_grid/locked_letters every
+# other worker of that palier gets — at the user's explicit request: "A
+# chaque nettoyage complet (tous les 5 cycles) redémarrer 20% des process
+# avec une grille réinitialisée totalement." All PARALLEL_ATTEMPTS workers
+# normally start from the exact same carried-forward state after a cleanup
+# (only their own random seed differs), which can make every one of them
+# converge on the same kind of dead end again and again — deliberately
+# sacrificing a small share of the batch to a genuinely fresh start gives
+# the search a chance to escape that instead. See generate_grid's own
+# `just_cleaned` flag.
+#
+# Originally a fraction (`FULL_RESET_ATTEMPT_FRACTION = 0.20`, resolving to
+# `round(0.20 * PARALLEL_ATTEMPTS)` workers — 2 on a 10-core machine).
+# Reduced to a fixed count of 1, at the user's explicit later request:
+# "Réduire le nombre de process qui calculent une grille totalement
+# nouvelle à 1 seul (au lieu de 20%)." A single from-scratch worker is
+# already enough to give the search a genuinely fresh escape route from a
+# repeated dead end, at a smaller cost to the batch's own carried-forward
+# progress than sacrificing 2+ workers to it every single cleanup.
+FULL_RESET_ATTEMPT_COUNT = 1
 
 
 def _slots_touching(slots, target_indices):
@@ -3261,8 +3285,8 @@ def _cycle_start_preview(rows, cols, seed_grid, locked_letters, preseed_assignme
         return [[WHITE] * cols for _ in range(rows)], []
     grid = [row[:] for row in seed_grid]
     # `if grid[r][c] == BLACK: continue` below (both branches) guards
-    # against a case found and confirmed live: `generate_grid`'s "20%
-    # reset" mechanism (FULL_RESET_ATTEMPT_FRACTION) starts a fraction of
+    # against a case found and confirmed live: `generate_grid`'s "reset"
+    # mechanism (FULL_RESET_ATTEMPT_COUNT) starts a handful of
     # a palier's own `_pattern_attempt` workers from a totally blank,
     # *independent* grid rather than building on top of `carry_seed_grid`
     # — this function is reused (see progress("pattern_generated", ...)
@@ -3648,6 +3672,86 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
             confirmed[cell] = ch
 
     return assignment, confirmed, new_black_cells
+
+
+def _plug_isolated_cells(grid, rows, cols, slots, assignment, index):
+    """Dernier recours tenté à la fin d'un palier en échec, à la demande
+    explicite de l'utilisateur : "Lorsque toutes les recherches échouent en
+    laissant une grille avec [ne reste] plus que des cases blanches
+    isolées, boucher les cases isolées avec une case noire. Si le résultat
+    donne une grille où tous les emplacements possibles sont remplis et
+    valides, déclarer la grille réussie."
+
+    Une case blanche encore sans lettre ("non remplie") est ici toute case
+    qu'aucun emplacement assigné (`assignment[i] is not None`) ne couvre —
+    y compris une case dont l'emplacement croisé (l'autre direction) EST
+    assigné, ce qui lui donne déjà une vraie lettre malgré tout : `known`
+    ci-dessous reflète exactement cette réalité, case par case, pas
+    emplacement par emplacement.
+
+    Une case non remplie est dite "isolée" si aucune de ses 4 cases
+    voisines orthogonales n'est, elle aussi, non remplie — c'est-à-dire que
+    tous ses voisins sont déjà noirs ou déjà pourvus d'une vraie lettre.
+    C'est une définition volontairement prudente : si une case non remplie
+    a ne serait-ce qu'un seul voisin non rempli, cela signifie qu'un vrai
+    emplacement d'au moins 2 lettres reste encore ouvert à cet endroit (un
+    mot qui pourrait encore, en principe, être trouvé) — ce n'est alors
+    plus "rien que des cases isolées", et cette fonction n'y touche pas du
+    tout : ni cette case, ni aucune autre de la grille, n'est modifiée. Une
+    case isolée, à l'inverse, ne peut par construction jamais faire partie
+    d'un emplacement encore ouvert d'au moins 2 cases : boucher une telle
+    case ne raccourcit jamais un mot déjà confirmé, ni ne retire aucune
+    vraie lettre déjà posée.
+
+    Ne fait rien (renvoie `None`) dans trois cas : (1) il reste au moins une
+    case non remplie qui n'est pas isolée (un vrai emplacement encore
+    ouvert existe ailleurs — pas seulement des cases isolées) ; (2) noircir
+    l'ensemble des cases isolées casserait la validité structurelle de la
+    grille (connexité, ou une case blanche orpheline ailleurs —
+    `is_structurally_valid` au niveau le plus strict, `min_interior_free=
+    1`) ; (3) une fois les cases isolées bouchées, au moins un emplacement
+    du nouveau motif (`extract_slots` recalculé sur la grille modifiée)
+    reste soit sans lettre connue à toutes ses cases, soit rempli d'une
+    combinaison qui ne correspond à aucun mot réel du dictionnaire — la
+    grille obtenue n'est alors PAS "remplie et valide" au sens de la
+    demande, donc pas question de la déclarer réussie. Sinon (tous les
+    emplacements du nouveau motif sont entièrement connus et forment un mot
+    réel), renvoie `(new_grid, new_slots, new_assignment)` — un résultat
+    directement utilisable comme une réussite complète de génération, au
+    même titre qu'un remplissage CSP qui aurait abouti normalement."""
+    known = {}
+    for i, cells in enumerate(slots):
+        word = assignment[i]
+        if word is not None:
+            for pos, cell in enumerate(cells):
+                known[cell] = word[pos]
+    unfilled = {
+        (r, c)
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] == WHITE and (r, c) not in known
+    }
+    if not unfilled:
+        return None
+    for (r, c) in unfilled:
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            if (r + dr, c + dc) in unfilled:
+                return None
+    new_grid = [row[:] for row in grid]
+    for (r, c) in unfilled:
+        new_grid[r][c] = BLACK
+    if not is_structurally_valid(new_grid, rows, cols, min_interior_free=1):
+        return None
+    new_slots = extract_slots(new_grid, rows, cols)
+    new_assignment = []
+    for cells in new_slots:
+        if any(cell not in known for cell in cells):
+            return None
+        candidates = _slot_candidates(index, len(cells), cells, known)
+        if not candidates:
+            return None
+        new_assignment.append(next(iter(candidates)))
+    return new_grid, new_slots, new_assignment
 
 
 # `_impossible_cell_groups`/`_lock_one_impossible_cell` — the single-cell
@@ -4590,9 +4694,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # True right after a palier that did a full cleanup ("nettoyage
     # complet", the `else:` branch below), False right after one that did
     # "reprise telle quelle" instead — at the user's explicit request (see
-    # FULL_RESET_ATTEMPT_FRACTION's own docstring): used only once, by the
+    # FULL_RESET_ATTEMPT_COUNT's own docstring): used only once, by the
     # very next palier's own worker-submission code below, to decide
-    # whether a fraction of that palier's PARALLEL_ATTEMPTS workers should
+    # whether a handful of that palier's PARALLEL_ATTEMPTS workers should
     # start from a blank grid instead of the just-cleaned carry_seed_grid/
     # carry_locked_letters every other worker gets. Always overwritten
     # again at the end of every single palier (whichever branch runs), so
@@ -4735,7 +4839,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # totally blank grid instead of the just-cleaned
                 # carry_seed_grid/carry_locked_letters every other worker
                 # gets, right after a full cleanup — at the user's explicit
-                # request, see FULL_RESET_ATTEMPT_FRACTION's own docstring.
+                # request, see FULL_RESET_ATTEMPT_COUNT's own docstring.
                 # No particular reason to prefer one seed over another for
                 # which of them get reset — `seeds` are already
                 # independently random, so simply resetting the first
@@ -4744,7 +4848,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # palier (`just_cleaned` is only ever True right after the
                 # `else:`/nettoyage branch below) nor on the very first
                 # palier of a call with no prior cleanup at all.
-                reset_count = round(FULL_RESET_ATTEMPT_FRACTION * PARALLEL_ATTEMPTS) if just_cleaned else 0
+                reset_count = FULL_RESET_ATTEMPT_COUNT if just_cleaned else 0
                 # Aperçu "cases noires posées, recherche des mots en
                 # cours" publié dès MAINTENANT — avant même de soumettre
                 # la moindre tentative parallèle à l'executor, donc bien
@@ -5290,6 +5394,27 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # neuf au palier suivant, exactement comme avant cette
             # fonctionnalité.
             selected_grid, selected_diag = failed_pairs[0]
+            # Dernier recours avant toute décision "reprise telle quelle" /
+            # nettoyage, à la demande explicite de l'utilisateur : voir
+            # `_plug_isolated_cells`'s propre docstring pour la définition
+            # précise d'une case "isolée" et les conditions qui la
+            # déclenchent. Un `None` (le cas normal, largement le plus
+            # fréquent) laisse tout le reste de ce palier inchangé —
+            # seule une grille où il ne reste plus RIEN que des cases
+            # isolées à boucher, formant après coup une grille entièrement
+            # remplie et valide, court-circuite la suite en la déclarant
+            # directement réussie, exactement comme une réussite CSP
+            # normale (`best`/`best_result`, utilisés tels quels par tout
+            # le code qui suit la boucle des paliers).
+            plugged = _plug_isolated_cells(
+                selected_grid, rows, cols,
+                extract_slots(selected_grid, rows, cols),
+                selected_diag["assignment"], index,
+            )
+            if plugged is not None:
+                new_grid, new_slots, new_assignment = plugged
+                best, best_result = new_grid, (new_slots, new_assignment)
+                break
             selected_impossible = set(selected_diag["impossible_slots"])
             # `_slots_touching`, à la demande explicite de l'utilisateur
             # ("ne pas essayer de remplir les emplacements qui croisent un

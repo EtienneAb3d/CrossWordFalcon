@@ -221,12 +221,16 @@ partir du moment où un premier palier échoue que les tentatives suivantes
 commencent à partager un même point de départ (motif conservé, ou grille
 nettoyée) — voir plus bas.
 
-Dès qu'au moins **30 %** de ces tentatives se sont terminées — qu'elles
-réussissent ou qu'elles échouent — toutes les tentatives encore en cours
-sont interrompues, sans attendre leur propre fin, pour passer directement
-au palier suivant (`backend/crossword_gen.py`, `generate_grid`, et le point
-de contrôle correspondant dans `Filler._backtrack`) : le palier n'attend
-donc plus systématiquement la tentative la plus lente du lot. Parmi les
+Une fraction réglable de ces tentatives, une fois terminées — qu'elles
+réussissent ou qu'elles échouent —, peut interrompre toutes les tentatives
+encore en cours pour passer directement au palier suivant
+(`backend/crossword_gen.py`, `generate_grid`,
+`PALIER_ATTEMPT_INTERRUPT_FRACTION`, et le point de contrôle correspondant
+dans `Filler._backtrack`) : le palier n'attendrait alors plus
+systématiquement la tentative la plus lente du lot. Cette fraction est
+pour l'instant fixée à **100 %** : le palier attend donc que **toutes** les
+tentatives du lot se terminent d'elles-mêmes avant de passer à la
+sélection, sans interruption anticipée. Parmi les
 tentatives ainsi conclues avant l'interruption, si plusieurs réussissent,
 ce n'est pas simplement la première trouvée qui est retenue : c'est celle
 dont les mots ont la plus grande **somme des carrés de leurs longueurs**.
@@ -495,8 +499,31 @@ ajouter — d'où le même nom.
 ### Quand un palier échoue
 
 Quand un palier échoue entièrement (aucune des tentatives parallèles n'a
-donné une grille complète), le palier suivant ne recommence pas
-systématiquement avec un motif entièrement neuf. Deux cas, dans cet ordre :
+donné une grille complète), avant même de choisir entre les deux cas
+ci-dessous, un tout dernier recours est tenté sur la meilleure tentative
+échouée de ce palier (celle qui minimise le nombre de caractères
+injouables — la même grille qui sert de base aux deux cas ci-dessous) : si
+tout ce qu'il reste encore sans lettre n'est rien de plus que des **cases
+isolées** — des cases blanches sans lettre dont aucun des 4 voisins directs
+n'est, lui non plus, sans lettre (tous ses voisins sont déjà soit noirs,
+soit pourvus d'une vraie lettre) —, chacune de ces cases isolées est
+bouchée d'une case noire (`backend/crossword_gen.py`,
+`_plug_isolated_cells`). Une case isolée ne peut, par construction, jamais
+faire partie d'un emplacement d'au moins 2 lettres encore ouvert : dès
+qu'une case sans lettre a ne serait-ce qu'un seul voisin également sans
+lettre, cela révèle un vrai emplacement encore à remplir quelque part, et
+ce dernier recours n'y touche alors pas du tout — ni à cette case, ni à
+aucune autre de la grille.
+
+Si le résultat, une fois ces cases bouchées, reste une grille valide (pas
+de case blanche orpheline créée ailleurs, grille blanche toujours connexe)
+**et** que chaque emplacement de ce nouveau motif est entièrement rempli
+d'un vrai mot du dictionnaire, la grille est directement déclarée
+**réussie** — exactement comme un remplissage CSP qui aurait abouti
+normalement, sans passer par la reprise "telle quelle" ni par le
+nettoyage. Sinon (au moins une case sans lettre n'est pas isolée, ou le
+résultat bouché n'est pas entièrement valide), rien n'est modifié et le
+palier suit son cours normal, entre les deux cas suivants, dans cet ordre :
 
 1. **Reprise "telle quelle".** Parmi les tentatives échouées de ce palier,
    on regarde la meilleure d'entre elles — celle qui minimise le nombre de
@@ -597,9 +624,11 @@ systématiquement avec un motif entièrement neuf. Deux cas, dans cet ordre :
    palier en cours : il est remis à zéro avant chaque nouveau palier, donc
    un blocage constaté à un palier n'affecte jamais les tentatives du
    suivant. En pratique, ce raccourci intervient rarement seul désormais :
-   l'arrêt général dès 30 % de tentatives terminées (voir "Plusieurs
-   tentatives en parallèle par palier" plus haut) coupe généralement court
-   avant même que ce signal-ci n'ait le temps de se propager. Ce raccourci
+   l'arrêt général une fois la fraction réglable de tentatives terminées
+   atteinte (voir "Plusieurs tentatives en parallèle par palier" plus
+   haut — pour l'instant fixée à 100 %, donc sans effet anticipé) peut,
+   selon sa valeur, couper court avant même que ce signal-ci n'ait le
+   temps de se propager. Ce raccourci
    ne s'applique **pas** au cas "Simplification puis
    motif neuf" ci-dessous : là, chacune des tentatives parallèles génère
    son propre motif indépendant, donc la conclusion de l'une ne dit rien
@@ -642,17 +671,17 @@ systématiquement avec un motif entièrement neuf. Deux cas, dans cet ordre :
    structurelle au palier suivant qu'un critère fondé sur les seuls mots —
    et sert de point de départ à un tout nouveau motif au palier suivant.
 
-   Juste après un tel nettoyage complet, une partie des tentatives
-   parallèles du palier suivant repart d'une **grille entièrement vierge**
-   plutôt que de la grille nettoyée — **20 % d'entre elles** par défaut
-   (`backend/crossword_gen.py`, `generate_grid`,
-   `FULL_RESET_ATTEMPT_FRACTION`) : toutes les autres tentatives partagent
-   la même grille de départ (seul leur tirage aléatoire diffère), avec le
-   risque qu'elles retombent toutes sur le même type d'impasse ; réserver
-   une petite partie du lot à un vrai nouveau départ permet parfois
-   d'échapper à ce blocage répété. Ne s'applique jamais après une reprise
-   "telle quelle" (cas 1 ci-dessus), seulement juste après un nettoyage
-   complet.
+   Juste après un tel nettoyage complet, une des tentatives parallèles du
+   palier suivant repart d'une **grille entièrement vierge** plutôt que de
+   la grille nettoyée — **une seule d'entre elles** (`backend/
+   crossword_gen.py`, `generate_grid`, `FULL_RESET_ATTEMPT_COUNT`) :
+   toutes les autres tentatives partagent la même grille de départ (seul
+   leur tirage aléatoire diffère), avec le risque qu'elles retombent
+   toutes sur le même type d'impasse ; réserver une seule tentative du lot
+   à un vrai nouveau départ permet parfois d'échapper à ce blocage répété,
+   à moindre coût pour le contenu déjà reporté du reste du lot. Ne
+   s'applique jamais après une reprise "telle quelle" (cas 1 ci-dessus),
+   seulement juste après un nettoyage complet.
 
 Aucune case noire n'est jamais ajoutée par l'un ou l'autre de ces deux cas —
 seuls les mots/cases noires déjà présents dans le motif choisi survivent ou
@@ -666,10 +695,12 @@ grille jugée impossible, voir l'étape 2) — un signal fort qu'aucune d'elles
 n'a de raison de croire qu'une reprise "telle quelle" sur son propre motif
 aboutirait un jour — le nettoyage se déclenche directement, sur la
 meilleure de ces grilles (`backend/crossword_gen.py`, `generate_grid`).
-En pratique, avec l'interruption décrite plus haut dès 30 % de tentatives
-terminées, il n'y a généralement qu'une petite poignée de tentatives
-réellement conclues par palier (pas la totalité du lot), donc cette règle
-porte sur un échantillon restreint.
+Avec la fraction d'interruption actuellement fixée à 100 % (voir
+"Plusieurs tentatives en parallèle par palier" plus haut), toutes les
+tentatives du lot ont le temps de se conclure d'elles-mêmes avant cette
+vérification, donc cette règle porte sur le lot complet ; avec une
+fraction plus basse, elle ne porterait que sur la poignée de tentatives
+déjà conclues au moment de l'interruption anticipée.
 
 Un emplacement est "impossible" au sens ci-dessus quand, à l'endroit où la
 recherche s'est arrêtée, aucun mot du dictionnaire ne peut plus s'y placer
