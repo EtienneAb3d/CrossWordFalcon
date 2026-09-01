@@ -161,8 +161,11 @@ class GenerateRequest(BaseModel):
     # comptent pour l'objectif de remplissage en noir") : si le
     # pré-remplissage a déjà posé plus de cases que ce pourcentage n'en
     # réclame, aucune case supplémentaire n'est ajoutée pour cette raison.
+    # Removed once (mistakenly, alongside the unrelated per-cycle
+    # single-cell lock), then restored — only that separate lock was ever
+    # meant to go, not this percentage mechanism (see CLAUDE.md).
     black_enrichment_percent: int = Field(
-        default=14, ge=0, le=100,
+        default=17, ge=0, le=100,
         description=(
             "Pourcentage de cases blanches (avant pré-remplissage) transformées "
             "en cases noires à chaque palier, pré-remplissage inclus (entier, 0 à 100)"
@@ -282,9 +285,28 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # through it one entry per poll, guaranteeing every single palier's
         # own preview gets shown at least once, in order, however fast
         # paliers actually resolve relative to the polling interval.
+        #
+        # Each entry is `{"step": ..., "examples": ...}`, not a bare
+        # `examples` list, at the user's explicit request: "L'historique
+        # des visualisation doit inclure le status (indiquant notamment le
+        # nombre de cycles)." The web UI's manual back/forward navigation
+        # through this same history (script.js's previewHistory, see
+        # CLAUDE.md) showed only the preview grids on their own, with no
+        # indication of which cycle/attempt a given grid actually came
+        # from — `job["step"]` (just built above) already carries exactly
+        # that (code, attempt, attempts, total_attempts, or current/total
+        # for the "clues" step). Stored as a shallow copy with its own
+        # `examples` key stripped out, not the dict itself — `job["step"]`
+        # is otherwise a fresh, never-mutated-afterward dict every call, so
+        # storing it directly would have been safe too, but it also
+        # contains this very same `examples` list under `data`'s own key,
+        # which would otherwise be carried twice per entry (once as the
+        # step's own field, once as this entry's dedicated `examples` key)
+        # for no benefit — nothing ever reads `entry["step"]["examples"]`.
         examples = data.get("examples")
         if examples:
-            job["examples_history"].append(examples)
+            step_without_examples = {k: v for k, v in job["step"].items() if k != "examples"}
+            job["examples_history"].append({"step": step_without_examples, "examples": examples})
         # "Continuer" button, at the user's explicit request — see
         # _new_job's own "resume_state" field and crossword_gen.py's
         # _serialize_resume_state. Only ever present on the single

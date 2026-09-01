@@ -59,20 +59,23 @@ const infoTooltip = document.getElementById("info-tooltip");
 const attemptPreview = document.getElementById("attempt-preview");
 const attemptPreviewGrids = document.getElementById("attempt-preview-grids");
 const attemptPreviewRevealBtn = document.getElementById("attempt-preview-reveal-btn");
+const attemptPreviewFirstBtn = document.getElementById("attempt-preview-first-btn");
+const attemptPreviewPrevBtn = document.getElementById("attempt-preview-prev-btn");
+const attemptPreviewNextBtn = document.getElementById("attempt-preview-next-btn");
+const attemptPreviewLastBtn = document.getElementById("attempt-preview-last-btn");
+const attemptPreviewPosition = document.getElementById("attempt-preview-position");
+const attemptPreviewStatus = document.getElementById("attempt-preview-status");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
 
-// "Taux noir" (anciennement "Ajout noires", renommé à la demande explicite
-// de l'utilisateur) est un champ de saisie libre (un entier, plutôt qu'une
-// liste de pourcentages prédéfinis) initialisé à une valeur fixe de 14 %
-// (voir sa valeur `value` dans index.html), à la demande explicite de
-// l'utilisateur — remplace une précédente formule dépendante de la
-// taille de la grille (0.3 * sqrt(largeur * hauteur)), recalculée à
-// chaque changement de largeur/hauteur : plus de recalcul automatique
-// désormais, la même valeur par défaut s'applique quelle que soit la
-// taille de grille choisie, modifiable librement par le joueur comme
-// n'importe quel autre champ.
+// "Taux noir" is a free-text integer field (0-100), initialized to a
+// fixed 14% default (see its `value` in index.html) — no client-side
+// auto-fill formula, unlike an earlier version tied to grid size.
+// Removed once by mistake alongside an unrelated per-cycle single-cell
+// lock (`_lock_one_impossible_cell` in crossword_gen.py), then restored:
+// only that separate lock was ever meant to go, not this field/mechanism
+// — see CLAUDE.md for the full history.
 
 fetch("/api/version")
   .then((r) => r.json())
@@ -304,6 +307,7 @@ function renderAttemptPreview(examples) {
     impossible_cells: impossibleCells,
     forced_cells: forcedCells,
     locked_cells: lockedCells,
+    low_candidate_cells: lowCandidateCells,
   } of examples) {
     if (!exampleGrid || !exampleGrid.length) continue;
     const height = exampleGrid.length;
@@ -345,8 +349,9 @@ function renderAttemptPreview(examples) {
       }
     }
     // Final overlay pass: every previously-built cell already sits in the
-    // DOM at this point, so adding .forced/.locked here can never be
-    // affected by where this runs relative to the loop above.
+    // DOM at this point, so adding .forced/.locked/.low-candidates here
+    // can never be affected by where this runs relative to the loop
+    // above.
     for (const [r, c] of forcedCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("forced");
@@ -354,6 +359,15 @@ function renderAttemptPreview(examples) {
     for (const [r, c] of lockedCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("locked");
+    }
+    // Only ever non-empty on the "pattern" (cycle-start) preview — see
+    // backend/crossword_gen.py's _low_candidate_slot_cells, which scopes
+    // this to that one event — but `|| []` here means every other event
+    // (whose examples simply lack this key) renders exactly as before,
+    // with no special-casing needed on this side.
+    for (const [r, c] of lowCandidateCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("low-candidates");
     }
     const totalCells = height * width;
     const blackPercent = Math.round((100 * blackCount) / totalCells);
@@ -387,10 +401,213 @@ function togglePreviewLetters() {
 
 attemptPreviewRevealBtn.addEventListener("click", togglePreviewLetters);
 
+// Full history of every attempt-preview state examples_history has ever
+// produced during the current generation — one element per entry
+// pollJob() has recorded, appended to as they arrive (in full batches,
+// never paced or skipped — see pollJob's own comment), never shortened.
+// Lets the player step back to an earlier state and forward again with
+// the prev/next buttons next to #attempt-preview-label, at the user's
+// explicit request — independent of the *live* display, which only ever
+// reflects whatever is most current. Each element is `{step, examples}`
+// (backend/app.py), not a bare examples array — at the user's own
+// explicit follow-up request, "L'historique des visualisation doit
+// inclure le status (indiquant notamment le nombre de cycles)", so a
+// shown grid can always be paired with which cycle/attempt it actually
+// came from, not just the grid on its own.
+let previewHistory = [];
+// Index into previewHistory currently shown on screen. Stays pinned to the
+// newest entry (auto-follow) as long as the player hasn't navigated back
+// manually — pollJob() advances it one step at a time via showNextPreview()
+// as it records new entries (see autoFollowPreview just below); showPrevious
+// Preview()/showNextPreview() also move it explicitly on a manual click.
+let previewHistoryIndex = -1;
+// Whether the live view should keep stepping forward through
+// `previewHistory` on its own, one entry per poll, as pollJob() records
+// new ones — true by default (and reset on every new generation, see
+// hideAttemptPreview()). Set to `false` the moment the player clicks "◀"
+// to look back at an earlier entry (showPreviousPreview()), so a poll
+// landing in between doesn't yank their view forward again while they're
+// reviewing something — the same "pause autoscroll while scrolled up"
+// courtesy a chat/log viewer gives. Resumed by manually clicking "▶"
+// (see its own click listener below) — clicking "forward" is read as "I
+// want to keep following again from here."
+let autoFollowPreview = true;
+// The `step` half of whichever previewHistory entry is currently on
+// screen (or null) — kept separately from `lastPreviewExamples` (the
+// `examples` half, used by togglePreviewLetters()'s own re-render) purely
+// so a UI language change can re-translate the status line the same way
+// applyTranslations()'s own caller already re-renders the grids (see the
+// languageSelect "change" handler further below).
+let lastPreviewStep = null;
+
+function updatePreviewNavButtons() {
+  const atStart = previewHistoryIndex <= 0;
+  const atEnd = previewHistoryIndex >= previewHistory.length - 1;
+  attemptPreviewFirstBtn.disabled = atStart;
+  attemptPreviewPrevBtn.disabled = atStart;
+  attemptPreviewNextBtn.disabled = atEnd;
+  attemptPreviewLastBtn.disabled = atEnd;
+  renderPreviewPosition();
+}
+
+// "Étape 5/13" next to the ◀/▶ buttons, at the user's explicit request —
+// `previewHistory.length` (the denominator) grows the moment pollJob()
+// records a new entry, even while the player is paused/behind reviewing
+// an earlier one (recordPreviewHistory() already calls updatePreviewNav
+// Buttons() unconditionally on every new batch) — so the readout itself
+// is what makes "the Front keeps silently accumulating new states while
+// paused" visible to the player, not just an internal implementation
+// detail. Called from updatePreviewNavButtons() itself so every existing
+// call site (recording, both jump buttons, both step buttons, the reveal
+// timer's own auto-advance, hideAttemptPreview()) keeps it in sync for
+// free, and again directly from the language-change handler further
+// below (a language switch touches no index, so updatePreviewNavButtons()
+// itself isn't otherwise re-triggered).
+function renderPreviewPosition() {
+  attemptPreviewPosition.textContent = previewHistoryIndex >= 0 && previewHistory.length
+    ? I18N[uiLanguage].attemptPreviewPosition(previewHistoryIndex + 1, previewHistory.length)
+    : "";
+}
+
+// Redraws #attempt-preview-status from whatever lastPreviewStep currently
+// holds, in the current UI language — describeStep() (defined further
+// below, but a plain function declaration, so it's hoisted and callable
+// here) already turns any known step code, including "pattern" (a cycle's
+// own starting state, see crossword_gen.py's _cycle_start_preview) and
+// "pattern_attempt_failed"/"pattern_found" (its end state), into the
+// right localized "Tentative X/Y..." text — the exact same status a
+// player would otherwise only ever see drain through the live #status
+// line one poll at a time, now paired with whichever preview grid is on
+// screen.
+function renderPreviewStatus() {
+  attemptPreviewStatus.textContent = lastPreviewStep ? describeStep(I18N[uiLanguage], lastPreviewStep) : "";
+}
+
+// Displays one previewHistory entry: its grids (via renderAttemptPreview,
+// unchanged) and its paired status text together — the one place both
+// halves of an entry actually reach the screen, used by every path that
+// shows a previewHistory entry (auto-follow, and both nav buttons) so
+// they can never drift out of sync with each other.
+function showPreviewEntry(entry) {
+  renderAttemptPreview(entry.examples);
+  lastPreviewStep = entry.step || null;
+  renderPreviewStatus();
+}
+
+// Called from pollJob() with every new attempt-preview state examples_
+// history produced since the last poll, however many that is. Purely a
+// recording step — every one of `newEntries` is unconditionally pushed
+// into `previewHistory` and the nav buttons' enabled state is refreshed,
+// but nothing is rendered here. What (if anything) gets shown live this
+// poll is decided by pollJob()'s own caller, right after this returns —
+// see its own comment for why "just render whatever's most recent",
+// tried first, doesn't work for this specific backend.
+//
+// This used to also render live (the last of `newEntries`, only when the
+// player was already following along) — reverted at the user's explicit
+// report: "je ne vois plus qu'une seule grille, jamais plus" / "le
+// stream des états en Live ne montre que les fins de cycles [en fait,
+// les débuts] ; il ne stream pas les phases intermédiaires." Root cause,
+// confirmed live by simulating this exact poll loop against a real job's
+// raw `examples_history`: `generate_grid()`'s own palier loop
+// (backend/crossword_gen.py) runs almost entirely inside one blocking
+// worker thread (`asyncio.to_thread`) with no `await` point of its own —
+// the *only* moment that thread ever actually blocks (and so the only
+// moment the event loop thread can get scheduled to serve an HTTP poll)
+// is while waiting on the `ProcessPoolExecutor` results for a palier's
+// own CSP search. `progress("pattern_generated", ...)` (up to 6 grids)
+// and `progress("pattern_attempt_failed", ...)` (up to 6 grids) both fire
+// immediately once those results come back, followed *immediately* — no
+// blocking point in between — by `progress("pattern", ...)` (1 grid) for
+// the *next* palier, right before that thread blocks again waiting on the
+// next batch of results. So whenever an HTTP poll actually gets to run,
+// `examples_history`'s own newest entry is — deterministically, not just
+// by chance — almost always that next palier's own "pattern" event: a
+// single grid, the state carried forward from the previous cycle, not
+// the richer up-to-6-grid state a completed search just produced.
+// Rendering only ever "whatever's most recent" therefore meant the live
+// view got stuck cycling through single-grid "pattern" snapshots, never
+// the 6-grid ones — confirmed directly: 21 new entries recorded between
+// two consecutive 2-second polls of a real job, every one of them ending
+// in a "pattern" event.
+function recordPreviewHistory(newEntries) {
+  if (!newEntries.length) return;
+  for (const entry of newEntries) previewHistory.push(entry);
+  updatePreviewNavButtons();
+}
+
+// Jumps the live view straight to the newest recorded entry, with no
+// pacing — used once a job reaches a terminal status (done/error/
+// cancelled), so the final, true end state is shown immediately rather
+// than however far behind the paced one-per-poll reveal below happened
+// to still be (no more polls are coming to keep draining it forward).
+function catchUpPreviewToEnd() {
+  autoFollowPreview = true;
+  if (previewHistory.length === 0) return;
+  if (previewHistoryIndex === previewHistory.length - 1) return;
+  previewHistoryIndex = previewHistory.length - 1;
+  showPreviewEntry(previewHistory[previewHistoryIndex]);
+  updatePreviewNavButtons();
+}
+
+function showPreviousPreview() {
+  if (previewHistoryIndex <= 0) return;
+  previewHistoryIndex--;
+  showPreviewEntry(previewHistory[previewHistoryIndex]);
+  autoFollowPreview = false;
+  updatePreviewNavButtons();
+}
+
+function showNextPreview() {
+  if (previewHistoryIndex >= previewHistory.length - 1) return;
+  previewHistoryIndex++;
+  showPreviewEntry(previewHistory[previewHistoryIndex]);
+  updatePreviewNavButtons();
+}
+
+// Jumps straight to the very first recorded entry in one click, at the
+// user's explicit request — same "pause auto-follow" treatment as a
+// single "◀" click (showPreviousPreview()), since this also moves away
+// from the live edge.
+function showFirstPreview() {
+  if (previewHistory.length === 0 || previewHistoryIndex <= 0) return;
+  previewHistoryIndex = 0;
+  showPreviewEntry(previewHistory[previewHistoryIndex]);
+  autoFollowPreview = false;
+  updatePreviewNavButtons();
+}
+
+attemptPreviewFirstBtn.addEventListener("click", showFirstPreview);
+attemptPreviewPrevBtn.addEventListener("click", showPreviousPreview);
+attemptPreviewNextBtn.addEventListener("click", () => {
+  showNextPreview();
+  // Resume auto-follow only once this click actually lands on the true
+  // last recorded entry — at the user's explicit request: "L'avancement
+  // automatique ne doit reprendre que quand l'utilisateur arrive à la
+  // dernière grille disponible." A single "▶" while several steps still
+  // remain ahead (a real, common case once the Back has gotten well
+  // ahead of the Front — see recordPreviewHistory's own comment) must
+  // stay paused, not silently resume and start auto-advancing again from
+  // wherever this one click happened to land.
+  if (previewHistoryIndex === previewHistory.length - 1) autoFollowPreview = true;
+});
+// Jumps straight to the newest recorded entry in one click, at the
+// user's explicit request — reuses catchUpPreviewToEnd() outright: by
+// definition this always lands exactly on the true last entry, so
+// resuming auto-follow unconditionally (which that function already
+// does) is always correct here, unlike the plain "▶" button above.
+attemptPreviewLastBtn.addEventListener("click", catchUpPreviewToEnd);
+
 function hideAttemptPreview() {
   attemptPreview.hidden = true;
   attemptPreviewGrids.innerHTML = "";
+  attemptPreviewStatus.textContent = "";
   lastPreviewExamples = null;
+  lastPreviewStep = null;
+  previewHistory = [];
+  previewHistoryIndex = -1;
+  autoFollowPreview = true;
+  updatePreviewNavButtons();
 }
 
 function isWhite(r, c) {
@@ -639,8 +856,13 @@ languageSelect.addEventListener("change", () => {
   // directly inside renderAttemptPreview() rather than through the generic
   // [data-i18n] walker applyTranslations() just ran — so a language switch
   // while a preview is showing needs its own explicit re-render, same as
-  // togglePreviewLetters() already does below.
+  // togglePreviewLetters() already does below. renderPreviewStatus() is the
+  // same kind of parameterized text (describeStep()'s own localized
+  // "Tentative X/Y..." message), needing the same explicit re-render —
+  // same for attemptPreviewPosition ("Étape X/Y").
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
+  renderPreviewStatus();
+  renderPreviewPosition();
 });
 
 applyTranslations();
@@ -654,6 +876,29 @@ applyTranslations();
 // search processes, see crossword_gen.py).
 const POLL_INTERVAL_MS = 2000;
 
+// How often the live attempt-preview advances by one more previewHistory
+// entry (see pollJob() below) — deliberately its own, faster-ticking timer,
+// independent of POLL_INTERVAL_MS, at the user's explicit report: "quand le
+// Back est en avance sur le Front, le Front continue à télécharger les
+// grilles d'aperçu, mais n'avance plus dans la séquence... tant que
+// l'utilisateur ne revient pas en arrière, il faut que le Front continue à
+// avancer dans l'affichage au fur et à mesure que les nouvelles grilles de
+// l'aperçu arrivent." A real, structural gap, not a perception issue:
+// tying the reveal to the poll loop itself (one `showNextPreview()` call
+// per `GET /api/generate/status` round trip) caps the reveal rate at 1
+// entry per POLL_INTERVAL_MS no matter how large a backlog piles up — and
+// a real burst regularly produces far more than that in a single poll
+// window (21 new entries measured between two consecutive 2s polls of a
+// real job), so the displayed sequence falls further and further behind
+// the true live edge over time, never catching back up on its own — a
+// player would have needed to click "▶" by hand, over and over, to make
+// any further visible progress. Ticking this reveal on its own faster
+// timer lets it drain a backlog considerably quicker than it typically
+// accumulates, while a caught-up, no-backlog run still only ever has one
+// new entry to reveal every couple of seconds anyway, so it isn't made to
+// look rushed either.
+const PREVIEW_REVEAL_INTERVAL_MS = 500;
+
 // Hard ceiling on any single fetch to this origin (the /api/generate and
 // /api/generate/status polls) — without this, a fetch left hanging (server
 // process killed mid-connection rather than cleanly refusing it, or any
@@ -664,12 +909,6 @@ const POLL_INTERVAL_MS = 2000;
 // (PROXY_TIMEOUT_S, 30s as of this value) so a legitimately slow-but-healthy
 // round trip through the proxy doesn't race against this client-side abort.
 const FETCH_TIMEOUT_MS = 35000;
-
-// `job["step"]["code"]` values reached only once pattern search is truly
-// over (see pollJob below) — "starting"/"pattern"/"pattern_attempt_failed"/
-// "pattern_found" are deliberately excluded, since the search-phase
-// backlog-draining behavior pollJob relies on for those still applies.
-const POST_SEARCH_STEP_CODES = new Set(["minimizing", "grid_ready", "clues", "saving"]);
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -716,6 +955,10 @@ function describeStep(t, step) {
       return t.statusStarting;
     case "pattern":
       return t.statusPattern(step.attempt, step.attempts, step.total_attempts);
+    case "pattern_generated":
+      return t.statusPatternGenerated(step.attempt, step.attempts, step.total_attempts);
+    case "pattern_attempt_failed":
+      return t.statusPatternAttemptFailed(step.attempt, step.attempts, step.total_attempts);
     case "pattern_found":
       return t.statusPatternFound(step.attempt, step.total_attempts);
     case "minimizing":
@@ -785,73 +1028,62 @@ let currentJobId = null;
 // status message with each step along the way, and returns the finished
 // grid.
 async function pollJob(jobId, t) {
-  // How many of `examples_history`'s entries this poll loop has already
-  // shown — at the user's explicit request, after a real, reported
-  // confusion this caused: a naive "always show the *latest* entry"
-  // approach means a palier that resolves fast enough (several paliers can
-  // complete within a single POLL_INTERVAL_MS window — observed directly)
-  // can have its own preview silently skipped, overwritten before this
-  // client ever polls it — so the very first preview a user ever sees can
-  // already belong to a *later* palier than palier 1, misleadingly making
-  // palier 1 itself look like it started out already forced/locked, which
-  // it never did. `examples_history` (backend/app.py) instead accumulates
-  // every palier's own end state, in order, never overwritten — this
-  // client-local counter lets the loop below show exactly one *new* entry
-  // per poll (the oldest one not yet shown), walking through the full
-  // history in order rather than jumping straight to whatever is newest,
-  // so every palier's own preview gets its moment on screen at least once.
+  // How many of `examples_history`'s entries this loop has already
+  // recorded into `previewHistory` — every new entry is always recorded
+  // in full, right away, however many arrived since the last poll (see
+  // recordPreviewHistory's own comment). What actually gets *revealed*
+  // live is handled by a wholly separate timer (see PREVIEW_REVEAL_
+  // INTERVAL_MS's own comment for why this loop's own POLL_INTERVAL_MS
+  // cadence turned out to be the wrong thing to tie it to) started right
+  // below and stopped again in the `finally` once this loop ends, one way
+  // or another. catchUpPreviewToEnd() jumps straight to the true final
+  // entry the moment the job reaches a terminal status, so a large
+  // remaining backlog never delays the actual result.
   let nextExampleIndex = 0;
-  while (true) {
-    let response;
-    try {
-      response = await fetchWithTimeout(`/api/generate/status/${jobId}`, {}, FETCH_TIMEOUT_MS);
-    } catch (err) {
-      // Covers both a hard timeout (AbortError, see FETCH_TIMEOUT_MS) and an
-      // outright connection failure (e.g. the server process died) — either
-      // way there's no response to read a structured error code from, so a
-      // dedicated, translated message stands in for describeErrorCode's
-      // usual backend-error-code lookup.
-      throw new Error(t.errorConnectionLost);
+  const revealTimer = setInterval(() => {
+    if (autoFollowPreview) showNextPreview();
+  }, PREVIEW_REVEAL_INTERVAL_MS);
+  try {
+    while (true) {
+      let response;
+      try {
+        response = await fetchWithTimeout(`/api/generate/status/${jobId}`, {}, FETCH_TIMEOUT_MS);
+      } catch (err) {
+        // Covers both a hard timeout (AbortError, see FETCH_TIMEOUT_MS) and an
+        // outright connection failure (e.g. the server process died) — either
+        // way there's no response to read a structured error code from, so a
+        // dedicated, translated message stands in for describeErrorCode's
+        // usual backend-error-code lookup.
+        throw new Error(t.errorConnectionLost);
+      }
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+      }
+      const history = data.examples_history || [];
+      if (history.length > nextExampleIndex) {
+        recordPreviewHistory(history.slice(nextExampleIndex));
+        nextExampleIndex = history.length;
+      }
+      if (data.status === "error") {
+        catchUpPreviewToEnd();
+        throw new GenerationFailedError(
+          describeErrorCode(t, data.error_code, data.error), jobId, data.error_code,
+        );
+      }
+      if (data.status === "cancelled") {
+        catchUpPreviewToEnd();
+        throw new CancelledError(t.statusCancelled);
+      }
+      if (data.status === "done") {
+        catchUpPreviewToEnd();
+        return data.result;
+      }
+      setStatus(describeStep(t, data.step), false);
+      await sleep(POLL_INTERVAL_MS);
     }
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
-    }
-    const history = data.examples_history || [];
-    // Once the job has moved past raw pattern search (minimizing/grid_ready/
-    // clues/saving), catch the preview cursor up to whatever is most recent
-    // instead of continuing to drain the search-phase backlog one entry per
-    // poll — at the user's explicit report of a real regression: paliers
-    // that fail fast (see the 30%-unfillable abandon rule and the
-    // 5-consecutive-continue cap, both added this session) can leave a much
-    // larger backlog of unseen search-phase examples than before, so by the
-    // time optimisation/clue-generation actually starts, this loop could
-    // still be many polls away from draining it — making it look like "the
-    // search keeps going" long after it actually finished. `Math.max` never
-    // moves the cursor *backwards*: during the search phase itself, this is
-    // a no-op (POST_SEARCH_STEP_CODES doesn't match yet), preserving the
-    // original one-at-a-time behavior that guarantees every palier's own
-    // preview gets shown at least once.
-    if (data.step && POST_SEARCH_STEP_CODES.has(data.step.code)) {
-      nextExampleIndex = Math.max(nextExampleIndex, history.length - 1);
-    }
-    if (history.length > nextExampleIndex) {
-      renderAttemptPreview(history[nextExampleIndex]);
-      nextExampleIndex++;
-    }
-    if (data.status === "error") {
-      throw new GenerationFailedError(
-        describeErrorCode(t, data.error_code, data.error), jobId, data.error_code,
-      );
-    }
-    if (data.status === "cancelled") {
-      throw new CancelledError(t.statusCancelled);
-    }
-    if (data.status === "done") {
-      return data.result;
-    }
-    setStatus(describeStep(t, data.step), false);
-    await sleep(POLL_INTERVAL_MS);
+  } finally {
+    clearInterval(revealTimer);
   }
 }
 

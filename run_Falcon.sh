@@ -24,17 +24,53 @@ fi
 BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
 FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
 
+# Kills a PID's entire process tree (its children first, recursively, then
+# the PID itself) instead of just the PID alone. Needed because a backend
+# process stopped mid-generation can have live `ProcessPoolExecutor`
+# worker processes (backend/crossword_gen.py's `_pattern_attempt`/
+# `_pattern_continue`, one OS process per PARALLEL_ATTEMPTS, plus a
+# `resource_tracker` helper) still running as its own direct children —
+# `kill $pid` alone only ever terminates the uvicorn process itself, since
+# each `generate_grid()` call creates its own `ProcessPoolExecutor` deep
+# inside the palier loop rather than holding one at the app level for a
+# shutdown handler to reach; a killed process never gets to run its own
+# `with ProcessPoolExecutor(...) as executor:` cleanup (`executor.
+# shutdown()`), so those workers are silently orphaned — reparented to
+# launchd (PPID 1) — and keep running forever, since nothing in their own
+# CSP search loop (`Filler._backtrack`) checks "is my parent still
+# alive", only `cancel_event`/`batch_abandoned_event`/`deadline_checks`,
+# none of which are ever set once orphaned. Found live, reported by the
+# user ("le process qui tourne encore et qui ne s'est pas correctement
+# interrompu au redémarrage du Back"): 436 such orphaned processes had
+# silently accumulated across this project's entire development history
+# (going back several days), none ever reaped by any previous restart.
+kill_tree() {
+    local pid="$1"
+    local sig="$2"
+    local child
+    for child in $(pgrep -P "$pid" 2>/dev/null || true); do
+        kill_tree "$child" "$sig"
+    done
+    kill "-$sig" "$pid" 2>/dev/null || true
+}
+
 stop_port() {
     local port="$1"
-    local pids
+    local pids pid
     pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
     if [ -n "$pids" ]; then
         echo "Stopping server already running on port $port (pid: $pids)"
-        kill $pids 2>/dev/null || true
+        for pid in $pids; do
+            kill_tree "$pid" TERM
+        done
         sleep 1
-        # kill -9 any survivors
+        # kill -9 (the whole tree again, not just the PID) any survivors
         pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
-        [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+        if [ -n "$pids" ]; then
+            for pid in $pids; do
+                kill_tree "$pid" KILL
+            done
+        fi
     fi
 }
 

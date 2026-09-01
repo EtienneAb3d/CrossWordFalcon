@@ -106,12 +106,26 @@ project's engineering language.
     current behavior directly (present tense, as if it had always worked
     this way) — never append "à la demande explicite de l'utilisateur",
     "précédemment", "a été essayé puis abandonné/reverti", a changed-N-times
-    account, or any other trace of *how* the current state was reached.
-    That narrative belongs in `CLAUDE.md` alone, which both this file and
-    `CLAUDE.md` must stay in sync with in terms of *current* algorithm
-    facts (dual-write the fact; the story stays CLAUDE.md-only). If a
-    change makes an old explanation wrong, replace it in place rather than
-    layering a correction on top.
+    account, "Vérifié en direct...", a bug report/incident narrative (a
+    user quote, a screenshot reference, a root-cause trace, before/after
+    measurements), or any other trace of *how* the current state was
+    reached. That narrative belongs in `CLAUDE.md` alone, which both this
+    file and `CLAUDE.md` must stay in sync with in terms of *current*
+    algorithm facts (dual-write the fact; the story stays CLAUDE.md-only).
+    If a change makes an old explanation wrong, replace it in place rather
+    than layering a correction on top. Found live drifting from this rule
+    despite it already existing: small, single-fact edits (bump a
+    constant, change a formula) kept slipping in a one-clause "à la
+    demande explicite de l'utilisateur" aside each time — harmless in
+    isolation, but compounding turns the file back into a changelog one
+    small violation at a time. A large corrective pass then had to strip
+    accumulated narrative across the whole file, including a ~500-line
+    block that was pure bug-fix history for the live-preview/diagnostic
+    display mechanism (screenshots, quoted reports, root-cause traces,
+    "vérifié en direct" measurements) — compressed down to a few
+    paragraphs of what that mechanism currently does. Treat every edit to
+    this file as an opportunity to re-check the *surrounding* paragraph
+    for drift too, not just the sentence being changed.
 
 12. **Never test or stress-test `crossword_gen.py` with an artificially
     small dictionary** (e.g. a `max_words=400`-style restriction) — at the
@@ -174,6 +188,19 @@ project's engineering language.
     the first time. Check this whenever a new top-level directory is added
     to `.gitignore`: only genuinely generated/downloaded/cached content
     belongs there, never a maintained source document.
+
+17. **Run verification/benchmark `generate_grid()` calls in "Flash" mode
+    (`deadline_checks=1000`) to go faster, unless the task at hand
+    specifically needs to exercise another mode.** At the user's explicit
+    request. A verification pass just needs to confirm correctness (0
+    mismatches, 0 empty white cells, no outright failure) — it doesn't
+    need the same search budget a real player-facing generation gets, and
+    the cross-palier retry mechanism (see `backend/crossword_gen.py`,
+    `generate_grid`) already makes even a small per-attempt budget viable.
+    Reach for `deadline_checks=None` (the grid-size-proportional default)
+    or a larger `BUDGET_MODES` value only when the change under test is
+    itself about search-budget behavior, timing, or something that Flash's
+    small budget could hide or distort.
 
 ## Decisions
 
@@ -271,6 +298,23 @@ project's engineering language.
   launching shell/terminal closing — `nohup` alone doesn't remove the
   process from the shell's job table on every shell. `setsid` isn't used:
   it's not available on macOS by default.
+- `run_Falcon.sh`'s `stop_port()` kills each PID's whole process tree
+  (`kill_tree()`, recursing via `pgrep -P` before killing the PID itself),
+  not just the PID alone — fixed after 436 orphaned `ProcessPoolExecutor`
+  worker processes were found live, accumulated over days: restarting
+  mid-generation used to only kill the uvicorn PID, silently orphaning
+  any active worker processes (`backend/crossword_gen.py`'s
+  `generate_grid()` creates its own `ProcessPoolExecutor` per palier,
+  never held anywhere a shutdown handler could reach) — orphaned this
+  way, a worker runs forever, since nothing in `Filler._backtrack` checks
+  "is my parent still alive." A deliberate exception to this project's
+  usual "never forcibly kill a worker" rule (see `GenerationCancelled`
+  in `backend/crossword_gen.py`): that rule is about the cooperative
+  "Stop" button *inside* a still-running server; stopping the whole
+  server abandons any in-flight work regardless, so there's nothing left
+  to preserve by leaving its workers alive. Verified live: a real
+  restart triggered mid-search (10 active workers confirmed via `ps`)
+  left zero afterward.
 - `frontend/server.py` proxies `/api/*` through one shared
   `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S)` (30s, one value for every
   proxied route, not a per-endpoint split) and sets

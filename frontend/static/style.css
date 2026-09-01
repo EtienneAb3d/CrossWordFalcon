@@ -14,6 +14,7 @@
   --incorrect-bg: #fecaca;
   --incorrect-fg: #7f1d1d;
   --locked: #ea580c;
+  --low-candidates-bg: #fed7aa;
 }
 
 * {
@@ -419,6 +420,28 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* Cells of a *partially* locked slot (backend/crossword_gen.py's
+   `_low_candidate_slot_cells`) whose intersection with the already-locked
+   letters leaves fewer than PREFILL_LOCKED_MIN_WORD_COUNT (3) real
+   dictionary candidates — at the user's explicit request, on the
+   "Génération du motif de cases noires" (`pattern`) preview specifically,
+   to make a fragile slot visible before pre-fill/nettoyage curatif even
+   acts on it. A light orange background (`--low-candidates-bg`, a pastel
+   tint of `--locked`'s own saturated orange) rather than reusing `--locked`
+   itself outright as a fill — `--locked` is a *border*-only color (see
+   `.locked` below) precisely so it composes with a background fill
+   underneath it without visual conflict; the two share the same hue
+   family on purpose (both signal a fragile/at-risk slot), just different
+   treatments, matching the border-vs-fill convention already established
+   between `.forced`/`.locked` and `.impossible`. Declared before
+   `.impossible` so a cell that's ever both (not possible today — see
+   backend's own comment — but kept future-proof) shows the more severe
+   "zero candidates left" red rather than this softer "few candidates
+   left" orange. */
+.attempt-preview-grid .cell.white.low-candidates {
+  background: var(--low-candidates-bg);
+}
+
 /* Cells of an "impossible zone" (a slot with no candidate word left at all
    at the shown snapshot — see script.js's renderAttemptPreview(),
    Filler.impossible_zone_cells()) at the user's explicit request — reuses
@@ -446,11 +469,77 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--locked);
 }
 
-#attempt-preview-label {
+/* Wraps #attempt-preview-label and the prev/next navigation buttons in one
+   row, at the user's explicit request to let the player step back/forward
+   through the history of preview states already shown (script.js's
+   previewHistory/previewHistoryIndex) instead of only ever seeing whichever
+   one pollJob()'s own auto-reveal cadence currently shows. The wrapper, not
+   the label itself, now owns the bottom margin that used to sit directly on
+   #attempt-preview-label. */
+#attempt-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin: 0 0 0.4rem 0;
+}
+
+#attempt-preview-label {
+  margin: 0;
   font-size: 0.9rem;
   color: #777;
   font-style: italic;
+}
+
+/* Status text paired with whichever previewHistory entry is currently on
+   screen (script.js's showPreviewEntry()/renderPreviewStatus()) — the
+   same localized "Tentative X/Y échouée (Z grilles échouées au total)..."
+   text describeStep() already produces for the live #status line, at the
+   user's explicit request so the history's own back/forward navigation
+   always shows which cycle a given preview grid actually came from, not
+   just the grid on its own. Same small/discreet treatment as
+   .attempt-preview-stats below each mini-grid, for visual consistency
+   between the two secondary-metadata lines in this section. */
+#attempt-preview-status {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.8rem;
+  color: var(--fg);
+  opacity: 0.7;
+}
+
+/* Small, unobtrusive prev/next controls next to #attempt-preview-label —
+   deliberately not .toggle-btn (no on/off state to convey here, just an
+   action) and much smaller than the page's main buttons, since this is a
+   secondary navigation aid for a diagnostic preview, not a primary action.
+   Disabled (not hidden) at either end of the history, so the player can
+   always see both controls and understand at a glance which direction(s)
+   remain available. */
+.nav-btn {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--white-cell);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+.nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Position readout ("Étape 5/13", script.js's renderPreviewPosition())
+   between the ◀/▶ buttons and the ⏮/⏭ jump-to-start/end buttons flanking
+   them — at the user's explicit request, so the player always knows
+   where they are in the history without counting clicks. A fixed
+   min-width keeps the buttons around it from jittering left/right as the
+   digit count changes (e.g. "3/9" vs "12/103"). */
+#attempt-preview-position {
+  font-size: 0.8rem;
+  color: #777;
+  min-width: 3.5rem;
+  text-align: center;
 }
 
 .cell.white {

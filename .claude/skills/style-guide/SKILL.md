@@ -1170,3 +1170,310 @@ English (see `project-best-practices`).
   ASGITransport` — see CLAUDE.md for the full trace). **Not yet
   verified**: the actual visual appearance and click behavior in a real
   browser — same tooling limitation as other UI work this session.
+
+- Two small "◀"/"▶" navigation buttons (`#attempt-preview-prev-btn`/
+  `#attempt-preview-next-btn`, shared `.nav-btn` class) were added right
+  next to `#attempt-preview-label` ("Aperçu des dernières tentatives..."),
+  at the user's explicit request, wrapped together in a new
+  `#attempt-preview-header` flex row (which now owns the bottom margin
+  that used to sit directly on `#attempt-preview-label`) so the label and
+  the two buttons read as one row. Lets the player step back to an earlier
+  attempt-preview state and forward again — independent of `pollJob()`'s
+  own one-per-poll auto-reveal cadence (`examples_history`/
+  `nextExampleIndex`, see CLAUDE.md), which keeps running underneath
+  regardless of whether the player is currently looking at an older entry
+  (`script.js`'s `previewHistory`/`previewHistoryIndex`/
+  `recordPreviewHistory()`/`showPreviousPreview()`/`showNextPreview()`).
+  Deliberately not `.toggle-btn` — there's no on/off state here, just an
+  action — and deliberately smaller/plainer than the page's main buttons
+  (`padding: 0.1rem 0.5rem`, `font-size: 0.8rem`, a thin `--border`
+  outline, `--white-cell` background) since this is a secondary navigation
+  aid for a diagnostic preview, not a primary action; disabled (not
+  hidden) at either end of the history via a plain `:disabled` opacity
+  rule, so both controls stay visible and the player can see at a glance
+  which direction(s) remain available. Auto-follow behavior: a newly
+  arrived entry only pulls the view forward if the player was already
+  viewing the previous newest one; if they had navigated back, the new
+  entry is queued (enabling "▶") without yanking their current view away
+  — the same "pause autoscroll while scrolled up" behavior a chat/log
+  viewer gives. Reset (both buttons disabled, history cleared) alongside
+  every other `hideAttemptPreview()` reset point (start of a fresh
+  generation, and once the final grid is ready). Verified without a real
+  browser (same tooling limitation as other UI work this session): a
+  direct Python translation of the exact four functions' logic, run
+  against 5 scenarios — auto-follow across several entries, navigating
+  back twice, a new entry arriving while viewing an older one (confirmed
+  it does *not* auto-jump), catching back up to the newest one click at a
+  time, and the reset — all 5 passed; the real served
+  `index.html`/`style.css`/`i18n.js`/`script.js` were fetched from the
+  running frontend server and confirmed to contain the new markup/rules/
+  translations/functions; a real JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) confirmed `script.js`/`i18n.js`
+  still parse correctly.
+
+- A new `#attempt-preview-status` line was added right below
+  `#attempt-preview-header` (above `#attempt-preview-grids`), at the
+  user's explicit request: "L'historique des visualisation doit inclure
+  le status (indiquant notamment le nombre de cycles)." Navigating the
+  history above only ever showed a grid on its own, with no indication of
+  which cycle/attempt it actually came from — this line shows that
+  pairing, reusing `describeStep()`'s own localized "Tentative X/Y
+  échouée..." text (the same text the live `#status` line already shows
+  during search) via a new `renderPreviewStatus()`. Styled small/discreet
+  (`font-size: 0.8rem`, `opacity: 0.7`) like `.attempt-preview-stats`
+  below each mini-grid, for visual consistency between the two secondary-
+  metadata lines in this section — not `.attempt-preview-label`'s italic
+  treatment, since this isn't a section heading. `showPreviewEntry(entry)`
+  is the one function that ever draws both halves of a `previewHistory`
+  entry (`{step, examples}`, see CLAUDE.md) together — the grid via the
+  pre-existing `renderAttemptPreview(entry.examples)`, the status via
+  `lastPreviewStep = entry.step` + `renderPreviewStatus()` — so the two
+  can never drift apart regardless of whether auto-follow or either nav
+  button is what triggered the display. Re-translated on a UI language
+  switch alongside the grids' own stats line (the `languageSelect`
+  "change" handler), and cleared alongside every other
+  `hideAttemptPreview()` reset point. Verified: the real running backend's
+  `examples_history` was inspected directly (`GET /api/generate/status/
+  {job_id}`) and confirmed every entry now carries a well-formed `step`
+  dict with no nested/duplicated `examples` key inside it; a real JS
+  syntax check (`esprima`) confirmed `script.js` still parses correctly.
+  **Not yet visually confirmed in an actual browser** — same tooling
+  limitation as other UI work this session.
+
+- Right after, at the user's own explicit follow-up request ("Ajouter à
+  l'historique (donc stacké) l'état initial d'un cycle"), a cycle's own
+  *starting* state — not just its outcome — was added as one more entry
+  in this same navigable history (see `_cycle_start_preview` in
+  CLAUDE.md). No new markup/CSS needed at all: this reuses the exact
+  same single-grid preview convention already established for the
+  "minimizing"/"clues" steps (`#attempt-preview-grids`' `repeat(3, auto)`
+  layout already handles a 1-example batch by simply leaving 2 of its 3
+  columns empty), so a cycle-start entry looks and behaves exactly like
+  any other entry in `previewHistory` — one more grid the "◀"/"▶" buttons
+  can step through, paired with its own "Tentative X/Y..." status text
+  via the mechanism just above. Verified live end to end through the real
+  running API: `examples_history` correctly alternates a `pattern`
+  (cycle-start, 1 example) entry with the following `pattern_attempt_
+  failed` (cycle-end, up to 6 examples) entry for every cycle observed.
+
+- A third stage was added to this same per-cycle history, right between
+  the two above, at the user's explicit request: "Stacker aussi l'état
+  après la phase d'initialisation des cases noires" — a new
+  `"pattern_generated"` step code, describing the black/white pattern a
+  cycle actually placed (this cycle's own new black cells, on top of
+  whatever was already locked), right before the CSP search that fills
+  it with letters even starts. No new markup/CSS/i18n structure needed
+  beyond one new `statusPatternGenerated` translation key (mirroring
+  `statusPattern`'s own wording, all 5 languages) and a matching
+  `describeStep()` case — this reuses the exact same single-or-up-to-6-
+  grid preview mechanism as every other stage. Verified live end to end:
+  `examples_history` now alternates `pattern → pattern_generated →
+  pattern_attempt_failed` (or `pattern_found`) for every cycle, confirmed
+  both via a direct `generate_grid()` on_progress hook and through the
+  real running API after a backend restart.
+
+- Separately, confirmed (not built — already correct) that the state
+  right *before* optimization (`minimize_black_squares`, the successful,
+  fully letter-filled grid) was already part of this same navigable
+  history: the pre-existing `progress("minimizing", examples=[...])`
+  call already carries a non-empty `examples` list, and the generic
+  `examples_history`-appending logic in `backend/app.py` already applies
+  to *any* progress event with non-empty `examples`, regardless of step
+  code — so this stage needed no code change at all, only a live
+  confirmation that it shows up correctly in the sequence (right after
+  `pattern_found`, fully letter-filled, no `.` placeholders remaining).
+
+- `pollJob()`'s recording logic was reworked once more right after, at
+  the user's clarifying request: "L'interface peut ne montrer que la
+  dernière étape en Live. Mais, toutes les étapes doivent être ajoutées
+  à l'historique navigable." Only the *navigable* history (`◀`/`▶`
+  through `previewHistory`) must never lose an entry — the *live*
+  display (the plain `#status` line, and whichever grid is currently
+  shown) only ever needs to reflect the most current state, no pacing
+  needed there at all. `recordPreviewHistory(entry)` (one at a time)
+  became `appendAllPreviewHistory(newEntries)` (a whole batch per poll):
+  every new `examples_history` entry is unconditionally recorded, but
+  only the *last* one of a batch is ever rendered live (and only if the
+  player hadn't navigated back — the same "pause autoscroll while
+  scrolled up" courtesy as before, now batch-aware). `pollJob()` itself
+  simplified back to resolving/throwing the instant the backend reports
+  a terminal status, with zero artificial delay — a terminal poll's
+  `history` already contains every entry the backend will ever produce,
+  so recording all of it in one synchronous pass loses nothing. The live
+  `#status` line now reads `data.step` directly (`describeStep(t, data.
+  step)`) instead of draining a separate cursor. This made the whole
+  `step_history`/`nextStepHistoryIndex` mechanism (built earlier this
+  session specifically to pace the live line) genuinely dead — removed
+  outright from both `backend/app.py` and `script.js`, per this
+  project's own no-dead-code convention; `previewHistory`'s own entries
+  already carry a richer, better-paired `step` for every code that
+  matters. Verified: an isolated Python translation of the new batch-
+  append logic passed 5 scenarios (a 12-entry burst recording all 12 but
+  rendering only the last; manual back-navigation; a further batch
+  arriving mid-navigation without yanking the view; manual forward
+  catch-up showing every entry; an empty-batch no-op); a real end-to-end
+  check against the running backend confirmed the client-side recorded
+  history exactly matches the backend's final `examples_history` on the
+  very same poll that first reports a terminal status — no extra delay
+  at all, unlike the previous design's measured dozens-of-seconds tail.
+
+- **This "render only the most recent entry" rule was reverted next**,
+  reported directly: "je ne vois plus qu'une seule grille, jamais plus...
+  le stream des états en Live ne montre que les fins de cycles [en
+  pratique les débuts de cycle]. Il ne stream pas les phases
+  intermédiaires (normalement affichées toutes les 2s en consommant la
+  pile)." Root-caused with a Python simulation of the real poll loop
+  against a real job's raw `examples_history`: 21 new entries recorded
+  between two consecutive 2s polls, *every* batch ending on a `"pattern"`
+  event (1 grid — the state carried into the *next* cycle), never on that
+  same window's own `"pattern_generated"`/`"pattern_attempt_failed"`
+  entries (up to 6 grids each) despite both being present in the batch.
+  Structural, not timing luck: `generate_grid()`'s palier loop runs
+  almost entirely inside one blocking worker thread with no `await`
+  point of its own — the only real blocking point (so the only window
+  the event loop can serve an HTTP poll) is waiting on the CSP search's
+  own `ProcessPoolExecutor` results; `pattern_generated`/`pattern_
+  attempt_failed` fire the instant those come back, immediately followed
+  — no blocking point between — by the *next* palier's own `pattern`,
+  right before the thread blocks again. So "render whatever's most
+  recent" was deterministically starving the preview of exactly the
+  up-to-6-grid states it exists to show. Fixed with a paced, one-entry-
+  per-poll live reveal — `recordPreviewHistory(newEntries)` (renamed back
+  from `appendAllPreviewHistory`, now a pure push, no rendering) still
+  records a full unpaced batch every poll into `previewHistory` (nothing
+  lost from the navigable history), but the *live* view only advances by
+  calling `showNextPreview()` (the same function the "▶" button already
+  used) once per poll, gated by a new `autoFollowPreview` flag (`true`
+  by default, set `false` by "◀" — pausing auto-advance while the player
+  reviews an earlier state — reset `true` by "▶", read as "resume
+  following"). A new `catchUpPreviewToEnd()` jumps straight to the
+  newest entry with no pacing the moment the job's status turns terminal
+  (`done`/`error`/`cancelled`), preserving the zero-delay-on-completion
+  guarantee the batch-append design above was built for — pacing only
+  ever applies while a job is genuinely still running. Verified: a
+  Python translation of the new logic run against a real 15×10 job
+  polled every 2s for 40 polls showed the live view genuinely cycling
+  through all 3 step codes, 16 of 29 shown states carrying more than 1
+  grid (3/5/6 observed) — versus exactly 1 grid, always `"pattern"`,
+  under the old logic on the same kind of job; a second real job (6×6,
+  "flash") run to completion confirmed the terminal catch-up still lands
+  correctly on the true final state with no extra delay.
+
+- **The one-entry-per-poll reveal pacing just above was itself reported
+  insufficient almost immediately**: "Quand le Back est en avance sur le
+  Front, le Front continue à télécharger les grilles d'aperçu, mais
+  n'avance plus dans la séquence. Il faut alors avancer à la main. Tant
+  que l'utilisateur ne revient pas en arrière, il faut que le Front
+  continue à avancer dans l'affichage au fur et à mesure que les
+  nouvelles grilles de l'aperçu arrivent." Real gap: tying the reveal to
+  the same loop iteration as the network poll caps it at 1 entry per
+  `POLL_INTERVAL_MS` (2s), but a real burst regularly produces far more
+  than that in one poll window (18-21 new entries measured between two
+  consecutive polls, more than once) — a backlog under that cap can only
+  grow, never shrink, so the display falls further and further behind,
+  functionally "stuck" from the player's point of view without repeated
+  manual "▶" clicks. Fixed by fully decoupling reveal from poll: a new
+  `PREVIEW_REVEAL_INTERVAL_MS` (500ms) drives its own dedicated
+  `setInterval` (`revealTimer`), started at the top of `pollJob()` and
+  cleared in a `finally` around the whole poll loop, ticking `if
+  (autoFollowPreview) showNextPreview();` on its own schedule —
+  `pollJob()`'s loop still records every new batch in full each poll,
+  it just no longer also calls `showNextPreview()` itself. Drains a
+  backlog ~4× faster than it's typically produced, catching all the way
+  up between bursts, while an idle/caught-up run just has the timer
+  no-op every tick (`showNextPreview()`'s own existing early return) —
+  no rushed feel when there's nothing to catch up on.
+  `autoFollowPreview`'s pause/resume via "◀"/"▶" is unaffected — the
+  timer already gates on that same flag every tick. Verified live: two
+  real Python threads (a 2s poll loop, a 500ms reveal loop, both hitting
+  the real running API, no mocking) against a real 15×10/"medium" job —
+  18 new entries arrived in one burst by t≈33s, fully drained
+  unattended by t≈41s, `0` entries left unrevealed — a smooth, continuous
+  progression the whole way, never needing a manual click.
+
+- **The "▶" button's own auto-follow-resume rule was tightened**, at the
+  user's explicit request: "Quand l'utilisateur revient volontairement en
+  arrière dans l'historique des aperçus, le Front doit arrêter d'avancer
+  automatiquement dans l'historique, pendant que le Front continue à
+  accumuler silencieusement les nouveaux états. L'avancement automatique
+  ne doit reprendre que quand l'utilisateur arrive à la dernière grille
+  disponible." The pause-on-"◀" half of this was already correct
+  (unchanged); the "▶" click handler previously resumed `autoFollowPreview`
+  unconditionally on every click, regardless of whether it actually
+  reached the tail — wrong once the Back has pulled ahead while paused (a
+  real, common case, see the reveal-timer entry above): a single "▶"
+  click partway through a large backlog would silently resume auto-
+  advance from wherever that one click landed, not genuinely "arriving at
+  the last available grid." Fixed: the handler now only sets
+  `autoFollowPreview = true` when `previewHistoryIndex` actually equals
+  `previewHistory.length - 1` right after that click. Silent background
+  accumulation (`recordPreviewHistory()`, unpaced, on every poll) needed
+  no change at all — it already never depended on `autoFollowPreview`.
+
+  Two one-click jump buttons were added alongside, at the same explicit
+  request ("Ajouter un bouton pour revenir au tout début, et un autre
+  pour aller tout à la fin, en un seul clic"): `#attempt-preview-first-btn`
+  ("⏮", `showFirstPreview()` — jumps to index 0, pauses auto-follow, the
+  same treatment as a single "◀") and `#attempt-preview-last-btn` ("⏭",
+  wired directly to the pre-existing `catchUpPreviewToEnd()` — reused
+  outright rather than duplicated, since jumping to the last entry always
+  means resuming auto-follow unconditionally, exactly what that function
+  already does for the terminal-status case). Both flank the existing
+  "◀"/"▶" pair in `#attempt-preview-header` (⏮ ◀ [position] ▶ ⏭),
+  `.nav-btn`-styled like the other two, disabled at the same ends of the
+  history (`updatePreviewNavButtons()` now sets all four at once).
+
+  A position readout (`#attempt-preview-position`, "Étape 5/13") was
+  added between "◀" and "▶", at the same request ("Ajouter un affichage
+  de la position dans l'historique") — `renderPreviewPosition()`, called
+  from inside `updatePreviewNavButtons()` itself so every existing call
+  site (recording, all four nav buttons, the reveal timer's own
+  auto-advance, `hideAttemptPreview()`) keeps it in sync for free, plus
+  once more from the language-change handler (parameterized text, not a
+  plain `data-i18n` string, same pattern as `attemptPreviewStats`/
+  `renderPreviewStatus()`). The denominator grows the moment a new batch
+  is recorded, even while paused — this is deliberate, not a bug: it's
+  what makes "the Back keeps silently feeding the stack while paused"
+  visible to the player, per the same message's own second half. A fixed
+  `min-width` on the span keeps the flanking buttons from jittering
+  left/right as the digit count changes (e.g. "3/9" vs "12/103").
+
+  Verified without a real browser (same tooling limitation as other UI
+  work this session): a direct Python translation of the full navigation
+  state machine (`autoFollowPreview`, all four nav functions, the fixed
+  "▶" handler, `renderPreviewPosition()`, button-disabled states) run
+  against 8 scenarios — normal auto-follow; pausing on "◀" while the Back
+  keeps feeding the stack silently (`previewHistory` grows from 5 to 10
+  entries with zero effect on the on-screen view or `autoFollowPreview`);
+  a single "▶" that does *not* reach the tail correctly staying paused; a
+  run of "▶" clicks that *does* reach the tail correctly resuming
+  auto-follow, confirmed by then observing a genuinely new arrival get
+  auto-revealed; the "⏭" button resuming unconditionally in one click
+  from a paused, far-behind state; the "⏮" button pausing unconditionally
+  in one click; the position readout's growing denominator; and the four
+  buttons' disabled state at both ends of the history — all 8 passed. A
+  real JS syntax check (`esprima`, temporarily installed and removed
+  again afterward) confirmed `script.js`/`i18n.js` still parse correctly.
+
+- A new `.low-candidates` highlight (light-orange background,
+  `--low-candidates-bg`) was added to the attempt-preview grids, at the
+  user's explicit request: "Sur la grille 'Génération du motif de cases
+  noires' afficher en fond orange les cases en dessous du seuil des
+  possibilités de remplissage (< 3 possibilités)." Only ever populated on
+  the `pattern` (cycle-start) event's own example — see CLAUDE.md's
+  `backend/crossword_gen.py` section (`_low_candidate_slot_cells`) for
+  the full backend-side computation. Rendered by `renderAttemptPreview()`
+  the same way as `.locked`/`.forced` (a final overlay pass reading a new
+  `low_candidate_cells` field, `|| []` so every other event, which simply
+  lacks the key, is unaffected). Deliberately a *background fill*, not a
+  border like `.locked` — sharing `.locked`'s orange hue family on
+  purpose (both flag a fragile/at-risk slot) but a lighter, pastel tint
+  (`--low-candidates-bg: #fed7aa`, matching `--correct-bg`/`--incorrect-bg`'s
+  own pastel-fill convention) and a different treatment (fill vs. border)
+  so the two compose on the same cell without either hiding the other —
+  the same fill-vs-border split already established between `.forced`/
+  `.locked` and `.impossible`. Declared before `.impossible` in the
+  stylesheet so the more severe "zero candidates left" red would win over
+  this softer "few candidates left" orange if a cell were ever
+  (hypothetically — not possible today, since `impossible_cells` is
+  always empty on the `pattern` event specifically) flagged as both.

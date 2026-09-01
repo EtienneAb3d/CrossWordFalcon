@@ -57,7 +57,7 @@
         <span data-i18n="blackEnrichmentLabel">Taux noir</span>
         <span class="input-with-suffix">
           <input type="number" id="black-enrichment" name="black_enrichment_percent"
-                 min="0" max="100" step="1" value="14">
+                 min="0" max="100" step="1" value="17">
           <span class="input-suffix">%</span>
         </span>
       </label>
@@ -95,7 +95,19 @@
     <p id="status" role="status"></p>
 
     <section id="attempt-preview" hidden>
-      <p id="attempt-preview-label" data-i18n="attemptPreviewLabel"></p>
+      <div id="attempt-preview-header">
+        <p id="attempt-preview-label" data-i18n="attemptPreviewLabel"></p>
+        <button type="button" id="attempt-preview-first-btn" class="nav-btn"
+                data-i18n-aria="attemptPreviewFirstBtn" disabled>⏮</button>
+        <button type="button" id="attempt-preview-prev-btn" class="nav-btn"
+                data-i18n-aria="attemptPreviewPrevBtn" disabled>◀</button>
+        <span id="attempt-preview-position"></span>
+        <button type="button" id="attempt-preview-next-btn" class="nav-btn"
+                data-i18n-aria="attemptPreviewNextBtn" disabled>▶</button>
+        <button type="button" id="attempt-preview-last-btn" class="nav-btn"
+                data-i18n-aria="attemptPreviewLastBtn" disabled>⏭</button>
+      </div>
+      <p id="attempt-preview-status"></p>
       <div id="attempt-preview-grids"></div>
     </section>
 

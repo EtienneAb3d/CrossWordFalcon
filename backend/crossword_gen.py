@@ -52,9 +52,12 @@ import concurrent.futures
 import math
 import multiprocessing
 import os
+import queue
 import random
 import re
 import sys
+import threading
+import time
 from collections import Counter, defaultdict
 
 BLACK = "#"
@@ -457,7 +460,19 @@ def _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_let
     vérifier — un appelant qui n'a jamais besoin de ce filtre) ; sans
     `locked_letters` ni `available_lengths`, ce filtre ne fait plus rien
     du tout non plus, ne coûtant rien au cas qui n'en a besoin d'aucun des
-    deux."""
+    deux.
+
+    Un morceau **entièrement** verrouillé (chacune de ses cases déjà dans
+    `locked_letters` — donc un mot déjà réel et confirmé) ne compte jamais
+    comme "cassé" ici, quel que soit son propre nombre de candidats — même
+    correctif que `_slot_with_insufficient_candidates` ci-dessus, et pour
+    la même raison exacte : la quasi-totalité des mots réels ne
+    correspondent qu'à eux-mêmes dans le dictionnaire (1 seul candidat),
+    un nombre presque toujours sous `PREFILL_LOCKED_MIN_WORD_COUNT` — sans
+    ce correctif, poser une case noire qui isolerait proprement un mot déjà
+    confirmé pouvait être rejeté à tort, comme si cette case noire
+    "cassait" un emplacement, alors qu'elle ne fait qu'isoler un mot déjà
+    résolu n'ayant besoin d'aucun candidat supplémentaire."""
     if index is None or (not locked_letters and available_lengths is None):
         return False
 
@@ -481,14 +496,17 @@ def _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_let
             continue
         if available_lengths is not None and length not in available_lengths:
             return True
-        if locked_letters and any(cell in locked_letters for cell in cells):
-            if _slot_candidate_count(index, length, cells, locked_letters) < PREFILL_MIN_WORD_COUNT:
-                return True
+        if locked_letters:
+            locked_count = sum(1 for cell in cells if cell in locked_letters)
+            if 0 < locked_count < length:
+                if _slot_candidate_count(index, length, cells, locked_letters) < PREFILL_LOCKED_MIN_WORD_COUNT:
+                    return True
     return False
 
 
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
-                        index=None, locked_letters=None, available_lengths=None):
+                        index=None, locked_letters=None, available_lengths=None,
+                        forbid_adjacency=False):
     """Cœur du placement des cases noires, partagé par make_pattern et sa
     phase de pré-remplissage (voir plus bas) — mélangé une seule fois, tiré
     depuis un petit avant-goût de `candidates` déjà mélangée. Place au plus
@@ -510,11 +528,27 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     tentatives suivantes. Seulement si aucune candidate isolée ne
     fonctionne à aucun de ces trois niveaux, on accepte l'adjacence et on
     retente les mêmes trois niveaux (3, puis 2, puis 1) sans plus exiger
-    l'isolement. Dans le cas résiduel où même cela ne trouve rien dans
-    toute la fenêtre (les 32 candidates cassent toutes la connexité ou
-    créent une case orpheline), la meilleure candidate au sens du critère
-    principal est simplement refusée et retirée du lot, pour garantir que
-    la boucle progresse toujours.
+    l'isolement — **sauf si `forbid_adjacency` est vrai** (`False` par
+    défaut, chaque appelant existant avant ce paramètre inchangé), auquel
+    cas cette toute dernière tentative (accepter l'adjacence) est
+    entièrement sautée : à la demande explicite de l'utilisateur, "Lors de
+    la première initialisation des cases noires, interdire tout tirage qui
+    placerait 2 cases noires avec un côté adjacent" — `make_pattern` passe
+    `forbid_adjacency=True` uniquement quand `seed_grid` est `None` (la
+    toute première grille d'un appel à `generate_grid()`, entièrement
+    blanche), jamais pour un palier qui reprend un motif déjà
+    partiellement noirci d'un palier précédent, où l'adjacence reste
+    acceptée en dernier recours exactement comme avant. Aucune candidate
+    isolée trouvée dans toute la fenêtre à ce stade se comporte alors
+    exactement comme le cas résiduel ci-dessous — la meilleure candidate
+    est refusée et retirée du lot, la boucle continue avec le reste du
+    pool, jamais un plantage ni un blocage. Dans le cas résiduel où même
+    cela ne trouve rien dans toute la fenêtre (les 32 candidates cassent
+    toutes la connexité ou créent une case orpheline, ou — avec
+    `forbid_adjacency` — sont toutes adjacentes à une case déjà noire), la
+    meilleure candidate au sens du critère principal est simplement
+    refusée et retirée du lot, pour garantir que la boucle progresse
+    toujours.
 
     Retourne (placed, rejected) — `rejected` couvre TOUTES les cases non
     placées, que la boucle s'arrête faute de candidates ou parce que
@@ -583,7 +617,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
             chosen = _first_valid(non_adjacent, min_free)
             if chosen is not None:
                 break
-        if chosen is None:
+        if chosen is None and not forbid_adjacency:
             for min_free in (3, 2, 1):
                 chosen = _first_valid(order, min_free)
                 if chosen is not None:
@@ -604,39 +638,110 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
 
 # Nombre minimal de mots d'une longueur donnée dans le dictionnaire pour que
 # cette longueur soit considérée "disponible" par la phase de pré-remplissage
-# ci-dessous — à la demande explicite de l'utilisateur, remplaçant un seuil
-# initial d'un seul mot (une longueur avec ne serait-ce qu'un mot était alors
-# jugée suffisante). Un emplacement dont la longueur ne compte que quelques
-# mots dans tout le dictionnaire reste en pratique très difficile à remplir
-# (surtout si plusieurs emplacements de cette même longueur se disputent le
-# même petit lot de mots), même s'il n'est techniquement pas impossible —
-# relever ce seuil pousse le pré-remplissage à continuer à poser des cases
-# noires dans ce cas-là aussi, plutôt que de s'arrêter dès qu'un seul mot
-# existe.
-PREFILL_MIN_WORD_COUNT = 10
+# ci-dessous. Historiquement fixé à 10 (contre un seuil initial d'un seul
+# mot, relevé après une régression réelle sur le banc d'essai 15×10 — voir
+# l'historique de PREFILL_LOCKED_MIN_WORD_COUNT juste en dessous pour le
+# même type de mesure), puis aligné à 3 à la demande explicite de
+# l'utilisateur, pour rester cohérent avec le critère d'impossibilité de
+# remplissage utilisé par `_slot_with_insufficient_candidates`/
+# `_new_black_cell_breaks_locked_slot` (voir PREFILL_LOCKED_MIN_WORD_COUNT
+# ci-dessous) — les deux constantes valent désormais 3, même si elles
+# restent deux constantes séparées (elles s'appliquent à deux vérifications
+# différentes : une longueur seule ici, une combinaison exacte de lettres
+# verrouillées à des positions précises pour l'autre). Vérifié en direct
+# après l'alignement : le banc d'essai standard 15×10 (graines 2 et 7)
+# réussit toujours sans régression à cette nouvelle valeur.
+PREFILL_MIN_WORD_COUNT = 3
 
-# Fraction de cases noires supplémentaires tirées après la phase de
-# pré-remplissage (voir make_pattern), à la demande explicite de
-# l'utilisateur : "rétablir un tirage de 5% de nouvelles cases ajoutées
-# (5% par rapport au nombre de cases blanches restantes)", relevé à 10% à
-# la demande explicite (et immédiate) de l'utilisateur juste après.
-# Rétabli après le retrait complet de l'ancienne escalade de ratio entre
-# paliers (voir generate_grid) — mais délibérément différent de cet ancien
-# mécanisme : ici, un tirage fixe (jamais escaladé d'un palier à l'autre)
-# exprimé en pourcentage des cases *encore blanches après le
-# pré-remplissage*, pas du nombre total de cases de la grille. Le
-# pré-remplissage place déjà tout ce qui est structurellement nécessaire (au
-# moins PREFILL_MIN_WORD_COUNT candidats par emplacement) ; ce tirage
-# supplémentaire, purement esthétique/de densité, ne s'applique qu'ensuite
-# et ne retire jamais rien de ce que le pré-remplissage a déjà posé.
-# Devenue une valeur *par défaut* plutôt qu'une constante figée, à la
-# demande explicite de l'utilisateur : `generate_grid`/`make_pattern`
-# acceptent désormais `black_enrichment_fraction` en paramètre — réglable
-# depuis l'interface web (un sélecteur "Ajout noires", 0/1/3/5/10 %, 3 %
-# par défaut — voir GenerateRequest.black_enrichment_percent dans
-# backend/app.py) — plutôt que figée à 10 % pour tout le monde. Cette
-# constante reste la valeur par défaut pour tout appelant qui ne précise
-# rien (le CLI, notamment).
+# Same idea as PREFILL_MIN_WORD_COUNT above, but for the position-aware
+# re-check the pre-fill phase also runs against a slot touching at least
+# one already-locked letter (see _slot_with_insufficient_candidates/
+# _new_black_cell_breaks_locked_slot) — a deliberately separate constant
+# from PREFILL_MIN_WORD_COUNT above, even though both now share the same
+# value (3): this one guarantees genuine *existence* of at least one real
+# word matching a slot's *exact* locked letters at their *exact*
+# positions (a far stronger, much rarer condition than merely having
+# enough words of the right length), while the other only ever checks
+# length alone.
+#
+# First set to the user's own literal value (1), then verified live —
+# not just assumed safe: two real `generate_grid()` runs on the standard
+# 15×10 benchmark (seeds 2 and 7, previously reliable throughout this
+# project's entire history) both failed outright at threshold 1 (73.3s
+# and 88.5s respectively, exhausting all 200 paliers) — a real
+# regression, confirmed reproducible, not a fluke: a slot locked down to
+# exactly one real candidate word is extremely fragile, since that one
+# word conflicting with even a single crossing letter anywhere makes the
+# slot permanently impossible, with pre-fill no longer stepping in to
+# shorten/avoid it. Reported to the user with this measurement; the user
+# chose an intermediate threshold (3) over keeping 1 (accepting the
+# regression) or reverting to 10 outright.
+PREFILL_LOCKED_MIN_WORD_COUNT = 3
+
+# Minimum number of new black cells always guaranteed to a single zone
+# during the "nettoyage curatif" budget check (see
+# `_prefill_unfillable_slots`) before that zone's own percentage-scaled
+# budget (`fill_objective_fraction * zone_white_count`) is allowed to
+# restrict it further — at the user's explicit request, after a real
+# regression measured live: the grid's own overall black-cell fill
+# objective (10-14% by default) applied *directly* to a single zone's own
+# size (typically 8-15 cells) left a budget of 0 or 1 cell for almost
+# every zone (e.g. exactly 0 for any zone of 9 cells or fewer at 10%) —
+# confirmed by re-running the standard 15×10 benchmark (seeds 2 and 7,
+# previously reliable throughout this project's entire history), which
+# both failed outright (148.2s/180.4s, exhausting all 200 paliers) once
+# this was wired in without a floor. Reported to the user with this
+# measurement; the user chose a guaranteed per-zone floor over either a
+# single grid-wide cumulative budget or reverting the whole mechanism.
+#
+# Tried as a *shared* budget instead (one pool of 2 across every zone
+# `_prefill_unfillable_slots` is tracking at once, not 2 per zone) later
+# in this project's history, at the user's own explicit request, after
+# they pointed out the arithmetic the per-zone scoping implied ("si 3
+# emplacements à problème, on monterait à 6 cases en plus autorisées") —
+# then reverted again immediately, by the user's own explicit follow-up
+# instruction, once a real regression was measured live on the exact
+# same standard benchmark this floor was originally introduced to fix:
+# seed 2 failed outright, seed 7 succeeded but 3.5× slower (355.4s vs.
+# ~102s). Back to the original per-zone scoping — see the
+# `project_nettoyage_curatif_paused` memory note for the full trail of
+# both attempts, kept for any future session that revisits this area.
+PREFILL_ZONE_BLACK_BUDGET_FLOOR = 2
+
+# Fraction of extra black cells drawn after the pre-fill phase (see
+# make_pattern), at the user's explicit request: "rétablir un tirage de 5%
+# de nouvelles cases ajoutées (5% par rapport au nombre de cases blanches
+# restantes)", raised to 10% at the user's own explicit (and immediate)
+# follow-up request right after. Reinstated after the old cross-palier
+# ratio-escalation mechanism was removed entirely (see generate_grid) — but
+# deliberately different from that old mechanism: this is a fixed draw
+# (never escalated palier to palier) expressed as a percentage of the cells
+# *still white after pre-fill*, not of the grid's total cell count.
+# Pre-fill already places whatever is structurally necessary (at least
+# PREFILL_MIN_WORD_COUNT candidates per slot); this further draw, purely
+# aesthetic/density-driven, only ever applies on top and never removes
+# anything pre-fill has already placed.
+# Became a *default* rather than a fixed constant, at the user's explicit
+# request: `generate_grid`/`make_pattern` now accept `black_enrichment_
+# fraction` as a parameter — tunable from the web UI (a "Taux noir"
+# selector, a free-text 0-100 integer field, 14% by default — see
+# GenerateRequest.black_enrichment_percent in backend/app.py) rather than
+# fixed at 10% for everyone. This constant remains the default value for
+# any caller that doesn't specify one (the CLI, notably).
+#
+# Applies only at a fresh-pattern palier — the very first one, or any
+# palier immediately following a full cleanup (`_build_retry_seed`) —
+# never to a "reprise telle-quelle" palier (`_pattern_continue`), which
+# never calls `make_pattern` at all. A SEPARATE mechanism that used to add
+# one extra black cell on top of this, on every single palier including
+# "reprise telle-quelle" ones (`_impossible_cell_groups`/`_lock_one_
+# impossible_cell`, a single-cell lock targeting whichever cells belonged
+# to an impossible/blockage slot), was removed entirely, at the user's
+# explicit request — this density-percentage mechanism itself was never
+# meant to be removed, only that separate per-cycle single-cell lock. See
+# CLAUDE.md for the full history of both mechanisms, including the
+# removal of the single-cell lock and this mechanism's own brief,
+# mistaken removal and restoration in the same session.
 POST_PREFILL_BLACK_FRACTION = 0.10
 
 
@@ -719,7 +824,7 @@ def _has_slot_without_candidate(grid, rows, cols, available_lengths, index=None,
         if length not in available_lengths:
             return True
         if locked_letters and any(cell in locked_letters for cell in slot):
-            if _slot_candidate_count(index, length, slot, locked_letters) < PREFILL_MIN_WORD_COUNT:
+            if _slot_candidate_count(index, length, slot, locked_letters) < PREFILL_LOCKED_MIN_WORD_COUNT:
                 return True
     return False
 
@@ -728,9 +833,19 @@ def _slot_with_insufficient_candidates(grid, rows, cols, available_lengths, inde
                                         locked_letters=None, skip=None):
     """Comme `_has_slot_without_candidate` (True/False), mais renvoie
     l'emplacement lui-même (sa liste de cases) dès qu'il en trouve un dont
-    la longueur — ou l'intersection avec `locked_letters` quand fourni,
-    voir `_slot_candidate_count` — laisse moins de `PREFILL_MIN_WORD_COUNT`
-    candidats ; `None` si tous les emplacements sont corrects (ou déjà dans
+    la longueur n'est pas dans `available_lengths` (moins de
+    `PREFILL_MIN_WORD_COUNT` mots dans le dictionnaire pour cette longueur
+    en général) — ou, quand `locked_letters` couvre au moins une de ses
+    cases, dont l'intersection avec ces lettres précises (voir
+    `_slot_candidate_count`) laisse moins de `PREFILL_LOCKED_MIN_WORD_COUNT`
+    candidats — un seuil bien plus bas que celui de la longueur seule, à la
+    demande explicite de l'utilisateur (un seuil d'1 seul mot a été essayé
+    puis écarté après vérification en direct : le banc d'essai standard
+    15×10 échouait alors sur des seeds qui réussissaient jusque-là de façon
+    fiable, un emplacement réduit à un unique candidat étant trop fragile
+    au moindre conflit croisé — voir la définition de
+    `PREFILL_LOCKED_MIN_WORD_COUNT` pour la mesure complète) ; `None` si
+    tous les emplacements sont corrects (ou déjà dans
     `skip`, voir plus bas). À la demande explicite de l'utilisateur :
     `_prefill_unfillable_slots` en a besoin pour cibler directement la case
     noire à poser *dans cet emplacement* plutôt que n'importe où dans la
@@ -743,16 +858,56 @@ def _slot_with_insufficient_candidates(grid, rows, cols, available_lengths, inde
     jamais être corrigé en y posant une case noire — sans `skip`, cette
     fonction renverrait indéfiniment ce même emplacement irréparable à
     chaque nouvel appel, empêchant `_prefill_unfillable_slots` de jamais
-    progresser sur les *autres* emplacements réellement corrigibles."""
+    progresser sur les *autres* emplacements réellement corrigibles.
+
+    Un emplacement **entièrement** couvert par `locked_letters` (chacune de
+    ses cases déjà verrouillée — donc déjà un mot réel et confirmé, pas un
+    emplacement encore à résoudre) n'est **jamais** considéré insuffisant,
+    quel que soit son propre nombre de candidats — bug réel trouvé et
+    corrigé après un rapport direct de l'utilisateur, deux captures
+    d'écran à l'appui : un mot déjà verrouillé et confirmé (ex. "AVALAS")
+    disparaissait entre l'aperçu "avant" et l'aperçu "après" d'une même
+    tentative, alors que les cases noires restaient rigoureusement
+    identiques (donc pas une nouvelle grille indépendante — voir plus haut
+    pour ce cas-là, déjà corrigé séparément). Root-causé en direct plutôt
+    que supposé : `_slot_candidate_count` compte, pour la vaste majorité
+    des mots réels d'une longueur donnée, **exactement 1** résultat (le mot
+    lui-même — la plupart des mots de 5 lettres ou plus sont la seule
+    entrée du dictionnaire à correspondre exactement à leur propre
+    orthographe), un nombre presque toujours strictement inférieur à
+    `PREFILL_LOCKED_MIN_WORD_COUNT` (3) — avant ce correctif, ce test
+    considérait donc à tort la quasi-totalité des mots déjà confirmés comme
+    des emplacements "insuffisants" à corriger, déclenchant `_remove_a_
+    crossing_word` (voir ci-dessous) pour un mot pourtant déjà résolu et
+    n'ayant besoin d'aucune correction — reproduit et confirmé avec un
+    dictionnaire miniature entièrement contrôlé : un mot fictif entièrement
+    verrouillé ("AVOIR", seul mot de 5 lettres du dictionnaire à
+    correspondre à cette orthographe précise, donc 1 candidat) était bien
+    la toute première case retournée par cette fonction, avant même
+    l'emplacement réellement problématique qu'il croise. Un emplacement
+    entièrement verrouillé mais dont la combinaison ne correspond à
+    *aucun* mot réel (véritablement impossible, pas seulement rare) n'est
+    pas non plus renvoyé ici désormais — ce cas reste correctement détecté
+    plus tard, une fois `make_pattern` revenu, par le mécanisme dédié de
+    `_pattern_attempt`/`_pattern_continue` (`preseed_assignment`/
+    `locked_impossible_slots`, qui valide chaque emplacement entièrement
+    verrouillé auprès du dictionnaire et le laisse `None` s'il ne
+    correspond à aucun mot réel — voir leurs propres docstrings) : le
+    pré-remplissage n'a de toute façon aucun moyen utile d'agir sur un tel
+    emplacement (aucune case n'y est disponible pour une case noire —
+    toutes déjà verrouillées — et retirer un mot qui le *croise* ne change
+    rien à ses propres lettres, déjà fixées par construction)."""
     for slot in extract_slots(grid, rows, cols):
         if skip and tuple(slot) in skip:
             continue
         length = len(slot)
         if length not in available_lengths:
             return slot
-        if locked_letters and any(cell in locked_letters for cell in slot):
-            if _slot_candidate_count(index, length, slot, locked_letters) < PREFILL_MIN_WORD_COUNT:
-                return slot
+        if locked_letters:
+            locked_count = sum(1 for cell in slot if cell in locked_letters)
+            if 0 < locked_count < length:
+                if _slot_candidate_count(index, length, slot, locked_letters) < PREFILL_LOCKED_MIN_WORD_COUNT:
+                    return slot
     return None
 
 
@@ -766,8 +921,73 @@ def _has_slot_without_candidate(grid, rows, cols, available_lengths, index=None,
     return _slot_with_insufficient_candidates(grid, rows, cols, available_lengths, index, locked_letters) is not None
 
 
+def _remove_a_crossing_word(slot, grid, rows, cols, locked_letters, rng=None):
+    """« Nettoyage curatif », à la demande explicite de l'utilisateur : au
+    lieu de continuer à noircir `slot` (l'emplacement le moins remplissable —
+    dont l'intersection avec les lettres déjà verrouillées ne laisse plus
+    assez de candidats, voir `_slot_with_insufficient_candidates` — qui a
+    déjà des lettres positionnées sur certaines de ses cases), retire un mot
+    déjà confirmé qui **participe** à ces lettres déjà positionnées : un
+    emplacement croisant `slot` — forcément dans l'autre sens, puisqu'il
+    partage au moins une case avec lui — dont *toutes* les cases sont dans
+    `locked_letters` (donc un vrai mot déjà verrouillé, pas seulement une
+    case isolée), lui-même responsable d'au moins une des lettres qui rendent
+    `slot` difficile à remplir. Plutôt que de choisir, parmi tous ces mots
+    croisants, celui qui a lui-même le moins de possibilités de remplissage —
+    un critère essayé puis explicitement écarté par l'utilisateur après une
+    régression mesurée en direct (voir plus bas) — un choix est tiré au
+    hasard (mélangé avec `rng`, l'aléa déjà seedé de cette tentative, pour
+    rester reproductible et éviter tout biais de position, le même principe
+    que partout ailleurs dans ce fichier) parmi tous les mots croisants
+    trouvés, sans aucun critère de fragilité. Mute `locked_letters` en place
+    (retire chacune des cases du mot choisi) et renvoie `True` si un mot a
+    bien été retiré ; `False` si `slot` ne touche aucun mot verrouillé du
+    tout (rien à retirer — le seul recours reste alors une case noire, ou
+    déclarer l'emplacement irréparable).
+
+    Anciennement `_remove_least_fillable_crossing_word` : une première
+    version choisissait le mot croisant ayant lui-même le moins de
+    candidats — l'idée étant de sacrifier le mot déjà le plus fragile,
+    de toute façon le plus proche de devenir lui-même impossible au moindre
+    autre conflit. Cette idée s'est révélée nuisible en pratique, constatée
+    en direct sur le banc d'essai standard : même en désactivant entièrement
+    le budget de cases noires (voir `PREFILL_ZONE_BLACK_BUDGET_FLOOR`), le
+    seul fait de retirer un mot dans ce cas limite (aucune case noire
+    disponible dans `slot`) suffisait à faire échouer une seed auparavant
+    fiable — retirer *spécifiquement* le mot le plus fragile s'est avéré
+    plus nuisible que bénéfique, sans doute parce qu'un mot déjà fragile
+    n'est pas pour autant redondant : sa disparition peut priver la suite de
+    la recherche d'une confirmation utile ailleurs dans la grille. À la
+    demande explicite de l'utilisateur, ce critère de sélection est
+    abandonné : n'importe quel mot croisant qui participe au problème peut
+    être retiré, sans chercher à deviner lequel serait le "moins coûteux" à
+    perdre."""
+    if not locked_letters:
+        return False
+    slot_tuple = tuple(slot)
+    slot_cells = set(slot)
+    candidates = []
+    for other in extract_slots(grid, rows, cols):
+        if tuple(other) == slot_tuple:
+            continue
+        if not (slot_cells & set(other)):
+            continue
+        if not all(cell in locked_letters for cell in other):
+            continue
+        candidates.append(other)
+    if not candidates:
+        return False
+    if rng is not None:
+        rng.shuffle(candidates)
+    chosen = candidates[0]
+    for cell in chosen:
+        locked_letters.pop(cell, None)
+    return True
+
+
 def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates,
-                               available_lengths, index=None, locked_letters=None, rng=None):
+                               available_lengths, index=None, locked_letters=None, rng=None,
+                               fill_objective_fraction=1.0, forbid_adjacency=False):
     """Phase de pré-remplissage, à la demande explicite de l'utilisateur :
     tant que la grille comporte un emplacement (`extract_slots`) dont la
     longueur a moins de `PREFILL_MIN_WORD_COUNT` mots candidats dans le
@@ -837,17 +1057,73 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
     noire posée n'importe où dans ce fichier doit respecter ; les
     candidates de l'emplacement sont essayées dans cet ordre de préférence
     jusqu'à en trouver une qui le respecte, ou jusqu'à épuisement (même cas
-    limite accepté que ci-dessus)."""
+    limite accepté que ci-dessus).
+
+    **« Nettoyage curatif »**, à la demande explicite de l'utilisateur,
+    ajouté sur ce même mécanisme pour le cas d'un emplacement rendu
+    insuffisant par des lettres déjà verrouillées (jamais pour le cas d'une
+    longueur simplement trop rare — voir plus bas) : au lieu de continuer à
+    noircir cet emplacement indéfiniment, un budget est maintenant respecté.
+    Pour chaque emplacement problématique rencontré, sa taille d'origine
+    (nombre de cases blanches qu'il couvrait à sa toute première détection,
+    avant toute case noire ajoutée pour le corriger — suivie par
+    `zone_footprints`, une liste de `[cases_d_origine, cases_noires_déjà_
+    ajoutées]`, puisqu'une même zone peut être retrouvée plusieurs fois de
+    suite, coupée en morceaux de plus en plus courts au fil des cases
+    ajoutées ; un morceau est rattaché à la zone d'origine dont il est un
+    sous-ensemble de cases, pas recréé comme une zone indépendante) sert de
+    référence : tant que le nombre de nouvelles cases noires déjà ajoutées
+    dans cette zone reste sous son propre budget (`zone_budget` —
+    `fill_objective_fraction`, le même objectif de remplissage en noir que
+    celui appliqué à la grille entière, voir `make_pattern`, appliqué à la
+    taille d'origine de cette zone, mais **jamais moins de
+    `PREFILL_ZONE_BLACK_BUDGET_FLOOR` (2) cases garanties** — voir sa propre
+    définition pour la régression réelle mesurée en direct, sans ce
+    plancher, qui a motivé son ajout : ce pourcentage, 10-14 % par défaut,
+    ramené directement à la taille typique d'une seule zone (souvent 8-15
+    cases), laissait un budget de 0 ou 1 case pour la quasi-totalité des
+    zones, au lieu d'un vrai budget proportionnel), une case noire continue
+    d'être tentée normalement. Une fois ce budget dépassé (ou si aucune case
+    noire disponible ne convient), plutôt que de déclarer aussitôt
+    l'emplacement irréparable, `_remove_a_crossing_word` est tenté : retirer
+    un mot déjà verrouillé qui croise cet emplacement (tiré au hasard parmi
+    ceux qui y participent, sans chercher à deviner lequel serait le moins
+    coûteux à perdre — voir sa propre docstring pour la régression que ce
+    choix corrige) relâche une contrainte de lettre sans ajouter la moindre
+    case noire supplémentaire — une façon de corriger l'emplacement qui
+    évite de sur-noircir une seule zone bien au-delà de ce que l'objectif de
+    remplissage global de la
+    grille prévoit. Seulement marqué irréparable si ni une case noire ni un
+    retrait de mot ne débloquent la situation — l'unique cas limite conservé
+    de la version précédente. Pour un emplacement insuffisant à cause de sa
+    seule longueur (`length not in available_lengths`, jamais causé par des
+    lettres verrouillées), retirer un mot ne changerait rien à sa longueur —
+    le budget/retrait est donc ignoré dans ce cas, qui garde exactement le
+    comportement d'origine (case noire, ou irréparable)."""
     count = 0
     unfixable = set()
+    zone_footprints = []  # [cases_d_origine (set), cases_noires_ajoutées (int)]
     while candidates:
         slot = _slot_with_insufficient_candidates(
             grid, rows, cols, available_lengths, index, locked_letters, skip=unfixable
         )
         if slot is None:
             break
-        candidate_set = set(candidates)
         length = len(slot)
+        is_length_problem = length not in available_lengths
+
+        slot_set = set(slot)
+        footprint = None
+        for fp in zone_footprints:
+            if slot_set <= fp[0]:
+                footprint = fp
+                break
+        if footprint is None:
+            footprint = [slot_set, 0]
+            zone_footprints.append(footprint)
+        zone_white_count = len(footprint[0])
+
+        candidate_set = set(candidates)
         cells_in_slot = [cell for cell in slot if cell in candidate_set]
         if rng is not None:
             rng.shuffle(cells_in_slot)
@@ -855,32 +1131,72 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
             cells_in_slot,
             key=lambda cell: row_black[cell[0]] + col_black[cell[1]],
         )
+
+        # Le budget par zone est le pourcentage de l'objectif de remplissage
+        # global appliqué à la taille de *cette* zone, mais jamais moins de
+        # `PREFILL_ZONE_BLACK_BUDGET_FLOOR` (2) cases noires garanties — à
+        # la demande explicite de l'utilisateur, après une régression réelle
+        # constatée en direct : ce pourcentage (10-14 % par défaut), une fois
+        # ramené à la taille typique d'une seule zone (souvent 8-15 cases),
+        # laissait un budget de 0 ou 1 case pour la quasi-totalité des
+        # zones — voir la docstring plus bas pour la mesure complète.
+        #
+        # Un budget PARTAGÉ entre toutes les zones (plutôt que par zone) a
+        # été essayé un temps, à la demande explicite de l'utilisateur —
+        # puis explicitement annulé par l'utilisateur lui-même une fois la
+        # régression réelle qu'il causait mesurée en direct sur le banc
+        # standard (seed 2 en échec complet, seed 7 3.5× plus lent) :
+        # "Il ne faut pas changer le budget..." Revenu au budget par zone
+        # d'origine — voir `PREFILL_ZONE_BLACK_BUDGET_FLOOR`'s propre
+        # définition pour l'historique complet des deux essais.
+        zone_budget = max(PREFILL_ZONE_BLACK_BUDGET_FLOOR,
+                           int(fill_objective_fraction * zone_white_count))
+        within_budget = (
+            is_length_problem
+            or zone_white_count == 0
+            or (footprint[1] + 1) <= zone_budget
+        )
         placed_one = False
-        for (r, c) in options:
-            grid[r][c] = BLACK
-            if is_structurally_valid(grid, rows, cols, min_interior_free=1):
-                row_black[r] += 1
-                col_black[c] += 1
-                candidates.remove((r, c))
-                count += 1
-                placed_one = True
-                break
-            grid[r][c] = WHITE
-        if not placed_one:
-            # Cet emplacement précis ne peut être corrigé par aucune case
-            # noire disponible (typiquement : toutes ses cases sont déjà
-            # verrouillées par des lettres d'un palier précédent, ou aucune
-            # ne préserve la connexité) — à la demande explicite de
-            # l'utilisateur, ce n'est pas une raison d'abandonner tout le
-            # pré-remplissage : on le marque pour ne plus jamais le
-            # reproposer (`unfixable`) et on continue sur les autres
-            # emplacements, qui restent corrigibles indépendamment. Ce
-            # résidu, s'il subsiste jusqu'au remplissage CSP, échouera
-            # simplement là normalement — et, dans le cas d'un mot
-            # verrouillé, sera retiré au palier suivant par le même
-            # mécanisme de nettoyage qui retire déjà tout mot croisant un
-            # emplacement impossible (voir _build_retry_seed).
-            unfixable.add(tuple(slot))
+        if within_budget:
+            non_adjacent = [
+                cell for cell in options if not _has_black_neighbor(grid, rows, cols, *cell)
+            ]
+            ordered_options = non_adjacent if forbid_adjacency else (
+                non_adjacent + [cell for cell in options if cell not in set(non_adjacent)]
+            )
+            for (r, c) in ordered_options:
+                grid[r][c] = BLACK
+                if is_structurally_valid(grid, rows, cols, min_interior_free=1):
+                    row_black[r] += 1
+                    col_black[c] += 1
+                    candidates.remove((r, c))
+                    count += 1
+                    footprint[1] += 1
+                    placed_one = True
+                    break
+                grid[r][c] = WHITE
+        if placed_one:
+            continue
+
+        if not is_length_problem and _remove_a_crossing_word(
+            slot, grid, rows, cols, locked_letters, rng
+        ):
+            continue
+
+        # Cet emplacement précis ne peut être corrigé ni par une case noire
+        # disponible, ni par le retrait d'un mot verrouillé qui le croise
+        # (typiquement : toutes ses cases sont déjà verrouillées par des
+        # lettres d'un palier précédent sans qu'aucun mot croisant ne soit
+        # lui-même verrouillé, ou aucune case ne préserve la connexité) — à
+        # la demande explicite de l'utilisateur, ce n'est pas une raison
+        # d'abandonner tout le pré-remplissage : on le marque pour ne plus
+        # jamais le reproposer (`unfixable`) et on continue sur les autres
+        # emplacements, qui restent corrigibles indépendamment. Ce résidu,
+        # s'il subsiste jusqu'au remplissage CSP, échouera simplement là
+        # normalement — et, dans le cas d'un mot verrouillé, sera retiré au
+        # palier suivant par le même mécanisme de nettoyage qui retire déjà
+        # tout mot croisant un emplacement impossible (voir _build_retry_seed).
+        unfixable.add(tuple(slot))
     return candidates
 
 
@@ -1040,7 +1356,69 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     cells than the target percentage of the *original* white-cell count
     calls for, no further cells are added for this reason at all (`placed`
     wins the `max`); if it placed fewer, only the shortfall is added on
-    top by `_place_black_cells` below."""
+    top by `_place_black_cells` below.
+
+    This mechanism was briefly (mistakenly) removed entirely in the same
+    session, along with a separate, unrelated per-cycle single-cell lock
+    (`_impossible_cell_groups`/`_lock_one_impossible_cell`, see
+    `generate_grid`'s own history) — the user's own follow-up correction
+    clarified that only that separate lock was meant to go, not this
+    density-percentage mechanism, which is still meant to apply at the
+    very first palier and at every palier immediately following a full
+    cleanup, exactly as it always has.
+
+    `black_enrichment_fraction` is no longer applied as the fixed
+    percentage it's given as, at the user's explicit later request: it is
+    scaled by `initial_white_count / (rows * cols)` — the proportion of
+    the grid still white, measured on *this* call's own starting state
+    (including whatever `seed_grid` already carries forward), before this
+    call's own pre-fill runs — right after `initial_white_count` is
+    captured. This scaled value is what feeds both `fill_objective_
+    fraction` (and therefore the curative-cleanup zone budget inside
+    `_prefill_unfillable_slots`) and the `target` computation below — the
+    raw, caller-supplied `black_enrichment_fraction` is never used
+    directly again past this point. For the very first palier of a call
+    (`seed_grid is None`, an entirely white grid), this proportion is
+    always exactly 1 (`initial_white_count == rows * cols`), so the
+    scaled rate equals the raw one — the very first grid's own behavior
+    is unchanged. From then on, as successive paliers accumulate more
+    black cells (whatever `seed_grid` is carried forward already has), the
+    proportion — and so the effective rate applied by pre-fill — shrinks
+    accordingly, without any caller needing to compute or pass this
+    shrinking rate itself.
+
+    Adjacency between two black cells is never accepted at all for the
+    very first palier of a call (`seed_grid is None`), at the user's
+    explicit request — see `_place_black_cells`'s own `forbid_adjacency`
+    parameter (passed here as `seed_grid is None`) for the mechanics.
+    Every later palier, which always starts from an already-partially-
+    black `seed_grid` carried forward from a previous one, keeps the
+    pre-existing behavior unchanged (adjacency still accepted as a last
+    resort when no isolated candidate can be found)."""
+    # Copie défensive de `locked_letters`, au même titre que celle déjà
+    # faite pour `seed_grid` juste en dessous — bug réel constaté en
+    # direct, capture d'écran à l'appui : des lettres verrouillées bien
+    # présentes dans l'aperçu "pattern" (début de cycle) disparaissaient
+    # de l'aperçu "pattern_generated" du même cycle, et pas seulement à
+    # l'écran. Cause : cet aperçu reconstruit spéculativement, dans le
+    # processus PARENT, le motif que le dernier worker non réinitialisé
+    # va lui-même recalculer — en appelant `make_pattern` directement sur
+    # `carry_locked_letters`, l'objet PARTAGÉ réellement transmis juste
+    # après aux vrais workers dispatchés (`_pattern_attempt`). Or
+    # `_prefill_unfillable_slots`/`_remove_a_crossing_word` (« nettoyage
+    # curatif ») mutent leur propre paramètre `locked_letters` sur place
+    # (retrait de cases par `.pop`) — un comportement sans risque pour un
+    # vrai worker, qui ne reçoit jamais qu'une copie indépendante une fois
+    # ses arguments transmis à son propre processus séparé, mais qui
+    # endommageait ici l'état partagé du processus parent lui-même : une
+    # simple reconstruction d'aperçu, censée être jetable, retirait
+    # réellement des lettres confirmées de `carry_locked_letters` avant
+    # même que les vrais workers de ce palier ne soient soumis — ceux-ci
+    # recevaient donc, eux aussi, une version déjà amputée. Cette copie
+    # protège tout appelant, pas seulement celui-là, exactement comme la
+    # copie de `seed_grid` protège déjà tout appelant contre une mutation
+    # similaire de la grille elle-même.
+    locked_letters = dict(locked_letters) if locked_letters else locked_letters
     if seed_grid is not None:
         grid = [row[:] for row in seed_grid]
         row_black = [row.count(BLACK) for row in grid]
@@ -1058,44 +1436,73 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         candidates = [(r, c) for r in range(rows) for c in range(cols)]
         placed = 0
     rng.shuffle(candidates)
-    # Nombre de cases blanches *avant* le pré-remplissage — base du calcul
-    # de `black_enrichment_fraction` ci-dessous, à la demande explicite de
-    # l'utilisateur ("les cases noires ajoutées en pré-remplissage
-    # comptent pour l'objectif de remplissage en noir") : le pourcentage
-    # visé est désormais calculé sur ce total fixe, pas sur ce qu'il reste
-    # de blanc une fois le pré-remplissage terminé — voir plus bas.
+    # Count of white cells *before* pre-fill — the base for the
+    # `black_enrichment_fraction` computation below, at the user's
+    # explicit request ("les cases noires ajoutées en pré-remplissage
+    # comptent pour l'objectif de remplissage en noir"): the target
+    # percentage is computed on this fixed total, not on however much
+    # white remains once pre-fill is done.
     initial_white_count = len(candidates)
+
+    # À la demande explicite de l'utilisateur : le taux fixe ("Taux noir",
+    # `black_enrichment_fraction`) n'est plus appliqué tel quel dans les
+    # phases de pré-remplissage — il est multiplié par la proportion de
+    # cases blanches restantes (cases blanches restantes / cases totales
+    # de la grille), mesurée sur CE palier précis (via `seed_grid` s'il y
+    # en a un) avant que son propre pré-remplissage ne démarre. Pour la
+    # toute première grille (aucun `seed_grid`, entièrement blanche),
+    # `initial_white_count == rows * cols` donc cette proportion vaut 1 —
+    # "le taux reste donc 1 pour la toute première grille" — et elle
+    # diminue mécaniquement, palier après palier, à mesure que la grille
+    # se noircit, sans qu'aucun code appelant n'ait besoin de le calculer
+    # lui-même : `initial_white_count` reflétait déjà cette réalité, il
+    # ne servait simplement pas encore à moduler le taux lui-même.
+    white_proportion = initial_white_count / (rows * cols)
+    black_enrichment_fraction = black_enrichment_fraction * white_proportion
+
+    # « Nettoyage curatif » (voir _prefill_unfillable_slots) : réutilise ce
+    # même objectif de remplissage en noir de la grille entière comme seuil
+    # au-delà duquel une zone impossible bascule du simple ajout de cases
+    # noires vers le retrait d'un mot déjà verrouillé qui la croise — à la
+    # demande explicite de l'utilisateur, plutôt que d'inventer un nouveau
+    # seuil séparé pour cette règle. `black_ratio` est presque toujours 0.0
+    # aujourd'hui (voir plus haut), donc `black_enrichment_fraction` domine
+    # en pratique ; les deux sont pris en compte ici par simple robustesse
+    # pour un appelant (le CLI) qui fixerait encore `--black-ratio`.
+    fill_objective_fraction = max(black_ratio, black_enrichment_fraction)
 
     if available_lengths is not None:
         candidates = _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
-            index, locked_letters, rng,
+            index, locked_letters, rng, fill_objective_fraction,
+            forbid_adjacency=(seed_grid is None),
         )
 
     placed = sum(row.count(BLACK) for row in grid)
-    # `placed` inclut déjà les cases posées par le pré-remplissage
-    # ci-dessus — les faire compter dans l'objectif signifie que ce
-    # dernier terme (`black_enrichment_fraction * initial_white_count`,
-    # calculé sur le total blanc *avant* pré-remplissage, jamais sur ce
-    # qu'il en reste après) est un troisième argument de `max`, au même
-    # titre que `placed` et le plancher `black_ratio` — et non plus un
-    # ajout systématique par-dessus, à la demande explicite de
-    # l'utilisateur : si le pré-remplissage a déjà posé plus de cases que
-    # ce que ce pourcentage réclame, aucune case supplémentaire n'est
-    # ajoutée pour cet objectif (`placed` l'emporte déjà dans le max) ;
-    # s'il en a posé moins, seule la différence est complétée.
+    # `placed` already includes whatever pre-fill placed above — counting
+    # it toward the target means this last term
+    # (`black_enrichment_fraction * initial_white_count`, computed on the
+    # white total *before* pre-fill, never on what's left after it) is a
+    # third argument to `max`, on the same footing as `placed` and the
+    # `black_ratio` floor — no longer added on top unconditionally, at the
+    # user's explicit request: if pre-fill already placed more cells than
+    # this percentage calls for, no further cell is added for this reason
+    # (`placed` already wins the max); if it placed fewer, only the
+    # difference is completed.
     target = max(
         placed,
         round(rows * cols * black_ratio),
         round(black_enrichment_fraction * initial_white_count),
     )
     _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
-                        index=index, locked_letters=locked_letters, available_lengths=available_lengths)
+                        index=index, locked_letters=locked_letters, available_lengths=available_lengths,
+                        forbid_adjacency=(seed_grid is None))
 
     if available_lengths is not None and locked_letters:
         _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
-            index, locked_letters, rng,
+            index, locked_letters, rng, fill_objective_fraction,
+            forbid_adjacency=(seed_grid is None),
         )
 
     return grid
@@ -1231,6 +1638,59 @@ PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500
 # les tentatives." See attempt_done_event/generate_grid.
 PALIER_ATTEMPT_INTERRUPT_FRACTION = 0.30
 
+# Délai de grâce (secondes) laissé au drainage de `best_state_queue` (voir
+# generate_grid) pour rattraper un message publié juste avant qu'un worker
+# ne rende la main, à la demande explicite de l'utilisateur ("Chaque process
+# suit son meilleur état, et transmet au process parent l'information que ce
+# meilleur état a changé"). Nécessaire à cause d'une particularité bien
+# connue de `multiprocessing.Queue`, confirmée en direct par un test isolé :
+# `put()` ne bloque pas — il remet l'objet à un thread interne dédié à
+# l'alimentation du tube sous-jacent, qui peut ne pas avoir fini son travail
+# au moment exact où le processus appelant rend la main (`f.result()` dans
+# le parent) ; un simple `get_nowait()` juste après peut donc légitimement
+# renvoyer `Empty` alors qu'un message vient tout juste d'être publié
+# (reproduit : un `try_fill` isolé qui publie un état, suivi immédiatement
+# d'un drainage sans délai, ne récupérait rien — le même drainage après un
+# `time.sleep(0.1)` récupérait le message publié). Une valeur courte (20ms)
+# suffit très largement en pratique : ce délai n'est payé qu'une seule fois
+# par palier, seulement une fois que le drainage "rapide" (get_nowait en
+# boucle) a déjà tout consommé de ce qui était immédiatement disponible — et
+# seulement si un message arrive réellement pendant ce court délai
+# supplémentaire ; sinon, le palier suivant démarre sans attendre.
+BEST_STATE_QUEUE_DRAIN_GRACE_S = 0.02
+
+# Maximum number of consecutive "reprise telle quelle" paliers (see
+# generate_grid's own `if still_has_hope:` branch) allowed before a full
+# cleanup ("nettoyage complet") is triggered unconditionally, even if the
+# current pattern still has real hope of progress. Named out of a previously
+# unnamed inline literal (`consecutive_continue_paliers >= 5`), at the user's
+# explicit request.
+#
+# Set to 0 — every single palier triggers a full cleanup, no "reprise telle
+# quelle" streak at all. This was first tried, then briefly reverted to 5
+# after appearing to cause a severe regression (a real generation stuck for
+# 150+ consecutive paliers on a pattern already 100% filled with real,
+# crossing-confirmed letters and 0% impossible) — but the user pushed back
+# directly on that diagnosis: "La reprise telle quelle ou le nettoyage est
+# un mécanisme qui intervient après la tentative de remplissage, qui doit
+# aller jusqu'au bout... tous les emplacements restants doivent être testés
+# avant de terminer un cycle... Si on a bien testé tous les emplacements
+# restant, et que tous les mots en place sont valides, la grille est alors
+# réputée réussie." The real bug was elsewhere: `Filler`/`try_fill` could
+# end a search attempt (deadline exceeded, 30% abandon, interrupted by a
+# sibling attempt, or genuinely exhausted) while a handful of slots were
+# already fully and validly determined by real crossing letters — matching
+# exactly one still-available dictionary word each — yet never explicitly
+# confirmed by `_backtrack`, simply because its own selection order never
+# reached them in time. Fixed at the actual root (`_close_implied_slots`,
+# called from `try_fill` right after `filler.solve()` returns): any such
+# trivially-implied slot is now confirmed as a final, cheap closing pass
+# before a search attempt's outcome is decided — so 0 no longer needs
+# "reprise telle quelle" to paper over this gap, restoring the 0 value the
+# user actually asked for. See `_close_implied_slots`'s own docstring for
+# the full mechanism and the live evidence that motivated it.
+MAX_CONSECUTIVE_CONTINUE_PALIERS = 0
+
 # Fraction of PARALLEL_ATTEMPTS that, right after a full cleanup ("nettoyage
 # complet" — see generate_grid's own `else:` branch, as opposed to "reprise
 # telle quelle"), start the very next palier from a completely blank grid
@@ -1272,10 +1732,37 @@ def _slots_touching(slots, target_indices):
     return touching
 
 
+# Fenêtre de tirage au hasard parmi les meilleurs mots candidats d'un
+# emplacement, une fois triés par `_candidate_score` (voir `Filler.
+# _backtrack`) — un peu comme la fenêtre de 32 cases de `_place_black_
+# cells` pour les cases noires : garde la priorité globale aux mots les
+# mieux notés statistiquement tout en évitant de les tester très
+# exactement dans l'ordre du tri, qui reviendrait à un choix entièrement
+# déterministe (à seedage égal) plutôt qu'à une vraie exploration.
+# Augmentée de 20 à 200, à la demande explicite de l'utilisateur : "évite
+# les mots trop rares, tout en laissant plus de latitude à l'exploration
+# de solutions variées" — une fenêtre plus large touche encore, en
+# pratique, essentiellement des mots bien classés statistiquement (jamais
+# les tout derniers du dictionnaire), mais parmi un choix nettement plus
+# large qu'auparavant, pour plus de diversité d'une tentative à l'autre.
+#
+# Relevée de 200 à 5000, à la demande explicite de l'utilisateur : "Les
+# 200 meilleurs obligent à commencer les emplacements vierges avec un
+# vocabulaire très restreint. Relâcher la contrainte... (ça aura sans
+# doute l'effet d'annuler l'intérêt du scoring, mais je voudrais voir ce
+# que ça donne)" — l'utilisateur anticipe lui-même qu'une fenêtre aussi
+# large, sur un emplacement encore entièrement vierge (aucune case fixée
+# par un croisement, donc `letter_scores` sans le moindre effet
+# discriminant sur le tri — voir `_candidate_score`), revient en pratique
+# à un tirage quasiment uniforme parmi tout le dictionnaire de cette
+# longueur, plutôt qu'à une vraie priorité aux mots les mieux notés.
+CANDIDATE_SCORE_WINDOW = 5000
+
+
 class Filler:
     def __init__(self, slots, index, rng, forced_letters=None, letter_scores=None,
                  excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
-                 attempt_done_event=None):
+                 attempt_done_event=None, on_new_best=None, locked_letters=None):
         self.slots = slots
         self.index = index
         self.rng = rng
@@ -1319,6 +1806,35 @@ class Filler:
         # assigné, sa propre lettre prend le pas sur cet indice (voir
         # _domain ci-dessous).
         self.forced_letters = forced_letters or {}
+        # case -> lettre réellement verrouillée par un palier précédent (le
+        # `locked_letters` de `_pattern_attempt`/`_pattern_continue`), à la
+        # demande explicite de l'utilisateur — gardée ici *séparément* de
+        # `self.forced_letters`, contrairement à avant, où l'appelant la
+        # fusionnait directement dans `forced_letters` avant même de
+        # construire ce `Filler` (`{**forced_letters, **locked_letters}`).
+        # Cette fusion perdait une distinction réelle : `_domain(i,
+        # ignore_forced=True)` (utilisé uniquement par `impossible_zone_
+        # slots`, voir plus bas) ignore intentionnellement tout
+        # `self.forced_letters` — correct pour une simple graine
+        # statistique jamais vérifiée, mais `locked_letters` n'en est pas
+        # une : c'est du contenu réellement confirmé, porté d'un palier au
+        # suivant. Bug réel constaté en direct : un emplacement entièrement
+        # verrouillé par `locked_letters`, dont la combinaison ne
+        # correspond à aucun mot réel (donc exclu de la recherche, jamais
+        # assigné), n'était presque jamais signalé « impossible » une fois
+        # cette fusion ignorée par `ignore_forced=True` — 330 instances sur
+        # 349 mesurées en direct sur une même graine de test. Résultat :
+        # `_clean_blocked_slots`/`_build_retry_seed` (le nettoyage entre
+        # paliers) ne voyait jamais cet emplacement comme un problème à
+        # corriger, donc ne retirait jamais le mot croisant responsable —
+        # la même combinaison invalide se reconstruisait alors à
+        # l'identique, cycle après cycle, parfois pendant plus de 70 cycles
+        # consécutifs sur une seule et même case, sans jamais progresser ni
+        # jamais être signalée. Séparer les deux dicts et vérifier
+        # `self.locked_letters` sans condition (voir _domain ci-dessous,
+        # jamais ignoré même avec `ignore_forced=True`) corrige ça à la
+        # racine.
+        self.locked_letters = locked_letters or {}
         # case -> Counter(lettre -> occurrences), le même échantillonnage
         # statistique que forced_letters ci-dessus mais gardé dans son
         # intégralité (voir sample_letter_biases) — utilisé par _backtrack
@@ -1411,15 +1927,38 @@ class Filler:
         # d'échec, voir try_fill/diagnostics["example_grid"].
         self.best_assignment = list(self.assignment)
         self.best_assigned_count = 0
+        # Rappelé (voir _backtrack) chaque fois que best_assignment vient
+        # d'être amélioré, avec ce nouvel état en argument — permet à
+        # try_fill de publier ce nouvel état vers le processus parent en
+        # temps réel plutôt qu'une seule fois à la toute fin de la
+        # recherche, à la demande explicite de l'utilisateur (voir
+        # `_worker_best_state_queue`, plus bas dans ce fichier, pour
+        # l'historique complet). `None` par défaut — aucun effet pour tout
+        # appelant existant.
+        self.on_new_best = on_new_best
 
-    def _domain(self, i):
+    def _domain(self, i, ignore_forced=False):
         """Ensemble/liste des mots compatibles avec les lettres déjà connues de
         la case i (sans encore exclure les mots utilisés ailleurs — voir _pick).
         Une lettre "conseillée" par self.forced_letters (voir __init__) compte
         comme une contrainte au même titre qu'une lettre vraiment imposée par
         un emplacement croisé déjà assigné — mais seulement tant qu'aucun
         emplacement croisé n'est réellement assigné à cette case : une vraie
-        affectation l'emporte toujours sur un simple indice statistique."""
+        affectation l'emporte toujours sur un simple indice statistique.
+
+        `ignore_forced` (`False` par défaut — comportement inchangé pour tout
+        appelant existant), à la demande explicite de l'utilisateur : ignore
+        entièrement `self.forced_letters` (la simple graine statistique),
+        ne retenant que les lettres réellement imposées par un emplacement
+        croisé déjà assigné — voir `impossible_zone_slots` (seul appelant à
+        le passer à `True`), qui a besoin d'une notion d'« impossible »
+        fondée uniquement sur des faits confirmés, jamais sur une simple
+        graine statistique non vérifiée. `self.locked_letters` (du contenu
+        réellement confirmé, porté d'un palier au suivant — voir __init__)
+        n'est en revanche JAMAIS ignoré, même avec `ignore_forced=True` :
+        ce n'est pas une supposition, donc `impossible_zone_slots` doit
+        pouvoir s'en servir tout autant que d'une vraie affectation
+        croisée."""
         cells = self.slots[i]
         length = len(cells)
         idx = self.index.get(length)
@@ -1433,6 +1972,8 @@ class Filler:
                     letter = self.assignment[j][other_pos]
                     break
             if letter is None:
+                letter = self.locked_letters.get(cell)
+            if letter is None and not ignore_forced:
                 letter = self.forced_letters.get(cell)
             if letter is not None:
                 constraints[pos] = letter
@@ -1451,38 +1992,6 @@ class Filler:
             if not result:
                 return ()
         return result
-
-    def _placed_letter_count(self, i):
-        """Nombre de cases de l'emplacement i dont la lettre est déjà connue
-        — soit imposée par un emplacement croisé déjà assigné, soit une
-        "graine" (self.forced_letters, l'ancien "lettres forcées" —
-        renommé à la demande explicite de l'utilisateur, voir sample_
-        letter_biases) — à la demande explicite de l'utilisateur, après un
-        rapport direct confirmant un vrai manque : sur une grille vierge
-        avec une graine posée, aucun emplacement n'avait alors de
-        croisement réellement assigné, donc l'emplacement de la graine
-        n'avait cette même priorité que tous les autres — il pouvait très
-        bien ne jamais être choisi tôt, à l'exact opposé du rôle voulu pour
-        une graine ("emplacements qui initient les premiers placements, ou
-        les influencent quand il y a déjà d'autres lettres"). Une case
-        comptée une seule fois même si elle est à la fois une graine et
-        fixée par un croisement réellement assigné — ce compte ne mesure
-        qu'un ensemble de cases déjà connues, pas deux critères distincts.
-        Utilisé par _backtrack comme critère de sélection principal (voir
-        ci-dessous), pas par _domain (qui a besoin du détail case->lettre,
-        pas juste du compte)."""
-        cells = self.slots[i]
-        count = 0
-        for cell in cells:
-            known = cell in self.forced_letters
-            if not known:
-                for j, _ in self.cell_to_slots[cell]:
-                    if j != i and self.assignment[j] is not None:
-                        known = True
-                        break
-            if known:
-                count += 1
-        return count
 
     def _candidate_score(self, i, word):
         """Somme des carrés des scores statistiques (self.letter_scores,
@@ -1591,13 +2100,36 @@ class Filler:
         dernier reflète l'état *courant* de `self.assignment` (qui peut
         avoir entièrement reculé jusqu'à son état de départ une fois la
         recherche terminée), pas nécessairement celui du point le plus
-        avancé (`best_assignment`) que ce diagnostic examine."""
+        avancé (`best_assignment`) que ce diagnostic examine.
+
+        `_domain(i, ignore_forced=True)` — jamais la version par défaut, qui
+        laisserait une simple graine statistique (`forced_letters`, un
+        indice non vérifié, voir `sample_letter_biases`) compter comme une
+        contrainte dure. Bug réel constaté en direct : un emplacement pouvait
+        être déclaré « impossible » (surligné en rouge dans l'aperçu, exclu
+        du remplissage, ciblé par le nettoyage entre paliers) alors
+        qu'aucune de ses lettres n'était en réalité imposée par un mot
+        croisé confirmé — juste une supposition statistique jamais
+        confirmée ni infirmée, qui ne redevient plus jamais pertinente une
+        fois la recherche arrêtée sur cet état. Conséquence directe : le
+        nettoyage (`_clean_blocked_slots`) recalculait alors, lui, un vrai
+        candidat pour ce même emplacement (puisqu'il ne regarde jamais
+        `forced_letters`) et ne faisait donc littéralement rien — ni retrait
+        de mot, ni case noire via la règle des 1/10 — laissant l'emplacement
+        marqué « impossible » indéfiniment, cycle après cycle, sans qu'aucun
+        mécanisme de nettoyage ne puisse jamais agir dessus. Confirmé en
+        direct sur une grille réelle : 41 % des emplacements déclarés
+        impossibles avaient en fait, une fois les graines statistiques
+        ignorées, au moins un candidat réel — un désaccord aussi fréquent
+        entre ce diagnostic et le nettoyage qui doit s'en servir ne pouvait
+        pas être un simple cas limite rare."""
         saved = self.assignment
         self.assignment = self.best_assignment
         used_at_best = {w for w in self.best_assignment if w is not None}
         result = [
             i for i, word in enumerate(self.best_assignment)
-            if word is None and all(w in used_at_best for w in self._domain(i))
+            if word is None
+            and all(w in used_at_best for w in self._domain(i, ignore_forced=True))
         ]
         self.assignment = saved
         return result
@@ -1708,6 +2240,8 @@ class Filler:
         if assigned_count > self.best_assigned_count:
             self.best_assigned_count = assigned_count
             self.best_assignment = list(self.assignment)
+            if self.on_new_best is not None:
+                self.on_new_best(self.best_assignment)
         if not unassigned:
             return True
 
@@ -1754,21 +2288,17 @@ class Filler:
         #    départage, un tirage pondéré par la longueur en dernier
         #    recours) ont été remplacés par une règle unique, à la demande
         #    explicite de l'utilisateur : parmi les emplacements de la
-        #    catégorie tirée, on calcule pour chacun le score
-        #    int(100 * lettres_déjà_remplies / sqrt(longueur)) (une première
-        #    version, int(remplies / longueur²) sans le facteur 100, donnait
-        #    toujours 0 — remplies ne dépassant jamais longueur, le ratio
-        #    reste toujours ≤ 1/longueur < 1 — corrigée à la demande
-        #    explicite de l'utilisateur ; le dénominateur lui-même est passé
-        #    ensuite de longueur² à sqrt(longueur), toujours à la demande
-        #    explicite de l'utilisateur — un dénominateur qui croît beaucoup
-        #    plus lentement avec la longueur, ce qui favorise davantage les
-        #    emplacements longs déjà bien avancés face aux emplacements
-        #    courts, contrairement à longueur² qui pénalisait très fortement
-        #    tout emplacement long quel que soit son propre remplissage),
+        #    catégorie tirée, on calcule pour chacun le score **nombre de
+        #    possibilités de remplissage** (`len(domains[i])` — le domaine
+        #    déjà calculé juste au-dessus pour la détection d'impasse, donc
+        #    aucun second calcul de domaine n'est nécessaire ici — le
+        #    nombre de mots du dictionnaire encore compatibles avec les
+        #    lettres déjà connues de cet emplacement, sans encore exclure
+        #    les mots déjà utilisés ailleurs dans la grille, voir `_domain`),
         #    et on tire au hasard, uniformément, **parmi les emplacements
-        #    ayant obtenu le meilleur score, dans une fenêtre de
-        #    max(5, int(emplacements_libres_de_cette_catégorie / 10))**
+        #    ayant obtenu le plus petit score** — les plus contraints, donc
+        #    les plus urgents à résoudre — **dans une fenêtre de
+        #    max(5, int(emplacements_libres_de_cette_catégorie / 3))**
         #    emplacements — une fenêtre qui s'élargit quand il reste
         #    beaucoup d'emplacements encore à remplir dans la catégorie
         #    tirée, et se resserre (jusqu'à ce plancher de 5) une fois qu'il
@@ -1780,13 +2310,25 @@ class Filler:
         #    l'égalité stricte sans fenêtre, puis une fenêtre fixe de 10,
         #    puis une fenêtre en int(sqrt(largeur × hauteur)), puis cette
         #    fenêtre proportionnelle au nombre d'emplacements encore libres
-        #    actuelle. Les emplacements sont mélangés (avec le RNG seedé de
-        #    cette tentative, donc reproductible) avant d'être triés par
-        #    score décroissant : sans ce mélange préalable, l'ordre de tri
-        #    (`sorted` est stable) déciderait quels emplacements à égalité
-        #    passent la coupure de la fenêtre, réintroduisant le même biais
-        #    positionnel déjà rencontré ailleurs dans ce fichier (voir plus
-        #    haut, les bugs "colonne noire"/"triangle" du pré-remplissage).
+        #    (÷10, puis ÷2, puis ÷3), puis int(100 * remplies / sqrt(longueur)),
+        #    puis le simple compte brut de lettres déjà remplies (sans
+        #    normalisation par la longueur du tout), puis ce critère
+        #    inversé (le plus de cases *encore blanches*, plutôt que le
+        #    plus de lettres déjà remplies), et enfin, toujours à la
+        #    demande explicite de l'utilisateur, ce critère basé sur le
+        #    domaine lui-même (le nombre réel de mots candidats), trié
+        #    cette fois par ordre croissant (le plus petit score, donc
+        #    l'emplacement le plus contraint, en premier) — plutôt qu'un
+        #    proxy géométrique (longueur/cases connues) sans lien direct
+        #    avec la difficulté réelle de remplissage de l'emplacement. Les
+        #    emplacements sont
+        #    mélangés (avec le RNG seedé de cette tentative, donc
+        #    reproductible) avant d'être triés par score : sans ce mélange
+        #    préalable, l'ordre de tri (`sorted` est stable) déciderait
+        #    quels emplacements à égalité passent la coupure de la fenêtre,
+        #    réintroduisant le même biais positionnel déjà rencontré
+        #    ailleurs dans ce fichier (voir plus haut, les bugs "colonne
+        #    noire"/"triangle" du pré-remplissage).
         free_across = [i for i in unassigned if self.directions[i] == "across"]
         free_down = [i for i in unassigned if self.directions[i] == "down"]
         if free_across and free_down:
@@ -1797,14 +2339,11 @@ class Filler:
             )[0]
         else:
             direction_pool = free_across or free_down
-        scores = {
-            i: int(100 * self._placed_letter_count(i) / (len(self.slots[i]) ** 0.5))
-            for i in direction_pool
-        }
+        scores = {i: len(domains[i]) for i in direction_pool}
         shuffled_pool = list(direction_pool)
         self.rng.shuffle(shuffled_pool)
-        window_size = max(5, int(len(direction_pool) / 10))
-        window = sorted(shuffled_pool, key=lambda i: -scores[i])[:window_size]
+        window_size = max(5, int(len(direction_pool) / 3))
+        window = sorted(shuffled_pool, key=lambda i: scores[i])[:window_size]
         best_i = self.rng.choice(window)
 
         cands = [w for w in domains[best_i] if w not in self.used_words]
@@ -1832,16 +2371,13 @@ class Filler:
             cands.sort(key=lambda w: self._candidate_score(best_i, w), reverse=True)
             # Pas un ordre de test strictement décroissant pour autant, à la
             # demande explicite de l'utilisateur : à chaque tirage, on
-            # pioche au hasard parmi les `CANDIDATE_SCORE_WINDOW` (20)
-            # meilleurs mots *encore restants* du tri (pas les 20 premiers
-            # du tri d'origine, figés une fois pour toutes — la fenêtre
-            # glisse au fur et à mesure que des mots en sont retirés), un
-            # peu comme la fenêtre de 32 cases de _place_black_cells pour
-            # les cases noires : garde la priorité globale aux mots les
-            # mieux notés tout en évitant de tester très exactement dans
-            # l'ordre du tri, qui reviendrait à un choix entièrement
-            # déterministe (à seedage égal) plutôt qu'une vraie exploration.
-            window = 20
+            # pioche au hasard parmi les `CANDIDATE_SCORE_WINDOW` meilleurs
+            # mots *encore restants* du tri (pas les `CANDIDATE_SCORE_
+            # WINDOW` premiers du tri d'origine, figés une fois pour
+            # toutes — la fenêtre glisse au fur et à mesure que des mots en
+            # sont retirés) — voir la docstring de la constante elle-même
+            # pour le détail de ce qu'elle équilibre.
+            window = CANDIDATE_SCORE_WINDOW
             reordered = []
             remaining = cands
             while remaining:
@@ -1939,6 +2475,84 @@ def _force_single_candidate_slots(slots, index, known_letters, excluded_slots=No
     return known
 
 
+def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=None):
+    """Referme, en une dernière passe bon marché, les emplacements dont la
+    recherche a laissé toutes les lettres déjà déterminées par de vrais
+    mots croisants réellement assignés — mais que `_backtrack` lui-même
+    n'a jamais explicitement confirmés (il n'a simplement pas eu
+    l'occasion de le sélectionner avant que la tentative ne se termine,
+    quelle qu'en soit la raison : budget épuisé, abandon à 30 %,
+    interruption par un frère de palier, ou recherche réellement
+    épuisée). Un tel emplacement est visuellement "complet" (chaque case
+    porte déjà une vraie lettre) mais reste formellement `None` dans
+    `assignment` — donc ni compté comme réussi, ni jamais signalé
+    injouable (`Filler.impossible_zone_slots()` ne le flague pas : son
+    seul mot possible n'est pas encore utilisé ailleurs).
+
+    Corrige un vrai bug rapporté en direct, capture d'écran à l'appui :
+    "77% rempli" (= 100% des cases blanches déjà pourvues d'une lettre,
+    23% de cases noires) avec 0% d'injouable, et pourtant une génération
+    qui recommençait indéfiniment sans jamais aboutir — l'utilisateur l'a
+    posé explicitement comme principe : "tous les emplacements restants
+    doivent être testés avant de terminer un cycle... si tous les mots en
+    place sont valides, la grille est alors réputée réussie." Cette
+    fonction est exactement ce dernier test, appliqué une fois la
+    recherche terminée plutôt que de compter sur `_backtrack` pour
+    l'avoir fait de lui-même.
+
+    Contrairement à `_force_single_candidate_slots` (utilisée avant même
+    que la recherche ne démarre, sur les seules lettres déjà verrouillées
+    d'un palier précédent — jamais de mot déjà placé à exclure à ce
+    stade), celle-ci doit tenir compte de `used_words` : un mot déjà
+    utilisé ailleurs dans la grille ne peut pas être confirmé une seconde
+    fois, même s'il correspond exactement aux lettres déjà en place.
+
+    Répétée jusqu'à un point fixe (confirmer un emplacement peut, via une
+    case de croisement, en déterminer un autre à son tour) ; mute
+    `assignment`/`used_words` sur place, aucune valeur de retour.
+
+    Ne place jamais un mot deviné ou statistique, et ne fait jamais
+    progresser la recherche elle-même : si aucun emplacement encore
+    non-assigné (et non exclu) n'est déjà réduit à exactement un seul mot
+    réel et disponible, cette fonction ne change rien du tout — elle ne
+    fait que confirmer ce qui est déjà, implicitement, la seule
+    possibilité restante.
+
+    Le garde `len(candidates) - len(used_words) > 1` évite le coût d'un
+    filtrage `not in used_words` sur un emplacement encore largement
+    ouvert (des milliers de candidats bruts pour une longueur donnée,
+    contre quelques dizaines/centaines de mots déjà utilisés) : retirer
+    au plus `len(used_words)` mots ne peut jamais faire descendre un
+    ensemble plus grand que `len(used_words) + 1` jusqu'à exactement 1,
+    donc un tel emplacement ne peut de toute façon jamais se refermer ici
+    — inutile de payer le filtrage pour le vérifier."""
+    excluded = excluded_slots or set()
+    known = {}
+    for i, cells in enumerate(slots):
+        word = assignment[i]
+        if word is not None:
+            for pos, cell in enumerate(cells):
+                known[cell] = word[pos]
+    changed = True
+    while changed:
+        changed = False
+        for i, cells in enumerate(slots):
+            if i in excluded or assignment[i] is not None:
+                continue
+            candidates = _slot_candidates(index, len(cells), cells, known)
+            if len(candidates) - len(used_words) > 1:
+                continue
+            real_candidates = [w for w in candidates if w not in used_words]
+            if len(real_candidates) != 1:
+                continue
+            word = real_candidates[0]
+            assignment[i] = word
+            used_words.add(word)
+            for pos, cell in enumerate(cells):
+                known[cell] = word[pos]
+            changed = True
+
+
 def sample_letter_biases(grid, rows, cols, index, rng,
                           sample_size=LETTER_BIAS_SAMPLE_SIZE,
                           force_fraction=LETTER_BIAS_FORCE_FRACTION,
@@ -1954,8 +2568,11 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     qu'il reste
     assez de mots compatibles une fois cette lettre figée), puis pioche au
     hasard parmi ces cases éligibles jusqu'à couvrir `force_fraction` du
-    nombre total de cases blanches de la grille — au plus UNE case forcée
-    par emplacement (jamais deux cases forcées sur le même mot). Le tirage
+    nombre de cases blanches *encore sans lettre connue* de la grille — pas
+    du nombre total de cases blanches, à la demande explicite de
+    l'utilisateur (voir le calcul de `target` plus bas pour le
+    raisonnement complet) — au plus UNE case forcée par emplacement
+    (jamais deux cases forcées sur le même mot). Le tirage
     au hasard (plutôt que les cases au consensus le plus fort en premier,
     une version précédente de cette règle) est à la demande explicite de
     l'utilisateur, après un rapport : pour une longueur donnée, prendre
@@ -2085,8 +2702,26 @@ def sample_letter_biases(grid, rows, cols, index, rng,
                 eligible.append((count, cell, letter))
     rng.shuffle(eligible)
 
-    total_white = sum(row.count(WHITE) for row in grid)
-    target = round(total_white * force_fraction)
+    # À la demande explicite de l'utilisateur : le nombre de graines visé
+    # doit être calculé par rapport au nombre de cases blanches *encore
+    # sans lettre connue*, pas par rapport au nombre total de cases
+    # blanches de la grille — sans quoi, une fois qu'un palier de reprise
+    # "telle quelle" a déjà confirmé une bonne partie de la grille (voir
+    # `known_letters` ci-dessus), le compte de cases blanches au sens brut
+    # reste presque inchangé (seules de nouvelles cases noires le font
+    # baisser), donnant l'impression trompeuse d'un nombre de graines
+    # "constant" d'un cycle à l'autre alors que de moins en moins de cases
+    # ont réellement besoin d'un indice statistique. Une case déjà dans
+    # `known` n'est de toute façon jamais elle-même éligible à devenir une
+    # graine (voir plus haut) — l'exclure aussi de la base de calcul du
+    # nombre cible aligne les deux. Pour la toute première grille d'un
+    # palier (`known` vide), ce compte est rigoureusement identique au
+    # nombre total de cases blanches — comportement inchangé.
+    remaining_white = sum(
+        1 for r in range(rows) for c in range(cols)
+        if grid[r][c] == WHITE and (r, c) not in known
+    )
+    target = round(remaining_white * force_fraction)
     forced = {}
     used_slots = set()
     for count, cell, letter in eligible:
@@ -2105,7 +2740,7 @@ def sample_letter_biases(grid, rows, cols, index, rng,
 def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=None,
              forced_letters=None, letter_scores=None, preseed_assignment=None,
              excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
-             attempt_done_event=None):
+             attempt_done_event=None, locked_letters=None, best_state_queue=None):
     """`preseed_assignment`/`excluded_slots` (both `None` by default — every
     pre-existing caller is unaffected), à la demande explicite de
     l'utilisateur : mécanique de reprise « telle-quelle » d'un palier sur
@@ -2197,7 +2832,25 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     la grille déjà remplie) garde son propre budget, bien plus petit
     (`deadline_checks=6_000`), explicitement transmis à chacun de ses
     appels à `try_fill` — cette formule ne s'applique donc qu'à un appelant
-    qui n'a jamais fourni son propre budget, jamais à ce cas-là."""
+    qui n'a jamais fourni son propre budget, jamais à ce cas-là.
+
+    `best_state_queue` (`None` par défaut — aucun effet pour tout appelant
+    existant), à la demande explicite de l'utilisateur : quand fourni, un
+    callback est posé sur le `Filler` construit ici (`Filler.on_new_best`)
+    pour publier, en temps réel, chaque nouveau record de `best_assignment`
+    atteint pendant la recherche — pas seulement l'état final renvoyé par
+    cette fonction une fois `filler.solve()` revenu. Le callback reconstruit
+    l'aperçu complet (`example_grid`/`impossible_cells`/`forced_cells`/
+    `locked_cells`) exactement comme le fait ce même `try_fill` sur échec
+    plus bas, à partir de ce nouveau `best_assignment` — même fonctions,
+    même forme de résultat — puis le publie sur `best_state_queue` (voir
+    `_worker_best_state_queue`/`generate_grid` pour ce qu'il en fait
+    ensuite). Un `grid` défensivement copié (`[row[:] for row in grid]`)
+    accompagne chaque publication : `grid` lui-même ne change jamais après
+    `make_pattern` (voir son propre docstring), mais chaque publication
+    doit rester un instantané indépendant plutôt qu'une référence partagée,
+    pour rester cohérente une fois désérialisée côté parent, où elle vivra
+    plus longtemps que cet appel à `try_fill`."""
     if deadline_checks is None:
         deadline_checks = rows * cols * 2000
     slots = extract_slots(grid, rows, cols)
@@ -2222,20 +2875,91 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     # des lettres statistiques de `forced_cells` (sample_letter_biases) :
     # une case verrouillée porte une lettre réelle, confirmée par la
     # recherche d'un palier précédent, pas une simple supposition. Calculé
-    # une fois ici, avant que `solve()` ne s'exécute, puisque `preseed_
-    # assignment` ne change jamais au cours de cette recherche (un
-    # emplacement qui y est déjà assigné n'est jamais reconsidéré — voir
-    # `Filler._backtrack`, qui ne retient que les emplacements encore à
-    # `None`).
-    locked_cells = (
-        sorted({cell for i, word in enumerate(preseed_assignment) if word is not None
-                for cell in slots[i]})
-        if preseed_assignment is not None else []
-    )
+    # une fois ici, avant que `solve()` ne s'exécute, puisque ni `preseed_
+    # assignment` ni `locked_letters` ne changent au cours de cette
+    # recherche (un emplacement déjà assigné dans `preseed_assignment` n'est
+    # jamais reconsidéré — voir `Filler._backtrack`, qui ne retient que les
+    # emplacements encore à `None` —, et `locked_letters` lui-même n'est
+    # jamais modifié après ce point).
+    #
+    # Corrigé après un rapport direct de l'utilisateur, avec deux
+    # captures d'écran à l'appui : « il y a des cas où le processus de
+    # génération des mots ne préserve pas les cases verrouillées » —
+    # l'aperçu montré juste après la pose des cases noires (avant la
+    # recherche) affichait beaucoup de cases entourées comme
+    # verrouillées, mais l'aperçu montré après l'échec de la recherche
+    # n'en montrait plus qu'une poignée. La cause n'était pas une
+    # perte réelle de contrainte : `locked_letters` (une fois fusionné
+    # dans `forced_letters` par l'appelant — voir `_pattern_attempt`/
+    # `_pattern_continue`) reste bien appliqué comme contrainte dure
+    # par `Filler._domain` sur chaque emplacement touchant une de ses
+    # cases, dans les deux directions, donc la lettre elle-même n'a
+    # jamais changé. Le bug était uniquement dans ce diagnostic
+    # `locked_cells` : il ne listait, avant ce correctif, que les cases
+    # d'un emplacement *entièrement* couvert par `locked_letters` (donc
+    # déjà promu en un mot réel dans `preseed_assignment`) — une case
+    # verrouillée appartenant à un emplacement seulement *partiellement*
+    # couvert (le reste de ses lettres restant à découvrir par la
+    # recherche) n'apparaissait jamais dans `locked_cells`, alors
+    # qu'elle est tout aussi verrouillée et contrainte que les autres.
+    # `locked_letters`, quand fourni, est donc maintenant la source
+    # principale de ce diagnostic — la même liste complète de cases que
+    # celle déjà affichée par `_cycle_start_preview` avant la recherche
+    # (voir generate_grid) — plutôt que `preseed_assignment` seul, qui
+    # reste un simple repli pour un appelant qui ne fournirait que ce
+    # dernier (aucun cas réel aujourd'hui : `_pattern_attempt`/
+    # `_pattern_continue` fournissent toujours les deux ensemble).
+    all_slot_cells = {cell for s in slots for cell in s}
+    if locked_letters:
+        locked_cells = sorted(cell for cell in locked_letters if cell in all_slot_cells)
+    elif preseed_assignment is not None:
+        locked_cells = sorted({cell for i, word in enumerate(preseed_assignment) if word is not None
+                                for cell in slots[i]})
+    else:
+        locked_cells = []
     filler = Filler(slots, index, rng, forced_letters=forced_letters, letter_scores=letter_scores,
                      excluded_slots=excluded_slots, cancel_event=cancel_event,
                      batch_abandoned_event=batch_abandoned_event,
-                     attempt_done_event=attempt_done_event)
+                     attempt_done_event=attempt_done_event, locked_letters=locked_letters)
+    if best_state_queue is not None:
+        # Assigné après construction, pas passé à Filler(...) directement
+        # ci-dessus : la fermeture ci-dessous a besoin de `filler` lui-même
+        # (pour lire filler.impossible_zone_cells(), qui dépend de l'état
+        # complet du Filler, pas seulement du best_assignment reçu en
+        # argument) — `filler` n'existe pas encore au moment où l'appel à
+        # Filler(...) est construit, mais existe déjà par le temps que ce
+        # callback sera réellement invoqué (depuis _backtrack, bien après).
+        def _publish_new_best(best_assignment):
+            example_grid, forced_cells, _ = build_partial_letters_grid(
+                grid, slots, best_assignment, forced_letters
+            )
+            # `impossible_slots` (pas seulement `impossible_cells`) est
+            # indispensable ici : côté parent, un état publié par cette file
+            # peut se retrouver sélectionné comme `failed_pairs[0]`/parmi les
+            # `FAILED_ATTEMPT_EXAMPLES` candidats du nettoyage
+            # (`_build_retry_seed`/`_clean_all_candidates`), qui lisent tous
+            # deux `cand_diag["impossible_slots"]` directement — l'omettre
+            # ferait planter ce chemin dès qu'un état publié ici gagne la
+            # sélection. `checks`/`reason` sont inclus par simple cohérence
+            # de forme avec le diagnostic final produit plus bas (utile pour
+            # backend.log si cet état gagne `last_diag`) mais ne sont lus
+            # nulle part côté parent pour cet état intermédiaire — `reason`
+            # porte une valeur dédiée (`"best_state_snapshot"`), distincte de
+            # toutes celles produites en fin de recherche, pour qu'on
+            # reconnaisse sans ambiguïté, dans les logs, un état publié en
+            # cours de route plutôt qu'un résultat final de tentative.
+            best_state_queue.put({
+                "grid": [row[:] for row in grid],
+                "assignment": list(best_assignment),
+                "example_grid": example_grid,
+                "impossible_cells": filler.impossible_zone_cells(),
+                "impossible_slots": filler.impossible_zone_slots(),
+                "forced_cells": forced_cells,
+                "locked_cells": locked_cells,
+                "checks": filler.checks,
+                "reason": "best_state_snapshot",
+            })
+        filler.on_new_best = _publish_new_best
     if preseed_assignment is not None:
         filler.assignment = list(preseed_assignment)
         filler.used_words = {w for w in preseed_assignment if w is not None}
@@ -2243,6 +2967,25 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
         filler.best_assigned_count = sum(1 for w in preseed_assignment if w is not None)
     filler.exclude_immediately_impossible_slots()
     solved_internally = filler.solve(deadline_checks)
+    # Referme les emplacements déjà entièrement déterminés par de vrais
+    # mots croisants mais jamais explicitement confirmés par `_backtrack`
+    # lui-même — voir `_close_implied_slots`'s propre docstring pour le
+    # bug réel que ceci corrige. Opère sur `filler.best_assignment` (le
+    # plus haut niveau de progrès jamais atteint, pas l'état courant de
+    # `filler.assignment`, potentiellement déjà partiellement "dépilé" par
+    # le retour en arrière si la recherche s'est terminée en échec) —
+    # c'est aussi cet état, jamais `filler.assignment` directement, que
+    # tout le reste de ce fichier (diagnostics, `_build_retry_seed`,
+    # l'aperçu affiché) lit déjà plus bas.
+    _close_implied_slots(slots, index, filler.best_assignment, filler.used_words, filler.excluded_slots)
+    # `filler.assignment` resynchronisé depuis `best_assignment` une fois
+    # cette fermeture appliquée : sur un succès natif (`solved_internally`
+    # sans emplacement exclu), les deux coïncidaient déjà, donc cette
+    # ligne ne change rien ; sur tout autre issue, c'est `best_assignment`
+    # — jamais réduit par un retour en arrière, seulement augmenté ici —
+    # qui reflète l'état réel à prendre en compte pour décider si cette
+    # tentative est réellement complète.
+    filler.assignment = list(filler.best_assignment)
     # Voir la docstring ci-dessus : avec `excluded_slots` non vide, `solved_
     # internally` (le sens interne de _backtrack — plus aucun emplacement
     # *non exclu* à traiter) ne suffit pas à garantir une grille complète.
@@ -2438,8 +3181,257 @@ def build_partial_letters_grid(grid, slots, assignment, forced_letters=None):
     return letters, (sorted(forced_letters) if forced_letters else []), len(covered)
 
 
+def _low_candidate_slot_cells(grid, rows, cols, index, locked_letters):
+    """Toutes les cases d'un emplacement *partiellement* verrouillé (au
+    moins une case verrouillée, mais pas toutes — voir `_slot_with_
+    insufficient_candidates` pour pourquoi un emplacement *entièrement*
+    verrouillé n'est jamais concerné : il est déjà un mot réel et
+    confirmé, pas un emplacement encore fragile) dont l'intersection avec
+    les lettres déjà verrouillées laisse strictement moins de
+    `PREFILL_LOCKED_MIN_WORD_COUNT` (3) candidats réels dans le
+    dictionnaire (`_slot_candidate_count`, la même intersection par
+    position que `Filler._domain`).
+
+    Purement diagnostique, pour l'aperçu web — à la demande explicite de
+    l'utilisateur, sur la grille "Génération du motif de cases noires"
+    (l'événement `pattern`, l'état de départ d'un cycle) : "afficher en
+    fond orange les cases en dessous du seuil des possibilités de
+    remplissage (< 3 possibilités)", pour rendre visible, avant même que
+    le pré-remplissage/nettoyage curatif n'agisse dessus, quels
+    emplacements sont déjà fragiles. Contrairement à `_slot_with_
+    insufficient_candidates` (utilisée par le pré-remplissage lui-même
+    pour *décider* d'une action, et qui s'arrête au tout premier
+    emplacement problématique trouvé, avec `skip`/longueur-seule en
+    plus), cette fonction-ci renvoie l'ensemble complet des cases
+    concernées, sur tous les emplacements à la fois — rien n'a besoin
+    d'être ciblé un par un pour un simple affichage.
+
+    Renvoie une liste triée de cases `(r, c)`, vide si `locked_letters`
+    est vide/`None` (rien à signaler) ou si aucun emplacement ne passe
+    sous le seuil."""
+    if not locked_letters:
+        return []
+    cells = set()
+    for slot in extract_slots(grid, rows, cols):
+        length = len(slot)
+        locked_count = sum(1 for cell in slot if cell in locked_letters)
+        if 0 < locked_count < length:
+            if _slot_candidate_count(index, length, slot, locked_letters) < PREFILL_LOCKED_MIN_WORD_COUNT:
+                cells.update(slot)
+    return sorted(cells)
+
+
+def _cycle_start_preview(rows, cols, seed_grid, locked_letters, preseed_assignment):
+    """Builds the single-grid preview shown right at the *start* of a
+    palier (generate_grid's own `progress("pattern", ...)` call), at the
+    user's explicit request: "Ajouter à l'historique (donc stacké) l'état
+    initial d'un cycle." Until this, examples_history (backend/app.py)
+    only ever stacked a palier's own *end* state (a failed attempt, or the
+    winning grid at "minimizing"/"clues") — the state a palier actually
+    *starts from* (whatever `_build_retry_seed`/`_clean_blocked_slots`
+    carried forward from the previous one, or a blank grid for the very
+    first palier) had no entry of its own in that history at all.
+
+    Returns `(example_grid, locked_cells)` — the same two fields every
+    other preview entry already carries (`impossible_cells`/`forced_cells`
+    are always empty for this one: nothing has been searched yet at this
+    point, so nothing is "impossible" yet, and no statistical hint has
+    been sampled yet either — that only happens once this palier's own
+    `_pattern_attempt`/`_pattern_continue` workers actually run). Wired
+    into `progress("pattern", ...)` below, so a fresh grid is stacked into
+    `examples_history` right alongside the "Tentative X/Y..." status
+    already carried by that same event's own kwargs — the two arrive
+    together in one call, so the web UI's history navigation
+    (frontend/static/script.js's previewHistory, see CLAUDE.md) always
+    shows a cycle's real starting point paired with its own cycle count,
+    not just its outcome.
+
+    `locked_cells` mirrors the meaning it already has everywhere else in
+    this file (see `build_partial_letters_grid`'s own docstring, `try_
+    fill`'s diagnostics): a cell whose shown letter is a real, previously-
+    confirmed one carried over from the *previous* palier, not a guess —
+    rendered with the same distinct `.locked` highlight already used
+    elsewhere in the web UI. Handles both of `generate_grid`'s mutually
+    exclusive resume shapes: `preseed_assignment` (the "reprise
+    telle-quelle" case, a real word per already-assigned slot) and
+    `locked_letters` (the "nettoyage" case, a plain `{cell: letter}` map).
+    `seed_grid` being `None` (the very first palier of a call) means a
+    blank grid with nothing locked at all, regardless of the other two."""
+    if seed_grid is None:
+        return [[WHITE] * cols for _ in range(rows)], []
+    grid = [row[:] for row in seed_grid]
+    # `if grid[r][c] == BLACK: continue` below (both branches) guards
+    # against a case found and confirmed live: `generate_grid`'s "20%
+    # reset" mechanism (FULL_RESET_ATTEMPT_FRACTION) starts a fraction of
+    # a palier's own `_pattern_attempt` workers from a totally blank,
+    # *independent* grid rather than building on top of `carry_seed_grid`
+    # — this function is reused (see progress("pattern_generated", ...)
+    # in generate_grid) to preview *each* of a palier's own outcomes, one
+    # of which can genuinely be such a reset worker's own unrelated
+    # pattern, passed here as `seed_grid`. Without this guard, a locked
+    # cell (from `carry_locked_letters`/`carry_preseed_assignment`, both
+    # computed against the *previous* palier's own pattern) could
+    # coincide with a black cell this specific reset worker's own
+    # `make_pattern` call happened to place there, and unconditionally
+    # writing a letter over it would silently erase that black cell from
+    # the shown preview — reproduced live: a real generate_grid() run's
+    # `pattern_generated` event showed *fewer* black cells than the same
+    # palier's own "pattern" (cycle-start) event, an impossible outcome
+    # without this bug, since `make_pattern` can only ever add black
+    # cells on top of a real `carry_seed_grid`, never remove any — this
+    # guard is what actually prevents that from ever showing here again.
+    # For the ordinary case (this palier's own real carried-forward
+    # pattern, or "reprise telle-quelle"'s byte-identical one), a locked
+    # cell is already guaranteed to stay white by construction elsewhere
+    # in this file, so this guard is a pure no-op there — it only ever
+    # changes anything for a reset worker's own independent pattern.
+    if preseed_assignment is not None:
+        slots = extract_slots(seed_grid, rows, cols)
+        locked_cells = []
+        for cells, word in zip(slots, preseed_assignment):
+            if word is None:
+                continue
+            for (r, c), ch in zip(cells, word):
+                if grid[r][c] == BLACK:
+                    continue
+                grid[r][c] = ch
+                locked_cells.append((r, c))
+        return grid, sorted(locked_cells)
+    if locked_letters:
+        locked_cells = []
+        for (r, c), ch in locked_letters.items():
+            if grid[r][c] == BLACK:
+                continue
+            grid[r][c] = ch
+            locked_cells.append((r, c))
+        return grid, sorted(locked_cells)
+    return grid, []
+
+
+def _playable_score(diag):
+    """Mesure la quantité de contenu réellement posé et confirmé dans
+    `diag["assignment"]` — racine carrée de la somme des carrés des
+    longueurs de chaque mot déjà assigné (`None` ignoré) — à la demande
+    explicite de l'utilisateur : "Au lieu d'un score sur les injouables,
+    mesurer les jouables (racine carré des sommes des carrés des longueurs
+    jouables)." Utilisé par `generate_grid` pour trier `failed_unique` en
+    sélectionnant la "meilleure" tentative échouée d'un palier — voir son
+    propre commentaire pour le biais que ce critère corrige (un ancien tri
+    par "le moins de cases injouables" favorisait à tort un état publié
+    tôt dans une recherche encore peu avancée, où peu de mots posés
+    signifie mécaniquement peu de cases pouvant déjà être jugées
+    injouables).
+
+    Même principe que le score déjà utilisé par `generate_grid` pour
+    départager plusieurs tentatives *réussies* du même palier — favoriser
+    quelques mots longs plutôt que beaucoup de mots courts pour le même
+    total de lettres — avec en plus la racine carrée pour ramener ce score
+    à une échelle comparable à une simple longueur plutôt qu'à une somme de
+    carrés. La longueur d'un mot assigné est prise directement via
+    `len(word)` (jamais recalculée depuis le motif) : un mot ne peut être
+    assigné qu'à un emplacement de sa propre longueur, donc les deux
+    valeurs sont toujours rigoureusement égales."""
+    return sum(len(w) ** 2 for w in diag["assignment"] if w is not None) ** 0.5
+
+
+def _cleaned_playable_score(grid, diag, rows, cols, index, rng):
+    """Comme `_playable_score`, mais sur l'état APRÈS nettoyage — le
+    contenu qui survivrait réellement une fois retiré, un par un, ce qui
+    est nécessaire pour lever chaque situation impossible de `diag[
+    "impossible_slots"]` (`_clean_blocked_slots`, voir sa propre docstring
+    pour l'algorithme "un mot à la fois" désormais utilisé) — plutôt que
+    sur `diag["assignment"]` brut, à la demande explicite de
+    l'utilisateur : "Il faut montrer les emplacements avant nettoyage,
+    évaluer la grille après nettoyage (qui sera transmise au cycle
+    suivant si sélectionnée)." `index`/`rng` transmis tels quels à
+    `_clean_blocked_slots` — le même générateur aléatoire déjà partagé
+    par tout `generate_grid()`, pour que ce score reste reproductible
+    depuis la même graine plutôt que d'introduire une seconde source
+    d'aléatoire indépendante.
+
+    Utilisé pour trier `failed_unique`/choisir `failed_pairs[0]` — la
+    tentative qui l'emporte est donc désormais celle qui garde le plus de
+    contenu réellement posé une fois nettoyée, pas celle qui, avant tout
+    nettoyage, a le moins de cases injouables ou le plus de contenu brut :
+    deux tentatives avec le même nombre de cases injouables brutes peuvent
+    perdre des quantités de contenu très différentes une fois nettoyées
+    (une tentative dont le mot croisant l'emplacement impossible est
+    court perd moins qu'une tentative dont il est long), et c'est bien
+    cette quantité *après* nettoyage qui détermine ce qui sera réellement
+    transmis au palier suivant si cette tentative est retenue — c'est
+    donc elle qu'il faut évaluer, pas l'état brut.
+
+    Recalcule `slots` directement depuis le vrai motif noir/blanc `grid`
+    (jamais depuis un `example_grid` aux lettres superposées, qui
+    fausserait `extract_slots`) — chaque tentative a son propre motif et
+    sa propre affectation, rien à partager entre elles. Repli sur
+    `_playable_score(diag)` (l'état brut) si `slots` ne correspond pas en
+    longueur à `diag["assignment"]` — ne devrait jamais arriver en usage
+    réel, un filet de sécurité plutôt qu'un cas attendu."""
+    slots = extract_slots(grid, rows, cols)
+    if len(slots) != len(diag["assignment"]):
+        return _playable_score(diag)
+    cleaned_assignment, _, _ = _clean_blocked_slots(
+        slots, diag["assignment"], diag["impossible_slots"], index=index, rng=rng,
+    )
+    return sum(len(w) ** 2 for w in cleaned_assignment if w is not None) ** 0.5
+
+
+def _public_diag(diag):
+    """Copie de `diag` sûre à étaler dans un événement `progress(...)` —
+    filet de sécurité générique contre un futur champ de diagnostic qui
+    ne serait pas JSON-safe tel quel (par exemple un dict indexé par
+    cellule `(row, col)`, un tuple comme *clé* de dict), plutôt qu'un
+    filtre pour un champ précis aujourd'hui.
+
+    Root-causé en direct, la première (et jusqu'ici seule) fois que ce
+    problème s'est posé : un vrai `GET /api/generate/status/{job_id}`
+    tombé en 500 (l'interface web affichait alors une erreur
+    "JSON.parse: unexpected character..." puisque le corps de réponse
+    n'était plus du JSON valide) — `backend.log` montrait
+    `TypeError: cannot use 'list' as a dict key` au beau milieu de
+    `fastapi.encoders.jsonable_encoder`. Le champ fautif à l'époque,
+    `own_locked_letters` (voir `_pattern_attempt` dans son historique),
+    encodait chaque case comme clé de dict — `jsonable_encoder` encode
+    récursivement chaque clé pour la rendre JSON-safe, ce qui transforme
+    un tuple en liste, puis tente de s'en servir comme clé d'un dict
+    Python tout court pour construire le résultat encodé — une liste
+    n'étant pas hashable, ça lève cette même `TypeError`. Chaque autre
+    champ de `diag` contenant des cellules (`locked_cells`,
+    `impossible_cells`, `forced_cells`...) les porte en tant qu'éléments
+    d'une simple liste, jamais en tant que clés de dict — aucun d'eux ne
+    pose ce problème. `own_locked_letters` lui-même a depuis été retiré
+    entièrement (son seul lecteur, `_preview_locked_source`, a disparu en
+    même temps que l'aperçu tardif qu'il alimentait) — cette fonction
+    reste néanmoins en place, volontairement, comme garde-fou pour la
+    même classe de bug si un futur champ de diagnostic prenait une forme
+    similaire."""
+    return {k: v for k, v in diag.items() if k != "own_locked_letters"}
+
+
+# Probabilité de tenter une case noire plutôt que de retirer un mot
+# croisant, dans la boucle "un par un" de `_clean_blocked_slots` ci-dessous
+# — à la demande explicite de l'utilisateur, restreinte à la reprise
+# "telle quelle" uniquement (voir `generate_grid`, branche `if
+# still_has_hope:`), jamais au nettoyage complet (`_build_retry_seed`, qui
+# régénère déjà un motif neuf via `make_pattern` et peut donc déjà ajouter
+# des cases noires par ce biais) : "En l'état, nettoyer les zones
+# impossibles et les connectés, supprime beaucoup de mots, ce qui oblige
+# plus tard à rajouter des cases noires par d'autres mécanismes. Autant
+# tenter la case noire tout de suite, et supprimer moins de mots. Par
+# ailleurs, sur des toutes petites zones, la suppression de mots ne
+# supprime pas grand chose, et la recherche tourne en rond sur très peu de
+# lettres modifiables. Ajouter des noires peut permettre de réellement
+# finir ces petites zones où la vraie solution n'existe peut-être pas."
+# Abaissée de 1/3 à 1/10 juste après, à la demande explicite de
+# l'utilisateur ("trop de cases noires à 1/3") — même mécanisme, valeur
+# revue à la baisse suite à un premier usage réel jugé trop agressif.
+BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY = 1 / 10
+
+
 def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=None,
-                          exclude_impossible_locked=False):
+                          exclude_impossible_locked=False, index=None, rng=None,
+                          min_candidates=1, grid=None, rows=None, cols=None):
     """Étapes 1 et 2 de `_build_retry_seed` (voir sa propre docstring pour
     l'historique complet), extraites dans leur propre fonction à la demande
     explicite de l'utilisateur : "à la fin d'un tour, nettoyer
@@ -2458,15 +3450,92 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     docstring pour le bug que ce préremplissage corrige) — un no-op sans
     `locked_letters` (le cas du nettoyage "telle quelle" en fin de palier,
     qui a déjà un `assignment` complet, mot par mot, sans rien à
-    recomposer). Retire ensuite tout emplacement *assigné* qui partage une
-    case avec un emplacement de `impossible_slots` (un niveau seulement,
-    pas de propagation en cascade), et construit `confirmed`
-    ({case: lettre}) à partir de ce qui reste.
+    recomposer).
 
-    Retourne `(cleaned_assignment, confirmed)` — `cleaned_assignment` est
-    une nouvelle liste (jamais une mutation de `assignment` reçu), avec un
-    `None` explicite pour chaque emplacement retiré, prête à servir
-    directement de `preseed_assignment` au palier suivant."""
+    Retire ensuite les mots croisant chaque emplacement de
+    `impossible_slots` — mais plus tous d'un coup, à la demande explicite
+    de l'utilisateur : "Le fait d'enlever tous les mots qui croisent un
+    emplacement impossible... enlève trop de mots à chaque fois. Nouvelle
+    algo : enlever les mots qui croisent un emplacement impossible un par
+    un, et s'arrêter quand la contrainte d'impossibilité... cesse. Dans
+    une première évolution, tirer le mot à retirer au hasard dans la liste
+    des mots possibles à retirer." Pour chaque emplacement impossible,
+    tant qu'il lui reste des mots croisant assignés ET que son nombre réel
+    de candidats (`_slot_candidate_count`, les lettres encore imposées par
+    les mots croisants qui n'ont pas encore été retirés) reste sous
+    `min_candidates` (1 par défaut — "la contrainte d'impossibilité
+    cesse" dès qu'au moins un vrai mot redevient possible ; un seuil plus
+    élevé, pour "trop peu de possibilités" plutôt que la stricte
+    impossibilité, est un développement futur, pas encore branché ici),
+    un des mots croisants encore assignés est tiré au hasard (`rng.choice`)
+    et retiré — jamais tous en une seule fois, jamais dans un ordre fixe
+    qui favoriserait toujours le même. Ancien comportement (tout retirer
+    d'un coup) conservé comme repli si `index`/`rng` ne sont pas fournis
+    (aucun appelant réel aujourd'hui n'omet les deux, mais un filet de
+    sécurité reste préférable à un plantage).
+
+    Avant de retirer un mot croisant, tente — avec une probabilité
+    `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY` (1/10, abaissée de 1/3
+    initial — voir le commentaire de cette constante) — une alternative,
+    à la demande explicite de l'utilisateur (voir le commentaire de cette
+    constante pour son raisonnement complet) : noircir une case de
+    l'emplacement impossible lui-même plutôt que de retirer le mot qui le
+    croise. Seulement disponible quand `grid`/`rows`/`cols` sont fournis
+    (`None` par défaut — no-op pour tout appelant qui ne les fournit pas,
+    en particulier `_build_retry_seed`/`_cleaned_playable_score`, qui
+    restent volontairement retrait-de-mot uniquement). Parmi les cases de
+    l'emplacement, celles *pas déjà* déterminées par un mot croisant
+    encore assigné (`known`) sont essayées en priorité — noircir une case
+    déjà couverte par un mot confirmé détruirait ce mot-là aussi, un
+    résultat plus destructeur qu'une case encore libre — mais, à la
+    demande explicite de l'utilisateur, une case déjà connue est tentée en
+    second recours plutôt que de renoncer entièrement à cette alternative
+    quand l'emplacement est déjà entièrement croisé (le cas le plus
+    fréquent en fin de partie, quand peu de cases restent réellement
+    libres) : dans ce cas, cette case noire retire alors, comme effet de
+    bord, le mot croisant qui l'occupait — exactement comme le ferait un
+    retrait de mot classique, mais en éliminant en plus, définitivement,
+    cette case de l'emplacement impossible plutôt que de simplement
+    libérer sa contrainte. Ce n'est que si aucune case de l'emplacement
+    (libre ou déjà connue) ne reste structurellement valide une fois
+    noircie que l'on retombe sur le retrait de mot habituel. Parmi
+    chacun des deux groupes de cases, tirage sans biais positionnel
+    (mélange avant essai, comme partout ailleurs dans ce fichier) puis
+    premier candidat qui reste structurellement valide
+    (`is_structurally_valid(..., min_interior_free=1)`) une fois noirci ;
+    tout mot *autre* que celui de l'emplacement impossible lui-même mais
+    passant par cette case précise est désassigné (il ne peut plus exister
+    une fois la case noire). Contrairement au retrait de mot (qui ne fait
+    que libérer une contrainte sur le MÊME emplacement i, qui continue
+    d'exister sous sa forme actuelle ce palier-ci), poser une case noire
+    *élimine* l'emplacement i sous sa forme actuelle — la boucle s'arrête
+    donc immédiatement pour i dès qu'une case a été noircie avec succès,
+    sans revérifier son nombre de candidats : ses fragments réels ne
+    seront redécouverts qu'au prochain `extract_slots` sur la grille mise
+    à jour, exactement comme pour toute autre case noire ajoutée ailleurs
+    dans ce fichier.
+
+    Zone strictement sans issue, à la demande explicite de l'utilisateur :
+    si la boucle ci-dessus finit par retirer tous les mots croisants
+    possibles (`crossing` devient vide) et que l'emplacement n'a
+    *toujours* strictement aucun candidat réel une fois toute contrainte de
+    croisement ainsi levée (`count == 0`, pas seulement sous
+    `min_candidates` — typiquement une longueur que le dictionnaire ne
+    couvre pas du tout), plus aucun retrait de mot ne pourra jamais
+    débloquer cette zone : toutes ses cases restantes sont alors noircies
+    directement (même garde-fou `is_structurally_valid(min_interior_free=
+    1)` par case, jamais un passe-droit), plutôt que de la laisser
+    resurgir identique à chaque nettoyage futur.
+
+    Retourne `(cleaned_assignment, confirmed, new_black_cells)` —
+    `cleaned_assignment` est une nouvelle liste (jamais une mutation de
+    `assignment` reçu), avec un `None` explicite pour chaque emplacement
+    retiré, prête à servir directement de `preseed_assignment` au palier
+    suivant ; `new_black_cells` est l'ensemble (potentiellement vide) des
+    cases nouvellement noircies par cette alternative — à fondre dans le
+    motif transmis au palier suivant par l'appelant, `_clean_blocked_
+    slots` elle-même ne mutant jamais `grid` en place (une copie de
+    travail interne, jetée après l'appel)."""
     if locked_letters:
         assignment = list(assignment)
         impossible_set = set(impossible_slots) if exclude_impossible_locked else set()
@@ -2477,90 +3546,122 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                 and all(cell in locked_letters for cell in cells)
             ):
                 assignment[i] = "".join(locked_letters[cell] for cell in cells)
+    else:
+        assignment = list(assignment)
 
     cell_to_slots = defaultdict(list)
     for i, cells in enumerate(slots):
         for cell in cells:
             cell_to_slots[cell].append(i)
 
-    to_remove = set()
-    for i in impossible_slots:
-        for cell in slots[i]:
-            for j in cell_to_slots[cell]:
-                if j != i and assignment[j] is not None:
-                    to_remove.add(j)
+    new_black_cells = set()
+    black_cell_capable = (
+        grid is not None and rows is not None and cols is not None
+    )
+    working_grid = [row[:] for row in grid] if black_cell_capable else None
 
-    cleaned_assignment = [
-        None if i in to_remove else word for i, word in enumerate(assignment)
-    ]
+    if index is not None and rng is not None:
+        for i in impossible_slots:
+            exhausted = False
+            while True:
+                crossing = sorted({
+                    j for cell in slots[i] for j in cell_to_slots[cell]
+                    if j != i and assignment[j] is not None
+                })
+                if not crossing:
+                    exhausted = True
+                    break
+                known = {}
+                for cell in slots[i]:
+                    for j in cell_to_slots[cell]:
+                        if j != i and assignment[j] is not None:
+                            known[cell] = assignment[j][slots[j].index(cell)]
+                            break
+                count = _slot_candidate_count(index, len(slots[i]), slots[i], known)
+                if count >= min_candidates:
+                    break
+
+                placed_black = False
+                if black_cell_capable and rng.random() < BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY:
+                    blank_candidates = [cell for cell in slots[i] if cell not in known]
+                    known_candidates = [cell for cell in slots[i] if cell in known]
+                    rng.shuffle(blank_candidates)
+                    rng.shuffle(known_candidates)
+                    for (br, bc) in blank_candidates + known_candidates:
+                        working_grid[br][bc] = BLACK
+                        if is_structurally_valid(working_grid, rows, cols, min_interior_free=1):
+                            new_black_cells.add((br, bc))
+                            for j in cell_to_slots[(br, bc)]:
+                                if j != i and assignment[j] is not None:
+                                    assignment[j] = None
+                            placed_black = True
+                            break
+                        working_grid[br][bc] = WHITE
+                if placed_black:
+                    break
+                assignment[rng.choice(crossing)] = None
+
+            # Zone strictement sans issue, à la demande explicite de
+            # l'utilisateur : le nettoyage ci-dessus n'a plus aucun mot
+            # croisant à retirer (`exhausted`) et, une fois toute contrainte
+            # de croisement ainsi levée, l'emplacement n'a toujours
+            # strictement aucun candidat réel (`count == 0`, pas seulement
+            # "trop peu" — typiquement une longueur que le dictionnaire ne
+            # couvre pas du tout) : plus aucun retrait de mot ne pourra
+            # jamais débloquer cette zone, donc on noircit directement
+            # toutes ses cases restantes plutôt que de la laisser resurgir
+            # identique à chaque nettoyage futur (voir CLAUDE.md pour le
+            # point fixe réel que cette situation a fini par causer sur une
+            # grande grille). Comme pour l'alternative 1/10 ci-dessus, chaque
+            # case est essayée avec `is_structurally_valid(min_interior_free
+            # =1)` avant d'être noircie — jamais un passe-droit sur cet
+            # invariant absolu, même ici. `crossing` étant vide à ce point,
+            # aucun autre mot ne traverse plus ces cases : la boucle
+            # défensive sur `cell_to_slots` ne fait donc rien en pratique,
+            # gardée uniquement par cohérence avec l'alternative ci-dessus.
+            if exhausted and black_cell_capable:
+                count = _slot_candidate_count(index, len(slots[i]), slots[i], {})
+                if count == 0:
+                    for (br, bc) in slots[i]:
+                        if working_grid[br][bc] == BLACK:
+                            continue
+                        working_grid[br][bc] = BLACK
+                        if is_structurally_valid(working_grid, rows, cols, min_interior_free=1):
+                            new_black_cells.add((br, bc))
+                            for j in cell_to_slots[(br, bc)]:
+                                if j != i and assignment[j] is not None:
+                                    assignment[j] = None
+                        else:
+                            working_grid[br][bc] = WHITE
+    else:
+        for i in impossible_slots:
+            for cell in slots[i]:
+                for j in cell_to_slots[cell]:
+                    if j != i and assignment[j] is not None:
+                        assignment[j] = None
 
     confirmed = {}
-    for i, word in enumerate(cleaned_assignment):
+    for i, word in enumerate(assignment):
         if word is None:
             continue
         for cell, ch in zip(slots[i], word):
             confirmed[cell] = ch
 
-    return cleaned_assignment, confirmed
+    return assignment, confirmed, new_black_cells
 
 
-def _impossible_cell_groups(slots, assignment, impossible_slots):
-    """Cases des emplacements de `impossible_slots`, réparties entre celles
-    qui portent déjà une lettre (un mot croisé assigné passe par cette
-    case) et celles qui sont encore blanches — à la demande explicite de
-    l'utilisateur, pour `_lock_one_impossible_cell` ci-dessous
-    ("privilégier de noircir une case blanche, sinon une case avec une
-    lettre"). `assignment` doit être l'affectation **brute**, avant tout
-    nettoyage (`_clean_blocked_slots` retire ensuite tout mot croisant un
-    emplacement impossible — une fois ça fait, ces cases sont *toutes*
-    redevenues blanches sans exception, ce qui rendrait cette distinction
-    impossible à observer si elle était calculée après coup plutôt
-    qu'avant). Retourne `(blank_cells, lettered_cells)`, deux ensembles
-    disjoints dont l'union est l'ensemble des cases de tous les
-    `impossible_slots` donnés."""
-    raw_letters = {}
-    for i, word in enumerate(assignment):
-        if word is None:
-            continue
-        for cell, ch in zip(slots[i], word):
-            raw_letters[cell] = ch
-    impossible_cells = {cell for i in impossible_slots for cell in slots[i]}
-    blank_cells = {cell for cell in impossible_cells if cell not in raw_letters}
-    lettered_cells = impossible_cells - blank_cells
-    return blank_cells, lettered_cells
-
-
-def _lock_one_impossible_cell(grid, rows, cols, blank_cells, lettered_cells, rng):
-    """Verrouille UNE case noire (une seule) au hasard parmi les cases
-    d'emplacements injouables données, à la demande explicite de
-    l'utilisateur : "ajouter une case noire (une seule en tout) au hasard
-    sur les cases qui étaient dans les emplacements injouables (tentative
-    de ne pas reproduire les mêmes erreurs en verrouillant progressivement
-    les configurations problématiques)." Privilégie `blank_cells` (voir
-    `_impossible_cell_groups`) si ce groupe n'est pas vide ; ne se rabat
-    sur `lettered_cells` que s'il l'est — à la demande explicite de
-    l'utilisateur, une précision apportée après coup ("s'il existe des
-    cases encore blanches ... privilégier de noircir une case blanche.
-    Sinon, noircir une case avec une lettre"). Mute `grid` en place ; ne
-    retourne rien. Les candidates du groupe retenu sont essayées dans un
-    ordre mélangé (le `rng` fourni, reproductible) jusqu'à en trouver une
-    qui préserve `is_structurally_valid(min_interior_free=1)` (l'invariant
-    absolu de ce fichier — connexité, aucune case blanche isolée) ; si
-    aucune ne convient, `grid` n'est pas modifiée du tout (cas limite
-    accepté, pas d'essai de repli sur l'autre groupe)."""
-    candidates = list(blank_cells) or list(lettered_cells)
-    rng.shuffle(candidates)
-    for (r, c) in candidates:
-        if grid[r][c] != WHITE:
-            continue
-        grid[r][c] = BLACK
-        if is_structurally_valid(grid, rows, cols, min_interior_free=1):
-            return
-        grid[r][c] = WHITE
+# `_impossible_cell_groups`/`_lock_one_impossible_cell` — the single-cell
+# lock this project's history called "the mechanism tied to cleanup" — were
+# removed entirely, at the user's explicit request, right after quoting
+# their own prior description of the mechanism back and saying to delete
+# it: no black cell is added anywhere by the cleanup path any more, either
+# (see `generate_grid`'s own nettoyage branches below and `make_pattern`'s
+# docstring above for the sibling per-step density draw removed the same
+# session). See CLAUDE.md for the removed mechanism's full history.
 
 
 def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, locked_letters=None,
-                       exclude_impossible_locked=False):
+                       exclude_impossible_locked=False, seed_grid=None, index=None, rng=None):
     """Construit le point de départ du palier suivant à partir de la
     meilleure tentative échouée du palier courant, à la demande explicite de
     l'utilisateur — nouvel algorithme de reprise entre paliers, distinct du
@@ -2763,9 +3864,9 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
     nettoyage une seconde fois pour ce palier, cette fois avec
     `exclude_impossible_locked=True`, uniquement pour débloquer ce cas
     précis plutôt que d'appliquer la règle plus agressive partout."""
-    assignment, confirmed = _clean_blocked_slots(
+    assignment, confirmed, _ = _clean_blocked_slots(
         slots, assignment, impossible_slots, locked_letters=locked_letters,
-        exclude_impossible_locked=exclude_impossible_locked,
+        exclude_impossible_locked=exclude_impossible_locked, index=index, rng=rng,
     )
 
     def _direction_has_confirmed_letter(r, c, dr, dc):
@@ -2808,6 +3909,48 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
             if not (0 <= rr < rows and 0 <= cc < cols) or grid[rr][cc] != BLACK:
                 return False
         return True
+
+    # Protection inconditionnelle des cases noires déjà présentes *avant*
+    # que ce palier ne commence (`seed_grid`, le motif reçu en entrée par
+    # `_pattern_attempt`/`make_pattern` pour CE palier précis, avant son
+    # propre pré-remplissage/placement au ratio/« nettoyage curatif ») — à
+    # la demande explicite de l'utilisateur, après un bug réel constaté en
+    # direct : "certaines cases noires initiales disparaissent... il ne
+    # faut toucher qu'aux cases noires ajoutées [ce palier], pas à celles
+    # présentes avant de commencer cette phase." Root cause : la protection
+    # ci-dessus (les deux boucles précédentes) ne se fie qu'à `assignment`
+    # (le résultat final de la recherche CSP de CETTE tentative précise)
+    # pour décider quels mots "survivent" — mais le « nettoyage curatif »
+    # (voir `_remove_a_crossing_word`, appelé depuis `_prefill_unfillable_
+    # slots`) peut retirer un mot de `locked_letters` *à l'intérieur même*
+    # du worker, avant que la recherche ne démarre — un mot pourtant déjà
+    # confirmé depuis un palier précédent, présent dans `carry_locked_
+    # letters` (la copie du parent, jamais mutée par le worker séparé — voir
+    # plus bas), mais absent du worker's own `locked_letters` copy une fois
+    # nettoyage curatif passé par là. Si la recherche CSP échoue ensuite à
+    # réattribuer ce même emplacement (`assignment[i]` reste `None`), ses
+    # cases-frontière — qui faisaient pourtant déjà partie du motif *avant*
+    # que ce palier ne commence, sans aucun rapport avec le nettoyage
+    # curatif de cette tentative précise — perdaient toute protection et se
+    # retrouvaient rouvertes, comme si elles avaient été ajoutées puis
+    # échouées ce palier-ci. Reproduit en direct : un diagnostic dédié,
+    # comparant les cases noires de l'aperçu "pattern" (motif d'entrée de
+    # palier) à celles de l'aperçu "pattern_generated" (motif produit par
+    # CETTE tentative), a bien confirmé des cases présentes "avant"
+    # totalement absentes "après" pour plusieurs tentatives/paliers réels.
+    # `seed_grid` (`None` par défaut — tout appelant existant avant ce
+    # correctif, si jamais il y en avait un sans ce paramètre, n'est pas
+    # affecté) est le motif d'ENTRÉE de la tentative dont `grid`/`assignment`
+    # sont le résultat — n'importe quelle case déjà noire dedans est protégée
+    # inconditionnellement ici, indépendamment de la survie ou non d'un mot
+    # dans `assignment` : elle n'a, par construction, jamais pu être
+    # "ajoutée sans succès" par CE palier, puisqu'elle existait déjà avant
+    # qu'il ne commence.
+    if seed_grid is not None:
+        for r in range(rows):
+            for c in range(cols):
+                if seed_grid[r][c] == BLACK:
+                    protected_black_cells.add((r, c))
 
     new_grid = [row[:] for row in grid]
     for r in range(rows):
@@ -2892,15 +4035,36 @@ _worker_batch_abandoned_event = None
 # already made, stop searching regardless of what you would have found" —
 # see Filler.__init__'s own docstring for the full reasoning.
 _worker_attempt_done_event = None
+# `multiprocessing.Queue` sur laquelle chaque worker publie, en temps réel,
+# chaque nouveau record de `Filler.best_assignment` atteint pendant SA
+# propre recherche — pas seulement son état final — à la demande explicite
+# de l'utilisateur : "Il ne faut pas supprimer les 70% des tentatives
+# restantes, mais seulement les interrompre... Il faut conserver les 6
+# meilleures grilles échouées des N process trouvées à n'importe quel
+# moment des N recherches", précisé ensuite : "Chaque process suit son
+# meilleur état, et transmet au process parent l'information que ce
+# meilleur état a changé. Le process parent garde les 6 meilleurs états,
+# de tous les états dont il a été informé par les N process." Même
+# contrainte technique que les autres globals ci-dessus (passé une seule
+# fois par worker via l'initializer du pool, jamais en argument de tâche
+# soumise). Le volume reste borné : `best_assigned_count` ne peut
+# progresser que d'une unité à la fois et ne dépasse jamais le nombre
+# d'emplacements de la grille (~50-60 en pratique), donc au plus
+# ~50-60 publications par worker et par palier, quel que soit le nombre
+# réel d'appels à `_backtrack` (potentiellement des centaines de
+# milliers) — voir `Filler._backtrack` pour le point d'appel exact.
+_worker_best_state_queue = None
 
 
-def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_done_event=None):
+def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_done_event=None,
+                  best_state_queue=None):
     global _worker_index, _worker_cancel_event, _worker_batch_abandoned_event, \
-        _worker_attempt_done_event
+        _worker_attempt_done_event, _worker_best_state_queue
     _worker_index = index
     _worker_cancel_event = cancel_event
     _worker_batch_abandoned_event = batch_abandoned_event
     _worker_attempt_done_event = attempt_done_event
+    _worker_best_state_queue = best_state_queue
 
 
 def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
@@ -3049,7 +4213,9 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                        forced_letters=forced_letters, letter_scores=letter_scores,
                        preseed_assignment=preseed_assignment, cancel_event=_worker_cancel_event,
                        batch_abandoned_event=None,
-                       attempt_done_event=_worker_attempt_done_event)
+                       attempt_done_event=_worker_attempt_done_event,
+                       locked_letters=locked_letters,
+                       best_state_queue=_worker_best_state_queue)
     return grid, result, diag
 
 
@@ -3167,7 +4333,9 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        preseed_assignment=preseed_assignment, excluded_slots=excluded_slots,
                        cancel_event=_worker_cancel_event,
                        batch_abandoned_event=_worker_batch_abandoned_event,
-                       attempt_done_event=_worker_attempt_done_event)
+                       attempt_done_event=_worker_attempt_done_event,
+                       locked_letters=known_letters,
+                       best_state_queue=_worker_best_state_queue)
     return seed_grid, result, diag
 
 
@@ -3270,14 +4438,24 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
 
     `black_enrichment_fraction` (défaut `POST_PREFILL_BLACK_FRACTION`, voir
     sa propre définition), à la demande explicite de l'utilisateur :
-    réglable depuis l'interface web (un sélecteur "Ajout noires", 0/1/3/5/
-    10 %, 3 % par défaut — voir `GenerateRequest.black_enrichment_percent`
-    dans backend/app.py). Transmis tel quel à `_pattern_attempt` (jamais à
-    `_pattern_continue`, qui ne rappelle jamais `make_pattern` — un palier
-    de reprise "telle-quelle" ne peut par construction ajouter aucune case
-    noire, voir _pattern_continue's propre docstring), donc uniquement
-    pertinent pour un palier qui part d'une grille vierge ou d'un
-    nettoyage (`_build_retry_seed`).
+    réglable depuis l'interface web (un sélecteur "Taux noir", un entier
+    libre 0-100, 14 % par défaut — voir `GenerateRequest.black_enrichment_
+    percent` dans backend/app.py). Transmis tel quel à `_pattern_attempt`
+    (jamais à `_pattern_continue`, qui ne rappelle jamais `make_pattern` —
+    un palier de reprise "telle-quelle" ne peut par construction ajouter
+    aucune case noire, voir _pattern_continue's propre docstring), donc
+    uniquement pertinent pour un palier qui part d'une grille vierge ou
+    d'un nettoyage (`_build_retry_seed`).
+
+    A separate, unrelated per-cycle single-cell lock
+    (`_impossible_cell_groups`/`_lock_one_impossible_cell`, which used to
+    add one extra black cell on every palier's own impossible/blockage
+    slot(s), including "reprise telle-quelle" ones) was removed entirely
+    in this same session, at the user's explicit request — but this
+    `black_enrichment_fraction` mechanism itself was never meant to be
+    removed, only that separate lock; a first attempt mistakenly removed
+    both together and was corrected once the user clarified the scope.
+    See CLAUDE.md for the full history of both.
 
     `force_letters_fraction` (0.0 par défaut, c'est-à-dire désactivé), à la
     demande explicite de l'utilisateur : active ou non le sondage
@@ -3313,6 +4491,17 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         wordlist_path, mw, require_gloss=(difficulty == "easy")
     )
     index = build_index(by_length)
+    # Précalculé une seule fois (pas par palier) — mêmes longueurs pour
+    # toute la génération, `index` ne change jamais. Reproduit exactement
+    # le calcul propre à chaque worker dans `_pattern_attempt` (voir sa
+    # propre docstring), mais côté processus PARENT cette fois — utilisé
+    # uniquement par l'aperçu "cases noires posées" précoce ci-dessous,
+    # jamais par la recherche CSP elle-même (qui reste toujours calculée
+    # dans les processus workers, avec leur propre `_worker_index`).
+    available_lengths_preview = {
+        length for length, data in index.items()
+        if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
+    }
     # Logged once per request, not per attempt: the CSP's failure mode
     # (below) can't be told apart from a genuinely empty word list for
     # some length without this — a `require_gloss`/`max_words` combination
@@ -3426,17 +4615,113 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # instead), cleared at the start of every palier below since its
     # meaning only ever applies to the palier currently running.
     attempt_done_event = multiprocessing.Event()
+    # "Chaque process suit son meilleur état, et transmet au process parent
+    # l'information que ce meilleur état a changé. Le process parent garde
+    # les 6 meilleurs états, de tous les états dont il a été informé par
+    # les N process" — décision explicite de l'utilisateur. Une
+    # `multiprocessing.Queue` (pas un `Event` : il faut transporter des
+    # données, pas juste un signal) transmise via l'initializer du pool,
+    # pour la même raison technique que les trois `Event` ci-dessus — un
+    # objet `multiprocessing` passé comme simple argument de tâche à
+    # `executor.submit(...)` provoque une `RuntimeError` sur macOS
+    # ("spawn"). Un seul objet pour toute la génération, jamais recréé
+    # palier après palier.
+    best_state_queue = multiprocessing.Queue()
+    # Un vrai interblocage a été constaté en direct (temps CPU des workers
+    # figé d'une lecture à l'autre, l'utilisateur observant lui-même « il
+    # n'y a plus que 2 process qui tourne ») avec une première version qui
+    # ne drainait `best_state_queue` qu'une seule fois par palier, juste
+    # après que `as_completed` a récupéré tous les futures : le tube
+    # (« pipe ») sous-jacent d'une `multiprocessing.Queue` a une capacité
+    # bornée côté OS — si assez de messages s'accumulent sans jamais être
+    # lus pendant qu'un worker est encore profondément dans sa recherche
+    # (chaque tentative peut publier jusqu'à ~50-60 fois, voir
+    # _worker_best_state_queue), son propre `put()` finit par bloquer tant
+    # que personne ne lit le tube ; mais personne ne le lit tant que TOUS
+    # les workers de ce palier n'ont pas terminé — et ce worker-là ne peut
+    # justement jamais terminer tant que son propre `put()` reste bloqué. Un
+    # classique interblocage producteur/consommateur, pas un problème de
+    # détection du seuil des 30 % (`attempt_done_event`) ni de workers qui
+    # ne s'arrêteraient pas correctement.
+    #
+    # Corrigé en drainant la file en continu, dans un thread dédié
+    # (`threading`, pas `multiprocessing` — ce thread tourne dans le
+    # processus PARENT, où GIL ou pas, une boucle qui ne fait qu'attendre
+    # sur `Queue.get(timeout=...)` puis `list.append(...)` ne se dispute
+    # jamais le GIL avec quoi que ce soit de coûteux) démarré une seule fois
+    # pour toute la génération, jamais recréé palier après palier — tant que
+    # ce thread tourne, le tube ne peut plus jamais s'accumuler assez pour
+    # bloquer un `put()`. `_best_state_buffer`/`_best_state_buffer_lock`
+    # accumulent chaque message reçu ; le code de chaque palier (plus bas)
+    # n'interagit plus jamais directement avec `best_state_queue` — il vide
+    # `_best_state_buffer` sous verrou à la place, ce qui revient exactement
+    # au même du point de vue de ce qu'il reçoit, sans jamais risquer de
+    # lire directement dans la file pendant qu'un worker y écrit encore.
+    best_state_buffer = []
+    best_state_buffer_lock = threading.Lock()
+    stop_best_state_drain = threading.Event()
+
+    def _drain_best_state_queue_continuously():
+        while not stop_best_state_drain.is_set():
+            try:
+                msg = best_state_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            with best_state_buffer_lock:
+                best_state_buffer.append(msg)
+
+    # Démarré avant même la création du pool, `daemon=True` : ce thread ne
+    # doit jamais empêcher le processus de se terminer, y compris sur un
+    # chemin de sortie anticipé (`GenerationCancelled`, levée depuis
+    # l'intérieur de la boucle ci-dessous) qui ne passerait pas par l'arrêt
+    # explicite tout en bas de cette fonction — dans ce cas rare, le thread
+    # reste simplement inactif (bloqué sur `get(timeout=0.1)`, sans rien à
+    # lire) jusqu'à la fin du processus, un coût négligeable, plutôt qu'un
+    # `try`/`finally` englobant toute la boucle des paliers (des centaines
+    # de lignes) qui aurait exigé de la réindenter en bloc.
+    best_state_drain_thread = threading.Thread(
+        target=_drain_best_state_queue_continuously, daemon=True
+    )
+    best_state_drain_thread.start()
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
-        initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event)
+        initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue)
     ) as executor:
         for attempt in range(attempts):
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
             batch_abandoned_event.clear()
             attempt_done_event.clear()
+            start_grid, start_locked_cells = _cycle_start_preview(
+                rows, cols, carry_seed_grid, carry_locked_letters, carry_preseed_assignment,
+            )
+            # Cases sous le seuil de remplissage (< PREFILL_LOCKED_MIN_
+            # WORD_COUNT candidats), à la demande explicite de
+            # l'utilisateur — voir _low_candidate_slot_cells pour la
+            # justification complète. Uniquement pertinent pour un cycle
+            # "motif neuf" (`carry_preseed_assignment is None`) : en
+            # reprise "telle quelle", chaque emplacement est soit
+            # entièrement assigné (un mot déjà confirmé, jamais fragile),
+            # soit entièrement libre (aucune lettre verrouillée à
+            # intersecter) — la notion même d'emplacement "partiellement"
+            # verrouillé, seule concernée par ce calcul, n'existe pas
+            # dans cette représentation. Ne s'applique pas non plus au
+            # tout premier palier (`carry_seed_grid is None`, rien
+            # n'ayant encore été verrouillé).
+            low_candidate_cells = (
+                _low_candidate_slot_cells(carry_seed_grid, rows, cols, index, carry_locked_letters)
+                if carry_preseed_assignment is None and carry_seed_grid is not None
+                else []
+            )
             progress("pattern", attempt=attempt + 1, attempts=attempts, parallel=PARALLEL_ATTEMPTS,
-                     total_attempts=total_attempts_tried)
+                     total_attempts=total_attempts_tried,
+                     examples=[{
+                         "example_grid": start_grid,
+                         "impossible_cells": [],
+                         "forced_cells": [],
+                         "locked_cells": start_locked_cells,
+                         "low_candidate_cells": low_candidate_cells,
+                     }])
             seeds = [rng.randrange(2**31) for _ in range(PARALLEL_ATTEMPTS)]
             if carry_preseed_assignment is not None:
                 futures = [
@@ -3460,6 +4745,138 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # `else:`/nettoyage branch below) nor on the very first
                 # palier of a call with no prior cleanup at all.
                 reset_count = round(FULL_RESET_ATTEMPT_FRACTION * PARALLEL_ATTEMPTS) if just_cleaned else 0
+                # Aperçu "cases noires posées, recherche des mots en
+                # cours" publié dès MAINTENANT — avant même de soumettre
+                # la moindre tentative parallèle à l'executor, donc bien
+                # avant que la recherche CSP (la partie lente) de ce
+                # palier ne termine — à la demande explicite de
+                # l'utilisateur : "Le Front n'affiche les aperçus qu'après
+                # la fin d'un cycle. Les états d'initialisation
+                # n'apparaissent pas avant la fin du cycle. Il faut que la
+                # stack Back soit proprement alimentée à chaque étape du
+                # cycle." Root-causé directement dans le code, pas
+                # supposé : le `pattern_generated` existant plus bas
+                # (`_cycle_start_preview` sur `failed_pairs`/`best`) n'est
+                # calculable qu'une fois TOUTES les tentatives parallèles
+                # de ce palier terminées (`concurrent.futures.
+                # as_completed`, plus bas) — pour un palier "motif neuf"
+                # (celui-ci, pas la reprise "telle quelle" ci-dessus, dont
+                # le propre `pattern_generated` coïncide déjà avec l'état
+                # de départ du cycle), l'étape "cases noires posées" ne
+                # pouvait donc jamais réellement apparaître avant la fin
+                # du cycle, quelle que soit la rapidité du Front à
+                # l'afficher — le Back lui-même ne l'avait tout simplement
+                # pas encore calculée. Reconstruit ici, dans le processus
+                # PARENT, avec les mêmes paramètres qu'un worker réel
+                # utilisera dans son propre processus séparé plus bas —
+                # `make_pattern` étant une fonction pure de ses arguments,
+                # appelée deux fois avec le même seed produit le même motif
+                # les deux fois, donc jamais de fausse impression de case
+                # noire "déplacée" une fois le véritable `pattern_generated`
+                # (calculé après coup, voir plus bas) reçu.
+                #
+                # Une initialisation PAR PROCESS, mais réservée à la toute
+                # première initialisation de la génération (`carry_seed_grid
+                # is None` — aucun palier précédent n'a encore tourné) — à
+                # la demande explicite de l'utilisateur : "la toute première
+                # initialisation des cases noires ne prépare qu'une seule
+                # grille. Intégrer cette première initialisation au début du
+                # cycle, de manière à créer une initialisation par process."
+                # Clarifié par l'utilisateur lui-même après une première
+                # implémentation qui l'appliquait à *chaque* cycle "motif
+                # neuf" (pas seulement le tout premier), provoquant un vrai
+                # ralentissement mesuré en direct (jusqu'à +250 % par palier)
+                # et, plus grave, un vrai risque de faire échouer une
+                # génération qui aurait sinon réussi (le calcul séquentiel
+                # supplémentaire dans le processus parent décale le timing
+                # réel auquel les tentatives parallèles sont soumises, et ce
+                # palier utilise un mécanisme d'interruption sensible à
+                # l'ordre réel d'achèvement — `attempt_done_event`/
+                # `batch_abandoned_event` — pas seulement à la graine) :
+                # "Il ne faut pas changer le budget, juste initialiser N
+                # grilles au premier cycle au lieu d'une seule. Les cycles
+                # suivants, à partir de 2, reprendront la meilleure grille
+                # (sauf 20% de nouvelles grilles)." À partir du 2e palier,
+                # `carry_seed_grid` porte déjà le contenu du meilleur essai
+                # précédent (ou repart d'une grille vierge pour les
+                # `reset_count` tentatives réinitialisées, déjà sa propre
+                # source de diversité) — la diversité "une grille par
+                # process" n'a donc de sens réel qu'au tout premier palier,
+                # où rien ne distingue encore les tentatives entre elles à
+                # part leur propre graine.
+                if carry_seed_grid is None:
+                    # Une par process (jusqu'à PARALLEL_ATTEMPTS), à la
+                    # demande explicite de l'utilisateur : "il n'y a jamais
+                    # eu 6 grilles par process, mais 1 grille par process
+                    # (1 process par processeur). Les 6 grilles affichées
+                    # sont les 6 meilleures tracées dans les générations." —
+                    # même principe ici : un calcul par tentative sur le
+                    # point d'être soumise, dédupliqué par motif noir/blanc
+                    # réel (deux workers peuvent légitimement retomber sur
+                    # le même motif) puis plafonné à `FAILED_ATTEMPT_
+                    # EXAMPLES` (6) pour l'affichage seulement — la même
+                    # convention déjà utilisée plus bas pour les motifs
+                    # réellement recherchés (`failed_unique`).
+                    seen_early_patterns = set()
+                    early_examples = []
+                    for s in seeds:
+                        early_pattern = make_pattern(
+                            rows, cols, ratio, random.Random(s),
+                            available_lengths=available_lengths_preview,
+                            seed_grid=None, locked_letters=None,
+                            index=index, black_enrichment_fraction=black_enrichment_fraction,
+                        )
+                        pattern_key = tuple(tuple(row) for row in early_pattern)
+                        if pattern_key in seen_early_patterns:
+                            continue
+                        seen_early_patterns.add(pattern_key)
+                        early_pattern_grid, early_pattern_locked = _cycle_start_preview(
+                            rows, cols, early_pattern, None, None,
+                        )
+                        early_examples.append({
+                            "example_grid": early_pattern_grid,
+                            "impossible_cells": [],
+                            "forced_cells": [],
+                            "locked_cells": early_pattern_locked,
+                        })
+                        if len(early_examples) >= FAILED_ATTEMPT_EXAMPLES:
+                            break
+                else:
+                    # Reconstruit ici, dans le processus PARENT, exactement
+                    # le même motif (mêmes paramètres, même graine) que ce
+                    # que le worker non réinitialisé le plus tardif de ce
+                    # palier (`seeds[-1]` — jamais parmi les `reset_count`
+                    # premiers réinitialisés) va lui-même calculer dans son
+                    # propre processus séparé — plutôt qu'un motif jetable
+                    # indépendant, qui aurait pu induire une fausse
+                    # impression de case noire "déplacée" une fois le
+                    # véritable `pattern_generated` (calculé après coup, voir
+                    # plus bas) reçu. Un seul exemple ici (pas un par
+                    # process) : à partir du 2e palier, cette diversité
+                    # existe déjà via le contenu réellement porté par
+                    # `carry_seed_grid`/les tentatives réinitialisées — voir
+                    # le paragraphe ci-dessus pour la clarification complète
+                    # de l'utilisateur sur ce point.
+                    early_pattern = make_pattern(
+                        rows, cols, ratio, random.Random(seeds[-1]),
+                        available_lengths=available_lengths_preview,
+                        seed_grid=carry_seed_grid, locked_letters=carry_locked_letters,
+                        index=index, black_enrichment_fraction=black_enrichment_fraction,
+                    )
+                    early_pattern_grid, early_pattern_locked = _cycle_start_preview(
+                        rows, cols, early_pattern, carry_locked_letters, None,
+                    )
+                    early_examples = [{
+                        "example_grid": early_pattern_grid,
+                        "impossible_cells": [],
+                        "forced_cells": [],
+                        "locked_cells": early_pattern_locked,
+                    }]
+                progress(
+                    "pattern_generated", attempt=attempt + 1, attempts=attempts,
+                    total_attempts=total_attempts_tried,
+                    examples=early_examples,
+                )
                 futures = [
                     executor.submit(
                         _pattern_attempt, rows, cols, ratio, s, force_letters_fraction,
@@ -3524,7 +4941,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 outcomes.append(f.result())
                 if len(outcomes) == interrupt_threshold:
                     attempt_done_event.set()
-            successes = [(g, r) for g, r, d in outcomes if r is not None]
+            successes = [(g, r, d) for g, r, d in outcomes if r is not None]
             # Dédoublonnage des tentatives échouées, à la demande explicite de
             # l'utilisateur, après un bug réel constaté en direct : une fois
             # qu'une bonne partie de la grille est verrouillée par le
@@ -3545,25 +4962,54 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # montrer (voir `failed_pairs` plus bas) — plus au calcul de
             # `total_attempts` lui-même, voir juste en dessous.
             failed_all = [(g, d) for g, r, d in outcomes if r is None]
-            # Attempts cut short by attempt_done_event (see above) never
-            # count as candidates for "which failed attempt is the best one"
-            # (failed_unique/failed_pairs below): their early, arbitrary stop
-            # reflects no real dead end, so their own `impossible_cells`
-            # count (the sort key used further below) would be a meaningless
-            # — and often misleadingly LOW, since they barely had time to
-            # explore — signal, not a genuine measure of how close they got.
-            # The first `interrupt_threshold` outcomes to complete are, by
-            # construction, never themselves interrupted this way (the
-            # event is only set right after that many are already in hand),
-            # so this filter never leaves `failed_unique` empty whenever
-            # `failed_all` itself is non-empty. Their `checks` still count
-            # toward
-            # `total_attempts_tried` below (real backtracking work was done
-            # before they were told to stop).
-            failed_real = [
-                (g, d) for g, d in failed_all
-                if d["reason"] != "interrupted_other_attempt_done"
-            ]
+            # Attempts cut short by attempt_done_event (see above) used to
+            # be excluded entirely from "which failed attempt is the best
+            # one" (failed_unique/failed_pairs below) — reverted at the
+            # user's explicit request: "Il ne faut pas supprimer les 70%
+            # des tentatives restantes, mais seulement les interrompre.
+            # Chacune d'elle porte normalement la mémorisation de sa
+            # meilleure grille échouée, qu'il faut prendre en compte." An
+            # interrupted worker's own diagnostics (`example_grid`/
+            # `assignment`/`impossible_cells`) are never empty placeholders
+            # — `try_fill` already builds them from `Filler.best_assignment`
+            # (the same high-water-mark snapshot a naturally-concluded
+            # failure uses too, see its own docstring), a real, genuine
+            # state that worker actually reached before being told to
+            # stop, not a fabricated or trivial one — discarding it
+            # outright threw away real, already-computed progress for no
+            # benefit. `total_attempts_tried`'s own `checks` summation
+            # below is unaffected either way (it already summed over every
+            # raw outcome, interrupted ones included, both before and
+            # after this change).
+            #
+            # `failed_real` (kept as its own name so nothing below needs to
+            # change) is therefore now just `failed_all` — no more `reason
+            # != "interrupted_other_attempt_done"` filtering. A worker
+            # interrupted so early it never made any real progress at all
+            # — "encore en train d'essayer de construire", per the user's
+            # own words — naturally shows up with `assigned_letter_count
+            # == 0`/an all-blank `example_grid` instead; nothing special
+            # needs to filter it out on purpose, since `_backtrack`'s own
+            # interruption check only ever runs from *inside* the search
+            # loop (never before it starts), so `Filler.best_assignment`
+            # already reflects whatever little (or, in the rare worst
+            # case, nothing at all) that worker managed before being told
+            # to stop.
+            #
+            # Caveat carried over from the design this reverts, worth
+            # keeping in mind rather than silently dropping: an
+            # interrupted worker's own `impossible_cells` count (the sort
+            # key `failed_pairs` uses just below) can be misleadingly LOW
+            # simply because it had less time to explore and so discover
+            # fewer of them — not necessarily because it's genuinely
+            # closer to a solution than a naturally-concluded worker that
+            # explored much further and found more. Not addressed by this
+            # change (the user asked specifically to stop discarding this
+            # data, not to redesign the sort criterion) — flagged here so
+            # a future report of "the carried-forward grid looks worse
+            # than a failed one that explored further" has a documented,
+            # plausible starting hypothesis.
+            failed_real = failed_all
             seen_keys = set()
             failed_unique = []
             for g, d in failed_real:
@@ -3571,6 +5017,27 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 if key not in seen_keys:
                     seen_keys.add(key)
                     failed_unique.append((g, d))
+            # `failed_unique` reste construit uniquement à partir de
+            # résultats *réels* de recherches (`failed_all`, ci-dessus) —
+            # jamais des états publiés en temps réel par `best_state_queue`
+            # (voir plus bas) : c'est ce pool, et lui seul, qui décide de
+            # `failed_pairs`/`selected_grid`/`selected_diag`/`still_has_hope`
+            # /`_build_retry_seed` — tout ce qui influence réellement la
+            # progression de la recherche d'un palier à l'autre. Un état
+            # publié par la file reste visible dans l'aperçu affiché à
+            # l'écran (voir `display_pairs`/`last_examples` plus bas), mais
+            # ne peut plus jamais devenir la base du palier suivant à la
+            # place d'un résultat réellement abouti — à la demande explicite
+            # de l'utilisateur, après un vrai échec mesuré en direct : même
+            # une fois le critère de tri corrigé (voir `_playable_score`
+            # plus bas), laisser un état intermédiaire concourir pour cette
+            # sélection restait risqué, puisque la recherche qui l'a produit
+            # n'était pas allée assez loin pour détecter tous les vrais
+            # conflits — son propre `impossible_slots` peut donc être
+            # incomplet par rapport à celui d'une recherche réellement
+            # terminée, ce qui rendrait le nettoyage du palier suivant
+            # (`_build_retry_seed`, qui se fie justement à `impossible_
+            # slots` pour décider quels mots retirer) lui-même incomplet.
             # `total_attempts` compte les grilles réellement essayées et
             # abandonnées au sens propre du mot, à la demande explicite de
             # l'utilisateur — pas le nombre de processus parallèles lancés
@@ -3597,7 +5064,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # score favorise quelques mots longs plutôt que beaucoup de
                 # mots courts pour le même nombre total de lettres (un mot de
                 # 10 lettres pèse 100, dix mots de 2 lettres ne pèsent que 40).
-                best, best_result = max(
+                # Le 3e élément (diag) de chaque tuple de `successes`
+                # n'est plus utilisé ici depuis la suppression de l'aperçu
+                # tardif "cases noires posées" (voir plus bas) — il
+                # alimentait uniquement `_preview_locked_source` pour cet
+                # aperçu, aujourd'hui supprimé.
+                best, best_result, _ = max(
                     successes, key=lambda gr: sum(len(slot) ** 2 for slot in gr[1][0])
                 )
                 break
@@ -3625,10 +5097,148 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # caractères considérés comme injouables" — remplace l'ancien
             # critère (le moins de cases noires), qui ne disait rien de
             # combien de cases étaient réellement bloquées.
+            #
+            # Un instant remplacé par `_playable_score` (racine carrée de la
+            # somme des carrés des longueurs jouables, sur l'état BRUT) une
+            # fois la fusion des états publiés par `best_state_queue` mise
+            # en place, le temps de corriger un biais réel : "le moins de
+            # cases injouables" favorisait à tort un état publié tôt dans
+            # une recherche encore très peu avancée sur un résultat
+            # réellement abouti d'une autre tentative. Un instant remis à
+            # `len(impossible_cells)` une fois les états publiés par la
+            # file structurellement écartés de cette sélection (voir
+            # `failed_unique`/`display_pairs` plus haut/plus bas).
+            #
+            # Remplacé une dernière fois par `_cleaned_playable_score`, à
+            # la demande explicite de l'utilisateur : "Il faut montrer les
+            # emplacements avant nettoyage, évaluer la grille après
+            # nettoyage (qui sera transmise au cycle suivant si
+            # sélectionnée)." Ni `len(impossible_cells)` ni `_playable_
+            # score` n'évaluaient l'état qui compte réellement pour cette
+            # sélection : celui qui sera transmis au palier suivant si
+            # cette tentative gagne — c'est-à-dire l'état APRÈS `_clean_
+            # blocked_slots`, pas l'état brut d'avant nettoyage. Deux
+            # tentatives à égalité de cases injouables brutes peuvent
+            # perdre des quantités de contenu très différentes une fois
+            # nettoyées, selon la longueur du mot qui croise l'emplacement
+            # impossible — voir `_cleaned_playable_score`'s propre
+            # docstring pour le détail complet.
             failed_pairs = sorted(
-                failed_unique, key=lambda gd: len(gd[1]["impossible_cells"]),
+                failed_unique,
+                key=lambda gd: _cleaned_playable_score(gd[0], gd[1], rows, cols, index, rng),
+                reverse=True,
             )
             last_diag = failed_pairs[0][1]
+            # Pool séparé, réservé à l'affichage des jusqu'à
+            # FAILED_ATTEMPT_EXAMPLES (6) aperçus — jamais utilisé pour
+            # `selected_grid`/`selected_diag`/`still_has_hope`/`_build_
+            # retry_seed` plus bas, qui continuent de se fier exclusivement
+            # à `failed_pairs` (construit ci-dessus à partir de `failed_
+            # unique`, lui-même uniquement des résultats réels — voir son
+            # propre commentaire). Part de `failed_unique` (une copie, pour
+            # ne jamais muter la liste qui sert par ailleurs à la sélection
+            # réelle) puis y fusionne les états publiés en temps réel par
+            # `best_state_queue`, à la demande explicite de l'utilisateur :
+            # "Chaque process suit son meilleur état, et transmet au
+            # process parent l'information que ce meilleur état a changé.
+            # Le process parent garde les 6 meilleurs états, de tous les
+            # états dont il a été informé par les N process" — restreint
+            # ensuite à l'affichage seul, après un vrai échec mesuré en
+            # direct (voir le commentaire de `failed_unique` plus haut)
+            # une fois confirmé que laisser ces états concourir pour la
+            # sélection réelle dégradait la progression d'un palier à
+            # l'autre. Voir Filler.on_new_best/_publish_new_best (try_fill)
+            # pour la publication ; voir best_state_queue plus haut pour
+            # pourquoi c'est une Queue (et pas juste un Event) et pourquoi
+            # elle est créée une seule fois pour toute la génération.
+            #
+            # Ne lit plus jamais `best_state_queue` directement ici — un
+            # thread dédié (`best_state_drain_thread`, démarré une seule
+            # fois avant la création du pool, voir son propre commentaire)
+            # la vide en continu dans `best_state_buffer`, précisément pour
+            # éviter un vrai interblocage constaté en direct : un worker
+            # encore profondément dans sa recherche peut publier des
+            # dizaines de fois avant de rendre la main, et le tube sous-
+            # jacent d'une `multiprocessing.Queue` a une capacité bornée —
+            # ne le lire qu'une fois par palier, une fois tous les workers
+            # revenus, laissait le temps à ce tube de se remplir et de
+            # bloquer un `put()` avant même que quiconque ne le lise.
+            #
+            # `as_completed` a déjà épuisé tous les futures de ce palier
+            # plus haut, donc chaque worker a déjà terminé sa recherche et
+            # émis son dernier `put()` — mais le thread de drainage ne
+            # l'aura pas forcément encore consommé au moment exact où ce
+            # code s'exécute (il ne fait qu'interroger la file toutes les
+            # BEST_STATE_QUEUE_DRAIN_GRACE_S secondes). Une courte pause,
+            # de deux fois cet intervalle, laisse au thread au moins un
+            # cycle complet pour rattraper un message tout juste publié
+            # avant que ce code ne lise `best_state_buffer` — un compromis
+            # borné (quelques dizaines de millisecondes par palier, jamais
+            # plus), pas une garantie absolue, mais un message manqué ici
+            # serait simplement traité au palier suivant plutôt que
+            # celui-ci, sans jamais risquer de reproduire l'interblocage.
+            time.sleep(2 * BEST_STATE_QUEUE_DRAIN_GRACE_S)
+            with best_state_buffer_lock:
+                published_this_palier = best_state_buffer[:]
+                best_state_buffer.clear()
+            display_seen_keys = set(seen_keys)
+            display_unique = list(failed_unique)
+            for published in published_this_palier:
+                # `grid` retiré du dict après lecture (pop, pas juste get) :
+                # une fois extrait dans `pub_grid` (le premier élément du
+                # couple `(grid, diag)`, exactement la même forme que
+                # failed_all/failed_unique ci-dessus), il n'a plus sa place
+                # à l'intérieur du diagnostic lui-même — le laisser dedans
+                # ferait fuiter une copie de la grille (redondante avec
+                # `example_grid`) dans le JSON envoyé au Front.
+                pub_grid = published.pop("grid")
+                pub_key = (tuple(map(tuple, pub_grid)), tuple(published["assignment"]))
+                if pub_key not in display_seen_keys:
+                    display_seen_keys.add(pub_key)
+                    display_unique.append((pub_grid, published))
+            # `failed_pairs[0]` (le vainqueur réel — celui qui va être
+            # nettoyé via `_clean_blocked_slots` et transmis au palier
+            # suivant, voir plus bas) est TOUJOURS placé en premier ici,
+            # quel que soit son propre score — jamais laissé au tri normal.
+            # Bug réel constaté en direct, avec des captures d'écran à
+            # l'appui : `display_pairs` et `failed_pairs` utilisant deux
+            # critères de tri différents (le premier par `_playable_score`,
+            # le second par `len(impossible_cells)`), la toute première
+            # grille montrée à l'écran pouvait être une tentative
+            # complètement différente de celle réellement conservée —
+            # jusqu'à un motif noir/blanc entièrement différent, pas
+            # seulement un contenu différent. L'utilisateur comparait alors
+            # à raison "cette grille" (la première montrée) à l'étape
+            # suivante (le début du palier suivant, qui affiche le vrai
+            # motif conservé) et y voyait des mots croisant une situation
+            # impossible jamais retirés — alors qu'en réalité ce n'était
+            # simplement pas la même grille : celle réellement conservée et
+            # nettoyée n'était jamais celle affichée en premier. Garantir
+            # que la première grille montrée est toujours la grille
+            # réellement conservée rend la comparaison "avant nettoyage
+            # (ici) / après nettoyage (au palier suivant)" valide.
+            winner_grid, winner_diag = failed_pairs[0]
+            winner_key = (tuple(map(tuple, winner_grid)), tuple(winner_diag["assignment"]))
+            display_rest = sorted(
+                (gd for gd in display_unique
+                 if (tuple(map(tuple, gd[0])), tuple(gd[1]["assignment"])) != winner_key),
+                key=lambda gd: _playable_score(gd[1]), reverse=True,
+            )
+            display_pairs = [(winner_grid, winner_diag)] + display_rest
+            # Chaque grille affichée montre l'état AVANT nettoyage (`d[
+            # "example_grid"]`, tel quel) — brièvement remplacé par une
+            # version déjà nettoyée (`_cleaned_example_preview`), reverti
+            # à la demande explicite de l'utilisateur : "la visualisation
+            # des extraits montre maintenant les grilles nettoyées avec
+            # des emplacements impossibles vides. On ne comprend plus ce
+            # qui se passe. Il faut montrer les emplacements avant
+            # nettoyage, évaluer la grille après nettoyage." Voir la
+            # sélection de `failed_pairs` plus haut (`_cleaned_playable_
+            # score`) pour l'évaluation, désormais bien faite sur l'état
+            # après nettoyage — seul l'AFFICHAGE reste sur l'état brut,
+            # pour que les cases marquées `impossible_cells` restent
+            # entourées d'un vrai contexte (les mots qui ont créé le
+            # conflit) plutôt que de rester vides sans explication.
             last_examples = [
                 {
                     "example_grid": d["example_grid"],
@@ -3636,10 +5246,25 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     "forced_cells": d["forced_cells"],
                     "locked_cells": d.get("locked_cells", []),
                 }
-                for _, d in failed_pairs[:FAILED_ATTEMPT_EXAMPLES]
+                for g, d in display_pairs[:FAILED_ATTEMPT_EXAMPLES]
             ]
-            progress("pattern_attempt_failed", attempt=attempt + 1, ratio=round(ratio, 3),
-                     total_attempts=total_attempts_tried, examples=last_examples, **last_diag)
+            # Un aperçu tardif "cases noires posées" (motif sans les
+            # lettres) vivait ici, juste avant `pattern_attempt_failed` —
+            # supprimé à la demande explicite de l'utilisateur, une fois
+            # confirmé 100 % redondant avec lui : `pattern_attempt_failed`
+            # (juste en dessous) montre déjà les mêmes motifs, avec en plus
+            # les lettres réellement trouvées et les diagnostics complets.
+            # Le seul aperçu "cases noires posées" qui reste est désormais
+            # le précoce (voir plus haut, avant `executor.submit`), publié
+            # avant même que la recherche ne démarre — l'aperçu tardif
+            # n'ajoutait rien de plus, seulement une redite plus tôt dans
+            # la séquence, ce qui donnait l'impression trompeuse d'un
+            # nouveau tirage de cases noires ("il a refait une génération
+            # de cases noires, qui a déjà été faite à l'étape précédente").
+            progress("pattern_attempt_failed", attempt=attempt + 1, attempts=attempts,
+                     ratio=round(ratio, 3),
+                     total_attempts=total_attempts_tried, examples=last_examples,
+                     **_public_diag(last_diag))
             # "Nouvelle version" du mécanisme de reprise entre paliers, à la
             # demande explicite de l'utilisateur, remplaçant l'essai
             # précédent ("continuer avant de nettoyer", tenté puis reverti —
@@ -3714,109 +5339,90 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # same conclusion before this palier is even allowed to finish.
             if failed_real and all(d["reason"] == "abandoned_too_unfillable" for _, d in failed_real):
                 still_has_hope = False
-            # Plafond de 5 paliers "continue" consécutifs (relevé de 5 à
-            # 10 puis à 50, puis ramené à 10 puis à 5, toujours à la
-            # demande explicite de l'utilisateur) — même quand
-            # `still_has_hope` reste `True`, on force un nettoyage dès que
-            # ce plafond est atteint, plutôt que de laisser la reprise
-            # "telle quelle" s'enchaîner indéfiniment sur un motif qui ne
-            # progresse peut-être plus vraiment d'un palier à l'autre.
-            if consecutive_continue_paliers >= 5:
+            # Plafond de MAX_CONSECUTIVE_CONTINUE_PALIERS paliers "continue"
+            # consécutifs (relevé de 5 à 10 puis à 50, puis ramené à 10 puis
+            # à 5, puis nommé et ramené à 1, toujours à la demande explicite
+            # de l'utilisateur) — même quand `still_has_hope` reste `True`,
+            # on force un nettoyage dès que ce plafond est atteint, plutôt
+            # que de laisser la reprise "telle quelle" s'enchaîner
+            # indéfiniment sur un motif qui ne progresse peut-être plus
+            # vraiment d'un palier à l'autre.
+            if consecutive_continue_paliers >= MAX_CONSECUTIVE_CONTINUE_PALIERS:
                 still_has_hope = False
 
             if still_has_hope:
                 consecutive_continue_paliers += 1
                 just_cleaned = False
-                # Nettoyage automatique des emplacements bloqués, mais pas
-                # des cases noires (à l'exception du verrouillage d'une
-                # seule case, voir plus bas), à la demande explicite de
-                # l'utilisateur : "à la fin d'un tour, nettoyer
-                # automatiquement les emplacements bloqués, mais pas les
-                # noires." Retire, avant même de reprendre "telle quelle"
-                # au palier suivant, tout mot qui croise directement un
-                # emplacement impossible (`_clean_blocked_slots`, les
-                # étapes 1-2 de `_build_retry_seed` sans sa 3e étape) —
-                # `carry_seed_grid` reste le motif rigoureusement identique
-                # (aucune case noire rouverte, aucun nouveau motif généré),
-                # seul le contenu verrouillé transmis au palier suivant est
-                # nettoyé.
-                cleaned_assignment, cleaned_confirmed = _clean_blocked_slots(
+                # Nettoyage automatique des emplacements bloqués, à la
+                # demande explicite de l'utilisateur : "à la fin d'un tour,
+                # nettoyer automatiquement les emplacements bloqués, mais
+                # pas les noires." Retire, avant même de reprendre "telle
+                # quelle" au palier suivant, tout mot qui croise directement
+                # un emplacement impossible (`_clean_blocked_slots`, les
+                # étapes 1-2 de `_build_retry_seed` sans sa 3e étape).
+                #
+                # L'invariant "jamais de case noire touchée" ci-dessus a
+                # depuis été assoupli, à la demande explicite de
+                # l'utilisateur et *seulement* sur ce chemin de reprise
+                # "telle quelle" (jamais sur le nettoyage complet
+                # `_build_retry_seed`, qui régénère déjà un motif neuf via
+                # `make_pattern` et peut donc déjà ajouter des cases noires
+                # par ce biais) : voir le commentaire de
+                # `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY` pour le
+                # raisonnement complet de l'utilisateur (retirer un mot sur
+                # une toute petite zone ne libère pas grand-chose, et peut
+                # faire tourner la recherche en rond). `grid=selected_grid`
+                # active cette alternative dans `_clean_blocked_slots` :
+                # avec une probabilité 1/10 (abaissée depuis 1/3, jugée
+                # trop agressive après un premier usage réel), un
+                # emplacement impossible peut désormais se voir couper par
+                # une case noire plutôt que de faire retirer le mot qui le
+                # croise.
+                cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
                     selected_slots, selected_diag["assignment"], selected_diag["impossible_slots"],
+                    index=index, rng=rng, grid=selected_grid, rows=rows, cols=cols,
                 )
-                # Copie défensive avant mutation (voir juste en dessous) —
-                # `selected_grid` est `failed_pairs[0][0]`, un objet partagé
-                # avec d'autres usages de ce palier (déjà utilisé pour
-                # `last_examples`/`last_diag` plus haut) ; le muter en place
-                # sans copie risquerait de corrompre ces données déjà
-                # calculées, le même principe que partout ailleurs dans ce
-                # fichier où une grille destinée à être modifiée est
-                # d'abord copiée (voir `_build_retry_seed`'s propre
-                # `new_grid`).
-                carry_seed_grid = [row[:] for row in selected_grid]
                 carry_locked_letters = None
-                # Verrouiller UNE seule case noire au hasard parmi les cases
-                # des emplacements injouables — à la demande explicite de
-                # l'utilisateur, qui a signalé que la première version de
-                # cette règle ne s'appliquait qu'au nettoyage complet
-                # (branche `else` ci-dessous) : "il faut ajouter une case
-                # noire à tous les tours où on nettoie les emplacements
-                # injouables (pas seulement quand on nettoie aussi les cases
-                # noires)." La reprise "telle quelle" nettoie elle aussi les
-                # emplacements bloqués (`_clean_blocked_slots` juste
-                # au-dessus), donc cette règle s'y applique tout autant —
-                # voir `_impossible_cell_groups`/`_lock_one_impossible_cell`
-                # pour la logique exacte (priorité aux cases encore
-                # blanches), partagée avec la branche `else` ci-dessous pour
-                # ne pas dupliquer ce calcul. C'est la SEULE exception au
-                # principe "aucune case noire touchée" de ce chemin.
-                selected_blank_cells, selected_lettered_cells = _impossible_cell_groups(
-                    selected_slots, selected_diag["assignment"], selected_diag["impossible_slots"],
-                )
-                _lock_one_impossible_cell(
-                    carry_seed_grid, rows, cols,
-                    selected_blank_cells, selected_lettered_cells, rng,
-                )
-                # Bug réel évité ici, trouvé par relecture avant tout test
-                # en direct : verrouiller cette case peut raccourcir ou
-                # scinder l'emplacement injouable visé, ce qui décale la
-                # numérotation de TOUS les emplacements suivants dans
-                # l'ordre de balayage de `extract_slots` (ligne par ligne
-                # pour l'horizontal, puis colonne par colonne pour le
-                # vertical — voir sa propre docstring). `selected_slots`/
-                # `selected_diag["impossible_slots"]` ne sont donc plus
-                # forcément valables comme indices une fois `carry_seed_
-                # grid` modifiée : le palier suivant (`_pattern_continue`
-                # -> `try_fill`) réextrait ses propres `slots` FRAÎCHEMENT
-                # depuis cette même grille modifiée, avec potentiellement
-                # une numérotation différente. `carry_preseed_assignment`/
-                # `carry_excluded_slots` ne sont donc calculés qu'ICI,
-                # après la mutation, à partir de cette nouvelle structure —
-                # jamais transmis tels quels depuis `selected_slots`.
-                # `cleaned_confirmed` (case -> lettre, déjà renvoyé par
-                # `_clean_blocked_slots` ci-dessus) sert de seule source de
-                # vérité pour reconstruire l'affectation par position,
-                # puisqu'il ne s'appuie que sur des coordonnées, jamais sur
-                # un indice d'emplacement — immunisé par construction contre
-                # ce décalage. Un ancien emplacement impossible qui a
-                # survécu identique (ses cases exactes existent encore telle
-                # quelles dans la nouvelle structure) reste exclu, à son
-                # nouvel indice ; celui qui vient d'être raccourci/scindé ne
-                # l'est plus — ses fragments neufs redeviennent librement
-                # tentables, ce qui est précisément le but de lui avoir
-                # ajouté une case noire.
-                new_slots = extract_slots(carry_seed_grid, rows, cols)
-                carry_preseed_assignment = [
-                    "".join(cleaned_confirmed[cell] for cell in cells)
-                    if all(cell in cleaned_confirmed for cell in cells) else None
-                    for cells in new_slots
-                ]
-                old_impossible_cell_tuples = {
-                    tuple(selected_slots[i]) for i in selected_diag["impossible_slots"]
-                }
-                carry_excluded_slots = {
-                    j for j, cells in enumerate(new_slots)
-                    if tuple(cells) in old_impossible_cell_tuples
-                }
+                if new_black_cells:
+                    # Au moins une case noire a été ajoutée : `selected_
+                    # slots`' propre numérotation ne représente plus le motif
+                    # réel une fois la case posée (l'emplacement coupé change
+                    # de forme) — même piège d'indices déjà rencontré et
+                    # corrigé une fois dans l'historique de ce fichier pour
+                    # le mécanisme de verrou à une case, depuis retiré (voir
+                    # CLAUDE.md). Même remède : reconstruire `carry_preseed_
+                    # assignment`/`carry_excluded_slots` depuis un
+                    # `extract_slots` frais sur le motif réellement mis à
+                    # jour, plutôt que de réutiliser les anciens indices tels
+                    # quels. `confirmed` (indexé par case, jamais par indice
+                    # d'emplacement) survit intact à ce recalcul.
+                    carry_seed_grid = [row[:] for row in selected_grid]
+                    for (br, bc) in new_black_cells:
+                        carry_seed_grid[br][bc] = BLACK
+                    new_slots = extract_slots(carry_seed_grid, rows, cols)
+                    carry_preseed_assignment = [
+                        "".join(confirmed[cell] for cell in cells)
+                        if all(cell in confirmed for cell in cells) else None
+                        for cells in new_slots
+                    ]
+                    old_impossible_cell_tuples = {
+                        tuple(selected_slots[i]) for i in selected_diag["impossible_slots"]
+                    }
+                    carry_excluded_slots = {
+                        j for j, cells in enumerate(new_slots)
+                        if tuple(cells) in old_impossible_cell_tuples
+                    }
+                else:
+                    # Aucune case noire ajoutée ce palier (probabilité 2/3,
+                    # ou aucun candidat structurellement valide trouvé) :
+                    # comportement exactement inchangé — `carry_seed_grid`
+                    # reste le motif rigoureusement identique, `carry_
+                    # preseed_assignment`/`carry_excluded_slots` mappent 1:1
+                    # sur les indices de `selected_slots`, sans rien à
+                    # recalculer.
+                    carry_seed_grid = selected_grid
+                    carry_preseed_assignment = cleaned_assignment
+                    carry_excluded_slots = set(selected_diag["impossible_slots"])
             else:
                 consecutive_continue_paliers = 0
                 carry_preseed_assignment = None
@@ -3857,30 +5463,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     result = []
                     for cand_grid, cand_diag in failed_pairs[:FAILED_ATTEMPT_EXAMPLES]:
                         cand_slots = extract_slots(cand_grid, rows, cols)
-                        # Cases des emplacements injouables de CETTE candidate,
-                        # réparties entre celles qui portaient déjà une lettre
-                        # et celles qui étaient encore blanches, calculé à
-                        # partir de l'affectation BRUTE — voir
-                        # `_impossible_cell_groups`'s propre docstring pour le
-                        # pourquoi (avant tout nettoyage, à la demande
-                        # explicite de l'utilisateur : après nettoyage, ces
-                        # cases sont de toute façon toutes redevenues
-                        # blanches, rendant la distinction impossible).
-                        cand_blank_impossible_cells, cand_lettered_impossible_cells = (
-                            _impossible_cell_groups(
-                                cand_slots, cand_diag["assignment"], cand_diag["impossible_slots"],
-                            )
-                        )
                         cand_seed, cand_confirmed = _build_retry_seed(
                             cand_grid, rows, cols, cand_slots,
                             cand_diag["assignment"], cand_diag["impossible_slots"],
                             locked_letters=carry_locked_letters,
                             exclude_impossible_locked=force_exclude,
+                            seed_grid=carry_seed_grid, index=index, rng=rng,
                         )
-                        result.append((
-                            cand_seed, cand_confirmed, cand_slots,
-                            cand_blank_impossible_cells, cand_lettered_impossible_cells,
-                        ))
+                        result.append((cand_seed, cand_confirmed, cand_slots))
                     return result
 
                 # Parmi les 6 nettoyées, celle qui l'emporte maximise la somme
@@ -3895,20 +5485,36 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # total de lettres) — appliquée ici au résultat *après*
                 # nettoyage (le vrai signal utile pour repartir), pas à un
                 # critère pré-nettoyage comme précédemment.
+                #
+                # Départagée par le nombre de cases noires du candidat
+                # (`_candidate_black_count`, sur `cand_seed`), à la demande
+                # explicite de l'utilisateur, après un vrai blocage constaté
+                # en direct sur une grande grille (30×30) très majoritairement
+                # verrouillée : le critère précédent ne regardait que les
+                # mots, jamais les cases noires, et pouvait donc reconduire
+                # indéfiniment un candidat à faible marge de manœuvre
+                # structurelle plutôt qu'un autre, à score de mots égal, qui
+                # aurait laissé plus de cases noires pour donner de la place
+                # au palier suivant — confirmé en direct : 11 paliers
+                # strictement identiques d'affilée (mêmes cases noires, mêmes
+                # emplacements impossibles) avant ce correctif.
                 def _words_in_place_score(cand_slots, cand_confirmed):
                     return sum(
                         len(cells) ** 2 for cells in cand_slots
                         if all(cell in cand_confirmed for cell in cells)
                     )
 
+                def _candidate_black_count(cand_seed):
+                    return sum(row.count(BLACK) for row in cand_seed)
+
                 previous_locked_letters = carry_locked_letters
                 cleaned_candidates = _clean_all_candidates(force_exclude=False)
-                (
-                    carry_seed_grid, carry_locked_letters, _,
-                    winning_blank_impossible_cells, winning_lettered_impossible_cells,
-                ) = max(
+                carry_seed_grid, carry_locked_letters, _ = max(
                     cleaned_candidates,
-                    key=lambda sc: _words_in_place_score(sc[2], sc[1]),
+                    key=lambda sc: (
+                        _words_in_place_score(sc[2], sc[1]),
+                        _candidate_black_count(sc[0]),
+                    ),
                 )
                 # Point fixe détecté : ce palier n'a produit aucun changement du
                 # tout (les lettres confirmées sont rigoureusement identiques à
@@ -3933,42 +5539,20 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # simple sur la seule gagnante.
                 if previous_locked_letters is not None and carry_locked_letters == previous_locked_letters:
                     cleaned_candidates = _clean_all_candidates(force_exclude=True)
-                    (
-                        carry_seed_grid, carry_locked_letters, _,
-                        winning_blank_impossible_cells, winning_lettered_impossible_cells,
-                    ) = max(
+                    carry_seed_grid, carry_locked_letters, _ = max(
                         cleaned_candidates,
-                        key=lambda sc: _words_in_place_score(sc[2], sc[1]),
+                        key=lambda sc: (
+                            _words_in_place_score(sc[2], sc[1]),
+                            _candidate_black_count(sc[0]),
+                        ),
                     )
-                # Verrouiller UNE seule case noire au hasard parmi les cases
-                # des emplacements injouables de la candidate retenue, à la
-                # demande explicite de l'utilisateur : "tentative de ne pas
-                # reproduire les mêmes erreurs en verrouillant progressivement
-                # les configurations problématiques." Une seule case au total
-                # pour ce palier — pas une par candidate nettoyée ci-dessus —
-                # donc appliquée une fois que la candidate gagnante (et, le
-                # cas échéant, sa version "point fixe cassé" ci-dessus) est
-                # définitivement connue. S'applique aussi bien ici (le
-                # nettoyage complet) qu'à la reprise "telle quelle" ci-dessus
-                # (voir son propre commentaire, plus haut) — à la demande
-                # explicite de l'utilisateur, après avoir remarqué que la
-                # première version ne l'appliquait qu'au nettoyage complet :
-                # "il faut ajouter une case noire à tous les tours où on
-                # nettoie les emplacements injouables (pas seulement quand on
-                # nettoie aussi les cases noires)" — la reprise "telle quelle"
-                # nettoie elle aussi les emplacements bloqués (voir
-                # `_clean_blocked_slots` juste au-dessus), donc cette règle
-                # s'y applique tout autant ; elle reste la SEULE exception au
-                # principe "aucune case noire touchée" de ce chemin-là.
-                # `_impossible_cell_groups`/`_lock_one_impossible_cell`
-                # implémentent la priorité aux cases encore blanches (voir
-                # leurs propres docstrings) — la même logique que ci-dessus,
-                # factorisée pour être appelée depuis les deux chemins sans
-                # dupliquer le calcul.
-                _lock_one_impossible_cell(
-                    carry_seed_grid, rows, cols,
-                    winning_blank_impossible_cells, winning_lettered_impossible_cells, rng,
-                )
+                # No black cell is added here any more either (the
+                # single-cell lock that used to run at this exact point,
+                # shared with the "reprise telle quelle" branch above, was
+                # removed entirely at the user's explicit request — see
+                # CLAUDE.md for its full history) — a full cleanup now only
+                # ever changes which words/black cells survive from the
+                # already-generated pattern, never adds a new one.
                 just_cleaned = True
             # Le ratio cible ne progresse plus d'un palier à l'autre (reste
             # fixé à `black_ratio`, 0.0 par défaut), à la demande explicite
@@ -3978,6 +5562,18 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # (_build_retry_seed juste au-dessus) suffit à faire progresser
             # la recherche, sans avoir besoin de densifier artificiellement
             # la grille palier après palier.
+
+    # Arrêt propre du thread de drainage de `best_state_queue` (voir sa
+    # propre docstring plus haut) — la recherche elle-même est terminée
+    # (succès ou épuisement de `attempts`), rien de plus ne sera jamais
+    # publié dessus. `daemon=True` garantirait de toute façon qu'il ne
+    # bloque jamais la fin du processus si ce point n'était pas atteint
+    # (par exemple `GenerationCancelled`, levée depuis l'intérieur de la
+    # boucle ci-dessus, sans jamais repasser par ici) — cet arrêt explicite
+    # est purement une question d'hygiène dans le cas normal, pas une
+    # protection dont la correction du programme dépendrait.
+    stop_best_state_drain.set()
+    best_state_drain_thread.join(timeout=1.0)
 
     if best is None:
         # "Continuer" button on the web UI (see _serialize_resume_state's
@@ -3993,7 +5589,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             )
             if carry_seed_grid is not None else None
         )
-        progress("pattern_failed", attempts=attempts, last_attempt=last_diag,
+        progress("pattern_failed", attempts=attempts,
+                  last_attempt=_public_diag(last_diag) if last_diag is not None else None,
                   examples=last_examples, total_attempts=total_attempts_tried,
                   resume_state=resume_state)
         return None
