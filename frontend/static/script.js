@@ -230,11 +230,12 @@ function setStatus(message, isError) {
 // backend/crossword_gen.py's try_fill, diagnostics["example_grid"]) — at
 // the user's explicit request, so a slow or ultimately-failing generation
 // isn't a black box: the player gets a visual sense of what was tried.
-// `examples` is an array of up to FAILED_ATTEMPT_EXAMPLES (6, see
-// crossword_gen.py) `{example_grid, impossible_cells, forced_cells,
-// locked_cells}` objects — one per parallel attempt at the same palier when
-// every one of them failed, laid out 2 rows of 3 (see #attempt-preview-grids
-// in style.css); a single-element array for the "minimizing"/"clues" steps'
+// `examples` is an array, no fixed length cap (see crossword_gen.py), of
+// `{example_grid, impossible_cells, forced_cells, locked_cells}` objects —
+// one per parallel attempt at the same palier when every one of them
+// failed, laid out as many rows of 3 as needed (see #attempt-preview-grids
+// in style.css, a plain CSS grid with no fixed row count); a single-element
+// array for the "minimizing"/"clues" steps'
 // one-grid preview of the actual, successful pattern. Each `example_grid`
 // is a 2D array of single characters — "#" for black, "." for a white cell
 // whose word wasn't yet determined, any other character for a placed

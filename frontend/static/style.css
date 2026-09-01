@@ -332,16 +332,19 @@ button:disabled {
   font-size: 1rem;
 }
 
-/* Live preview of up to FAILED_ATTEMPT_EXAMPLES (6, see crossword_gen.py)
-   failed generation attempts' most-filled-in state, laid out 2 rows of 3,
-   at the user's explicit request — before this, a single example; now one
-   mini-grid per parallel attempt, for a more representative glimpse of
-   what was tried at that step, not a real interactive grid.
+/* Live preview of every failed generation attempt's most-filled-in state
+   (no fixed cap — see crossword_gen.py, at the user's explicit later
+   request "Afficher toutes les meilleures grilles dans l'aperçu, pas
+   seulement les 6 meilleures" — a fixed cap of 6 lived here before that),
+   laid out as many rows of 3 as needed, at the user's explicit request —
+   before this, a single example; now one mini-grid per parallel attempt,
+   for a more representative glimpse of what was tried at that step, not a
+   real interactive grid.
    #attempt-preview-grids is the wrapper holding one .attempt-preview-grid
    per example — a fixed 3-column CSS grid (not flex-wrap) specifically so
-   6 examples always lay out as 2 full rows of 3 regardless of viewport
-   width, exactly as requested, rather than however many happen to fit per
-   row at a given window size. Also reused as-is for a single-grid preview
+   examples always lay out in full rows of 3 regardless of viewport width
+   or how many there are, rather than however many happen to fit per row
+   at a given window size. Also reused as-is for a single-grid preview
    (the "minimizing"/"clues" steps, see CLAUDE.md) — one grid then simply
    occupies the first of the 3 columns, no special-casing needed.
    `justify-items: start` overrides CSS Grid's own default (`stretch`) for

@@ -259,8 +259,8 @@ async def _run_generate_job(job_id, req, resume_state=None):
         job["step"] = {"code": step, **data}
         if step in ("minimizing", "grid_ready"):
             phase_times[step] = time.monotonic()
-        # `examples` (a list of up to FAILED_ATTEMPT_EXAMPLES dicts, each
-        # {example_grid, impossible_cells, forced_cells} — see
+        # `examples` (a list of dicts, each
+        # {example_grid, impossible_cells, forced_cells} — no fixed cap, see
         # crossword_gen.py's generate_grid, CLAUDE.md) is otherwise only
         # visible in `job["step"]` for the single progress event that
         # carries it — the very next event (e.g. the next palier's plain

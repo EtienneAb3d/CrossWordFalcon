@@ -9482,3 +9482,376 @@ what directly exercises the success path itself). A full end-to-end
 (Flash mode) confirmed no regression to the ordinary case: 0 mismatches,
 0 empty white cells each — seed 2 in 24.0s, 63 words, 38 black cells;
 seed 7 in 13.0s, 52 words, 47 black cells.
+
+`_clean_blocked_slots`'s per-impossible-slot word removal reverted from
+"one crossing word at a time, stop once satisfied" back to "remove every
+crossing word at once" — the exact behavior this same mechanism had
+before that incremental refinement was ever introduced — at the user's
+explicit request: "Actuellement : pour un emplacement réputé injouable,
+on ne supprime qu'un seul mot croisant. Modifier : on retire tous les
+mots croisants (situation antérieure)." The intermediate `while True:`
+loop (tracking `exhausted`, checking `_slot_candidate_count(...) >=
+min_candidates` after each single removal) is gone; the function now
+computes `crossing` once per impossible slot and, unless the black-cell
+alternative fires (see below), unassigns every one of `crossing` in a
+single pass (`for j in crossing: assignment[j] = None`). The now-unused
+`min_candidates` parameter was removed from the signature entirely (no
+caller ever passed a non-default value).
+
+The `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY` (1/10) alternative —
+introduced after the incremental refinement, but conceptually independent
+of "one word vs. all words" — was kept, just adapted to run once per
+impossible slot instead of once per removal iteration (there is no more
+iteration to run it inside of): tried first, before any word removal;
+if it succeeds, the crossing-word removal is skipped entirely for that
+slot (`if placed_black: continue`); if it doesn't fire or fails to find a
+structurally valid cell, every crossing word is removed unconditionally.
+The "zone strictement sans issue" full-blackening fallback (a slot with
+literally zero real candidates for its own length, even fully
+unconstrained) is unchanged in spirit — still checked right after the
+crossing-word removal, still guarded by the same `is_structurally_valid
+(min_interior_free=1)` per cell — only the `exhausted`-tracking variable
+that used to gate it was dropped, since removal is now always unconditional
+(so the check that used to depend on "did the incremental loop exhaust
+every candidate" simply runs whenever `not placed_black`).
+
+Verified: 4 isolated `_clean_blocked_slots` tests — a 3×3 hand-built grid
+(one impossible down-slot crossing two independently-assigned across
+words, "CAT"/"DOG") confirmed BOTH crossing words are removed in one call
+(not just one), with the black-cell alternative forced off
+(`BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY` monkeypatched to 0.0); the
+same scenario with `index`/`rng` omitted confirmed the pre-existing
+"remove everything" fallback path (for a caller that supplies neither) is
+completely untouched; a 2×5 grid (a 5-letter across "HELLO" crossing a
+2-letter impossible down-slot) with the probability forced to 1.0
+confirmed the black-cell alternative still fires and, when it does, the
+crossing word (HELLO) survives completely untouched (word removal
+correctly skipped); the same grid with a dictionary containing no
+2-letter word at all (probability forced to 0.0) confirmed the "zone
+strictement sans issue" fallback still blackens at least one of the
+slot's own cells once every crossing word is gone and the slot's real
+candidate count is genuinely zero (a full, deterministic "every cell
+gets blackened" outcome isn't always achievable by this pre-existing,
+order-sensitive, one-cell-at-a-time validity loop for every possible
+geometry — a characteristic of code this change didn't touch, not a new
+gap). A full end-to-end `generate_grid()` run on both seeds of the
+standard 15×10 benchmark (Flash mode) confirmed no regression — if
+anything, both seeds finished faster than the immediately preceding
+measurement (10.2s/10.2s vs. 24.0s/13.0s), consistent with removing all
+crossing words at once freeing more of the grid per cleanup pass: 0
+mismatches, 0 empty white cells each — seed 2, 59 words, 42 black cells;
+seed 7, 51 words, 47 black cells.
+
+The up-to-`FAILED_ATTEMPT_EXAMPLES` (6) display pool (`display_unique`/
+`display_pairs`, built from `failed_unique` merged with every state
+`best_state_queue` published during the palier) was changed to keep at
+most **one grid per parallel attempt (process)**, at the user's explicit
+request: "Actuellement : on garde toutes les meilleures grilles de tous
+les process (6 max). Modifier : on ne garde qu'une seule meilleure
+grille par process." Previously, a single worker could contribute several
+distinct entries to this pool — its own final outcome (from
+`failed_unique`) *and* one or more of its own earlier intermediate
+`best_state_queue` publications (each a genuinely different `(grid,
+assignment)` snapshot, since `assigned_count` only grows between
+publications) — since the existing dedup (`display_seen_keys`) only ever
+compared grid+assignment *content*, never *which attempt produced it*. A
+single unusually productive worker could therefore occupy several of the
+6 displayed slots on its own, crowding out other workers' own single best
+state.
+
+Fixed by giving `try_fill` a new `attempt_id=None` parameter (no effect
+for any pre-existing caller): recorded verbatim, with no processing at
+all, both in every message `_publish_new_best` puts on `best_state_queue`
+and in `diagnostics["attempt_id"]` on failure. `_pattern_attempt`/
+`_pattern_continue` both pass `attempt_id=seed` — the per-task seed each
+already receives as its own first real parameter, already unique per
+submitted future within a given palier (`seeds = [rng.randrange(2**31)
+for _ in range(PARALLEL_ATTEMPTS)]`), so no new plumbing was needed to
+obtain a per-attempt identifier, only to thread the one that already
+existed one level further. `generate_grid`, right after building
+`display_unique` (the deduped-by-content merge of `failed_unique` and
+this palier's own `published_this_palier`), now groups every entry by
+`d.get("attempt_id")` and keeps only the highest-`_playable_score` one
+per group — a `None` id (no real caller produces one today) is treated as
+its own always-distinct group per entry (keyed by list index), so it can
+never accidentally collapse two genuinely different, unidentified entries
+into one. The pre-existing "the real winner (`failed_pairs[0]`) is always
+shown first, regardless of its own score" invariant is completely
+unaffected — this reduction runs *before* that step, on the whole pool,
+and the winner's own attempt naturally still has exactly one surviving
+entry (itself) either way.
+
+Verified: 3 isolated reproductions of the exact grouping logic (mirrored
+outside `generate_grid`, which isn't itself easily unit-testable in
+pieces, matching this project's own established practice for changes to
+this function) — 3 snapshots from the same attempt at increasing scores
+plus 1 from a different attempt correctly collapsed to exactly 2 survivors
+(the best of the first group, the only one of the second); 3 entries with
+3 distinct attempt ids all survived untouched; 2 entries both carrying
+`attempt_id=None` (one with the higher score) correctly never merged,
+confirming the `None`-is-never-grouped safety net. A direct, non-
+multiprocessing call to both `_pattern_attempt` and `_pattern_continue`
+confirmed the real wiring: each returned `diag["attempt_id"]` matched the
+exact seed it was called with. A real `generate_grid()` run (15×10, seed
+2, Flash mode) with every `on_progress` event run through `fastapi.
+encoders.jsonable_encoder` confirmed all 57 real events serialize cleanly
+(a plain int `attempt_id` was never at risk of the tuple-keyed-dict class
+of bug this exact area has hit before, but re-verified directly given
+this function's own history) — and a full end-to-end run on both seeds
+of the standard 15×10 benchmark confirmed no regression: 0 mismatches, 0
+empty white cells each — seed 2 in 10.1s, 58 words, 39 black cells; seed
+7 in 10.1s, 58 words, 42 black cells.
+
+**The cross-palier full-cleanup mechanism was changed from "clean up to 6
+candidates, keep just the single best one for every non-reset worker" to
+"clean every distinct candidate, keep one cleaned grid per non-reset
+worker"**, at the user's explicit request: "Actuellement : on conserve
+les 6 meilleures grilles (une seule par process) et on relance tous les
+process sur la meilleure grille après nettoyage (sauf les grilles
+nouvelles, actuellement paramétré 1 grille nouvelle). Modifier : on garde
+la meilleure grille de tous les process, soit N grilles pour N process,
+et on relance toutes les meilleures grilles après nettoyage en ayant
+éliminé les moins bonnes en fonction du nombre de nouvelles grilles
+paramétrées." Previously, `_clean_all_candidates` only ever cleaned
+`failed_pairs[:FAILED_ATTEMPT_EXAMPLES]` (6, the *display* cap — see the
+one-per-process display reduction above), picked the single overall best
+(`max(...)` by `_words_in_place_score` then `_candidate_black_count`),
+and every one of the next palier's `PARALLEL_ATTEMPTS - FULL_RESET_
+ATTEMPT_COUNT` non-reset workers restarted from that *same* single grid —
+only their own random seed differed.
+
+`_clean_all_candidates` now iterates every entry of `failed_pairs`
+(unbounded — the 6-grid display cap is a separate, purely visual concern,
+untouched: `failed_pairs` already carries at most one entry per parallel
+attempt of this palier, per `failed_unique`'s own dedup, so this really
+is "N grilles pour N process" as asked). A new `_sorted_by_score` helper
+factors the existing `(_words_in_place_score, _candidate_black_count)`
+key out of the old `max(...)` call (unchanged criteria) into a full
+descending sort. A new `_seed_pool(sorted_candidates)` then keeps
+`max(1, len(sorted_candidates) - FULL_RESET_ATTEMPT_COUNT)` of the
+best-scoring cleaned candidates — eliminating exactly as many of the
+*worst* ones as `FULL_RESET_ATTEMPT_COUNT` ("le nombre de nouvelles
+grilles paramétrées"), the same count already reserved for a totally
+fresh/blank restart next palier — `max(1, ...)` guarantees the pool is
+never fully emptied even if `FULL_RESET_ATTEMPT_COUNT` exceeds the
+candidate count. In the normal case (as many distinct failed candidates
+as `PARALLEL_ATTEMPTS`), this makes the survivor count exactly match the
+number of non-reset worker slots the next palier needs to fill — a clean
+1:1 mapping, one distinct cleaned grid per worker.
+
+A new `carry_seed_pool` variable (a list of `(seed_grid, locked_letters)`
+pairs, `None` until the first full cleanup — mirroring `carry_seed_grid`/
+`carry_locked_letters`'s own existing initialization) is set to this
+survivor list at both points `_clean_all_candidates`'s result used to
+feed the old `max(...)` selection (the normal pass and the fixed-point-
+breaking `exclude_impossible_locked=True` pass). `carry_seed_grid`/
+`carry_locked_letters` themselves are **not** removed or repurposed —
+they still always hold the single best cleaned candidate (`carry_seed_
+pool[0]`, since the pool is sorted descending) and are still used
+*exactly* as before everywhere else in this function (previews other than
+the very next palier's own dispatch, `resume_state` serialization for the
+"Continuer" button, the fixed-point comparison) — only the *next-palier
+dispatch itself* was changed to draw from the new pool instead.
+
+At the dispatch site (`futures = [...]` for `_pattern_attempt`), each
+non-reset worker (`i >= reset_count`) now receives `pool[(i - reset_count)
+% len(pool)]` instead of the same `carry_seed_grid`/`carry_locked_letters`
+pair unconditionally — `pool` itself resolves to `carry_seed_pool` when
+set, or falls back to the single-entry `[(carry_seed_grid, carry_locked_
+letters)]` (the exact pre-existing behavior) whenever it isn't (the very
+first palier, or a "Continuer"-resumed run's own first palier, where
+`carry_seed_pool` was never populated in *this* call). The `%
+len(pool)` cycles rather than errors if, exceptionally, `failed_pairs`
+had fewer distinct entries than non-reset slots to fill (heavy content-
+dedup) — a legitimate, accepted degrade: some workers then legitimately
+share a cleaned grid, same as the pre-existing single-grid design already
+did for *all* of them.
+
+The early "cases noires posées" preview (`pattern_generated`, built by
+the parent process before submitting any real work) was generalized the
+same way it already was for the very-first-palier case (one example per
+distinct starting grid, deduped, capped at `FAILED_ATTEMPT_EXAMPLES`)
+rather than staying a single reconstruction from `carry_seed_grid` alone
+— deliberately, to avoid re-triggering the exact preview-mismatch bug
+class this file has hit and fixed several times before (CAROLINE,
+ENREGISTRAT...): once the next palier can genuinely start from several
+distinct grids, a single "representative" preview built from `carry_seed_
+grid` alone could show a pattern no real worker actually receives. For
+each pool entry `p`, the preview is reconstructed with `seeds[reset_count
++ p]` — the exact seed the *first* real worker assigned to that pool
+entry will use (`min(..., len(seeds) - 1)` guards a degenerate edge case,
+`PARALLEL_ATTEMPTS <= FULL_RESET_ATTEMPT_COUNT`, that already existed
+before this change and never crashed then either, just showed a
+non-representative preview — now guarded rather than risking an
+IndexError with the new indexing scheme).
+
+Verified: 3 isolated tests of `_seed_pool`'s exact elimination logic
+(eliminates precisely the worst N; never empties the pool even when
+`FULL_RESET_ATTEMPT_COUNT` exceeds the candidate count; degrades to
+`max(1, ...)` correctly) and 3 isolated tests of the exact dispatch-cycling
+logic (the normal case gives every non-reset worker a genuinely distinct
+grid — `len(set(...)) == 9` out of 9 non-reset slots; a shortfall pool of
+3 candidates correctly cycles to fill 9 slots without error; a
+single-entry pool reproduces the pre-existing "everyone gets the same
+grid" behavior exactly) all passed. A real `generate_grid()` run (15×10,
+seed 2, Flash mode) with `on_progress` capturing every `pattern_generated`
+event's own example count confirmed the new per-pool preview genuinely
+engages on every single palier of the run, not just the first — 13/13
+`pattern_generated` events showed 6 distinct examples each, none
+collapsed to 1 (the old single-grid-preview signature) — strong, direct
+evidence the pool itself holds multiple genuinely distinct entries at
+every post-cleanup palier, not just occasionally. The same run, plus a
+separate check with every `on_progress` event passed through `fastapi.
+encoders.jsonable_encoder`, confirmed no serialization regression (39/39
+events clean). A full end-to-end benchmark across 5 scenarios — both
+seeds of the standard 15×10 benchmark, plus two 9×9 seeds and a third
+15×10 seed, all Flash mode — confirmed no regression whatsoever: 0
+mismatches, 0 empty white cells in every single run (15×10 seed 2:
+17.3s/63 words; seed 7: 10.2s/62 words; 9×9 seed 3: 8.2s/29 words; 9×9
+seed 4: 4.7s/35 words; 15×10 seed 30: 9.3s/61 words).
+
+**The fixed 6-grid display cap on every attempt-preview mechanism was
+removed entirely**, at the user's explicit request: "Afficher toutes les
+meilleures grilles dans l'aperçu, pas seulement les 6 meilleures."
+`FAILED_ATTEMPT_EXAMPLES` (the module constant, `6`, this project's whole
+history of tuning this exact preview mechanism going back to its very
+first version) is gone outright — every one of its three real usages
+(the two `if len(early_examples) >= FAILED_ATTEMPT_EXAMPLES: break`
+early-stopping checks in the "pattern_generated" preview loops, and the
+`display_pairs[:FAILED_ATTEMPT_EXAMPLES]` slice feeding `last_examples`
+for "pattern_attempt_failed"/"pattern_failed") simply dropped their cap —
+every distinct candidate is now shown, deduplication (by real pattern
+content, and — since a recent change — by parallel attempt/process) is
+what naturally bounds the list, not an artificial ceiling. The frontend
+needed no change at all: `renderAttemptPreview()` (`frontend/static/
+script.js`) already iterates `examples` with a plain `for...of`, no
+`.slice()`/length cap of its own, and `#attempt-preview-grids` (`style.
+css`) already used a fixed 3-column CSS grid (`grid-template-columns:
+repeat(3, auto)`) with no fixed row count — built that way specifically
+so 6 examples would read as 2 full rows, but never actually assuming
+exactly 6; any larger count simply wraps into more rows for free.
+Comments throughout `crossword_gen.py`, `backend/app.py`, `script.js`,
+and `style.css` that referenced the now-deleted constant or a fixed "6"
+were reworded to describe the new, uncapped behavior; a few nearby
+comments that were already stale from an *earlier* session's own change
+(claiming a "6 meilleures tentatives" cap on `_clean_all_candidates`'s
+own selection, when that had already been widened to *every* distinct
+candidate in the immediately preceding turn) were corrected along the
+way too, since they sat right next to code this change touched anyway.
+
+**A real, previously-latent bug in the "one grid per attempt" guarantee
+was found and fixed while verifying this uncapping live** — not
+introduced by the uncapping itself, but only ever visible once the
+6-slot cap stopped silently truncating the list before the duplicate
+could be noticed. Live diagnostic (`on_progress` counting each `pattern_
+attempt_failed` event's own example count on a real 15×10 run, 10-core
+machine so `PARALLEL_ATTEMPTS=10`) showed events with **11** examples —
+one more than the 10 parallel attempts that palier could ever have
+produced, an impossible count under the "at most one entry per attempt"
+invariant the previous session's own display reduction was supposed to
+guarantee.
+
+Root cause, traced directly: `winner_grid`/`winner_diag` (always forced
+first in `display_pairs`, see its own long-standing "avant nettoyage/
+après nettoyage doit rester comparable" comment) come from `failed_pairs
+[0]` — sorted by `_cleaned_playable_score`, evaluating each candidate's
+*post-cleanup* state. Separately, `display_unique`'s own "one entry per
+attempt" reduction (added last session) picks its single survivor per
+`attempt_id` by `_playable_score` — the *raw*, pre-cleanup state. For the
+winning attempt specifically, these two different criteria can genuinely
+disagree about which of that *same* attempt's own recorded states is
+"best": the attempt's true final result (chosen by `_cleaned_playable_
+score`, becoming the forced winner) versus one of its own earlier
+`best_state_queue`-published intermediate snapshots (chosen by
+`_playable_score` for the per-attempt reduction) — two states with
+genuinely different content, so the pre-existing `winner_key`
+byte-for-byte content check in `display_rest`'s exclusion filter never
+recognized them as the same thing, letting the *same* parallel attempt
+appear twice: once as the forced winner, once via its own leftover,
+inferior intermediate snapshot.
+
+Fixed by also excluding, in `display_rest`'s filter, any `display_unique`
+entry whose own `attempt_id` matches the winner's (`winner_diag.get(
+"attempt_id")`) — not just entries with byte-identical content — with a
+defensive `winner_attempt_id is None` bypass for a hypothetical caller
+that never sets the field (none exists today, matching the same
+defensive convention already used for the per-attempt reduction itself).
+Verified: 3 isolated reproductions of the exact exclusion logic — a
+same-attempt, different-content intermediate snapshot is now correctly
+excluded alongside the byte-identical winner itself (only a genuinely
+different attempt survives); distinct attempts are all still kept
+untouched; a `None` attempt_id case is a safe no-op, excluding nothing
+extra. A real `generate_grid()` run (15×10, seed 2) with the same
+`on_progress` diagnostic re-run after the fix confirmed every single
+`pattern_attempt_failed` event now caps out at exactly 10 (`PARALLEL_
+ATTEMPTS`) examples, never 11, across 13 real events — direct,
+before/after confirmation the fix actually closes the gap it targets. A
+real JS syntax check (`esprima`, temporarily installed and removed
+again afterward) confirmed `script.js`/`i18n.js` still parse correctly
+after the comment updates. Two further checks — every `on_progress`
+event across a real run passed through `fastapi.encoders.jsonable_
+encoder` with zero failures, and a full end-to-end benchmark on both
+seeds of the standard 15×10 benchmark — confirmed no regression: 0
+mismatches, 0 empty white cells each (seed 2 in 14.6s, 65 words; seed 7
+in 11.2s, 63 words).
+
+**The very first preview of a palier — "Génération du motif de cases
+noires" (the `"pattern"` progress event, the cycle-start state shown
+*before* this palier's own black cells are even placed) — was still
+stuck showing exactly one grid**, at the user's direct report: "Les
+extraits 'Génération du motif de cases noires' ne montrent qu'une seule
+grille. Il devrait maintenant y en avoir N pour N process." Root cause:
+the pool-based dispatch diversity added two turns ago only ever reached
+the *second* preview (`"pattern_generated"`, "cases noires posées" —
+built once black cells for this specific palier are already decided) —
+the `"pattern"` event's own `examples` list was still built from a single
+`_cycle_start_preview(rows, cols, carry_seed_grid, carry_locked_letters,
+carry_preseed_assignment)` call, unconditionally, exactly as it was
+before the pool ever existed.
+
+Fixed by computing `pool` (the same `carry_seed_pool if carry_seed_pool
+else [(carry_seed_grid, carry_locked_letters)]` fallback already used
+for dispatch/the second preview) once, right at the very top of the
+palier loop — before the "reprise telle quelle" vs. "motif neuf" branch
+even runs — and branching the `"pattern"` event's own `examples`
+construction on `carry_preseed_assignment`: a "reprise telle quelle"
+palier still shows exactly one grid (its own single, rigorously-identical
+motif — genuinely nothing more to show, per `_pattern_continue`'s own
+docstring), while a "motif neuf" palier now builds one example per
+distinct `pool` entry via `_cycle_start_preview(rows, cols, pool_grid,
+pool_locked, None)`, deduplicated by the raw `pool_grid` content (never
+the post-overlay preview grid — matching the same convention already used
+by the other two "one per pool/seed entry" loops in this file) — this
+correctly collapses back to a single blank-grid example on the very first
+palier of a call (`pool` there is always the single-entry `[(None,
+None)]` fallback, since neither `carry_seed_pool` nor `carry_seed_grid`
+exist yet). `low_candidate_cells` (`_low_candidate_slot_cells`, the
+below-prefill-threshold highlight) is now computed per pool entry too, on
+that entry's own locked letters — previously computed once from the
+single primary `carry_seed_grid`/`carry_locked_letters`, which would have
+been visually wrong once overlaid on any *other* pool entry's own,
+different grid. The now-redundant second computation of `pool` inside the
+"motif neuf" dispatch branch (previously computed there for the first
+time) was removed — that branch now simply reuses the one computed at the
+top of the loop, never recomputing an identical value twice.
+
+Verified: a real `generate_grid()` run (15×10, seed 2, Flash mode,
+`MAX_CONSECUTIVE_CONTINUE_PALIERS` at its real default of 0, so every
+failed palier goes through nettoyage) with `on_progress` capturing every
+`"pattern"` event's own example count confirmed attempt 1 shows exactly 1
+example (the blank first-palier case) and every one of the following 14
+paliers shows 9 distinct examples (`PARALLEL_ATTEMPTS − FULL_RESET_
+ATTEMPT_COUNT` = 10 − 1 on this 10-core machine) — matching the pool size
+exactly, never collapsed to 1. A second run with `MAX_CONSECUTIVE_
+CONTINUE_PALIERS` monkeypatched to 5 (to force at least one real "reprise
+telle quelle" streak, never naturally reached at the real default of 0)
+confirmed the other branch too: paliers 1-14 (blank first palier, plus a
+real "reprise telle quelle" streak) all show exactly 1 example, and the
+moment a nettoyage is finally forced (palier 15 onward) the count jumps to
+8-9 distinct examples — direct, live confirmation both branches of the
+new conditional behave exactly as intended, not just one of them. Two
+further checks — every `on_progress` event across a real run passed
+through `fastapi.encoders.jsonable_encoder` with zero failures (66/66
+events clean), and a full end-to-end benchmark on both seeds of the
+standard 15×10 benchmark — confirmed no regression: 0 mismatches, 0 empty
+white cells each (seed 2 in 5.4s, 56 words; seed 7 in 11.4s, 64 words).

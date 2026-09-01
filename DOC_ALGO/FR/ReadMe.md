@@ -261,8 +261,9 @@ de croisements pour révéler un conflit) : le comparer à un résultat
 réellement abouti d'une autre tentative fausserait la sélection. La
 sélection qui alimente réellement le palier suivant ne se fie donc qu'aux
 résultats finaux de vraies recherches abouties ; les états publiés par la
-file restent visibles dans l'aperçu affiché à l'écran (jusqu'à 6 grilles),
-dans un vivier séparé qui, lui, peut les inclure, mais qui n'a aucune
+file restent visibles dans l'aperçu affiché à l'écran (toutes les grilles
+distinctes, sans plafond — voir plus bas), dans un vivier séparé qui, lui,
+peut les inclure, mais qui n'a aucune
 influence sur la progression réelle de la recherche. La première des
 grilles montrées à l'écran est toujours, exactement, celle qui va
 réellement être nettoyée et conservée pour le palier suivant si elle est
@@ -270,6 +271,27 @@ retenue — les autres grilles montrées peuvent provenir du vivier élargi
 (résultats réels + états publiés par la file), mais jamais à la place de
 celle-là, pour que la comparaison "avant nettoyage / après nettoyage"
 entre deux aperçus successifs reste valide.
+
+**Une seule grille par tentative parallèle dans ce vivier élargi**, pas
+plusieurs : une même tentative parallèle peut, au cours de sa propre
+recherche, avoir publié plusieurs états successifs (chacun un nouveau
+record, voir ci-dessus) en plus de son propre résultat final — sans
+filtrage, ces différents instantanés d'une seule et même tentative
+pouvaient occuper à eux seuls plusieurs des places affichées, au
+détriment des autres tentatives du même palier. Chaque état, qu'il vienne
+d'un résultat final ou d'une publication intermédiaire, porte désormais
+l'identité de la tentative qui l'a produit ; parmi tous les états d'une
+même tentative, seul celui au score le plus élevé (le même critère que le
+tri de l'affichage) est conservé — le vivier élargi ne peut donc plus
+jamais montrer deux états distincts provenant de la même tentative
+parallèle. Cette même règle protège aussi la toute première grille
+montrée (la grille réellement conservée pour le palier suivant, voir plus
+haut) : sa propre tentative d'origine ne peut plus, elle non plus,
+apparaître une seconde fois plus loin dans la liste via un de ses propres
+instantanés antérieurs — un cas réel trouvé en direct une fois le plafond
+d'affichage retiré (voir plus bas), puisque cette grille-là est choisie
+selon un critère légèrement différent (l'état après nettoyage) de celui
+qui départage le reste du vivier (l'état brut).
 
 ## Étape 2 — Remplir la grille avec de vrais mots
 
@@ -576,7 +598,7 @@ palier suit son cours normal, entre les deux cas suivants, dans cet ordre :
    où elle s'était arrêtée plutôt que de repartir de zéro sur le même
    motif.
 
-   **Exception : avec une probabilité d'1/10, ce retrait de mot est
+   **Exception : avec une probabilité d'1/10, ce retrait de mots est
    remplacé par l'ajout d'une case noire.** Uniquement sur ce chemin de
    reprise "telle quelle" — jamais sur le nettoyage complet
    ("Simplification puis motif neuf" ci-dessous), qui régénère déjà un
@@ -600,15 +622,14 @@ palier suit son cours normal, entre les deux cas suivants, dans cet ordre :
    motif mis à jour.
 
    **Zone strictement sans issue : toutes ses cases restantes sont
-   noircies d'un coup.** Si le retrait de mots croisants va jusqu'au bout
-   (plus aucun mot croisant assigné à retirer pour cet emplacement) et
-   que celui-ci n'a *toujours* strictement aucun candidat réel une fois
-   toute contrainte de croisement ainsi levée — typiquement une longueur
-   que le dictionnaire ne couvre pas du tout —, plus aucun retrait de mot
-   ne pourra jamais débloquer cette zone : chacune de ses cases restantes
-   est alors directement noircie (toujours sous réserve de garder la
-   grille valide, case par case), plutôt que de laisser cette même zone
-   resurgir identique à chaque nettoyage futur.
+   noircies d'un coup.** Une fois tous les mots croisants effectivement
+   retirés (ci-dessus), si l'emplacement n'a *toujours* strictement aucun
+   candidat réel une fois toute contrainte de croisement ainsi levée —
+   typiquement une longueur que le dictionnaire ne couvre pas du tout —,
+   plus aucun retrait de mot ne pourra jamais débloquer cette zone :
+   chacune de ses cases restantes est alors directement noircie (toujours
+   sous réserve de garder la grille valide, case par case), plutôt que de
+   laisser cette même zone resurgir identique à chaque nettoyage futur.
 
    Toutes les tentatives parallèles de ce palier partagent ce **même
    motif rigoureusement identique** — seul l'ordre dans lequel chacune
@@ -645,43 +666,58 @@ palier suit son cours normal, entre les deux cas suivants, dans cet ordre :
    conservé. Cet ordre compte : décider des cases noires à garder se fait à
    partir de ce qui reste *après* le retrait des mots, jamais avant.
 
-   Ce premier retrait se fait un mot croisant à la fois, pas tous d'un
-   coup : pour chaque emplacement impossible, tant qu'il reste bloqué
-   (aucun vrai mot du dictionnaire ne correspond aux lettres déjà imposées
-   par les mots croisants encore en place), un de ces mots croisants est
-   tiré au hasard et retiré, puis on revérifie — dès qu'au moins un vrai
-   mot redevient possible, l'opération s'arrête pour cet emplacement, sans
-   toucher aux autres mots croisants encore là.
+   Ce premier retrait retire TOUS les mots croisant un emplacement
+   impossible, d'un coup — jamais un seul à la fois. Une exception
+   subsiste, la même que celle décrite plus haut pour la reprise "telle
+   quelle" : avec une probabilité d'1/10, ce retrait est remplacé par
+   l'ajout d'une case noire sur l'emplacement impossible lui-même, tentée
+   une seule fois par emplacement ; ce n'est que si cette alternative
+   n'est pas tentée ou échoue que le retrait de tous les mots croisants a
+   lieu.
 
    Une case noire déjà présente dans le motif reçu en entrée de ce palier
    reste toujours noire, quoi qu'il arrive à son propre mot pendant la
    recherche de cette tentative précise.
 
-   Ces deux temps sont appliqués aux tentatives échouées de ce palier
-   retenues comme candidates — jusqu'à 6 (`FAILED_ATTEMPT_EXAMPLES`), au
-   plus la poignée de tentatives déjà conclues au moment où les autres sont
-   interrompues (voir plus haut) ; la grille conservée pour le palier
-   suivant est celle qui, une fois nettoyée, maximise la **somme des
-   carrés des longueurs des mots en place** (un mot n'est "en place" que
-   si toutes ses cases sont confirmées — même principe que le critère qui
-   choisit, plus haut, parmi plusieurs tentatives parallèles réussies),
-   départagée, à score égal, par le **nombre de cases noires** de la
-   candidate (la plus noire l'emporte) — sur une grille très largement
-   verrouillée, cette seconde condition laisse plus de marge de manœuvre
-   structurelle au palier suivant qu'un critère fondé sur les seuls mots —
-   et sert de point de départ à un tout nouveau motif au palier suivant.
+   Ces deux temps sont appliqués à **toutes** les tentatives échouées et
+   distinctes de ce palier (jusqu'à `PARALLEL_ATTEMPTS`, une par
+   tentative — exactement les mêmes que celles montrées à l'écran,
+   également sans plafond, voir "Aperçu affiché pendant la génération"
+   plus bas), à la demande explicite de l'utilisateur : "on garde la
+   meilleure grille de tous les process,
+   soit N grilles pour N process." Chacune, une fois nettoyée, reçoit le
+   même score que celui utilisé plus haut pour départager les tentatives
+   parallèles réussies — la **somme des carrés des longueurs des mots en
+   place** (un mot n'est "en place" que si toutes ses cases sont
+   confirmées), départagée à score égal par le **nombre de cases noires**
+   de la candidate (la plus noire l'emporte, pour laisser plus de marge
+   de manœuvre structurelle au palier suivant sur une grille très
+   largement verrouillée).
+
+   Triées du meilleur score au moins bon, les grilles nettoyées les moins
+   bonnes sont ensuite **éliminées** — autant qu'il y a de "grilles
+   nouvelles" configurées (voir juste en dessous), jamais plus, et jamais
+   au point de vider entièrement la sélection (il en reste toujours au
+   moins une, la meilleure). Chacune des grilles nettoyées survivantes
+   sert alors de point de départ à l'un des workers non réinitialisés du
+   palier suivant — une grille distincte par worker, pas une seule grille
+   reprise identiquement par tous : dans le cas normal (autant de
+   tentatives échouées distinctes que de workers), le nombre de grilles
+   qui survivent à l'élimination correspond exactement au nombre de
+   workers non réinitialisés à pourvoir, chacun recevant ainsi sa propre
+   grille de départ, jamais celle d'un autre.
 
    Juste après un tel nettoyage complet, une des tentatives parallèles du
-   palier suivant repart d'une **grille entièrement vierge** plutôt que de
-   la grille nettoyée — **une seule d'entre elles** (`backend/
-   crossword_gen.py`, `generate_grid`, `FULL_RESET_ATTEMPT_COUNT`) :
-   toutes les autres tentatives partagent la même grille de départ (seul
-   leur tirage aléatoire diffère), avec le risque qu'elles retombent
-   toutes sur le même type d'impasse ; réserver une seule tentative du lot
-   à un vrai nouveau départ permet parfois d'échapper à ce blocage répété,
-   à moindre coût pour le contenu déjà reporté du reste du lot. Ne
-   s'applique jamais après une reprise "telle quelle" (cas 1 ci-dessus),
-   seulement juste après un nettoyage complet.
+   palier suivant repart d'une **grille entièrement vierge** plutôt que
+   d'une grille nettoyée — **une seule d'entre elles** (`backend/
+   crossword_gen.py`, `generate_grid`, `FULL_RESET_ATTEMPT_COUNT`) : les
+   autres tentatives, elles, reprennent chacune sa propre grille nettoyée
+   parmi les survivantes ci-dessus (et non plus toutes la même grille de
+   départ) — le nombre de grilles nouvelles ainsi réservées est
+   précisément le nombre de grilles nettoyées éliminées juste au-dessus,
+   pour que chaque place du palier suivant soit pourvue exactement une
+   fois. Ne s'applique jamais après une reprise "telle quelle" (cas 1
+   ci-dessus), seulement juste après un nettoyage complet.
 
 Aucune case noire n'est jamais ajoutée par l'un ou l'autre de ces deux cas —
 seuls les mots/cases noires déjà présents dans le motif choisi survivent ou
@@ -729,26 +765,40 @@ pour chaque palier : d'abord le motif de départ (le motif repris du palier
 précédent, avec ses éventuelles cases/lettres verrouillées) ; puis, dès
 que les cases noires de ce palier sont posées mais avant que la recherche
 de mots ne démarre, le motif noir/blanc obtenu ; puis, si le palier
-échoue, jusqu'à 6 des meilleures tentatives échouées avec leurs lettres
-réelles et leurs diagnostics complets (cases injouables, cases
-verrouillées).
+échoue, toutes les meilleures tentatives échouées distinctes de ce
+palier, sans plafond, avec leurs lettres réelles et leurs diagnostics
+complets (cases injouables, cases verrouillées).
 
-Pour un palier « motif neuf » (qui pose les cases noires et lance la
-recherche dans le même appel, exécuté d'un bloc dans son propre processus
-worker), le motif « cases noires posées » est calculé et publié par le
-processus parent lui-même, avant même de soumettre les tentatives
-parallèles — en reconstruisant exactement le motif que la dernière
-tentative jamais réinitialisée de ce palier va elle-même calculer dans
-son propre processus (la pose des cases noires étant une fonction pure de
-ses paramètres, l'appeler une seconde fois avec la même graine produit le
-motif identique, au bit près). Sur le tout premier palier d'une
-génération (avant que quoi que ce soit n'ait jamais été reporté d'un
-palier à l'autre), ce calcul se fait une fois par tentative parallèle sur
-le point d'être lancée, dédupliqué par motif réel et plafonné à 6 grilles
-distinctes ; sur tout palier suivant, une seule grille suffit, puisque la
-diversité existe déjà via le contenu reporté d'un palier à l'autre. Ce
-mécanisme ne s'applique jamais à une reprise « telle quelle », dont
-l'aperçu coïncide déjà avec le motif de départ du cycle.
+Pour un palier « motif neuf » qui suit un nettoyage complet — celui qui
+peut désormais repartir de plusieurs grilles nettoyées distinctes plutôt
+que d'une seule (voir "Quand un palier échoue" plus haut) — le tout
+premier de ces deux aperçus (le motif de départ, avant même la pose de
+nouvelles cases noires) montre lui aussi une grille par grille nettoyée
+survivante du vivier, pas une seule : chaque tentative parallèle non
+réinitialisée de ce palier démarre déjà, à cet instant précis, sur sa
+propre grille de départ distincte, donc l'aperçu la montre telle quelle.
+Dédupliqué par motif réel, sans aucun plafond, comme partout ailleurs
+dans ce mécanisme de vivier. Sur le tout premier palier d'une génération
+(rien encore reporté d'un palier à l'autre) comme lors d'une reprise
+« telle quelle » (motif rigoureusement identique pour toutes les
+tentatives, voir plus haut), une seule grille suffit — il n'y a, dans ces
+deux cas précis, rien de plus à montrer.
+
+Pour ce même palier « motif neuf », le second aperçu — « cases noires
+posées » — est calculé et publié par le processus parent lui-même, avant
+même de soumettre les tentatives parallèles — en reconstruisant
+exactement le motif que le worker réel à qui cette grille de départ sera
+effectivement assignée va lui-même calculer dans son propre processus (la
+pose des cases noires étant une fonction pure de ses paramètres, l'appeler
+une seconde fois avec la même graine produit le motif identique, au bit
+près). Sur le tout premier palier d'une génération comme sur tout palier
+suivant un nettoyage complet, ce calcul se fait une fois par grille de
+départ distincte sur le point d'être lancée — une par tentative parallèle
+sur une grille vierge pour le tout premier palier, une par grille
+nettoyée survivante pour tout palier suivant un nettoyage — dédupliqué
+par motif réel, sans aucun plafond, dans les deux cas. Ce mécanisme ne
+s'applique jamais à une reprise « telle quelle », dont l'aperçu coïncide
+déjà avec le motif de départ du cycle.
 
 Cette reconstruction, purement destinée à l'affichage, ne peut en aucun
 cas altérer les lettres réellement verrouillées transmises au palier —
