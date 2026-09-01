@@ -387,8 +387,11 @@ croisement — un mot qui colle bien au consensus sur plusieurs cases à la
 fois est essayé avant un mot qui n'y colle pas du tout, plutôt qu'un tirage
 entièrement aléatoire parmi tous les mots valides. Le tout premier mot
 essayé n'est toutefois pas strictement le mieux classé : le programme
-pioche au hasard parmi les 5000 meilleurs candidats restants à chaque fois,
-une fenêtre qui se décale au fur et à mesure. Sur un emplacement encore
+pioche au hasard parmi les `CANDIDATE_SCORE_WINDOW` meilleurs candidats
+restants à chaque fois (actuellement 20 000 — soit la totalité du
+dictionnaire FR pour n'importe quelle longueur de mot jusqu'à 8 lettres
+inclus, qui en compte 19 066), une fenêtre qui se décale au fur et à
+mesure. Sur un emplacement encore
 entièrement vierge (aucune case fixée par un croisement), ce classement
 n'a en pratique plus aucun effet discriminant — une fenêtre aussi large
 revient alors à un tirage quasiment uniforme dans tout le dictionnaire de

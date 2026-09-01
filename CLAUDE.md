@@ -9855,3 +9855,22 @@ through `fastapi.encoders.jsonable_encoder` with zero failures (66/66
 events clean), and a full end-to-end benchmark on both seeds of the
 standard 15×10 benchmark — confirmed no regression: 0 mismatches, 0 empty
 white cells each (seed 2 in 5.4s, 56 words; seed 7 in 11.4s, 64 words).
+
+`CANDIDATE_SCORE_WINDOW` was raised again, from 5000 to **20000**, at the
+user's explicit request — "Donne un nom de variable pour les 5000
+meilleurs. Fixe cette variable à 20000 pour le moment (tout ce qui est
+dispo pour les 8 lettres)." The variable already existed under this exact
+name (see its own entry above, "Relevée de 200 à 5000"); this request only
+asked for the value itself to change, plus confirmation of the name. 20000
+was picked specifically because it already exceeds the French wordlist's
+own count of 8-letter words (19,066, counted directly from `data/
+wordlist_fr_full.tsv`'s `MOT` column) — so at this value the window no
+longer excludes any word at all for a slot of 8 letters or fewer (the
+overwhelming majority of real crossword slots), and very nearly so for
+most longer lengths too. Only the constant itself changed
+(`CANDIDATE_SCORE_WINDOW = 5000` → `20000`) — no other part of the
+mechanism (the shuffle-before-sort tie-breaking, the sliding-window
+semantics, the `if self.letter_scores:` gate) was touched. Verified: a
+real `generate_grid()` run on both seeds of the standard 15×10 benchmark
+(Flash mode) confirmed no regression: 0 mismatches, 0 empty white cells
+each — seed 2 in 10.3s, 68 words; seed 7 in 10.6s, 57 words.

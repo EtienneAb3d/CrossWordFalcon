@@ -1779,7 +1779,20 @@ def _slots_touching(slots, target_indices):
 # discriminant sur le tri — voir `_candidate_score`), revient en pratique
 # à un tirage quasiment uniforme parmi tout le dictionnaire de cette
 # longueur, plutôt qu'à une vraie priorité aux mots les mieux notés.
-CANDIDATE_SCORE_WINDOW = 5000
+#
+# Relevée à nouveau de 5000 à 20000, à la demande explicite de
+# l'utilisateur, fixée "pour le moment" à "tout ce qui est dispo pour les
+# 8 lettres" — le dictionnaire FR compte 19 066 mots de 8 lettres (compté
+# en direct sur data/wordlist_fr_full.tsv), donc 20000 couvre déjà la
+# totalité du dictionnaire pour n'importe quelle longueur de slot jusqu'à
+# 8 lettres inclus (et la quasi-totalité au-delà — seules quelques
+# longueurs bien plus rares/longues en comptent davantage) : à cette
+# valeur, la fenêtre n'exclut plus aucun mot pour la grande majorité des
+# emplacements réels, réduisant d'autant plus le tirage à un choix
+# quasiment uniforme sur tout le dictionnaire de la longueur concernée
+# (même conséquence que celle déjà anticipée ci-dessus lors du passage à
+# 5000, mais plus marquée encore).
+CANDIDATE_SCORE_WINDOW = 20000
 
 
 class Filler:
