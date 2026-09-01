@@ -162,6 +162,19 @@ project's engineering language.
     CLAUDE.md's `frontend/server.py` entry for the full incident) — check
     for this whenever a new backend endpoint is added.
 
+16. **`DOC_ALGO/FR/ReadMe.md` must always be tracked in git — never
+    gitignored.** Found live: `/DOC_ALGO/` had been listed in `.gitignore`
+    (alongside genuinely generated/cache directories like `CORPUS/`,
+    `DICS/`, `GRID_SVG/`) even though this specific file is a hand-
+    maintained reference doc, updated on the same footing as `CLAUDE.md`/
+    `README.md` (see permanent rule 11) — every edit to it was silently
+    invisible to `git status`/`git diff`, so a real update could easily
+    look, from the outside, like it had never happened. Fixed by removing
+    the `/DOC_ALGO/` line from `.gitignore` and committing the file for
+    the first time. Check this whenever a new top-level directory is added
+    to `.gitignore`: only genuinely generated/downloaded/cached content
+    belongs there, never a maintained source document.
+
 ## Decisions
 
 ### Architecture
@@ -393,23 +406,17 @@ the current defaults/behavior to know before touching this code.
   A flat, non-escalating `POST_PREFILL_BLACK_FRACTION` is layered on top of
   pre-fill. The web UI exposes this as `black_enrichment_percent` — a
   free-text integer field (0-100, `GenerateRequest.Field(ge=0, le=100)`,
-  default 14), statically initialized (no longer auto-computed from grid
-  size — an earlier `round(0.3 * sqrt(width * height))` formula was
-  dropped at the user's explicit request in favor of this fixed default) —
-  this setting only ever applies to a palier that starts from a
-  blank/cleaned-up grid, never to a "continue verbatim" palier (see
-  below), which never calls `make_pattern` at all. The fraction is
-  computed on the white-cell count **before** pre-fill runs (`make_pattern`'s
-  `initial_white_count`), and pre-fill's own placed cells now genuinely
-  count toward that target: `target = max(placed, black_ratio_floor,
-  round(fraction * initial_white_count))`, `placed` already including
-  whatever pre-fill placed — reversed at the user's explicit request from
-  an earlier version where the fraction was computed on the cells still
-  white right *after* pre-fill and added *on top* of `placed`
-  unconditionally (so pre-fill's own cells never counted toward it). If
-  pre-fill alone already placed more cells than the target percentage of
-  the *original* white-cell count calls for, no further cells are added
-  for this reason at all.
+  default 14) — applied only at a fresh-pattern palier: the very first
+  one, or any palier immediately following a full cleanup (never a
+  "reprise telle quelle" palier, which never calls `make_pattern` at all).
+  The fraction is computed on the white-cell count **before** pre-fill
+  runs (`make_pattern`'s `initial_white_count`), and pre-fill's own placed
+  cells genuinely count toward that target: `target = max(placed,
+  black_ratio_floor, round(fraction * initial_white_count))`. This
+  mechanism was briefly (mistakenly) removed entirely in the same session
+  as the single-cell lock below, then restored once the user clarified
+  that only that separate lock was ever meant to go — see CLAUDE.md for
+  the full history of both.
 - `PARALLEL_ATTEMPTS` (default: this machine's CPU count, see env vars
   above) independent attempts run concurrently per palier via
   `ProcessPoolExecutor`; `attempts` (paliers)
@@ -442,45 +449,19 @@ the current defaults/behavior to know before touching this code.
   neither bound a surviving word nor sit between two confirmed letters on
   the same axis (an isolated-hole check also prevents reopening a cell
   fully surrounded by black cells) — and generate a fresh pattern from
-  that state. Both paths (continue verbatim *and* full nettoyage) then
-  additionally lock in **one** new black cell — exactly one per palier,
-  never one per cleaned candidate — chosen at random among the cells that
-  belonged to any impossible slot of the winning grid, via the shared
-  helpers `_impossible_cell_groups`/`_lock_one_impossible_cell` — at the
-  user's explicit request ("tenter de ne pas reproduire les mêmes erreurs
-  en verrouillant progressivement les configurations problématiques").
-  Originally full-nettoyage-only; extended to the continue-verbatim path
-  too at the user's own explicit follow-up ("il faut ajouter une case
-  noire à tous les tours où on nettoie les emplacements injouables, pas
-  seulement quand on nettoie aussi les cases noires") — this is the one
-  and only exception to that path's "never touches a black cell" rule.
-  Candidate cells are split into two groups — still blank (no letter) vs.
-  already carrying a letter from a crossing assigned word — computed from
-  the *raw*, pre-cleanup assignment (before `_clean_blocked_slots` strips
-  every crossing word), since post-cleanup *every* impossible-slot cell is
-  blank without exception, which would make the distinction meaningless
-  if computed any later — at the user's own explicit follow-up precision
-  ("ajouter la case noire avant de nettoyer... privilégier de noircir une
-  case blanche, sinon une case avec une lettre"). The blank group is tried
-  first if non-empty (`list(blank) or list(lettered)`), shuffled with the
-  palier's own seeded `rng` and tried in order, skipping any that would
-  break `is_structurally_valid(min_interior_free=1)` (the absolute
-  connectivity/no-orphaned-cell invariant), falling back to the next
-  candidate within the same group; if none in the chosen group validate,
-  no cell is added (accepted edge case — the other group is not tried as
-  a further fallback). On the continue-verbatim path specifically, since
-  this lock can split/shorten the targeted slot, every subsequent slot
-  index in `extract_slots`'s own row-then-column scan order can shift —
-  `carry_preseed_assignment`/`carry_excluded_slots` are therefore rebuilt
-  from scratch against a *fresh* `extract_slots` call on the just-locked
-  grid (matched by cell tuples via the cell-based `confirmed` dict
-  `_clean_blocked_slots` already returns, never carried over from the
-  pre-lock slot list) rather than reused at their old, potentially
-  now-wrong indices — a real bug caught by code review before it was ever
-  run live, not from a reported failure. The full-nettoyage path has no
-  such concern: it only ever threads cell-keyed data (`locked_letters`) to
-  the next palier, never a position-indexed list, so nothing needed
-  rebuilding there. Both paths dedupe the palier's parallel outcomes by
+  that state. Neither path ever adds a black cell any more: the single-
+  cell lock that used to run at the end of both (`_impossible_cell_groups`/
+  `_lock_one_impossible_cell`, chosen at random among the cells of the
+  winning grid's own impossible slot(s), preferring a still-blank cell
+  over a lettered one) was removed entirely, at the user's explicit
+  request — quoting their own prior description of the mechanism back and
+  asking to delete it, right after separately asking to stop the
+  per-step density draw above (see CLAUDE.md for the removed mechanism's
+  full history). `carry_seed_grid` on the continue-verbatim path is now a
+  direct, unmutated reference to the winning grid — no more index-shift
+  workaround needed (`carry_preseed_assignment`/`carry_excluded_slots` map
+  1:1 onto the winning grid's own unchanged slot indices). Both paths
+  still dedupe the palier's parallel outcomes by
   (pattern, assignment) before counting/selecting from them. "Best failed
   attempt" (`failed_
   pairs[0]`) means fewest cells belonging to an impossible slot
@@ -757,7 +738,8 @@ the current defaults/behavior to know before touching this code.
   organized by topic, not a duplicate of `CLAUDE.md`'s own detail.
 - `DOC_ALGO/FR/ReadMe.md` is the French, user-facing explanation of the
   grid-generation algorithm — keep it in sync with `backend/crossword_gen.py`
-  per permanent rule 11.
+  per permanent rule 11. Tracked in git like `CLAUDE.md`/`README.md`, never
+  gitignored (permanent rule 16).
 - `README.md` stays non-technical (permanent rule 5); anything about
   implementation, JSON formats, or internal module behavior belongs in
   `CLAUDE.md` instead.
