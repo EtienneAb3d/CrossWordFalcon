@@ -593,7 +593,10 @@ niveaux de priorité** :
    à droite. On tire au
    hasard, uniformément, **parmi les emplacements ayant obtenu le plus
    petit score** (les plus proches du coin en haut à gauche), **dans une
-   fenêtre de max(5, int(taille du groupe / 4)) emplacements** — une
+   fenêtre de max(5, int(taille du groupe × `SLOT_SELECTION_WINDOW_
+   FRACTION`)) emplacements** — une proportion nommée et fixée à **1/10**
+   (`backend/crossword_gen.py`, relevée de 1/4 à la demande explicite de
+   l'utilisateur) — une
    fenêtre qui s'élargit quand ce groupe compte encore beaucoup
    d'emplacements, et se resserre (jusqu'à ce plancher de 5) une fois
    qu'il n'en reste plus beaucoup. Contrairement aux critères déjà essayés

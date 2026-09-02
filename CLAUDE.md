@@ -10801,3 +10801,35 @@ larger minimum). A full end-to-end run on both seeds of the standard
 empty white cells each — seed 2 in 33.1s, 53 words, 36 black cells; seed
 7 in 26.8s, 61 words, 36 black cells — both comfortably within this
 benchmark's own established historical range for black-cell counts.
+
+The tier-4 selection window's own divisor (`_backtrack`'s `window_size =
+max(5, int(len(selection_pool) / 4))`) was named and lowered from 1/4 to
+1/10, at the user's explicit request, quoting the DOC_ALGO's own current
+wording back: "Donner un nom de variable à la proportion (actuellement
+1/4), et fixer cette variable à la valeur de 1/10." A new module-level
+constant, `SLOT_SELECTION_WINDOW_FRACTION = 1 / 10`, defined right after
+`CANDIDATE_SCORE_WINDOW` (a similarly-purposed window-tuning constant, for
+consistency of placement) — `window_size = max(5, int(len(selection_pool)
+* SLOT_SELECTION_WINDOW_FRACTION))` replaces the bare `/ 4`. Every
+surrounding mechanic (the direction-alternation/few-candidates/non-blank
+tiers above it, the geometric top-left-corner score, the shuffle-before-
+sort tie-breaking, the plancher of 5) is untouched — only this one divisor
+changed, from a fixed literal to a named constant with a smaller value.
+The large tuning-history comment block right above this line (documenting
+every prior version of this exact selection rule) was updated in place to
+name the new constant and its value rather than the bare `/4` fraction.
+
+Verified: an isolated arithmetic check (`/tmp/test_window_fraction.py`,
+deleted after use) confirmed the new formula for several pool sizes
+(5→5, 49→5, 50→5, 51→5, 60→6, 100→10, 237→23, 300→30 — the floor of 5
+engaging under a pool of 50, versus under 20 with the old ÷4 divisor); a
+real `Filler`-based no-positional-bias sweep (20 genuinely tied slots,
+2000 seeded trials, tied scores forced to isolate the shuffle-before-sort
+windowing logic itself from the real geometric score) confirmed every
+tied slot still gets selected a comparable number of times (83-114 out of
+2000, no systematic favoritism) under the narrower window. A real,
+non-mocked `generate_grid()` call (9×9, seed 3, Flash mode) succeeded
+cleanly: 32 words, 0 mismatches, 0 empty white cells. A full end-to-end
+run on both seeds of the standard 15×10 benchmark (Flash mode) confirmed
+no regression: 0 mismatches, 0 empty white cells each — seed 2 in 24.8s,
+56 words, 29 black cells; seed 7 in 18.2s, 61 words, 34 black cells.

@@ -1889,6 +1889,17 @@ def _slots_touching(slots, target_indices):
 # 5000, mais plus marquée encore).
 CANDIDATE_SCORE_WINDOW = 20000
 
+# Proportion du groupe d'emplacements retenu (`selection_pool`, voir
+# `Filler._backtrack`, "Choisir quel emplacement remplir en premier") qui
+# détermine la taille de la fenêtre de tirage final — `window_size =
+# max(5, int(len(selection_pool) * SLOT_SELECTION_WINDOW_FRACTION))`, un
+# plancher de 5 dans tous les cas. Nommée et abaissée de 1/4 à 1/10, à la
+# demande explicite de l'utilisateur — une fenêtre plus étroite resserre
+# le tirage final sur une plus petite fraction des emplacements les mieux
+# classés (les plus proches du coin en haut à gauche, voir le score
+# géométrique juste au-dessus), au lieu d'un quart du groupe retenu.
+SLOT_SELECTION_WINDOW_FRACTION = 1 / 10
+
 
 class Filler:
     def __init__(self, slots, index, rng, forced_letters=None, letter_scores=None,
@@ -2493,7 +2504,9 @@ class Filler:
         #    emplacements du groupe obtenu au niveau précédent, on calcule
         #    pour chacun un score, et on tire au hasard, uniformément,
         #    **parmi les emplacements ayant obtenu le plus petit score**,
-        #    **dans une fenêtre de max(5, int(taille_du_groupe / 4))**
+        #    **dans une fenêtre de max(5, int(taille_du_groupe *
+        #    SLOT_SELECTION_WINDOW_FRACTION))** (1/10, voir sa propre
+        #    docstring)
         #    emplacements — une fenêtre qui s'élargit quand ce groupe compte
         #    encore beaucoup d'emplacements, et se resserre (jusqu'à ce
         #    plancher de 5) une fois qu'il n'en reste plus beaucoup, plutôt
@@ -2530,7 +2543,10 @@ class Filler:
         #    remplissage selon un front géométrique plutôt que selon la
         #    difficulté de chaque emplacement.
         #    Fenêtre resserrée de ÷3 à ÷4 dans le même mouvement, toujours
-        #    à la demande explicite de l'utilisateur. Les emplacements sont
+        #    à la demande explicite de l'utilisateur — puis nommée
+        #    (`SLOT_SELECTION_WINDOW_FRACTION`) et resserrée une fois de
+        #    plus, de 1/4 à 1/10, à la demande explicite de l'utilisateur.
+        #    Les emplacements sont
         #    mélangés (avec le RNG seedé de cette tentative, donc
         #    reproductible) avant d'être triés par score : sans ce mélange
         #    préalable, l'ordre de tri (`sorted` est stable) déciderait
@@ -2594,7 +2610,7 @@ class Filler:
         }
         shuffled_pool = list(selection_pool)
         self.rng.shuffle(shuffled_pool)
-        window_size = max(5, int(len(selection_pool) / 4))
+        window_size = max(5, int(len(selection_pool) * SLOT_SELECTION_WINDOW_FRACTION))
         window = sorted(shuffled_pool, key=lambda i: scores[i])[:window_size]
         best_i = self.rng.choice(window)
 
