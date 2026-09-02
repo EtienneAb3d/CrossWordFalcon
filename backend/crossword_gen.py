@@ -1686,6 +1686,32 @@ PALIER_ATTEMPT_INTERRUPT_FRACTION = 1.0
 # supplémentaire ; sinon, le palier suivant démarre sans attendre.
 BEST_STATE_QUEUE_DRAIN_GRACE_S = 0.02
 
+# Cadence (secondes) à laquelle `generate_grid` republie, tant qu'une
+# recherche est en cours, le pourcentage du budget de vérifications
+# (`deadline_checks`) déjà consommé par la tentative la plus avancée du
+# palier courant — à la demande explicite de l'utilisateur : "sur la ligne
+# de statut de l'interface, ajouter le pourcentage du budget déjà consommé
+# par la phase de remplissage en cours." Réutilise `best_state_buffer`
+# (déjà drainé en continu par `_drain_best_state_queue_continuously`, voir
+# sa propre définition) plutôt qu'un nouveau canal dédié : chaque message
+# qui y arrive porte déjà `checks` (voir `_publish_new_best`), donc le
+# maximum de cette valeur parmi les messages du palier en cours est déjà
+# une estimation raisonnable de « jusqu'où la recherche est allée » — une
+# estimation, pas une mesure exacte à l'instant T, puisqu'elle ne progresse
+# qu'aux instants où l'une des tentatives parallèles bat son propre record
+# de mots placés (voir `Filler.on_new_best`), pas à chaque vérification
+# individuelle ; un worker profondément coincé dans du retour en arrière
+# sans jamais améliorer son record affiche donc un pourcentage figé sur son
+# dernier record connu, plutôt qu'une progression continue — la valeur
+# affichée est donc un plancher (« au moins X % déjà consommé »), jamais
+# une survalorisation. 2 secondes, la même cadence que le sondage de
+# l'interface (`POLL_INTERVAL_MS`, frontend/static/script.js) : assez
+# fréquent pour rester "en direct" à l'œil, sans republier à chaque
+# publication individuelle (jusqu'à ~50-60 par tentative, voir
+# `_worker_best_state_queue`), qui spammerait `backend.log` pour un gain
+# de fraîcheur imperceptible.
+BUDGET_PROGRESS_REPORT_INTERVAL_S = 2.0
+
 # Maximum number of consecutive "reprise telle quelle" paliers (see
 # generate_grid's own `if still_has_hope:` branch) allowed before a full
 # cleanup ("nettoyage complet") is triggered unconditionally, even if the
@@ -2057,6 +2083,24 @@ class Filler:
                 return ()
         return result
 
+    def _has_known_letter(self, i):
+        """True si l'emplacement i a déjà au moins une case déterminée par
+        une vraie lettre — un mot croisé déjà assigné pendant cette même
+        tentative, ou une lettre verrouillée d'un palier précédent
+        (self.locked_letters). Une simple graine statistique
+        (self.forced_letters) ne compte jamais ici, comme partout ailleurs
+        dans ce fichier (voir _domain/impossible_zone_slots) — ce n'est
+        qu'une supposition non vérifiée, pas un fait acquis. Utilisée par
+        _backtrack pour prioriser les emplacements déjà partiellement
+        connus plutôt qu'un emplacement entièrement vierge."""
+        for cell in self.slots[i]:
+            if cell in self.locked_letters:
+                return True
+            for j, _ in self.cell_to_slots[cell]:
+                if j != i and self.assignment[j] is not None:
+                    return True
+        return False
+
     def _candidate_score(self, i, word):
         """Somme des carrés des scores statistiques (self.letter_scores,
         voir sample_letter_biases) de `word` sur les cases de l'emplacement
@@ -2336,7 +2380,7 @@ class Filler:
                 return False
             domains[i] = domain
 
-        # Règle de sélection à 3 niveaux, à la demande explicite de
+        # Règle de sélection à 4 niveaux, à la demande explicite de
         # l'utilisateur (le MRV a été retiré — voir le commentaire plus
         # haut, avant la classe Filler, pour pourquoi) :
         # 1. on alterne d'abord horizontal/vertical : on tire la
@@ -2367,53 +2411,74 @@ class Filler:
         #    emplacement de la catégorie n'est dans ce cas, ce niveau ne
         #    change rien : le niveau 3 s'applique alors à l'ensemble de la
         #    catégorie, exactement comme avant l'ajout de ce niveau ;
-        # 3. les niveaux 2/3/4 précédents (le moins de cases encore
+        # 3. **Nouveau, à la demande explicite de l'utilisateur** : parmi
+        #    les emplacements du groupe obtenu au niveau précédent, s'il en
+        #    existe au moins un qui a déjà au moins une case déterminée par
+        #    une vraie lettre (`_has_known_letter` — un mot croisé déjà
+        #    assigné, ou une lettre verrouillée d'un palier précédent —
+        #    jamais une simple graine statistique), le choix se restreint à
+        #    ces emplacements-là uniquement, excluant les emplacements
+        #    entièrement vierges tant qu'il en reste au moins un déjà
+        #    partiellement connu — finir un emplacement déjà entamé plutôt
+        #    que d'en ouvrir un nouveau. Si tous les emplacements du groupe
+        #    sont entièrement vierges, ce niveau ne change rien : le niveau
+        #    4 s'applique alors à l'ensemble du groupe, exactement comme
+        #    avant l'ajout de ce niveau ;
+        # 4. les niveaux 2/3/4 précédents (le moins de cases encore
         #    blanches en priorité, le plus de lettres déjà fixées en
         #    départage, un tirage pondéré par la longueur en dernier
-        #    recours) ont été remplacés par une règle unique, à la demande
-        #    explicite de l'utilisateur : parmi les emplacements du groupe
-        #    obtenu au niveau précédent, on calcule pour chacun le score
-        #    **nombre de possibilités de remplissage** (`len(domains[i])` —
-        #    le domaine
-        #    déjà calculé juste au-dessus pour la détection d'impasse, donc
-        #    aucun second calcul de domaine n'est nécessaire ici — le
-        #    nombre de mots du dictionnaire encore compatibles avec les
-        #    lettres déjà connues de cet emplacement, sans encore exclure
-        #    les mots déjà utilisés ailleurs dans la grille, voir `_domain`),
-        #    et on tire au hasard, uniformément, **parmi les emplacements
-        #    ayant obtenu le plus petit score** — les plus contraints, donc
-        #    les plus urgents à résoudre — **dans une fenêtre de
-        #    max(5, int(taille_du_groupe / 3))**
+        #    recours) ont été remplacés par une règle unique : parmi les
+        #    emplacements du groupe obtenu au niveau précédent, on calcule
+        #    pour chacun un score, et on tire au hasard, uniformément,
+        #    **parmi les emplacements ayant obtenu le plus petit score**,
+        #    **dans une fenêtre de max(5, int(taille_du_groupe / 4))**
         #    emplacements — une fenêtre qui s'élargit quand ce groupe compte
         #    encore beaucoup d'emplacements, et se resserre (jusqu'à ce
         #    plancher de 5) une fois qu'il n'en reste plus beaucoup, plutôt
-        #    qu'une taille fixe ou liée à
-        #    la seule taille de la grille. Ce critère a déjà changé
-        #    plusieurs fois : "le moins de cases encore blanches", puis "le
-        #    plus de lettres déjà remplies" en compte brut sur une fenêtre
-        #    de 30, puis remplies/longueur sur une fenêtre de 15, puis
-        #    l'égalité stricte sans fenêtre, puis une fenêtre fixe de 10,
-        #    puis une fenêtre en int(sqrt(largeur × hauteur)), puis cette
-        #    fenêtre proportionnelle au nombre d'emplacements encore libres
-        #    (÷10, puis ÷2, puis ÷3), puis int(100 * remplies / sqrt(longueur)),
-        #    puis le simple compte brut de lettres déjà remplies (sans
-        #    normalisation par la longueur du tout), puis ce critère
-        #    inversé (le plus de cases *encore blanches*, plutôt que le
-        #    plus de lettres déjà remplies), et enfin, toujours à la
-        #    demande explicite de l'utilisateur, ce critère basé sur le
-        #    domaine lui-même (le nombre réel de mots candidats), trié
-        #    cette fois par ordre croissant (le plus petit score, donc
-        #    l'emplacement le plus contraint, en premier) — plutôt qu'un
-        #    proxy géométrique (longueur/cases connues) sans lien direct
-        #    avec la difficulté réelle de remplissage de l'emplacement. Les
-        #    emplacements sont
+        #    qu'une taille fixe ou liée à la seule taille de la grille. Ce
+        #    critère a déjà changé plusieurs fois : "le moins de cases
+        #    encore blanches", puis "le plus de lettres déjà remplies" en
+        #    compte brut sur une fenêtre de 30, puis remplies/longueur sur
+        #    une fenêtre de 15, puis l'égalité stricte sans fenêtre, puis
+        #    une fenêtre fixe de 10, puis une fenêtre en int(sqrt(largeur ×
+        #    hauteur)), puis cette fenêtre proportionnelle au nombre
+        #    d'emplacements encore libres (÷10, puis ÷2, puis ÷3), puis
+        #    int(100 * remplies / sqrt(longueur)), puis le simple compte
+        #    brut de lettres déjà remplies (sans normalisation par la
+        #    longueur du tout), puis ce critère inversé (le plus de cases
+        #    *encore blanches*, plutôt que le plus de lettres déjà
+        #    remplies), puis le domaine lui-même (le nombre réel de mots
+        #    candidats, `len(domains[i])`, déjà calculé plus haut pour la
+        #    détection d'impasse), trié par ordre croissant (le plus petit
+        #    score, donc l'emplacement le plus contraint, en premier) — et
+        #    enfin, à la demande explicite de l'utilisateur, ce score
+        #    purement **géométrique** : `x + y`, où `(y, x)` est la
+        #    première case de l'emplacement (`self.slots[i][0]`, toujours
+        #    la case la plus en haut/à gauche parmi les siennes — voir
+        #    `extract_slots`), mesurées par rapport au coin en haut à
+        #    gauche de la grille (la même origine que `(row, col)` partout
+        #    ailleurs dans ce fichier) — voir le calcul lui-même plus bas
+        #    pour le détail, y compris une première version mesurée par
+        #    rapport au coin en haut à *droite*, corrigée à la demande de
+        #    l'utilisateur après un diagnostic en direct. Contrairement à
+        #    tous les critères précédents de ce niveau, celui-ci ne dépend
+        #    plus du tout de l'état de remplissage de l'emplacement (ni ses
+        #    lettres connues, ni son domaine) — seulement de sa position
+        #    fixe dans la grille — ce qui tend à faire progresser le
+        #    remplissage selon un front géométrique plutôt que selon la
+        #    difficulté de chaque emplacement.
+        #    Fenêtre resserrée de ÷3 à ÷4 dans le même mouvement, toujours
+        #    à la demande explicite de l'utilisateur. Les emplacements sont
         #    mélangés (avec le RNG seedé de cette tentative, donc
         #    reproductible) avant d'être triés par score : sans ce mélange
         #    préalable, l'ordre de tri (`sorted` est stable) déciderait
         #    quels emplacements à égalité passent la coupure de la fenêtre,
         #    réintroduisant le même biais positionnel déjà rencontré
         #    ailleurs dans ce fichier (voir plus haut, les bugs "colonne
-        #    noire"/"triangle" du pré-remplissage).
+        #    noire"/"triangle" du pré-remplissage) — d'autant plus pertinent
+        #    maintenant que le score lui-même est géométrique, donc que de
+        #    nombreux emplacements peuvent partager exactement le même
+        #    score (toute la diagonale à une distance donnée du coin).
         free_across = [i for i in unassigned if self.directions[i] == "across"]
         free_down = [i for i in unassigned if self.directions[i] == "down"]
         if free_across and free_down:
@@ -2426,10 +2491,48 @@ class Filler:
             direction_pool = free_across or free_down
         few_candidates = [i for i in direction_pool if len(domains[i]) < PREFILL_MIN_WORD_COUNT]
         selection_pool = few_candidates if few_candidates else direction_pool
-        scores = {i: len(domains[i]) for i in selection_pool}
+        # Nouveau niveau, à la demande explicite de l'utilisateur : parmi
+        # le groupe obtenu au niveau précédent, s'il en existe au moins un
+        # qui a déjà au moins une case déterminée par une vraie lettre
+        # (`_has_known_letter` — un mot croisé déjà assigné, ou une lettre
+        # verrouillée d'un palier précédent), le choix se restreint à ces
+        # emplacements-là uniquement, excluant les emplacements
+        # entièrement vierges tant qu'il en reste au moins un déjà
+        # partiellement connu. Si tous les emplacements du groupe sont
+        # entièrement vierges, ce niveau ne change rien.
+        non_blank = [i for i in selection_pool if self._has_known_letter(i)]
+        if non_blank:
+            selection_pool = non_blank
+        # Score géométrique, à la demande explicite de l'utilisateur : x + y,
+        # où (y, x) est la première case de l'emplacement (self.slots[i][0],
+        # toujours la case la plus en haut/à gauche parmi les siennes — voir
+        # extract_slots), x/y mesurées par rapport au coin en haut à
+        # gauche de la grille — la même origine que `(row, col)` partout
+        # ailleurs dans ce fichier, donc x = colonne, y = ligne directement.
+        # Un emplacement dont la première case est déjà au coin en haut à
+        # gauche obtient le score le plus bas possible (0) ; le score
+        # augmente à mesure qu'un emplacement démarre plus bas et/ou plus à
+        # droite. Une première version mesurait ce même score par rapport
+        # au coin en haut à DROITE (x = distance au bord droit plutôt qu'au
+        # bord gauche), conformément à la toute première formulation de la
+        # demande — un diagnostic en direct (fenêtre de sélection capturée
+        # sur une vraie recherche) a confirmé que ce calcul produisait
+        # exactement ce que cette formule impliquait mathématiquement
+        # (favoriser les emplacements proches du coin en haut à droite),
+        # sans bug de calcul ; mais l'utilisateur a signalé que le
+        # remplissage semblait démarrer du mauvais coin, et a choisi,
+        # via une question directe, de repasser au coin en haut à gauche
+        # plutôt que de garder ce comportement — cette version n'a donc
+        # plus besoin de connaître la largeur de la grille du tout (`cols`
+        # a été retiré de `Filler.__init__`, qui ne l'utilisait que pour
+        # ce calcul).
+        scores = {
+            i: self.slots[i][0][1] + self.slots[i][0][0]
+            for i in selection_pool
+        }
         shuffled_pool = list(selection_pool)
         self.rng.shuffle(shuffled_pool)
-        window_size = max(5, int(len(selection_pool) / 3))
+        window_size = max(5, int(len(selection_pool) / 4))
         window = sorted(shuffled_pool, key=lambda i: scores[i])[:window_size]
         best_i = self.rng.choice(window)
 
@@ -4722,6 +4825,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
              length_counts=dict(sorted((length, len(words)) for length, words in by_length.items())))
 
     rows, cols = height, width
+    # Même résolution que `try_fill`'s propre `None`-fallback (largeur ×
+    # hauteur × 2000), calculée ici une seule fois — plutôt que dans chaque
+    # worker séparément — pour que le rapport de progression du budget
+    # ci-dessous (`BUDGET_PROGRESS_REPORT_INTERVAL_S`) sache contre quelle
+    # valeur comparer `checks` sans avoir à la redemander à un worker.
+    resolved_deadline_checks = (
+        deadline_checks if deadline_checks is not None else rows * cols * 2000
+    )
     ratio = black_ratio
     best, best_result = None, None
     last_diag = None
@@ -4889,15 +5000,38 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     best_state_buffer = []
     best_state_buffer_lock = threading.Lock()
     stop_best_state_drain = threading.Event()
+    # Horodatage (monotonic) de la dernière publication du pourcentage de
+    # budget consommé — voir BUDGET_PROGRESS_REPORT_INTERVAL_S. Une liste
+    # à un seul élément (pas une simple variable) uniquement pour rester
+    # mutable depuis l'intérieur de la boucle ci-dessous sans `nonlocal`.
+    last_budget_progress_report = [0.0]
 
     def _drain_best_state_queue_continuously():
         while not stop_best_state_drain.is_set():
             try:
                 msg = best_state_queue.get(timeout=0.1)
             except queue.Empty:
-                continue
-            with best_state_buffer_lock:
-                best_state_buffer.append(msg)
+                msg = None
+            if msg is not None:
+                with best_state_buffer_lock:
+                    best_state_buffer.append(msg)
+            # Vérifié à chaque itération de cette boucle (~10 fois par
+            # seconde, voir le timeout de get() ci-dessus), pas seulement
+            # quand un message vient d'arriver — sinon, un palier dont
+            # aucune tentative n'améliore plus son record pendant un long
+            # moment ne republierait plus jamais rien du tout, alors que
+            # `deadline_checks` continue, lui, réellement de se consommer
+            # en arrière-plan dans les workers.
+            now = time.monotonic()
+            if now - last_budget_progress_report[0] >= BUDGET_PROGRESS_REPORT_INTERVAL_S:
+                last_budget_progress_report[0] = now
+                with best_state_buffer_lock:
+                    checks_seen = [m["checks"] for m in best_state_buffer]
+                if checks_seen:
+                    percent = min(
+                        100, round(100 * max(checks_seen) / resolved_deadline_checks)
+                    )
+                    progress("budget_progress", percent=percent)
 
     # Démarré avant même la création du pool, `daemon=True` : ce thread ne
     # doit jamais empêcher le processus de se terminer, y compris sur un

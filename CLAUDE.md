@@ -10087,3 +10087,302 @@ selection area's own long-documented run-to-run variance rather than a
 confirmed regression — the user interrupted the follow-up standard-
 benchmark run before it completed, intending to test independently rather
 than have it re-verified here).
+
+A live budget-consumption percentage was added to the web UI's status
+line, at the user's explicit request: "sur la ligne de statut de
+l'interface, ajouter le pourcentage du budget déjà consommé par la phase
+de remplissage en cours." Until now, the polled status line only ever
+updated at fixed phase-transition points (`progress("pattern", ...)`,
+`"pattern_generated"`, `"pattern_attempt_failed"`, `"pattern_found"`,
+etc.) — there was no live signal at all *while* a single palier's own CSP
+search was genuinely still running inside its worker processes, since
+`generate_grid()`'s own main thread stays blocked in `concurrent.futures.
+as_completed(futures)` for the whole duration of a palier.
+
+Rather than add a new, from-scratch live-progress channel, this reuses
+`best_state_queue`/`_publish_new_best` (already streaming every new
+best-assignment record from each parallel attempt back to the parent
+process in real time, continuously drained by `_drain_best_state_queue_
+continuously` — see that mechanism's own extensive history above) — every
+message it carries already includes `checks` (`filler.checks` at the
+moment of that record). A new module-level constant, `BUDGET_PROGRESS_
+REPORT_INTERVAL_S = 2.0` (matching the frontend's own `POLL_INTERVAL_MS`
+polling cadence), and a new `resolved_deadline_checks` (computed once at
+the top of `generate_grid`, mirroring `try_fill`'s own `None`-fallback
+formula — `deadline_checks if deadline_checks is not None else rows *
+cols * 2000` — so a caller that never picked a "Mode" still gets a correct
+denominator) together drive a periodic report: the drain loop, on every
+iteration (not just when a new message actually arrives — otherwise a
+palier where no attempt ever beats its own record for a long stretch
+would silently stop reporting altogether, even though `deadline_checks`
+keeps being consumed in the background regardless), checks whether at
+least `BUDGET_PROGRESS_REPORT_INTERVAL_S` seconds have passed since the
+last report; if so, and `best_state_buffer` (already scoped to the
+*current* palier only — cleared at the end of every palier) is non-empty,
+it computes `percent = min(100, round(100 * max(checks across buffered
+messages) / resolved_deadline_checks))` and calls `progress(
+"budget_progress", percent=percent)`.
+
+This is a deliberate lower-bound estimate, not an exact live counter,
+documented directly in the constant's own comment: `checks` only advances
+at the moments a parallel attempt beats its own best-assignment record
+(`Filler.on_new_best`), never on every single `_backtrack` call — a worker
+stuck deep in unproductive backtracking without ever improving its record
+shows a frozen percentage at its last known record, even though it keeps
+burning through its own budget in the background. The displayed number
+can therefore lag reality, but can never overstate it.
+
+`backend/app.py`'s `progress()` closure gained a special case for this one
+step code: instead of the usual unconditional `job["step"] = {"code":
+step, **data}` (which would otherwise replace the currently-shown status
+— attempt number, etc. — with a bare percentage), a `"budget_progress"`
+event now *merges* `budget_percent` into whatever `job["step"]` already
+holds (`job["step"] = {**job["step"], "budget_percent": ...}`) and returns
+early, skipping the rest of the function (phase-timing, `examples_
+history`, `resume_state` bookkeeping — none of which apply to this
+synthetic, merge-only event). The very next *real* progress event (the
+next `"pattern"`/`"pattern_attempt_failed"`/etc.) still replaces `job
+["step"]` wholesale as before, naturally dropping any stale `budget_
+percent` until the next report arrives for whatever comes after it.
+Verified structurally, not just reasoned about, that this can never leak
+into an unrelated later phase: `stop_best_state_drain.set()` (which halts
+the entire reporting mechanism, drain thread included) already runs
+immediately after the palier loop exits, strictly *before* `generate_
+grid()`'s own `progress("minimizing", ...)` call further down — so a
+`"budget_progress"` event can structurally never arrive once minimization/
+clue-generation has started.
+
+`frontend/static/script.js`'s `describeStep()` was restructured from a
+`switch` that directly `return`ed each localized message to one that
+builds the same message into a local `message` variable first, then — if
+`step.budget_percent` is a number — appends it via a new, separate
+composer function rather than editing each `statusPattern*`/etc. string
+individually (so the augmentation applies uniformly regardless of which
+of the several relevant step codes happens to carry it). A new
+`statusBudgetPercent(message, percent)` translation key was added to all 5
+languages in `frontend/static/i18n.js`, right after `statusSaving`,
+following this project's established "join several info fragments with
+an em dash" convention (already used for the SVG export's own header
+line): French "... — 42 % du budget", English "... — 42% of budget",
+German "... — 42% des Budgets", Spanish "... — 42% del presupuesto",
+Italian "... — 42% del budget".
+
+Verified: a real, non-mocked `generate_grid()` run (9×9, seed 3, a
+deliberately small `deadline_checks=5000` so the budget would genuinely
+be exercised) with `on_progress` capturing every event confirmed 139
+`"budget_progress"` events fired over the run's own ~400s, every single
+`percent` value strictly within `[0, 100]`, and — checked explicitly, not
+assumed — zero `"budget_progress"` events appearing anywhere after the
+first `"minimizing"` event in the recorded sequence, confirming the
+mechanism correctly stops itself before it could ever leak into a later
+phase. A real JS syntax check (`esprima`, temporarily installed and
+removed again afterward, the same one-off-tool pattern already used
+elsewhere in this project) confirmed `script.js`/`i18n.js` still parse
+correctly after the change.
+
+The status line's new live percentage (see the entry above) was reworded
+right after shipping, at the user's explicit request: "Pour un
+utilisateur, le mot 'budget' peut laisser penser qu'on consomme de
+l'argent. Remplace par un pourcentage de 'tentatives'." A pure wording
+change — the underlying computation (`checks` vs. `resolved_deadline_
+checks`, the whole `budget_progress`/`BUDGET_PROGRESS_REPORT_INTERVAL_S`
+mechanism) is completely untouched, since the user's objection was only
+ever about the *displayed* word, never about what's actually measured;
+per this project's own established convention ("English code identifiers,
+translated UI text"), the internal Python/JS identifiers (`budget_
+percent`, `"budget_progress"`, `BUDGET_PROGRESS_REPORT_INTERVAL_S`,
+`resolved_deadline_checks`, the `statusBudgetPercent` i18n key name
+itself) were all deliberately left as-is — none of them are ever shown to
+a user, so renaming them would add risk for no user-visible benefit. Only
+the 5 translated strings inside `statusBudgetPercent` (`frontend/static/
+i18n.js`) changed, each reusing that same language's own existing word for
+"attempt" (already used elsewhere on the very same status line, e.g.
+`statusPattern`'s "tentative ${attempt}/${attempts}"/"attempt
+${attempt}/${attempts}"/etc.) rather than inventing a new term: French
+"— 42 % des tentatives", English "— 42% of attempts", German "— 42% der
+Versuche", Spanish "— 42% de los intentos", Italian "— 42% dei
+tentativi". `DOC_ALGO/FR/ReadMe.md`'s own worked example was updated to
+match, with a short note on why "budget" was avoided in the user-facing
+text specifically (while the surrounding prose keeps using "budget" as
+its own established technical term for the search's own check-count
+ceiling — see "Limites de la recherche" — since that's an internal/
+engineering description, not what the player sees). Verified: a real JS
+syntax check (`esprima`, temporarily installed and removed again
+afterward) confirmed `i18n.js` still parses correctly after the change.
+
+Reworded again immediately, at the user's explicit follow-up request:
+"'tentatives' est déjà utilisé avec une autre signification. Utilise
+'générations' pour le pourcentage du budget." Correct: this same status
+line already uses "tentative"/"attempt"/etc. with a *different* meaning
+(the palier's own attempt number, `statusPattern`'s `step.attempt/step.
+attempts`), so reusing the same word for this new, unrelated percentage
+risked reading as if the two referred to the same count. Same scope as
+the previous wording change — only the 5 translated strings inside
+`statusBudgetPercent` (`frontend/static/i18n.js`) changed, no computation/
+identifier touched: French "— 42 % des générations", English "— 42% of
+generations", German "— 42% der Generationen", Spanish "— 42% de las
+generaciones", Italian "— 42% delle generazioni". `DOC_ALGO/FR/ReadMe.md`'s
+own worked example and its explanatory note (now naming both reasons
+"budget" and "tentatives" were each avoided) updated to match. Verified: a
+real JS syntax check (`esprima`, temporarily installed and removed again
+afterward) confirmed `i18n.js` still parses correctly. At the user's
+explicit instruction this time ("ne redémarre pas le serveur"), `VERSION.
+txt` was still bumped to record the change, but the servers were
+deliberately left running the previous build rather than restarted.
+
+A fourth priority level was inserted into `Filler._backtrack`'s slot-
+selection rule, at the user's explicit request, quoting the doc's own
+current rule 3 back verbatim and asking to insert this new restriction
+right before it: "limiter aux emplacements possédant déjà au moins une
+lettre, tant qu'il y a des emplacements non totalement vide." The rule
+went from 3 levels (direction, few-candidates, domain-size window) to 4:
+direction, few-candidates (unchanged), a new "at least one known letter"
+filter, then the pre-existing domain-size window (renumbered from level 3
+to level 4, otherwise entirely unchanged).
+
+A new `Filler._has_known_letter(i)` helper (placed right before `_candidate_
+score`, mirroring where the now-removed `_empty_cell_count` used to live)
+returns whether slot `i` has at least one cell already determined by a
+real letter — a crossing assignment made during this same attempt, or
+`self.locked_letters` (confirmed content carried forward from a previous
+palier) — deliberately excluding `self.forced_letters` (the purely
+statistical seed hint), consistent with every other place in this file
+that draws this same real-vs-guessed distinction. Right after `selection_
+pool` is computed by the few-candidates tier in `_backtrack`, `non_blank =
+[i for i in selection_pool if self._has_known_letter(i)]` is computed; if
+non-empty, `selection_pool` becomes that filtered subset — deprioritizing
+completely blank slots in favor of ones already partially confirmed by
+real content — otherwise (every slot in the pool is still fully blank)
+`selection_pool` is left untouched, an exact no-op matching the pre-
+existing behavior. The rationale (finish an already-started slot before
+opening a brand new one) mirrors the same intuition behind the earlier
+"almost complete" tier this session first tried and then replaced (see
+its own entry above) — but framed the opposite way round this time
+(favoring *any* non-blank slot, not specifically a near-complete one) and
+kept as its own separate, additional level rather than folded into either
+existing one.
+
+Verified: an isolated `Filler` test (2 independent, non-crossing 4-letter
+slots, one fully blank and one with a single locked letter, both with
+domains well above `PREFILL_MIN_WORD_COUNT` so the few-candidates tier
+never engages and the new tier can be checked in isolation) confirmed
+`_has_known_letter` returns the correct boolean for each, that the
+level-3 filter correctly restricts the pool to just the partially-known
+slot across 20 seeds, that a control where both slots are fully blank
+correctly filters nothing, and that a real `_backtrack` call resolves
+both slots correctly across 15 seeds with the new tier active. A real,
+non-mocked `generate_grid()` run (9×9, seed 3) succeeded: 30 words, 0
+mismatches, 0 empty white cells. A full end-to-end run on both seeds of
+the standard 15×10 benchmark (Flash mode) confirmed no regression: 0
+mismatches, 0 empty white cells each — seed 2 in 251.7s, 58 words, 32
+black cells; seed 7 in 292.4s, 59 words, 32 black cells.
+
+The tier-4 selection score (the domain-size window, see the entries
+above) was replaced with a purely geometric score, at the user's explicit
+request, quoting the doc's own current rule 4 back verbatim: "Remplacer
+le score 'nombre de possibilités de remplissage' par le score (x+y) où x
+est la coordonnée horizontale de la première case de l'emplacement et y
+la coordonnée verticale de cette première case (par rapport au coin en
+haut à droite). Au lieu de prendre une fenêtre 1/3, prendre une fenêtre
+1/4."
+
+`Filler.__init__` gained a new `cols=None` parameter (resolved
+immediately to `0` if omitted — never crashes for a hypothetical direct
+caller that doesn't supply it, since a systematic offset shift has no
+effect on `sorted(..., key=...)`'s relative ordering; `try_fill`, the
+only real production caller, always supplies the grid's real `cols`).
+`_backtrack`'s scoring line changed from `scores = {i: len(domains[i])
+for i in selection_pool}` to `scores = {i: (self.cols - 1 - self.slots[i]
+[0][1]) + self.slots[i][0][0] for i in selection_pool}` — `self.slots[i]
+[0]` is always the slot's own topmost/leftmost cell (`extract_slots`'s own
+construction order), a `(row, col)` tuple; `y` is read directly as `row`
+(the top-right corner is already at the very top, so the vertical
+distance is unaffected by which horizontal corner is the reference), but
+`x` is measured from the **right** edge (`cols - 1 - col`) rather than the
+conventional left edge, per the user's explicit "par rapport au coin en
+haut à droite" — a slot starting exactly at the grid's top-right corner
+scores 0, the lowest possible, with the score growing as a slot starts
+further down and/or further left. This is a fundamentally different kind
+of criterion from every one this same tier has used before (see the
+extensive prior tuning history in this same comment block): it depends
+only on a slot's fixed position in the grid, never on its current
+fill/constraint state, biasing the fill order toward a geometric
+wavefront sweeping from the top-right corner rather than toward whichever
+slot is statistically hardest to fill. `window_size`'s divisor changed
+from `/3` to `/4` in the same edit (`max(5, int(len(selection_pool) /
+4))`) — a narrower window at any given pool size, so the random draw
+stays closer to the very best (lowest-score, closest-to-corner)
+candidates than before.
+
+`domains[i]` (still computed at the top of `_backtrack` for the forward-
+checking empty-domain check, and still used by the tier-2 few-candidates
+filter) is untouched — only its use as tier 4's own ranking criterion was
+replaced; `cands = [w for w in domains[best_i] if w not in self.
+used_words]` right after tier 4's own selection still reads from it
+exactly as before.
+
+Verified: an isolated `Filler` test (3 independent, non-crossing 3-letter
+slots in a 5-column grid, at columns 0/4/2) confirmed the score formula
+directly (column 4 → 0, the best; column 2 → 2; column 0 → 4, the worst)
+and that `cols=None` resolves to `0` without raising; a real `_backtrack`
+call resolved all 3 slots correctly across 15 seeds with the new score
+active; a larger, 20-independent-slot reproduction of the exact window
+logic (window size 5 = `max(5, int(20/4))`) confirmed the window always
+contains precisely the 5 lowest-scored slots, not an arbitrary subset. A
+real, non-mocked `generate_grid()` run (9×9, seed 3) succeeded: 30 words,
+0 mismatches, 0 empty white cells.
+
+**A real user-reported mismatch was found immediately after the geometric
+score above shipped**: "Le nouveau traitement semble commencer la grille
+en haut à droite, et non en haut à gauche. Il doit y avoir un problème
+dans le calcul des coordonnées." Investigated live before touching any
+code, exactly as this codebase's own established practice for this kind
+of report calls for: a dedicated diagnostic built a real 9×5 grid, all
+white (both a length-5 and a length-9 dictionary so both across and down
+slots have real candidates), constructed a `Filler`, and monkeypatched
+`rng.choice` to record the very first tier-4 selection window a real
+`_backtrack()` call actually drew from. The captured windows — e.g.
+`[(0,4), (0,5), (0,6), (0,7), (0,8)]`, the 5 down-slots at the *rightmost*
+5 of 9 columns — confirmed the code was computing exactly what the
+formula as first specified implied: `x = cols - 1 - col` (distance from
+the *right* edge) genuinely does score the top-right corner `(0, cols-1)`
+at `0`, the lowest possible, so the tier-4 rule (already established,
+unchanged: smallest score wins) correctly favored it — **no bug in the
+calculation itself**, confirmed by direct measurement, not just re-reading
+the formula.
+
+Reported to the user with this finding via `AskUserQuestion` — did they
+want the corner reference switched to top-left (matching what they
+described observing/wanting), or was the top-right behavior actually
+correct and their own expectation mismatched? **The user chose to switch
+to the top-left corner.** Since a top-left-referenced `x`/`y` is now
+identical to the raw `(col, row)` already used as this file's own
+universal coordinate convention everywhere else, the whole `cols`-
+threading mechanism the previous entry introduced became unnecessary:
+`Filler.__init__`'s `cols=None` parameter (and `self.cols`) were removed
+outright, and `try_fill`'s own `Filler(..., cols=cols)` call reverted to
+omit it — per this project's no-dead-code convention, since nothing else
+in `Filler` ever needed the grid's width. `_backtrack`'s scoring line
+simplified from `(self.cols - 1 - self.slots[i][0][1]) + self.slots[i][0]
+[0]` to plain `self.slots[i][0][1] + self.slots[i][0][0]` — `x` (`col`)
+and `y` (`row`) read directly, no flip, no grid-width dependency at all.
+Every surrounding comment (the tier-4 walkthrough, the tuning-history
+block above it) was reworded to describe the top-left corner and to
+record this correction's own trail (first tried at top-right, confirmed
+computationally correct via live diagnostic, then switched to top-left at
+the user's explicit choice) rather than erasing that history.
+
+Verified: an isolated reproduction of the identical live-diagnostic
+technique, re-run after the fix, confirmed the very first tier-4 window
+now consistently favors slots starting at or near `(0, 0)` — e.g.
+`[(0,0), (0,1), (0,2), (0,3), (0,4)]` and `[(0,0), (1,0), (2,0), (3,0),
+(4,0)]` across 3 different seeds — the mirror image of the pre-fix
+capture; a direct score check confirmed the single lowest-scoring slot
+among all of a real grid's own slots is exactly the one starting at
+`(0, 0)`, scoring `0`; and that `Filler()` now works correctly with no
+`cols` argument at all (no such attribute exists on the instance anymore).
+A real, non-mocked `generate_grid()` run (9×9, seed 3) succeeded: 34
+words, 0 mismatches, 0 empty white cells. A full end-to-end run on both
+seeds of the standard 15×10 benchmark (Flash mode) confirmed no
+regression: 0 mismatches, 0 empty white cells each — seed 2 in 366.1s, 61
+words, 30 black cells; seed 7 in 706.9s, 59 words, 31 black cells.

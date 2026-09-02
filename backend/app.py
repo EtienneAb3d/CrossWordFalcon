@@ -256,6 +256,24 @@ async def _run_generate_job(job_id, req, resume_state=None):
     phase_times = {}
 
     def progress(step, **data):
+        if step == "budget_progress":
+            # Enrichit le statut déjà affiché (ex. "Tentative N/200...")
+            # d'un pourcentage de budget de vérifications consommé, à la
+            # demande explicite de l'utilisateur : "sur la ligne de statut
+            # de l'interface, ajouter le pourcentage du budget déjà
+            # consommé par la phase de remplissage en cours." Ne remplace
+            # jamais `job["step"]` en entier comme les autres étapes le
+            # font juste en dessous — ce signal est republié toutes les
+            # `BUDGET_PROGRESS_REPORT_INTERVAL_S` secondes pendant qu'une
+            # recherche est en cours (voir crossword_gen.py), et
+            # l'écraser remplacerait le statut réel (numéro de tentative,
+            # etc.) par un pourcentage nu. Le prochain événement "normal"
+            # (`pattern`/`pattern_attempt_failed`/...) remplace `job
+            # ["step"]` en entier comme d'habitude, faisant naturellement
+            # disparaître ce `budget_percent` devenu obsolète jusqu'à ce
+            # qu'un nouveau rapport arrive pour la tentative suivante.
+            job["step"] = {**job["step"], "budget_percent": data.get("percent")}
+            return
         job["step"] = {"code": step, **data}
         if step in ("minimizing", "grid_ready"):
             phase_times[step] = time.monotonic()

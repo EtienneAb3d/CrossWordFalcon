@@ -951,28 +951,53 @@ async function fetchWithTimeout(url, options, timeoutMs) {
 // older UI never breaks against a newer backend.
 function describeStep(t, step) {
   if (!step) return t.statusGenerating;
+  let message;
   switch (step.code) {
     case "starting":
-      return t.statusStarting;
+      message = t.statusStarting;
+      break;
     case "pattern":
-      return t.statusPattern(step.attempt, step.attempts, step.total_attempts);
+      message = t.statusPattern(step.attempt, step.attempts, step.total_attempts);
+      break;
     case "pattern_generated":
-      return t.statusPatternGenerated(step.attempt, step.attempts, step.total_attempts);
+      message = t.statusPatternGenerated(step.attempt, step.attempts, step.total_attempts);
+      break;
     case "pattern_attempt_failed":
-      return t.statusPatternAttemptFailed(step.attempt, step.attempts, step.total_attempts);
+      message = t.statusPatternAttemptFailed(step.attempt, step.attempts, step.total_attempts);
+      break;
     case "pattern_found":
-      return t.statusPatternFound(step.attempt, step.total_attempts);
+      message = t.statusPatternFound(step.attempt, step.total_attempts);
+      break;
     case "minimizing":
-      return t.statusMinimizing;
+      message = t.statusMinimizing;
+      break;
     case "grid_ready":
-      return t.statusGridReady(step.word_count);
+      message = t.statusGridReady(step.word_count);
+      break;
     case "clues":
-      return t.statusClues(step.current, step.total);
+      message = t.statusClues(step.current, step.total);
+      break;
     case "saving":
-      return t.statusSaving;
+      message = t.statusSaving;
+      break;
     default:
-      return t.statusGenerating;
+      message = t.statusGenerating;
   }
+  // `budget_percent` (backend/crossword_gen.py's "budget_progress" event,
+  // merged into job["step"] by backend/app.py rather than replacing it —
+  // see its own comment) is only ever present while a pattern-search
+  // attempt is genuinely still in flight (never on "minimizing"/"clues"/
+  // etc., which only start once the drain thread that produces it has
+  // already stopped) — appended as a plain suffix rather than woven into
+  // each statusPattern*/etc. string itself, at the user's explicit
+  // request ("sur la ligne de statut de l'interface, ajouter le
+  // pourcentage du budget déjà consommé"), so every existing message stays
+  // untouched and only gains this one extra fragment when the data is
+  // actually available.
+  if (typeof step.budget_percent === "number") {
+    message = t.statusBudgetPercent(message, step.budget_percent);
+  }
+  return message;
 }
 
 // Turns a backend error code (backend/app.py's job["error_code"], or

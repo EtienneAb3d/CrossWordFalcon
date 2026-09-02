@@ -515,7 +515,7 @@ instantanément tous les mots d'une longueur donnée qui ont une lettre
 précise à une position précise — sans cela, il faudrait relire tout le
 dictionnaire à chaque tentative.
 
-À chaque emplacement à choisir, le programme applique une règle à **trois
+À chaque emplacement à choisir, le programme applique une règle à **quatre
 niveaux de priorité** :
 
 1. on tire d'abord la **catégorie** (horizontal ou vertical) : la
@@ -535,17 +535,41 @@ niveaux de priorité** :
    aucun emplacement de la catégorie n'est sous ce seuil, ce niveau ne
    change rien : le niveau suivant s'applique alors à la catégorie
    entière ;
-3. parmi les emplacements retenus au niveau précédent, on calcule pour
-   chacun le score **nombre de possibilités de remplissage** — le nombre
-   de mots du dictionnaire encore compatibles avec les lettres déjà
-   connues de cet emplacement (sans exclure les mots déjà utilisés
-   ailleurs dans la grille) — et on tire au hasard, uniformément, **parmi
-   les emplacements ayant obtenu le plus petit score** (les plus
-   contraints, donc les plus urgents à résoudre), **dans une fenêtre de
-   max(5, int(taille du groupe / 3)) emplacements** — une fenêtre qui
-   s'élargit quand ce groupe compte encore beaucoup d'emplacements, et se
-   resserre (jusqu'à ce plancher de 5) une fois
-   qu'il n'en reste plus beaucoup.
+3. parmi les emplacements retenus au niveau précédent, s'il en existe au
+   moins un qui a déjà **au moins une case déterminée par une vraie
+   lettre** (un vrai mot croisé déjà assigné pendant cette même tentative,
+   ou une lettre verrouillée d'un palier précédent — jamais une simple
+   graine statistique), le choix se restreint à ces emplacements-là
+   uniquement, excluant les emplacements entièrement vierges tant qu'il en
+   reste au moins un déjà partiellement connu — finir un emplacement déjà
+   entamé plutôt que d'en ouvrir un nouveau. Si tous les emplacements
+   retenus au niveau précédent sont entièrement vierges, ce niveau ne
+   change rien : le niveau suivant s'applique alors au groupe entier ;
+4. parmi les emplacements retenus au niveau précédent, on calcule pour
+   chacun le score **x + y**, où `(x, y)` sont les coordonnées de la
+   première case de l'emplacement (son coin le plus en haut à gauche),
+   mesurées par rapport au coin **en haut à gauche** de la grille — la
+   même origine que celle utilisée partout ailleurs dans ce document (`x`
+   = colonne, `y` = ligne) : un emplacement dont la première case est déjà
+   au coin en haut à gauche obtient le score le plus bas possible (0), le
+   score augmentant à mesure qu'un emplacement démarre plus bas et/ou plus
+   à droite. On tire au
+   hasard, uniformément, **parmi les emplacements ayant obtenu le plus
+   petit score** (les plus proches du coin en haut à gauche), **dans une
+   fenêtre de max(5, int(taille du groupe / 4)) emplacements** — une
+   fenêtre qui s'élargit quand ce groupe compte encore beaucoup
+   d'emplacements, et se resserre (jusqu'à ce plancher de 5) une fois
+   qu'il n'en reste plus beaucoup. Contrairement aux critères déjà essayés
+   avant lui à ce même niveau (nombre de lettres déjà remplies, nombre de
+   possibilités de remplissage, etc.), ce score ne dépend plus du tout de
+   l'état de remplissage de l'emplacement — seulement de sa position fixe
+   dans la grille — ce qui tend à faire progresser le remplissage selon un
+   front géométrique partant du coin en haut à gauche plutôt que selon la
+   difficulté de chaque emplacement. Une première version mesurait ce même
+   score par rapport au coin en haut à *droite* ; un diagnostic en direct a
+   confirmé que le calcul reflétait fidèlement cette formule (sans bug),
+   mais le remplissage démarrait alors visiblement du mauvais coin —
+   corrigé vers le coin en haut à gauche à la demande de l'utilisateur.
 
 Le programme n'essaie par ailleurs jamais de remplir un emplacement qui
 croise (partage une case avec) un emplacement déjà connu comme "impossible"
@@ -568,6 +592,30 @@ l'interface web, le sélecteur **"Mode"** (Flash/Turbo/Rapide/Moyen/Ultra ;
 `backend/app.py`, `BUDGET_MODES`) fixe directement ce budget par tentative
 à une valeur choisie (1 000 à 5 000 000), sans rapport avec la taille de la
 grille, à la place de cette formule par défaut.
+
+#### Pourcentage de budget affiché en direct
+
+Pendant qu'une recherche est en cours, la ligne de statut de l'interface
+affiche, en plus de son message habituel (numéro de tentative, etc.), le
+pourcentage de ce budget déjà consommé par la tentative parallèle la plus
+avancée du palier en cours — affiché sous la forme d'un pourcentage de
+**générations** plutôt que de "budget" (mot qui, pour un utilisateur,
+évoque plutôt une somme d'argent) ou de "tentatives" (déjà utilisé sur
+cette même ligne avec un autre sens — le numéro du palier), par exemple
+« ... — 42 % des générations » —, republié toutes les 2 secondes. Cette estimation s'appuie sur les
+mêmes publications en temps réel que le vivier d'aperçu (voir "Plusieurs
+tentatives en parallèle par palier", étape 1) : chaque nouveau record de
+mots placés d'une tentative fait connaître son propre nombre de
+vérifications à cet instant, et le programme retient le plus élevé de tous
+ceux connus pour le palier en cours. C'est un plancher, pas une mesure
+exacte à l'instant T : une tentative en train de reculer/avancer sans
+jamais battre son propre record ne fait progresser aucun de ces chiffres,
+même si elle continue réellement de consommer son budget en arrière-plan —
+le pourcentage affiché ne peut donc jamais être surestimé, seulement
+sous-estimé le temps qu'une tentative batte de nouveau son record. Ce
+pourcentage disparaît de lui-même dès que la recherche de mots se termine
+(succès ou passage à l'étape 3) — il n'a plus de sens une fois la phase de
+remplissage terminée.
 
 #### Abandon anticipé à 30 % d'impossibilité
 
