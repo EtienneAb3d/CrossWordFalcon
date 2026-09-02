@@ -609,7 +609,22 @@ niveaux de priorité** :
    score par rapport au coin en haut à *droite* ; un diagnostic en direct a
    confirmé que le calcul reflétait fidèlement cette formule (sans bug),
    mais le remplissage démarrait alors visiblement du mauvais coin —
-   corrigé vers le coin en haut à gauche à la demande de l'utilisateur.
+   corrigé vers le coin en haut à gauche à la demande de l'utilisateur ;
+5. cette fenêtre de niveau 4 est ensuite **retriée** par nombre de lettres
+   déjà posées dans chaque emplacement (le plus de lettres en premier —
+   même distinction fait-acquis/simple-supposition que le niveau 3, une
+   simple graine statistique ne comptant jamais), puis **réduite à
+   nouveau** à ses `SLOT_SELECTION_REFINE_FRACTION` premiers emplacements
+   (1/4, `backend/crossword_gen.py`) — mêlangée d'abord (même raison que
+   le mélange du niveau 4) pour éviter tout biais positionnel à la
+   coupure. Un plancher de seulement 1 emplacement (pas 5 comme la
+   fenêtre du niveau 4) : la fenêtre de niveau 4 peut déjà être aussi
+   petite que son propre plancher de 5, et un plancher de 5 ici annulerait
+   la réduction dans ce cas très courant. Le tirage final au hasard se
+   fait dans cette fenêtre réduite plutôt que dans la fenêtre du niveau 4
+   directement — à la demande explicite de l'utilisateur, pour favoriser
+   davantage la finition d'un emplacement déjà bien avancé plutôt qu'un
+   simple critère géométrique.
 
 Le programme n'essaie par ailleurs jamais de remplir un emplacement qui
 croise (partage une case avec) un emplacement déjà connu comme "impossible"
@@ -1025,6 +1040,52 @@ tentatives échouées distinctes que de workers), le nombre de grilles
 qui survivent à l'élimination correspond exactement au nombre de
 workers non réinitialisés à pourvoir, chacun recevant ainsi sa propre
 grille de départ, jamais celle d'un autre.
+
+##### Mémorisation des nettoyages successifs et grille jugée infaisable
+
+À la demande explicite de l'utilisateur : "Mémoriser les grilles en fin
+de cycle. Quand une même grille est produite plus de 3 cycles, déclarer
+cette grille infaisable, et supprime là au cycle suivant (elle devient
+la grille entièrement vierge du tour suivant)." Le programme retient
+l'état obtenu (motif noir/blanc **et** contenu confirmé, fusionnés en
+une seule grille comparable) à l'issue de chaque **nettoyage complet**
+(jamais d'une reprise "telle quelle") ; si ce même état, sans le
+moindre changement, se reproduit sur `GRID_REPEAT_INFEASIBLE_THRESHOLD`
+(3) nettoyages consécutifs, il est déclaré infaisable et le palier
+suivant repart d'une **grille entièrement vierge** — motif, contenu,
+viviers de grilles candidates et compteur de série "telle quelle" tous
+réinitialisés à zéro, exactement l'état du tout premier palier de
+l'appel.
+
+C'est un garde-fou plus profond que celui déjà en place juste au-dessus
+(voir "Score et sélection parmi les tentatives nettoyées") : ce dernier
+ne compare que les seules lettres verrouillées d'un nettoyage à l'autre
+et, dès qu'il détecte une identité stricte, ne retente qu'**une seule
+fois** un nettoyage plus agressif (retirant aussi tout emplacement
+verrouillé dont la combinaison ne correspond à aucun mot réel) avant de
+poursuivre quoi qu'il arrive — un blocage qui survit même à cette
+relance unique n'avait jusqu'ici aucune autre issue que d'épuiser tous
+les paliers restants à l'identique. Cette mémorisation-ci prend le
+relais en comptant les répétitions sur plusieurs nettoyages, pas une
+seule relance.
+
+Deux versions plus larges ont été essayées et abandonnées avant
+d'arriver à cette portée finale (nettoyage seul), chacune ayant produit
+une vraie régression mesurée en direct sur le benchmark standard 15×10
+(mode Flash) : comparer uniquement le motif noir/blanc, sur les deux
+branches du palier, confondait un motif qui reste stable plusieurs
+cycles "reprise telle quelle" de suite (normal — une case noire n'y est
+ajoutée qu'une fois sur dix, voir plus haut) avec un vrai blocage ;
+comparer motif+contenu mais toujours sur les deux branches faisait
+doublon avec `MAX_CONSECUTIVE_CONTINUE_PALIERS`, qui borne déjà "reprise
+telle quelle" avec une réponse plus douce (un nettoyage classique, pas
+une grille vierge). Restreindre la détection au seul nettoyage complet
+règle les deux problèmes à la fois. Une fois cette portée finale
+adoptée, un test de fiabilité dédié (6 exécutions répétées de la graine
+2, en mode Flash — la graine la plus sensible à ce benchmark) a mesuré
+un taux de réussite identique avec et sans le mécanisme (2/6 dans les
+deux cas) : la variance déjà connue de ce benchmark en mode Flash
+explique l'écart observé lors des premiers essais, pas ce mécanisme.
 
 ##### Une tentative repart d'une grille entièrement vierge
 

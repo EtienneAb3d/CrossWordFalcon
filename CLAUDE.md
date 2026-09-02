@@ -10946,3 +10946,176 @@ every request with no caching, confirmed once already this session for
 an unrelated pure-frontend change) and confirmed to contain the new
 `align-self: flex-start` line. The `style-guide` SKILL was updated with
 the same reasoning, flagged the same way as "not yet visually confirmed."
+
+  **The tier-4 slot-selection window (`SLOT_SELECTION_WINDOW_FRACTION`,
+  1/10) was refined with a second, nested reduction stage**, at the
+  user's explicit request, quoting DOC_ALGO's own current wording back
+  verbatim: "Retrier la fenêtre obtenue par rapport au nombre de lettres
+  déjà posées dans chaque emplacement, le plus de lettres en premier.
+  Réduire à nouveau la fenêtre au premier 1/4 des emplacements (donner
+  un nom de variable à ce pourcentage, pour modification ultérieure)."
+  A new `Filler._placed_letter_count(i)` helper (mirroring `_has_known_
+  letter`'s exact real-vs-guessed distinction — a crossing assignment
+  made this same attempt, or `self.locked_letters` carried forward from
+  a previous palier, but never `self.forced_letters`, a purely
+  statistical seed hint) counts how many of a slot's cells already carry
+  a real, confirmed letter — reintroducing, under a new name, a metric
+  this exact tier had used once before earlier in this project's own
+  tuning history (`_empty_cell_count`, removed once the tier-4 criterion
+  moved to a purely geometric score, see the extensive tuning history
+  above) but this time as a *second-stage refinement* layered on top of
+  the geometric window, not as the window's own primary criterion.
+
+  `_backtrack`'s final selection step now, right after computing
+  `window` (the existing geometric-score window, unchanged): re-shuffles
+  it (same reason as the existing shuffle-before-sort — `sorted` is
+  stable, so without a fresh shuffle the first sort's own leftover order
+  would silently decide which tied-on-placed-letters slots survive the
+  second cutoff), re-sorts by `_placed_letter_count` descending, and
+  slices to a new `refined_window_size = max(1, int(len(window) *
+  SLOT_SELECTION_REFINE_FRACTION))` — a new module-level constant,
+  `SLOT_SELECTION_REFINE_FRACTION = 1/4`, defined right after `SLOT_
+  SELECTION_WINDOW_FRACTION`. Deliberately a *different* floor (1, not
+  5): `window` itself can already be as small as its own floor of 5, and
+  a floor of 5 here would make the second reduction a no-op in that very
+  common case (1/4 of 5 rounds down to 1, already below a floor of 5,
+  which would force the whole 5-slot window to be kept verbatim). The
+  final `self.rng.choice(...)` now draws from this doubly-reduced
+  `refined_window` instead of the plain geometric `window` directly.
+  Named separately from `SLOT_SELECTION_WINDOW_FRACTION`: the two
+  fractions apply to two different windows, one after the other (the
+  second operates on `window`, never on `selection_pool` directly) —
+  their numeric value happening to both be 1/4 at some point in this
+  project's history (the *first* fraction's own now-superseded original
+  value) is a pure coincidence, not a relationship between them.
+
+  Verified: an isolated `_placed_letter_count` check across three hand-
+  built scenarios confirmed a locked cell counts, a real crossing
+  assignment counts, and a pure statistical seed hint (`forced_letters`)
+  never does — matching `_has_known_letter`'s own already-established
+  convention exactly. A dedicated end-to-end `_backtrack` reproduction
+  (12 independent same-direction slots, 3 pre-locked with one letter
+  each, a rich enough dictionary that the search never artificially
+  aborts) spied on every `rng.choice(...)` call made during a real,
+  successful search: the very first selection's own candidate pool
+  always contained exactly the slot(s) most-advanced by placed-letter
+  count among whatever the geometric window happened to draw first —
+  across 200 different seeds, the very first pick favored a
+  placed-letter slot in all 200/200 runs (far above the ~17% a uniform
+  draw over the raw 3-of-12 locked slots would predict), confirming the
+  refinement genuinely, reliably biases toward finishing an already-
+  advanced slot rather than merely reshuffling the same candidates. A
+  control with no locked letters at all (every slot tied at count 0)
+  confirmed the mechanism degrades gracefully — 50/50 seeds still solve
+  the small scenario correctly, the refinement simply has nothing to
+  discriminate on. A full end-to-end `generate_grid()` run on both seeds
+  of the standard 15×10 benchmark (Flash mode), with the concurrent,
+  independent `GRID_REPEAT_INFEASIBLE_THRESHOLD` feature below
+  deliberately neutralized for this specific isolation check, confirmed
+  no regression on its own (0 mismatches, 0 empty white cells each,
+  19.5s/15.4s — comfortably faster than the pre-change baseline of
+  28.1s/21.5s on the same seeds).
+
+  **A repeated-grid infeasibility check was added on top of the full-
+  nettoyage fixed-point mechanism above**, at the user's explicit
+  request, delivered mid-turn: "Mémoriser les grilles en fin de cycle.
+  Quand une même grille est produite plus de 3 cycles, déclarer cette
+  grille infaisable, et supprime là au cycle suivant (elle devient la
+  grille entièrement vierge du tour suivant)." A new module-level
+  constant, `GRID_REPEAT_INFEASIBLE_THRESHOLD = 3`, and two new tracking
+  variables (`last_cycle_end_grid`/`same_grid_streak`, initialized once
+  before the palier loop) together implement it.
+
+  Went through two full rounds of measured, disclosed regression before
+  reaching its final, shipped scope — both via `AskUserQuestion`, matching
+  this exact code area's own long-established discipline. **Version 1**
+  compared only the black/white pattern (`carry_seed_grid`), applied
+  after *both* branches of the palier (`if still_has_hope: ... else:
+  ...`). Verified live before shipping: a real `generate_grid()` run on
+  the standard 15×10 benchmark (Flash mode) showed both seeds failing
+  outright (200 paliers exhausted) where the pre-change baseline
+  succeeded reliably in ~20-28s — confirmed causal by disabling the
+  mechanism (huge threshold) and re-running, which restored success.
+  Root cause: in "reprise telle quelle" mode, the pattern legitimately
+  stays identical across several consecutive cycles by design (a black
+  cell is only ever added with 1/10 probability during that branch's own
+  cleanup, see `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY`) while the
+  confirmed-letter content keeps growing normally — comparing the bare
+  pattern alone mistook this healthy progress for a genuine stuck state
+  and threw it all away.
+
+  Reported to the user with this measurement via `AskUserQuestion`; the
+  user chose to compare pattern **and** confirmed content together
+  (reusing `_cycle_start_preview`, which already merges the two into one
+  comparable grid for exactly this kind of purpose elsewhere in this
+  same file) rather than scoping the check to the nettoyage branch alone
+  or dropping the feature outright. **Version 2** implemented that —
+  still applied after both branches — and still regressed on the same
+  benchmark (200 paliers exhausted on both seeds, essentially unchanged
+  timing from version 1). A more detailed live diagnostic (a temporary,
+  env-var-gated debug print recording the branch taken, the streak, and
+  `consecutive_continue_paliers` at every trigger) pinpointed why: the
+  large majority of triggers on the "reprise telle quelle" branch
+  coincided *exactly* with the moment `MAX_CONSECUTIVE_CONTINUE_PALIERS`
+  (4) was itself already about to force a plain nettoyage on its own —
+  this new mechanism was firing in lockstep with an already-well-tuned
+  safety valve, but responding far more destructively (a fully blank
+  grid instead of a normal nettoyage, which keeps whatever content
+  survives cleanup). A smaller remainder of triggers were genuine
+  nettoyage-to-nettoyage repeats — exactly the kind of deeper fixed
+  point the existing single-retry check (`previous_locked_letters`/
+  `exclude_impossible_locked=True`, see the entry above) doesn't always
+  resolve.
+
+  Reported again via `AskUserQuestion` with this more precise finding;
+  the user chose to scope the whole mechanism to nettoyage-complet
+  cycles only, ignoring "reprise telle quelle" cycles entirely (matching
+  the option they had *not* picked the first time, now clearly
+  justified by direct measurement rather than guessed at upfront).
+  **Final version**: the entire streak-tracking block now lives inside
+  the `else:` (nettoyage) branch exclusively, right after `just_cleaned
+  = True` — a "reprise telle quelle" cycle never touches `last_cycle_
+  end_grid`/`same_grid_streak` at all, so any number of intervening
+  continue-cycles between two nettoyages is simply invisible to this
+  mechanism (only nettoyage-to-nettoyage repeats are ever counted).
+  `current_state_grid, _ = _cycle_start_preview(rows, cols, carry_seed_
+  grid, carry_locked_letters, carry_preseed_assignment)` still merges
+  pattern and content the same way version 2 did (`carry_preseed_
+  assignment` is always `None` on this branch, so the merge always comes
+  from `carry_locked_letters`) — hashed as a tuple of tuples for the
+  streak comparison. Once `same_grid_streak > GRID_REPEAT_INFEASIBLE_
+  THRESHOLD`, every carried-forward variable (`carry_seed_grid`/`carry_
+  locked_letters`/`carry_preseed_assignment`/`carry_excluded_slots`/
+  `carry_seed_pool`/`carry_seed_pool_continue`/`consecutive_continue_
+  paliers`) resets to exactly the function's own initial state, so the
+  very next palier dispatches through the ordinary "no `carry_seed_grid`
+  yet" fresh-start path with zero special-casing needed anywhere else.
+
+  Verified in stages before shipping the final version. Isolated: a
+  standalone mirror of the exact final control flow (5 hand-built
+  scenarios) confirmed many consecutive identical "reprise telle quelle"
+  cycles never move the streak at all; a mix of nettoyage/continue
+  cycles only ever counts the nettoyage ones (continue cycles pass
+  through invisibly); a repeat held at exactly the threshold (3) never
+  resets, a 4th repeat does, resetting every tracked variable correctly;
+  the tracker restarts cleanly after a reset; two distinct list objects
+  with identical content are correctly treated as the same state
+  (content equality, not identity). Live: a small (5×5, real French
+  wordlist, tiny deadline) diagnostic confirmed the mechanism runs
+  without error in a genuine `generate_grid()` call. A dedicated live
+  diagnostic on the standard 15×10 benchmark (both seeds, Flash mode)
+  with the temporary debug print active showed the mechanism firing
+  rarely and plausibly (2-3 real triggers across 31-40 nettoyage cycles
+  observed per run, not the near-constant firing version 1/2 showed) and
+  both seeds succeeding. Given this exact benchmark's own already well-
+  documented Flash-mode variance, a single run either way was judged
+  insufficient: a dedicated 6-run reliability comparison on seed 2 (the
+  more fragile of the two) measured an *identical* 2/6 success rate with
+  the mechanism active and with it neutralized (`GRID_REPEAT_
+  INFEASIBLE_THRESHOLD` monkeypatched to a huge value) — direct,
+  matched-sample-size confirmation that the final, nettoyage-scoped
+  version adds no measurable failure risk beyond this benchmark's own
+  pre-existing, substantial run-to-run variance at Flash mode. The
+  temporary `_DEBUG_GRID_REPEAT` env-var-gated print used for all of
+  this live diagnosis was removed before shipping, per this project's
+  own established convention.

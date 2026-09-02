@@ -1799,6 +1799,38 @@ BUDGET_PROGRESS_REPORT_INTERVAL_S = 2.0
 # budget (300 000+) or a larger `BUDGET_MODES` choice.
 MAX_CONSECUTIVE_CONTINUE_PALIERS = 4
 
+# Nombre de nettoyages complets CONSÉCUTIFS pendant lesquels `generate_
+# grid` peut produire exactement le même état (motif noir/blanc ET
+# contenu confirmé, voir `_cycle_start_preview`) avant d'être déclaré
+# infaisable et réinitialisé à une grille entièrement vierge au cycle
+# suivant — à la demande explicite de l'utilisateur : "Mémoriser les
+# grilles en fin de cycle. Quand une même grille est produite plus de 3
+# cycles, déclarer cette grille infaisable, et supprime là au cycle
+# suivant (elle devient la grille entièrement vierge du tour suivant)."
+# Voir generate_grid, dans le `else:` (nettoyage complet) du `if still_
+# has_hope: ... else: ...`, pour le mécanisme lui-même — délibérément
+# limité à cette seule branche, jamais à "reprise telle quelle", après
+# deux régressions mesurées en direct sur le benchmark standard 15×10
+# (Flash) et deux allers-retours avec l'utilisateur (voir le commentaire
+# du mécanisme lui-même pour le détail complet) : comparer le seul motif
+# sur les deux branches confondait un motif stable (normal en "reprise
+# telle quelle", où une case noire n'est ajoutée qu'une fois sur dix,
+# voir BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY) avec un vrai blocage ;
+# comparer motif+contenu sur les deux branches faisait toujours doublon
+# avec MAX_CONSECUTIVE_CONTINUE_PALIERS, qui borne déjà "reprise telle
+# quelle" avec une réponse plus douce (un nettoyage classique, pas une
+# grille vierge). Restreint au nettoyage, ce garde-fou couvre un point
+# fixe plus profond que celui déjà géré juste à côté (comparaison des
+# seules lettres confirmées, une seule relance avec `exclude_impossible_
+# locked=True`, voir `previous_locked_letters` plus bas) — qui ne
+# résout pas toujours le blocage du premier coup. Nommée séparément de
+# MAX_CONSECUTIVE_CONTINUE_PALIERS ci-dessus : les deux plafonds
+# répondent à deux questions différentes (combien de cycles "reprise
+# telle quelle" enchaîner sans nettoyage du tout, vs. combien de
+# nettoyages consécutifs tolérer un état qui ne change plus malgré eux)
+# et n'ont aucun lien entre elles.
+GRID_REPEAT_INFEASIBLE_THRESHOLD = 3
+
 # Number of PARALLEL_ATTEMPTS workers that, right after a full cleanup
 # ("nettoyage complet" — see generate_grid's own `else:` branch, as opposed
 # to "reprise telle quelle"), start the very next palier from a completely
@@ -1899,6 +1931,27 @@ CANDIDATE_SCORE_WINDOW = 20000
 # classés (les plus proches du coin en haut à gauche, voir le score
 # géométrique juste au-dessus), au lieu d'un quart du groupe retenu.
 SLOT_SELECTION_WINDOW_FRACTION = 1 / 10
+
+# Une fois la fenêtre ci-dessus obtenue (`window`, triée par score
+# géométrique croissant), `Filler._backtrack` la retrie une seconde fois
+# par nombre de lettres déjà posées dans chaque emplacement (le plus de
+# lettres en premier — `_placed_letter_count`, la même distinction
+# fait-acquis/simple-supposition que `_has_known_letter`), puis la
+# réduit à nouveau à ses `SLOT_SELECTION_REFINE_FRACTION` premiers
+# emplacements (les mieux pourvus en lettres déjà connues) avant le
+# tirage final au hasard — à la demande explicite de l'utilisateur.
+# Nommée séparément de `SLOT_SELECTION_WINDOW_FRACTION` ci-dessus : les
+# deux fractions s'appliquent à deux fenêtres différentes, l'une après
+# l'autre (la seconde opère sur `window`, pas sur `selection_pool`), pas
+# à la même grandeur — leur valeur numérique commune (1/4) est une
+# coïncidence avec l'ancienne valeur historique de la première fraction
+# (voir son propre commentaire ci-dessus), pas un lien entre les deux.
+# Plancher à 1 emplacement (jamais 5, comme la fenêtre précédente) :
+# `window` elle-même peut être aussi petite que son propre plancher de
+# 5, et un plancher de 5 ici annulerait la réduction demandée dans ce
+# cas très courant (1/4 de 5 vaut 1, en dessous du plancher de 5, qui
+# forcerait alors la fenêtre entière à être reprise telle quelle).
+SLOT_SELECTION_REFINE_FRACTION = 1 / 4
 
 
 class Filler:
@@ -2148,6 +2201,27 @@ class Filler:
             if not result:
                 return ()
         return result
+
+    def _placed_letter_count(self, i):
+        """Nombre de cases de l'emplacement i déjà déterminées par une
+        vraie lettre — un mot croisé déjà assigné pendant cette même
+        tentative, ou une lettre verrouillée d'un palier précédent
+        (self.locked_letters). Même distinction fait-acquis/simple-
+        supposition que _has_known_letter (self.forced_letters, une
+        simple graine statistique, ne compte jamais ici) — voir sa propre
+        docstring. Utilisée par _backtrack pour retrier la fenêtre de
+        sélection du niveau 4 (le plus de lettres déjà posées en
+        premier), à la demande explicite de l'utilisateur."""
+        count = 0
+        for cell in self.slots[i]:
+            if cell in self.locked_letters:
+                count += 1
+                continue
+            for j, _ in self.cell_to_slots[cell]:
+                if j != i and self.assignment[j] is not None:
+                    count += 1
+                    break
+        return count
 
     def _has_known_letter(self, i):
         """True si l'emplacement i a déjà au moins une case déterminée par
@@ -2612,7 +2686,22 @@ class Filler:
         self.rng.shuffle(shuffled_pool)
         window_size = max(5, int(len(selection_pool) * SLOT_SELECTION_WINDOW_FRACTION))
         window = sorted(shuffled_pool, key=lambda i: scores[i])[:window_size]
-        best_i = self.rng.choice(window)
+        # Nouveau, à la demande explicite de l'utilisateur : retrier cette
+        # fenêtre par nombre de lettres déjà posées dans chaque
+        # emplacement (le plus de lettres en premier), puis la réduire à
+        # nouveau à ses SLOT_SELECTION_REFINE_FRACTION premiers
+        # emplacements — voir la docstring de cette constante. Remélangée
+        # d'abord (avec le RNG seedé de cette tentative) pour la même
+        # raison que le mélange précédent : `sorted` est stable, donc sans
+        # ce second mélange l'ordre issu du premier tri (par score
+        # géométrique) déciderait quels emplacements à égalité de lettres
+        # déjà posées passent la coupure de cette seconde fenêtre.
+        shuffled_window = list(window)
+        self.rng.shuffle(shuffled_window)
+        placed_counts = {i: self._placed_letter_count(i) for i in window}
+        refined_window_size = max(1, int(len(window) * SLOT_SELECTION_REFINE_FRACTION))
+        refined_window = sorted(shuffled_window, key=lambda i: -placed_counts[i])[:refined_window_size]
+        best_i = self.rng.choice(refined_window)
 
         cands = [w for w in domains[best_i] if w not in self.used_words]
         # Toujours mélangé d'abord (avec le RNG seedé de cette tentative,
@@ -5237,6 +5326,19 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # nettoyage a réellement lieu (voir plus bas) — ce compteur ne mesure
     # que la série en cours, pas un total cumulé sur toute la génération.
     consecutive_continue_paliers = 0
+    # Mémorisation de l'état (motif + contenu confirmé) obtenu à la fin de
+    # chaque NETTOYAGE COMPLET, à la demande explicite de l'utilisateur —
+    # voir GRID_REPEAT_INFEASIBLE_THRESHOLD's own docstring pour la
+    # demande complète et l'historique des deux régressions mesurées avant
+    # d'arriver à cette portée finale (nettoyage seul, jamais "reprise
+    # telle quelle"). `last_cycle_end_grid` garde l'état (sous forme
+    # hashable, un tuple de tuples produit par `_cycle_start_preview`) du
+    # dernier nettoyage ; `same_grid_streak` compte combien de nettoyages
+    # CONSÉCUTIFS (aucune "reprise telle quelle" entre-temps ne le
+    # remet à zéro ni ne l'incrémente — cette branche n'y touche jamais)
+    # ont reproduit ce même état.
+    last_cycle_end_grid = None
+    same_grid_streak = 0
     # True right after a palier that did a full cleanup ("nettoyage
     # complet", the `else:` branch below), False right after one that did
     # "reprise telle quelle" instead — at the user's explicit request (see
@@ -6428,6 +6530,77 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # ever changes which words/black cells survive from the
                 # already-generated pattern, never adds a new one.
                 just_cleaned = True
+                # Mémorisation de l'état obtenu à la fin de CE nettoyage
+                # (motif noir/blanc ET contenu confirmé) et détection d'un
+                # état qui se répète à l'identique d'un nettoyage au
+                # suivant — voir GRID_REPEAT_INFEASIBLE_THRESHOLD's own
+                # docstring pour la demande complète et son historique.
+                # Réservé à cette seule branche (`if still_has_hope:` ci-
+                # dessus, "reprise telle quelle", n'y touche jamais) — à la
+                # demande explicite de l'utilisateur, après DEUX régressions
+                # mesurées en direct sur le benchmark standard 15×10
+                # (Flash) : une première version comparait uniquement le
+                # motif noir/blanc, sur les deux branches — le motif reste
+                # très souvent identique plusieurs cycles "reprise telle
+                # quelle" de suite par construction (le nettoyage n'ajoute
+                # une case noire qu'une fois sur dix, voir BLACK_CELL_
+                # INSTEAD_OF_REMOVAL_PROBABILITY) alors même que le contenu
+                # progresse normalement, confondant ça avec un vrai blocage.
+                # Une deuxième version comparait motif+contenu, toujours sur
+                # les deux branches — un diagnostic détaillé (branche +
+                # compteur consecutive_continue_paliers à chaque
+                # déclenchement) a montré que la majorité des déclenchements
+                # coïncidaient, sur la branche "reprise telle quelle", très
+                # exactement avec le moment où MAX_CONSECUTIVE_CONTINUE_
+                # PALIERS force déjà, tout seul, un passage en nettoyage —
+                # ce mécanisme faisait alors doublon avec un garde-fou déjà
+                # réglé, mais avec une réponse bien plus destructrice
+                # (grille entièrement vierge au lieu d'un nettoyage
+                # classique qui conserve le contenu valide). Restreindre la
+                # détection à cette seule branche règle les deux problèmes
+                # à la fois : un cycle "reprise telle quelle" ne compte
+                # jamais dans la série (déjà borné ailleurs), et seul un
+                # vrai point fixe du nettoyage LUI-MÊME (celui que la
+                # relance unique avec `exclude_impossible_locked=True`,
+                # juste au-dessus, ne résout pas toujours) déclenche la
+                # réinitialisation. Réutilise `_cycle_start_preview` (déjà
+                # appelée ailleurs dans cette même boucle pour l'aperçu
+                # "début de cycle") pour fusionner motif + contenu en une
+                # seule grille comparable — `carry_preseed_assignment` vaut
+                # toujours `None` sur cette branche, donc `_cycle_start_
+                # preview` construit systématiquement à partir de `carry_
+                # locked_letters` ici. Comparé comme un tuple de tuples
+                # (hashable, comparaison de contenu, pas d'identité) plutôt
+                # que la liste elle-même — `locked_cells` (2e valeur de
+                # retour) n'est pas utile ici, seule la grille fusionnée
+                # sert de clé.
+                current_state_grid, _ = _cycle_start_preview(
+                    rows, cols, carry_seed_grid, carry_locked_letters, carry_preseed_assignment,
+                )
+                current_pattern_key = tuple(tuple(row) for row in current_state_grid)
+                if current_pattern_key == last_cycle_end_grid:
+                    same_grid_streak += 1
+                else:
+                    last_cycle_end_grid = current_pattern_key
+                    same_grid_streak = 1
+                if same_grid_streak > GRID_REPEAT_INFEASIBLE_THRESHOLD:
+                    # Motif jugé infaisable : réinitialisation complète, le
+                    # prochain cycle repart d'une grille entièrement vierge
+                    # — exactement l'état initial de cette fonction (voir
+                    # `carry_seed_grid = None` tout en haut), y compris les
+                    # deux viviers et le compteur de série "reprise telle
+                    # quelle", pour qu'un palier "motif neuf" reparte bien
+                    # de zéro plutôt que de réutiliser un vivier construit
+                    # à partir du motif désormais abandonné.
+                    carry_seed_grid = None
+                    carry_locked_letters = None
+                    carry_preseed_assignment = None
+                    carry_excluded_slots = None
+                    carry_seed_pool = None
+                    carry_seed_pool_continue = None
+                    consecutive_continue_paliers = 0
+                    last_cycle_end_grid = None
+                    same_grid_streak = 0
             # Le ratio cible ne progresse plus d'un palier à l'autre (reste
             # fixé à `black_ratio`, 0.0 par défaut), à la demande explicite
             # de l'utilisateur : le pré-remplissage (au moins
