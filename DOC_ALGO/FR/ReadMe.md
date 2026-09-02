@@ -122,7 +122,8 @@ Une case n'est acceptée que si elle respecte ces règles :
 - la grille blanche doit rester entièrement connectée — pas de zone blanche
   isolée du reste de la grille par un mur de cases noires ;
 - un emplacement (une zone blanche encadrée par une case noire des deux
-  côtés) doit normalement faire **au moins 3 cases**, **sauf** si l'une de
+  côtés) doit normalement faire **au moins `STRUCTURAL_MIN_INTERIOR_FREE`
+  cases** (8 — `backend/crossword_gen.py`), **sauf** si l'une de
   ses deux extrémités touche directement le bord de la grille : dans ce
   cas, il reste toujours autorisé, quelle que soit sa longueur (y compris 1
   ou 2 cases) et quel qu'en soit le nombre sur la grille entière. Une zone
@@ -131,12 +132,22 @@ Une case n'est acceptée que si elle respecte ces règles :
   lettres, elle, **devient un vrai mot à deviner** avec sa propre
   définition, voir l'étape 2 ("et", "ou", "no", etc.).
 
-L'exigence de 3 cases peut être abaissée pour une case précise (voir
-"Éviter l'isolement" ci-dessous) — `minimize_black_squares` (étape 3), qui
-ne fait que *retirer* des cases noires, vérifie donc la grille avec
-l'exigence minimale réelle (1 case, c'est-à-dire uniquement la connexité et
-l'absence de case orpheline), pas l'exigence esthétique de 3 cases, qui
-n'est pas son rôle de faire respecter.
+  Nommée et relevée de 3 à 8, à la demande explicite de l'utilisateur :
+  "Attribuer un nom de variable à cette règle **au moins 3 cases**. Fixer
+  ce nombre à 8. Si aucune case ne peut être posée en respectant ce nombre
+  pour atteindre l'objectif de remplissage des noires, abaisser le nombre
+  et recommencer à essayer de placer des noires." Ce dernier point —
+  abaisser le nombre et retenter — est exactement le mécanisme déjà décrit
+  dans "Éviter l'isolement" ci-dessous, généralisé pour redescendre d'un
+  cran à la fois (8, 7, 6, ... jusqu'à 1) au lieu des 3 paliers fixes
+  (3, 2, 1) utilisés avant ce changement.
+
+L'exigence de `STRUCTURAL_MIN_INTERIOR_FREE` cases peut être abaissée pour
+une case précise (voir "Éviter l'isolement" ci-dessous) — `minimize_black_
+squares` (étape 3), qui ne fait que *retirer* des cases noires, vérifie
+donc la grille avec l'exigence minimale réelle (1 case, c'est-à-dire
+uniquement la connexité et l'absence de case orpheline), pas l'exigence
+esthétique ci-dessus, qui n'est pas son rôle de faire respecter.
 
 ### Choisir où placer une case
 
@@ -149,23 +160,26 @@ chargées en cases noires.
 
 **Éviter l'isolement.** Parmi les 32 candidates, on cherche d'abord la
 meilleure (au sens du critère ci-dessus) qui **ne touche aucune autre case
-noire** et qui respecte l'exigence normale de 3 cases. Si cette exigence ne
-laisse plus aucune candidate à la fois isolée et valide, elle est abaissée à
-2 cases, puis à 1 case, toujours en cherchant une candidate isolée à chaque
-niveau. C'est seulement si aucune candidate isolée ne fonctionne à aucun de
-ces trois niveaux qu'on accepte l'adjacence — en retentant alors les mêmes
-trois niveaux (3, puis 2, puis 1) sans plus exiger l'isolement. Cette
+noire** et qui respecte l'exigence normale de `STRUCTURAL_MIN_INTERIOR_FREE`
+cases (8). Si cette exigence ne laisse plus aucune candidate à la fois
+isolée et valide, elle est abaissée d'un cran à la fois (7, puis 6, ...
+jusqu'à 1), toujours en cherchant une candidate isolée à chaque niveau.
+C'est seulement si aucune candidate isolée ne fonctionne à aucun de ces
+niveaux qu'on accepte l'adjacence — en retentant alors la même cascade
+(`STRUCTURAL_MIN_INTERIOR_FREE` jusqu'à 1, un cran à la fois) sans plus
+exiger l'isolement. Cette
 relaxation ne s'applique qu'à la case en cours de placement, pas à toute la
 grille ni aux tentatives suivantes — mais elle peut légitimement laisser un
-emplacement interne de 1 ou 2 cases dans la grille finale, quand c'est le
-seul moyen d'éviter qu'une nouvelle case touche une case noire déjà posée.
+emplacement interne plus court que `STRUCTURAL_MIN_INTERIOR_FREE` dans la
+grille finale, quand c'est le seul moyen d'éviter qu'une nouvelle case
+touche une case noire déjà posée.
 
 **Exception : lors de la toute première initialisation d'une grille**
 (la première grille d'une génération, avant tout palier — aucun motif reçu
 d'un palier précédent), cette dernière relaxation (accepter l'adjacence en
 dernier recours) est **entièrement désactivée** :
-si aucune candidate isolée ne convient à aucun des 3 niveaux, la meilleure
-candidate est simplement refusée et retirée du lot — la case noire n'est
+si aucune candidate isolée ne convient à aucun des niveaux de la cascade,
+la meilleure candidate est simplement refusée et retirée du lot — la case noire n'est
 donc jamais posée cette fois-ci — plutôt que d'accepter malgré tout une
 case adjacente à une autre. Dans ce cas précis, la grille peut donc
 légitimement finir avec moins de cases noires que l'objectif visé. Ce
@@ -362,6 +376,18 @@ laissant à celui qui l'a appelée le soin d'essayer autre chose.
    privilégie les mieux notés statistiquement sans être strictement figé
    (voir "Les graines" plus bas pour le détail du classement et du tirage
    dans une fenêtre) :
+   - **chaque candidat compte immédiatement pour le budget de vérifications**
+     (voir "Limites de la recherche" plus bas), qu'il mène ou non à une
+     descente récursive plus loin — cette tentative est aussitôt comparée au
+     budget restant, et à un signal d'abandon global éventuel : si l'un ou
+     l'autre est déjà atteint, la fonction s'arrête immédiatement, sans
+     même poser ce mot ni essayer les candidats suivants. Sans ce contrôle,
+     un emplacement dont presque tous les candidats cassent un croisement
+     (voir le contrôle ciblé décrit juste en dessous) pourrait faire
+     défiler des centaines de candidats un par un sans que le budget ne
+     soit jamais reconsulté, puisque ce contrôle ne l'était auparavant qu'à
+     chaque nouvelle descente récursive, jamais entre deux candidats
+     rejetés au même niveau ;
    - le mot est posé provisoirement sur l'emplacement, et ajouté à
      `used_words` pour qu'il ne puisse plus être choisi ailleurs pendant
      cette même tentative ;
@@ -413,12 +439,23 @@ du dictionnaire (plus aucun appel récursif à faire) ; elle échoue si le
 tout premier appel — celui qui n'a encore rien posé du tout — épuise
 lui-même tous ses candidats sans jamais réussir plus loin, signe que le
 motif actuel, avec les lettres déjà imposées, n'admet tout simplement
-aucune solution valide. Chaque appel de cette fonction, qu'il choisisse un
-mot, échoue, ou revienne en arrière, compte comme une "vérification" pour
-le budget décrit plus bas dans "Limites de la recherche" — c'est
-l'épuisement de ce compteur qui, sur une grille trop difficile, met fin à
-la tentative avant que l'un ou l'autre des deux dénouements ci-dessus ne
-soit atteint.
+aucune solution valide.
+
+**Ce que compte le budget** (voir "Limites de la recherche" plus bas), à
+la demande explicite de l'utilisateur ("pour éviter d'itérer longtemps sur
+des cas impossibles") : ce n'est plus le nombre d'appels récursifs, mais
+le nombre de **tentatives de poser un mot** — chaque candidat essayé sur
+l'emplacement choisi (étape 3 ci-dessus) compte pour une unité, que ce mot
+mène ensuite à une descente récursive ou soit immédiatement rejeté par le
+contrôle de croisement décrit dans cette même étape. Sans ce changement,
+un emplacement dont presque tous les candidats cassent un croisement (ce
+qui arrive sans jamais provoquer la moindre récursion) pouvait laisser la
+recherche défiler un très grand nombre de candidats rejetés un par un sans
+que le budget ne s'épuise jamais — puisqu'un candidat rejeté de cette
+façon ne descendait jamais dans un nouvel appel récursif, seul moment où
+le compteur avançait auparavant. C'est l'épuisement de ce compteur qui,
+sur une grille trop difficile, met fin à la tentative avant que l'un ou
+l'autre des deux dénouements ci-dessus ne soit atteint.
 
 ### Les emplacements à une seule possibilité
 
@@ -587,11 +624,32 @@ Cette recherche a un budget maximal, proportionnel à la taille de la
 grille par défaut (**largeur × hauteur × 2000** vérifications — 300 000 sur
 la grille de référence 15×10 ; `backend/crossword_gen.py`, `try_fill`) : si
 une grille s'avère trop difficile à remplir, l'étape 2 abandonne et on
-passe à l'étape 3 pour simplifier la tentative avant de continuer. Depuis
+passe à l'étape 3 pour simplifier la tentative avant de continuer. Une
+"vérification" est **une tentative de poser un mot sur l'emplacement
+choisi** (voir "Le mécanisme de backtracking, en détail" plus haut) — pas
+un appel récursif : un mot immédiatement rejeté parce qu'il casserait un
+croisement compte tout autant qu'un mot qui mène plus loin dans la
+recherche, précisément pour qu'une longue série de candidats voués à
+l'échec n'échappe jamais à ce budget. Depuis
 l'interface web, le sélecteur **"Mode"** (Flash/Turbo/Rapide/Moyen/Ultra ;
 `backend/app.py`, `BUDGET_MODES`) fixe directement ce budget par tentative
 à une valeur choisie (1 000 à 5 000 000), sans rapport avec la taille de la
 grille, à la place de cette formule par défaut.
+
+Depuis que le décompte lui-même a changé (voir le paragraphe ci-dessus sur
+"une tentative de poser un mot"), un même nombre de vérifications
+représente moins d'exploration réelle qu'avant — un mot rejeté sans jamais
+descendre dans la récursion coûtait auparavant zéro vérification, il en
+coûte désormais une comme n'importe quel autre. Mesuré en direct sur le
+mode **Flash** (1 000, le plus contraint) : la grille de référence 15×10
+(seed 2) échoue désormais systématiquement à ce budget, alors qu'elle
+réussissait avant ce changement — au budget par défaut (300 000, ou tout
+autre mode plus large), elle réussit toujours normalement (0 incohérence,
+0 case vide, mesuré en direct). Un compromis assumé, à la demande
+explicite de l'utilisateur après lui avoir soumis ce constat : le mode
+Flash devient plus fragile sur certaines grilles, en échange d'un budget
+qui ne laisse plus jamais une recherche déjà sans espoir tourner
+indéfiniment sans jamais l'épuiser.
 
 #### Pourcentage de budget affiché en direct
 
@@ -744,22 +802,67 @@ jamais tenté, donc il ne compte pas non plus comme un espoir de
 progrès), **et que moins de `MAX_CONSECUTIVE_CONTINUE_PALIERS` paliers
 "telle quelle" consécutifs se sont déjà enchaînés sans nettoyage**
 (passé ce nombre, un nettoyage est déclenché systématiquement, même si
-un espoir de progrès subsiste encore), le palier suivant repart du
-**motif rigoureusement identique**, sans régénérer aucun nouveau motif.
+un espoir de progrès subsiste encore), le palier suivant repart, **pour
+chaque tentative parallèle non réinitialisée**, du **motif rigoureusement
+identique à celui d'ORIGINE de sa propre tentative de ce palier**, sans
+régénérer aucun nouveau motif — jamais du seul motif de la "meilleure"
+tentative rediffusé identiquement à tous.
+
+##### Chaque tentative repart de sa propre grille, partiellement nettoyée
+
+Corrigé à la demande explicite de l'utilisateur, qui a signalé une vraie
+régression : "après un cycle, le cycle suivant repart maintenant avec
+une seule grille. Quand il n'y a pas de déclenchement d'un nettoyage
+complet, chaque process doit repartir à l'étape suivante avec sa grille
+partiellement nettoyée (sauf le pourcentage de grilles entièrement
+neuves)." Avant ce correctif, seule la "meilleure" tentative du palier
+(celle qui minimise les cases injouables) était nettoyée (retrait des
+mots croisant un emplacement impossible, voir "Nettoyage automatique des
+emplacements bloqués" plus bas) et sa grille, une fois nettoyée, était
+reprise à l'identique par TOUS les workers non réinitialisés du palier
+suivant — perdant le progrès propre à chacune des autres tentatives
+distinctes de ce même palier.
+
+Désormais, exactement le même principe que celui déjà en place pour le
+nettoyage complet (voir "Score et sélection parmi les tentatives
+nettoyées" plus bas) s'applique aussi ici : **chaque** tentative
+distincte de ce palier (jusqu'à `PARALLEL_ATTEMPTS`, pas seulement la
+meilleure) est nettoyée individuellement, puis triée par le même score
+(somme des carrés des longueurs des mots en place, départagée par le
+nombre de cases noires) ; les moins bonnes sont éliminées, autant qu'il y
+a de "grilles nouvelles" configurées (voir "Une tentative repart d'une
+grille entièrement vierge" plus bas, désormais vrai pour ce cas aussi,
+pas seulement après un nettoyage complet) ; chacune des grilles nettoyées
+survivantes sert de point de départ à l'un des workers non réinitialisés
+du palier suivant — une grille distincte par worker, jamais celle d'un
+autre.
 
 ##### Fréquence des nettoyages complets
 
 Bornée par
-`MAX_CONSECUTIVE_CONTINUE_PALIERS` (valeur actuelle : 0) — un nettoyage
+`MAX_CONSECUTIVE_CONTINUE_PALIERS` (valeur actuelle : 4) — un nettoyage
 peut toujours survenir plus tôt (dès que le motif courant n'a plus
 aucun espoir de progrès, voir "Simplification puis motif neuf"
 ci-dessous), mais jamais plus tard que `MAX_CONSECUTIVE_CONTINUE_
 PALIERS` paliers "telle quelle" consécutifs — ce plafond est
 systématique, même si la reprise "telle quelle" aurait encore, en
-théorie, un espoir de progrès à ce moment-là. Avec la valeur actuelle
-(0), ce plafond est déjà atteint dès le tout premier palier "telle
-quelle" candidat : **chaque palier échoué déclenche systématiquement
-un nettoyage complet**, sans jamais de reprise "telle quelle".
+théorie, un espoir de progrès à ce moment-là. Avec cette valeur, jusqu'à
+4 paliers "telle quelle" peuvent s'enchaîner avant qu'un nettoyage ne
+soit déclenché systématiquement (contre 0 auparavant, où chaque palier
+échoué déclenchait un nettoyage complet dès le premier).
+
+Relevée de 0 à 4 à la demande explicite de l'utilisateur. Une
+régression réelle a été mesurée et confirmée causale par comparaison
+directe (A/B, seule cette constante changée) avant de conserver cette
+valeur : en mode **Flash** (le budget de vérifications le plus serré des
+5 modes réels de l'interface, voir "Limites de la recherche" plus bas),
+la graine 7 de la grille de référence 15×10 échoue désormais de façon
+reproductible (2 essais consécutifs échoués) alors qu'elle réussissait
+de façon fiable avec l'ancienne valeur (0) — la graine 2 réussit dans
+les deux cas. Signalé à l'utilisateur, qui a choisi de garder 4 malgré
+cette régression, jugeant le mode Flash — au budget déjà le plus
+contraint — pas nécessairement représentatif du comportement au budget
+par défaut ou sur un mode plus large.
 
 ##### Une tentative va jusqu'au bout avant que le palier ne se termine
 
@@ -828,31 +931,40 @@ chacune de ses cases restantes est alors directement noircie (toujours
 sous réserve de garder la grille valide, case par case), plutôt que de
 laisser cette même zone resurgir identique à chaque nettoyage futur.
 
-##### Interruption anticipée du lot
+##### Interruption anticipée du lot (mécanisme aujourd'hui désactivé)
 
-Toutes les tentatives parallèles de ce palier partagent ce **même
-motif rigoureusement identique** — seul l'ordre dans lequel chacune
-explore les emplacements diffère. Dès que l'une d'elles est jugée
-bloquée (voir l'étape 2, "Limites de la recherche" — plus de 30 % de
-la grille jugée impossible), toutes les autres tentatives de ce même
-palier s'arrêtent aussitôt elles aussi, sans attendre d'atteindre
-individuellement leur propre seuil d'abandon ou leur propre budget
-(`backend/crossword_gen.py`, `Filler._backtrack` et `generate_grid`) —
-un motif partagé jugé bloqué par une
-tentative l'est tout autant pour les autres, inutile de les laisser
-continuer à chercher sur ce même motif. Ce signal ne vaut que pour le
-palier en cours : il est remis à zéro avant chaque nouveau palier, donc
-un blocage constaté à un palier n'affecte jamais les tentatives du
-suivant. En pratique, ce raccourci intervient rarement seul désormais :
-l'arrêt général une fois la fraction réglable de tentatives terminées
-atteinte (voir "Plusieurs tentatives en parallèle par palier" plus
-haut — pour l'instant fixée à 100 %, donc sans effet anticipé) peut,
-selon sa valeur, couper court avant même que ce signal-ci n'ait le
-temps de se propager. Ce raccourci
-ne s'applique **pas** au cas "Simplification puis
-motif neuf" ci-dessous : là, chacune des tentatives parallèles génère
-son propre motif indépendant, donc la conclusion de l'une ne dit rien
-de fiable sur celui, différent, d'une autre.
+Un mécanisme existe pour arrêter, dès qu'une tentative parallèle d'un
+palier est jugée bloquée (voir l'étape 2, "Limites de la recherche" —
+plus de 30 % de la grille jugée impossible), toutes les autres
+tentatives de ce même palier aussitôt elle aussi, sans attendre
+d'atteindre individuellement leur propre seuil d'abandon ou leur propre
+budget (`backend/crossword_gen.py`, `Filler._backtrack`,
+`_worker_batch_abandoned_event`). Il n'a de sens que si **toutes les
+tentatives parallèles du palier partagent rigoureusement le même
+motif** — un motif partagé jugé bloqué par une tentative l'est tout
+autant pour les autres — jamais si chacune peut explorer un motif
+différent, auquel cas la conclusion de l'une ne dit rien de fiable sur
+celui, différent, d'une autre.
+
+C'est pourquoi il n'est aujourd'hui **transmis nulle part** : ni au cas
+"Simplification puis motif neuf" ci-dessous (chacune des tentatives
+parallèles y génère depuis toujours son propre motif indépendant), ni
+à la reprise "telle quelle" (voir "Chaque tentative repart de sa propre
+grille, partiellement nettoyée" plus haut) — cette dernière partageait
+bien un motif rigoureusement identique entre toutes ses tentatives
+parallèles avant l'introduction du vivier `carry_seed_pool_continue`,
+mais ce n'est plus le cas depuis : deux tentatives parallèles d'un même
+palier "telle quelle" peuvent désormais recevoir des entrées
+différentes du vivier (ou même un motif entièrement neuf pour les
+tentatives réinitialisées) — la même contamination entre motifs
+indépendants qui a motivé de désactiver ce signal pour le "motif neuf"
+s'applique donc désormais ici aussi, désactivé préventivement par
+cohérence plutôt qu'après un échec constaté en direct. En pratique, ce
+raccourci n'aurait de toute façon plus grand-chose à apporter : l'arrêt
+général une fois la fraction réglable de tentatives terminées atteinte
+(voir "Plusieurs tentatives en parallèle par palier" plus haut — pour
+l'instant fixée à 100 %) coupe déjà court, quel que soit le motif de
+chacune.
 
 #### Simplification puis motif neuf
 
@@ -922,13 +1034,24 @@ parmi les survivantes ci-dessus (et non plus toutes la même grille de
 départ) — le nombre de grilles nouvelles ainsi réservées est
 précisément le nombre de grilles nettoyées éliminées juste au-dessus,
 pour que chaque place du palier suivant soit pourvue exactement une
-fois. Ne s'applique jamais après une reprise "telle quelle" (voir
-"Reprise « telle quelle »" ci-dessus), seulement juste après un nettoyage
-complet.
+fois.
 
-Aucune case noire n'est jamais ajoutée par l'un ou l'autre de ces deux cas —
-seuls les mots/cases noires déjà présents dans le motif choisi survivent ou
-disparaissent selon ce que le nettoyage retire.
+**S'applique désormais aussi à la reprise "telle quelle"** (voir
+"Chaque tentative repart de sa propre grille, partiellement nettoyée"
+ci-dessus), à la demande explicite de l'utilisateur — contrairement au
+nettoyage complet, ceci s'applique ici à **chaque** palier "telle
+quelle", pas seulement au premier d'une série : une tentative
+réinitialisée d'un tel palier repart d'un motif entièrement neuf via
+`_pattern_attempt` (jamais `_pattern_continue`, puisqu'il n'y a alors
+plus de motif ni de verrouillage antérieur à reprendre), exactement le
+même mécanisme que pour un nettoyage complet.
+
+Aucune case noire n'est jamais ajoutée par le nettoyage de la reprise
+"telle quelle" ni par celui du nettoyage complet lui-même — seuls les
+mots/cases noires déjà présents dans le motif choisi survivent ou
+disparaissent selon ce que le nettoyage retire ; une tentative
+réinitialisée (motif entièrement neuf, voir ci-dessus), elle, peut bien
+sûr en poser de nouvelles, comme n'importe quel autre motif neuf.
 
 #### Un cas force systématiquement le nettoyage
 
@@ -993,10 +1116,20 @@ réinitialisée de ce palier démarre déjà, à cet instant précis, sur sa
 propre grille de départ distincte, donc l'aperçu la montre telle quelle.
 Dédupliqué par motif réel, sans aucun plafond, comme partout ailleurs
 dans ce mécanisme de vivier. Sur le tout premier palier d'une génération
-(rien encore reporté d'un palier à l'autre) comme lors d'une reprise
-« telle quelle » (motif rigoureusement identique pour toutes les
-tentatives, voir plus haut), une seule grille suffit — il n'y a, dans ces
-deux cas précis, rien de plus à montrer.
+(rien encore reporté d'un palier à l'autre), une seule grille suffit — il
+n'y a, dans ce cas précis, rien de plus à montrer (aucune tentative
+précédente à diversifier).
+
+Un palier de reprise « telle quelle » a désormais lui aussi son propre
+aperçu par grille du vivier (`carry_seed_pool_continue` — voir "Chaque
+tentative repart de sa propre grille, partiellement nettoyée" plus haut),
+exactement le même principe : chaque tentative parallèle non réinitialisée
+démarre sur sa propre affectation nettoyée, distincte de celle des autres,
+donc l'aperçu montre chacune séparément. Seule une tentative
+*réinitialisée* d'un tel palier (motif entièrement neuf, voir "Une
+tentative repart d'une grille entièrement vierge" plus haut) n'est
+volontairement pas préviewée séparément ici — même convention que pour le
+nettoyage complet.
 
 Pour ce même palier « motif neuf », le second aperçu — « cases noires
 posées » — est calculé et publié par le processus parent lui-même, avant

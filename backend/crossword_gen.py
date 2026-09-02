@@ -295,10 +295,33 @@ def load_wordlist(path, max_words=None, require_gloss=False):
 
 # ---------- Génération du motif de cases noires ----------
 
-def is_structurally_valid(grid, rows, cols, min_interior_free=3):
+# Longueur minimale "normale" (esthétique, pas absolue — la vraie limite
+# jamais franchie, connexité/absence de case orpheline, reste le littéral
+# `min_interior_free=1` passé explicitement par tous les autres appelants,
+# voir plus bas) d'une zone blanche *interne* (encadrée par une case noire
+# des deux
+# côtés), utilisée comme valeur par défaut de `is_structurally_valid` et
+# comme point de départ de la cascade de relaxation de `_place_black_
+# cells` (voir sa propre docstring) — nommée et fixée à 8 (relevée de 3) à
+# la demande explicite de l'utilisateur : "Attribuer un nom de variable à
+# cette règle **au moins 3 cases**. Fixer ce nombre à 8. Si aucune case ne
+# peut être posée en respectant ce nombre pour atteindre l'objectif de
+# remplissage des noires, abaisser le nombre et recommencer à essayer de
+# placer des noires." Ce dernier point — abaisser le nombre et
+# retenter — est exactement ce que `_place_black_cells` faisait déjà,
+# jusqu'ici avec une cascade figée à 3 niveaux (3, 2, 1) : généralisé
+# pour redescendre d'un cran à la fois depuis cette constante jusqu'à 1
+# (`range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1)`), pour que la relaxation
+# progressive reste cohérente quelle que soit la valeur choisie ici,
+# plutôt que 3 paliers fixes indépendants de ce nombre.
+STRUCTURAL_MIN_INTERIOR_FREE = 8
+
+
+def is_structurally_valid(grid, rows, cols, min_interior_free=STRUCTURAL_MIN_INTERIOR_FREE):
     """Une grille est valide si :
     - toute zone blanche *interne* (encadrée par une case noire des deux
-      côtés) fait au moins `min_interior_free` cases (3 par défaut),
+      côtés) fait au moins `min_interior_free` cases (`STRUCTURAL_MIN_
+      INTERIOR_FREE`, 8, par défaut),
       **sauf** si l'une de ses deux extrémités touche directement le bord de
       la grille (ligne/colonne 0, ou la dernière) : une telle zone de bord
       reste toujours autorisée, quelle que soit sa longueur (y compris 1 ou
@@ -306,11 +329,15 @@ def is_structurally_valid(grid, rows, cols, min_interior_free=3):
       budget ni compteur, contrairement à un ancien système à ce sujet
       (voir le SKILL project-best-practices). `min_interior_free` existe
       pour `_place_black_cells`, à la demande explicite de l'utilisateur :
-      si l'exigence par défaut (3) ne laisse plus que des cases adjacentes
-      à une autre case noire, elle est abaissée à 2 puis 1 pour cette
-      tentative de placement précise (voir sa docstring) — tous les autres
-      appelants (`minimize_black_squares` compris) utilisent la valeur par
-      défaut, inchangée. Une zone d'une seule lettre ne devient jamais un
+      si l'exigence par défaut (`STRUCTURAL_MIN_INTERIOR_FREE`) ne laisse
+      plus que des cases adjacentes à une autre case noire, elle est
+      abaissée d'un cran à la fois jusqu'à 1 pour cette tentative de
+      placement précise (voir sa docstring) — tous les autres appelants
+      (`minimize_black_squares` compris) utilisent `min_interior_free=1`
+      explicitement (la vraie limite absolue — connexité et absence de
+      case orpheline, jamais l'exigence esthétique ci-dessus), jamais la
+      valeur par défaut de cette fonction. Une zone d'une seule lettre ne
+      devient jamais un
       emplacement à définir (extract_slots l'exclut toujours, voir plus
       bas) — elle sert juste de passage pour un mot plus long dans l'autre
       sens — mais une zone de DEUX lettres devient un véritable emplacement
@@ -519,15 +546,19 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     (`_has_black_neighbor`) : on cherche la meilleure candidate (au sens du
     critère ci-dessus) qui soit à la fois isolée et structurellement
     valide avec l'exigence normale (`is_structurally_valid`,
-    `min_interior_free=3` — au moins 3 cases libres par emplacement
-    interne). Si l'exigence de 3 cases ne laisse plus aucune candidate à
-    la fois isolée et valide, elle est abaissée à 2, puis à 1, avant
-    d'accepter l'adjacence : cette relaxation ne s'applique qu'à cette
-    tentative de placement précise, pas à la grille entière ni aux
-    tentatives suivantes. Seulement si aucune candidate isolée ne
-    fonctionne à aucun de ces trois niveaux, on accepte l'adjacence et on
-    retente les mêmes trois niveaux (3, puis 2, puis 1) sans plus exiger
-    l'isolement — **sauf si `forbid_adjacency` est vrai** (`False` par
+    `min_interior_free=STRUCTURAL_MIN_INTERIOR_FREE`, 8 — au moins 8
+    cases libres par emplacement interne). Si cette exigence ne laisse
+    plus aucune candidate à la fois isolée et valide, elle est abaissée
+    d'un cran à la fois (7, puis 6, ... jusqu'à 1), à la demande explicite
+    de l'utilisateur ("si aucune case ne peut être posée en respectant ce
+    nombre... abaisser le nombre et recommencer à essayer de placer des
+    noires"), avant d'accepter l'adjacence : cette relaxation ne s'applique
+    qu'à cette tentative de placement précise, pas à la grille entière ni
+    aux tentatives suivantes. Seulement si aucune candidate isolée ne
+    fonctionne à aucun de ces niveaux, on accepte l'adjacence et on
+    retente la même cascade (`STRUCTURAL_MIN_INTERIOR_FREE` jusqu'à 1, un
+    cran à la fois) sans plus exiger l'isolement — **sauf si
+    `forbid_adjacency` est vrai** (`False` par
     défaut, chaque appelant existant avant ce paramètre inchangé), auquel
     cas cette toute dernière tentative (accepter l'adjacence) est
     entièrement sautée : à la demande explicite de l'utilisateur, "Lors de
@@ -612,12 +643,12 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         non_adjacent = [i for i in order if not _has_black_neighbor(grid, rows, cols, *remaining[i])]
 
         chosen = None
-        for min_free in (3, 2, 1):
+        for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
             chosen = _first_valid(non_adjacent, min_free)
             if chosen is not None:
                 break
         if chosen is None and not forbid_adjacency:
-            for min_free in (3, 2, 1):
+            for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
                 chosen = _first_valid(order, min_free)
                 if chosen is not None:
                     break
@@ -1245,7 +1276,10 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
 
     Structural validity itself (`is_structurally_valid`) is equally simple
     now: an *interior* white zone (bounded by a black cell on both sides)
-    must be at least `min_interior_free` cells long (3 by default); a zone
+    must be at least `min_interior_free` cells long
+    (`STRUCTURAL_MIN_INTERIOR_FREE`, 8 by default — named and raised from
+    an original 3 at the user's own later explicit request, see that
+    constant's own docstring for the full reasoning); a zone
     touching the grid's own border on at least one side is always allowed,
     whatever its length and however many of them the grid ends up with.
     `_place_black_cells` reintroduces a preference for keeping black cells
@@ -1253,10 +1287,11 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     structural minimum rather than by a secondary tie-break criterion: among
     the window, it first looks for the best candidate (by the row/column
     criterion) that is *not* adjacent to any existing black cell and valid
-    at `min_interior_free=3`; if the 3-cell requirement leaves no such
-    isolated candidate, it's relaxed to 2, then to 1, still only considering
-    isolated candidates — only once even the most relaxed level finds none
-    is adjacency accepted at all, again trying 3, then 2, then 1 before
+    at `min_interior_free=STRUCTURAL_MIN_INTERIOR_FREE`; if that requirement
+    leaves no such isolated candidate, it's relaxed one step at a time (7,
+    then 6, ... down to 1), still only considering isolated candidates —
+    only once even the most relaxed level finds none is adjacency accepted
+    at all, again cascading `STRUCTURAL_MIN_INTERIOR_FREE` down to 1 before
     giving up on that specific placement attempt.
 
     `available_lengths` (`None` by default — every existing caller
@@ -1742,7 +1777,27 @@ BUDGET_PROGRESS_REPORT_INTERVAL_S = 2.0
 # "reprise telle quelle" to paper over this gap, restoring the 0 value the
 # user actually asked for. See `_close_implied_slots`'s own docstring for
 # the full mechanism and the live evidence that motivated it.
-MAX_CONSECUTIVE_CONTINUE_PALIERS = 0
+#
+# Raised from 0 to 4, at the user's own later explicit request ("Régler
+# MAX_CONSECUTIVE_CONTINUE_PALIERS à 4") — a plain value change, no
+# reasoning given beyond the number itself; every mechanic this constant
+# gates (the counter's own increment/reset points, the all-abandoned
+# force-nettoyage rule, `_close_implied_slots`'s own fix above, which
+# remains what makes even a small non-zero value here safe) is untouched.
+#
+# A real regression on the standard 15×10 benchmark's seed 7 was found and
+# confirmed causal by a direct A/B (this exact constant, nothing else,
+# flipped back to 0 and re-tested) before shipping this value: in **Flash**
+# mode (`deadline_checks=1000`, the tightest of the 5 real `BUDGET_MODES`)
+# seed 7 fails reproducibly at 4 (two runs, 17.2s/17.3s, all 200 paliers
+# exhausted) but succeeds reliably at 0 (41.6s, 60 words) — seed 2
+# succeeds either way. Reported to the user with this measurement; they
+# chose to keep 4 regardless, the same trade-off already accepted for the
+# `Filler._backtrack` checks-per-candidate change earlier this session:
+# Flash's own tiny budget is the mode most exposed to this kind of
+# reliability cost, not necessarily representative of the real default
+# budget (300 000+) or a larger `BUDGET_MODES` choice.
+MAX_CONSECUTIVE_CONTINUE_PALIERS = 4
 
 # Number of PARALLEL_ATTEMPTS workers that, right after a full cleanup
 # ("nettoyage complet" — see generate_grid's own `else:` branch, as opposed
@@ -2262,7 +2317,14 @@ class Filler:
         return sorted(cells)
 
     def _backtrack(self, deadline_checks):
-        self.checks += 1
+        # `self.checks` n'est plus incrémenté ici (une fois par appel/nœud)
+        # mais une fois par mot candidat réellement essayé, dans la boucle
+        # `for w in cands:` plus bas — voir son propre commentaire pour la
+        # raison (à la demande explicite de l'utilisateur, "pour éviter
+        # d'itérer longtemps sur des cas impossibles"). Ce premier appel
+        # (depuis `Filler.solve()`) démarre donc avec `self.checks` encore à
+        # sa valeur d'entrée (0 pour une recherche neuve) ; les contrôles
+        # ci-dessous restent corrects avec cette valeur telle quelle.
         if self.abandoned:
             return False
         if self.checks > deadline_checks:
@@ -2576,6 +2638,40 @@ class Filler:
                 reordered.append(remaining.pop(idx))
             cands = reordered
         for w in cands:
+            # Compter cette tentative de pose immédiatement, qu'elle mène ou
+            # non à une descente récursive plus loin — à la demande
+            # explicite de l'utilisateur ("modifie de manière à incrémenter
+            # le décompte du budget à chaque fois qu'on essaye de poser un
+            # mot, que ça génère une descente récursive ou pas"), pour
+            # éviter d'itérer longtemps sur des cas impossibles. Avant ce
+            # changement, `self.checks` n'était incrémenté qu'au tout début
+            # de `_backtrack`, donc seulement quand la récursion descendait
+            # réellement plus loin (voir le commentaire juste au-dessus du
+            # contrôle de croisement, plus bas) : un emplacement dont
+            # presque tous les candidats cassent un croisement (voir ce même
+            # contrôle) ne recule jamais dans `_backtrack`, donc ce compteur
+            # ne bougeait pas du tout pendant que cette boucle parcourait
+            # potentiellement des centaines de candidats rejetés un par un —
+            # ni le budget (`deadline_checks`) ni `self.abandoned` n'étaient
+            # jamais reconsultés tant que la boucle continuait, puisque ces
+            # deux contrôles ne sont autrement évalués qu'à l'entrée de
+            # `_backtrack`. Compter — et vérifier — dès cette tentative,
+            # avant même de poser le mot, borne enfin ce cas : la boucle
+            # s'arrête au plus tard `deadline_checks` tentatives après son
+            # dernier passage par le haut de la fonction, plutôt que de
+            # pouvoir continuer indéfiniment sur un emplacement condamné.
+            # `self.abandoned` est revérifié ici pour la même raison : il
+            # peut avoir été mis à `True` par une tentative sœur déjà
+            # explorée plus tôt dans cette même boucle (un candidat qui a
+            # récursé, plus profondément déclaré la recherche sans espoir,
+            # puis rendu la main) — sans ce contrôle, les candidats suivants
+            # continueraient d'être essayés (et leur propre contrôle de
+            # croisement calculé, un vrai coût) avant que le prochain appel
+            # récursif ne le remarque enfin via son propre `if self.
+            # abandoned: return False`.
+            self.checks += 1
+            if self.abandoned or self.checks > deadline_checks:
+                return False
             self.assignment[best_i] = w
             self.used_words.add(w)
             # Évaluer tout de suite, avant de descendre plus loin dans la
@@ -4274,6 +4370,134 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
     return new_grid, confirmed
 
 
+# Score utilisé pour choisir la meilleure grille nettoyée parmi plusieurs
+# candidates — sommme des carrés des longueurs des mots réellement "en
+# place" après nettoyage (toutes leurs cases figurent dans `cand_confirmed`).
+# Hissé au niveau du module (auparavant une fermeture locale, propre au seul
+# nettoyage complet, `else:` dans `generate_grid`) à la demande explicite de
+# l'utilisateur, une fois la même logique nécessaire aussi pour la reprise
+# "telle quelle" (voir `_clean_continue_candidate`/`_continue_seed_pool` plus
+# bas) — favorise quelques mots longs plutôt que beaucoup de mots courts pour
+# le même total de lettres, la même formule déjà utilisée pour départager les
+# tentatives parallèles réussies dans `generate_grid`.
+def _words_in_place_score(cand_slots, cand_confirmed):
+    return sum(
+        len(cells) ** 2 for cells in cand_slots
+        if all(cell in cand_confirmed for cell in cells)
+    )
+
+
+# Départage `_words_in_place_score` à égalité — le nombre de cases noires du
+# candidat, à la demande explicite de l'utilisateur, après un vrai blocage
+# constaté en direct sur une grande grille très majoritairement verrouillée
+# (voir CLAUDE.md pour l'historique complet). Également hissé au niveau du
+# module pour la même raison que `_words_in_place_score` ci-dessus.
+def _candidate_black_count(cand_seed):
+    return sum(row.count(BLACK) for row in cand_seed)
+
+
+# Trie une liste de candidats nettoyés par (`_words_in_place_score`,
+# `_candidate_black_count`) décroissant — chaque candidat est un tuple dont
+# les 3 premiers éléments sont `(seed_grid, confirmed, slots)`, dans cet
+# ordre précis (les éléments suivants, s'il y en a, ne sont jamais lus ici —
+# voir `_clean_continue_candidate` pour un exemple à 5 éléments).
+def _sorted_by_score(cleaned_candidates):
+    return sorted(
+        cleaned_candidates,
+        key=lambda sc: (
+            _words_in_place_score(sc[2], sc[1]),
+            _candidate_black_count(sc[0]),
+        ),
+        reverse=True,
+    )
+
+
+# Réduit une liste déjà triée (la meilleure d'abord) au vivier transmis au
+# prochain palier, en éliminant les `FULL_RESET_ATTEMPT_COUNT` moins bonnes —
+# ce nombre éliminé correspond exactement au nombre de tentatives que le
+# prochain palier réservera de toute façon à un nouveau départ complètement
+# vierge (voir `reset_count` dans `generate_grid`), les grilles survivantes
+# remplissant alors, une par une, très exactement le reste des places du
+# prochain palier. `max(1, ...)` : ne jamais vider entièrement le vivier,
+# même si `FULL_RESET_ATTEMPT_COUNT` dépasse le nombre de candidats
+# disponibles — il reste toujours au moins la meilleure grille elle-même.
+# `extract` isole, de chaque tuple candidat, exactement ce dont le prochain
+# palier a besoin pour relancer une tentative à partir de cette entrée —
+# `(seed_grid, locked_letters)` par défaut (le nettoyage complet, motif
+# neuf), `(seed_grid, preseed_assignment, excluded_slots)` pour la reprise
+# "telle quelle" (voir `_continue_seed_pool`).
+def _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[1])):
+    keep = max(1, len(sorted_candidates) - FULL_RESET_ATTEMPT_COUNT)
+    return [extract(sc) for sc in sorted_candidates[:keep]]
+
+
+# Nettoie UNE tentative individuelle d'un palier "reprise telle quelle" (voir
+# generate_grid, `if still_has_hope:`) — mêmes étapes que `_clean_blocked_
+# slots` (retrait des mots croisant un emplacement impossible, avec son
+# alternative 1/10 de case noire), appliquées ici à chaque tentative
+# distincte de ce palier plutôt qu'à la seule "meilleure" — à la demande
+# explicite de l'utilisateur : "Quand il n'y a pas de déclenchement d'un
+# nettoyage complet, chaque process doit repartir à l'étape suivante avec sa
+# grille partiellement nettoyée (sauf le pourcentage de grilles entièrement
+# neuves)" — le même principe déjà en place pour le nettoyage complet (voir
+# `_clean_all_candidates`, dans `generate_grid`) désormais étendu à la
+# reprise "telle quelle", jusque-là seule à ne conserver qu'une seule grille
+# (`selected_grid`/`selected_diag`, la "meilleure" au sens de `failed_pairs`)
+# pour tous les workers non réinitialisés du palier suivant.
+#
+# Retourne un tuple à 5 éléments — `(cand_seed_grid, cand_confirmed,
+# cand_slots, cand_preseed_assignment, cand_excluded_slots)` — les 3 premiers
+# dans le même ordre que les candidats du nettoyage complet (compatibles avec
+# `_words_in_place_score`/`_sorted_by_score`), les 2 derniers la forme
+# attendue par `_pattern_continue` (`cand_seed_grid` doublé, jamais répété
+# dans le tuple).
+#
+# Si `_clean_blocked_slots` ajoute une case noire (son alternative 1/10), la
+# numérotation des emplacements change — même remède déjà utilisé pour la
+# seule grille gagnante avant cette fonctionnalité (voir l'historique complet
+# dans CLAUDE.md, "même piège d'indices déjà rencontré... pour le mécanisme
+# de verrou à une case, depuis retiré") : reconstruire `cand_slots`/
+# `cand_preseed_assignment`/`cand_excluded_slots` depuis un `extract_slots`
+# frais sur le motif réellement mis à jour, en s'appuyant sur `confirmed`
+# (indexé par case, jamais par indice d'emplacement, donc immunisé contre ce
+# décalage) plutôt que sur les anciens indices.
+def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
+    cand_slots = extract_slots(cand_grid, rows, cols)
+    cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
+        cand_slots, cand_diag["assignment"], cand_diag["impossible_slots"],
+        index=index, rng=rng, grid=cand_grid, rows=rows, cols=cols,
+    )
+    if new_black_cells:
+        cand_seed_grid = [row[:] for row in cand_grid]
+        for (br, bc) in new_black_cells:
+            cand_seed_grid[br][bc] = BLACK
+        new_slots = extract_slots(cand_seed_grid, rows, cols)
+        cand_preseed_assignment = [
+            "".join(confirmed[cell] for cell in cells)
+            if all(cell in confirmed for cell in cells) else None
+            for cells in new_slots
+        ]
+        old_impossible_cell_tuples = {
+            tuple(cand_slots[i]) for i in cand_diag["impossible_slots"]
+        }
+        cand_excluded_slots = {
+            j for j, cells in enumerate(new_slots)
+            if tuple(cells) in old_impossible_cell_tuples
+        }
+        return cand_seed_grid, confirmed, new_slots, cand_preseed_assignment, cand_excluded_slots
+    cand_excluded_slots = set(cand_diag["impossible_slots"])
+    return cand_grid, confirmed, cand_slots, cleaned_assignment, cand_excluded_slots
+
+
+# Extrait, d'une liste déjà triée de candidats `_clean_continue_candidate`
+# (5 éléments), le vivier transmis au prochain palier "reprise telle
+# quelle" — `(seed_grid, preseed_assignment, excluded_slots)` par entrée,
+# la forme attendue par `_pattern_continue`. Simple appel à `_seed_pool`
+# ci-dessus avec l'extracteur adapté à cette forme à 5 éléments.
+def _continue_seed_pool(sorted_candidates):
+    return _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[3], sc[4]))
+
+
 # ---------- Tentatives (motif + remplissage) en parallèle ----------
 #
 # `index` (le lexique pré-indexé, potentiellement 100 000+ mots) est envoyé
@@ -4311,9 +4535,13 @@ _worker_cancel_event = None
 # même batch, qui s'arrêtent alors eux aussi, sans attendre d'atteindre
 # individuellement leur propre seuil d'abandon ou leur propre budget.
 #
-# N'est réellement transmis qu'à `_pattern_continue` (reprise "telle
-# quelle"), jamais à `_pattern_attempt` (motif neuf) — un vrai bug trouvé
-# en direct avant tout déploiement, pas seulement raisonné : les
+# N'est plus réellement transmis NULLE PART aujourd'hui — ni à
+# `_pattern_attempt` (motif neuf), ni à `_pattern_continue` (reprise
+# "telle quelle") — les deux transmettent toujours `None` à `try_fill`
+# plutôt que ce global. Historique complet, dans l'ordre :
+#
+# D'abord désactivé spécifiquement pour `_pattern_attempt`, un vrai bug
+# trouvé en direct avant tout déploiement, pas seulement raisonné : les
 # PARALLEL_ATTEMPTS tentatives d'un même palier `_pattern_attempt` génèrent
 # chacune leur PROPRE motif indépendant (`make_pattern` avec son propre
 # `rng`, sur le même `seed_grid`/`locked_letters` de départ mais avec des
@@ -4327,12 +4555,26 @@ _worker_cancel_event = None
 # spécifiquement pour `_pattern_attempt` (en lui transmettant toujours
 # `None` plutôt que ce global) restaure le succès, confirmant que le
 # problème vient bien de cette contamination entre motifs indépendants.
-# `_pattern_continue`, lui, fait exactement l'inverse par construction :
-# toutes ses tentatives parallèles partagent RIGOUREUSEMENT le même motif
-# et le même verrouillage (voir sa propre docstring, "le motif et le
-# verrouillage restent rigoureusement identiques d'une tentative à
-# l'autre") — seul l'ordre d'exploration diffère — donc la conclusion
-# d'une tentative sur ce motif partagé reste pertinente pour les autres.
+#
+# `_pattern_continue`, à l'époque, faisait exactement l'inverse par
+# construction : toutes ses tentatives parallèles partageaient
+# RIGOUREUSEMENT le même motif et le même verrouillage — seul l'ordre
+# d'exploration différait — donc la conclusion d'une tentative sur ce motif
+# partagé restait pertinente pour les autres, et le signal restait
+# transmis là.
+#
+# Ce n'est plus vrai depuis `carry_seed_pool_continue` (voir
+# `generate_grid`), à la demande explicite de l'utilisateur ("chaque
+# process doit repartir à l'étape suivante avec sa grille partiellement
+# nettoyée") : deux tentatives parallèles d'un même palier "reprise telle
+# quelle" peuvent désormais recevoir des entrées DIFFÉRENTES du vivier (ou
+# même un motif entièrement neuf via `_pattern_attempt` pour les
+# tentatives réinitialisées, voir `FULL_RESET_ATTEMPT_COUNT`) — exactement
+# la même contamination entre motifs indépendants que celle qui a motivé
+# de désactiver ce signal pour `_pattern_attempt` s'applique désormais
+# aussi ici, alors désactivé de la même façon, préventivement, avant même
+# qu'un échec en direct ne le confirme sur cette exacte grille de
+# référence (voir `_pattern_continue`'s own docstring/call site).
 _worker_batch_abandoned_event = None
 # "This palier already has its answer" signal (see Filler.attempt_done_event
 # and generate_grid), at the user's explicit request: "interrupt every search
@@ -4558,12 +4800,25 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     sans aucun rapport avec le blocage déjà connu.
 
     Chaque tentative parallèle du même palier reçoit son propre seed, comme
-    _pattern_attempt — le motif et le verrouillage restent rigoureusement
-    identiques d'une tentative à l'autre (rien de nouveau à générer), seul
+    _pattern_attempt — `seed_grid`/`preseed_assignment`/`excluded_slots`
+    restent, pour UN appel donné, rigoureusement identiques d'un appel à
+    l'autre de `Filler`/`try_fill` à l'intérieur de cette même recherche
+    (rien de nouveau à générer une fois cette tentative lancée), seul
     l'ordre d'exploration diffère (sondage statistique `sample_letter_
     biases`, tri/tirage des mots candidats dans `_backtrack`) : suffisant
     pour que plusieurs tentatives parallèles, parties du même point,
     atteignent des états d'avancement différents.
+
+    Ceci ne veut plus dire, depuis que le vivier `carry_seed_pool_continue`
+    existe (voir `generate_grid`), que TOUTES les tentatives parallèles d'un
+    même palier "reprise telle quelle" reçoivent nécessairement le même
+    triplet `(seed_grid, preseed_assignment, excluded_slots)` — à la
+    demande explicite de l'utilisateur ("chaque process doit repartir à
+    l'étape suivante avec sa grille partiellement nettoyée"), le parent peut
+    désormais dispatcher une entrée différente du vivier à chaque tentative
+    non réinitialisée du même palier ; seule une tentative *individuelle*
+    (un seul appel à cette fonction) garde un point de départ fixe pour
+    elle-même.
 
     Un `try_fill` complet (`truly_complete`, voir sa docstring) implique ici
     que même les emplacements exclus ont fini par être remplis — impossible
@@ -4639,12 +4894,28 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     # contrainte réelle.
     forced_letters = {**forced_letters, **known_letters}
     diag = {}
+    # `batch_abandoned_event` toujours `None` ici désormais — n'était vrai
+    # que tant que TOUTES les tentatives parallèles d'un même palier
+    # "reprise telle quelle" partageaient rigoureusement le même
+    # `seed_grid`/`preseed_assignment` (voir la docstring de cette fonction,
+    # et `_worker_batch_abandoned_event` pour l'historique complet de cette
+    # règle). Depuis `carry_seed_pool_continue` (voir `generate_grid`), deux
+    # tentatives parallèles du même palier peuvent désormais recevoir des
+    # entrées DIFFÉRENTES du vivier — un `_pattern_attempt` (motif neuf,
+    # pour les tentatives réinitialisées) mélangé à plusieurs `_pattern_
+    # continue` sur des grilles distinctes — donc la conclusion "30 % de MA
+    # grille est impossible" d'une tentative ne dit plus rien de fiable sur
+    # la grille, potentiellement différente, d'une autre tentative de ce
+    # même palier : exactement le même raisonnement, appliqué au même
+    # global, qui a déjà motivé de le désactiver pour `_pattern_attempt`
+    # (voir juste au-dessus) — désactivé ici aussi pour la même raison,
+    # avant même qu'un vrai échec en direct ne le confirme.
     result = try_fill(seed_grid, rows, cols, _worker_index, rng, deadline_checks=deadline_checks,
                        diagnostics=diag,
                        forced_letters=forced_letters, letter_scores=letter_scores,
                        preseed_assignment=preseed_assignment, excluded_slots=excluded_slots,
                        cancel_event=_worker_cancel_event,
-                       batch_abandoned_event=_worker_batch_abandoned_event,
+                       batch_abandoned_event=None,
                        attempt_done_event=_worker_attempt_done_event,
                        locked_letters=known_letters,
                        best_state_queue=_worker_best_state_queue,
@@ -4900,6 +5171,29 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # deux (voir plus bas, où chaque branche remet l'autre à None).
     carry_preseed_assignment = None
     carry_excluded_slots = None
+    # Vivier de grilles nettoyées candidates pour le prochain palier de
+    # reprise "telle quelle" — le pendant de `carry_seed_pool` ci-dessus,
+    # mais pour `_pattern_continue` au lieu de `_pattern_attempt` : une
+    # entrée `(seed_grid, preseed_assignment, excluded_slots)` par tentative
+    # distincte du palier qui vient de se terminer, pas une seule grille
+    # reprise par tous les workers non réinitialisés — à la demande explicite
+    # de l'utilisateur : "Quand il n'y a pas de déclenchement d'un nettoyage
+    # complet, chaque process doit repartir à l'étape suivante avec sa
+    # grille partiellement nettoyée (sauf le pourcentage de grilles
+    # entièrement neuves)." Voir `_clean_continue_candidate`/
+    # `_continue_seed_pool` (niveau module) et `if still_has_hope:` plus bas
+    # pour la construction ; `carry_seed_grid`/`carry_preseed_assignment`/
+    # `carry_excluded_slots` ci-dessus restent la MEILLEURE entrée de ce
+    # vivier (toujours en tête une fois trié) — utilisés tels quels partout
+    # ailleurs dans cette fonction (aperçus autres que le tout prochain
+    # palier, `resume_state`...) exactement comme avant cette fonctionnalité
+    # ; seul le tout prochain palier de reprise "telle quelle" puise dans ce
+    # vivier pour diversifier son propre lancement. `None` tant qu'aucun
+    # palier "telle quelle" n'a encore eu lieu (voir plus bas, où seule cette
+    # branche le renseigne) — jamais transmis par `resume_state` (comme
+    # `carry_seed_pool` lui-même), un run repris reconstruit ce vivier
+    # normalement dès son premier palier "telle quelle".
+    carry_seed_pool_continue = None
     # "Continuer" button on the web UI, at the user's explicit request: when
     # every one of `attempts` (200 by default) paliers has failed, the user
     # can relaunch another `attempts` paliers starting from the exact state
@@ -5067,21 +5361,45 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # pool` — voir sa propre définition pour le détail complet.
             pool = carry_seed_pool if carry_seed_pool else [(carry_seed_grid, carry_locked_letters)]
             if carry_preseed_assignment is not None:
-                # Reprise "telle quelle" : un seul motif, rigoureusement
-                # identique pour toutes les tentatives parallèles de ce
-                # palier (voir _pattern_continue's own docstring) — jamais
-                # de diversité à montrer ici, contrairement au cas "motif
-                # neuf" ci-dessous.
-                start_grid, start_locked_cells = _cycle_start_preview(
-                    rows, cols, carry_seed_grid, carry_locked_letters, carry_preseed_assignment,
-                )
-                cycle_start_examples = [{
-                    "example_grid": start_grid,
-                    "impossible_cells": [],
-                    "forced_cells": [],
-                    "locked_cells": start_locked_cells,
-                    "low_candidate_cells": [],
-                }]
+                # Un aperçu par grille du vivier (`carry_seed_pool_
+                # continue`), pas un seul, à la demande explicite de
+                # l'utilisateur (voir la définition de `carry_seed_pool_
+                # continue`) — même principe que le "motif neuf" ci-dessous,
+                # désormais aussi vrai pour la reprise "telle quelle" :
+                # chaque tentative distincte du palier précédent a pu être
+                # nettoyée différemment (mots retirés différents, parfois une
+                # case noire ajoutée), donc le prochain palier peut
+                # réellement démarrer sur plusieurs motifs/affectations
+                # distincts, pas un seul comme avant cette fonctionnalité.
+                # Repli sur `[(carry_seed_grid, carry_preseed_assignment,
+                # carry_excluded_slots)]` (comportement d'avant cette
+                # fonctionnalité) tant qu'aucun palier "telle quelle" n'a
+                # encore renseigné `carry_seed_pool_continue`. Les
+                # tentatives réinitialisées de ce palier (`reset_count` plus
+                # bas, un motif entièrement neuf) ne sont volontairement pas
+                # préviewées séparément ici — même convention que la branche
+                # "motif neuf" ci-dessous, dont le propre vivier ne les
+                # préviewe pas non plus.
+                continue_pool = carry_seed_pool_continue if carry_seed_pool_continue else [
+                    (carry_seed_grid, carry_preseed_assignment, carry_excluded_slots)
+                ]
+                seen_continue_patterns = set()
+                cycle_start_examples = []
+                for pool_grid, pool_preseed, _pool_excluded in continue_pool:
+                    pattern_key = tuple(tuple(row) for row in pool_grid)
+                    if pattern_key in seen_continue_patterns:
+                        continue
+                    seen_continue_patterns.add(pattern_key)
+                    start_grid, start_locked_cells = _cycle_start_preview(
+                        rows, cols, pool_grid, None, pool_preseed,
+                    )
+                    cycle_start_examples.append({
+                        "example_grid": start_grid,
+                        "impossible_cells": [],
+                        "forced_cells": [],
+                        "locked_cells": start_locked_cells,
+                        "low_candidate_cells": [],
+                    })
             else:
                 # Un aperçu par grille du vivier, pas un seul, à la demande
                 # explicite de l'utilisateur : "Les extraits 'Génération du
@@ -5128,12 +5446,48 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                      examples=cycle_start_examples)
             seeds = [rng.randrange(2**31) for _ in range(PARALLEL_ATTEMPTS)]
             if carry_preseed_assignment is not None:
-                futures = [
-                    executor.submit(_pattern_continue, rows, cols, s, carry_seed_grid,
-                                     carry_preseed_assignment, carry_excluded_slots,
-                                     force_letters_fraction, deadline_checks)
-                    for s in seeds
-                ]
+                # `reset_count` tentatives de ce palier "reprise telle
+                # quelle" repartent d'un motif entièrement neuf
+                # (`_pattern_attempt`, seed_grid=None — jamais `_pattern_
+                # continue`, puisqu'il n'y a alors ni motif ni verrouillage
+                # antérieur à reprendre) au lieu de la reprise individuelle
+                # sur leur propre entrée du vivier — à la demande explicite
+                # de l'utilisateur : "chaque process doit repartir à l'étape
+                # suivante avec sa grille partiellement nettoyée (sauf le
+                # pourcentage de grilles entièrement neuves)." Contrairement
+                # au "motif neuf" ci-dessous (`reset_count` conditionné par
+                # `just_cleaned`, seulement juste après un nettoyage
+                # complet), s'applique ici inconditionnellement à CHAQUE
+                # palier "reprise telle quelle" — il n'y a pas d'équivalent
+                # de `just_cleaned` à distinguer, puisqu'un tel palier est
+                # déjà, par construction, toujours la suite d'un état
+                # précédent (jamais un tout premier palier, qui part
+                # toujours de `carry_seed_grid is None`, donc de la branche
+                # "motif neuf" ci-dessous). Chaque tentative non
+                # réinitialisée (`i >= reset_count`) reçoit sa propre entrée
+                # du vivier (`continue_pool`, déjà calculé plus haut pour
+                # l'aperçu de ce même palier) — un simple parcours cyclique
+                # (`% len(continue_pool)`) répartit les entrées disponibles
+                # sur les places non réinitialisées, comme pour le "motif
+                # neuf" ci-dessous.
+                reset_count = FULL_RESET_ATTEMPT_COUNT
+                futures = []
+                for i, s in enumerate(seeds):
+                    if i < reset_count:
+                        futures.append(executor.submit(
+                            _pattern_attempt, rows, cols, ratio, s, force_letters_fraction,
+                            None, None,
+                            black_enrichment_fraction, deadline_checks,
+                        ))
+                    else:
+                        task_seed_grid, task_preseed_assignment, task_excluded_slots = (
+                            continue_pool[(i - reset_count) % len(continue_pool)]
+                        )
+                        futures.append(executor.submit(
+                            _pattern_continue, rows, cols, s, task_seed_grid,
+                            task_preseed_assignment, task_excluded_slots,
+                            force_letters_fraction, deadline_checks,
+                        ))
             else:
                 # A fraction of this palier's own workers start from a
                 # totally blank grid instead of the just-cleaned
@@ -5496,11 +5850,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # (10 par palier), qui ne reflète absolument pas le travail
             # réel effectué : le remplissage CSP procède par essais
             # successifs avec retour en arrière (voir Filler._backtrack) —
-            # chaque case noeud de recherche visité (`filler.checks`,
-            # incrémenté une fois par appel à _backtrack, qu'il aboutisse à
-            # un retour en arrière ou à une avancée) représente une
-            # configuration de grille réellement tentée puis abandonnée dès
-            # que la recherche recule. Sommé sur TOUTES les tentatives
+            # chaque tentative de poser un mot (`filler.checks`, incrémenté
+            # une fois par mot candidat essayé dans la boucle de
+            # `_backtrack`, qu'il mène ou non à une descente récursive plus
+            # loin — voir le commentaire de cette boucle pour pourquoi ce
+            # compteur n'est plus lié à la seule profondeur de récursion)
+            # représente une configuration de grille réellement tentée puis
+            # abandonnée dès que la recherche recule ou rejette ce mot.
+            # Sommé sur TOUTES les tentatives
             # échouées de ce palier, y compris les doublons ci-dessus — un
             # motif identique retrouvé par deux workers différents (seeds
             # différents) a quand même nécessité, dans chaque worker, son
@@ -5898,70 +6255,32 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # pas les noires." Retire, avant même de reprendre "telle
                 # quelle" au palier suivant, tout mot qui croise directement
                 # un emplacement impossible (`_clean_blocked_slots`, les
-                # étapes 1-2 de `_build_retry_seed` sans sa 3e étape).
-                #
-                # L'invariant "jamais de case noire touchée" ci-dessus a
-                # depuis été assoupli, à la demande explicite de
-                # l'utilisateur et *seulement* sur ce chemin de reprise
-                # "telle quelle" (jamais sur le nettoyage complet
-                # `_build_retry_seed`, qui régénère déjà un motif neuf via
-                # `make_pattern` et peut donc déjà ajouter des cases noires
-                # par ce biais) : voir le commentaire de
-                # `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY` pour le
-                # raisonnement complet de l'utilisateur (retirer un mot sur
-                # une toute petite zone ne libère pas grand-chose, et peut
-                # faire tourner la recherche en rond). `grid=selected_grid`
-                # active cette alternative dans `_clean_blocked_slots` :
-                # avec une probabilité 1/10 (abaissée depuis 1/3, jugée
-                # trop agressive après un premier usage réel), un
-                # emplacement impossible peut désormais se voir couper par
-                # une case noire plutôt que de faire retirer le mot qui le
-                # croise.
-                cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
-                    selected_slots, selected_diag["assignment"], selected_diag["impossible_slots"],
-                    index=index, rng=rng, grid=selected_grid, rows=rows, cols=cols,
+                # étapes 1-2 de `_build_retry_seed` sans sa 3e étape) —
+                # désormais appliqué à CHAQUE tentative distincte de ce
+                # palier (`failed_pairs`), pas seulement la "meilleure"
+                # (`selected_grid`/`selected_diag`) comme avant cette
+                # fonctionnalité — à la demande explicite de l'utilisateur :
+                # "Regression : après un cycle, le cycle suivant repart
+                # maintenant avec une seule grille. Quand il n'y a pas de
+                # déclenchement d'un nettoyage complet, chaque process doit
+                # repartir à l'étape suivante avec sa grille partiellement
+                # nettoyée (sauf le pourcentage de grilles entièrement
+                # neuves)." Voir `_clean_continue_candidate` (niveau module,
+                # juste après `_build_retry_seed`) pour le détail exact —
+                # même logique, y compris l'alternative case noire à 1/10
+                # (`BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY`, voir sa
+                # propre docstring pour le raisonnement complet), appliquée
+                # une fois par tentative au lieu d'une seule fois sur le
+                # vainqueur.
+                cleaned_continue_candidates = _sorted_by_score(
+                    _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng)
+                    for cand_grid, cand_diag in failed_pairs
+                )
+                carry_seed_pool_continue = _continue_seed_pool(cleaned_continue_candidates)
+                carry_seed_grid, carry_preseed_assignment, carry_excluded_slots = (
+                    carry_seed_pool_continue[0]
                 )
                 carry_locked_letters = None
-                if new_black_cells:
-                    # Au moins une case noire a été ajoutée : `selected_
-                    # slots`' propre numérotation ne représente plus le motif
-                    # réel une fois la case posée (l'emplacement coupé change
-                    # de forme) — même piège d'indices déjà rencontré et
-                    # corrigé une fois dans l'historique de ce fichier pour
-                    # le mécanisme de verrou à une case, depuis retiré (voir
-                    # CLAUDE.md). Même remède : reconstruire `carry_preseed_
-                    # assignment`/`carry_excluded_slots` depuis un
-                    # `extract_slots` frais sur le motif réellement mis à
-                    # jour, plutôt que de réutiliser les anciens indices tels
-                    # quels. `confirmed` (indexé par case, jamais par indice
-                    # d'emplacement) survit intact à ce recalcul.
-                    carry_seed_grid = [row[:] for row in selected_grid]
-                    for (br, bc) in new_black_cells:
-                        carry_seed_grid[br][bc] = BLACK
-                    new_slots = extract_slots(carry_seed_grid, rows, cols)
-                    carry_preseed_assignment = [
-                        "".join(confirmed[cell] for cell in cells)
-                        if all(cell in confirmed for cell in cells) else None
-                        for cells in new_slots
-                    ]
-                    old_impossible_cell_tuples = {
-                        tuple(selected_slots[i]) for i in selected_diag["impossible_slots"]
-                    }
-                    carry_excluded_slots = {
-                        j for j, cells in enumerate(new_slots)
-                        if tuple(cells) in old_impossible_cell_tuples
-                    }
-                else:
-                    # Aucune case noire ajoutée ce palier (probabilité 2/3,
-                    # ou aucun candidat structurellement valide trouvé) :
-                    # comportement exactement inchangé — `carry_seed_grid`
-                    # reste le motif rigoureusement identique, `carry_
-                    # preseed_assignment`/`carry_excluded_slots` mappent 1:1
-                    # sur les indices de `selected_slots`, sans rien à
-                    # recalculer.
-                    carry_seed_grid = selected_grid
-                    carry_preseed_assignment = cleaned_assignment
-                    carry_excluded_slots = set(selected_diag["impossible_slots"])
             else:
                 consecutive_continue_paliers = 0
                 carry_preseed_assignment = None
@@ -6037,56 +6356,20 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # pour repartir), pas à un critère pré-nettoyage comme
                 # précédemment.
                 #
-                # Départagée par le nombre de cases noires du candidat
-                # (`_candidate_black_count`, sur `cand_seed`), à la demande
-                # explicite de l'utilisateur, après un vrai blocage constaté
-                # en direct sur une grande grille (30×30) très majoritairement
-                # verrouillée : le critère précédent ne regardait que les
-                # mots, jamais les cases noires, et pouvait donc reconduire
-                # indéfiniment un candidat à faible marge de manœuvre
-                # structurelle plutôt qu'un autre, à score de mots égal, qui
-                # aurait laissé plus de cases noires pour donner de la place
-                # au palier suivant — confirmé en direct : 11 paliers
-                # strictement identiques d'affilée (mêmes cases noires, mêmes
-                # emplacements impossibles) avant ce correctif.
-                def _words_in_place_score(cand_slots, cand_confirmed):
-                    return sum(
-                        len(cells) ** 2 for cells in cand_slots
-                        if all(cell in cand_confirmed for cell in cells)
-                    )
-
-                def _candidate_black_count(cand_seed):
-                    return sum(row.count(BLACK) for row in cand_seed)
-
-                def _sorted_by_score(cleaned_candidates):
-                    return sorted(
-                        cleaned_candidates,
-                        key=lambda sc: (
-                            _words_in_place_score(sc[2], sc[1]),
-                            _candidate_black_count(sc[0]),
-                        ),
-                        reverse=True,
-                    )
-
-                # Le vivier transmis au prochain palier « motif neuf »
-                # (`carry_seed_pool`, voir sa propre définition plus haut) ne
-                # garde que les meilleures grilles nettoyées, en éliminant les
-                # `FULL_RESET_ATTEMPT_COUNT` moins bonnes — à la demande
-                # explicite de l'utilisateur : "on relance toutes les
-                # meilleures grilles après nettoyage en ayant éliminé les
-                # moins bonnes en fonction du nombre de nouvelles grilles
-                # paramétrées." Ce nombre éliminé correspond exactement au
-                # nombre de tentatives que le prochain palier réservera de
-                # toute façon à un nouveau départ complètement vierge (voir
-                # `reset_count` plus bas) — les grilles nettoyées survivantes
-                # remplissent alors, une par une, très exactement le reste des
-                # places du prochain palier. `max(1, ...)` : ne jamais vider
-                # entièrement le vivier, même si `FULL_RESET_ATTEMPT_COUNT`
-                # dépasse le nombre de candidats disponibles — il reste
-                # toujours au moins la meilleure grille elle-même.
-                def _seed_pool(sorted_candidates):
-                    keep = max(1, len(sorted_candidates) - FULL_RESET_ATTEMPT_COUNT)
-                    return [(sc[0], sc[1]) for sc in sorted_candidates[:keep]]
+                # `_words_in_place_score`/`_candidate_black_count`/
+                # `_sorted_by_score`/`_seed_pool` (le score, son départage par
+                # le nombre de cases noires, le tri qui les combine, et la
+                # réduction au vivier transmis au palier suivant) sont
+                # désormais des fonctions de niveau module, juste après
+                # `_build_retry_seed` — hissées hors de cette fermeture locale
+                # à la demande explicite de l'utilisateur, une fois la même
+                # logique nécessaire aussi pour la reprise "telle quelle" (voir
+                # `_clean_continue_candidate`/`_continue_seed_pool`, et plus
+                # bas, `if still_has_hope:`) ; voir leurs propres docstrings
+                # pour le raisonnement complet (notamment le départage par
+                # cases noires, ajouté après un vrai blocage constaté en
+                # direct sur une grande grille 30×30 très majoritairement
+                # verrouillée).
 
                 previous_locked_letters = carry_locked_letters
                 cleaned_candidates = _sorted_by_score(_clean_all_candidates(force_exclude=False))

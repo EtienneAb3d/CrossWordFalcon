@@ -10386,3 +10386,418 @@ words, 0 mismatches, 0 empty white cells. A full end-to-end run on both
 seeds of the standard 15×10 benchmark (Flash mode) confirmed no
 regression: 0 mismatches, 0 empty white cells each — seed 2 in 366.1s, 61
 words, 30 black cells; seed 7 in 706.9s, 59 words, 31 black cells.
+
+`Filler._backtrack`'s own `self.checks` budget counter was moved from
+"once per recursive call" to **once per candidate word actually
+attempted**, whether or not that attempt leads to a recursive descent, at
+the user's explicit request: "Pour éviter d'itérer longtemps sur des cas
+impossibles, modifie de manière à incrémenter le décompte du budget à
+chaque fois qu'on essaye de poser un mot, que ça génère une descente
+récursive ou pas." Before this, `self.checks += 1` sat at the very top of
+`_backtrack`, meaning a candidate immediately rejected by the crossing
+check (see `_crossing_slots`, added earlier this session — a word that
+would leave a crossing slot with no remaining candidate is discarded
+*before* ever calling `self._backtrack` again, specifically to avoid the
+cost of a full recursive descent for a doomed word) never advanced the
+counter at all: since neither the deadline check (`self.checks >
+deadline_checks`) nor `self.abandoned` are ever re-evaluated except at the
+very top of `_backtrack`, an emplacement whose real dictionary domain is
+large but where almost every candidate breaks some crossing constraint
+could have the `for w in cands:` loop iterate over hundreds of doomed
+candidates — each still paying the real cost of recomputing every crossing
+slot's own domain — without the search budget or the collaborative
+abandon signal (`self.abandoned`, settable by a sibling branch of the very
+same search) ever being reconsulted, since the loop never re-entered the
+top of the function for any of those rejections.
+
+Fixed by moving the increment (and a matching short-circuit) into the
+`for w in cands:` loop itself, right at the top of each iteration, and
+removing the old top-of-function increment entirely (the function's very
+first line is now just a comment explaining why): `self.checks += 1`
+followed immediately by `if self.abandoned or self.checks >
+deadline_checks: return False` — before the candidate is even placed on
+the grid. This bounds the loop's own worst case directly: it can never try
+more than `deadline_checks` (plus the handful already spent elsewhere)
+candidates in total across the whole search, no matter how many of them
+are immediately rejected by the crossing check without ever recursing.
+`self.abandoned` is re-checked here too (not just the deadline) because it
+can legitimately become `True` mid-loop from an *earlier* candidate of
+this very iteration that did recurse, discovered the search hopeless deep
+down (the 30%-unfillable rule, or a sibling-attempt interruption), and
+returned back up — without this check, the loop would keep trying further
+candidates (each still paying for its own crossing-domain recomputation)
+before the next real recursive call's own top-of-function check would
+finally notice.
+
+`diagnostics["checks"] >= deadline_checks`'s own "deadline_exceeded" vs.
+"search_exhausted" reason distinction (in `try_fill`, unrelated to this
+change) still holds correctly: since the increment now happens
+immediately before the comparison inside the loop, `self.checks` still
+ends up exactly `deadline_checks + 1` the moment the budget trips, so the
+`>=` comparison there is unaffected. One small, deliberate side effect,
+documented in a new comment at the top of `_backtrack`: the very first
+call (from `Filler.solve()`) now enters with `self.checks` still at its
+starting value (`0` for a fresh search) rather than already incremented to
+`1` — for the documented `_close_implied_slots` scenario (a grid already
+fully determined by crossing letters alone, `deadline_checks=0`,
+verified separately below), `_backtrack`'s very first call can now find
+`unassigned` already empty and return `True` immediately, whereas the old
+code's top-of-function increment would have tripped the deadline check
+(`1 > 0`) before ever reaching that point and returned `False` — relying
+entirely on the closure mechanism (`_close_implied_slots`, called
+unconditionally after `filler.solve()` regardless of its own return
+value) to still report success. Both versions end up reporting the same
+final outcome (`try_fill` returns a real result, `reason == "solved"`) —
+this is a more direct path to the same correct answer, not a behavior
+change a caller could observe.
+
+Also updated the neighboring comment in `generate_grid` explaining
+`total_attempts`'s own unit (previously "chaque nœud de recherche visité,
+incrémenté une fois par appel à `_backtrack`") to match: it's now "chaque
+tentative de poser un mot," consistent with what `filler.checks` actually
+measures after this change — the sum over every failed parallel attempt
+of a palier is unaffected in spirit (still "how much real search work was
+genuinely done"), just measured at a finer grain than before.
+
+Verified in stages. Isolated (`Filler` built directly, no full
+`generate_grid()` call): (1) a hand-built 2×3 grid (one across slot whose
+7 candidates all start with 'A', one crossing down slot whose 3 candidates
+all start with 'Z' — so whichever direction the search tries first, every
+one of its own candidates breaks the crossing slot's domain and none of
+them ever recurse) confirmed, across 20 seeds, `filler.checks` after a
+full failed `solve(deadline_checks=1_000_000)` exactly equals the number
+of candidates actually tried in whichever direction was picked (7 or 3) —
+proving every crossing-rejected candidate now counts, not just recursing
+ones; (2) the same scenario with `deadline_checks=2` confirmed the loop
+now stops after exactly 3 candidates (2 tried, the 3rd trips the deadline
+before ever being placed) rather than continuing through the rest of that
+direction's candidate list, across the same 20 seeds — the actual
+"n'itère plus longtemps" fix, not just the counting; (3) `self.abandoned`
+pre-set before any call confirmed `solve()` returns `False` with
+`filler.checks` still at `0` — the very first top-of-function check still
+short-circuits before the loop is ever entered, so a genuinely pre-
+abandoned search costs nothing. A separate isolated test reproduced the
+documented `_close_implied_slots` regression scenario byte-for-byte (two
+preseeded across words, "CAT"/"DOG", crossing three down slots each fully
+determined by them, `deadline_checks=0`) — confirmed `try_fill` still
+returns a genuine success (`reason == "solved"`, `checks <= 1`) despite
+the tightest possible deadline, proving the "very first call can return
+`True` immediately when nothing is unassigned" side effect noted above
+doesn't break this pre-existing feature.
+
+A real, non-mocked `generate_grid()` call (9×9, seed 3, `deadline_checks=
+1000` — Flash mode) succeeded cleanly: 2.9s, 29 words, 0 mismatches, 0
+empty white cells.
+
+**A real regression was found on the full standard 15×10 benchmark run at
+Flash mode (deadline_checks=1000)**: seed 7 still succeeded (47.1s, 62
+words, 0 mismatches, 0 empty cells), but **seed 2 failed outright**
+(47.5s, all 200 paliers exhausted) — a seed that had succeeded reliably
+throughout this whole session's prior Flash-mode verifications. Root-
+caused with a direct A/B rather than assumed: `git stash`d this exact
+change and re-ran the identical seed-2/Flash scenario on the pre-change
+code — it was still running, clearly making real progress (worker
+processes actively at 100% CPU) after many minutes, dramatically slower
+to even *reach* a verdict than the post-change code's 47.5s failure,
+confirming directly that the *old* counting semantics let a Flash-mode
+search explore far more real candidates before exhausting its nominal
+budget than the *new* semantics do, for the exact same numeric value
+(1000) — exactly the expected, intended consequence of this change (every
+crossing-rejected candidate now costs one unit, where it used to be free),
+just landing hard on the one mode (Flash, the tightest of the 5 real
+`BUDGET_MODES` exposed in the web UI, not merely an internal testing
+convention) where the budget was already smallest.
+
+To bound the severity rather than guess at it, the *new* code was then
+run on seed 2 at the **real default budget** (`deadline_checks=None` →
+`rows*cols*2000` = 300 000 on this grid, no Flash override) — succeeded
+cleanly: 216.8s, 60 words, 0 mismatches, 0 empty white cells. This
+confirmed the regression is specific to the artificially tiny Flash
+budget, not a general breakage of the search.
+
+Reported to the user with both measurements via `AskUserQuestion` (keep
+as-is / raise `BUDGET_MODES["flash"]`'s own value / revert the whole
+change) — **the user chose to keep the change exactly as implemented**,
+accepting Flash mode becoming more fragile on some grids as a deliberate,
+disclosed trade-off of a budget that now genuinely bounds every real
+attempt, including previously-free crossing rejections, exactly as
+requested. No further code change made as a result of this finding —
+documented directly in `DOC_ALGO/FR/ReadMe.md`'s own "Budget de
+vérifications" section instead, so a future reader/tester isn't surprised
+by Flash mode's own reliability profile changing here.
+
+`MAX_CONSECUTIVE_CONTINUE_PALIERS` (the "reprise telle quelle" streak
+cap, see its own extensive history above — most recently `0`) was raised
+to **4**, at the user's explicit, plain request: "Régler
+MAX_CONSECUTIVE_CONTINUE_PALIERS à 4" — no further reasoning given
+beyond the value itself. A one-line change plus an isolated reproduction
+of the exact increment/reset/plafond logic used throughout this
+constant's own history confirmed the resulting sequence of chosen modes
+is exactly 4 "continue" then 1 forced "nettoyage", repeating.
+
+**A real regression was found on the standard 15×10 benchmark before
+shipping**, per this project's own established discipline for changes to
+this exact constant: seed 2 succeeded in Flash mode
+(`deadline_checks=1000`), but **seed 7 failed reproducibly**, twice in a
+row (17.2s, then 17.3s — both exhausting all 200 paliers), where it had
+succeeded reliably at the previous value (0) immediately before this
+change. Root-caused with a direct, surgical A/B rather than assumed: the
+constant alone was flipped back to 0 (via `sed`, restored afterward) with
+every other line of this session's own changes left in place, and seed 7
+re-tested at Flash — succeeded (41.6s, 60 words) — pinning the regression
+precisely on this one constant's new value, not on anything else changed
+this session (in particular, not on the earlier `Filler._backtrack`
+checks-per-candidate change, which was already separately confirmed and
+disclosed to only affect Flash mode's own reliability margin).
+
+Reported to the user with both measurements via `AskUserQuestion` (keep 4
+/ check the real default budget first / revert to 0) — **the user chose
+to keep 4 regardless**, the same kind of disclosed trade-off already
+accepted once this same session for the checks-per-candidate change:
+Flash mode's own tiny budget (the tightest of the 5 real `BUDGET_MODES`)
+is the mode most exposed to this kind of reliability cost, not
+necessarily representative of the real default budget (300 000+ on this
+grid shape) or a larger `BUDGET_MODES` choice. No further code change
+made as a result — documented directly in the constant's own comment and
+in `DOC_ALGO/FR/ReadMe.md`'s "Fréquence des nettoyages complets"
+subsection, so a future reader isn't surprised by Flash mode's own
+reliability profile on this specific seed.
+
+**The "reprise telle quelle" mechanism was extended to carry forward N
+distinct grids (one per non-reset parallel attempt), matching the
+already-established "N grids for N processes" design that only ever
+applied to the full-nettoyage branch until now**, at the user's explicit
+request, reported directly as a regression: "Regression : après un
+cycle, le cycle suivant repart maintenant avec une seule grille. Quand
+il n'y a pas de déclenchement d'un nettoyage complet, chaque process doit
+repartir à l'étape suivante avec sa grille partiellement nettoyée (sauf
+le pourcentage de grilles entièrement neuves)." Until this, `if still_
+has_hope:` (the "reprise telle quelle" branch) always cleaned only the
+single winner (`selected_grid`/`selected_diag`, `failed_pairs[0]`) and
+broadcast that one grid, byte-for-byte identical, to every single
+non-reset worker of the next palier via `_pattern_continue` — discarding
+every other parallel attempt's own distinct progress from that same
+palier, even though each worker's own stochastic search order can (and
+does) produce genuinely different final states from the same shared
+starting pattern.
+
+Four small, pure helper functions previously living as local closures
+inside `generate_grid`'s own nettoyage (`else:`) branch — `_words_in_
+place_score`, `_candidate_black_count`, `_sorted_by_score`, `_seed_pool`
+— were hoisted to module level (right after `_build_retry_seed`), since
+the exact same scoring/pooling logic is now needed by the "reprise telle
+quelle" branch too; `_seed_pool` gained an `extract` parameter (default
+`lambda sc: (sc[0], sc[1])`, matching its original nettoyage-only
+2-tuple shape exactly, so no existing caller's behavior changed) so the
+same reduction-to-a-pool logic can serve both the nettoyage case
+(`(seed_grid, locked_letters)` per entry) and the new continue case
+(`(seed_grid, preseed_assignment, excluded_slots)` per entry, via a new
+5-element candidate tuple).
+
+A new module-level `_clean_continue_candidate(cand_grid, cand_diag, rows,
+cols, index, rng)` generalizes the single-winner cleaning logic that used
+to be inline in the `if still_has_hope:` branch (the `_clean_blocked_
+slots` call, its own 1/10 black-cell alternative, and the index-shift
+remediation already needed whenever that alternative actually adds a
+cell) to run once per candidate instead of once total — returns a
+5-tuple `(cand_seed_grid, cand_confirmed, cand_slots, cand_preseed_
+assignment, cand_excluded_slots)`, the first 3 elements shaped exactly
+like the nettoyage branch's own candidate tuples (so `_sorted_by_score`
+needs no special-casing), the last 2 the shape `_pattern_continue`
+itself needs. A new `_continue_seed_pool(sorted_candidates)` is a thin
+wrapper around `_seed_pool` with the matching `extract` for this 5-tuple
+shape.
+
+`generate_grid` gained a new `carry_seed_pool_continue` variable
+(initialized to `None` before the palier loop, mirroring `carry_seed_
+pool`'s own initialization and — like it — never part of `resume_state`
+serialization, since a resumed run simply rebuilds it fresh from its own
+first "reprise telle quelle" palier). The `if still_has_hope:` branch's
+body was rewritten from "clean the single winner, assign `carry_seed_
+grid`/`carry_preseed_assignment`/`carry_excluded_slots` from it directly"
+to: clean *every* entry of `failed_pairs` via `_clean_continue_candidate`,
+sort via `_sorted_by_score`, build `carry_seed_pool_continue` via
+`_continue_seed_pool`, and take `carry_seed_pool_continue[0]` (still the
+single best entry, always first once sorted) as the new values for
+`carry_seed_grid`/`carry_preseed_assignment`/`carry_excluded_slots` —
+these three keep their pre-existing role everywhere else in the function
+(other previews, `resume_state` serialization) exactly as before, only
+this one assignment point changed.
+
+At the top of the palier loop, both the early "cases noires posées"-style
+preview (the `progress("pattern", ...)` call, when `carry_preseed_
+assignment is not None`) and the actual dispatch were generalized the
+same way the nettoyage branch's own equivalents already were: the preview
+now builds one example per distinct entry of `carry_seed_pool_continue`
+(falling back to the single pre-existing entry when the pool hasn't been
+populated yet — the very first "reprise telle quelle" palier of a call
+can't happen before at least one nettoyage/failed palier, so this fallback
+is mostly theoretical but kept for defensive parity with the nettoyage
+branch's own identical fallback). Dispatch itself gained a `reset_count =
+FULL_RESET_ATTEMPT_COUNT` — unlike the nettoyage branch's own `reset_
+count` (gated by `just_cleaned`, only right after an actual cleanup),
+this one applies unconditionally to *every* "reprise telle quelle"
+palier, since there's no equivalent "just switched into this mode"
+distinction to gate on here: every such palier is, by construction,
+already a continuation of some prior state (a true first palier of a
+whole generation always dispatches through the nettoyage/"motif neuf"
+branch instead, `carry_seed_grid is None`). The first `reset_count`
+workers of such a palier are now dispatched via `_pattern_attempt` with
+`seed_grid=None, locked_letters=None` (a genuinely fresh, from-scratch
+pattern — never `_pattern_continue`, which has no meaning without a prior
+pattern/lock to continue from) instead of always continuing; every other
+worker (`i >= reset_count`) receives its own entry from `carry_seed_pool_
+continue` via the exact same `% len(pool)` cycling convention already
+used by the nettoyage branch's own dispatch, rather than the previous
+"everyone gets the identical `carry_seed_grid`/`carry_preseed_assignment`"
+call.
+
+**A real, self-caught correctness issue was found and fixed before this
+was considered done**, while updating this exact file's own documentation
+for consistency (not from a live failure report): `_worker_batch_
+abandoned_event` — the shared signal letting one parallel attempt's own
+"30% of my pattern is unfillable" conclusion abort every *other* attempt
+of the same palier — was, and remained, wired into `_pattern_continue`'s
+own `try_fill` call (`batch_abandoned_event=_worker_batch_abandoned_
+event`), on the strength of an invariant this exact mechanism's own
+history had already established and heavily relied on: "toutes ses
+tentatives parallèles partagent RIGOUREUSEMENT le même motif et le même
+verrouillage" (see this global's own long-standing docstring, and the
+already-fixed, analogous bug this exact reasoning was first found for on
+`_pattern_attempt` — see its own entry earlier in this file). This
+feature breaks that invariant outright: once `carry_seed_pool_continue`
+can hold more than one distinct entry, two parallel attempts of the same
+"reprise telle quelle" palier can now be searching genuinely different
+grids (different pool entries, or even one of them a totally fresh
+`_pattern_attempt` reset worker) — exactly the same "contamination
+between independent patterns" class of bug this project has already
+found and fixed once, for `_pattern_attempt` specifically, complete with
+a documented live reproduction on this exact benchmark's seed 7. Fixed
+preventively, before any live failure was needed to confirm it, by
+changing `_pattern_continue`'s own `try_fill` call to `batch_abandoned_
+event=None` (matching `_pattern_attempt`'s own long-standing value) —
+`_worker_batch_abandoned_event` itself, its `Filler.__init__`/
+`_backtrack` plumbing, and `Filler.batch_abandoned_event`'s own generic
+parameter are all left completely intact (nothing reads or sets this
+particular global usefully anymore today, but removing the mechanism
+itself was out of scope for this fix and not asked for) — only the two
+call sites that used to actually wire it in (`_pattern_attempt`,
+already `None`; `_pattern_continue`, now also `None`) determine whether
+it's ever really exercised. `DOC_ALGO/FR/ReadMe.md`'s own "Interruption
+anticipée du lot" subsection, `_pattern_continue`'s own docstring, and
+`_worker_batch_abandoned_event`'s own module-level comment were all
+updated to record this — the mechanism is not deleted, just now
+correctly disabled everywhere, its own history kept as a record of why.
+
+Verified in stages. Isolated (`/tmp/test_continue_pool.py`, deleted after
+use): `_seed_pool`'s generalized default extractor reproduces the exact
+old nettoyage-only 2-tuple behavior unchanged; `_clean_continue_candidate`
+on a hand-built 3×3 grid (one impossible down-slot crossed by all three
+across words at their own shared cells) correctly removes every crossing
+word, matching `_clean_blocked_slots`'s own already-verified behavior,
+just invoked per-candidate now; `_sorted_by_score`/`_continue_seed_pool`
+on two cleaned candidates correctly eliminate exactly `FULL_RESET_
+ATTEMPT_COUNT` of them and return 3-tuples in the shape `_pattern_
+continue` expects; a standalone reproduction of the exact reset-count/
+pool-cycling dispatch logic confirmed every non-reset worker gets a
+genuinely distinct pool entry in the normal case, and that a shortfall
+pool (fewer distinct entries than non-reset slots) cycles correctly
+without error, mirroring the exact same verification already done once
+for the nettoyage branch's own equivalent mechanism.
+
+Live: a real `generate_grid()` run (15×10, seed 2, Flash mode) with
+`on_progress` counting each `"pattern"` event's own example count showed
+74 of 75 paliers with more than 1 example — the one exception being the
+genuinely first palier of the whole run (still correctly showing exactly
+1, a blank grid, no prior state to diversify). To specifically confirm
+this covers *both* transition types (not just nettoyage, which already
+had this diversity before this feature), a temporary, clearly-scoped
+`_DEBUG_CONTINUE_POOL` environment-variable-gated print (removed again
+immediately after use, never left in the shipped code) tagged each
+`"pattern"` event with whether the palier about to run was dispatched as
+"reprise telle quelle" (`carry_preseed_assignment is not None`) or
+"nettoyage/motif neuf" — confirmed both kinds consistently show 9
+examples (`PARALLEL_ATTEMPTS − FULL_RESET_ATTEMPT_COUNT` = 10 − 1 on this
+10-core machine), 44 "continue" transitions and 20 "nettoyage/neuf"
+transitions sampled in one run, with the same `MAX_CONSECUTIVE_CONTINUE_
+PALIERS` (4) cap pattern visible in the attempt sequence (a run of up to
+4 "continue" transitions between each "nettoyage/neuf" one) as an
+incidental cross-check that this constant's own behavior is unaffected.
+
+A full end-to-end run on both seeds of the standard 15×10 benchmark
+(Flash mode) confirmed no regression after the `batch_abandoned_event`
+fix specifically (re-run after that fix, not just before it): 0
+mismatches, 0 empty white cells each — seed 2 in 8.0s, 52 words, 31 black
+cells; seed 7 in 19.2s, 61 words, 35 black cells — notably, seed 7 (which
+had been failing reproducibly in Flash mode with `MAX_CONSECUTIVE_
+CONTINUE_PALIERS=4` alone, see that entry's own A/B measurement above)
+now succeeds reliably again, plausibly because genuine per-worker
+diversity within a "continue" streak gives the search more independent
+chances to escape a dead end than everyone converging on one shared
+grid — observed, not claimed as proven given this exact benchmark's own
+well-documented run-to-run variance history.
+
+**The "at least 3 cells" interior-zone structural rule (`is_structurally_
+valid`'s own `min_interior_free` default, and the starting point of `_place_
+black_cells`'s own relaxation cascade) was named and raised from 3 to 8**,
+at the user's explicit request, quoting the DOC_ALGO's own current wording
+back verbatim: "Attribuer un nom de variable à cette règle **au moins 3
+cases**. Fixer ce nombre à 8. Si aucune case ne peut être posée en
+respectant ce nombre pour atteindre l'objectif de remplissage des noires,
+abaisser le nombre et recommencer à essayer de placer des noires." A new
+module-level constant, `STRUCTURAL_MIN_INTERIOR_FREE = 8`, defined right
+before `is_structurally_valid` (whose own default parameter now reads
+`min_interior_free=STRUCTURAL_MIN_INTERIOR_FREE` instead of the bare
+literal `3`) — though in practice, per a direct `grep` audit done while
+implementing this, *every* real call site of `is_structurally_valid`
+throughout this file already passes `min_interior_free=` explicitly
+(either `min_free` from `_place_black_cells`'s own cascade, or the literal
+`1` everywhere else — `minimize_black_squares`, `_build_retry_seed`,
+`_plug_isolated_cells`, the "zone strictement sans issue" black-cell
+fallback in `_clean_blocked_slots`, etc.), so this function's own bare
+default was never actually exercised by any caller even before this
+change — a pre-existing, stale claim in this exact function's own
+docstring ("tous les autres appelants... utilisent la valeur par défaut,
+inchangée") was corrected in the same pass, once noticed, to instead say
+plainly that every other caller passes `min_interior_free=1` explicitly.
+
+The third part of the request — "if no cell can be placed respecting this
+number... lower the number and retry" — turned out to already be exactly
+what `_place_black_cells` was doing, just with a hardcoded 3-level cascade
+`(3, 2, 1)` rather than a value derived from the new named constant.
+Generalized to `range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1)` at both of
+this function's own two call sites for it (the isolated-candidate search,
+and the adjacency-accepting fallback right after it) — descends one cell
+at a time from 8 down to 1 rather than in fixed jumps, so the cascade
+stays coherent regardless of whatever value this constant is ever set to
+in the future, not tied to exactly 3 discrete, hand-picked levels.
+`_place_black_cells`'s own docstring, and the matching English docstring
+paragraph in `make_pattern` describing the same mechanism, were both
+updated to reference the named constant and the generalized cascade
+instead of the old hardcoded numbers.
+
+Verified in stages, given this touches the same core structural-validity
+code this project's own history has repeatedly found subtle regressions
+in. Isolated (`/tmp/test_structural_min.py`, deleted after use): confirmed
+`STRUCTURAL_MIN_INTERIOR_FREE == 8`; a hand-built 2-row grid (row 0 kept
+fully white to preserve connectivity regardless of row 1's own black
+cells — a 1-row test grid was tried first and correctly rejected every
+scenario, since splitting a *single* row's own white cells with any
+interior black cell always breaks the separate, absolute connectivity
+requirement, unrelated to this specific rule — a genuine test-design
+lesson, not a bug) confirmed an exactly-8-cell interior zone in row 1
+passes at the new default, a 7-cell one fails at the default but passes
+at the absolute floor (`min_interior_free=1`), and a short zone touching
+the grid's own border is still exempt regardless of length; a direct
+`_place_black_cells` call on a scenario where only a 4-cell interior
+placement was achievable (never 8, 7, 6, or 5) confirmed the full
+descending cascade successfully finds it rather than giving up early. A
+real, non-mocked `generate_grid()` call (9×9, seed 3, Flash mode)
+succeeded cleanly: 31 words, 0 mismatches, 0 empty white cells, 13 black
+cells out of 81 — the resulting pattern read and visually inspected,
+nothing pathological (no runaway black-cell density despite the much
+larger minimum). A full end-to-end run on both seeds of the standard
+15×10 benchmark (Flash mode) confirmed no regression: 0 mismatches, 0
+empty white cells each — seed 2 in 33.1s, 53 words, 36 black cells; seed
+7 in 26.8s, 61 words, 36 black cells — both comfortably within this
+benchmark's own established historical range for black-cell counts.
