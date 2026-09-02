@@ -136,6 +136,20 @@ _DURATION_LABELS = {
     "it": ("Griglia generata in", "Ottimizzata in", "Definizioni generate in"),
 }
 
+# Mirrors frontend/static/i18n.js's attemptPreviewStats own "XX % noir"/
+# "XX% black"/etc. wording (same per-language spacing before "%") — added
+# to the same 3rd header line, right after the 3 durations, at the user's
+# explicit request: "après la liste des temps de traitement, sur la même
+# ligne, afficher le taux de cases noires de la grille." `{p}` is replaced
+# with the rounded black-cell percentage.
+_BLACK_RATIO_LABELS = {
+    "fr": "{p} % noir",
+    "en": "{p}% black",
+    "de": "{p}% schwarz",
+    "es": "{p}% negro",
+    "it": "{p}% nero",
+}
+
 
 def _format_duration(seconds):
     """Mirrors frontend/static/script.js's formatDuration exactly (same
@@ -350,7 +364,9 @@ def render_grid_svg(result, language, difficulty=None, mode=None):
     `optimization_duration_seconds`/`clues_duration_seconds`, ajoutées par
     backend/app.py — absentes pour tout appelant qui ne les fournit pas,
     auquel cas cette ligne entière est omise plutôt que d'afficher des
-    zéros trompeurs)."""
+    zéros trompeurs), suivies du taux de cases noires de la grille
+    (`result["black_ratio"]`, toujours présent — CLI compris — donc
+    toujours affiché, à la demande explicite de l'utilisateur)."""
     words = result["words"]
     across_heading, down_heading, solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
     across_lines = _group_clue_lines(words, "across", "row", language)
@@ -410,6 +426,9 @@ def render_grid_svg(result, language, difficulty=None, mode=None):
         )
     if "clues_duration_seconds" in result:
         info_bits.append(f"{clues_label} {_format_duration(result['clues_duration_seconds'])}")
+    if "black_ratio" in result:
+        black_ratio_template = _BLACK_RATIO_LABELS.get(language, _BLACK_RATIO_LABELS["en"])
+        info_bits.append(black_ratio_template.format(p=round(100 * result["black_ratio"])))
     if info_bits:
         parts.append(
             f'<text x="{text_x}" y="{logo_y + 56}" font-size="12" font-family="sans-serif" '

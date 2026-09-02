@@ -705,7 +705,21 @@ PREFILL_LOCKED_MIN_WORD_COUNT = 3
 # ~102s). Back to the original per-zone scoping — see the
 # `project_nettoyage_curatif_paused` memory note for the full trail of
 # both attempts, kept for any future session that revisits this area.
-PREFILL_ZONE_BLACK_BUDGET_FLOOR = 2
+#
+# Lowered from 2 to 1, at the user's own later explicit request, quoting
+# this exact floor's own docstring back: "2 cases minimum crée trop de
+# cases noires" — a real, opposite-direction complaint from the one that
+# originally raised this floor from 0/1 to 2 (that earlier regression was
+# about too FEW guaranteed cells causing outright failures; this one is
+# about too MANY black cells being added in practice once every zone gets
+# at least 2). Verified live rather than assumed safe, given this exact
+# constant's own fraught history: two real `generate_grid()` runs on the
+# standard 15×10 benchmark (seeds 2 and 7, Flash mode) both succeeded — 0
+# mismatches, 0 empty white cells each — confirming this specific value
+# (unlike the *shared*-budget alternative tried and reverted above, and
+# unlike the unrelated `PREFILL_LOCKED_MIN_WORD_COUNT=1` regression noted
+# further above) doesn't reproduce either of those earlier failures.
+PREFILL_ZONE_BLACK_BUDGET_FLOOR = 1
 
 # Fraction of extra black cells drawn after the pre-fill phase (see
 # make_pattern), at the user's explicit request: "rétablir un tirage de 5%
@@ -1076,7 +1090,7 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
     `fill_objective_fraction`, le même objectif de remplissage en noir que
     celui appliqué à la grille entière, voir `make_pattern`, appliqué à la
     taille d'origine de cette zone, mais **jamais moins de
-    `PREFILL_ZONE_BLACK_BUDGET_FLOOR` (2) cases garanties** — voir sa propre
+    `PREFILL_ZONE_BLACK_BUDGET_FLOOR` (1) case garantie** — voir sa propre
     définition pour la régression réelle mesurée en direct, sans ce
     plancher, qui a motivé son ajout : ce pourcentage, 10-14 % par défaut,
     ramené directement à la taille typique d'une seule zone (souvent 8-15
@@ -1133,7 +1147,7 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
 
         # Le budget par zone est le pourcentage de l'objectif de remplissage
         # global appliqué à la taille de *cette* zone, mais jamais moins de
-        # `PREFILL_ZONE_BLACK_BUDGET_FLOOR` (2) cases noires garanties — à
+        # `PREFILL_ZONE_BLACK_BUDGET_FLOOR` (1) case noire garantie — à
         # la demande explicite de l'utilisateur, après une régression réelle
         # constatée en direct : ce pourcentage (10-14 % par défaut), une fois
         # ramené à la taille typique d'une seule zone (souvent 8-15 cases),
@@ -1891,6 +1905,20 @@ class Filler:
         for i, cells in enumerate(slots):
             for pos, cell in enumerate(cells):
                 self.cell_to_slots[cell].append((i, pos))
+        # Pour chaque emplacement, l'ensemble des AUTRES emplacements qui
+        # partagent au moins une case avec lui (précalculé une fois ici, à
+        # partir de cell_to_slots juste au-dessus — la géométrie des
+        # emplacements ne change jamais une fois `slots` extrait). Sert à
+        # `_backtrack`, à la demande explicite de l'utilisateur, pour
+        # évaluer tout de suite, juste après avoir posé un mot, seulement
+        # les emplacements que ce mot croise réellement — plutôt que
+        # d'attendre l'appel récursif suivant, qui recalcule le domaine de
+        # TOUS les emplacements encore libres de la grille, y compris ceux
+        # que ce mot ne pouvait de toute façon pas affecter.
+        self._crossing_slots = [
+            {j for cell in cells for j, _ in self.cell_to_slots[cell] if j != i}
+            for i, cells in enumerate(slots)
+        ]
         # Nombre total de cases blanches de la grille (une case par clé de
         # cell_to_slots, indépendamment du nombre d'emplacements qui la
         # traversent) — dénominateur de UNFILLABLE_ABANDON_FRACTION, voir
@@ -2308,7 +2336,7 @@ class Filler:
                 return False
             domains[i] = domain
 
-        # Règle de sélection à 2 niveaux, à la demande explicite de
+        # Règle de sélection à 3 niveaux, à la demande explicite de
         # l'utilisateur (le MRV a été retiré — voir le commentaire plus
         # haut, avant la classe Filler, pour pourquoi) :
         # 1. on alterne d'abord horizontal/vertical : on tire la
@@ -2319,13 +2347,34 @@ class Filler:
         #    non remplis a plus de chances d'être choisie que l'autre, ce
         #    qui tend naturellement à alterner/équilibrer les deux au fil du
         #    remplissage sans figer un ordre strict ;
-        # 2. les niveaux 2/3/4 précédents (le moins de cases encore
+        # 2. **Nouveau, à la demande explicite de l'utilisateur, prioritaire
+        #    sur le critère de domaine ci-dessous** : parmi les emplacements
+        #    de la catégorie tirée, s'il en existe au moins un dont le
+        #    domaine (`domains[i]`, déjà calculé juste au-dessus) compte
+        #    strictement moins de `PREFILL_MIN_WORD_COUNT` mots candidats —
+        #    le même seuil que le pré-remplissage de l'étape 1 utilise pour
+        #    décider qu'un emplacement a besoin d'une case noire — le choix
+        #    se restreint à ces emplacements-là uniquement. But : essayer de
+        #    résoudre ces emplacements fragiles par un vrai mot pendant que
+        #    la recherche progresse encore, avant qu'un futur palier de
+        #    nettoyage ne les juge insuffisants et n'y ajoute une case
+        #    noire pour les corriger (voir `_prefill_unfillable_slots`,
+        #    étape 1) — un mot réellement posé ici évite cette case noire.
+        #    D'abord expérimenté avec un critère différent ("une seule case
+        #    encore vide"), remplacé par celui-ci à la demande explicite de
+        #    l'utilisateur, qui vise directement le même seuil que le
+        #    pré-remplissage plutôt qu'un proxy géométrique. Si aucun
+        #    emplacement de la catégorie n'est dans ce cas, ce niveau ne
+        #    change rien : le niveau 3 s'applique alors à l'ensemble de la
+        #    catégorie, exactement comme avant l'ajout de ce niveau ;
+        # 3. les niveaux 2/3/4 précédents (le moins de cases encore
         #    blanches en priorité, le plus de lettres déjà fixées en
         #    départage, un tirage pondéré par la longueur en dernier
         #    recours) ont été remplacés par une règle unique, à la demande
-        #    explicite de l'utilisateur : parmi les emplacements de la
-        #    catégorie tirée, on calcule pour chacun le score **nombre de
-        #    possibilités de remplissage** (`len(domains[i])` — le domaine
+        #    explicite de l'utilisateur : parmi les emplacements du groupe
+        #    obtenu au niveau précédent, on calcule pour chacun le score
+        #    **nombre de possibilités de remplissage** (`len(domains[i])` —
+        #    le domaine
         #    déjà calculé juste au-dessus pour la détection d'impasse, donc
         #    aucun second calcul de domaine n'est nécessaire ici — le
         #    nombre de mots du dictionnaire encore compatibles avec les
@@ -2334,11 +2383,11 @@ class Filler:
         #    et on tire au hasard, uniformément, **parmi les emplacements
         #    ayant obtenu le plus petit score** — les plus contraints, donc
         #    les plus urgents à résoudre — **dans une fenêtre de
-        #    max(5, int(emplacements_libres_de_cette_catégorie / 3))**
-        #    emplacements — une fenêtre qui s'élargit quand il reste
-        #    beaucoup d'emplacements encore à remplir dans la catégorie
-        #    tirée, et se resserre (jusqu'à ce plancher de 5) une fois qu'il
-        #    n'en reste plus beaucoup, plutôt qu'une taille fixe ou liée à
+        #    max(5, int(taille_du_groupe / 3))**
+        #    emplacements — une fenêtre qui s'élargit quand ce groupe compte
+        #    encore beaucoup d'emplacements, et se resserre (jusqu'à ce
+        #    plancher de 5) une fois qu'il n'en reste plus beaucoup, plutôt
+        #    qu'une taille fixe ou liée à
         #    la seule taille de la grille. Ce critère a déjà changé
         #    plusieurs fois : "le moins de cases encore blanches", puis "le
         #    plus de lettres déjà remplies" en compte brut sur une fenêtre
@@ -2375,10 +2424,12 @@ class Filler:
             )[0]
         else:
             direction_pool = free_across or free_down
-        scores = {i: len(domains[i]) for i in direction_pool}
-        shuffled_pool = list(direction_pool)
+        few_candidates = [i for i in direction_pool if len(domains[i]) < PREFILL_MIN_WORD_COUNT]
+        selection_pool = few_candidates if few_candidates else direction_pool
+        scores = {i: len(domains[i]) for i in selection_pool}
+        shuffled_pool = list(selection_pool)
         self.rng.shuffle(shuffled_pool)
-        window_size = max(5, int(len(direction_pool) / 3))
+        window_size = max(5, int(len(selection_pool) / 3))
         window = sorted(shuffled_pool, key=lambda i: scores[i])[:window_size]
         best_i = self.rng.choice(window)
 
@@ -2424,7 +2475,39 @@ class Filler:
         for w in cands:
             self.assignment[best_i] = w
             self.used_words.add(w)
-            if self._backtrack(deadline_checks):
+            # Évaluer tout de suite, avant de descendre plus loin dans la
+            # récursion, si le mot qu'on vient de poser rend l'un des
+            # emplacements qui le CROISENT (self._crossing_slots, précalculé
+            # dans __init__) impossible à remplir — même critère
+            # d'impossibilité que le contrôle de domaine plus haut (domaine
+            # vide, ou entièrement déjà utilisé ailleurs), mais restreint
+            # aux seuls emplacements que ce mot peut réellement avoir
+            # affectés, à la demande explicite de l'utilisateur. Poser un
+            # mot ne peut jamais changer le domaine d'un emplacement qui ne
+            # partage aucune case avec lui (`_domain` ne lit que les cases
+            # de l'emplacement lui-même) — vérifier seulement les voisins
+            # donne donc exactement le même résultat que le contrôle de
+            # domaine "tous les emplacements encore libres" du prochain
+            # appel récursif, sans avoir à le déclencher (ni son propre
+            # compteur `checks`, ni son propre balayage de toute la grille)
+            # pour un mot déjà condamné : si un seul des voisins est
+            # devenu impossible, ce mot est retiré immédiatement et le
+            # suivant est essayé, sans jamais descendre plus loin. Un
+            # emplacement déjà mis de côté (`excluded_slots`/
+            # `_crossing_excluded_slots`) n'est jamais concerné — il ne
+            # bloque déjà jamais rien pour ce même motif.
+            crossing_broken = False
+            for j in self._crossing_slots[best_i]:
+                if (
+                    self.assignment[j] is None
+                    and j not in self.excluded_slots
+                    and j not in self._crossing_excluded_slots
+                ):
+                    domain = self._domain(j)
+                    if all(w2 in self.used_words for w2 in domain):
+                        crossing_broken = True
+                        break
+            if not crossing_broken and self._backtrack(deadline_checks):
                 return True
             self.assignment[best_i] = None
             self.used_words.discard(w)

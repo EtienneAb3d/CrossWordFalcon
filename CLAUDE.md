@@ -9874,3 +9874,216 @@ semantics, the `if self.letter_scores:` gate) was touched. Verified: a
 real `generate_grid()` run on both seeds of the standard 15×10 benchmark
 (Flash mode) confirmed no regression: 0 mismatches, 0 empty white cells
 each — seed 2 in 10.3s, 68 words; seed 7 in 10.6s, 57 words.
+
+`Filler._backtrack`'s word-placement loop was changed to check the
+*crossing* slots of a just-placed word immediately, before recursing, at
+the user's explicit request: "quand un mot est posé, évaluer les
+possibilités de remplissage des emplacements qui croisent ce mot. Si un de
+ces emplacements est devenu impossible à remplir, ne pas aller plus loin,
+retirer le mot qui vient d'être posé, et tester un autre mot. Si tous les
+mots disponibles ont été testés, ne pas aller plus loin, et revenir en
+arrière." Previously, placing a word and recursing into `_backtrack` was
+the only way this got detected — the *next* call's own top-of-function
+domain check already scans *every* still-unassigned slot in the whole
+grid (not just the ones the just-placed word actually touches) and fails
+immediately if any is empty (or fully consumed by `used_words`), so the
+outcome (a doomed word eventually being undone and the next one tried) was
+already correct — but only after paying for a full recursive call first
+(incrementing `checks`, running every cancel/abandon/interrupt checkpoint,
+and recomputing the domain of literally every unassigned slot in the
+grid), even for a word that a much smaller, local check could already
+have ruled out.
+
+`Filler.__init__` gained a new precomputed `self._crossing_slots` — a
+list, indexed by slot, of every *other* slot sharing at least one cell
+with it (built once from `self.cell_to_slots`, right next to it, since
+slot geometry never changes once `slots` is extracted — the same
+precompute-once-in-`__init__` convention already used for `self.
+directions`). The `for w in cands:` loop in `_backtrack` now checks, right
+after placing `w` and adding it to `used_words` but *before* the recursive
+call: for every slot in `self._crossing_slots[best_i]` that's still
+unassigned and not excluded (`excluded_slots`/`_crossing_excluded_slots`
+— the same "never consider" set already used everywhere else in this
+function), recompute its domain and check whether every remaining
+candidate is already in `used_words` — the identical criterion the
+top-of-function check already uses for every slot. If any crossing slot
+comes back broken this way, the word is undone immediately (never
+recursing at all) and the loop moves to the next candidate; otherwise the
+recursive call proceeds exactly as before. This is provably equivalent in
+*outcome* to the pre-existing full-grid check — placing a word can never
+change the domain of a slot that shares no cell with it, since `_domain`
+only ever reads the cells of the slot being evaluated — but strictly
+cheaper: a doomed word is now caught and discarded without ever spending a
+`checks` increment or scanning the rest of the grid for it, leaving more
+of the search's own budget available for branches that were never
+provably dead in the first place. One small, accepted side effect: since
+a doomed word's own recursive call never happens, `self.best_assignment`
+(the pure diagnostic high-water-mark used for the failure preview) can no
+longer momentarily include that doomed word before it gets undone —
+arguably an improvement, not a regression, since it means a state that
+was never actually viable can no longer show up, even fleetingly, as
+"best."
+
+Verified: an isolated hand-built two-slot scenario (a 4-letter across slot
+crossing a 3-letter down slot at one shared cell, with a dictionary where
+the across word "AAAA" forces a first letter no down-word in the
+dictionary starts with, while "BBBB" crosses two valid down-words)
+confirmed the across slot correctly settles on "BBBB" — "AAAA" is
+discarded — across 30 different seeds, with a low `checks` count (3)
+confirming the doomed candidate never triggered a wasted recursive call.
+A full end-to-end `generate_grid()` run on both seeds of the standard
+15×10 benchmark (Flash mode) confirmed no regression: 0 mismatches, 0
+empty white cells each — seed 2 in 151.6s, 57 words, 41 black cells; seed
+7 in 125.4s, 58 words, 40 black cells.
+
+A fourth piece of information was added to `backend/svg_export.py`'s own
+3rd header line (mode + the 3 durations, see the entry above), at the
+user's explicit request: "après la liste des temps de traitement, sur la
+même ligne, afficher le taux de cases noires de la grille." A new
+`_BLACK_RATIO_LABELS` dict mirrors `frontend/static/i18n.js`'s own
+`attemptPreviewStats` wording and per-language spacing before "%" (French
+keeps a space before "%", the other four don't — e.g. `"23 % noir"` vs.
+`"23% black"`), formatted from a `"{p}"` placeholder rather than a plain
+tuple like `_MODE_LABELS`/`_DURATION_LABELS`, since the black-cell
+percentage itself is a computed number, not a fixed label string to pick
+from a small set. Appended to `info_bits` right after the 3 durations,
+gated on `"black_ratio" in result` — always true in practice (`generate_
+grid()` always sets it, CLI included, unlike the 3 duration fields which
+only `backend/app.py`'s own web-UI calls add), so unlike `mode`/the 3
+durations, this piece is never actually omitted; the same `in result`
+convention was kept anyway, for consistency with how every other piece of
+this line is built and as a defensive no-op for a hypothetical caller that
+strips the key. Verified live: a real `generate_grid()` call (9×9, seed 3)
+rendered through `render_grid_svg()` for all 5 languages produced the
+exact expected line, e.g. French: `"Mode Flash — Grille générée en 12s —
+Optimisation en 4s — Définitions générées en 1mn7s — 23 % noir"`, English:
+`"...— 23% black"`, German: `"...— 23% schwarz"`, Spanish: `"...— 23%
+negro"`, Italian: `"...— 23% nero"` — matching `result["black_ratio"]`
+exactly; a second call with `mode=None` and no duration fields at all
+(the CLI's own shape) confirmed the black-cell percentage alone still
+renders correctly (`"23 % noir"`), proving it's never accidentally tied to
+the other 3 pieces' own presence.
+
+`PREFILL_ZONE_BLACK_BUDGET_FLOOR` was lowered from 2 to **1**, at the
+user's explicit request, quoting the `DOC_ALGO/FR/ReadMe.md` wording of
+this exact floor back: "une seule case noire garantie (2 cases minimum
+crée trop de cases noires)." This constant guarantees a minimum number of
+new black cells to a single problem zone during "nettoyage curatif"
+(`_prefill_unfillable_slots`) before its own percentage-scaled budget is
+allowed to restrict it further — raised from an original 0/1 to 2 earlier
+in this project's history after a real regression (too few guaranteed
+cells caused outright search failures on the standard benchmark); this
+change reports the opposite complaint (2 guaranteed cells now adds more
+black cells than wanted in practice) and lowers it back down by one.
+Verified live rather than assumed safe, given this exact constant's own
+fraught history (two prior, unrelated regressions on this same general
+area — the *shared*-budget alternative once tried and reverted for this
+very constant, and the separate `PREFILL_LOCKED_MIN_WORD_COUNT=1`
+regression): two real `generate_grid()` runs on the standard 15×10
+benchmark (seeds 2 and 7, Flash mode) both succeeded — 0 mismatches, 0
+empty white cells each (seed 2: 213.3s, 65 words, 39 black cells/26.0%;
+seed 7: 473.7s, 60 words, 38 black cells/25.3%) — confirming this
+specific value doesn't reproduce either of those earlier failures.
+
+A new, prioritized selection tier was inserted into `Filler._backtrack`'s
+slot-selection rule, at the user's explicit request: "introduire une
+règle avant la règle 2 : choisir en priorité les emplacements où il ne
+reste plus qu'une seule lettre vide." The rule went from 2 levels
+(direction, then domain-size window) to 3: direction (unchanged), then a
+new "almost complete" filter, then the pre-existing domain-size window
+(renumbered from level 2 to level 3, otherwise unchanged — same window
+formula, same shuffle-before-sort tie-breaking, same random draw).
+
+A new `Filler._empty_cell_count(i)` helper counts how many of slot `i`'s
+own cells are still genuinely undetermined — neither fixed by a real
+crossing assignment made during this same attempt, nor by `self.
+locked_letters` (real, confirmed content carried forward from a previous
+palier) — deliberately excluding `self.forced_letters` (the purely
+statistical seed hint from `sample_letter_biases`) from counting as
+"known," consistent with this whole file's established distinction
+between a verified fact and an unverified guess (the same distinction
+`Filler._domain(i, ignore_forced=True)`/`impossible_zone_slots` already
+draw). Right after `direction_pool` is computed in `_backtrack`, a new
+`almost_complete = [i for i in direction_pool if self._empty_cell_count(i)
+== 1]` is checked: if non-empty, `selection_pool` becomes that filtered
+subset instead of the full `direction_pool`; if empty (no slot in the
+category is down to exactly one blank cell), `selection_pool` falls back
+to the full `direction_pool`, an exact no-op matching the pre-existing
+behavior. Every use of `direction_pool` in the scoring/window/draw code
+right below was changed to `selection_pool`, so the domain-size window
+(level 3) now operates on whichever pool level 2 produced, sized
+proportionally to that pool's own size rather than always the full
+category. This is a deliberately different signal from the domain-size
+criterion it now precedes: a slot with only one blank cell can still have
+many real candidate words (any dictionary word sharing its already-known
+letters everywhere else), so "closest to completion" and "fewest
+candidates" are genuinely distinct measures, not a duplicate of the
+existing rule.
+
+Verified: an isolated test (3 independent, non-crossing 4-letter slots — one
+fully blank, one with exactly 1 empty cell via `locked_letters` and only
+one matching dictionary word, one with 2 empty cells) confirmed `_empty_
+cell_count` returns the right count for each, and that a real `_backtrack`
+call resolves the 1-empty-cell slot to its unique candidate every time
+across 20 seeds — direct evidence the new tier actually engages and
+prioritizes correctly, not just that the helper computes the right
+number; a control with no slot at exactly 1 empty cell confirmed the
+fallback to the full pool still resolves normally (10 seeds); a third
+check confirmed a pure statistical seed (`forced_letters`, no real
+crossing/locked content at all) never counts as "known" for this
+purpose. A real, non-mocked `generate_grid()` run (9×9, seed 3) succeeded
+cleanly: 31 words, 0 mismatches, 0 empty white cells. A full end-to-end
+run on both seeds of the standard 15×10 benchmark (Flash mode) confirmed
+no regression: 0 mismatches, 0 empty white cells each — seed 2 in 440.9s,
+63 words, 39 black cells; seed 7 in 295.7s, 59 words, 39 black cells.
+
+The "almost complete" tier (level 2, added just above) was replaced with a
+different criterion, at the user's explicit request, quoting the doc's
+own current wording back: "Donner un nom de variable à 'moins de 3 mots
+candidats' et fixer sa valeur à 3 [...] Dans la règle qu'on vient
+d'ajouter, remplacer [le critère 'une seule case encore vide'] par
+'choisir en priorité les emplacements avec moins de N mots candidats' N
+étant la variable ci-dessus. Le but est d'essayer de résoudre ces cas
+avant qu'ils ne produisent des ajouts de cases noires." The variable
+already existed under the requested name — `PREFILL_MIN_WORD_COUNT` (3),
+already used by the pre-fill mechanism (`_prefill_unfillable_slots`) and
+its locked-letter-aware sibling — so the first half of this request
+needed no code change, only naming it explicitly in `DOC_ALGO/FR/
+ReadMe.md`'s own "Pré-remplissage" section (which previously just said
+"moins de 3 mots candidats" with no variable name attached).
+
+The second half replaces `Filler._empty_cell_count` (this session's own
+prior addition, one call site) with a direct reuse of `domains[i]` — the
+per-slot domain `_backtrack` already computes at the top of every call
+for its own forward-checking pass, so no new computation was needed:
+`almost_complete = [i for i in direction_pool if self._empty_cell_count(i)
+== 1]` became `few_candidates = [i for i in direction_pool if len(domains
+[i]) < PREFILL_MIN_WORD_COUNT]`. `_empty_cell_count` itself was deleted
+outright (its one and only caller), per this project's own no-dead-code
+convention. The rationale named directly in the request — "essayer de
+résoudre ces cas avant qu'ils ne produisent des ajouts de cases noires" —
+ties this tier explicitly to the pre-fill mechanism's own threshold: a
+slot whose real candidate count has dropped below `PREFILL_MIN_WORD_COUNT`
+is exactly the kind of slot pre-fill would otherwise blacken out on a
+later palier if it's never resolved by a real word first, so prioritizing
+it for an actual assignment attempt now is a direct, tightly-scoped
+countermeasure. Deliberately uses the *raw* domain size (not filtered by
+`used_words`), matching the tier-3 window's own scoring convention right
+below it (`scores = {i: len(domains[i]) for i in selection_pool}`) rather
+than introducing a second, differently-defined notion of "few candidates"
+between the two adjacent tiers.
+
+Verified: an isolated `Filler` test (3 independent, non-crossing 4-letter
+slots — one fully blank/6 candidates, one locked to exactly
+`PREFILL_MIN_WORD_COUNT` candidates via `locked_letters` — confirmed
+*not* prioritized, since the rule is strictly "<", not "<="[not ">="] —
+and one locked down to exactly 1 candidate) confirmed the 1-candidate slot
+is resolved to its unique word across 20 different seeds; a control with
+no slot under the threshold confirmed the fallback to the full
+`direction_pool` still works normally. A real `generate_grid()` run (9×9,
+seed 3) succeeded: 33 words, 0 mismatches, 0 empty white cells (slower
+than earlier same-shape runs this session, consistent with this exact
+selection area's own long-documented run-to-run variance rather than a
+confirmed regression — the user interrupted the follow-up standard-
+benchmark run before it completed, intending to test independently rather
+than have it re-verified here).
