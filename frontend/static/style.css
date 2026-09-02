@@ -389,13 +389,37 @@ button:disabled {
    2rem) since this is a quick, secondary glance, not the main puzzle, and
    non-interactive (no cursor: pointer, no hover/selection states — those
    only make sense for a real playable grid). No row/column headers
-   either, for the same "quick glance" reason. */
+   either, for the same "quick glance" reason.
+   `align-self: flex-start` — at the user's explicit report, from a real
+   screenshot: "Les grilles des extraits s'affichent sur un fond gris trop
+   grand." Root cause: `.attempt-preview-item` (the flex parent wrapping
+   this mini-grid together with .attempt-preview-stats just above it, see
+   its own comment below) never sets `align-items`, so it defaults to
+   flexbox's own `stretch` — every child, including this mini-grid, is
+   stretched to match the WIDTH of whichever sibling is naturally widest
+   along that column-flex container's cross axis. `.attempt-preview-stats`
+   is a plain sentence ("23 % noir, 77 % rempli, 0 % injouable") that can
+   easily be wider than a small mini-grid's own natural width (`width ×
+   1.1rem` — a 9-column grid is under 10rem, well short of that sentence's
+   own width at 0.7rem) — on a grid narrower than its own stats line,
+   flexbox's default stretch pulled this element wider than its actual
+   cell content, and since its own background is the gray `--border`
+   grid-line color (needed for the cell-gap trick above), the stretched,
+   cell-less remainder painted visibly as a wide gray block next to the
+   real cells — never visible on this project's own larger 15×10 benchmark
+   grid, whose mini-grid is already wider than the stats line, which is
+   exactly why this went unnoticed through all of this project's own prior
+   testing on that grid. `align-self: flex-start` overrides the inherited
+   stretch for this one child, keeping it at its own natural width instead
+   — the same fix, and the same reasoning, already applied once to #grid
+   itself inside #board's own flex row (see #grid's own comment). */
 .attempt-preview-grid {
   display: inline-grid;
   gap: 1px;
   background: var(--border);
   border: 2px solid var(--border);
   align-content: start;
+  align-self: flex-start;
 }
 
 .attempt-preview-grid .cell {

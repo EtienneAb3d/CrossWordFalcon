@@ -934,6 +934,21 @@ function formatDuration(seconds) {
   return out;
 }
 
+// Décompte de mots essayés (backend/crossword_gen.py, `total_attempts` —
+// somme de `Filler.checks`, incrémenté une fois par mot candidat essayé,
+// voir son propre historique) formaté pour rester lisible même une fois
+// dans les millions, à la demande explicite de l'utilisateur : nombre
+// exact en dessous de 1000, puis divisé par 1000 avec un suffixe K/M/G au
+// fur et à mesure — sans décimale ("12K", jamais "12,3K"), à sa demande
+// explicite elle aussi.
+function formatAttemptCount(n) {
+  const value = Math.max(0, Math.round(n || 0));
+  if (value < 1000) return String(value);
+  if (value < 1000000) return `${Math.round(value / 1000)}K`;
+  if (value < 1000000000) return `${Math.round(value / 1000000)}M`;
+  return `${Math.round(value / 1000000000)}G`;
+}
+
 async function fetchWithTimeout(url, options, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -957,16 +972,16 @@ function describeStep(t, step) {
       message = t.statusStarting;
       break;
     case "pattern":
-      message = t.statusPattern(step.attempt, step.attempts, step.total_attempts);
+      message = t.statusPattern(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
       break;
     case "pattern_generated":
-      message = t.statusPatternGenerated(step.attempt, step.attempts, step.total_attempts);
+      message = t.statusPatternGenerated(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
       break;
     case "pattern_attempt_failed":
-      message = t.statusPatternAttemptFailed(step.attempt, step.attempts, step.total_attempts);
+      message = t.statusPatternAttemptFailed(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
       break;
     case "pattern_found":
-      message = t.statusPatternFound(step.attempt, step.total_attempts);
+      message = t.statusPatternFound(step.attempt, formatAttemptCount(step.total_attempts));
       break;
     case "minimizing":
       message = t.statusMinimizing;

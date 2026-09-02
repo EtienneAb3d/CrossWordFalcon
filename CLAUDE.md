@@ -10833,3 +10833,116 @@ cleanly: 32 words, 0 mismatches, 0 empty white cells. A full end-to-end
 run on both seeds of the standard 15×10 benchmark (Flash mode) confirmed
 no regression: 0 mismatches, 0 empty white cells each — seed 2 in 24.8s,
 56 words, 29 black cells; seed 7 in 18.2s, 61 words, 34 black cells.
+
+The status line's `total_attempts` count was reworded from "grilles
+échouées" ("grids failed") to **"mots testés"** ("words tried") across all
+four progress messages that carry it (`statusPattern`/
+`statusPatternGenerated`/`statusPatternFound`/`statusPatternAttemptFailed`,
+all 5 UI languages), at the user's explicit request, after they noticed
+the wording no longer matched what the number actually counts and asked
+for confirmation before the rewording: "Le décompte ne reflète plus les
+grilles échouées, mais le nombre de mots essayé (merci de confirmer que
+c'est bien ça)." Confirmed directly by re-reading `generate_grid`'s own
+`total_attempts_tried += sum(d["checks"] for _, d in failed_all)` —
+`Filler.checks`, per this exact session's own earlier "checks-per-
+candidate" change (see its own entry above), is incremented once per
+*candidate word actually attempted* in `_backtrack`'s own loop, not once
+per recursive call — so this sum genuinely counts words tried, not grids
+failed, exactly matching the user's own reading; this wording gap had
+existed since that earlier change landed, simply not yet noticed/reworded
+until now. Every one of the 20 affected strings (4 messages × 5
+languages) was reworded to a natural per-language equivalent of "words
+tried" (French "mots testés", English "words tried", German "getestete
+Wörter", Spanish "palabras probadas", Italian "parole testate"), keeping
+each message's own surrounding sentence structure and "jusqu'ici"/"so
+far" vs. "au total"/"in total" distinction exactly as before — only the
+noun phrase itself changed.
+
+Separately, at the user's own explicit follow-up request, this count is
+now formatted for readability once it grows large (real runs have shown
+values in the millions — see this session's own `_DEBUG_CONTINUE_POOL`
+diagnostic output above, which included `total_attempts=6058499`): a new
+`frontend/static/script.js` function, `formatAttemptCount(n)`, returns
+the exact integer below 1000, then divides by 1000 with a `K`/`M`/`G`
+suffix once past that threshold ("12K", "6M", ...) — **no decimal place**
+at the user's own explicit further follow-up request ("Ne pas garder les
+chiffres après la virgule dans la division par 1000"), so `Math.round`
+(not a fixed-decimal `toFixed`) is used at every division step. Wired in
+at `describeStep()`'s four call sites for these messages (`case
+"pattern"`/`"pattern_generated"`/`"pattern_attempt_failed"`/
+`"pattern_found"`), which now pass `formatAttemptCount(step.
+total_attempts)` instead of the raw number — `i18n.js`'s own four
+functions are otherwise unchanged, simply interpolating whatever string
+they're handed, matching this project's own established convention of
+computing values in `script.js` and only phrasing them in `i18n.js` (the
+same split already used for `formatDuration`). A minor, accepted cosmetic
+quirk at the very top of each unit's own range (e.g. 999999 → "1000K"
+rather than "1M", since the unit-selection threshold check happens before
+rounding) was left as-is — not asked for, and only ever visible for a
+value within a few hundred of an exact power-of-1000 boundary.
+
+Verified: an isolated Python reproduction of the exact same formatting
+logic (`Math.round`/threshold checks translated 1:1) confirmed correct
+output across a wide range of values — 0, 1, 999, 1000, 1001, 1500,
+12345, 999999, 1000000, 1500000, 12345678, 999999999, 1000000000,
+4200000000 → "0", "1", "999", "1K", "1K", "2K", "12K", "1000K", "1M",
+"2M", "12M", "1000M", "1G", "4G" respectively, matching what the
+described JS logic itself computes. A real JS syntax check (`esprima`,
+temporarily installed and removed again afterward, the same one-off-tool
+pattern already used elsewhere in this project) confirmed `script.js`/
+`i18n.js` still parse correctly after the change.
+
+**A real visual bug was reported live, with a screenshot**: "Les grilles
+des extraits s'affichent sur un fond gris trop grand" — one of the
+attempt-preview mini-grids (`.attempt-preview-grid`, see the `style-guide`
+SKILL) showed a wide gray block extending past its own actual cell
+content. Root-caused by careful re-reading of the CSS cascade rather than
+live visual inspection (this session's environment still has no
+`chromium-cli`/`node`/Python `playwright`, the same limitation already
+noted throughout this project's UI work): `.attempt-preview-item` (the
+flex-column wrapper around each mini-grid's own `.attempt-preview-stats`
+line and the mini-grid itself, see `frontend/static/script.js`'s
+`renderAttemptPreview()`) never sets `align-items`, so it defaults to
+flexbox's own `stretch` — every child, `.attempt-preview-grid` included,
+gets stretched to match the width of whichever sibling is naturally
+widest along that column-flex container's cross axis.
+`.attempt-preview-stats` is a plain sentence ("23 % noir, 77 % rempli, 0 %
+injouable") that can easily be wider than a *small* mini-grid's own
+natural width (`width × 1.1rem` per cell — a 9-column grid is under 10rem,
+well short of that sentence's own width at 0.7rem) but never wider than
+this project's own larger 15×10 benchmark grid (16.5rem at 15 columns) —
+exactly why this went unnoticed through all of this project's own prior
+testing on that specific, larger benchmark grid, and only surfaced on a
+smaller real generation. Since `.attempt-preview-grid`'s own background is
+the gray `--border` grid-line color (the same cell-gap trick `#grid`
+itself uses for its own grid lines), the stretched, cell-less remainder
+painted visibly as a wide gray block next to the real cells.
+
+Fixed with `align-self: flex-start` added to `.attempt-preview-grid`'s
+own CSS rule — overrides the inherited stretch for this one child,
+keeping it at its own natural width regardless of its sibling's own
+width. This is the exact same fix, for the exact same underlying reason
+(an unconstrained flex child stretching wider than its own content),
+already applied once before to `#grid` itself inside `#board`'s own flex
+row (`align-self: flex-start` there too) — confirmed by re-reading that
+rule's own existing comment, which documents the identical root cause in
+a different context. `align-content: start` (already present on
+`.attempt-preview-grid`, added for an earlier, related report) is left
+untouched — a different property (how the grid's own rows/columns are
+distributed *within* its own box, once that box is larger than its
+content) than `align-self` (how large the box itself gets in the first
+place, within its own flex parent slot) — both remain independently
+useful, not redundant with each other.
+
+Not verified live in a real browser (the same tooling limitation noted
+above) — a CSS-brace-balance sanity check confirmed the stylesheet still
+parses structurally after the edit (66 open braces, 66 close braces,
+matching the file's own pre-edit count exactly since only one property
+line was added inside an existing rule), and the real served
+`frontend/static/style.css` was fetched directly from the actual running
+server (no restart needed or performed — a real generation job was
+active on it at the time, and static files are served fresh from disk on
+every request with no caching, confirmed once already this session for
+an unrelated pure-frontend change) and confirmed to contain the new
+`align-self: flex-start` line. The `style-guide` SKILL was updated with
+the same reasoning, flagged the same way as "not yet visually confirmed."

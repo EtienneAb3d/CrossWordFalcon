@@ -1477,3 +1477,33 @@ English (see `project-best-practices`).
   this softer "few candidates left" orange if a cell were ever
   (hypothetically — not possible today, since `impossible_cells` is
   always empty on the `pattern` event specifically) flagged as both.
+
+- **A real bug was reported live, with a screenshot**: "Les grilles des
+  extraits s'affichent sur un fond gris trop grand" — one of the
+  attempt-preview mini-grids showed a wide gray block extending past its
+  own actual cell content. Root-caused by careful re-reading of the CSS
+  cascade (this session's environment has no browser-automation tooling
+  — chromium-cli/node/Python playwright — so this was reasoned through
+  structurally, not visually confirmed, same limitation already noted
+  elsewhere in this file): `.attempt-preview-item` (the flex-column
+  wrapper around each mini-grid's own `.attempt-preview-stats` line and
+  the `.attempt-preview-grid` itself, see `script.js`'s
+  `renderAttemptPreview()`) never sets `align-items`, so it defaults to
+  flexbox's own `stretch` — every child, `.attempt-preview-grid` included,
+  gets stretched to match the width of whichever sibling is naturally
+  widest. `.attempt-preview-stats` is a plain sentence ("23 % noir, 77 %
+  rempli, 0 % injouable") that can easily be wider than a *small* mini-grid
+  (a 9-column grid is under 10rem at 1.1rem/cell, well short of that
+  sentence's own width at 0.7rem) — never visible on this project's own
+  larger 15×10 benchmark grid, whose mini-grid is already wider than the
+  stats line on its own, which is exactly why this went unnoticed through
+  all of this project's own prior testing on that specific grid size.
+  Since `.attempt-preview-grid`'s own background is the gray `--border`
+  grid-line color (the same cell-gap trick `#grid` itself uses), the
+  stretched, cell-less remainder painted visibly as a wide gray block next
+  to the real cells. Fixed with `align-self: flex-start` on `.attempt-
+  preview-grid` — the exact same fix, for the exact same underlying reason
+  (an unconstrained flex child stretching wider than its own content),
+  already applied once before to `#grid` itself inside `#board`'s own flex
+  row. **Not yet visually confirmed in an actual browser** — the same
+  tooling limitation already noted throughout this project's UI work.
