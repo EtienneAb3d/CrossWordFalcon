@@ -831,6 +831,74 @@ plus bas) ; chacune des grilles nettoyées survivantes sert de point de
 départ à l'un des workers non réinitialisés du palier suivant — une
 grille distincte par worker, jamais celle d'un autre.
 
+##### Raccourcissement préalable des emplacements impossibles
+
+Avant tout retrait de mot classique (voir "Nettoyage automatique des
+emplacements bloqués" plus bas), et uniquement sur ce chemin de reprise
+"telle quelle" — jamais sur le nettoyage complet, pour la même raison
+que l'exception case noire à 1/10 plus bas —, chaque emplacement
+impossible d'une tentative est d'abord examiné pour un mot plus court :
+en tête ou en fin de la zone, de longueur maximale (longueur de
+l'emplacement moins un) et minimale de 3 lettres (jamais 2 ni moins),
+laissant au moins une case vide de l'autre côté. Tous les candidats
+valables sont d'abord rassemblés — toutes longueurs et les deux côtés
+(tête/fin) confondus, en excluant tout mot déjà utilisé ailleurs dans la
+grille, tout mot dont aucune lettre ne serait réellement nouvelle (déjà
+toutes connues d'avance, ce qui n'apporterait aucun progrès), et dont la
+case frontière (celle qui sépare le mot de la case vide restante) n'est
+pas déjà couverte par une lettre confirmée et reste noircissable sans
+casser la validité structurelle de la grille — puis un candidat est tiré
+au hasard dans cet ensemble complet : la longueur elle-même est tirée au
+hasard, jamais préférée la plus longue possible. Une case déjà couverte
+par une lettre confirmée n'est jamais retenue comme case frontière : la
+noircir détruirait le mot croisant qui la fixe.
+
+Les deux morceaux résultants de la zone initiale — le mot posé et, s'il y
+en a un, le reste de l'autre côté de la case frontière — sont l'un et
+l'autre contrôlés dès lors qu'ils se trouvent entièrement déterminés. Le
+mot posé l'est toujours, par construction. Le reste, s'il compte au moins
+deux cases (en dessous, ce n'est de toute façon jamais un vrai
+emplacement) et se trouve déjà entièrement couvert par des lettres
+confirmées — par d'autres croisements, indépendamment de ce placement
+précis —, doit lui aussi correspondre à un mot réel ; sinon, toute la
+combinaison (longueur, côté) est écartée d'un coup, avant même de
+chercher un mot pour l'autre morceau.
+
+Avant de retenir ce candidat, on vérifie qu'il ne crée pas un NOUVEL
+emplacement croisant impossible — un emplacement croisant qui avait
+encore au moins un candidat réel avant ce placement précis, et n'en a
+plus aucun une fois la lettre ajoutée. Un emplacement croisant déjà
+impossible avant ce placement n'est jamais compté comme une nouvelle
+dégradation. Si le candidat tiré créerait un tel blocage, il est
+écarté et un autre candidat est tiré, jusqu'à épuisement de l'ensemble.
+Si aucun candidat ne convient — parce qu'aucun mot plus court n'existe,
+ou parce que chacun créerait un nouveau blocage ailleurs — cet
+emplacement n'est pas touché du tout (ni case noire, ni mot posé) et
+l'examen passe à l'emplacement impossible suivant. Le motif, les
+emplacements croisants et les mots déjà utilisés sont recalculés à neuf
+avant l'examen de chaque emplacement, pas seulement une fois par tour —
+l'examen d'un emplacement tient donc toujours compte du mot que
+l'emplacement précédent vient tout juste de poser dans le même tour.
+
+Une fois tous les emplacements impossibles de ce tour ainsi examinés, la
+détection des emplacements impossibles est relancée sur le motif mis à
+jour — un emplacement raccourci peut redevenir jouable, ou rester encore
+trop contraint pour l'être, auquel cas il peut à son tour être raccourci
+davantage lors d'un nouveau tour ; les vérifications de croisement
+peuvent aussi avoir révélé de nouveaux emplacements bloqués ailleurs.
+Le cycle s'arrête dès qu'aucun emplacement encore impossible ne peut
+plus être raccourci nulle part.
+
+Un emplacement croisant peut devenir entièrement déterminé — chacune de
+ses cases fixée par un mot croisant différent — sans qu'aucun mot n'ait
+jamais été explicitement choisi ni vérifié pour lui : avant de le
+considérer résolu, sa combinaison de lettres est validée contre le
+dictionnaire ; si elle ne correspond à aucun mot réel, elle n'est jamais
+retenue comme mot posé — l'emplacement reste signalé impossible et sera
+traité par la phase de nettoyage habituelle (retrait de mots croisants,
+ou son alternative case noire) comme n'importe quel autre emplacement
+encore bloqué à la fin du cycle.
+
 ##### Fréquence des nettoyages complets
 
 Bornée par `MAX_CONSECUTIVE_CONTINUE_PALIERS` (valeur actuelle : 4) — un
@@ -864,10 +932,14 @@ tous les mots en place sont valides, la grille est réputée réussie.
 
 ##### Nettoyage automatique des emplacements bloqués
 
-Avant de transmettre le motif au palier suivant, on nettoie
-automatiquement les emplacements bloqués — mais, sauf exception (voir
-plus bas), jamais les cases noires : tout mot qui croise directement un
-emplacement impossible est retiré — les cases qu'il occupait
+Sur le chemin de reprise "telle quelle", cette étape ne traite que les
+emplacements encore impossibles une fois le raccourcissement préalable
+(voir "Raccourcissement préalable des emplacements impossibles"
+plus haut) épuisé — sur le nettoyage complet, elle s'applique
+directement, sans étape préalable. Avant de transmettre le motif au
+palier suivant, on nettoie automatiquement les emplacements bloqués —
+mais, sauf exception (voir plus bas), jamais les cases noires : tout mot
+qui croise directement un emplacement impossible est retiré — les cases qu'il occupait
 redeviennent libres pour la recherche du palier suivant. Les
 emplacements déjà connus comme impossibles sont eux-mêmes mis de côté
 (ignorés plutôt que redemandés), pour laisser la recherche continuer là

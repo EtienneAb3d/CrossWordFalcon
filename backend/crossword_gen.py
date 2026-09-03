@@ -4084,6 +4084,315 @@ def _public_diag(diag):
 BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY = 1 / 10
 
 
+def _impossible_indices(slots_list, index, known):
+    """Indices des emplacements de `slots_list` réputés impossibles au sens
+    local de `_shorten_impossible_zones` ci-dessous : pas entièrement
+    couverts par `known`, et sans aucun candidat réel une fois cette
+    contrainte (partielle, ou totalement absente — une longueur que le
+    dictionnaire ne couvre pas du tout est tout aussi bloquée qu'une
+    combinaison de lettres invalide, même critère que la "zone strictement
+    sans issue" de `_clean_blocked_slots`) appliquée (`_slot_candidates`
+    vide). Un emplacement entièrement couvert par `known` est un mot déjà
+    confirmé — sa validité éventuelle est une tout autre question, déjà
+    traitée ailleurs dans ce fichier (voir le bug AVALAS dans CLAUDE.md).
+    Même critère utilisé aux deux endroits où `_shorten_impossible_zones`
+    en a besoin : pour redétecter les emplacements encore bloqués après
+    chaque case noire posée, et pour calculer la liste finale renvoyée à
+    l'appelant."""
+    result = []
+    for j, cells in enumerate(slots_list):
+        length = len(cells)
+        if length == sum(1 for c in cells if c in known):
+            continue
+        sub_known = {c: known[c] for c in cells if c in known}
+        if not _slot_candidates(index, length, cells, sub_known):
+            result.append(j)
+    return result
+
+
+def _invalid_fully_known_indices(slots_list, index, known):
+    """Indices des emplacements de `slots_list` entièrement couverts par
+    `known` — chacune de leurs cases fixée, directement ou indirectement,
+    par un mot croisant — mais dont la combinaison de lettres ne
+    correspond à AUCUN mot réel du dictionnaire. `_impossible_indices`
+    ignore volontairement ce cas (voir sa propre docstring : "sa validité
+    éventuelle est une tout autre question, déjà traitée ailleurs dans ce
+    fichier") — un choix de conception valable pour ses propres appelants
+    d'origine (`_pattern_attempt`/`_pattern_continue`, qui valident déjà
+    séparément tout emplacement entièrement verrouillé, voir `locked_
+    impossible_slots`), mais `_shorten_impossible_zones` ci-dessous, en
+    posant de nouvelles lettres qui peuvent achever de couvrir un
+    emplacement croisant entièrement sans jamais interroger le
+    dictionnaire pour cette combinaison précise, n'avait aucun autre
+    endroit pour effectuer ce même contrôle — bug réel constaté en
+    direct : un mot inventé ("ATEIRS", "TENLES"...), jamais réellement
+    choisi par personne, simplement recomposé tel quel à partir de lettres
+    individuellement correctes mais jamais vérifiées ensemble."""
+    result = []
+    for j, cells in enumerate(slots_list):
+        length = len(cells)
+        if length != sum(1 for c in cells if c in known):
+            continue
+        known_full = {c: known[c] for c in cells}
+        if not _slot_candidates(index, length, cells, known_full):
+            result.append(j)
+    return result
+
+
+def _new_crossing_impossibility(cur_slots, cell_to_slots, own_idx, sub, word, known, index):
+    """True si poser `word` sur `sub` (une fois `known` mis à jour avec ses
+    lettres) rendrait impossible un emplacement CROISANT — un autre
+    emplacement de `cur_slots`, dans l'autre direction, partageant l'une
+    des cases de `sub` — qui ne l'était pas déjà avant ce placement précis.
+    Un emplacement croisant déjà sans candidat AVANT ce placement n'est
+    jamais compté ici (il n'est pas "créé" par ce mot, il l'était déjà,
+    pour une tout autre raison) — seule une dégradation NOUVELLE,
+    directement causée par cette lettre précise, doit faire rejeter le
+    candidat. Même mécanique d'intersection par position que `_impossible_
+    indices`/`Filler._domain` (`_slot_candidates`), appliquée ici avant/
+    après une seule lettre ajoutée plutôt qu'à l'état final."""
+    for pos, cell in enumerate(sub):
+        letter = word[pos]
+        for j in cell_to_slots.get(cell, ()):
+            if j == own_idx:
+                continue
+            cross_cells = cur_slots[j]
+            known_before = {c: known[c] for c in cross_cells if c in known}
+            if not _slot_candidates(index, len(cross_cells), cross_cells, known_before):
+                continue
+            known_after = dict(known_before)
+            known_after[cell] = letter
+            if not _slot_candidates(index, len(cross_cells), cross_cells, known_after):
+                return True
+    return False
+
+
+def _find_shorter_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
+                                 index, known, used_words, rng):
+    """Pour UN emplacement réputé impossible (`cells`, d'indice `own_idx`
+    dans `cur_slots`), cherche un mot plus court à poser en tête ou en fin
+    de la zone, laissant au moins une case vide de l'autre côté — donc de
+    longueur maximale `len(cells) - 1`, jamais la longueur complète de
+    l'emplacement, `3` au minimum (jamais `2` ni moins — à la demande
+    explicite de l'utilisateur : "ne pas tester un remplissage partiel de
+    moins de 2 lettres... comprendre : au moins 3 lettres"). Rassemble
+    D'ABORD tous les candidats valables, toutes longueurs et tous côtés
+    confondus — un candidat n'est retenu que si sa case frontière (celle
+    qui sépare le mot de la case vide restante) reste structurellement
+    valide une fois noircie (`is_structurally_valid(min_interior_free=1)`,
+    jamais de passe-droit sur cet invariant absolu), que le morceau
+    restant (l'autre côté de la zone, une fois la case frontière noircie)
+    n'est pas déjà couvert par une combinaison de lettres invalide (voir
+    plus bas), que le mot lui-même ajoute au moins une lettre réellement
+    nouvelle (une case qui n'était pas encore connue — poser un "mot" dont
+    toutes les lettres étaient déjà acquises n'apporte aucun progrès,
+    seulement une case noire), et que le mot n'est pas déjà utilisé
+    ailleurs dans la grille (`used_words`) — puis tire au hasard dans cet
+    ensemble complet (longueur elle-même variable, pas seulement le côté à
+    longueur égale, ni un ordre "le plus long d'abord").
+
+    Pour chaque candidat ainsi tiré, vérifie qu'il ne crée pas un nouvel
+    emplacement croisant impossible (`_new_crossing_impossibility`) avant
+    de le retenir — si c'est le cas, ce candidat est écarté et un autre
+    est tiré, jusqu'à épuisement de l'ensemble. Renvoie `(mot,
+    cases_du_mot, case_frontière)` du premier candidat qui passe tous ces
+    contrôles, ou `None` si aucun ne convient — auquel cas cet emplacement
+    n'est pas touché du tout, ni case noire ni mot posé.
+
+    Une case frontière déjà couverte par une lettre confirmée (`known`)
+    n'est jamais candidate — la noircir détruirait le mot croisant qui la
+    fixe déjà, laissant ses autres cases assignées à un fragment qui n'est
+    plus forcément un vrai mot du dictionnaire (bug réel constaté en
+    direct : "génère des mots qui n'existent pas... ne pas poser de case
+    noire sur une case qui contient déjà une lettre").
+
+    Les deux morceaux résultants de la zone initiale — le mot posé
+    lui-même, et le reste éventuel de l'autre côté de la case frontière —
+    sont l'un et l'autre contrôlés s'ils se trouvent entièrement déterminés
+    : le mot posé l'est toujours, par construction (validé contre le
+    dictionnaire avant d'être retenu comme candidat) ; le reste, s'il
+    compte au moins deux cases (sinon ce n'est pas un vrai emplacement, il
+    ne sera jamais lui-même testé comme un mot) et se trouve déjà
+    entièrement couvert par `known` (par d'autres croisements,
+    indépendamment de ce placement précis), doit lui aussi correspondre à
+    un mot réel — à la demande explicite de l'utilisateur : "bien tester
+    les 2 parties de l'emplacement initialement vide, si les 2 parties
+    sont complètes. Si un des deux morceaux complets n'est pas un mot
+    valide, ne pas faire le remplacement partiel." Si ce reste est
+    entièrement déterminé mais ne correspond à aucun mot réel, toute la
+    combinaison (longueur, côté) est écartée d'un coup — sans même
+    chercher de mot pour `sub`, puisque la validité du reste ne dépend pas
+    du mot choisi."""
+    length = len(cells)
+    options = []
+    for m in range(length - 1, 2, -1):
+        for side in (0, 1):
+            if side == 0:
+                sub = cells[:m]
+                boundary = cells[m]
+                leftover = cells[m + 1:]
+            else:
+                sub = cells[length - m:]
+                boundary = cells[length - m - 1]
+                leftover = cells[:length - m - 1]
+            br, bc = boundary
+            if grid[br][bc] == BLACK or boundary in known:
+                continue
+            grid[br][bc] = BLACK
+            valid = is_structurally_valid(grid, rows, cols, min_interior_free=1)
+            grid[br][bc] = WHITE
+            if not valid:
+                continue
+            if len(leftover) >= 2 and all(c in known for c in leftover):
+                leftover_known = {c: known[c] for c in leftover}
+                if not _slot_candidates(index, len(leftover), leftover, leftover_known):
+                    continue
+            if all(c in known for c in sub):
+                continue
+            sub_known = {c: known[c] for c in sub if c in known}
+            candidates = [
+                w for w in _slot_candidates(index, m, sub, sub_known)
+                if w not in used_words
+            ]
+            for w in candidates:
+                options.append((w, sub, boundary))
+    rng.shuffle(options)
+    for word, sub, boundary in options:
+        if _new_crossing_impossibility(cur_slots, cell_to_slots, own_idx, sub, word, known, index):
+            continue
+        return word, sub, boundary
+    return None
+
+
+def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
+                               index, rng):
+    """Nouvelle étape insérée AVANT le nettoyage habituel des emplacements
+    bloqués (`_clean_blocked_slots` ci-dessous), à la demande explicite de
+    l'utilisateur, réservée à la reprise "telle quelle" (voir
+    `_clean_continue_candidate`) — jamais au nettoyage complet, qui
+    régénère de toute façon un motif neuf via `make_pattern` et peut donc
+    déjà ajouter ses propres cases noires par ce biais, exactement le
+    même principe déjà établi pour `BLACK_CELL_INSTEAD_OF_REMOVAL_
+    PROBABILITY` juste au-dessus.
+
+    Pour chaque emplacement de `impossible_slots`, tente de poser un mot
+    plus court en tête ou en fin de la zone (voir `_find_shorter_word_for_
+    zone`, qui tire au hasard parmi tous les candidats valables — toutes
+    longueurs confondues — et rejette tout candidat qui créerait un
+    nouvel emplacement croisant impossible) plutôt que de retirer
+    directement les mots qui le croisent. Un mot trouvé est posé, une
+    case noire est ajoutée à l'extrémité qui laisse une case vide ; un
+    emplacement pour lequel AUCUN mot plus court ne convient (soit qu'il
+    n'en existe aucun, soit que chacun créerait un nouveau blocage
+    ailleurs) n'est pas touché du tout — ni case noire, ni mot — et
+    attend simplement le prochain tour, ou le nettoyage habituel si plus
+    aucun progrès n'est possible nulle part. Une fois tous les emplacements
+    de ce tour ainsi traités, la détection des emplacements bloqués est
+    relancée sur la grille mise à jour (le nouveau motif peut avoir résolu
+    certains emplacements, ou raccourci d'autres qui restent encore trop
+    contraints, ou même en avoir révélé de nouveaux via les vérifications
+    de croisement) — jusqu'à ce qu'aucun mot plus court ne puisse plus
+    être placé nulle part. La fonction rend alors la main, avec la liste
+    des emplacements encore réellement impossibles à ce stade, pour que
+    `_clean_blocked_slots` prenne le relais avec son propre mécanisme
+    (retrait de mots, ou son alternative case noire).
+
+    Le critère "impossible" utilisé ici (`_impossible_indices`, une simple
+    intersection de candidats par position) est volontairement plus
+    simple que celui du vrai solveur CSP (`Filler.impossible_zone_slots`,
+    qui tient aussi compte de `used_words`/`forced_letters` au moment
+    précis où la recherche a le plus progressé) — cette fonction opère
+    APRÈS la recherche, sur un motif qui va de toute façon être remodelé,
+    donc redériver ce même critère localement à chaque tour de boucle
+    (plutôt que de relancer un vrai `Filler`, bien plus coûteux) est
+    suffisant et cohérent avec `_low_candidate_slot_cells`/`_noise_slot_
+    cells`, qui font déjà ce même choix ailleurs dans ce fichier.
+
+    Renvoie `(grid, slots, assignment, impossible_slots)` — inchangés,
+    par référence, si aucun mot plus court n'a jamais pu être placé (le
+    cas courant), sinon un nouveau triplet motif/emplacements/mots
+    reflétant l'état après ce nettoyage préalable, avec la liste des
+    emplacements encore impossibles réindexée sur le nouveau motif.
+
+    Le motif, les emplacements croisants (`cell_to_slots`) et les mots déjà
+    utilisés sont recalculés à neuf avant CHAQUE emplacement traité — pas
+    seulement une fois par tour — pour que l'examen d'un emplacement tienne
+    toujours compte du mot que l'emplacement précédent vient tout juste de
+    poser (bug réel constaté en direct : un emplacement traité juste après
+    un autre, avec un instantané de motif encore périmé, pouvait accepter
+    un mot en réalité déjà incompatible avec ce qui venait d'être posé).
+    Chaque emplacement encore à traiter est identifié par ses propres cases
+    (un tuple de coordonnées), jamais par un indice numérique dans la liste
+    des emplacements — un indice se périmerait dès qu'une case noire
+    ajoutée ailleurs modifie l'ordre/le nombre d'emplacements, le même
+    piège d'indices déjà rencontré ailleurs dans ce fichier."""
+    known = {}
+    for i, word in enumerate(assignment):
+        if word is None:
+            continue
+        for cell, ch in zip(slots[i], word):
+            known[cell] = ch
+
+    new_grid = [row[:] for row in grid]
+    changed = False
+    remaining_cells = [tuple(slots[i]) for i in impossible_slots]
+
+    while remaining_cells:
+        progressed = False
+        for cells_tuple in remaining_cells:
+            cur_slots = extract_slots(new_grid, rows, cols)
+            try:
+                own_idx = cur_slots.index(list(cells_tuple))
+            except ValueError:
+                # Cet emplacement n'existe plus tel quel (l'une de ses
+                # propres cases a été noircie/couverte entre-temps) —
+                # aucun de ses cas normaux ne devrait jamais l'atteindre
+                # (voir la garde `boundary in known`/`grid[br][bc] ==
+                # BLACK` ci-dessus, qui protège explicitement les propres
+                # cases de CHAQUE emplacement traité), mais reste un
+                # garde-fou défensif plutôt qu'un plantage.
+                continue
+            cells = cur_slots[own_idx]
+            cell_to_slots = defaultdict(list)
+            for i, s in enumerate(cur_slots):
+                for c in s:
+                    cell_to_slots[c].append(i)
+            used_words = {
+                "".join(known[c] for c in s) for s in cur_slots
+                if all(c in known for c in s)
+            }
+            result = _find_shorter_word_for_zone(
+                new_grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
+                index, known, used_words, rng,
+            )
+            if result is None:
+                continue
+            word, sub, boundary = result
+            for c, ch in zip(sub, word):
+                known[c] = ch
+            new_grid[boundary[0]][boundary[1]] = BLACK
+            progressed = True
+            changed = True
+        if not progressed:
+            break
+        cur_slots = extract_slots(new_grid, rows, cols)
+        remaining_idx = _impossible_indices(cur_slots, index, known)
+        remaining_cells = [tuple(cur_slots[j]) for j in remaining_idx]
+
+    if not changed:
+        return grid, slots, assignment, impossible_slots
+
+    final_slots = extract_slots(new_grid, rows, cols)
+    invalid_full = set(_invalid_fully_known_indices(final_slots, index, known))
+    final_assignment = [
+        "".join(known[c] for c in cells)
+        if all(c in known for c in cells) and j not in invalid_full else None
+        for j, cells in enumerate(final_slots)
+    ]
+    final_impossible = sorted(set(_impossible_indices(final_slots, index, known)) | invalid_full)
+    return new_grid, final_slots, final_assignment, final_impossible
+
+
 def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=None,
                           exclude_impossible_locked=False, index=None, rng=None,
                           grid=None, rows=None, cols=None):
@@ -4782,10 +5091,25 @@ def _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[1])):
 # frais sur le motif réellement mis à jour, en s'appuyant sur `confirmed`
 # (indexé par case, jamais par indice d'emplacement, donc immunisé contre ce
 # décalage) plutôt que sur les anciens indices.
+#
+# `_shorten_impossible_zones` (juste avant `_clean_blocked_slots` plus haut
+# dans ce fichier) tente d'abord de raccourcir chaque emplacement impossible
+# (un mot plus court en tête/fin de zone, borné par une case noire) avant
+# tout retrait de mot classique — jamais lors du nettoyage complet (voir sa
+# propre docstring), seulement ici, pour cette même raison déjà établie pour
+# `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY`. Son motif/liste d'emplacements
+# encore impossibles éventuellement mis à jour (`cand_grid`/`cand_impossible`)
+# remplacent alors `cand_diag["assignment"]`/`cand_diag["impossible_slots"]`
+# pour le reste de cette fonction — un no-op complet (mêmes objets, mêmes
+# indices) tant qu'aucun mot plus court n'a pu être placé.
 def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
     cand_slots = extract_slots(cand_grid, rows, cols)
+    cand_grid, cand_slots, cand_assignment, cand_impossible = _shorten_impossible_zones(
+        cand_grid, rows, cols, cand_slots, cand_diag["assignment"],
+        cand_diag["impossible_slots"], index, rng,
+    )
     cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
-        cand_slots, cand_diag["assignment"], cand_diag["impossible_slots"],
+        cand_slots, cand_assignment, cand_impossible,
         index=index, rng=rng, grid=cand_grid, rows=rows, cols=cols,
     )
     if new_black_cells:
@@ -4799,14 +5123,14 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
             for cells in new_slots
         ]
         old_impossible_cell_tuples = {
-            tuple(cand_slots[i]) for i in cand_diag["impossible_slots"]
+            tuple(cand_slots[i]) for i in cand_impossible
         }
         cand_excluded_slots = {
             j for j, cells in enumerate(new_slots)
             if tuple(cells) in old_impossible_cell_tuples
         }
         return cand_seed_grid, confirmed, new_slots, cand_preseed_assignment, cand_excluded_slots
-    cand_excluded_slots = set(cand_diag["impossible_slots"])
+    cand_excluded_slots = set(cand_impossible)
     return cand_grid, confirmed, cand_slots, cleaned_assignment, cand_excluded_slots
 
 

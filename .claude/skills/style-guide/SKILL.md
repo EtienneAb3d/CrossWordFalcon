@@ -1539,3 +1539,81 @@ English (see `project-best-practices`).
   real served markup fetched and read directly, and a real generation
   through the running API confirmed `examples_history`/the duration
   fields this feature depends on are present and correctly shaped).
+
+- added a diagnostic word-verification table (`#word-verification-wrap`,
+  `script.js`'s `renderWordTable()`), right below `#attempt-preview-grids`
+  inside the `#attempt-preview` panel, at the user's explicit request: one
+  row per grid word, sorted longest-first, with its own (x, y) starting
+  coordinate, whether it really exists in the language's wordlist file,
+  and whichever candidate canonical form has a real gloss entry. Only
+  ever populated on the single `previewHistory` entry backend/app.py
+  builds it for (the "clues" step, alongside the final-grid preview — see
+  CLAUDE.md), so it naturally appears/disappears together with that
+  specific step as the player navigates the history. Styled small/
+  discreet like `#attempt-preview-status`/`.attempt-preview-stats` (a
+  0.9rem italic title in `#777`, an 0.8rem table with thin `--border`
+  row dividers) — a secondary diagnostic, not a primary content element.
+  Wrapped in a new `.table-scroll` (`overflow-x: auto`) rather than
+  letting a long word/wide table stretch the page horizontally — the
+  first table this project has ever needed, so this establishes the
+  convention for any future one. A word missing from the wordlist (the
+  one directly visible symptom of the rare "invented word" edge case
+  documented in CLAUDE.md) is shown in `var(--error)` (`#b3261e`, the
+  existing error-red token — no new color) rather than the normal text
+  color, so it stands out unambiguously among otherwise-normal rows,
+  consistent with this file's own "light background/saturated color only
+  where it signals something real" convention elsewhere (e.g. `.impossible`).
+  **Not yet visually confirmed in an actual browser** — same tooling
+  limitation noted throughout this file; verified structurally instead
+  (JS syntax check, HTML tag/CSS brace balance, and a real generation
+  through the running API confirmed the table's own data — coordinates,
+  wordlist presence, glossed root forms — is present and correctly shaped
+  by the time the "clues" step is reached).
+
+- columns 2/3 of that same word-verification table now show the *entire*
+  verbatim reference-file line (the wordlist TSV row, the gloss JSON Lines
+  entry) instead of just the matched word/lemma, at the user's explicit
+  request. Since this content can run much longer than a single word (a
+  full JSON gloss entry especially), these two cells get a new `.raw-line`
+  class (`white-space: pre-wrap; word-break: break-word; max-width:
+  28rem`) that overrides the table's own default `nowrap` (kept for the
+  short position column) — long content now wraps within its own cell,
+  preserving the raw line's own whitespace/structure, rather than forcing
+  the whole table to scroll arbitrarily wide or truncating silently.
+  Several `gloss_lines` for the same word are joined with a real newline
+  before being set as `textContent`, which `pre-wrap` renders as visually
+  stacked lines within the same cell. `vertical-align: top` was added to
+  every cell in this table so a short position cell stays aligned with the
+  top of a much taller, wrapped raw-line cell on the same row, rather than
+  centering against it. **Not yet visually confirmed in an actual
+  browser** — same tooling limitation noted throughout this file; verified
+  structurally instead (JS syntax check, CSS brace balance, and a real
+  generation through the running API confirmed both raw-line fields are
+  present, verbatim, and correctly shaped — including a multi-line JSON
+  gloss entry — by the time the "clues" step is reached).
+
+- the word-verification table's own visibility is now tied to the letter-
+  reveal toggle (`#attempt-preview-reveal-btn`), at the user's explicit
+  request — previously shown unconditionally whenever a `word_table`
+  arrived, even while the preview grids' own letters were hidden. Since
+  the toggle now gates two things (grid letters, and this table) rather
+  than "letters" specifically, its label was renamed from "Lettres" to
+  "Voir" (fr; "View"/"Anzeigen"/"Ver"/"Vedi" elsewhere) — same id/i18n key,
+  only the displayed text changed, per this project's usual "English code
+  identifiers, translated UI text" convention. No new CSS: the table still
+  hides via its own existing `#word-verification-wrap[hidden]`, just
+  driven by one more condition (`showPreviewLetters`) in `script.js`'s
+  `renderWordTable()`, alongside the pre-existing "no data" check.
+  **Not yet visually confirmed in an actual browser** — same tooling
+  limitation noted throughout this file; verified by direct code-path
+  review instead (togglePreviewLetters()/renderWordTable()/showPreviewEntry()
+  all funnel through the same `lastWordTable`/`showPreviewLetters` gate).
+
+- the word-verification table's own position column now reads `H (row,
+  col)` / `V (row, col)` instead of a bare `(col, row)` pair, at the
+  user's explicit request — direction first (a literal "H"/"V", never
+  translated per UI language), then row before column (the opposite of a
+  mathematical (x, y) pair, matching how the coordinate is actually read
+  aloud — "ligne, colonne"). No new CSS: still plain text inside the same
+  first `<td>`, unaffected by the `.raw-line`/`vertical-align: top`
+  treatment already applied to columns 2/3.

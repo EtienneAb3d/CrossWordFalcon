@@ -19,7 +19,10 @@ for, so it was folded into one script and the file removed.
   accents/diacritics kept) — carried through so clue generation
   (backend/clues.py) can see the word's real gender/number/conjugation,
   which the grid's bare WORD form doesn't preserve.
-- Words under 3 letters after normalization are excluded.
+- Words under 2 letters after normalization are excluded (a real, cluable
+  2-letter grid slot is supported — see backend/crossword_gen.py's
+  structural rules; a bare 1-letter zone never becomes a slot at all, so a
+  1-letter word would never be looked up).
 - On duplicates after accent-stripping, the higher frequency count wins
   (and its accented spelling is the one kept).
 - The corpus-building step already filters out wrong-language sentences

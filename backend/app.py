@@ -20,6 +20,7 @@ Usage :
     uvicorn backend.app:app --port 3001
 """
 import asyncio
+import json
 import logging
 import multiprocessing
 import time
@@ -201,6 +202,128 @@ def system_info():
     return get_system_info(clue_generator.model)
 
 
+def _load_wordlist_raw_lines(language):
+    """{MOT: raw TSV line, exactly as written in data/wordlist_<language>_
+    full.tsv} — used by _build_word_verification_table (column 2) to show
+    the file's real content verbatim, not a reconstruction from a few
+    parsed fields. A MOT can legitimately repeat on disk (build_wordlist_
+    freq.py only dedupes by keeping the highest-frequency occurrence in
+    memory, never on disk) — the first line seen is kept, matching that
+    same highest-frequency-first convention closely enough for a
+    diagnostic table (this file is not re-sorted here)."""
+    wordlist_path = WORDLISTS.get(language)
+    lines = {}
+    if not wordlist_path:
+        return lines
+    try:
+        with open(wordlist_path, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.rstrip("\n")
+                if not stripped or stripped.startswith("#"):
+                    continue
+                mot = stripped.split("\t", 1)[0].upper()
+                lines.setdefault(mot, stripped)
+    except OSError:
+        pass
+    return lines
+
+
+def _load_gloss_raw_lines(language):
+    """{lemma_lower: raw JSON Lines entry, exactly as written in data/
+    gloss_dictionary/<language>_glosses.jsonl} — mirrors backend/gloss_
+    lookup.py's own _load() index (same lemma-lowercased key, same one-
+    bucket-per-lemma file shape from build_gloss_dictionary.py) but keeps
+    each entry's exact original line text rather than the parsed dict,
+    since _build_word_verification_table (column 3) shows the file's real
+    content verbatim, not a re-serialization of it."""
+    path = DATA_DIR / "gloss_dictionary" / f"{language}_glosses.jsonl"
+    lines = {}
+    if not path.exists():
+        return lines
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                entry = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            word = entry.get("word")
+            if word:
+                lines.setdefault(word.lower(), stripped)
+    return lines
+
+
+def _build_word_verification_table(words, language):
+    """Diagnostic table built right before clue generation starts (see
+    _run_generate_job's own `progress("clues", ...)` call), at the user's
+    explicit request: one row per grid word, sorted top-to-bottom then
+    left-to-right (reading order: by starting row, then starting column;
+    "across" before "down" for the rare case where both start at the same
+    cell), checking two things a legitimately placed word should always
+    satisfy.
+
+    Column 2 ("wordlist entry"): whether the word's bare, accent-stripped
+    grid spelling (`w["answer"]`) really exists as a MOT entry in
+    data/wordlist_<language>_full.tsv — the exact same dictionary
+    crossword_gen.py's solver draws every candidate from — and, when it
+    does, the *entire, verbatim TSV line* for that entry (MOT/ACCENTUE/
+    FREQUENCE/CANONIQUE together), not just the word's own accented
+    spelling. A missing entry is the one directly visible symptom of the
+    rare "invented word" edge case documented in CLAUDE.md (a slot
+    completed purely by its crossing assignments, never itself validated
+    against the real dictionary) — this table exists specifically so that
+    residual bug, if it ever recurs, is immediately visible on screen
+    rather than silently shipped in a finished grid. Read directly from
+    the TSV file (`_load_wordlist_raw_lines`) rather than reusing
+    crossword_gen.py's own in-memory `accents`/`canonicals` dicts (not
+    returned by generate_grid() at all) — this also makes the check
+    genuinely independent of whatever difficulty-based subset the solver
+    happened to restrict itself to for this one request.
+
+    Column 3 ("root form"): among the word's candidate canonical form(s)
+    (`w["canonical"]`, already computed by crossword_gen.py via Hunspell's
+    morphological analysis — see build_wordlist_freq.py), the *entire,
+    verbatim JSON Lines entry* (`_load_gloss_raw_lines`) for each one that
+    has a real entry in data/gloss_dictionary/<language>_glosses.jsonl —
+    never looked up at all for a word that already failed the column-2
+    check, since an invented word's own "canonical form" carries no
+    meaningful information either.
+
+    Returns a plain list of dicts (JSON-safe, ready for a progress event):
+    {row, col, direction, answer, in_wordlist, wordlist_line, gloss_lines}
+    — `direction` ("across"/"down") is carried through unchanged from
+    `w["direction"]` (see crossword_gen.py's `build_word_entries`) so the
+    frontend can prefix each coordinate with H/V (frontend/static/
+    script.js's `renderWordTable()`)."""
+    wordlist_lines = _load_wordlist_raw_lines(language)
+    gloss_lines = _load_gloss_raw_lines(language)
+
+    rows = []
+    for w in sorted(words, key=lambda w: (w["row"], w["col"], w["direction"])):
+        answer = w["answer"]
+        wordlist_line = wordlist_lines.get(answer)
+        in_wordlist = wordlist_line is not None
+        matched_gloss_lines = []
+        if in_wordlist:
+            canonical_list = w.get("canonical") or [w.get("accented", answer)]
+            for lemma in canonical_list:
+                gloss_line = gloss_lines.get(lemma.lower())
+                if gloss_line:
+                    matched_gloss_lines.append(gloss_line)
+        rows.append({
+            "row": w["row"],
+            "col": w["col"],
+            "direction": w["direction"],
+            "answer": answer,
+            "in_wordlist": in_wordlist,
+            "wordlist_line": wordlist_line,
+            "gloss_lines": matched_gloss_lines,
+        })
+    return rows
+
+
 def _new_job():
     if len(JOBS) >= MAX_JOBS:
         oldest = next(iter(JOBS))
@@ -323,8 +446,21 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # for no benefit — nothing ever reads `entry["step"]["examples"]`.
         examples = data.get("examples")
         if examples:
-            step_without_examples = {k: v for k, v in job["step"].items() if k != "examples"}
-            job["examples_history"].append({"step": step_without_examples, "examples": examples})
+            step_without_examples = {
+                k: v for k, v in job["step"].items() if k not in ("examples", "word_table")
+            }
+            entry = {"step": step_without_examples, "examples": examples}
+            # word_table (see _build_word_verification_table below) rides
+            # along on this same entry rather than a separate job-level
+            # field, at the user's explicit request that this diagnostic
+            # table appear right below the final-grid preview it belongs
+            # to — the only progress event that ever carries a word_table
+            # is this same "clues" event that also carries `examples`, so
+            # the two naturally travel together through the frontend's own
+            # previewHistory navigation (script.js's showPreviewEntry()).
+            if "word_table" in data:
+                entry["word_table"] = data["word_table"]
+            job["examples_history"].append(entry)
         # "Continuer" button, at the user's explicit request — see
         # _new_job's own "resume_state" field and crossword_gen.py's
         # _serialize_resume_state. Only ever present on the single
@@ -405,6 +541,22 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # `impossible_cells`/`forced_cells`/`locked_cells` vides : cette
         # grille est déjà remplie et minimisée avec succès, il n'y a ni case
         # impossible, ni lettre forcée, ni case verrouillée à signaler.
+        # word_table (see _build_word_verification_table above), at the
+        # user's explicit request: a verification table, one grid word per
+        # row, shown right below this final-grid preview on the frontend
+        # (see script.js's showPreviewEntry()) — never recomputed or
+        # republished afterward (every later "clues" progress call, one per
+        # word during clue generation, never carries `examples` at all, so
+        # none of them create a further entry in job["examples_history"] —
+        # see the progress() closure above), so this one entry stays the
+        # only one that ever carries this table. asyncio.to_thread: reads a
+        # potentially large file (up to a few hundred thousand lines for
+        # German) synchronously — must never block the asyncio event loop,
+        # even though the result is needed before clue_generator.generate
+        # can start right after.
+        word_table = await asyncio.to_thread(
+            _build_word_verification_table, result["words"], req.language
+        )
         progress(
             "clues", current=0, total=len(result["words"]),
             examples=[{
@@ -413,6 +565,7 @@ async def _run_generate_job(job_id, req, resume_state=None):
                 "forced_cells": [],
                 "locked_cells": [],
             }],
+            word_table=word_table,
         )
         clues_start = time.monotonic()
         clues = await asyncio.to_thread(

@@ -84,7 +84,7 @@
 
       <button type="submit" id="generate-btn" data-i18n="generateBtn">Générer la grille</button>
       <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
-              data-i18n="attemptPreviewRevealBtn">Lettres</button>
+              data-i18n="attemptPreviewRevealBtn">Voir</button>
       <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
       <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
       <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
@@ -109,6 +109,21 @@
       </div>
       <p id="attempt-preview-status"></p>
       <div id="attempt-preview-grids"></div>
+      <div id="word-verification-wrap" hidden>
+        <p id="word-verification-title" data-i18n="wordVerificationTitle"></p>
+        <div class="table-scroll">
+          <table id="word-verification-table">
+            <thead>
+              <tr>
+                <th data-i18n="wordVerificationColPosition"></th>
+                <th data-i18n="wordVerificationColWordlist"></th>
+                <th data-i18n="wordVerificationColRoot"></th>
+              </tr>
+            </thead>
+            <tbody id="word-verification-tbody"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section id="result" hidden>

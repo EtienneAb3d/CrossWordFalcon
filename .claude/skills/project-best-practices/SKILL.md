@@ -784,6 +784,10 @@ the current defaults/behavior to know before touching this code.
   grid-generation algorithm — keep it in sync with `backend/crossword_gen.py`
   per permanent rule 11. Tracked in git like `CLAUDE.md`/`README.md`, never
   gitignored (permanent rule 16).
+- `DOC_DIC/FR/ReadMe.md` is the French, user-facing explanation of the
+  dictionary-generation pipeline (`build_sentence_corpus.py` ->
+  `build_wordlist_freq.py` -> `build_gloss_dictionary.py`) — kept in sync
+  the same way, per permanent rule 18.
 - `README.md` stays non-technical (permanent rule 5); anything about
   implementation, JSON formats, or internal module behavior belongs in
   `CLAUDE.md` instead.
@@ -791,3 +795,22 @@ the current defaults/behavior to know before touching this code.
   rule 14) — a change from this project's own long-standing practice of
   French inline comments throughout `backend/crossword_gen.py` in
   particular, kept as-is rather than retrofitted.
+
+18. **Keep `DOC_DIC/FR/ReadMe.md` current, on the same footing as
+    `DOC_ALGO/FR/ReadMe.md`** — a French, present-tense-only, timeless
+    reference explaining how `build_sentence_corpus.py`,
+    `build_wordlist_freq.py`, and `build_gloss_dictionary.py` build this
+    project's per-language dictionaries (`data/reference_corpus/`,
+    `data/wordlist_<lang>_full.tsv`, `data/gloss_dictionary/`). Whenever
+    any of those three scripts' behavior changes, update it to describe
+    the new current behavior directly — the same rules already governing
+    `DOC_ALGO/FR/ReadMe.md` apply here identically: no narrative ("à la
+    demande explicite de l'utilisateur", "précédemment", a changed-N-times
+    account, a bug-fix/incident trace — see permanent rule 11, which that
+    narrative belongs in `CLAUDE.md` alone), every point cites its source
+    file and function (see permanent rule 13, no line numbers), and the
+    file must always stay tracked in git, never gitignored (see permanent
+    rule 16). Both `DOC_DIC/FR/ReadMe.md` and `CLAUDE.md` must stay in
+    sync on *current* facts about these three scripts, exactly as already
+    required between `DOC_ALGO/FR/ReadMe.md` and `CLAUDE.md` for
+    `backend/crossword_gen.py`.

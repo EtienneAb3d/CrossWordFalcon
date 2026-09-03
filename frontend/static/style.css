@@ -615,6 +615,81 @@ button:disabled {
   text-align: center;
 }
 
+/* Diagnostic word-verification table (script.js's renderWordTable()),
+   shown right below the "clues" step's own final-grid preview — at the
+   user's explicit request: one row per grid word, sorted longest first,
+   confirming it really exists in the language's own wordlist file and
+   showing whichever candidate canonical form(s) has a real gloss entry.
+   Same small/discreet treatment as the other secondary-metadata elements
+   in this section (#attempt-preview-status, .attempt-preview-stats). Only
+   ever visible on the one previewHistory entry that carries a word_table
+   (see showPreviewEntry()) — hidden the rest of the time, same as this
+   whole #attempt-preview section itself. */
+#word-verification-wrap {
+  margin-top: 0.75rem;
+}
+
+#word-verification-title {
+  margin: 0 0 0.3rem 0;
+  font-size: 0.9rem;
+  color: #777;
+  font-style: italic;
+}
+
+/* Wide content (many/long words) must scroll inside its own container
+   rather than widen the page — the page body itself must never scroll
+   horizontally. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+#word-verification-table {
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+#word-verification-table th,
+#word-verification-table td {
+  padding: 0.2rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+#word-verification-table th {
+  color: #777;
+  font-weight: 600;
+}
+
+/* Columns 2/3 (script.js's renderWordTable()) now show the *entire*
+   verbatim reference-file line (the TSV row, the JSON Lines entry) rather
+   than just the matched word/lemma, at the user's explicit request — a
+   raw line can run much longer than a single word, so these two columns
+   override the table's own default `white-space: nowrap` (kept for the
+   short position column) with `pre-wrap`: long content wraps onto several
+   visual lines within its own cell instead of forcing the whole table to
+   scroll arbitrarily wide, while still preserving the line's own
+   whitespace (TSV tabs, JSON structure) exactly as written on disk.
+   `word-break: break-word` additionally lets an unbroken run (e.g. a
+   fully quoted JSON blob with no natural wrap point) still wrap rather
+   than overflow its cell; `max-width` keeps a single cell from itself
+   dominating the table's overall width on a very long line. */
+.raw-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 28rem;
+}
+
+/* A word absent from the wordlist file — the one directly visible symptom
+   of the rare "invented word" edge case documented in CLAUDE.md — is
+   shown in the page's own error color rather than the normal text color,
+   so it stands out unambiguously among otherwise-normal rows. */
+.word-missing {
+  color: var(--error);
+  font-weight: 600;
+}
+
 .cell.white {
   background: var(--white-cell);
   color: var(--fg);

@@ -531,6 +531,159 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   whatever letters are embedded in any `example_grid` it's handed,
   uniformly across every step that can populate one.
 
+  A word-verification table is built and shown right alongside this same
+  "clues"-step preview, at the user's explicit request: below the final
+  grid, one row per grid word (sorted longest-first), with the word's own
+  (x, y) starting coordinate, whether it really exists as a `MOT` entry in
+  `data/wordlist_<lang>_full.tsv` — shown in red if not, on the reasoning
+  that a placed word missing from the dictionary is the one directly
+  visible symptom of the rare "invented word" edge case (a slot completed
+  purely by its crossing assignments, never itself validated against the
+  real dictionary — see `crossword_gen.py`'s own extensive history of this
+  exact bug class, most recently around `_shorten_impossible_zones`), and
+  whichever of its candidate canonical form(s) has a real entry in
+  `data/gloss_dictionary/<lang>_glosses.jsonl`. `_build_word_verification_
+  table(words, language)` re-reads the wordlist TSV directly from disk
+  (rather than reusing `crossword_gen.py`'s own in-memory `accents`/
+  `canonicals` dicts, never returned by `generate_grid()` in the first
+  place) — this also makes the check genuinely independent of whichever
+  difficulty-based subset the solver happened to restrict itself to for
+  this one request, closer to a literal reading of "does this word exist
+  in the wordlist file" than "was this word available to this specific
+  solver run." Reuses `backend/gloss_lookup.py`'s existing
+  `find_glosses_for_canonicals()` for the root-form lookup — no new gloss
+  mechanism. Run via `asyncio.to_thread` (a language's wordlist file can
+  run into a few hundred thousand lines, e.g. German), right before the
+  same `progress("clues", current=0, ...)` call that already builds the
+  final-grid preview — passed in as a new `word_table=...` kwarg on that
+  one call, never on any of the many per-word "clues" progress calls that
+  follow during the (often slow) LLM round-trips, so it's computed exactly
+  once per job. `progress()`'s own closure threads it into the *same*
+  `job["examples_history"]` entry the final-grid preview already creates
+  (rather than a separate, job-level field) — the two naturally travel
+  together through the frontend's own history navigation, appearing and
+  disappearing together as the player steps back/forward through
+  `previewHistory` (`frontend/static/script.js`), exactly matching "en
+  dessous de la dernière grille finale." `frontend/static/script.js`'s
+  `renderWordTable()` builds the table DOM (a plain `<table>` inside a new
+  `#word-verification-wrap`, right after `#attempt-preview-grids`) and is
+  called from `showPreviewEntry()` — the one place every part of a
+  `previewHistory` entry reaches the screen — with the entry's own
+  `word_table` (`undefined`/empty on every other step, correctly hiding
+  the table). Verified: an isolated test of `_build_word_verification_
+  table` against a small, fully controlled fake wordlist/gloss-lookup
+  confirmed the sort order (longest first, ties broken by number/
+  direction), a word genuinely absent from the wordlist correctly flagged
+  `in_wordlist: False` with no accented form, a word with two candidate
+  canonical forms only one of which has a gloss correctly returning just
+  that one, and an unknown language degrading gracefully (every word
+  flagged missing, no crash) rather than raising. A real, non-mocked
+  generation submitted through the actual running API (9×9, seed 3, Flash
+  mode) and polled to the "clues" step confirmed the table appears exactly
+  once, with all 28 real placed words, sorted correctly by length, every
+  one found in the wordlist with its real accented spelling and a real
+  glossed canonical root — zero missing-from-wordlist entries, as expected
+  of an ordinary successful generation with no invented-word bug in play.
+
+  Columns 2 and 3 were changed to show the *entire, verbatim reference-file
+  line* instead of just the matched word/lemma, at the user's explicit
+  request: "donner la ligne complète des fichiers de référence." Two new
+  small helpers replace the previous field-by-field parsing:
+  `_load_wordlist_raw_lines(language)` (`{MOT: raw TSV line}`, splitting
+  each line only on its first tab to extract the key, keeping the rest of
+  the line untouched) and `_load_gloss_raw_lines(language)` (`{lemma_lower:
+  raw JSON Lines entry}`, still `json.loads`-ing each line to read its own
+  `"word"` field for the index key, but storing the original line text
+  itself as the value, never a re-serialization of the parsed dict) — the
+  latter replaces the previous call to `backend/gloss_lookup.py`'s
+  `find_glosses_for_canonicals()` entirely, since that function only ever
+  returns the parsed `"entries"` list, not the line's own `"word"` field or
+  its exact original formatting. `_build_word_verification_table`'s
+  returned row shape changed from `{..., accented, glossed_canonical}` to
+  `{..., wordlist_line, gloss_lines}` — `wordlist_line` is `None` (not a
+  bare word) when the answer is missing from the wordlist; `gloss_lines` is
+  a list of raw JSONL lines, one per candidate canonical form that has a
+  real entry (still never looked up at all for a word that already failed
+  the wordlist check). `frontend/static/script.js`'s `renderWordTable()`
+  reads these two new fields directly and adds a `.raw-line` CSS class
+  (`white-space: pre-wrap`, replacing the table's own default `nowrap` for
+  these two columns specifically) so a long TSV/JSON line wraps within its
+  own cell instead of forcing the whole table to scroll arbitrarily wide;
+  multiple `gloss_lines` for the same word are joined with a real newline,
+  which `pre-wrap` renders as separate stacked lines. Verified: 4 isolated
+  checks against a small, fully controlled fake wordlist/gloss file
+  confirmed `wordlist_line` is the exact original TSV line (not
+  reconstructed from parts), `gloss_lines` holds the exact original JSONL
+  line(s) for only the candidate(s) that actually have an entry, a raw
+  gloss line round-trips through `json.loads` back to the original dict
+  (proving it's genuinely verbatim, not a lookalike), and an unknown
+  language still degrades gracefully. A real, non-mocked generation
+  through the actual running API (9×9, seed 4, Flash mode), polled to the
+  "clues" step, confirmed all 32 real placed words correctly carry a
+  clean 4-column `wordlist_line` and at least one syntactically valid raw
+  `gloss_lines` entry each (including a real proper-noun example,
+  "ESTAING", whose gloss entry's own `"pos": "name"` and two definitions
+  came through completely intact) — zero missing-from-wordlist entries and
+  zero unparsable gloss lines.
+
+  Three further refinements landed together, all at the user's explicit
+  request. First, the table's own sort order changed from longest-word-
+  first to reading order — top-to-bottom, then left-to-right (`sorted(
+  words, key=lambda w: (w["row"], w["col"], w["direction"]))`, "across"
+  sorting before "down" as a tiebreak for the rare case where both start
+  at the same cell) — matching how a player's eye would actually scan the
+  finished grid, rather than a frequency-adjacent ranking that has no
+  visual counterpart on the grid itself. Second, the table is now only
+  ever shown while the letter-reveal toggle (`showPreviewLetters`) is on
+  — previously visible unconditionally the moment a `word_table` arrived,
+  regardless of whether the preview grids' own letters were currently
+  hidden. `renderWordTable(table)` now stores its argument into a new
+  `lastWordTable` (mirroring `lastPreviewExamples`) before deciding
+  whether to actually populate/show `#word-verification-wrap` — hiding it
+  whenever `!showPreviewLetters`, exactly like the preview grids' own
+  letters — and `togglePreviewLetters()` calls `renderWordTable(
+  lastWordTable)` alongside its existing `renderAttemptPreview(...)` call,
+  so flipping the toggle shows/hides the table instantly from whatever the
+  currently-displayed `previewHistory` entry already holds, with no need
+  to re-navigate. Third, since the button now gates two things (the
+  preview grids' letters, and this table) rather than "letters" alone, it
+  was renamed from "Lettres" to "Voir" (French; "View"/"Anzeigen"/"Ver"/
+  "Vedi" in the other four languages) — the `attemptPreviewRevealBtn` i18n
+  key and the `#attempt-preview-reveal-btn` id are both unchanged, only
+  the displayed label. Verified: an isolated test against a small fake
+  wordlist (four words including two sharing the same starting cell, one
+  "across" and one "down") confirmed the returned rows come back in exact
+  reading order, with the "across" entry immediately before the "down"
+  one at their shared coordinate; the visibility-gating logic was verified
+  by direct code review of `renderWordTable`/`togglePreviewLetters`/
+  `showPreviewEntry`/`hideAttemptPreview`'s call graph (this session's
+  environment still has no `chromium-cli`/`node`/Python `playwright` to
+  drive a real click) — a JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) confirmed `script.js`/`i18n.js`
+  still parse correctly after the change.
+
+  Column 1 was changed once more, at the user's explicit request: "afficher
+  (y,x) et non l'inverse, et préfixer H ou V pour horizontal ou vertical."
+  `_build_word_verification_table`'s own returned row dict gained a
+  `direction` field (`w["direction"]`, `"across"`/`"down"`, carried through
+  unchanged from `crossword_gen.py`'s `build_word_entries` — no new
+  computation, just one more pass-through key) — the row-shape docstring
+  updated to list it. `frontend/static/script.js`'s `renderWordTable()`
+  builds the position cell's text as `` `${direction === "across" ? "H" :
+  "V"} (${row.row + 1}, ${row.col + 1})` `` — row before column (the
+  opposite order from the previous `(col+1, row+1)`, i.e. an (x, y) pair),
+  and a literal "H"/"V" prefix, deliberately not translated per UI
+  language (the user asked for exactly these two letters). Verified: an
+  isolated test against a small fake wordlist (two words sharing the same
+  starting cell, one "across" one "down") confirmed `direction` comes back
+  correctly for each; a real, non-mocked generation through the actual
+  running API (9×9, seed 6, Flash mode), polled to the "clues" step,
+  confirmed every one of 32 real placed words carries a `direction` of
+  either `"across"` or `"down"` (both values genuinely present), with the
+  reading-order sort from the previous entry still intact. A JS syntax
+  check (`esprima`, temporarily installed and removed again afterward)
+  confirmed `script.js` still parses correctly after the change.
+
   A "Stop" button was added to the web UI, at the user's explicit
   request, to interrupt a generation in progress "quelle que soit
   l'étape" (whatever the current phase). `CANCEL_EVENTS` (job_id ->
@@ -10736,6 +10889,388 @@ diversity within a "continue" streak gives the search more independent
 chances to escape a dead end than everyone converging on one shared
 grid — observed, not claimed as proven given this exact benchmark's own
 well-documented run-to-run variance history.
+
+**A new pre-step was added right before `_clean_blocked_slots`'s own
+word-removal logic, scoped to the "reprise telle quelle" path only**
+(never the full-nettoyage path, `_build_retry_seed` — same reasoning
+already established for `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY`'s
+own 1/10 alternative: a full nettoyage already regenerates a brand-new
+pattern via `make_pattern`, which can already add its own black cells,
+so this pre-step would be redundant there), at the user's explicit
+request: for each impossible slot, look for a shorter word (max length =
+slot length − 1) fitting at either the head or the tail of the zone,
+leaving at least one empty cell on the other side; if one exists, place
+it and turn the boundary cell — the one separating the placed word from
+the remaining empty cell(s) — black; once every currently-impossible
+slot has been tried this way, re-run impossible-slot detection on the
+updated pattern and repeat, until no impossible slot can be shortened
+any further; only then does the existing cleanup (word removal, or its
+own 1/10 black-cell alternative) run on whatever remains genuinely
+blocked.
+
+Two new functions implement this, right before `_clean_blocked_slots`:
+`_find_shorter_word_for_zone(grid, rows, cols, cells, index, known,
+used_words, rng)` handles a single impossible slot — tries lengths from
+`len(cells) - 1` down to 2 (favoring the longest match, so the least
+content is ever discarded), and at each length shuffles head/tail before
+trying either (the same no-positional-bias convention used everywhere
+else in this file for an otherwise-arbitrary tie). For a given
+(length, side) combination, it checks the boundary cell's own structural
+validity *first* (`is_structurally_valid(..., min_interior_free=1)`,
+tentatively blackened then reverted) — before ever querying the
+dictionary, since that validity depends only on the cell's position, not
+on which word would fill the slot — and only then looks up real
+candidates via `_slot_candidates`, excluding anything already placed
+elsewhere in the grid (`used_words`). `_shorten_impossible_zones(grid,
+rows, cols, slots, assignment, impossible_slots, index, rng)` drives the
+whole loop: builds a cell→letter `known` map from `assignment`, repeatedly
+calls the helper above for every slot still flagged impossible, folds
+each success into `known` and the working grid, and re-derives which
+slots are still impossible after each round via a new small helper,
+`_impossible_indices` — a partially-or-not-at-all-known slot with zero
+real candidates given whatever is currently known, mirroring
+`_clean_blocked_slots`'s own "zone strictement sans issue" criterion
+(a length the dictionary has no word of at all is just as blocked as an
+incompatible letter combination — checked regardless of whether the slot
+has any known letters at all, not only when partially covered, since a
+fully-open slot whose own length the dictionary never covers is exactly
+as dead an end as one narrowed there by letters). A fully-known slot is
+never flagged by either function — its own validity is a separate,
+already-handled concern elsewhere (see the AVALAS bug fix earlier in
+this same investigation). Termination is guaranteed without an explicit
+cap: every successful round permanently converts at least one white cell
+to black (or to a confirmed letter), a strictly decreasing, bounded
+quantity. Returns the original `(grid, slots, assignment,
+impossible_slots)` unchanged, by reference, whenever nothing was ever
+shortened — a true no-op for the overwhelmingly common case where every
+impossible slot in a palier stays exactly as impossible as the search
+left it.
+
+`_clean_continue_candidate` calls `_shorten_impossible_zones` right after
+its own `extract_slots` call and before its existing `_clean_blocked_
+slots` call, threading its returned (possibly updated) grid/slots/
+assignment/impossible-list through the rest of the function exactly as
+if they'd been the original inputs — including the final `cand_excluded_
+slots`, now built from the shortening step's own final impossible list
+rather than the raw `cand_diag["impossible_slots"]`, so a slot resolved
+(or newly discovered) by this pre-step is reflected correctly in what
+gets excluded for the next palier.
+
+Verified in stages. Isolated (`_impossible_indices`/`_find_shorter_word_
+for_zone`/`_shorten_impossible_zones` called directly, no full
+`generate_grid()`): a partially-known slot with no real candidate is
+flagged, a fully-known one never is regardless of validity, a slot with
+zero known letters and zero dictionary words of its own length is
+flagged too (matching the "zone sans issue" parity above); a hand-built
+6-cell zone correctly finds the single longest fitting word first,
+falls back to a shorter one once the longer one is already used
+elsewhere, and correctly filters candidates by whatever letters are
+already known on either sub-range regardless of which side the random
+tie-break happens to try first; a 3×5 grid built so every interior cut
+of its own sole connector row breaks connectivity confirmed the
+boundary-validity check correctly rejects every interior option and
+still finds the one genuinely valid edge-boundary match, never touching
+the connectivity-breaking cell; a hand-built 8-cell zone with no
+dictionary word at its own length, or at any length down to 5, but one
+at length 4 and another at length 2, confirmed the iterative loop
+genuinely runs two full rounds — an 8-cell zone shortens to a 4-letter
+word plus a leftover 3-cell zone that's itself still impossible, which
+then shortens again to a 2-letter word with nothing left over at all — a
+direct, real proof of the "recommencer... et tenter à nouveau" loop, not
+just a single-shot shortening. A real, non-mocked `generate_grid()` run
+(15×10, Flash mode, both benchmark seeds, run three times each with a
+spy wrapper counting real invocations and real changes) confirmed the
+mechanism engages meaningfully on genuine generations — 10-20 calls per
+run, roughly half to two-thirds of them actually placing a shorter word
+— with 6/6 seed-runs across the 3 repeats succeeding, 0 mismatches, 0
+empty white cells each; a real `difficulty="hard"` 9×9 run (seed 3, the
+full dictionary, never an artificially restricted one) also succeeded
+cleanly, 0 mismatches, 0 empty white cells.
+
+**This mechanism's own candidate-selection strategy was reworked right
+after, at the user's explicit request, in three parts**: (1) draw fully
+at random among every candidate partial word, treating length itself as
+random rather than always preferring the longest one that fits; (2)
+before actually blackening the boundary cell, verify the chosen word
+doesn't create a *new* impossible situation on any crossing slot — if it
+does, try a different candidate word instead; (3) if no candidate word
+avoids creating a new impossible crossing, leave that zone completely
+untouched and move on to the next impossible zone, rather than forcing
+any placement.
+
+`_find_shorter_word_for_zone` was rewritten around this: instead of
+iterating lengths from longest to shortest and returning on the first
+one with a real candidate, it now first collects *every* valid
+`(word, sub, boundary)` option across every length (`len(cells) - 1`
+down to 2) and both sides — still gated by the same structural-validity
+check on the boundary cell and the same `used_words` exclusion as before
+— into one flat list, shuffles it once (a genuine uniform draw across
+every length and side at once, not a per-length tie-break any more),
+then walks it in order, returning the first candidate that also passes
+the new crossing-safety check below; `None` if the whole shuffled list
+is exhausted with nothing viable. The function's own signature grew
+three new parameters — `cur_slots`, `cell_to_slots`, `own_idx` — needed
+by the crossing check to find, for each cell of a candidate word, which
+*other* slot (the perpendicular one) shares that cell.
+
+A new `_new_crossing_impossibility(cur_slots, cell_to_slots, own_idx,
+sub, word, known, index)` implements the crossing-safety check itself:
+for every cell of `sub`, it looks up the crossing slot (excluding
+`own_idx`, the zone's own slot) and compares its real candidate count
+*before* the new letter would be added (via the existing `known` state)
+against its count *after* — both computed with the same `_slot_
+candidates` intersection this whole mechanism already relies on
+elsewhere. A crossing slot that already had zero candidates *before*
+this specific placement is never counted as "newly" broken (it was
+already blocked for some unrelated reason, not caused by this word) —
+only a transition from "had at least one real candidate" to "has none"
+counts. `_shorten_impossible_zones` itself gained a `cell_to_slots` map
+(rebuilt once per round, from `cur_slots`, the same round-scoped
+snapshot already used for `used_words`) and now iterates `remaining_idx`
+(indices into `cur_slots`, replacing the previous list of raw cell-lists
+so each zone's own index is available to pass through as `own_idx`) —
+its own docstring, and `_find_shorter_word_for_zone`'s, were reworded to
+describe the new "draw first, verify, retry-or-skip" flow instead of the
+old "longest first" one.
+
+Verified in stages. Isolated: `_new_crossing_impossibility` correctly
+flags a letter that breaks an otherwise-fine crossing slot, correctly
+lets through one that's still compatible, and correctly never flags a
+crossing slot that was already impossible before the placement — proving
+the "newly created" distinction is real, not just a pass-through. A
+6x6-grid reproduction (deliberately shaped so the crossing slots' own
+length — 6, from every row being unassigned/white — never coincides with
+any length row 2's own zone tries, 2 through 5, avoiding an accidental
+self-consistency trap where a candidate word could satisfy its own
+crossing purely by chance of dictionary overlap) confirmed a candidate
+whose letters have no matching crossing word at all is correctly
+rejected under every one of 10 seeds tried, correctly returning `None`
+once every option is exhausted; a companion test with two length-4
+candidates — one whose letters are covered by the crossing dictionary,
+one whose aren't — confirmed the uncovered one is never chosen across 30
+seeds, regardless of shuffle order. A dedicated statistical check
+confirmed the length itself is genuinely randomized (more than one
+distinct candidate length observed across 60 seeded draws on the same
+zone, not a fixed longest-first pattern). At the `_shorten_impossible_
+zones` level: a scenario with a zone that can *never* be safely
+shortened (every candidate word breaks a crossing, nothing else exists)
+confirmed it comes back completely unmodified — same grid object, same
+assignment, still reported impossible — proving "passer à la zone
+suivante sans rien placer" holds even when nothing at all can be done; a
+companion scenario with two independent zones in the same call — one
+permanently unshortenable (a 2-cell zone, which can structurally never
+be shortened at all, `range(length - 1, 1, -1)` being empty for length
+2), one genuinely resolvable — confirmed the hopeless zone is left
+completely untouched while the resolvable one still gets a real
+placement, proving one zone's own dead end never blocks progress on
+another processed in the same round. A real, non-mocked `generate_grid()`
+run (15×10, Flash mode, both benchmark seeds, 3 repeats with the same
+spy-wrapper methodology as the previous entry) confirmed no regression:
+6/6 succeeded, 0 mismatches, 0 empty white cells each, comparable timing
+to before this refinement (4-6s per run) despite the added crossing
+checks, and the mechanism engaging even more actively than before (11-25
+real placements per run, out of 20-50 zone examinations) — plausibly
+because a rejected candidate no longer wastes the whole attempt on a
+single length, it just tries the next shuffled option instead. A real
+`difficulty="hard"` 9×9 run (seed 3, full dictionary) also succeeded
+cleanly, 0 mismatches, 0 empty white cells.
+
+**Two real correctness bugs in this same mechanism were reported and
+fixed right after, both from the user directly**: "génère des mots qui
+n'existent pas" — (1) never blacken a cell that already carries a
+confirmed letter (a partial placement that would require doing so must
+be rejected outright); (2) properly account for the words just placed
+when evaluating the following partial placements. Both were confirmed
+live with a real, non-mocked `generate_grid()` sweep before touching any
+code — cross-checking every placed word in the final grid against the
+real French wordlist directly (not just structural/mismatch checks)
+surfaced genuine, non-existent "words" (`ATEIRS`, `TENLES`, `RES`, and
+several 2-3-letter fragments) across multiple seeds at the standard
+15×10 Flash benchmark.
+
+Fix (1): `_find_shorter_word_for_zone`'s option-building loop now also
+skips a boundary cell already present in `known` (`if grid[br][bc] ==
+BLACK or boundary in known: continue`) — blackening an already-confirmed
+cell would destroy the crossing word that fixed it there, leaving its
+*other* cells still assigned to a now-meaningless fragment (exactly the
+class of bug reported: a real word's own letters surviving in `known`
+after one of its cells got blackened out from under it, `extract_slots`
+re-deriving a shorter, never-validated "word" from what's left).
+
+Fix (2): `_shorten_impossible_zones`'s own loop used to build `cell_to_
+slots`/`used_words` (and read `cur_slots`) **once per pass**, shared
+across every zone examined in that pass — a zone processed after an
+earlier one in the same pass could therefore be evaluated against a
+grid/slot-structure snapshot that no longer matched reality once the
+earlier zone had already placed its own word and boundary. Restructured
+so `cur_slots`/`cell_to_slots`/`used_words` are all recomputed fresh —
+via a real `extract_slots` call — immediately before *every single* zone
+examined, not once per batch. Each zone still to be examined is now
+tracked by its own cell-tuple identity (`remaining_cells`, a list of
+`tuple(cells)`) rather than a numeric slot index into `cur_slots` — a
+numeric index would go stale the moment an earlier zone's own placement
+shifts `extract_slots`'s own output order, the same index-shift pitfall
+already documented and fixed several times elsewhere in this exact file;
+a zone's own cell-tuple identity is stable across another, disjoint
+zone's own mutation, since a zone's boundary is always chosen from
+strictly within its own cells (guaranteed by fix (1) above, extended to
+never touch a cell outside `cells` at all). `cur_slots.index(list(cells_
+tuple))` re-locates the zone's own current slot index fresh each time,
+with a defensive (never-expected-to-fire) `except ValueError: continue`
+guard.
+
+**A third, deeper bug was found live while verifying these two fixes
+resolved the reported symptom** — running the exact same real-wordlist
+cross-check again after fixes (1) and (2) still turned up invalid words
+(`ATEIRS`, `TENLES`...), and tracing every one confirmed neither fix (1)
+nor (2) was ever directly responsible: a dedicated spy on `_find_
+shorter_word_for_zone`'s own return values showed zero of the flagged
+bad words had ever been placed by this mechanism directly. Root-caused by
+inspecting a real generated grid cell by cell: the invalid "words" were
+always *down*-direction slots whose every cell happened to end up
+independently confirmed by a *different* across word crossing it —
+never explicitly assigned or validated by anyone as a genuine word in
+its own right, simply an accidental byproduct of `_shorten_impossible_
+zones`'s own `final_assignment` construction, which built a word for
+*any* slot fully covered by `known` with no validation at all. This is
+exactly the AVALAS-class bug documented earlier in this file for
+`_pattern_attempt`'s own `preseed_assignment` — but that established
+fix (validating a fully-locked slot's combination against the real
+dictionary before trusting it, via `locked_impossible_slots`) was never
+ported to this newer mechanism, which has its own, independent path to
+completing a slot purely through crossings.
+
+Fixed with a new `_invalid_fully_known_indices(slots_list, index,
+known)`, mirroring `_impossible_indices`'s own shape but for the
+opposite case it deliberately excludes (a fully-covered slot) — flags
+any slot whose every cell is known but whose exact letter sequence
+matches no real dictionary entry (`_slot_candidates` on the full,
+completely-constrained `known`). `_shorten_impossible_zones`'s final
+`final_assignment`/`final_impossible` computation now excludes any such
+slot from `final_assignment` (left `None`, never a fabricated word) and
+folds it into `final_impossible` (the union of `_impossible_indices` and
+`_invalid_fully_known_indices`) — so it reaches `_clean_blocked_slots`
+through the normal `cand_impossible`/`cand_excluded_slots` path exactly
+like any other genuinely blocked slot, and its crossing words get
+properly cleaned up rather than the invalid combination being silently
+trusted forever. Mid-loop `remaining_cells` recomputation (`_impossible_
+indices` alone) is deliberately left untouched — a fully-known slot can
+never be "shortened" by this mechanism regardless (every cell, including
+any potential boundary, is already known, so fix (1) above excludes
+every option outright), so there's nothing useful for the mid-loop retry
+to do with it; only the final, returned-to-the-caller computation needed
+the added validation.
+
+Verified: an isolated `_invalid_fully_known_indices` test confirmed a
+fully-known real word is never flagged, a fully-known invalid
+combination is, and a partially-known slot (a different concern
+entirely) is never touched by this function. A dedicated integration
+test (a 3×3 grid, two already-assigned crossing words fixing a down-
+slot's first and last letter, an impossible middle row shortened in a
+way that necessarily completes the down-slot's own middle letter too, no
+3-letter dictionary entries at all) confirmed the completed word is
+never assigned and correctly appears in `final_impossible` instead. The
+real-wordlist cross-check was re-run after this third fix, both on the
+original two failing seeds and broadened to 10 consecutive seeds on the
+standard 15×10 Flash benchmark (~560 words placed in total): **zero**
+invalid words found, down from several per seed before. A full end-to-
+end benchmark (both reference seeds, 3 repeats, the same spy-wrapper
+methodology as before) confirmed no regression to reliability: 6/6
+succeeded, 0 mismatches, 0 empty white cells each — timing rose somewhat
+(5-19s vs. the previous 4-9s, consistent with recomputing `extract_
+slots` per zone instead of per pass) but stayed well within Flash mode's
+own established range. A real `difficulty="hard"` 9×9 run (seed 3, full
+dictionary) also succeeded cleanly with zero invalid words.
+
+**Three more refinements to this exact mechanism were requested right
+after, all at the user's explicit request**: (1) never test a partial
+placement shorter than 3 letters (the user first wrote "moins de 2
+lettres" then immediately clarified "comprendre : au moins 3 lettres" —
+i.e., the minimum sub-word length moves from 2 to 3, not merely
+reaffirming the pre-existing 2); (2) the partial fill must always add at
+least one genuinely new letter to the zone (never a placement whose every
+cell was already known beforehand — a pure black-cell addition with zero
+real progress); (3) properly validate *both* resulting pieces of the
+original zone once a candidate is chosen — the placed word (already
+guaranteed valid, since that's how it was found) and the leftover, if it
+happens to already be fully determined (independently of this placement,
+purely via pre-existing crossings) — rejecting the whole candidate
+outright if the leftover's own combination isn't a real word.
+
+`_find_shorter_word_for_zone`'s option-building loop was extended with
+three corresponding checks, all evaluated once per `(m, side)` before
+even generating word candidates for `sub` (since none of them depend on
+which specific word ends up chosen): the loop bound changed from
+`range(length - 1, 1, -1)` to `range(length - 1, 2, -1)` (rule 1 —
+`m` now never reaches 2); a new `leftover` variable is computed alongside
+`sub`/`boundary` for both sides, and — only when `len(leftover) >= 2`
+(a shorter leftover is never a real slot at all, see `extract_slots`'s
+own `>=2` threshold, so nothing to validate there) and every one of its
+cells is already `in known` — its combination is checked via `_slot_
+candidates`; an empty result skips this whole `(m, side)` combination
+outright, before any word is even looked up for `sub` (rule 3); right
+before generating candidates, `if all(c in known for c in sub): continue`
+skips a sub-range that was already entirely known, so it can never appear
+as a "successful" placement — the search still has other `(m, side)`
+combinations to try, but this exact one is now off the table (rule 2).
+
+Verified in stages. Isolated: `_find_shorter_word_for_zone` on a
+length-4 zone with a dictionary that only has a length-2 entry confirmed
+`None` across 10 seeds (the old minimum would have found it) — and,
+adding a length-3 entry plus a self-consistent length-2 crossing
+dictionary, confirmed it now finds the length-3 word every time; a
+zone whose only candidate sub-range was already fully known (spelling a
+real, pre-existing word) confirmed the placement is correctly rejected
+(zero new letters, `None` returned, no other candidate available); a
+6-cell zone with both sides' own leftover pre-known to a combination
+with no matching 2-letter word anywhere in the dictionary — while the
+sub-word itself (`"ABC"`) would otherwise fit either side perfectly —
+confirmed every single `(m, side)` combination is correctly rejected,
+proving the leftover check, not sub validity, is what blocks it; a
+companion test confirmed a leftover of exactly 1 cell is never treated as
+something needing validation at all (the placement succeeds normally
+even where an over-eager check would have wrongly required it to spell a
+word). A real end-to-end `generate_grid()` sweep (15×10, Flash mode, both
+benchmark seeds, 3 repeats, the same spy-wrapper methodology as before)
+confirmed no regression: 6/6 succeeded, 0 mismatches, 0 empty white
+cells each — timing rose a little further still (6-21s), consistent with
+the mechanism now needing to try more, shorter-lived `(m, side)`
+combinations before finding a genuinely valid one.
+
+**A residual, much rarer instance of the same "invented word" symptom
+was found while re-running the real-wordlist cross-check after these
+three fixes** — a 10-seed sweep found one bad word (`EIEEGT`, seed 2 on
+one particular run); a further, dedicated 30-seed sweep (fresh seeds,
+1000-1029) found exactly one more (`BTV`, seed 1003) — roughly 1 invalid
+word per ~500-600 real words placed, down from several *per single
+generation* before the three fixes above, but not fully zero. Investigated
+directly rather than assumed fixed: `_shorten_impossible_zones`'s own spy
+instrumentation showed the bad word was never placed by this mechanism
+either time (matching the pattern from the earlier AVALAS-class
+investigation) — re-reading `_pattern_continue`'s own docstring alongside
+its real code confirmed the *mechanism*, not this specific fix: a slot in
+`excluded_slots` (which now can include entries from `_shorten_
+impossible_zones`'s own `final_impossible`, on top of genuinely
+Filler-diagnosed ones from an earlier palier) is never explicitly
+assigned or validated by `Filler`/`_backtrack` — by design, precisely so
+the search doesn't abort the moment it touches a known-bad slot — but its
+own cells can still end up individually completed as a side effect of
+*other*, legitimately-assigned crossing words, with nobody ever
+re-checking that the resulting combination is a real dictionary entry.
+This appears to be a pre-existing structural property of `excluded_slots`
+in general (not specific to the three fixes just made, nor to `_shorten_
+impossible_zones` alone — a genuinely Filler-diagnosed excluded slot
+could trigger the identical gap), only made somewhat more likely to
+surface now that `_shorten_impossible_zones` populates `excluded_slots`
+with more entries than before (both the ordinary partial-impossible case
+and the newly-added fully-known-invalid case). **Not fixed in this
+session** — reported to the user rather than patched speculatively,
+since a real fix here would mean either re-validating every excluded
+slot's own eventual completion before declaring a grid done (a change to
+`generate_grid`'s own success path, an area with its own long,
+regression-heavy history per this file) or reworking what `excluded_
+slots` is allowed to mean, both a larger scope than the three specific
+rules this round of requests asked for.
 
 **The "at least 3 cells" interior-zone structural rule (`is_structurally_
 valid`'s own `min_interior_free` default, and the starting point of `_place_

@@ -108,7 +108,7 @@ SOURCES = {
     "ccmatrix": "https://object.pouta.csc.fi/OPUS-CCMatrix/v1/mono/{lang}.txt.gz",
 }
 
-DEFAULT_MAX_BYTES = 50_000_000
+DEFAULT_MAX_BYTES = 1_000_000_000
 MAX_WORDS_PER_SENTENCE = 50
 # A sentence under this many words is too thin to be a meaningful usage
 # example or a useful word-frequency data point ("Oui.", "Ça va ?", a lone

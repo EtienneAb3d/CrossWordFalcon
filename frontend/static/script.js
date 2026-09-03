@@ -68,6 +68,8 @@ const attemptPreviewNextBtn = document.getElementById("attempt-preview-next-btn"
 const attemptPreviewLastBtn = document.getElementById("attempt-preview-last-btn");
 const attemptPreviewPosition = document.getElementById("attempt-preview-position");
 const attemptPreviewStatus = document.getElementById("attempt-preview-status");
+const wordVerificationWrap = document.getElementById("word-verification-wrap");
+const wordVerificationTbody = document.getElementById("word-verification-tbody");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
@@ -403,12 +405,18 @@ function renderAttemptPreview(examples) {
 // hideAttemptPreview() below): it's meant as a standing preference the
 // player sets once, decided *before* a generation even starts, not a
 // per-generation state that should snap back to hidden every time.
+//
+// Also gates the word-verification table (renderWordTable(), further
+// below) at the user's explicit request — the button was renamed from
+// "Lettres" to "Voir" to reflect this broader "reveal secondary detail"
+// role, rather than "letters" specifically.
 let showPreviewLetters = false;
 
 function togglePreviewLetters() {
   showPreviewLetters = !showPreviewLetters;
   attemptPreviewRevealBtn.classList.toggle("active", showPreviewLetters);
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
+  renderWordTable(lastWordTable);
 }
 
 attemptPreviewRevealBtn.addEventListener("click", togglePreviewLetters);
@@ -506,15 +514,88 @@ function renderPreviewStatus() {
   attemptPreviewStatus.textContent = lastPreviewStep ? describeStep(I18N[uiLanguage], lastPreviewStep) : "";
 }
 
+// Diagnostic table shown right below the final, already-minimized grid's
+// own preview (the "clues" previewHistory entry — see backend/app.py,
+// _build_word_verification_table), at the user's explicit request: one
+// row per grid word, sorted in reading order (top-to-bottom, then
+// left-to-right — the same order the backend already sorts by, this is
+// purely a display pass-through, no re-sorting done here). Column 1 is
+// the word's own H/V direction ("across"/"down" — literal "H"/"V", not
+// translated per UI language, at the user's explicit request) followed
+// by its (y, x) starting coordinate (1-based, row then column — the
+// opposite order from a mathematical (x, y) pair, matching #grid's own
+// row/column headers). Column 2 checks the word really exists as a
+// MOT entry in data/wordlist_<lang>_full.tsv — the exact dictionary the
+// solver drew from — showing the entry's *entire, verbatim TSV line*
+// (`row.wordlist_line`, MOT/ACCENTUE/FREQUENCE/CANONIQUE together, exactly
+// as written in the file — not just the word's own accented spelling)
+// when it does, or the bare grid answer in red (`.word-missing`) when it
+// doesn't: the one directly visible symptom of the rare "invented word"
+// edge case documented in CLAUDE.md (a slot completed purely via crossing
+// assignments, never validated against the real dictionary). Column 3
+// shows the *entire, verbatim JSON Lines entry* (`row.gloss_lines`, one
+// per matching canonical form, at the user's explicit request for "la
+// ligne complète des fichiers de référence" rather than just the matched
+// lemma) for each of the word's candidate canonical form(s) that has a
+// real entry in data/gloss_dictionary/<lang>_glosses.jsonl (an em dash
+// when none do). Both raw-line columns use `.raw-line` (CSS `white-space:
+// pre-wrap`) so a long TSV/JSON line wraps onto several visual lines
+// instead of forcing the whole table to scroll arbitrarily wide.
+// `table` is only ever present on the one previewHistory entry backend/
+// app.py builds it for — `undefined`/empty on every other entry, so the
+// table naturally disappears while navigating to an earlier/later step.
+//
+// Only actually shown while `showPreviewLetters` ("Voir", see
+// togglePreviewLetters()) is on, at the user's explicit request — kept in
+// `lastWordTable` regardless of that flag (mirroring `lastPreviewExamples`)
+// so toggling the button re-renders instantly, from whatever the current
+// previewHistory entry already holds, with no need to re-navigate.
+let lastWordTable = null;
+
+function renderWordTable(table) {
+  lastWordTable = table;
+  wordVerificationTbody.innerHTML = "";
+  if (!table || !table.length || !showPreviewLetters) {
+    wordVerificationWrap.hidden = true;
+    return;
+  }
+  for (const row of table) {
+    const tr = document.createElement("tr");
+
+    const posTd = document.createElement("td");
+    const directionPrefix = row.direction === "across" ? "H" : "V";
+    posTd.textContent = `${directionPrefix} (${row.row + 1}, ${row.col + 1})`;
+    tr.appendChild(posTd);
+
+    const wordTd = document.createElement("td");
+    wordTd.classList.add("raw-line");
+    wordTd.textContent = row.in_wordlist ? row.wordlist_line : row.answer;
+    if (!row.in_wordlist) wordTd.classList.add("word-missing");
+    tr.appendChild(wordTd);
+
+    const rootTd = document.createElement("td");
+    rootTd.classList.add("raw-line");
+    rootTd.textContent = (row.gloss_lines && row.gloss_lines.length)
+      ? row.gloss_lines.join("\n")
+      : "—";
+    tr.appendChild(rootTd);
+
+    wordVerificationTbody.appendChild(tr);
+  }
+  wordVerificationWrap.hidden = false;
+}
+
 // Displays one previewHistory entry: its grids (via renderAttemptPreview,
-// unchanged) and its paired status text together — the one place both
-// halves of an entry actually reach the screen, used by every path that
-// shows a previewHistory entry (auto-follow, and both nav buttons) so
-// they can never drift out of sync with each other.
+// unchanged), its paired status text, and its word-verification table (if
+// any) together — the one place every part of an entry actually reaches
+// the screen, used by every path that shows a previewHistory entry
+// (auto-follow, and both nav buttons) so they can never drift out of sync
+// with each other.
 function showPreviewEntry(entry) {
   renderAttemptPreview(entry.examples);
   lastPreviewStep = entry.step || null;
   renderPreviewStatus();
+  renderWordTable(entry.word_table);
 }
 
 // Called from pollJob() with every new attempt-preview state examples_
@@ -630,6 +711,7 @@ function hideAttemptPreview() {
   previewHistory = [];
   previewHistoryIndex = -1;
   autoFollowPreview = true;
+  renderWordTable(null);
   updatePreviewNavButtons();
 }
 
