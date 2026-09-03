@@ -11119,3 +11119,238 @@ the same reasoning, flagged the same way as "not yet visually confirmed."
   temporary `_DEBUG_GRID_REPEAT` env-var-gated print used for all of
   this live diagnosis was removed before shipping, per this project's
   own established convention.
+
+`SLOT_SELECTION_REFINE_FRACTION` was raised from 1/4 to 1/2, at the
+user's explicit request, quoting the constant's own docstring back and
+asking for this specific new value alongside an explicit reconfirmation
+of its existing floor-of-1 guarantee (`refined_window_size = max(1,
+int(len(window) * SLOT_SELECTION_REFINE_FRACTION))`, unchanged code —
+already correct before this request, the docstring was reworded to state
+the invariant more directly: `refined_window` can never end up empty
+regardless of `window`'s own size or this fraction's value). A milder
+reduction (keeping half of `window` rather than a quarter) leaves more
+room for the next stage — see below — to actually discriminate among a
+non-trivial set of candidates, rather than handing it an already very
+narrow pool.
+
+**A new, sixth selection stage was added right after it**, at the user's
+explicit request: "classer les entrées de la fenêtre restante par rapport
+à un score 'somme des carrés des fréquences mesurées des lettres du mot
+sur l'emplacement (fréquences mesurée notamment pour générer les
+graines)', le plus haut score en premier (donc le mot qui propose le plus
+d'options sur sa zone par rapport aux emplacements voisins)." A new
+`Filler._slot_letter_frequency_score(i)` sums, over every cell of slot
+`i` **not already determined by a real letter** (a crossing assignment
+made this same attempt, or `self.locked_letters` — the same fait-acquis/
+simple-supposition exclusion `_placed_letter_count`/`_has_known_letter`
+already use, deliberately narrower than `_candidate_score`'s own
+crossing-only exclusion, since a locked cell is just as settled as a
+crossing-assigned one and offers no more "options" either), the square of
+that cell's own most-frequent letter count in `self.letter_scores` (the
+same statistic `sample_letter_biases` already computes to choose seeds) —
+`0` for a cell with no sampled data at all. Squaring mirrors the same
+reasoning already used elsewhere in this file (`_candidate_score`, the
+sum-of-squares of word lengths in `generate_grid`): favors an emplacement
+where *several* still-free cells each carry a strong statistical
+consensus over one that owes a high score to a single standout cell.
+
+Wired into `_backtrack` right after `refined_window` (tier 5) is
+computed: a third shuffle (same reason as the two before it — `sorted`
+is stable, so without shuffling first the earlier tie order would decide
+ties at this new stage too) followed by a descending sort on this new
+score, and `best_i` becomes the very first entry of that sort — no
+further window/fraction narrowing, this stage always picks a single
+winner directly (with the pre-shuffle still resolving a true tie at
+random). `self.rng.choice(refined_window)` (the previous, purely random
+final draw) is gone — the final pick is now always driven by this score,
+with randomness surviving only as a tie-breaker.
+
+Verified live: 4 isolated tests — a hand-computed sum-of-squares check
+against a small `letter_scores` dict (including cells absent from it,
+correctly scoring 0); a check that a cell fixed by a crossing assignment
+*or* present in `locked_letters` is excluded, both independently and
+together; a 200-seed sweep on two independent, non-crossing slots (one
+with a strong statistical signal on every cell, one with a weak one)
+confirming the higher-scoring slot wins the final pick in all 200/200
+trials, never by chance; a direct check that `SLOT_SELECTION_REFINE_
+FRACTION == 0.5` and that its floor holds for a range of window sizes.
+Two real end-to-end `generate_grid()` runs on the standard 15×10
+benchmark (Flash mode, seed 2 — the historically more fragile of the two
+reference seeds) — one with this session's changes in place, one on the
+unmodified code (via a temporary `git stash`) — both landed at an
+identical 1/4 success rate (4 runs each), confirming the combined change
+(the wider `SLOT_SELECTION_REFINE_FRACTION` plus the new sixth stage)
+introduces no measurable regression beyond this benchmark's own
+well-documented Flash-mode variance; a real, non-mocked 9×9 smoke run and
+a real seed-7 run on the standard benchmark both succeeded cleanly with
+the new code (0 mismatches, 0 empty white cells).
+
+Separately, on the web UI: `frontend/static/index.html`/`script.js`/`style.css` gained a pair of
+small navigation buttons (◀/▶, reusing the `.nav-btn` class) at the end
+of `#generation-times` (the "Grille générée en... — Optimisation en... —
+Définitions générées en..." line on the final, playable grid), at the
+user's explicit request: "ajoute les boutons de navigation permettant de
+remonter dans l'historique de la recherche, à la fin de la ligne
+d'informations." These reuse the exact same `previewHistory`/
+`showPreviousPreview()`/`showNextPreview()`/`updatePreviewNavButtons()`/
+`renderPreviewPosition()` machinery already built for the in-progress
+`#attempt-preview` panel's own ⏮/◀/▶/⏭ controls (see that mechanism's own
+extensive history above) — no new history-tracking mechanism, only a
+second, smaller entry point into the one that already exists.
+
+The one real gap this closed: `runGeneration()`'s second call to
+`hideAttemptPreview()` (right before the final grid renders) wiped
+`previewHistory`/`previewHistoryIndex` back to empty, which would have
+left the final grid with nothing to navigate. A new `hideAttemptPreview
+Panel()` — hides the panel (`attemptPreview.hidden = true`) without
+touching `previewHistory`/`previewHistoryIndex`/`lastPreviewExamples`/
+`lastPreviewStep` — replaces `hideAttemptPreview()` at that one call
+site; the *other* call site, at the very start of a fresh generation,
+keeps the original `hideAttemptPreview()` (a full reset is exactly what's
+needed there, discarding the previous generation's own history). The two
+new buttons' click handlers simply un-hide the panel
+(`attemptPreview.hidden = false`) and then call the existing
+`showPreviousPreview()`/`showNextPreview()` — the panel reappears, right
+above the finished puzzle (its DOM position was already there,
+unchanged), populated with whichever historical grid/status the click
+navigated to, with its own full ⏮/◀/▶/⏭ controls immediately usable too.
+
+`index.html`'s `#generation-times` gained an inner `#generation-times-
+text` span (the element `script.js`'s `generationTimes` const now points
+at, so setting the duration text no longer clobbers the buttons) plus
+`#generation-times-position` (mirrors `#attempt-preview-position`'s
+"Étape X/Y" readout, smaller to match this line's own 0.7rem). `style.css`
+made `#generation-times` a small flex row (`gap: 0.35rem`) and gave the
+position span a fixed `min-width` (matching `#attempt-preview-position`'s
+own anti-jitter treatment). `updatePreviewNavButtons()`/
+`renderPreviewPosition()` were both extended to also drive the new
+buttons' disabled state and the new position span — one single source of
+truth for "where are we in `previewHistory`," so the two button pairs
+(in-panel and end-of-line) can never drift out of sync with each other.
+No new i18n keys were needed: the two buttons reuse the existing
+`attemptPreviewPrevBtn`/`attemptPreviewNextBtn` aria-label translations
+(same action, same wording, in all 5 languages).
+
+Verified: a real JS syntax check (`esprima`, temporarily installed and
+removed again afterward) confirmed `script.js`/`i18n.js` still parse
+correctly; a CSS brace-balance check and an HTML `<section>` tag-count
+check confirmed both stylesheets/markup stay structurally sound after the
+edit; both servers were restarted and the real served `index.html`/
+`style.css`/`script.js` were fetched directly and confirmed to contain
+the new markup/rules/functions. A real generation submitted through the
+actual running API (9×9, `mode="flash"`) and polled to completion showed
+`examples_history` with 4 real entries (`{step, examples}`, the exact
+shape `previewHistory`/`showPreviewEntry()` expect) and all three
+duration fields (`generation_duration_seconds`/`optimization_duration_
+seconds`/`clues_duration_seconds`) populated on the finished job — the
+real data this feature depends on client-side, confirmed present and
+correctly shaped end to end. **Not yet visually confirmed in an actual
+browser** — same tooling limitation already noted throughout this
+project's UI work (no `chromium-cli`/`node`/Python `playwright` available
+in this environment) — verified structurally instead, as above.
+
+A purple/violet cell highlight was added, distinct from the existing red
+`.impossible`/orange `.low-candidates`, for a genuinely new class of
+diagnostic — found by directly root-causing a real report: a real grid
+was stuck for 11 consecutive paliers on 3 specific cells, none of which
+were ever flagged by any existing mechanism. Reconstructing the exact
+job's own `examples_history` (fetched live via `GET /api/generate/status/
+<job_id>`, this session's server having been restarted just before the
+job ran, so it was still in the in-memory `JOBS` dict) and re-deriving
+`used_words`/real dictionary candidates against `data/wordlist_fr_full.tsv`
+by hand confirmed the root cause precisely: each of the two crossing
+slots at the stuck cells had, individually, real, non-empty candidate
+sets — never flagged by `Filler.impossible_zone_cells` (raw domain
+empty) — but the *only* candidates were either already placed elsewhere
+in that same grid, or entries with a near-zero frequency in the wordlist
+(`ESR`=3.0, `GSR`=1.0, `KSS`=1.0, `TSS`=4.0 — almost certainly corpus
+noise: acronyms/fragments that slipped past `build_wordlist_freq.py`'s
+own filtering, not real French words), against `EST`=high but already
+used, `VOS`=27330 but on a different, unrelated crossing. At the user's
+explicit request, given three offered readings of "cases impossibles à
+jouer parce qu'aucune proposition n'est jouable" (recolor the existing
+red; visualize `excluded_slots`, never-attempted slots crossing an
+impossible one; or this new, finer noise/reuse criterion) — the user
+chose the new, finer criterion.
+
+`load_wordlist()` now also returns a 4th value, `frequencies` ({MOT:
+fréquence brute}) — its one and only call site (`generate_grid`) updated
+to unpack it. `build_index(by_length, frequencies=None)` gained a new
+optional parameter, embedding `index[length]["freq"] = {word: freq}` for
+every length — `None` (the default, for a hand-built test's own
+synthetic `by_length`) resolves every word's frequency to `0.0`, a
+no-op for any caller that never reads this new field. `generate_grid`'s
+one call site passes the real `frequencies` through.
+
+`NOISE_FREQUENCY_THRESHOLD = 5` (placed right after `PREFILL_LOCKED_
+MIN_WORD_COUNT`) was calibrated directly against the real French
+wordlist rather than picked arbitrarily: the 10 lowest-frequency entries
+of length 2 and 3 are unambiguous noise (`ΔT`, `Nʼ`, `ZL`, `ΜG`... ;
+`GLX`, `ITO`, `TEO`, `ZIO`...), and the threshold catches all four of
+the reported case's own noise words (`ESR`/`GSR`/`KSS`/`TSS`) while
+excluding only 4.5%/10.3% of real length-2/3 words overall (measured
+live against `data/wordlist_fr_full.tsv`) — conservative, not
+aggressive.
+
+A first implementation of `_noise_slot_cells(grid, rows, cols, index,
+locked_letters)` checked each *slot* independently (mirroring `_low_
+candidate_slot_cells`'s own per-slot shape exactly) — and, verified
+directly against the real reconstructed job data, found **nothing at
+all** on the exact grid that motivated this feature: each of the two
+crossing slots, checked in isolation, still had several playable words
+of its own (`NOS`/`LOS`/`DOS`/`COS`/`VOS` for one; `ST`/`SV`/`SU`/`SR`/
+`SA`/`SI`/`SB` for the other) — the real blockage was never about either
+slot lacking options on its own, but about *no letter being common to
+both slots' own playable sets at their shared cell*, a fundamentally
+different, cross-slot computation the first version never performed.
+Rewritten around that: for every still-free cell, collect the "playable"
+letter set (from each open, i.e. partially-locked, crossing slot's own
+playable-word list, excluding `used_words` and sub-threshold-frequency
+entries) at that cell's own position in each slot, and flag the cell
+only if the intersection across every slot touching it (one, for a
+cell only constrained in one direction; two, for a genuine crossing) is
+empty. Re-verified against the same real job data: correctly flags
+exactly the one cell whose crossing truly had no common letter (down
+`ER_` → {E,G,S} vs. across `_S_` → {A,C,D,E,F,G,H,I,K,M,N,O,P,T,U},
+intersection {E,G} — but both routes to E/G individually failed on
+frequency/reuse — leaving nothing), while correctly leaving the other
+two cells of the same 3-cell reported stuck zone unflagged (each did
+have a genuine, if rare, cross-slot solution — `VOS`/`SV` and `PST`/
+`ET`-style combinations the search's own candidate-ranking just never
+happened to try within budget, a separate, softer issue this highlight
+deliberately doesn't claim to solve).
+
+Wired into the same, single call site `_low_candidate_slot_cells`
+already uses — `generate_grid`'s "pattern" (cycle-start) progress event,
+per pool entry, never for a "reprise telle quelle" palier (mirroring
+that function's own established scope exactly; there's no
+`Filler`/search state to query at cycle-start for a post-search
+context, and `low_candidate_cells` itself never extended there either).
+`frontend/static/script.js`'s `renderAttemptPreview()` destructures a
+new `noise_cells` field (`|| []`, a no-op for every other event, which
+simply lacks the key) and applies a new `.noise` class; `style.css`
+adds a `--noise-bg` token (light violet) and a `.noise` background-fill
+rule, declared after `.low-candidates` and before `.impossible` in the
+cascade — the three can in principle overlap on the same cell, in which
+case the more severe one (red, then violet, then orange) visually wins.
+
+Verified: 6 isolated tests against small, hand-built dictionaries/grids
+— a genuine crossing deadlock (two slots each individually fine, no
+shared letter) correctly flagged; a crossing with one legitimately
+shared letter correctly *not* flagged; a single-open-direction cell
+correctly flagged when that lone slot's own playable set is empty
+(pure noise) and correctly clear when it isn't; a word already used
+elsewhere in the grid correctly removed from a slot's own playable set,
+turning an otherwise-resolvable crossing into a genuine deadlock; an
+empty/missing `locked_letters` correctly a no-op. Re-run directly
+against the real, original stuck job's own reconstructed grid state —
+confirmed the single, precise flagged cell matches the hand-derived
+diagnosis exactly. A real, non-mocked `generate_grid()` run (15×10,
+seed 2, Flash mode) with an `on_progress` hook confirmed `noise_cells`
+is populated on real "pattern" events throughout an actual run (286
+non-empty occurrences across the run), not just in the isolated tests.
+Real JS syntax check (`esprima`, temporarily installed and removed
+again afterward) and a CSS brace-balance check confirmed `script.js`/
+`i18n.js`/`style.css` still parse correctly after the change. **Not yet
+visually confirmed in an actual browser** — same tooling limitation
+already noted throughout this project's UI work.

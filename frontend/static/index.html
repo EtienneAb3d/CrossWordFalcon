@@ -113,7 +113,14 @@
 
     <section id="result" hidden>
       <p id="stats"></p>
-      <p id="generation-times"></p>
+      <p id="generation-times">
+        <span id="generation-times-text"></span>
+        <button type="button" id="generation-times-prev-btn" class="nav-btn"
+                data-i18n-aria="attemptPreviewPrevBtn" disabled>◀</button>
+        <span id="generation-times-position"></span>
+        <button type="button" id="generation-times-next-btn" class="nav-btn"
+                data-i18n-aria="attemptPreviewNextBtn" disabled>▶</button>
+      </p>
       <div id="board">
         <div id="clues">
           <h2 data-i18n="acrossHeading">Horizontalement</h2>

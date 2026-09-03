@@ -132,15 +132,11 @@ Une case n'est acceptée que si elle respecte ces règles :
   lettres, elle, **devient un vrai mot à deviner** avec sa propre
   définition, voir l'étape 2 ("et", "ou", "no", etc.).
 
-  Nommée et relevée de 3 à 8, à la demande explicite de l'utilisateur :
-  "Attribuer un nom de variable à cette règle **au moins 3 cases**. Fixer
-  ce nombre à 8. Si aucune case ne peut être posée en respectant ce nombre
-  pour atteindre l'objectif de remplissage des noires, abaisser le nombre
-  et recommencer à essayer de placer des noires." Ce dernier point —
-  abaisser le nombre et retenter — est exactement le mécanisme déjà décrit
-  dans "Éviter l'isolement" ci-dessous, généralisé pour redescendre d'un
-  cran à la fois (8, 7, 6, ... jusqu'à 1) au lieu des 3 paliers fixes
-  (3, 2, 1) utilisés avant ce changement.
+  Si aucune case ne peut être posée en respectant ce nombre pour atteindre
+  l'objectif de remplissage des noires, le nombre est abaissé d'un cran à
+  la fois (8, 7, 6, ... jusqu'à 1) et le placement retenté à chaque
+  palier — exactement le mécanisme décrit dans "Éviter l'isolement"
+  ci-dessous.
 
 L'exigence de `STRUCTURAL_MIN_INTERIOR_FREE` cases peut être abaissée pour
 une case précise (voir "Éviter l'isolement" ci-dessous) — `minimize_black_
@@ -319,7 +315,7 @@ parallèle. Cette même règle protège aussi la toute première grille
 montrée (la grille réellement conservée pour le palier suivant, voir plus
 haut) : sa propre tentative d'origine ne peut plus, elle non plus,
 apparaître une seconde fois plus loin dans la liste via un de ses propres
-instantanés antérieurs — un cas réel trouvé en direct une fois le plafond
+instantanés antérieurs — un cas qui peut se produire une fois le plafond
 d'affichage retiré (voir plus bas), puisque cette grille-là est choisie
 selon un critère légèrement différent (l'état après nettoyage) de celui
 qui départage le reste du vivier (l'état brut).
@@ -381,13 +377,12 @@ laissant à celui qui l'a appelée le soin d'essayer autre chose.
      descente récursive plus loin — cette tentative est aussitôt comparée au
      budget restant, et à un signal d'abandon global éventuel : si l'un ou
      l'autre est déjà atteint, la fonction s'arrête immédiatement, sans
-     même poser ce mot ni essayer les candidats suivants. Sans ce contrôle,
-     un emplacement dont presque tous les candidats cassent un croisement
-     (voir le contrôle ciblé décrit juste en dessous) pourrait faire
-     défiler des centaines de candidats un par un sans que le budget ne
-     soit jamais reconsulté, puisque ce contrôle ne l'était auparavant qu'à
-     chaque nouvelle descente récursive, jamais entre deux candidats
-     rejetés au même niveau ;
+     même poser ce mot ni essayer les candidats suivants. Ce contrôle à
+     chaque candidat (pas seulement à chaque descente récursive) garantit
+     qu'un emplacement dont presque tous les candidats cassent un
+     croisement (voir le contrôle ciblé décrit juste en dessous) ne peut
+     jamais faire défiler un très grand nombre de candidats rejetés un par
+     un sans que le budget ne soit jamais reconsulté ;
    - le mot est posé provisoirement sur l'emplacement, et ajouté à
      `used_words` pour qu'il ne puisse plus être choisi ailleurs pendant
      cette même tentative ;
@@ -441,21 +436,19 @@ lui-même tous ses candidats sans jamais réussir plus loin, signe que le
 motif actuel, avec les lettres déjà imposées, n'admet tout simplement
 aucune solution valide.
 
-**Ce que compte le budget** (voir "Limites de la recherche" plus bas), à
-la demande explicite de l'utilisateur ("pour éviter d'itérer longtemps sur
-des cas impossibles") : ce n'est plus le nombre d'appels récursifs, mais
-le nombre de **tentatives de poser un mot** — chaque candidat essayé sur
-l'emplacement choisi (étape 3 ci-dessus) compte pour une unité, que ce mot
-mène ensuite à une descente récursive ou soit immédiatement rejeté par le
-contrôle de croisement décrit dans cette même étape. Sans ce changement,
-un emplacement dont presque tous les candidats cassent un croisement (ce
-qui arrive sans jamais provoquer la moindre récursion) pouvait laisser la
-recherche défiler un très grand nombre de candidats rejetés un par un sans
-que le budget ne s'épuise jamais — puisqu'un candidat rejeté de cette
-façon ne descendait jamais dans un nouvel appel récursif, seul moment où
-le compteur avançait auparavant. C'est l'épuisement de ce compteur qui,
-sur une grille trop difficile, met fin à la tentative avant que l'un ou
-l'autre des deux dénouements ci-dessus ne soit atteint.
+**Ce que compte le budget** (voir "Limites de la recherche" plus bas) :
+non pas le nombre d'appels récursifs, mais le nombre de **tentatives de
+poser un mot** — chaque candidat essayé sur l'emplacement choisi (étape 3
+ci-dessus) compte pour une unité, que ce mot mène ensuite à une descente
+récursive ou soit immédiatement rejeté par le contrôle de croisement
+décrit dans cette même étape. Ce comptage par tentative garantit qu'un
+emplacement dont presque tous les candidats cassent un croisement (ce qui
+peut se produire sans jamais provoquer la moindre récursion) épuise bel et
+bien le budget lui aussi, plutôt que de laisser la recherche défiler un
+très grand nombre de candidats rejetés sans que le budget ne s'épuise
+jamais. C'est l'épuisement de ce compteur qui, sur une grille trop
+difficile, met fin à la tentative avant que l'un ou l'autre des deux
+dénouements ci-dessus ne soit atteint.
 
 ### Les emplacements à une seule possibilité
 
@@ -590,41 +583,41 @@ niveaux de priorité** :
    = colonne, `y` = ligne) : un emplacement dont la première case est déjà
    au coin en haut à gauche obtient le score le plus bas possible (0), le
    score augmentant à mesure qu'un emplacement démarre plus bas et/ou plus
-   à droite. On tire au
-   hasard, uniformément, **parmi les emplacements ayant obtenu le plus
-   petit score** (les plus proches du coin en haut à gauche), **dans une
-   fenêtre de max(5, int(taille du groupe × `SLOT_SELECTION_WINDOW_
-   FRACTION`)) emplacements** — une proportion nommée et fixée à **1/10**
-   (`backend/crossword_gen.py`, relevée de 1/4 à la demande explicite de
-   l'utilisateur) — une
-   fenêtre qui s'élargit quand ce groupe compte encore beaucoup
-   d'emplacements, et se resserre (jusqu'à ce plancher de 5) une fois
-   qu'il n'en reste plus beaucoup. Contrairement aux critères déjà essayés
-   avant lui à ce même niveau (nombre de lettres déjà remplies, nombre de
-   possibilités de remplissage, etc.), ce score ne dépend plus du tout de
-   l'état de remplissage de l'emplacement — seulement de sa position fixe
-   dans la grille — ce qui tend à faire progresser le remplissage selon un
-   front géométrique partant du coin en haut à gauche plutôt que selon la
-   difficulté de chaque emplacement. Une première version mesurait ce même
-   score par rapport au coin en haut à *droite* ; un diagnostic en direct a
-   confirmé que le calcul reflétait fidèlement cette formule (sans bug),
-   mais le remplissage démarrait alors visiblement du mauvais coin —
-   corrigé vers le coin en haut à gauche à la demande de l'utilisateur ;
+   à droite. Ce score ne dépend pas de l'état de remplissage de
+   l'emplacement — seulement de sa position fixe dans la grille — ce qui
+   tend à faire progresser le remplissage selon un front géométrique
+   partant du coin en haut à gauche plutôt que selon la difficulté de
+   chaque emplacement. On retient, **parmi les emplacements ayant obtenu
+   le plus petit score** (les plus proches du coin en haut à gauche),
+   **une fenêtre de max(5, int(taille du groupe × `SLOT_SELECTION_WINDOW_
+   FRACTION`)) emplacements** — une proportion fixée à **1/10**
+   (`backend/crossword_gen.py`) — une fenêtre qui s'élargit quand ce
+   groupe compte encore beaucoup d'emplacements, et se resserre (jusqu'à
+   ce plancher de 5) une fois qu'il n'en reste plus beaucoup ;
 5. cette fenêtre de niveau 4 est ensuite **retriée** par nombre de lettres
    déjà posées dans chaque emplacement (le plus de lettres en premier —
    même distinction fait-acquis/simple-supposition que le niveau 3, une
-   simple graine statistique ne comptant jamais), puis **réduite à
-   nouveau** à ses `SLOT_SELECTION_REFINE_FRACTION` premiers emplacements
-   (1/4, `backend/crossword_gen.py`) — mêlangée d'abord (même raison que
-   le mélange du niveau 4) pour éviter tout biais positionnel à la
-   coupure. Un plancher de seulement 1 emplacement (pas 5 comme la
-   fenêtre du niveau 4) : la fenêtre de niveau 4 peut déjà être aussi
-   petite que son propre plancher de 5, et un plancher de 5 ici annulerait
-   la réduction dans ce cas très courant. Le tirage final au hasard se
-   fait dans cette fenêtre réduite plutôt que dans la fenêtre du niveau 4
-   directement — à la demande explicite de l'utilisateur, pour favoriser
-   davantage la finition d'un emplacement déjà bien avancé plutôt qu'un
-   simple critère géométrique.
+   simple graine statistique ne comptant jamais), puis **réduite** à ses
+   `SLOT_SELECTION_REFINE_FRACTION` premiers emplacements (1/2,
+   `backend/crossword_gen.py`) — mêlangée d'abord (même raison que le
+   mélange du niveau 4) pour éviter tout biais positionnel à la coupure.
+   Un plancher de seulement 1 emplacement (pas 5 comme la fenêtre du
+   niveau 4) : la fenêtre de niveau 4 peut déjà être aussi petite que son
+   propre plancher de 5, et un plancher de 5 ici annulerait la réduction
+   dans ce cas très courant — cette fenêtre réduite ne peut donc jamais
+   finir vide ;
+6. cette fenêtre réduite est enfin retriée une dernière fois par un score
+   statistique — la somme des carrés des fréquences mesurées (le même
+   échantillonnage statistique qui alimente les graines, voir "Les
+   graines" plus haut) de la lettre la plus fréquente à chaque case
+   **encore libre** de l'emplacement (une case déjà déterminée par une
+   vraie lettre n'offre plus aucune option de remplissage, donc n'est pas
+   comptée) — le score le plus haut en premier : l'emplacement dont la
+   zone propose statistiquement le plus d'options de remplissage, et donc,
+   pour les emplacements voisins qui croisent ses cases encore libres, le
+   plus de lettres crédibles avec lesquelles composer à leur tour. Cette
+   fenêtre étant elle aussi remélangée au préalable, cet emplacement
+   devient directement l'emplacement choisi.
 
 Le programme n'essaie par ailleurs jamais de remplir un emplacement qui
 croise (partage une case avec) un emplacement déjà connu comme "impossible"
@@ -654,20 +647,17 @@ l'interface web, le sélecteur **"Mode"** (Flash/Turbo/Rapide/Moyen/Ultra ;
 à une valeur choisie (1 000 à 5 000 000), sans rapport avec la taille de la
 grille, à la place de cette formule par défaut.
 
-Depuis que le décompte lui-même a changé (voir le paragraphe ci-dessus sur
-"une tentative de poser un mot"), un même nombre de vérifications
-représente moins d'exploration réelle qu'avant — un mot rejeté sans jamais
-descendre dans la récursion coûtait auparavant zéro vérification, il en
-coûte désormais une comme n'importe quel autre. Mesuré en direct sur le
-mode **Flash** (1 000, le plus contraint) : la grille de référence 15×10
-(seed 2) échoue désormais systématiquement à ce budget, alors qu'elle
-réussissait avant ce changement — au budget par défaut (300 000, ou tout
-autre mode plus large), elle réussit toujours normalement (0 incohérence,
-0 case vide, mesuré en direct). Un compromis assumé, à la demande
-explicite de l'utilisateur après lui avoir soumis ce constat : le mode
-Flash devient plus fragile sur certaines grilles, en échange d'un budget
-qui ne laisse plus jamais une recherche déjà sans espoir tourner
-indéfiniment sans jamais l'épuiser.
+Puisqu'un mot immédiatement rejeté (sans jamais descendre dans la
+récursion) compte tout autant qu'un mot qui mène plus loin dans la
+recherche (voir le paragraphe ci-dessus sur "une tentative de poser un
+mot"), le mode **Flash** (1 000 vérifications, le plus contraint) reste le
+plus fragile des cinq : sur certaines grilles, ce budget peut s'épuiser
+avant qu'une recherche par ailleurs remplissable n'ait eu la chance
+d'aboutir. C'est un compromis assumé plutôt qu'un bug — un budget qui
+ne laisse jamais une recherche déjà sans espoir tourner indéfiniment sans
+jamais s'épuiser, au prix d'une fragilité accrue sur le mode le plus
+serré ; au budget par défaut (300 000, ou tout autre mode plus large), ce
+risque disparaît.
 
 #### Pourcentage de budget affiché en direct
 
@@ -828,59 +818,30 @@ tentative rediffusé identiquement à tous.
 
 ##### Chaque tentative repart de sa propre grille, partiellement nettoyée
 
-Corrigé à la demande explicite de l'utilisateur, qui a signalé une vraie
-régression : "après un cycle, le cycle suivant repart maintenant avec
-une seule grille. Quand il n'y a pas de déclenchement d'un nettoyage
-complet, chaque process doit repartir à l'étape suivante avec sa grille
-partiellement nettoyée (sauf le pourcentage de grilles entièrement
-neuves)." Avant ce correctif, seule la "meilleure" tentative du palier
-(celle qui minimise les cases injouables) était nettoyée (retrait des
-mots croisant un emplacement impossible, voir "Nettoyage automatique des
-emplacements bloqués" plus bas) et sa grille, une fois nettoyée, était
-reprise à l'identique par TOUS les workers non réinitialisés du palier
-suivant — perdant le progrès propre à chacune des autres tentatives
-distinctes de ce même palier.
-
-Désormais, exactement le même principe que celui déjà en place pour le
-nettoyage complet (voir "Score et sélection parmi les tentatives
-nettoyées" plus bas) s'applique aussi ici : **chaque** tentative
-distincte de ce palier (jusqu'à `PARALLEL_ATTEMPTS`, pas seulement la
-meilleure) est nettoyée individuellement, puis triée par le même score
-(somme des carrés des longueurs des mots en place, départagée par le
-nombre de cases noires) ; les moins bonnes sont éliminées, autant qu'il y
-a de "grilles nouvelles" configurées (voir "Une tentative repart d'une
-grille entièrement vierge" plus bas, désormais vrai pour ce cas aussi,
-pas seulement après un nettoyage complet) ; chacune des grilles nettoyées
-survivantes sert de point de départ à l'un des workers non réinitialisés
-du palier suivant — une grille distincte par worker, jamais celle d'un
-autre.
+**Chaque** tentative distincte de ce palier (jusqu'à `PARALLEL_ATTEMPTS`,
+pas seulement la meilleure) est nettoyée individuellement — exactement le
+même principe que pour le nettoyage complet (voir "Score et sélection
+parmi les tentatives nettoyées" plus bas) : retrait des mots croisant un
+emplacement impossible (voir "Nettoyage automatique des emplacements
+bloqués" plus bas), puis tri par le même score (somme des carrés des
+longueurs des mots en place, départagée par le nombre de cases noires).
+Les moins bonnes sont éliminées, autant qu'il y a de "grilles nouvelles"
+configurées (voir "Une tentative repart d'une grille entièrement vierge"
+plus bas) ; chacune des grilles nettoyées survivantes sert de point de
+départ à l'un des workers non réinitialisés du palier suivant — une
+grille distincte par worker, jamais celle d'un autre.
 
 ##### Fréquence des nettoyages complets
 
-Bornée par
-`MAX_CONSECUTIVE_CONTINUE_PALIERS` (valeur actuelle : 4) — un nettoyage
-peut toujours survenir plus tôt (dès que le motif courant n'a plus
-aucun espoir de progrès, voir "Simplification puis motif neuf"
+Bornée par `MAX_CONSECUTIVE_CONTINUE_PALIERS` (valeur actuelle : 4) — un
+nettoyage peut toujours survenir plus tôt (dès que le motif courant n'a
+plus aucun espoir de progrès, voir "Simplification puis motif neuf"
 ci-dessous), mais jamais plus tard que `MAX_CONSECUTIVE_CONTINUE_
 PALIERS` paliers "telle quelle" consécutifs — ce plafond est
 systématique, même si la reprise "telle quelle" aurait encore, en
 théorie, un espoir de progrès à ce moment-là. Avec cette valeur, jusqu'à
 4 paliers "telle quelle" peuvent s'enchaîner avant qu'un nettoyage ne
-soit déclenché systématiquement (contre 0 auparavant, où chaque palier
-échoué déclenchait un nettoyage complet dès le premier).
-
-Relevée de 0 à 4 à la demande explicite de l'utilisateur. Une
-régression réelle a été mesurée et confirmée causale par comparaison
-directe (A/B, seule cette constante changée) avant de conserver cette
-valeur : en mode **Flash** (le budget de vérifications le plus serré des
-5 modes réels de l'interface, voir "Limites de la recherche" plus bas),
-la graine 7 de la grille de référence 15×10 échoue désormais de façon
-reproductible (2 essais consécutifs échoués) alors qu'elle réussissait
-de façon fiable avec l'ancienne valeur (0) — la graine 2 réussit dans
-les deux cas. Signalé à l'utilisateur, qui a choisi de garder 4 malgré
-cette régression, jugeant le mode Flash — au budget déjà le plus
-contraint — pas nécessairement représentatif du comportement au budget
-par défaut ou sur un mode plus large.
+soit déclenché systématiquement.
 
 ##### Une tentative va jusqu'au bout avant que le palier ne se termine
 
@@ -964,21 +925,19 @@ autant pour les autres — jamais si chacune peut explorer un motif
 différent, auquel cas la conclusion de l'une ne dit rien de fiable sur
 celui, différent, d'une autre.
 
-C'est pourquoi il n'est aujourd'hui **transmis nulle part** : ni au cas
+C'est pourquoi il n'est **transmis nulle part** : ni au cas
 "Simplification puis motif neuf" ci-dessous (chacune des tentatives
-parallèles y génère depuis toujours son propre motif indépendant), ni
-à la reprise "telle quelle" (voir "Chaque tentative repart de sa propre
-grille, partiellement nettoyée" plus haut) — cette dernière partageait
-bien un motif rigoureusement identique entre toutes ses tentatives
-parallèles avant l'introduction du vivier `carry_seed_pool_continue`,
-mais ce n'est plus le cas depuis : deux tentatives parallèles d'un même
-palier "telle quelle" peuvent désormais recevoir des entrées
-différentes du vivier (ou même un motif entièrement neuf pour les
-tentatives réinitialisées) — la même contamination entre motifs
-indépendants qui a motivé de désactiver ce signal pour le "motif neuf"
-s'applique donc désormais ici aussi, désactivé préventivement par
-cohérence plutôt qu'après un échec constaté en direct. En pratique, ce
-raccourci n'aurait de toute façon plus grand-chose à apporter : l'arrêt
+parallèles y génère son propre motif indépendant), ni à la reprise
+"telle quelle" (voir "Chaque tentative repart de sa propre grille,
+partiellement nettoyée" plus haut) — deux tentatives parallèles d'un
+même palier "telle quelle" peuvent en effet recevoir des entrées
+différentes du vivier `carry_seed_pool_continue` (ou même un motif
+entièrement neuf pour les tentatives réinitialisées), donc partager un
+motif rigoureusement identique entre toutes ses tentatives parallèles
+n'est plus garanti pour ce cas non plus : la même contamination entre
+motifs indépendants qui écarte ce signal pour le "motif neuf" s'applique
+donc aussi ici. En pratique, ce raccourci n'aurait de toute façon plus
+grand-chose à apporter : l'arrêt
 général une fois la fraction réglable de tentatives terminées atteinte
 (voir "Plusieurs tentatives en parallèle par palier" plus haut — pour
 l'instant fixée à 100 %) coupe déjà court, quel que soit le motif de
@@ -1017,9 +976,8 @@ Ces deux temps sont appliqués à **toutes** les tentatives échouées et
 distinctes de ce palier (jusqu'à `PARALLEL_ATTEMPTS`, une par
 tentative — exactement les mêmes que celles montrées à l'écran,
 également sans plafond, voir "Aperçu affiché pendant la génération"
-plus bas), à la demande explicite de l'utilisateur : "on garde la
-meilleure grille de tous les process,
-soit N grilles pour N process." Chacune, une fois nettoyée, reçoit le
+plus bas), pas seulement à la meilleure — la meilleure grille de tous
+les process, soit N grilles pour N process. Chacune, une fois nettoyée, reçoit le
 même score que celui utilisé plus haut pour départager les tentatives
 parallèles réussies — la **somme des carrés des longueurs des mots en
 place** (un mot n'est "en place" que si toutes ses cases sont
@@ -1043,10 +1001,7 @@ grille de départ, jamais celle d'un autre.
 
 ##### Mémorisation des nettoyages successifs et grille jugée infaisable
 
-À la demande explicite de l'utilisateur : "Mémoriser les grilles en fin
-de cycle. Quand une même grille est produite plus de 3 cycles, déclarer
-cette grille infaisable, et supprime là au cycle suivant (elle devient
-la grille entièrement vierge du tour suivant)." Le programme retient
+Le programme retient
 l'état obtenu (motif noir/blanc **et** contenu confirmé, fusionnés en
 une seule grille comparable) à l'issue de chaque **nettoyage complet**
 (jamais d'une reprise "telle quelle") ; si ce même état, sans le
@@ -1064,28 +1019,20 @@ et, dès qu'il détecte une identité stricte, ne retente qu'**une seule
 fois** un nettoyage plus agressif (retirant aussi tout emplacement
 verrouillé dont la combinaison ne correspond à aucun mot réel) avant de
 poursuivre quoi qu'il arrive — un blocage qui survit même à cette
-relance unique n'avait jusqu'ici aucune autre issue que d'épuiser tous
-les paliers restants à l'identique. Cette mémorisation-ci prend le
-relais en comptant les répétitions sur plusieurs nettoyages, pas une
-seule relance.
+relance unique n'a alors, à lui seul, aucune autre issue que d'épuiser
+tous les paliers restants à l'identique. Cette mémorisation-ci comble
+exactement ce cas, en comptant les répétitions sur plusieurs nettoyages
+plutôt qu'une seule relance.
 
-Deux versions plus larges ont été essayées et abandonnées avant
-d'arriver à cette portée finale (nettoyage seul), chacune ayant produit
-une vraie régression mesurée en direct sur le benchmark standard 15×10
-(mode Flash) : comparer uniquement le motif noir/blanc, sur les deux
-branches du palier, confondait un motif qui reste stable plusieurs
-cycles "reprise telle quelle" de suite (normal — une case noire n'y est
-ajoutée qu'une fois sur dix, voir plus haut) avec un vrai blocage ;
-comparer motif+contenu mais toujours sur les deux branches faisait
-doublon avec `MAX_CONSECUTIVE_CONTINUE_PALIERS`, qui borne déjà "reprise
-telle quelle" avec une réponse plus douce (un nettoyage classique, pas
-une grille vierge). Restreindre la détection au seul nettoyage complet
-règle les deux problèmes à la fois. Une fois cette portée finale
-adoptée, un test de fiabilité dédié (6 exécutions répétées de la graine
-2, en mode Flash — la graine la plus sensible à ce benchmark) a mesuré
-un taux de réussite identique avec et sans le mécanisme (2/6 dans les
-deux cas) : la variance déjà connue de ce benchmark en mode Flash
-explique l'écart observé lors des premiers essais, pas ce mécanisme.
+Cette détection se limite au seul nettoyage complet, jamais à la
+reprise "telle quelle" : comparer uniquement le motif noir/blanc sur les
+deux branches confondrait un motif qui reste stable plusieurs cycles
+"reprise telle quelle" de suite (normal — une case noire n'y est ajoutée
+qu'une fois sur dix, voir plus haut) avec un vrai blocage ; comparer
+motif+contenu sur les deux branches ferait doublon avec
+`MAX_CONSECUTIVE_CONTINUE_PALIERS`, qui borne déjà "reprise telle
+quelle" avec une réponse plus douce (un nettoyage classique, pas une
+grille vierge).
 
 ##### Une tentative repart d'une grille entièrement vierge
 
@@ -1100,11 +1047,10 @@ précisément le nombre de grilles nettoyées éliminées juste au-dessus,
 pour que chaque place du palier suivant soit pourvue exactement une
 fois.
 
-**S'applique désormais aussi à la reprise "telle quelle"** (voir
-"Chaque tentative repart de sa propre grille, partiellement nettoyée"
-ci-dessus), à la demande explicite de l'utilisateur — contrairement au
-nettoyage complet, ceci s'applique ici à **chaque** palier "telle
-quelle", pas seulement au premier d'une série : une tentative
+**S'applique aussi à la reprise "telle quelle"** (voir "Chaque tentative
+repart de sa propre grille, partiellement nettoyée" ci-dessus) —
+contrairement au nettoyage complet, ceci s'applique ici à **chaque**
+palier "telle quelle", pas seulement au premier d'une série : une tentative
 réinitialisée d'un tel palier repart d'un motif entièrement neuf via
 `_pattern_attempt` (jamais `_pattern_continue`, puisqu'il n'y a alors
 plus de motif ni de verrouillage antérieur à reprendre), exactement le
@@ -1229,6 +1175,15 @@ appartient à un emplacement *partiellement* verrouillé (jamais un
 emplacement entièrement verrouillé, déjà un mot confirmé) dont
 l'intersection avec les lettres déjà verrouillées laisse moins de 3
 candidats réels dans le dictionnaire.
+
+Une case est mise en évidence par un fond violet si aucune lettre ne
+satisfait à la fois l'emplacement horizontal et l'emplacement vertical
+qui s'y croisent — chacun des deux, pris séparément, peut très bien avoir
+des mots candidats bien réels (un fond orange/rouge ne s'y déclencherait
+donc pas), mais si aucun de leurs mots réellement jouables (ni déjà posé
+ailleurs dans la grille, ni une entrée quasi nulle en fréquence — donc
+probablement pas un vrai mot) ne partage la même lettre à cette case
+précise, elle reste en pratique injouable telle quelle.
 
 ## Résumé en une phrase
 

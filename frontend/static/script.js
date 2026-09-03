@@ -41,7 +41,10 @@ const button = document.getElementById("generate-btn");
 const status = document.getElementById("status");
 const result = document.getElementById("result");
 const stats = document.getElementById("stats");
-const generationTimes = document.getElementById("generation-times");
+const generationTimes = document.getElementById("generation-times-text");
+const generationTimesPrevBtn = document.getElementById("generation-times-prev-btn");
+const generationTimesNextBtn = document.getElementById("generation-times-next-btn");
+const generationTimesPosition = document.getElementById("generation-times-position");
 const gridEl = document.getElementById("grid");
 const hoverDefinition = document.getElementById("hover-definition");
 const cluesAcross = document.getElementById("clues-across");
@@ -309,6 +312,7 @@ function renderAttemptPreview(examples) {
     forced_cells: forcedCells,
     locked_cells: lockedCells,
     low_candidate_cells: lowCandidateCells,
+    noise_cells: noiseCells,
   } of examples) {
     if (!exampleGrid || !exampleGrid.length) continue;
     const height = exampleGrid.length;
@@ -369,6 +373,13 @@ function renderAttemptPreview(examples) {
     for (const [r, c] of lowCandidateCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("low-candidates");
+    }
+    // Only ever non-empty on the "pattern" (cycle-start) preview too —
+    // see backend/crossword_gen.py's _noise_slot_cells — same `|| []`
+    // no-op convention as lowCandidateCells just above.
+    for (const [r, c] of noiseCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("noise");
     }
     const totalCells = height * width;
     const blackPercent = Math.round((100 * blackCount) / totalCells);
@@ -448,6 +459,13 @@ function updatePreviewNavButtons() {
   attemptPreviewPrevBtn.disabled = atStart;
   attemptPreviewNextBtn.disabled = atEnd;
   attemptPreviewLastBtn.disabled = atEnd;
+  // Same enabled/disabled state, mirrored onto the pair of nav buttons at
+  // the end of #generation-times (see hideAttemptPreviewPanel()) — a
+  // single source of truth for "where are we in previewHistory" driving
+  // both sets of buttons, so they can never drift out of sync with each
+  // other regardless of which one the player actually clicks.
+  generationTimesPrevBtn.disabled = atStart;
+  generationTimesNextBtn.disabled = atEnd;
   renderPreviewPosition();
 }
 
@@ -465,9 +483,13 @@ function updatePreviewNavButtons() {
 // below (a language switch touches no index, so updatePreviewNavButtons()
 // itself isn't otherwise re-triggered).
 function renderPreviewPosition() {
-  attemptPreviewPosition.textContent = previewHistoryIndex >= 0 && previewHistory.length
+  const text = previewHistoryIndex >= 0 && previewHistory.length
     ? I18N[uiLanguage].attemptPreviewPosition(previewHistoryIndex + 1, previewHistory.length)
     : "";
+  attemptPreviewPosition.textContent = text;
+  // Same text, on the copy of this readout next to #generation-times' own
+  // nav buttons (see updatePreviewNavButtons()).
+  generationTimesPosition.textContent = text;
 }
 
 // Redraws #attempt-preview-status from whatever lastPreviewStep currently
@@ -610,6 +632,34 @@ function hideAttemptPreview() {
   autoFollowPreview = true;
   updatePreviewNavButtons();
 }
+
+// Hides the attempt-preview panel WITHOUT wiping previewHistory, at the
+// user's explicit request: once the final, playable grid is ready, the
+// panel goes back to hidden by default (it's not meant to permanently sit
+// above a finished puzzle), but the search history it recorded must
+// survive so the new #generation-times-prev-btn/-next-btn (see below) can
+// still bring it back up on demand — unlike hideAttemptPreview() above,
+// which is reserved for the start of a brand new generation, where
+// wiping previous history is exactly the point. Used in place of
+// hideAttemptPreview() at the "grid is ready" transition in
+// runGeneration().
+function hideAttemptPreviewPanel() {
+  attemptPreview.hidden = true;
+}
+
+// The two buttons at the end of #generation-times reuse the exact same
+// previewHistory/showPreviousPreview()/showNextPreview() machinery the
+// in-progress panel already has — the only thing they add is revealing
+// the panel again first, since hideAttemptPreviewPanel() (see above)
+// leaves it hidden but its content/history intact once a grid is ready.
+generationTimesPrevBtn.addEventListener("click", () => {
+  attemptPreview.hidden = false;
+  showPreviousPreview();
+});
+generationTimesNextBtn.addEventListener("click", () => {
+  attemptPreview.hidden = false;
+  showNextPreview();
+});
 
 function isWhite(r, c) {
   return puzzle.pattern[r][c] !== BLACK;
@@ -1173,7 +1223,7 @@ async function runGeneration(startJob) {
     solutionBtn.classList.remove("active");
     checkBtn.classList.remove("active");
 
-    hideAttemptPreview();
+    hideAttemptPreviewPanel();
     // #result (and so #grid, its descendant) must already be visible before
     // renderGrid() runs: it measures gridEl.offsetWidth to size #hover-
     // definition (see renderGrid()'s own comment) — while #result is still

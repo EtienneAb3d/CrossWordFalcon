@@ -1507,3 +1507,35 @@ English (see `project-best-practices`).
   already applied once before to `#grid` itself inside `#board`'s own flex
   row. **Not yet visually confirmed in an actual browser** — the same
   tooling limitation already noted throughout this project's UI work.
+
+- added a pair of small navigation buttons (◀/▶, `.nav-btn`, same class
+  already used by `#attempt-preview`'s own ⏮/◀/▶/⏭ controls) at the end
+  of `#generation-times` (the final grid's "Grille générée en... —
+  Optimisation en... — Définitions générées en..." line), at the user's
+  explicit request, so the player can step back through the same search-
+  history states (`script.js`'s `previewHistory`) even after the puzzle
+  is done, not only while a generation is in progress. Clicking either
+  one un-hides `#attempt-preview` (kept hidden by default once the final
+  grid is ready, via a new `hideAttemptPreviewPanel()` that hides the
+  panel without wiping `previewHistory` — unlike the full `hideAttempt
+  Preview()` reset still used at the start of a fresh generation) and
+  reuses the exact same `showPreviousPreview()`/`showNextPreview()`
+  already built for the in-progress panel — the panel's own full ⏮/◀/▶/⏭
+  controls become usable immediately once reopened this way, right above
+  the finished puzzle (its DOM position, a sibling right before
+  `#result`, was already there). `#generation-times` gained an inner
+  `#generation-times-text` span (so setting the duration text no longer
+  clobbers the buttons) and `#generation-times-position` (a smaller copy
+  of `#attempt-preview-position`'s "Étape X/Y" readout, 0.7rem to match
+  this line's own size) — laid out as a small flex row (`gap: 0.35rem`).
+  `updatePreviewNavButtons()`/`renderPreviewPosition()` (already the
+  single source of truth for the in-panel controls) were extended to
+  also drive this new pair, so the two button sets can never disagree
+  with each other. No new i18n strings: reuses the existing
+  `attemptPreviewPrevBtn`/`attemptPreviewNextBtn` aria-label keys (same
+  action, same wording). **Not yet visually confirmed in an actual
+  browser** — same tooling limitation noted throughout this file;
+  verified structurally instead (JS syntax check, CSS brace balance, the
+  real served markup fetched and read directly, and a real generation
+  through the running API confirmed `examples_history`/the duration
+  fields this feature depends on are present and correctly shaped).

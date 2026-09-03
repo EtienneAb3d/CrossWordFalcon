@@ -198,7 +198,7 @@ def load_wordlist(path, max_words=None, require_gloss=False):
     valeur de `difficulty` retienne une proportion comparable du vocabulaire
     quelle que soit la langue, plutôt qu'un nombre de mots fixe qui n'a pas
     le même effet suivant la taille du lexique de chaque langue. Retourne
-    (by_length, accents, canonicals) :
+    (by_length, accents, canonicals, frequencies) :
     - by_length = {longueur: [mots]} — seuls les `max_words` mots les plus
       fréquents *au global* (toutes longueurs confondues), si fourni, sont
       conservés, puis regroupés par longueur pour le solveur CSP ;
@@ -207,7 +207,12 @@ def load_wordlist(path, max_words=None, require_gloss=False):
       conjugaison — quand il génère les définitions ; voir backend/clues.py) ;
     - canonicals = {MOT: [forme(s) canonique(s)/lemme(s)]}, pour les mots
       retenus dans by_length (sert à chercher une définition de dictionnaire
-      par lemme plutôt que par forme fléchie ; voir backend/clues.py)."""
+      par lemme plutôt que par forme fléchie ; voir backend/clues.py) ;
+    - frequencies = {MOT: fréquence brute (float)}, pour les mots retenus
+      dans by_length — passée à `build_index` (voir `NOISE_FREQUENCY_
+      THRESHOLD`/`_noise_slot_cells`), pour distinguer un candidat
+      statistiquement crédible d'une entrée quasi nulle du dictionnaire
+      (bruit de corpus, sigle, fragment étranger)."""
     entries = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -286,11 +291,13 @@ def load_wordlist(path, max_words=None, require_gloss=False):
     result = defaultdict(list)
     accents = {}
     canonicals = {}
-    for word, (accented, _, canonical) in ranked:
+    frequencies = {}
+    for word, (accented, freq, canonical) in ranked:
         result[len(word)].append(word)
         accents[word] = accented
         canonicals[word] = canonical
-    return dict(result), accents, canonicals
+        frequencies[word] = freq
+    return dict(result), accents, canonicals, frequencies
 
 
 # ---------- Génération du motif de cases noires ----------
@@ -707,6 +714,29 @@ PREFILL_MIN_WORD_COUNT = 3
 # chose an intermediate threshold (3) over keeping 1 (accepting the
 # regression) or reverting to 10 outright.
 PREFILL_LOCKED_MIN_WORD_COUNT = 3
+
+# Fréquence brute (colonne FREQUENCE de data/wordlist_<lang>_full.tsv, voir
+# load_wordlist) en dessous de laquelle un candidat n'est plus compté comme
+# "jouable" par `_noise_slot_cells` (voir sa propre docstring) — à la
+# demande explicite de l'utilisateur, pour distinguer une case réellement
+# injouable (aucun candidat réel, déjà couverte par le surlignage rouge
+# .impossible) d'une case techniquement non vide mais dont les seuls
+# candidats restants sont soit déjà utilisés ailleurs dans la grille, soit
+# du bruit de corpus (sigle, fragment étranger, artefact d'OCR) plutôt que
+# de vrais mots crédibles.
+#
+# Calibrée en direct sur le lexique français réel : les 10 plus faibles
+# fréquences de longueur 2 et 3 sont sans exception du bruit reconnaissable
+# (« ΔT », « Nʼ », « ZL », « ΜG »... ; « GLX », « ITO », « TEO », « ZIO »...),
+# tandis que le cas concret ayant motivé cette fonctionnalité (une grille
+# bloquée sur 3 cases pendant 11 paliers consécutifs, voir CLAUDE.md)
+# montrait `ESR`=3.0, `GSR`=1.0, `KSS`=1.0, `TSS`=4.0 — aucun n'est un vrai mot
+# français — contre `VOS`=27330.0 et `SE`, tous deux courants. Un seuil de 5
+# écarte ces quatre entrées de bruit sans toucher aux mots réels, mais
+# reste délibérément conservateur : à ce seuil, seuls 4.5 % des mots de
+# longueur 2 et 10.3 % de ceux de longueur 3 du lexique français réel sont
+# exclus (mesuré en direct, `data/wordlist_fr_full.tsv`).
+NOISE_FREQUENCY_THRESHOLD = 5
 
 # Minimum number of new black cells always guaranteed to a single zone
 # during the "nettoyage curatif" budget check (see
@@ -1598,14 +1628,28 @@ def extract_slots(grid, rows, cols):
 # longueur ayant `lettre` en position p. Les intersections de quelques ensembles
 # (un par lettre déjà connue) remplacent le scan complet du lexique.
 
-def build_index(by_length):
+def build_index(by_length, frequencies=None):
+    """`frequencies` (un dict {MOT: fréquence}, `None` par défaut) alimente
+    `index[length]["freq"]` — utilisé uniquement par `_noise_slot_cells`
+    (voir `NOISE_FREQUENCY_THRESHOLD`) pour distinguer un candidat
+    statistiquement crédible d'une entrée quasi nulle du dictionnaire.
+    Omis (`None`), chaque mot de `index[length]["freq"]` retombe sur `0.0`
+    — un no-op pour tout appelant qui n'utilise pas cette fonctionnalité
+    (aucun caller réel autre que `generate_grid` aujourd'hui, mais un test
+    isolé qui construit son propre petit lexique n'a pas besoin de fournir
+    ce paramètre pour continuer à fonctionner comme avant)."""
+    frequencies = frequencies or {}
     index = {}
     for length, words in by_length.items():
         pos_sets = [defaultdict(set) for _ in range(length)]
         for w in words:
             for p, ch in enumerate(w):
                 pos_sets[p][ch].add(w)
-        index[length] = {"words": words, "pos": pos_sets}
+        index[length] = {
+            "words": words,
+            "pos": pos_sets,
+            "freq": {w: frequencies.get(w, 0.0) for w in words},
+        }
     return index
 
 
@@ -1939,19 +1983,23 @@ SLOT_SELECTION_WINDOW_FRACTION = 1 / 10
 # fait-acquis/simple-supposition que `_has_known_letter`), puis la
 # réduit à nouveau à ses `SLOT_SELECTION_REFINE_FRACTION` premiers
 # emplacements (les mieux pourvus en lettres déjà connues) avant le
-# tirage final au hasard — à la demande explicite de l'utilisateur.
+# tirage final — à la demande explicite de l'utilisateur, qui a aussi
+# relevé cette proportion de 1/4 à 1/2 dans le même mouvement (une
+# réduction plus douce, gardant la moitié plutôt que le quart de
+# `window`). Plancher **toujours à 1 emplacement, jamais 0** (jamais 5
+# non plus, comme la fenêtre précédente) : `window` elle-même peut être
+# aussi petite que son propre plancher de 5, et un plancher plus élevé
+# ici annulerait la réduction demandée dans ce cas très courant (la
+# moitié de 5 vaut 2, mais un tiers ou un quart de 5 vaudrait déjà 1,
+# sous un plancher de 5 qui forcerait alors la fenêtre entière à être
+# reprise telle quelle) — cette fenêtre réduite (`refined_window`) ne
+# peut donc jamais finir vide, quelle que soit la taille de `window` ou
+# la valeur de cette fraction.
 # Nommée séparément de `SLOT_SELECTION_WINDOW_FRACTION` ci-dessus : les
 # deux fractions s'appliquent à deux fenêtres différentes, l'une après
 # l'autre (la seconde opère sur `window`, pas sur `selection_pool`), pas
-# à la même grandeur — leur valeur numérique commune (1/4) est une
-# coïncidence avec l'ancienne valeur historique de la première fraction
-# (voir son propre commentaire ci-dessus), pas un lien entre les deux.
-# Plancher à 1 emplacement (jamais 5, comme la fenêtre précédente) :
-# `window` elle-même peut être aussi petite que son propre plancher de
-# 5, et un plancher de 5 ici annulerait la réduction demandée dans ce
-# cas très courant (1/4 de 5 vaut 1, en dessous du plancher de 5, qui
-# forcerait alors la fenêtre entière à être reprise telle quelle).
-SLOT_SELECTION_REFINE_FRACTION = 1 / 4
+# à la même grandeur — leur valeur numérique n'a aucun lien entre elles.
+SLOT_SELECTION_REFINE_FRACTION = 1 / 2
 
 
 class Filler:
@@ -2240,6 +2288,46 @@ class Filler:
                 if j != i and self.assignment[j] is not None:
                     return True
         return False
+
+    def _slot_letter_frequency_score(self, i):
+        """Somme des carrés des fréquences mesurées (self.letter_scores —
+        la même statistique que sample_letter_biases calcule pour choisir
+        les graines/forced_letters, voir _candidate_score plus bas) de la
+        lettre la plus fréquente à chaque case ENCORE LIBRE de l'emplacement
+        i — une case déjà déterminée par une vraie lettre (un mot croisé
+        déjà assigné pendant cette même tentative, ou self.locked_letters)
+        n'offre plus aucune option de remplissage, donc n'est pas comptée
+        ici, même exclusion que _placed_letter_count/_has_known_letter.
+
+        Utilisée par _backtrack comme dernier critère de départage du
+        niveau 4 (voir sa propre docstring), à la demande explicite de
+        l'utilisateur : favorise l'emplacement dont la zone offre
+        statistiquement le plus d'options de remplissage — c'est-à-dire,
+        pour chaque case encore libre, plusieurs mots réels différents s'y
+        accordant plutôt qu'une lettre isolée dominant le reste — et donc,
+        pour les emplacements voisins qui croisent ces mêmes cases, le plus
+        de lettres crédibles avec lesquelles composer à leur tour. Mettre
+        les fréquences au carré favorise un emplacement dont plusieurs
+        cases encore libres ont toutes un consensus statistique marqué
+        plutôt qu'un emplacement qui ne doit un score élevé qu'à une seule
+        case exceptionnelle — même raisonnement déjà appliqué ailleurs dans
+        ce fichier (_candidate_score, la somme des carrés des longueurs de
+        mots dans generate_grid)."""
+        total = 0
+        for cell in self.slots[i]:
+            if cell in self.locked_letters:
+                continue
+            fixed = False
+            for j, _ in self.cell_to_slots[cell]:
+                if j != i and self.assignment[j] is not None:
+                    fixed = True
+                    break
+            if fixed:
+                continue
+            counts = self.letter_scores.get(cell)
+            if counts:
+                total += max(counts.values()) ** 2
+        return total
 
     def _candidate_score(self, i, word):
         """Somme des carrés des scores statistiques (self.letter_scores,
@@ -2631,6 +2719,22 @@ class Filler:
         #    maintenant que le score lui-même est géométrique, donc que de
         #    nombreux emplacements peuvent partager exactement le même
         #    score (toute la diagonale à une distance donnée du coin).
+        #    Cette fenêtre géométrique (`window`) est ensuite retriée deux
+        #    fois de plus, chaque fois en la réduisant encore, avant que le
+        #    choix final ne se fasse :
+        # 5. par nombre de lettres déjà posées dans chaque emplacement
+        #    (`_placed_letter_count`, le plus de lettres en premier),
+        #    réduite à ses `SLOT_SELECTION_REFINE_FRACTION` premiers
+        #    emplacements (voir la docstring de cette constante) ;
+        # 6. par `_slot_letter_frequency_score` (voir sa propre docstring),
+        #    le score le plus haut en premier — l'emplacement dont la zone
+        #    propose statistiquement le plus d'options de remplissage —
+        #    dont le premier devient directement l'emplacement choisi.
+        #    Chacune de ces deux réductions remélange sa propre fenêtre
+        #    d'entrée au préalable (même raison que le mélange du niveau 4 :
+        #    `sorted` étant stable, ce mélange est ce qui départage les
+        #    emplacements à égalité de score, pas l'ordre hérité du tri
+        #    précédent).
         free_across = [i for i in unassigned if self.directions[i] == "across"]
         free_down = [i for i in unassigned if self.directions[i] == "down"]
         if free_across and free_down:
@@ -2701,7 +2805,20 @@ class Filler:
         placed_counts = {i: self._placed_letter_count(i) for i in window}
         refined_window_size = max(1, int(len(window) * SLOT_SELECTION_REFINE_FRACTION))
         refined_window = sorted(shuffled_window, key=lambda i: -placed_counts[i])[:refined_window_size]
-        best_i = self.rng.choice(refined_window)
+        # Nouveau, à la demande explicite de l'utilisateur : classer les
+        # emplacements de cette fenêtre réduite par _slot_letter_frequency_
+        # score (voir sa propre docstring), le score le plus haut en
+        # premier — donc l'emplacement dont la zone propose statistiquement
+        # le plus d'options de remplissage, y compris pour les emplacements
+        # voisins qui croisent ses cases encore libres. Remélangée d'abord
+        # (avec le RNG seedé de cette tentative), pour la même raison que
+        # les deux mélanges précédents : `sorted` est stable, donc sans ce
+        # troisième mélange l'ordre issu des deux tris précédents
+        # déciderait, à égalité de score, quel emplacement l'emporte.
+        shuffled_refined = list(refined_window)
+        self.rng.shuffle(shuffled_refined)
+        freq_scores = {i: self._slot_letter_frequency_score(i) for i in refined_window}
+        best_i = sorted(shuffled_refined, key=lambda i: -freq_scores[i])[0]
 
         cands = [w for w in domains[best_i] if w not in self.used_words]
         # Toujours mélangé d'abord (avec le RNG seedé de cette tentative,
@@ -3657,6 +3774,105 @@ def _low_candidate_slot_cells(grid, rows, cols, index, locked_letters):
         if 0 < locked_count < length:
             if _slot_candidate_count(index, length, slot, locked_letters) < PREFILL_LOCKED_MIN_WORD_COUNT:
                 cells.update(slot)
+    return sorted(cells)
+
+
+def _noise_slot_cells(grid, rows, cols, index, locked_letters):
+    """Cases où **aucune lettre** ne satisfait à la fois l'emplacement
+    horizontal et l'emplacement vertical qui s'y croisent — le domaine brut
+    de chacun des deux emplacements, pris séparément, peut très bien être
+    non vide (donc ni l'un ni l'autre n'est signalé par le surlignage rouge
+    `.impossible`, un domaine totalement vide), mais si aucun de leurs mots
+    réellement *jouables* respectifs ne partage la même lettre à cette case
+    précise, elle ne peut en pratique jamais être remplie.
+
+    « Réellement jouable », pour un emplacement *partiellement* verrouillé
+    (même restriction que `_low_candidate_slot_cells` ci-dessus — un
+    emplacement entièrement verrouillé est déjà un mot confirmé, un
+    emplacement entièrement vierge est hors du champ de cette fonction),
+    signifie un candidat du dictionnaire (`_slot_candidates`) qui n'est ni :
+    - déjà utilisé ailleurs dans cette même grille (tout autre emplacement
+      entièrement verrouillé, `used_words`, calculé ici directement depuis
+      `locked_letters` — un mot déjà posé ne peut plus être reposé) ;
+    - en dessous de `NOISE_FREQUENCY_THRESHOLD` en fréquence brute
+      (`index[length]["freq"]`, voir `build_index`) — voir la docstring de
+      cette constante pour sa calibration.
+
+    Une case ne croisée QUE par un seul emplacement encore ouvert (l'autre
+    direction y est déjà entièrement verrouillée, ou n'y forme même pas un
+    véritable emplacement — une zone d'une seule case) est un cas
+    dégénéré de la même règle : elle est signalée si et seulement si ce
+    seul emplacement, à lui seul, n'a plus aucun mot jouable du tout.
+
+    Cas concret ayant motivé cette fonctionnalité, voir CLAUDE.md : une
+    grille bloquée 11 paliers d'affilée sur 3 cases, dont une seule
+    (l'intersection entre un emplacement horizontal `_S_` et un
+    emplacement vertical `ER_`) était en réalité totalement bloquée par ce
+    critère — chaque emplacement pris isolément avait pourtant bel et bien
+    des mots jouables (`OST`/`PST`/...  d'un côté, `ERG`/`ERS`/`ERE` de
+    l'autre), mais aucune lettre commune aux deux ensembles à leur case
+    partagée ; un premier jet de cette fonction, qui ne vérifiait chaque
+    emplacement qu'isolément (sans le croisement), ne signalait donc rien
+    du tout sur cette grille — vérifié en la rejouant explicitement contre
+    l'historique réel de cette même génération.
+
+    Purement diagnostique, sur l'aperçu "Génération du motif de cases
+    noires" (l'événement `pattern`), à la demande explicite de
+    l'utilisateur — même portée que `_low_candidate_slot_cells`, jamais
+    calculée pour un palier de reprise "telle quelle" (voir son propre
+    appelant dans `generate_grid`)."""
+    if not locked_letters:
+        return []
+    all_slots = extract_slots(grid, rows, cols)
+    used_words = {
+        "".join(locked_letters[cell] for cell in slot)
+        for slot in all_slots
+        if all(cell in locked_letters for cell in slot)
+    }
+    # Mots jouables par emplacement partiellement verrouillé (None pour
+    # tout autre emplacement — entièrement verrouillé ou entièrement
+    # vierge — hors du champ de cette fonction, voir la docstring).
+    playable_by_slot = []
+    for slot in all_slots:
+        length = len(slot)
+        locked_count = sum(1 for cell in slot if cell in locked_letters)
+        if not (0 < locked_count < length):
+            playable_by_slot.append(None)
+            continue
+        candidates = _slot_candidates(index, length, slot, locked_letters)
+        freq_map = index.get(length, {}).get("freq", {})
+        playable_by_slot.append([
+            w for w in candidates
+            if w not in used_words and freq_map.get(w, 0.0) >= NOISE_FREQUENCY_THRESHOLD
+        ])
+    # Pour chaque case encore libre, les emplacements ouverts (au sens
+    # ci-dessus) qui la traversent, avec sa position exacte dans chacun —
+    # 1 seul pour une case bordée d'un côté par du verrouillé/du noir, 2
+    # pour un vrai croisement horizontal/vertical.
+    cell_slots = defaultdict(list)
+    for i, slot in enumerate(all_slots):
+        if playable_by_slot[i] is None:
+            continue
+        for pos, cell in enumerate(slot):
+            if cell not in locked_letters:
+                cell_slots[cell].append((i, pos))
+    cells = set()
+    for cell, entries in cell_slots.items():
+        letter_sets = []
+        for slot_i, pos in entries:
+            playable = playable_by_slot[slot_i]
+            if not playable:
+                letter_sets = []
+                break
+            letter_sets.append({w[pos] for w in playable})
+        if not letter_sets:
+            cells.add(cell)
+            continue
+        common = letter_sets[0]
+        for s in letter_sets[1:]:
+            common &= s
+        if not common:
+            cells.add(cell)
     return sorted(cells)
 
 
@@ -5176,10 +5392,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
 
     rng = random.Random(seed)
     mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
-    by_length, accents, canonicals = load_wordlist(
+    by_length, accents, canonicals, frequencies = load_wordlist(
         wordlist_path, mw, require_gloss=(difficulty == "easy")
     )
-    index = build_index(by_length)
+    index = build_index(by_length, frequencies)
     # Précalculé une seule fois (pas par palier) — mêmes longueurs pour
     # toute la génération, `index` ne change jamais. Reproduit exactement
     # le calcul propre à chaque worker dans `_pattern_attempt` (voir sa
@@ -5517,6 +5733,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
                         "low_candidate_cells": [],
+                        "noise_cells": [],
                     })
             else:
                 # Un aperçu par grille du vivier, pas un seul, à la demande
@@ -5552,12 +5769,23 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         _low_candidate_slot_cells(pool_grid, rows, cols, index, pool_locked)
                         if pool_grid is not None else []
                     )
+                    # Cases sans aucune proposition réellement jouable
+                    # (`NOISE_FREQUENCY_THRESHOLD`), à la demande explicite
+                    # de l'utilisateur — même calcul par grille du vivier
+                    # individuelle, même portée (jamais pour un palier de
+                    # reprise "telle quelle") que low_candidate_cells
+                    # ci-dessus, voir _noise_slot_cells.
+                    noise_cells = (
+                        _noise_slot_cells(pool_grid, rows, cols, index, pool_locked)
+                        if pool_grid is not None else []
+                    )
                     cycle_start_examples.append({
                         "example_grid": start_grid,
                         "impossible_cells": [],
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
                         "low_candidate_cells": low_candidate_cells,
+                        "noise_cells": noise_cells,
                     })
             progress("pattern", attempt=attempt + 1, attempts=attempts, parallel=PARALLEL_ATTEMPTS,
                      total_attempts=total_attempts_tried,

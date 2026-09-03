@@ -15,6 +15,7 @@
   --incorrect-fg: #7f1d1d;
   --locked: #ea580c;
   --low-candidates-bg: #fed7aa;
+  --noise-bg: #e9d5ff;
 }
 
 * {
@@ -235,6 +236,28 @@ button:disabled {
   font-size: 0.7rem;
   color: var(--fg);
   opacity: 0.7;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+/* #generation-times-prev-btn/#generation-times-next-btn (the two .nav-btn
+   at the end of this line, reusing the exact mechanism/history already
+   built for #attempt-preview-prev-btn/#attempt-preview-next-btn — see
+   script.js's showPreviousPreview()/showNextPreview()) let the player
+   step back through the same search-history states once the final,
+   playable grid is shown, at the user's explicit request — the attempt-
+   preview panel above stays hidden by default once a grid is ready
+   (hideAttemptPreviewPanel(), unlike the full hideAttemptPreview() reset
+   at the start of a new generation), and reappears on demand the moment
+   either button is first used. #generation-times-position mirrors
+   #attempt-preview-position's own small/centered/fixed-width treatment,
+   just smaller to match this line's own 0.7rem. */
+#generation-times-position {
+  font-size: 0.7rem;
+  color: var(--fg);
+  min-width: 3rem;
+  text-align: center;
 }
 
 .toggle-btn.active {
@@ -467,6 +490,29 @@ button:disabled {
    left" orange. */
 .attempt-preview-grid .cell.white.low-candidates {
   background: var(--low-candidates-bg);
+}
+
+/* Cases où aucune lettre ne satisfait à la fois l'emplacement horizontal
+   et l'emplacement vertical qui s'y croisent (backend/crossword_gen.py's
+   `_noise_slot_cells`) — distinct de `.impossible` ci-dessous : chacun
+   des deux emplacements pris séparément peut très bien avoir un domaine
+   non vide (donc aucun des deux n'est lui-même `.impossible`), mais si
+   aucun de leurs mots réellement jouables (ni déjà utilisés ailleurs
+   dans la grille, ni du bruit statistique) ne partage la même lettre à
+   cette case précise, elle reste en pratique injouable — un critère plus
+   fin que le simple domaine vide, à la demande explicite de
+   l'utilisateur. Fond violet (`--noise-bg`), une couleur dédiée plutôt
+   que réutiliser l'orange de `.low-candidates` (un avertissement plus
+   doux, "peu de candidats") ou le rouge de `.impossible` (un domaine
+   brut totalement vide) — les trois signalent des degrés de gravité
+   différents. Déclarée après `.low-candidates` et avant `.impossible`
+   dans la cascade : les deux peuvent en principe se recouper sur la même
+   case (un emplacement au domaine juste en dessous du seuil peut aussi
+   être en cause dans un croisement injouable), auquel cas le violet
+   l'emporte sur l'orange (signal plus sévère), mais s'efface devant le
+   rouge (le cas le plus sévère de tous). */
+.attempt-preview-grid .cell.white.noise {
+  background: var(--noise-bg);
 }
 
 /* Cells of an "impossible zone" (a slot with no candidate word left at all
