@@ -119,6 +119,72 @@ TEMPERATURE = 0.4
 # model is asked for this directly, not just filtered after the fact.
 MAX_CLUE_WORDS = 20
 
+# Grid title (see LLMClueGenerator.generate_title), at the user's explicit
+# request: "Pas plus de 3 mots." Prompt-side only, deliberately never
+# enforced by truncating the model's actual answer afterward — a first
+# version of _clean_title did clamp to this many words as a hard safety
+# net, but the user asked for that to be removed: "Ne pas couper un titre
+# trop long, ce qui lui enlève son sens. Faire confiance au LLM pour
+# respecter la consigne (le LLM sur cette machine est un tout petit
+# modèle qui a du mal à appliquer les consignes très fidèlement)" — a
+# title is meant to read as one coherent phrase, and slicing off its last
+# words the moment the model runs one word over the limit can silently
+# turn a real, meaningful title into a fragment with no sense of its own
+# (see this project's own live example, "La clé du mystère" truncated
+# into the meaningless "La clé du"). Kept only as the number named in the
+# system prompt's own rule text.
+MAX_TITLE_WORDS = 3
+
+# A wrapping quote pair the model sometimes puts around a title despite
+# rule 2 explicitly forbidding it (e.g. '"Vol de Nuit"') — stripped by
+# _clean_title. Deliberately narrow (quote characters only, not general
+# punctuation): a title legitimately ending in "!"/"?" is fine and must
+# not be touched.
+_TITLE_QUOTES_RE = re.compile(r'^[\'"“”«»]+|[\'"“”«»]+$')
+
+# A leaked "Title: " (or its equivalent in each of the 5 supported
+# languages) label the model sometimes echoes despite rule 2 explicitly
+# forbidding exactly this — mirrors a failure mode already documented for
+# clue generation itself (backend/clues.py's own history, see CLAUDE.md:
+# a small model echoing a format template's literal placeholder text
+# instead of just answering). Checked case-insensitively, stripped by
+# _clean_title after the leading numbered/bulleted marker (so a line like
+# "1. Title: Vol de Nuit" is still fully cleaned, not just partially).
+_TITLE_LABEL_RE = re.compile(
+    r"^\s*(?:title|titre|titel|título|titolo)\s*:\s*", re.IGNORECASE,
+)
+
+
+def _clean_title(content):
+    """Turns a raw LLM response into a usable title, or "" if nothing
+    usable survives — never raises, since a missing/blank title is a
+    purely cosmetic degrade for the caller (see LLMClueGenerator.
+    generate_title's own docstring), not worth treating as an error.
+    Takes only the first non-empty line (a model asked for a bare title
+    occasionally still pads its answer with a second, explanatory line
+    despite the prompt forbidding it), strips a leading numbered/bulleted
+    marker the same way _parse_response already does for clues
+    (_LEADING_MARKER_RE), then a leaked "Title: "-style label
+    (_TITLE_LABEL_RE), then a wrapping quote pair (_TITLE_QUOTES_RE) —
+    and returns the result exactly as the model wrote it from there,
+    deliberately never truncated to MAX_TITLE_WORDS: see that constant's
+    own comment for why cutting a too-long title short was tried and then
+    explicitly reverted at the user's request (it can silently turn a
+    real, meaningful title into a fragment with no sense of its own)."""
+    line = ""
+    for candidate_line in content.splitlines():
+        candidate_line = candidate_line.strip()
+        if candidate_line:
+            line = candidate_line
+            break
+    if not line:
+        return ""
+    line = _LEADING_MARKER_RE.sub("", line).strip()
+    line = _TITLE_LABEL_RE.sub("", line).strip()
+    line = _TITLE_QUOTES_RE.sub("", line).strip()
+    return line
+
+
 # Even a modest batch (5-6 words) was unreliable on the small local model —
 # it would produce good clues for the first couple of words then degrade
 # into empty/off-topic/malformed lines for the rest of the same response.
@@ -140,9 +206,28 @@ _BATCH_SIZE = 1
 # prompt) — it used to be hardcoded here in French only, regardless of
 # which language the grid/clue was actually in.
 DIFFICULTY_STYLE = {
+    # Second sentence added at the user's explicit request: "quand une
+    # définition simple existe pour un mot, ne pas utiliser une définition
+    # qui renvoie à un nom de personne, de ville, de fleuve, un terme
+    # technique spécialisé, ou de façon générale qui nécessite une culture
+    # générale très avancée." Scoped to "easy" only, per the request's own
+    # wording — a word that's ALSO a person's/place's name (e.g. a common
+    # noun that happens to double as a river or given name) can still be
+    # clued at medium/hard difficulty via that sense; at easy, the plain,
+    # everyday sense must be preferred whenever one exists at all. This is
+    # a genuinely different concern from rule 5 in _build_system_prompt
+    # ("the clue must reflect the word's actual meaning") — that rule is
+    # about correctness (not inventing a meaning), this one is about
+    # *which* real, correct meaning to pick when more than one exists.
     "easy": (
         "very easy: simple, literal, everyday vocabulary, no wordplay, no "
-        "ambiguity — a clue a child could answer."
+        "ambiguity — a clue a child could answer. If the word has more "
+        "than one real meaning and a simple, everyday one exists, always "
+        "use that one — never a sense that refers to a person's name, a "
+        "city or other place name, a river, a specialized/technical term, "
+        "or in general any sense that would require advanced general "
+        "knowledge/culture to recognize. Those senses are for medium/hard "
+        "difficulty, not easy."
     ),
     "medium": (
         "medium: classic newspaper-crossword style — reworded and a "
@@ -587,6 +672,84 @@ class LLMClueGenerator:
         if errors and not clues:
             raise errors[0]
         return clues
+
+    def generate_title(self, word_entries, language="fr", timeout=DEFAULT_TIMEOUT,
+                        cancel_event=None):
+        """Asks the LLM for a short (see MAX_TITLE_WORDS), catchy title for
+        the whole grid, from the list of every one of its solution words —
+        called once per grid, at the user's explicit request, right after
+        every clue is already generated (see backend/app.py's
+        _run_generate_job) and shown above the finished, playable grid
+        (frontend/static/script.js's displayFinalGrid). Unlike generate()
+        above, this is a single best-effort attempt with no retry loop and
+        no per-call LOG_LLM/ record: a title is a purely cosmetic addition,
+        not worth tripling the number of LLM round-trips per grid over (a
+        real cost — see clue generation's own documented per-word timing)
+        the way a missing clue would be. Any failure here — a connection
+        error, an empty/unusable/wrong-language response — simply returns
+        "" rather than raising; the caller treats that exactly like a
+        title-less grid generated before this feature existed (see
+        backend/grid_store.py), never as a reason to fail the request.
+
+        `word_entries` is the same (answer, accented, canonical) shape
+        generate() takes; only each word's accented spelling is actually
+        used here (the model is shown the real, natural spelling of every
+        answer, the same reasoning as generate()'s own accented/inflected
+        choice) — deduplicated and sorted so the prompt is stable/
+        reproducible regardless of the words' own original grid order."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelled()
+        words = sorted({accented for _, accented, _ in word_entries})
+        if not words:
+            return ""
+        language_name = LANGUAGE_NAMES.get(language, language)
+        system_prompt = (
+            "You are naming a crossword puzzle. You will be given the list "
+            "of every answer word placed in the grid.\n\n"
+            f"Reply with a short, catchy title for this puzzle, entirely in "
+            f"{language_name}, loosely evoking its words/theme if a theme is "
+            "apparent from them — never a literal list of the words "
+            "themselves.\n\n"
+            "STRICT RULES:\n"
+            f"1. At most {MAX_TITLE_WORDS} words.\n"
+            "2. Reply with the title only — no quotes, no ending "
+            "punctuation, no explanation, no leading label such as "
+            "\"Title:\".\n"
+            f"3. The title must be entirely in {language_name}, even if "
+            "some of the words below are foreign proper nouns.\n"
+        )
+        user_message = "Words: " + ", ".join(words)
+        try:
+            response = httpx.post(
+                self.base_url,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "temperature": TEMPERATURE,
+                    "max_tokens": REASONING_TOKEN_BUDGET + 30,
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+        except httpx.HTTPError as e:
+            logger.warning(
+                "title generation failed (%s, model=%r): %s", self.base_url, self.model, e,
+            )
+            return ""
+        logger.info("title generation: raw LLM response: %r", content)
+        title = _clean_title(_strip_reasoning(content))
+        if title and _detect_wrong_language(title, language):
+            logger.warning(
+                "title generation: %r looks like the wrong language, discarding", title,
+            )
+            return ""
+        logger.info("title generation: %r", title)
+        return title
 
     @staticmethod
     def _build_examples_block(entry, language):

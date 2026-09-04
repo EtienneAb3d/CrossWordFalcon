@@ -70,6 +70,12 @@ const attemptPreviewPosition = document.getElementById("attempt-preview-position
 const attemptPreviewStatus = document.getElementById("attempt-preview-status");
 const wordVerificationWrap = document.getElementById("word-verification-wrap");
 const wordVerificationTbody = document.getElementById("word-verification-tbody");
+const gridTitleEl = document.getElementById("grid-title");
+const libraryBtn = document.getElementById("library-btn");
+const libraryPanel = document.getElementById("library");
+const libraryCloseBtn = document.getElementById("library-close-btn");
+const libraryTbody = document.getElementById("library-tbody");
+const libraryEmpty = document.getElementById("library-empty");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
@@ -1315,6 +1321,172 @@ async function pollJob(jobId, t) {
   }
 }
 
+// Renders a finished grid's own `result` (backend/crossword_gen.py's
+// generate_grid() return dict, extended by backend/app.py with the three
+// duration fields and, at the user's explicit request, a short LLM-
+// generated `title`) into #result — shared by runGeneration()'s own
+// success path (a grid that just finished generating) and loadLibraryGrid()
+// below ("Bibliothèque" button, at the user's explicit request), so a
+// grid reloaded from GRID_STORE/ displays through exactly the same code
+// path as one fresh out of the generator, with the "Vérification"/
+// "Solution" buttons immediately usable either way — no separate,
+// easily-drifting rendering logic for the two cases.
+function displayFinalGrid(gridData) {
+  puzzle = gridData;
+  userLetters = Array.from({ length: gridData.height }, () => Array(gridData.width).fill(""));
+  selected = null;
+  showSolution = false;
+  checking = false;
+  solutionBtn.classList.remove("active");
+  checkBtn.classList.remove("active");
+
+  hideAttemptPreviewPanel();
+  // #result (and so #grid, its descendant) must already be visible before
+  // renderGrid() runs — see runGeneration()'s own historical note on this
+  // exact ordering requirement (renderGrid() measures gridEl.offsetWidth).
+  result.hidden = false;
+  // Grid title (see backend/clues.py's LLMClueGenerator.generate_title),
+  // at the user's explicit request: "Affiche ce nom en haut de la grille
+  // à jouer." A grid saved before this feature existed (or one whose
+  // title generation itself failed, see generate_title's own "" return)
+  // simply has no title line shown, rather than an empty heading.
+  gridTitleEl.textContent = gridData.title || "";
+  gridTitleEl.hidden = !gridData.title;
+  renderGrid();
+  renderClues(gridData.words);
+  const t = I18N[uiLanguage];
+  stats.textContent = t.stats(gridData.word_count, gridData.black_count, (gridData.black_ratio * 100).toFixed(1));
+  generationTimes.textContent = t.generationTimes(
+    formatDuration(gridData.generation_duration_seconds),
+    formatDuration(gridData.optimization_duration_seconds),
+    formatDuration(gridData.clues_duration_seconds),
+  );
+  solutionBtn.hidden = false;
+  checkBtn.hidden = false;
+  definitionsBtn.hidden = false;
+  // Hidden by default on every fresh grid, at the user's explicit
+  // request, regardless of whatever the *previous* grid's own toggle
+  // state was left at.
+  showDefinitions = false;
+  applyDefinitionsVisibility();
+  // The solution is established now — solutionBtn takes over revealing
+  // letters from here on, at the user's explicit request, so the
+  // preview-only toggle has nothing left to control.
+  attemptPreviewRevealBtn.hidden = true;
+}
+
+function hideLibraryPanel() {
+  libraryPanel.hidden = true;
+}
+
+// "Bibliothèque" button (permanent, unlike every other button in
+// #generate-form — see index.html), at the user's explicit request:
+// lists every grid saved under GRID_STORE/ (backend/grid_store.py), the
+// UI's own current language first, then English (unless that's already
+// the UI language), then everything else, most recent first within each
+// group — the sorting itself is entirely server-side (GET /api/library),
+// this just renders whatever order the backend already returned. Fetched
+// fresh every time the panel opens rather than cached, since a grid saved
+// by a generation finishing in another tab (or another browser entirely)
+// should show up without needing a page reload.
+async function renderLibraryList() {
+  const t = I18N[uiLanguage];
+  libraryTbody.replaceChildren();
+  libraryEmpty.hidden = true;
+  let entries = [];
+  try {
+    const response = await fetchWithTimeout(
+      `/api/library?preferred_language=${encodeURIComponent(uiLanguage)}`, {}, FETCH_TIMEOUT_MS,
+    );
+    if (response.ok) {
+      const data = await response.json();
+      entries = data.grids || [];
+    }
+  } catch (err) {
+    // Best-effort: a browsing feature failing silently (empty list) is
+    // preferable to surfacing a connection error over it, especially
+    // since #status may currently be showing an unrelated generation's
+    // own progress.
+  }
+  if (entries.length === 0) {
+    libraryEmpty.hidden = false;
+    return;
+  }
+  const difficultyLabels = {
+    easy: t.difficultyEasy, medium: t.difficultyMedium, hard: t.difficultyHard,
+  };
+  for (const entry of entries) {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    // First column, at the user's explicit request: "la première colonne
+    // doit indiquer la langue (la langue de l'interface en premier)" — the
+    // sort itself already puts the UI's own language first (GET /api/
+    // library's own preferred_language, see backend/grid_store.py's
+    // list_grids), this just makes that language visible per row. Reuses
+    // #language's own <option> text (a language always names itself in
+    // its own language there — "English", never "Anglais" — rather than
+    // duplicating that same small list here, which could otherwise drift
+    // out of sync with it).
+    const languageTd = document.createElement("td");
+    const languageOption = languageSelect.querySelector(`option[value="${entry.language}"]`);
+    languageTd.textContent = languageOption ? languageOption.textContent : (entry.language || "");
+    const dateTd = document.createElement("td");
+    dateTd.textContent = entry.created_at ? new Date(entry.created_at).toLocaleString(uiLanguage) : "";
+    const titleTd = document.createElement("td");
+    titleTd.textContent = entry.title || "";
+    const difficultyTd = document.createElement("td");
+    difficultyTd.textContent = difficultyLabels[entry.difficulty] || entry.difficulty || "";
+    const sizeTd = document.createElement("td");
+    sizeTd.textContent = entry.width && entry.height ? `${entry.width}×${entry.height}` : "";
+    tr.append(languageTd, dateTd, titleTd, difficultyTd, sizeTd);
+    tr.addEventListener("click", () => loadLibraryGrid(entry.id));
+    tr.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        loadLibraryGrid(entry.id);
+      }
+    });
+    libraryTbody.appendChild(tr);
+  }
+}
+
+// Clicking a row loads that grid straight into the player, at the user's
+// explicit request: "ça charge la grille pour la jouer (exactement comme
+// en fin de process, avec les boutons 'Vérification' et 'Solution'
+// visibles)" — reuses displayFinalGrid() above, so this behaves exactly
+// like a generation that just finished. Deliberately doesn't touch
+// currentJobId/stopBtn/continueBtn beyond hiding them: a library grid was
+// never a job in the first place, so there's nothing to cancel/continue.
+async function loadLibraryGrid(gridId) {
+  const t = I18N[uiLanguage];
+  try {
+    const response = await fetchWithTimeout(`/api/library/${gridId}`, {}, FETCH_TIMEOUT_MS);
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+    }
+    hideAttemptPreview();
+    stopBtn.hidden = true;
+    continueBtn.hidden = true;
+    displayFinalGrid(data);
+    hideLibraryPanel();
+    setStatus(t.statusLibraryLoaded, false);
+  } catch (err) {
+    setStatus(err.message, true);
+  }
+}
+
+libraryBtn.addEventListener("click", () => {
+  if (libraryPanel.hidden) {
+    libraryPanel.hidden = false;
+    renderLibraryList();
+  } else {
+    hideLibraryPanel();
+  }
+});
+
+libraryCloseBtn.addEventListener("click", hideLibraryPanel);
+
 // Shared by the form's own submit handler and continueBtn's click handler
 // (both further below) — at the user's explicit request: "Continuer"
 // relaunches a fresh job from a failed one's own resume state, but from
@@ -1351,49 +1523,7 @@ async function runGeneration(startJob) {
     const jobId = await startJob(t);
     currentJobId = jobId;
     const gridData = await pollJob(jobId, t);
-
-    puzzle = gridData;
-    userLetters = Array.from({ length: gridData.height }, () => Array(gridData.width).fill(""));
-    selected = null;
-    showSolution = false;
-    checking = false;
-    solutionBtn.classList.remove("active");
-    checkBtn.classList.remove("active");
-
-    hideAttemptPreviewPanel();
-    // #result (and so #grid, its descendant) must already be visible before
-    // renderGrid() runs: it measures gridEl.offsetWidth to size #hover-
-    // definition (see renderGrid()'s own comment) — while #result is still
-    // `hidden`, every element inside it lays out at zero size regardless of
-    // how many cells were appended, so that measurement would silently
-    // read 0 and leave #hover-definition's width stuck at "0px" (an inline
-    // style, not a stylesheet rule, which is exactly why it wasn't obvious
-    // from reading the CSS alone) — reported live from an actual browser.
-    // Showing #result a few statements earlier than before causes no
-    // visible flash: nothing awaits between here and renderGrid()/
-    // renderClues() actually repopulating it, so the browser never paints
-    // an intermediate empty frame.
-    result.hidden = false;
-    renderGrid();
-    renderClues(gridData.words);
-    stats.textContent = t.stats(gridData.word_count, gridData.black_count, (gridData.black_ratio * 100).toFixed(1));
-    generationTimes.textContent = t.generationTimes(
-      formatDuration(gridData.generation_duration_seconds),
-      formatDuration(gridData.optimization_duration_seconds),
-      formatDuration(gridData.clues_duration_seconds),
-    );
-    solutionBtn.hidden = false;
-    checkBtn.hidden = false;
-    definitionsBtn.hidden = false;
-    // Hidden by default on every fresh grid, at the user's explicit
-    // request, regardless of whatever the *previous* grid's own toggle
-    // state was left at.
-    showDefinitions = false;
-    applyDefinitionsVisibility();
-    // The solution is established now — solutionBtn takes over revealing
-    // letters from here on, at the user's explicit request, so the
-    // preview-only toggle has nothing left to control.
-    attemptPreviewRevealBtn.hidden = true;
+    displayFinalGrid(gridData);
     setStatus(t.statusGenerated, false);
   } catch (err) {
     // A user-requested stop isn't an error — no red #status.error styling

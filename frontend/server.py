@@ -148,6 +148,36 @@ async def proxy_system_info():
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/library")
+async def proxy_library_list(request: Request):
+    """Relaie le bouton "Bibliothèque" de l'interface (voir script.js) vers
+    le back — même schéma que les autres routes de ce proxy. La query
+    string (`preferred_language`) est transmise telle quelle : sans route
+    explicite ici, une requête vers ce chemin tomberait dans le
+    `app.mount` `StaticFiles` monté en dernier, exactement le bug déjà
+    rencontré une fois pour /api/generate/continue/{job_id} (voir son
+    propre commentaire ci-dessus)."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/library", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.get("/api/library/{grid_id}")
+async def proxy_library_get(grid_id: str):
+    """Relaie le chargement d'une grille de la bibliothèque (voir
+    script.js) vers le back — même schéma que les autres routes de ce
+    proxy."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # Montée en dernier : les routes /api/* déclarées ci-dessus restent prioritaires,
 # tout le reste est résolu dans static/ (404 si le fichier n'y existe pas).
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

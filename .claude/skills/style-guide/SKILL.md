@@ -1660,3 +1660,61 @@ English (see `project-best-practices`).
   that the backend's own `is_best` field is present exactly once per
   multi-example event and correctly absent/false for the one case with no
   real winner yet — see CLAUDE.md for the full verification trail).
+
+- **Grid title** (`#grid-title`, an `<h2>` at the very top of `#result`,
+  above `#stats`), at the user's explicit request: "Affiche ce nom en
+  haut de la grille à jouer" — the short, LLM-generated title
+  (`backend/clues.py`'s `LLMClueGenerator.generate_title()`, see
+  CLAUDE.md) is set as a real heading, not styled like `#stats`'s own
+  small secondary-metadata line right below it, since this is the one
+  piece of text meant to read as the puzzle's own name. Hidden via the
+  `hidden` attribute rather than emptied out for a grid with no title at
+  all (title generation failed, or a grid saved before this feature
+  existed) — no empty heading line taking up space either way. Populated
+  by a new shared `displayFinalGrid(gridData)` function (factored out of
+  what used to be inline in `runGeneration()`'s own success path), so a
+  grid reloaded from the library (see below) gets the exact same
+  treatment as one that just finished generating.
+
+- **"Bibliothèque" button** (`#library-btn`), at the user's explicit
+  request — the one button in `#generate-form` that's *never* `hidden`
+  (every other button there only appears once a grid exists or a job is
+  running). Pushed to the row's own far right via `margin-left: auto`
+  (mirrors `h1`'s own `margin-right: auto` trick in `#page-header`)
+  rather than relying on source order alone, so it stays visually
+  distinct from the form's other, conditionally-shown buttons regardless
+  of how many of them happen to be visible at any given moment.
+
+  Clicking it toggles a new `#library` panel — boxed distinctly (a
+  visible border/background, unlike `#attempt-preview`'s plain inline
+  layout), since unlike the attempt preview this can be opened at any
+  time, independently of whether a generation is even running; a clear
+  boundary keeps it reading as its own self-contained panel. Lists every
+  grid saved under `GRID_STORE/` (`backend/grid_store.py`) as a plain
+  table (`#library-table`, styled like `#word-verification-table`) —
+  fetched fresh every time the panel opens (`GET /api/library?preferred_
+  language=<uiLanguage>`), never cached, so a grid saved from another tab
+  shows up without a page reload. Its first column shows the grid's own
+  language, at the user's own explicit follow-up request ("la première
+  colonne doit indiquer la langue (la langue de l'interface en
+  premier)") — reuses `#language`'s own `<option>` text directly (a
+  language always names itself in its own language there, e.g. "English"
+  never "Anglais") rather than duplicating that same small list a second
+  time, which could otherwise drift out of sync with it; the "interface
+  language first" ordering itself is entirely server-side (`GET /api/
+  library`'s own sort, see CLAUDE.md), this column only makes the
+  already-sorted language visible per row. Each row is clickable
+  (`cursor: pointer`, a `--selected`-colored hover/focus tint) and
+  keyboard-reachable (`tabindex="0"`, Enter/Space triggers the same load)
+  — clicking one loads that grid straight into the player via the same
+  `displayFinalGrid()` used by a fresh generation, at the user's explicit
+  request: "ça charge la grille pour la jouer (exactement comme en fin de
+  process, avec les boutons 'Vérification' et 'Solution' visibles)."
+
+  **Not yet visually confirmed in an actual browser** — same tooling
+  limitation noted throughout this file; verified structurally (a real
+  JS syntax check via `esprima`, an HTML tag-balance check, a CSS
+  brace-balance check) and functionally through the real running API end
+  to end (real generations saved to and correctly listed/sorted from
+  `GRID_STORE/`, see CLAUDE.md for the full trail) rather than by
+  looking at the rendered page.

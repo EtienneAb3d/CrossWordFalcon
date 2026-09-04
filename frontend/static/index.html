@@ -90,9 +90,33 @@
       <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
       <button type="button" id="solution-btn" class="toggle-btn" data-i18n="solutionBtn" hidden>Solution</button>
       <button type="button" id="definitions-btn" class="toggle-btn" data-i18n="definitionsBtn" hidden>Définitions</button>
+      <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
     </form>
 
     <p id="status" role="status"></p>
+
+    <section id="library" hidden>
+      <div id="library-header">
+        <p id="library-label" data-i18n="libraryLabel"></p>
+        <button type="button" id="library-close-btn" class="nav-btn"
+                data-i18n-aria="libraryCloseBtn">✕</button>
+      </div>
+      <div class="table-scroll">
+        <table id="library-table">
+          <thead>
+            <tr>
+              <th data-i18n="libraryColLanguage"></th>
+              <th data-i18n="libraryColDate"></th>
+              <th data-i18n="libraryColTitle"></th>
+              <th data-i18n="libraryColDifficulty"></th>
+              <th data-i18n="libraryColSize"></th>
+            </tr>
+          </thead>
+          <tbody id="library-tbody"></tbody>
+        </table>
+      </div>
+      <p id="library-empty" data-i18n="libraryEmpty" hidden></p>
+    </section>
 
     <section id="attempt-preview" hidden>
       <div id="attempt-preview-header">
@@ -127,6 +151,7 @@
     </section>
 
     <section id="result" hidden>
+      <h2 id="grid-title" hidden></h2>
       <p id="stats"></p>
       <p id="generation-times">
         <span id="generation-times-text"></span>

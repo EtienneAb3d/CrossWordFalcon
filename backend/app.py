@@ -35,6 +35,7 @@ from .clues import ClueGenerationError, LLMClueGenerator
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, generate_grid,
 )
+from .grid_store import get_grid, list_grids, save_grid_json
 from .svg_export import save_grid_png, save_grid_svg
 from .system_info import get_system_info
 
@@ -200,6 +201,35 @@ def system_info():
     external GPU) across the lifetime of one long-running server
     process."""
     return get_system_info(clue_generator.model)
+
+
+@app.get("/api/library")
+def library_list(preferred_language: str = "fr"):
+    """Bouton "Bibliothèque" de l'interface, à la demande explicite de
+    l'utilisateur — la liste (métadonnées seulement, jamais la grille
+    entière : voir backend/grid_store.py's list_grids) de toutes les
+    grilles déjà sauvegardées dans GRID_STORE/, triées langue configurée
+    d'abord, puis anglais, puis le reste, plus récente en premier dans
+    chaque groupe. `preferred_language` est la langue actuellement
+    sélectionnée côté interface (le même sélecteur pilote à la fois la
+    langue de la grille et celle de l'interface — voir CLAUDE.md),
+    transmise explicitement par le frontend à chaque ouverture du
+    panneau plutôt que déduite ici d'un cookie ou d'un en-tête."""
+    return {"grids": list_grids(preferred_language)}
+
+
+@app.get("/api/library/{grid_id}")
+def library_get(grid_id: str):
+    """Charge une grille précédemment sauvegardée pour la rejouer —
+    renvoie exactement la même forme qu'un job terminé (`result`, voir
+    _run_generate_job), avec en plus les métadonnées de la bibliothèque
+    (id/titre/langue/difficulté/mode/date), pour que le frontend puisse
+    l'afficher via le même chemin de code qu'une génération qui vient de
+    se terminer (voir frontend/static/script.js's displayFinalGrid)."""
+    record = get_grid(grid_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    return record
 
 
 def _load_wordlist_raw_lines(language):
@@ -587,6 +617,25 @@ async def _run_generate_job(job_id, req, resume_state=None):
         for w in result["words"]:
             w["clue"] = clues.get(w["answer"], "")
 
+        # A short, catchy title for the whole grid, at the user's explicit
+        # request: "demande au LLM de générer un titre sympa pour la
+        # grille en fonction des mots qu'elle contient" — generated once
+        # every clue already exists (LLMClueGenerator.generate_title's own
+        # docstring explains why this is a single best-effort call, unlike
+        # generate()'s own per-word retry loop), shown above the finished
+        # grid (frontend/static/script.js's displayFinalGrid) and saved
+        # alongside it below. A failure here never raises (see generate_
+        # title) — "" simply means no title line is shown/stored, exactly
+        # like a grid generated before this feature existed.
+        title = await asyncio.to_thread(
+            clue_generator.generate_title,
+            [(w["answer"], w["accented"], w["canonical"]) for w in result["words"]],
+            req.language,
+            cancel_event=cancel_event,
+        )
+        result["title"] = title
+        logger.info("[%s] title: %r", short_id, title)
+
         progress("saving")
         try:
             svg_path = await asyncio.to_thread(
@@ -602,6 +651,20 @@ async def _run_generate_job(job_id, req, resume_state=None):
             # A durable copy of the grid is a nice-to-have, not the point
             # of the request — never fail the user's grid over it.
             logger.warning("[%s] failed to save grid SVG: %s", short_id, e)
+
+        # Bibliothèque (see GET /api/library, GET /api/library/{grid_id}
+        # below, and frontend/static/script.js's "Bibliothèque" button),
+        # at the user's explicit request — same best-effort treatment as
+        # the SVG/PNG saves just above: a failure to persist this grid
+        # for later browsing is logged, never allowed to fail the request
+        # the player is actually waiting on.
+        try:
+            grid_id = await asyncio.to_thread(
+                save_grid_json, result, req.language, req.difficulty, req.mode, title
+            )
+            logger.info("[%s] saved to library: %s", short_id, grid_id)
+        except OSError as e:
+            logger.warning("[%s] failed to save grid to library: %s", short_id, e)
 
         progress("done")
         job["status"] = "done"

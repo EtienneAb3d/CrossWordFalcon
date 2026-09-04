@@ -2256,6 +2256,74 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   style-guide SKILL for the final `#generation-times` design (one
   combined line, styled like `.attempt-preview-stats`, placed right
   after `#stats` rather than before it).
+
+  A short, LLM-generated **grid title** is now produced at the very end
+  of every generation, at the user's explicit request: "A la fin de la
+  génération de la grille et des définitions, demande au LLM de générer
+  un titre sympa pour la grille en fonction des mots qu'elle contient.
+  Pas plus de 3 mots. Affiche ce nom en haut de la grille à jouer."
+  `_run_generate_job` calls the new `clue_generator.generate_title(...)`
+  (see `backend/clues.py`'s own entry for the method itself) right after
+  every word already has its own `clue` assigned, via `asyncio.to_thread`
+  like every other blocking call in this function — a single best-effort
+  attempt, never raising: a failure (connection error, empty/unusable
+  response) simply resolves to `""`, folded into `result["title"]` the
+  same way a grid with no title at all would be. Logged
+  (`logger.info("[%s] title: %r", ...)`) regardless of outcome.
+
+  **Bibliothèque** (a persistent library of every past grid, browsable
+  from the web UI — see `frontend/static/script.js`'s "Bibliothèque"
+  button), at the user's explicit request: "Génère un fichier JSON dans
+  GRID_STORE/<lang> décrivant toute la configuration de la grille, son
+  titre, ses définitions et les infos de création (date, mode, langue,
+  etc, comme sur la sauvegarde SVG)." Right after the SVG/PNG saves (same
+  "saving" progress step, same best-effort try/except-and-log pattern —
+  never fails the request over a persistence failure), `_run_generate_job`
+  calls the new `save_grid_json(result, req.language, req.difficulty,
+  req.mode, title)` (see `backend/grid_store.py`'s own entry below) and
+  logs the returned id.
+
+  Two new endpoints back the "Bibliothèque" button itself: `GET /api/
+  library?preferred_language=<code>` returns `{"grids": [...]}` — every
+  stored grid's compact metadata (id/created_at/language/difficulty/
+  title/width/height, never the full pattern/solution/words payload),
+  sorted by `backend/grid_store.py`'s `list_grids()` (the UI's own
+  current language first, then English unless that's already the UI
+  language, then everything else, most recent first within each group —
+  `preferred_language` is the frontend's own current `#language` select
+  value, the same one that drives both the puzzle language and the UI's
+  own language, see that file's own docstring for why this project has
+  only ever had one selector for both). `GET /api/library/{grid_id}`
+  returns the *entire* stored record for one grid — deliberately the
+  exact same shape as a finished job's own `result` (see `frontend/
+  static/script.js`'s `displayFinalGrid()`), so loading a past grid back
+  into the player reuses the identical rendering path as a grid that just
+  finished generating, no special-casing needed on the frontend. A
+  `grid_id` that doesn't match `backend/grid_store.py`'s own strict id
+  shape, or that matches no file, returns a 404 (`"grille introuvable
+  dans la bibliothèque"`) — never a 500, and never lets an arbitrary
+  string reach the filesystem unvalidated (see that module's own
+  `_GRID_ID_RE`).
+
+  Verified live, end to end, through the real running API (not just
+  direct Python calls): a real generation (6×6, French, Flash mode)
+  produced a title (`"La clé du mystère : la liste des mots"`, kept in
+  full — see `backend/clues.py`'s own entry on why this is no longer
+  truncated to `MAX_TITLE_WORDS`) and a real `GRID_STORE/fr/<id>.json`
+  file; `GET /api/library`
+  (through the frontend's own proxy, port 3000, not just the back end's
+  own port 3001) correctly listed it; `GET /api/library/{id}` returned
+  every field `displayFinalGrid()` needs (`pattern`/`solution`/`words`/
+  `word_count`/`black_count`/`black_ratio`/all three duration fields/
+  `title`). A second real generation in English, then three different
+  `preferred_language` values (`fr`/`en`/`de`) against the real, now
+  two-grid library confirmed the sort order exactly as specified — `fr`
+  first for `preferred_language=fr`, `en` first for `preferred_language=
+  en`, and `en` (not `fr`) ranked second for `preferred_language=de`
+  (a language with no stored grids of its own), matching "EN en second
+  si ce n'est pas la langue de l'interface" precisely. A malformed id
+  (`../../etc/passwd`) and a well-shaped-but-nonexistent one both
+  correctly returned 404 through the real HTTP API, confirmed directly.
 - `backend/system_info.py` — `get_system_info(llm_model)`, best-effort *local
   machine* hardware detection for that info badge: `nvidia-smi --query-gpu=name,
   memory.total` for a discrete NVIDIA GPU's exact name and dedicated VRAM if present,
@@ -2927,6 +2995,149 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   same outcome as "ran out of retries for this word" or any other
   legitimate partial result, so it needs its own signal rather than being
   silently folded into an existing return path.
+
+  A new `generate_title(word_entries, language="fr", timeout=DEFAULT_
+  TIMEOUT, cancel_event=None)` method, at the user's explicit request (see
+  `backend/app.py`'s own entry for how/when it's called): asks the LLM for
+  a short, catchy title for the whole grid, from the deduplicated,
+  alphabetically-sorted list of every solution word's accented spelling —
+  deliberately *not* built on the same machinery as `generate()`'s own
+  per-word retry loop: a single best-effort HTTP call, no 3-attempt retry,
+  no per-call `LOG_LLM/` record, since a title is a purely cosmetic
+  addition, not worth tripling the LLM round-trip count over the way a
+  missing clue would be. Any failure (a connection error, an empty/
+  unusable response) simply returns `""` rather than raising. The raw
+  response is still logged (`logger.info("title generation: raw LLM
+  response: %r", ...)`, mirroring `_call()`'s own diagnostic logging for
+  clues) so a deployed instance always has the ground truth for what the
+  model actually said. `_detect_wrong_language()` (already built for clue
+  candidates) is reused as-is to discard a title that drifted into
+  another language rather than showing it anyway.
+
+  A new `_clean_title(content)` turns the raw response into a usable
+  title: takes only the first non-empty line, strips a leading numbered/
+  bulleted marker (`_LEADING_MARKER_RE`, already used for clues), then a
+  leaked `"Title: "`/`"Titre : "`-style label the model sometimes echoes
+  despite the prompt explicitly forbidding it (`_TITLE_LABEL_RE`, one
+  entry per supported language, case-insensitive — mirrors a failure mode
+  already documented for clue generation itself: a small model echoing a
+  format template's own placeholder text instead of answering directly),
+  then a wrapping quote pair (`_TITLE_QUOTES_RE`) — and returns the
+  result exactly as the model wrote it, with no length clamp at all. A
+  first version *did* truncate to `MAX_TITLE_WORDS` (3, at the user's own
+  explicit "pas plus de 3 mots") — genuinely load-bearing, not a
+  theoretical safeguard: a real call on this project's own default small
+  local model (Qwen3.5-0.8B) returned `"La clé du mystère : la liste des
+  mots"`, clamped down to `"La clé du"`. Reported to the user as a live
+  example of the clamp actually firing — the user then explicitly asked
+  for it to be removed instead: "Ne pas couper un titre trop long, ce qui
+  lui enlève son sens. Faire confiance au LLM pour respecter la consigne
+  (le LLM sur cette machine est un tout petit modèle qui a du mal à
+  appliquer les consignes très fidèlement)" — precisely because slicing a
+  real, meaningful title down to its first 3 words can turn it into a
+  fragment with no sense of its own (exactly what happened to "La clé du
+  mystère"), and the user chose to accept an occasional too-long title
+  from a small model over that guaranteed loss of meaning. `MAX_TITLE_
+  WORDS` itself is kept, but only ever read by `generate_title()`'s own
+  system-prompt text (the rule the model is asked, not something enforced
+  against its answer afterward).
+
+  Separately, `DIFFICULTY_STYLE["easy"]` gained a second sentence, at the
+  user's explicit request: "Modifier le prompt de génération des
+  définitions pour la difficulté FACILE pour préciser : quand une
+  définition simple existe pour un mot, ne pas utiliser une définition
+  qui renvoie à un nom de personne, de ville, de fleuve, un terme
+  technique spécialisé, ou de façon générale qui nécessite une culture
+  générale très avancée." Deliberately scoped to `"easy"` only (never
+  touching `"medium"`/`"hard"`'s own style strings) — since `style_line`
+  (built in `_build_system_prompt()`) is placed at the very top of the
+  system prompt as "the single most important constraint on every clue
+  you write," this addition reaches the model with the same priority as
+  the difficulty description itself, rather than being buried among the
+  8 numbered rules further down. A genuinely different concern from rule
+  5 in that same prompt ("the clue must reflect the word's actual
+  meaning") — rule 5 is about correctness (never inventing a meaning that
+  isn't real), this new sentence is about *which* real, correct meaning
+  to prefer when a word genuinely has more than one (e.g. a common noun
+  that also happens to be a river's name, or a person's given name).
+  Verified live: rebuilt the system prompt directly and confirmed the new
+  sentence appears exactly where intended, right after the existing
+  "very easy..." style description and before the worked example; a real
+  call on French `SEINE` (common noun "a fishing net" vs. the river) at
+  both "easy" and "hard" difficulty produced the everyday "filet de
+  pêche" sense both times on this specific small local model — the
+  differential effect could not be directly demonstrated with this one
+  word (the model never reached for the river sense even at "hard"),
+  reported honestly as an inconclusive verification rather than claimed
+  as a confirmed behavior change, consistent with this whole file's own
+  established pattern of disclosing a small local model's real
+  reliability ceiling on qualitative prompt rules rather than overstating
+  it.
+- `backend/grid_store.py` — persists every finished grid as a durable,
+  self-contained JSON record under `GRID_STORE/<language>/` (project
+  root, gitignored — a generated artifact, not source content, the same
+  convention as `GRID_SVG/`/`GRID_PNG/`, see `backend/svg_export.py`), at
+  the user's explicit request (see `backend/app.py`'s own entry for when
+  this is called). A stored record IS a `generate_grid()` result dict
+  (`pattern`/`solution`/`words` with their own `clue`, plus the three
+  duration fields `backend/app.py` already adds) — just extended with a
+  handful of metadata fields the frontend doesn't otherwise get from a
+  live job (`id`/`title`/`language`/`difficulty`/`mode`/`created_at`) —
+  so `GET /api/library/{grid_id}` can hand it straight to the frontend
+  with no reshaping needed at all.
+
+  Filenames, at the user's own explicit follow-up request ("les noms de
+  fichiers sont préfixés par la date, puis le titre de la grille, et
+  finalement un code sur 4 chiffres aléatoire pour éviter que 2 mêmes
+  titres à la même date ne s'écrasent l'un l'autre"):
+  `<timestamp>_<title-slug>_<4-digit code>.json` (`save_grid_json()`) —
+  the timestamp alone (unlike `svg_export.py`'s own plain `<timestamp>_
+  <language>.svg`) isn't a safe-enough uniqueness guarantee once the
+  title is baked into the filename too, since an empty or short LLM
+  title could otherwise collide within the same second; the random
+  4-digit suffix (`secrets.randbelow(10_000)`) rules that out with no
+  global counter or lock needed. `_slugify_title()` makes a title
+  filesystem-safe: NFKD-decomposed and re-encoded to ASCII-only (accents
+  stripped, the words themselves still readable in the filename), every
+  run of non-alphanumeric characters collapsed to one hyphen, capped at
+  `MAX_SLUG_LENGTH` (40), falling back to the generic `"grille"` for an
+  empty/unusable title (title generation itself failed) rather than
+  leaving that segment of the filename blank.
+
+  `list_grids(preferred_language)` — the "Bibliothèque" button's own
+  listing, at the user's explicit request (see `backend/app.py`): reads
+  every stored grid's *compact* metadata only (`_iter_stored_grids()`,
+  skipping a file that fails to parse rather than failing the whole
+  listing), then sorts it via two separate stable passes rather than one
+  combined key — first by `created_at` descending (a plain string sort
+  already gives the right order for an ISO 8601 timestamp), then by
+  `group` ascending (0 = `preferred_language` itself, 1 = English unless
+  that's already `preferred_language`, 2 = everything else) — Python's
+  sort being stable means the first pass's "most recent first" order
+  survives untouched within each group after the second pass reorders
+  the groups themselves.
+
+  `get_grid(grid_id)` validates `grid_id` against `_GRID_ID_RE` (the
+  exact shape `save_grid_json()` produces — timestamp, slug, 4-digit
+  code, no slash or path-traversal metacharacter can ever match it)
+  *before* it's ever interpolated into a glob pattern — an id that
+  doesn't match returns `None` immediately, never touching the
+  filesystem with unvalidated input. Since the filename itself carries
+  no language (only the title/timestamp/code), and `GRID_STORE_DIR` only
+  ever has a handful of language subdirectories, locating the file is a
+  cheap `GRID_STORE_DIR.glob(f"*/{grid_id}.json")` restricted to an
+  already-validated id, rather than requiring the caller to also supply
+  the language.
+
+  Verified live: isolated tests (a temporary `GRID_STORE_DIR` swapped in)
+  confirmed `_slugify_title()` on several real titles (accented, empty,
+  punctuated, unusually long), and `list_grids()`'s own sort order across
+  4 saved grids (fr/fr/en/es) for 3 different `preferred_language`
+  values, matching the spec exactly each time; `get_grid()` correctly
+  returned `None` for both a path-traversal attempt (`"../../etc/
+  passwd"`) and a well-shaped but nonexistent id. Then re-verified
+  end-to-end through the real running API — see `backend/app.py`'s own
+  entry for those results.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -3398,6 +3609,17 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   real generation submitted through the frontend (`POST /api/generate` →
   polled `GET /api/generate/status/{job_id}` to `"done"`) confirmed no
   regression to the ordinary, successful path from this same change.
+
+  Two more explicit proxy routes were added for the "Bibliothèque" button
+  (see `backend/app.py`'s own entry), following this file's own
+  established convention exactly (no generic passthrough exists — every
+  new backend endpoint needs its own hand-written route here or it falls
+  through to the static-file mount instead): `GET /api/library` (query
+  string, i.e. `preferred_language`, forwarded verbatim via `request.
+  query_params`) and `GET /api/library/{grid_id}`. Verified live through
+  the real running proxy (port 3000, not just the back end's own port
+  3001): both routes returned the same data as calling the back end
+  directly.
 - `frontend/static/i18n.js` — the internationalization config: every user-visible
   interface string (labels, buttons, headings, progress/status messages, error
   messages), for every supported language (fr/en/de/es/it), as one `I18N` object —

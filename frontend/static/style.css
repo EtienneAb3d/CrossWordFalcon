@@ -212,6 +212,16 @@ button:disabled {
   border-color: var(--error);
 }
 
+/* "Bibliothèque" is the one button in #generate-form that's never hidden
+   (see index.html) — permanent, at the user's explicit request. Pushed to
+   the row's own far right (mirrors h1's own `margin-right: auto` trick in
+   #page-header) regardless of how many of the other, conditionally-shown
+   buttons happen to be visible alongside it at any given moment, rather
+   than just sitting wherever it falls in source order. */
+#library-btn {
+  margin-left: auto;
+}
+
 #status {
   min-height: 1.2rem;
   font-size: 0.9rem;
@@ -219,6 +229,20 @@ button:disabled {
 
 #status.error {
   color: var(--error);
+}
+
+/* Short, LLM-generated grid title (backend/clues.py's LLMClueGenerator.
+   generate_title), at the user's explicit request: "Affiche ce nom en
+   haut de la grille à jouer." A proper heading (not styled like #stats'
+   own small secondary metadata line right below it) since this is the
+   one piece of text meant to read as the puzzle's own name, not a status
+   readout. Hidden via the `hidden` attribute (see script.js's
+   displayFinalGrid) rather than emptied out, for a grid with no title at
+   all (title generation itself failed, or a grid saved before this
+   feature existed) — no empty heading line taking up space. */
+#grid-title {
+  margin: 0 0 0.3rem;
+  font-size: 1.3rem;
 }
 
 #stats {
@@ -726,6 +750,75 @@ button:disabled {
   white-space: pre-wrap;
   word-break: break-word;
   max-width: 28rem;
+}
+
+/* "Bibliothèque" panel (#library-btn's click handler, script.js), at the
+   user's explicit request — a plain toggled panel like #attempt-preview,
+   listing every grid saved under GRID_STORE/ (backend/grid_store.py) so
+   one can be reopened and played. Boxed distinctly (border/background,
+   unlike #attempt-preview's plain inline layout) since, unlike the
+   attempt preview, this can be opened at any time, independently of
+   whether a generation is even running — a visible boundary makes it
+   read clearly as its own self-contained panel rather than part of
+   whatever's currently below it. */
+#library {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white-cell);
+}
+
+#library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 0.5rem;
+}
+
+#library-label {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+#library-table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+#library-table th,
+#library-table td {
+  padding: 0.3rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+#library-table th {
+  color: #777;
+  font-weight: 600;
+}
+
+/* Every row loads its own grid on click (script.js's loadLibraryGrid()) —
+   styled to read as clickable (pointer cursor, a hover tint) the same way
+   a real link/button would, even though it's a plain <tr>. */
+#library-table tbody tr {
+  cursor: pointer;
+}
+
+#library-table tbody tr:hover,
+#library-table tbody tr:focus-visible {
+  background: var(--selected);
+  outline: none;
+}
+
+#library-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #777;
+  font-style: italic;
 }
 
 /* A word absent from the wordlist file — the one directly visible symptom

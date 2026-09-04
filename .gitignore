@@ -8,5 +8,6 @@ env.sh
 /DICS/
 /GRID_SVG/
 /GRID_PNG/
+/GRID_STORE/
 /LOG_LLM/
 *.log
