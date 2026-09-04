@@ -5506,6 +5506,27 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # pour le reste de cette fonction — un no-op complet (mêmes objets, mêmes
 # indices) tant qu'aucun mot plus court n'a pu être placé.
 def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
+    """Nettoie une seule tentative échouée d'un palier "reprise telle
+    quelle" (voir `_continue_seed_pool`) — retire ce qui croise un
+    emplacement impossible (`_clean_blocked_slots`), après avoir d'abord
+    tenté de raccourcir ces mêmes emplacements (`_shorten_impossible_
+    zones`).
+
+    Quand `_clean_blocked_slots` a, en plus, posé une nouvelle case noire
+    (son alternative à 1/10 — `new_black_cells`), le motif change de
+    forme : `new_slots` est réextrait sur cette grille modifiée, et
+    `cand_preseed_assignment` recompose alors le mot de CHAQUE emplacement
+    de ce nouveau motif entièrement couvert par `confirmed` — y compris un
+    tout nouvel emplacement, né de la case noire ajoutée, jamais lui-même
+    résolu par une vraie recherche. Ce mot est validé avant d'être promu
+    (`_invalid_fully_known_indices`, même garde-fou que `_optimize_before_
+    cleanup`/`_clean_blocked_slots` — voir CLAUDE.md, "UI") : une
+    combinaison qui ne correspond à aucun mot réel du dictionnaire, même
+    entièrement couverte par des lettres individuellement correctes,
+    n'est jamais promue — l'emplacement reste `None`, et sera redécouvert
+    de lui-même comme impossible dès la prochaine recherche (`Filler.
+    exclude_immediately_impossible_slots`), plutôt que d'être verrouillé
+    tel quel pour le reste de la génération."""
     cand_slots = extract_slots(cand_grid, rows, cols)
     cand_grid, cand_slots, cand_assignment, cand_impossible = _shorten_impossible_zones(
         cand_grid, rows, cols, cand_slots, cand_diag["assignment"],
@@ -5525,6 +5546,8 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
             if all(cell in confirmed for cell in cells) else None
             for cells in new_slots
         ]
+        for j in _invalid_fully_known_indices(new_slots, index, confirmed):
+            cand_preseed_assignment[j] = None
         old_impossible_cell_tuples = {
             tuple(cand_slots[i]) for i in cand_impossible
         }

@@ -1299,6 +1299,71 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   correctness: 0 mismatches between placed words and the solution grid,
   each run.
 
+  **A fourth instance of the exact same bug class was reported next**,
+  with the same rigor as before: "Vérifie que le mot 'UI' est impossible
+  dans les dictionnaires. Une grille contenant ce mot impossible a été
+  déclarée terminée/acceptée, alors que ça devrait être pas se produire.
+  La grille finale ne peut être qu'une grille ne contenant que des mots
+  valides sur tous les emplacements possibles." Confirmed directly: "UI"
+  is genuinely absent from all 5 language dictionaries.
+
+  Root-caused by first re-auditing every other place in the file that
+  reconstructs a word from a `{cell: letter}` map without going through a
+  real, validated CSP assignment — the same audit style already used for
+  Rounds 1-3 above — and finding one more: `_clean_continue_candidate`'s
+  own handling of `_clean_blocked_slots`'s 1/10 black-cell alternative.
+  When that alternative fires, a new black cell is added to an impossible
+  slot's own cells, splitting or shortening it; `new_slots` is re-extracted
+  on this modified pattern, and `cand_preseed_assignment` — which becomes
+  `carry_preseed_assignment` for the very next "reprise telle quelle"
+  palier — assembles a word for *every* slot of this new pattern fully
+  covered by `confirmed`, including a brand-new fragment born from the
+  split, **with no validation against the dictionary at all**. Unlike
+  Rounds 1-3 (each already fixed), this is the one other spot in the file
+  that performs this exact kind of reconstruction — confirmed directly, not
+  guessed, by grepping every `"".join(...)` call in the file that builds a
+  word from a letter map and checking each one's own validation (`minimize_
+  black_squares`'s dictionary check, `_optimize_before_cleanup`'s `_invalid_
+  fully_known_indices`, `_clean_blocked_slots`'s `_slot_candidates` check,
+  `_shorten_impossible_zones`'s own established validation, `_pattern_
+  attempt`/`_pattern_continue`'s own `_slot_candidate_count`-gated preseed
+  promotions, `_plug_isolated_cells`'s `_slot_candidates` check — every one
+  already validated except this exact one).
+
+  Fixed the same way as every other occurrence: after building `cand_
+  preseed_assignment`, `_invalid_fully_known_indices(new_slots, index,
+  confirmed)` (the same helper already reused for Round 2) clears any
+  invalid, fully-known entry back to `None` — left unpromoted rather than
+  additionally forced into `cand_excluded_slots`, for the same reason as
+  `_clean_blocked_slots`'s own Round-3 fix: its letters stay in `confirmed`
+  regardless, so the very next real search will naturally rediscover the
+  same empty domain via `Filler.exclude_immediately_impossible_slots()` and
+  correctly report it through the normal `impossible_slots` channel,
+  without a second, parallel bookkeeping path introduced just for this one
+  reconstruction site. `_clean_continue_candidate` also gained a real
+  docstring (it had none at all before this fix) documenting both its own
+  normal role and this specific validation step.
+
+  Verified with a genuine, measured before/after reproduction rather than
+  reasoning alone: a hand-built 4×3 grid (three real across words assigned,
+  one down-slot of 4 cells flagged impossible) with a rigged, deterministic
+  RNG stand-in (forcing the black-cell alternative to fire, and forcing it
+  onto a specific interior cell of the impossible slot) split that slot
+  into a 1-cell orphan and a genuine 2-cell fragment, the latter fully
+  covered by two *other*, already-validated crossing words — spelling "OA",
+  absent from the test dictionary. `git stash`-ing just this fix and
+  re-running the identical scenario on the otherwise-fixed code confirmed
+  "OA" *was* genuinely promoted into `cand_preseed_assignment` without the
+  fix — an unambiguous, measured A/B, not just a plausible-sounding
+  mechanism — and confirmed absent (the slot stays `None`) with the fix
+  restored. A real, non-mocked sweep across 6 seeds (2, 7, 30, 1000, 1001,
+  1002) on the standard 15×10 grid, full French dictionary, easy
+  difficulty, Flash mode — 352 real placed words cross-checked directly
+  against `data/wordlist_fr_full.tsv` — found zero invalid words. A full
+  end-to-end `generate_grid()` run on both reference seeds of the standard
+  15×10 benchmark confirmed no regression: 0 mismatches between placed
+  words and the solution grid, each run.
+
   Every preview's own `examples` list is now always displayed **in
   process-number order** (1..N), at the user's explicit request: "afficher
   les prévisualisations toujours dans l'ordre des process." Before this,

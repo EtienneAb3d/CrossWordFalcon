@@ -1090,6 +1090,16 @@ le fait disparaître purement et simplement sous sa forme actuelle, ses
 fragments réels n'étant redécouverts qu'au palier suivant, une fois le
 motif mis à jour.
 
+Le nouveau motif, une fois cette case ajoutée, peut faire apparaître un
+tout nouvel emplacement — un fragment de l'emplacement scindé, ou tout
+autre emplacement recoupé — entièrement couvert par des lettres déjà
+confirmées ailleurs dans la grille. Ce mot n'est transmis comme lettres
+pré-définies du palier suivant que s'il correspond réellement à un mot du
+dictionnaire (`backend/crossword_gen.py`, `_clean_continue_candidate`,
+`_invalid_fully_known_indices`) — sinon l'emplacement reste sans mot,
+plutôt que de porter une combinaison jamais vérifiée (même principe que
+"Validation des mots recomposés par croisement" plus haut).
+
 ##### Zone strictement sans issue
 
 Toutes ses cases restantes sont
