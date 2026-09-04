@@ -76,9 +76,144 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   sources) before deleting that cache and launching the real, full-scale
   reprocessing for all 5 languages, again rebuilding `build_wordlist_freq.py` and
   `build_gloss_dictionary.py` for every language per rule 6.
+
+  `--max-bytes`'s own default was raised from 50MB to 1GB, at the user's
+  explicit request, to pull in a substantially richer corpus per language.
+  Rebuilding French this way kept 86.2M sentences (up from a much smaller
+  count at the old default) — a 5.25GB output file. This surfaced a real
+  problem only once a *later* feature (see below) tried to compress and
+  publish this same output on GitHub: at that scale, no plausible cap on
+  the *published* file could still serve `build_wordlist_freq.py`'s own
+  needs from the same file, since word-frequency counting requires every
+  validated sentence, not a size-bounded subset (see that script's own
+  updated entry below).
+
+  This function now writes **two** output files instead of one, at the
+  user's own explicit correction after noticing the size-capping work
+  below was about to apply to the *only* corpus file this script produces
+  — conflating two genuinely different downstream needs (`backend/
+  example_sentences.py`'s LLM-grounding lookups, which can use any random
+  subset just fine, vs. `build_wordlist_freq.py`'s frequency counting,
+  which cannot without silently and unevenly biasing every word's own
+  count): `data/reference_corpus/<lang>_sentences_full.txt` (every
+  validated sentence — gitignored, never distributed, and the *only* file
+  `build_wordlist_freq.py` may ever read) and `data/reference_corpus/
+  <lang>_sentences.txt` (a reproducible random sample of it, capped at
+  `MAX_SENTENCES_PER_LANGUAGE` — the file name `backend/example_
+  sentences.py` and `compress_reference_corpus.py` already used before
+  this split, both entirely unchanged by it). A new `--recap` CLI flag
+  (`recap_from_full()`) re-derives just the capped file from an
+  already-built full one, without re-running the download/filter pipeline
+  at all — needed because the French/English full corpora had already
+  been built (as a single, now-legacy-named file) by the time this split
+  landed; both were renamed to the `_full.txt` name by hand (no data lost,
+  the existing files were already genuinely complete) and re-capped via
+  this flag. Implemented as a streaming reservoir sample (`_reservoir_
+  sample_file`, Algorithm R) rather than loading the file whole into
+  memory first — deliberately, since this machine had as little as 116MB
+  of nominally "free" RAM at the time (31 of 34GB already in use, mostly
+  by this same rebuild's own concurrent language builds), and a naive
+  `.splitlines()` load of an 86M-line/5.25GB file plus the resulting list
+  of Python string objects could plausibly have pushed the machine into
+  serious swapping or an outright OOM.
+
+  `MAX_SENTENCES_PER_LANGUAGE` (the cap on the *published* file) went
+  through two real, measured rounds before landing on its final value —
+  never guessed at or left as a pure estimate, given how directly this
+  number determines whether `compress_reference_corpus.py`'s own output
+  actually fits GitHub's limits (see that script's own entry below for
+  the full quantitative trail): a first real compression test at the
+  user's own initially-chosen value, 10,000,000, measured 173.0 MB for
+  French — still over GitHub's 100MB hard limit; reported back to the
+  user with this measurement (not silently adjusted), together with a
+  second real test at 3,000,000 (52.8 MB, passing) — the user chose
+  **3,000,000** directly from the real numbers. Re-verified once more
+  after a *separate* fix to the compression method itself (see below)
+  improved the achievable ratio: French landed at 48.6 MB (under even
+  the 50MB soft-warning threshold) and English at 56.5 MB (over the soft
+  warning, comfortably under the 100MB hard limit) — an accepted, already
+  anticipated trade-off, not a new one requiring further back-and-forth.
+
+  Verified live in stages: isolated tests of `_reservoir_sample_file`
+  (under-cap keeps every line; over-cap returns exactly `cap` lines, a
+  genuine subset of the input, reproducible run to run for the same
+  seed) and of `recap_from_full`/`build_sentence_corpus`'s own new
+  two-file wiring (a fake pipeline with no real network/Hunspell calls,
+  confirming both files are written, the capped one a genuine subset of
+  the full one) all passed before ever touching the real, multi-gigabyte
+  corpora. The real French/English full corpora were then renamed and
+  re-capped for real (each recap completing in about a minute — fast,
+  since it's a single streaming read/write pass, not a re-download or
+  re-validation), and the resulting capped files' own real compressed
+  sizes were measured directly (see `compress_reference_corpus.py`'s own
+  entry) rather than assumed correct from the isolated tests alone.
+- `compress_reference_corpus.py` — new one-off packaging script, at the
+  user's explicit request, once the 1GB-`--max-bytes` rebuild above made
+  the existing (already gitignored) `data/reference_corpus/<lang>_
+  sentences.txt` far too large to keep serving double duty as both the
+  frequency-counting source and something small enough to publish:
+  compresses the (already-capped, see above) corpus into `data/reference_
+  corpus_<lang>.tar.xz` and validates the result against GitHub's own
+  size limits (`GITHUB_HARD_LIMIT_BYTES`, 100MB, a hard rejection on
+  `git push`; `GITHUB_WARN_LIMIT_BYTES`, 50MB, GitHub's own softer
+  web-UI warning) — exits non-zero past the hard limit, so a build
+  pipeline can treat this as a real gate, not just an informational
+  print.
+
+  **This whole mechanism turned out to already exist**, discovered only
+  after implementing this script from scratch and hitting a real,
+  measured problem with it (see below) — `data/reference_corpus_<lang>
+  .tar.xz`, one archive per language, checked into the repo, already
+  existed since 2026-08-26 (commit "Split reference_corpus.tar.xz into
+  one archive per language," itself following an earlier single-combined-
+  archive attempt that a real `git push` rejected outright, "GH001: Large
+  files detected") — documented in the project-best-practices SKILL, not
+  in this file, which is why it went unnoticed until directly searching
+  `git log --all` for prior related commits mid-session. That earlier
+  version never needed any sentence-count cap at all, since it was built
+  when `--max-bytes` still defaulted to 50MB (a much smaller corpus,
+  naturally compressing to ~44-50MB per language with no cap) — the
+  1GB-budget rebuild this session is what broke that assumption, not a
+  flaw in the original mechanism.
+
+  The SKILL's own pre-existing entry for this mechanism already warned,
+  explicitly, against the exact mistake this script's own first version
+  made: compressing via `tar -cJf ... ` with `XZ_OPT="-T0"` rather than
+  piping a real `tar -cf -` stream through a directly-invoked `xz -9e
+  -T0` process. On a machine whose `tar` is `bsdtar`/libarchive (macOS's
+  default, confirmed directly via `tar --version` on this machine),
+  `XZ_OPT` is silently ignored by libarchive's own built-in `-J` xz
+  filter — no error, no warning, just a materially worse compression
+  ratio. Measured live, on the exact same French capped corpus: 52.7 MB
+  via the broken `tar -cJf`+`XZ_OPT` method vs. 48.6 MB via the corrected
+  pipe — the precise difference between failing and passing GitHub's
+  50MB soft-warning threshold for French specifically. Fixed by rewriting
+  the one compression call to `subprocess.Popen(["tar", "-cf", "-", ...])`
+  piped into a separate `subprocess.run(["xz", "-9e", "-T0"], stdin=...)`
+  call — verified the fix doesn't merely look different but actually
+  produces standard, correctly-decodable output too: a real `tar -xJf`
+  extraction (bsdtar's own decompression path, unaffected by this whole
+  compression-side bug) of the newly-produced archive correctly recovered
+  all 3,000,000 lines of the French capped corpus.
+
+  Verified live end to end, not just in isolated pieces: a small,
+  fully-controlled fixture (a tiny, highly repetitive fake corpus)
+  confirmed the script's own compress/validate/round-trip-extract logic
+  in isolation first; real compression runs against the actual French
+  and English capped corpora (after the `MAX_SENTENCES_PER_LANGUAGE`
+  and compression-method fixes above) produced `reference_corpus_fr
+  .tar.xz` (48.6 MB, comfortably under both GitHub thresholds) and
+  `reference_corpus_en.tar.xz` (56.5 MB, under the hard limit, over the
+  soft warning — the accepted trade-off from the cap's own history
+  above); a real `tar -xJf` extraction of the French archive recovered
+  exactly 3,000,000 lines, confirming the archive is genuinely usable by
+  `Install.sh`'s own pre-existing extraction step, not just correctly
+  *sized*.
 - `build_wordlist_freq.py` — one-off preprocessing script that reads a language's
-  reference corpus (`data/reference_corpus/<lang>_sentences.txt`, counting word
-  occurrences itself — `_count_word_frequencies`) and writes
+  FULL reference corpus (`data/reference_corpus/<lang>_sentences_full.txt` —
+  never the capped `<lang>_sentences.txt` variant; see build_sentence_
+  corpus.py's own entry above for why the two must never be conflated,
+  counting word occurrences itself — `_count_word_frequencies`) and writes
   `data/wordlist_<lang>_full.tsv`, a `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`
   word list ready for the generator — the accented/inflected column preserves the
   word's natural spelling (gender, number, conjugation) alongside the grid's bare
@@ -482,6 +617,883 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   unknown job_id returned 404. **Not yet verified**: the actual visual
   appearance and click behavior of `#continue-btn` in a real browser — the
   same tooling limitation already noted for other UI work this session.
+
+  Each preview grid now carries the real, stable **number of the process
+  that produced it**, at the user's explicit request: "préfixe les stats
+  par le numéro du process qui l'a générée en gras (permet de suivre une
+  grille qui change de place d'un cycle à l'autre)" — since a grid's own
+  position among the up-to-`PARALLEL_ATTEMPTS` shown examples reorders
+  from cycle to cycle (sorted by score, see `display_pairs`/`_seed_pool`
+  above), there was previously no way to tell, just by looking, whether
+  two grids shown at different positions in two different cycles actually
+  came from the same underlying worker or not.
+
+  `_pattern_attempt`/`_pattern_continue` each capture `os.getpid()` into
+  their own `diag["worker_pid"]` right after `diag = {}` — the real OS PID
+  of whichever worker process happened to run that specific task. This is
+  meaningfully stable across an entire `generate_grid()` call, not just
+  within one palier: the `ProcessPoolExecutor` itself is created once and
+  its own `with` block spans the *whole* palier loop, so its worker
+  processes are reused task after task rather than recreated — a given
+  PID, once assigned to "worker slot N" by the pool, tends to keep
+  handling that same slot's tasks for the rest of the run. A raw PID
+  isn't a friendly number to show a player, though, so `generate_grid`
+  maintains its own `worker_pid_numbers` dict (`{pid: small stable int}`,
+  created once before the pool, never reset mid-call), assigning each
+  newly-seen PID the next integer starting at 1 the first time it ever
+  reports back a diagnostic — translated into a `process_number` field on
+  every diag right after each palier's own `outcomes` are collected, from
+  both successes and failures alike.
+
+  Threading this into every preview took more than the two "real search
+  outcome" events (`last_examples`, feeding `pattern_attempt_failed`/
+  `pattern_found`) — those get it directly from `d.get("process_number")`,
+  trivially. The single-grid "minimizing"/"clues" previews needed the
+  *winning* candidate's own diag kept around specifically for this
+  purpose: `best_diag` (`None` by default, alongside `best`/`best_result`)
+  is now set in every branch that ever sets those two — `successes[0]`'s
+  own third element for the single-success case, a 5th tuple element
+  threaded through the multi-candidate optimization trial (`scored.
+  append((opt_black, -opt_score, g, r, d))`) for the multi-success case,
+  and left `None` for `_plug_isolated_cells`' own success path (no real
+  worker behind it at all). `generate_grid()`'s own return dict gained a
+  new `winning_process_number` key (`best_diag.get("process_number") if
+  best_diag else None`) specifically so `backend/app.py`'s own separate
+  "clues" step preview (built from `result["solution"]`, with no diag of
+  its own to read) can attach the same number too.
+
+  The harder case was the *pool-based* previews (`"pattern"`'s cycle-start
+  examples and `"pattern_generated"`'s pre-search examples, both built
+  from `carry_seed_pool`/`carry_seed_pool_continue` — see their own long
+  history above) — these are reconstructed in the *parent* process, from
+  a pool of grids carried forward from a *previous* palier's own real
+  winners, not from a live worker at all. Rather than thread a
+  process_number through the pool tuples actually used for real dispatch
+  (`carry_seed_pool`/`pool`/`carry_seed_pool_continue`/`continue_pool`
+  themselves, whose exact shapes this whole file's history shows are
+  extremely sensitive to change), a parallel, purely diagnostic side
+  channel was added instead: `carry_seed_pool_process_numbers`/
+  `carry_seed_pool_continue_process_numbers` (both `{}` initially,
+  alongside their respective pools, reset together wherever the pools
+  themselves are reset — the `GRID_REPEAT_INFEASIBLE_THRESHOLD` full-reset
+  block). `_clean_all_candidates`/`_clean_continue_candidate` (already
+  looping over `failed_pairs`'s own `(cand_grid, cand_diag)` pairs to
+  produce the cleaned candidates that eventually populate the pools) now
+  each carry `cand_diag.get("process_number")` as one more trailing tuple
+  element — a 4th for the plain nettoyage candidates, a 6th for the
+  "reprise telle quelle" ones — read only by `_sorted_by_score`/`_seed_pool`
+  /`_continue_seed_pool`'s own fixed-position lookups (positions 0-2, or
+  0/3/4 for the continue extractor), which never touch this new trailing
+  position and so needed no change at all. Right after each `cleaned_
+  candidates`/`cleaned_continue_candidates` is built, a small dict
+  comprehension keys every one of them by its own grid content (`tuple(
+  tuple(row) for row in sc[0])`) to build the side-channel lookup — built
+  from the *full* cleaned list, not just whichever subset survives into
+  the pool itself, since over-including a few unused entries costs
+  nothing and avoids a second, narrower pass.
+
+  The preview-building loops themselves then look a grid's own content up
+  in the matching side-channel dict: the `"pattern"` cycle-start loops
+  (both the "reprise telle quelle" `continue_pool` one and the "motif
+  neuf" `pool` one) key directly on `pool_grid`'s own content, since that
+  *is* the grid being shown; the `"pattern_generated"` pool-based loop
+  needed one more piece of care, since it reconstructs `early_pattern` —
+  a *new* pattern built on top of `pool_grid` (via `make_pattern(seed_
+  grid=pool_grid, ...)`, adding further black cells) — so the lookup key
+  there is `pool_grid`'s own content specifically, computed separately
+  from `pattern_key` (which stays `early_pattern`'s content, unchanged,
+  still the dedup key it always was) — conflating the two would have
+  looked up the wrong, never-matching key for every single entry. The
+  very first palier's own early preview (`carry_seed_grid is None`,
+  genuinely no worker exists yet at that point — these examples are
+  `make_pattern()` calls made directly in the parent, before any task is
+  ever submitted) explicitly sets `"process_number": None` rather than
+  guessing — there is nothing real to report yet.
+
+  `frontend/static/script.js`'s `renderAttemptPreview()` destructures the
+  new `process_number` field and, when it's not `None`/`undefined`,
+  prepends a bold (`<strong class="attempt-preview-process">`) "Process
+  N:" label (localized per UI language, `i18n.js`'s new
+  `attemptPreviewProcessLabel`) to the existing stats line — omitted
+  entirely for the one case that genuinely has no process behind it, per
+  the backend's own explicit `None`. See the `style-guide` SKILL for the
+  label's own color/weight treatment.
+
+  Verified: an isolated test of `_clean_continue_candidate`'s own new
+  6-tuple shape confirmed `process_number` survives as the exact 6th
+  element unchanged; an isolated reproduction of the `worker_pid_numbers`
+  assignment logic confirmed a PID keeps its own number across separate
+  simulated paliers while a genuinely new PID gets the next one in
+  sequence, never renumbering an already-seen PID. Four real, non-mocked
+  `generate_grid()` calls (small grids, several seeds, `on_progress`
+  capturing every single `examples` entry) confirmed every example dict
+  across every step code always carries a `process_number` key (never
+  missing outright), that every non-`None` value is a real positive
+  integer within a small, bounded range matching `PARALLEL_ATTEMPTS`, and
+  — critically, since this was the hardest part to get right — that all
+  four step codes that can carry one (`"pattern"`, `"pattern_generated"`,
+  `"pattern_attempt_failed"`, `"minimizing"`) genuinely did carry a real,
+  non-`None` process_number at least once across the four runs, proving
+  the pool-based side-channel lookups work correctly against real data,
+  not only in the isolated tuple-shape test. A real JS syntax check
+  (`esprima`, temporarily installed and removed again afterward, this
+  project's own established pattern for verifying frontend changes with
+  no `node`/browser tooling available) confirmed `script.js`/`i18n.js`
+  still parse correctly after the change. **Not yet verified**: the
+  actual visual appearance of the bold process-number prefix in a real
+  browser — the same tooling limitation noted throughout this project's
+  UI work.
+
+  A brand new step was inserted right before whichever cleanup mode runs
+  at the end of a failed palier ("reprise telle quelle" or full
+  nettoyage), at the user's explicit request: "verrouiller tous les
+  emplacements entièrement vides et les éventuelles cases noires avant/
+  après ces emplacements vides [puis] lancer un cycle d'optimisation
+  comme celui fait à toute fin [minimize_black_squares], qui ne doit pas
+  toucher aux cases blanches ou noires verrouillées." Two genuine
+  design ambiguities were resolved via `AskUserQuestion` before writing
+  any code, given how historically fragile this exact area of the file
+  is: (1) whether this applies to every distinct attempt of the palier
+  (`failed_pairs`) or only the single selected winner — the user chose
+  **every attempt**, matching this whole area's own established "N grids
+  for N processes" philosophy already built for the existing cleanup
+  mechanisms; (2) whether the optimized result actually replaces what
+  feeds the real cleanup/next-palier resumption, or is a preview-only
+  side effect — the user chose **replaces the real basis**.
+
+  A new module-level `_optimize_before_cleanup(cand_grid, cand_diag,
+  rows, cols, index, rng, deadline_checks=6_000, cancel_event=None)`
+  implements this, placed right before `_shorten_impossible_zones` (the
+  first step of the *existing* cleanup, conceptually the very next thing
+  to run afterward). An "entirely empty" slot — the concept the user
+  asked to lock — is defined purely observationally, from the candidate's
+  own `example_grid`: every one of its cells still shows `"."`, whether
+  or not `assignment[i]` happens to be `None` for it directly (a slot can
+  show real letters purely via a crossing slot's own assignment even
+  while `assignment[i] is None`, so checking `assignment` alone would
+  have been wrong) — a genuinely different category from an "impossible"
+  slot (which can already carry some letters, just no matching real
+  word). Its own boundary black cell(s) — immediately before its first
+  cell and after its last, in its own direction, whichever exist and are
+  genuinely `BLACK` — are added to a `locked_black_cells` set, never
+  offered to the removal loop below.
+
+  Genuinely impossible slots (`cand_diag["impossible_slots"]`) are *also*
+  excluded from what this new step's own `try_fill` calls are required to
+  solve (via `excluded_slots`, recomputed fresh every single call by
+  cell-tuple matching against the *original* impossible cell-tuples —
+  the same index-shift-immune technique `_clean_continue_candidate`
+  already established for exactly this reason) — without this, the mere
+  *presence* of an already-known-impossible slot anywhere else in the
+  grid would make every `try_fill` call here fail outright, before ever
+  attempting a single black-cell removal, since `try_fill`'s own
+  top-of-function domain check has no way to know that specific
+  emptiness is expected and permanent. Their own boundary cells are
+  deliberately **not** locked, though — the ordinary cleanup that
+  immediately follows this new step still needs to be completely free to
+  act on them exactly as before this feature existed. A genuine
+  consequence, not a bug: if a black-cell removal elsewhere happens to
+  *merge* an impossible slot with a neighbor (its own cells no longer
+  matching the original impossible cell-tuple exactly), the merged slot
+  is no longer excluded and this step's own `try_fill` will genuinely try
+  to solve it — occasionally succeeding, in which case a black-cell
+  removal legitimately un-stuck a slot the original search itself never
+  could.
+
+  The optimization itself runs in two stages, sharing one small
+  `_try_complete(g)` closure (locking in whatever's already `confirmed`
+  via `preseed_assignment`, excluding both categories above via
+  `excluded_slots`, recomputed fresh from `g`'s own current slot
+  structure every single call — never reused stale across a black-cell
+  removal, since removing one can shift every later slot's own index):
+  (1) one call with the pattern completely unchanged, to pick up any
+  real, free progress the original search's own budget/interruption
+  simply never got to reach; (2) then a `minimize_black_squares`-style
+  loop — shuffled order, repeated to a fixed point, `is_structurally_
+  valid(min_interior_free=1)` — trying to remove every *other* (non-
+  locked) black cell, reverting immediately if either check fails.
+  Returns `(new_grid, new_diag)` — `new_diag` a shallow copy of the
+  original `cand_diag` with only `assignment`/`impossible_slots` (remapped
+  to the final slot structure, the same cell-tuple technique once more)/
+  `example_grid` updated; every other key (`process_number` in
+  particular) passes through unchanged, so nothing downstream needs to
+  know this step ever ran.
+
+  Wired into `generate_grid`'s own palier loop right after `still_has_
+  hope` is fully decided (all of its own force-triggers already applied)
+  but before the `if still_has_hope: ... else: ...` split: a single
+  `optimized_pairs = [_optimize_before_cleanup(...) for cand_grid,
+  cand_diag in failed_pairs]` list replaces `failed_pairs` as the input
+  to *both* branches' own existing cleanup calls (`_clean_continue_
+  candidate`'s generator expression, and `_clean_all_candidates`'s own
+  loop) — computed once, shared by whichever branch actually runs, never
+  duplicated. The "avant" preview needed no new code at all — the
+  existing `pattern_attempt_failed` event, built from the *raw*
+  `failed_pairs` just above, already shows exactly that state. The
+  "après" preview is a new `progress("pre_cleanup_optimized", ...)` call,
+  built from `optimized_pairs` in the exact same example-dict shape
+  every other multi-grid preview already uses (`example_grid`/
+  `impossible_cells`/`forced_cells`/`locked_cells`/`process_number`) —
+  `impossible_cells` recomputed from the new, remapped `impossible_slots`
+  against a fresh `extract_slots` call on the optimized grid;
+  `forced_cells`/`locked_cells` simply carried through from the
+  *original*, pre-optimization diag (plain cell coordinates, never slot
+  indices, so unaffected by any renumbering) — this reuses the frontend's
+  already-existing `renderAttemptPreview()` with zero changes needed
+  there, and a new `describeStep()` case (`"pre_cleanup_optimized"`,
+  `frontend/static/i18n.js`'s new `statusPreCleanupOptimized` in all 5
+  languages) gives it its own live status text instead of falling back to
+  the generic "generating…" message.
+
+  Verified in stages. Isolated: three hand-built scenarios directly
+  against `_optimize_before_cleanup` — an entirely-empty slot stays
+  unassigned and its two boundary black cells both survive every removal
+  attempt, even though a real dictionary word existed that would have
+  fit there; a genuinely removable black cell (no locked neighbor) gets
+  removed and the resulting gap gets completed with a real word once
+  nothing blocks it; a genuinely impossible slot (locked letters
+  matching no real word) is left completely untouched — same letters,
+  still reported as impossible (correctly remapped) — and never crashes
+  the function despite being present alongside the other cases. A real,
+  non-mocked `generate_grid()` run (8×6, seed 2, Flash-scale `deadline_
+  checks=1000`) with `on_progress` confirmed `"pre_cleanup_optimized"`
+  genuinely fires (twice, across 2 failed paliers before success), each
+  time carrying exactly `PARALLEL_ATTEMPTS` (10, this machine's own core
+  count) examples, each with a real `process_number` — and the
+  generation itself still succeeded, 0 mismatches, 0 empty white cells.
+  A full end-to-end run on both seeds of the standard 15×10 benchmark
+  confirmed no regression to reliability (0 mismatches, 0 empty white
+  cells each) and, despite this new step's own real added cost per
+  failed palier, no dramatic slowdown either — seed 2 in 135.2s (56
+  words, 31 black cells), seed 7 in 99.3s (54 words, 24 black cells),
+  both comfortably within this benchmark's own already wide historical
+  range rather than a new outlier. A real JS syntax check (`esprima`,
+  temporarily installed and removed again afterward) confirmed
+  `script.js`/`i18n.js` still parse correctly after the change. **Not yet
+  verified**: the actual visual appearance of this new preview stage and
+  its status text in a real browser — the same tooling limitation noted
+  throughout this project's UI work.
+
+  **A real staleness bug in this same step's own `locked_cells` diagnostic
+  was found and fixed later**, reported directly by the user: "Pour
+  fonctionner correctement, l'optimisation doit déverrouiller toute la
+  grille avant de verrouiller les emplacements vides et les cases noires
+  avant/après. De même, le début du cycle suivant doit déverrouiller
+  toute la grille avant de reverouiller toutes les lettres en place."
+  Investigated by reading both mechanisms directly rather than guessed
+  at, given how many prior bugs in this exact area turned out to be
+  subtle staleness/leakage between paliers.
+
+  `_optimize_before_cleanup`'s own internal protection sets
+  (`locked_black_cells`/`empty_cell_tuples`) were already correctly
+  computed fresh every call, from the given `cand_grid`/`cand_diag` alone
+  — no leakage there. The real bug was in what the function *returned*:
+  `new_diag = {**cand_diag, "assignment": ..., "impossible_slots": ...,
+  "example_grid": ...}` spread the *original* `cand_diag` first, which
+  still carried whatever `locked_cells` the *search that produced this
+  candidate* had computed (from that palier's own `preseed_assignment`/
+  `locked_letters`, i.e. the *previous* palier's own confirmed content) —
+  never overridden to reflect what this optimization step itself
+  protects. The displayed `pre_cleanup_optimized` preview therefore
+  highlighted the wrong cells: a stale leftover from before this step
+  ran, not "the empty slots and their boundary black cells" this step's
+  own docstring already promised.
+
+  Fixed by rebuilding `locked_cells` from scratch (never inheriting
+  anything from `cand_diag`) right before returning: `sorted(locked_
+  black_cells | {cell for cells in empty_cell_tuples for cell in
+  cells})` — the same two sets already computed once, up front, and
+  never touched again for the rest of the function (`locked_black_cells`
+  can never be removed by the `while improved` loop below, since it's
+  explicitly excluded from `removable`; `empty_cell_tuples` stays valid
+  as "what this step protected throughout" even for a cell that later
+  got a real letter via `_try_complete`'s own free-budget completion —
+  a cell showing a letter while still listed in `locked_cells` is
+  therefore expected, not a bug: `locked_cells` here means "this zone's
+  own boundary stayed off-limits to black-cell churn," not "still
+  blank"). `new_diag["locked_cells"]` is now set explicitly, after the
+  `**cand_diag` spread, so it always wins over whatever the spread would
+  otherwise have carried forward.
+
+  The second half of the report — "le début du cycle suivant doit
+  déverrouiller toute la grille avant de reverouiller toutes les lettres
+  en place" — was investigated the same way and found **already
+  correct**, not a second bug: `_cycle_start_preview` (which builds the
+  `"pattern"` event's own `locked_cells` for the very start of the next
+  palier) always builds its overlay from scratch, from whichever
+  `locked_letters`/`preseed_assignment` it's handed for that specific
+  pool entry — never from any prior diag. `carry_locked_letters` itself
+  is always a brand-new dict (from `_clean_blocked_slots`'s own
+  `confirmed = {}`, rebuilt fresh from that palier's real `assignment`
+  every single time) or explicitly reset to `None` the moment a "reprise
+  telle quelle" streak starts (see `if still_has_hope:`) — never
+  incrementally mutated, so nothing can carry a stale entry forward
+  across paliers.
+
+  Verified in stages. Isolated: two hand-built grids fed directly to
+  `_optimize_before_cleanup` — one with a real assigned word on one row
+  and a genuinely empty row (no boundary black cell, edge of the grid on
+  both sides) confirmed `locked_cells` matches exactly the empty row's
+  own cells and excludes the assigned row entirely; a second grid with an
+  interior black cell splitting one row into an assigned sub-slot and an
+  empty sub-slot confirmed `locked_cells` matches exactly the empty
+  sub-slot's cells plus its one real boundary black cell. A live,
+  non-mocked `generate_grid()` sweep (9×7, seed 5, Flash-scale) with
+  `on_progress` checking, across every `"pattern"` (cycle-start) event
+  after the very first palier, that `locked_cells` exactly matches the
+  set of cells actually carrying a letter in that same event's own
+  `example_grid` — 82 events checked, zero stale entries, zero missing
+  entries — confirming the second half of the report was already
+  satisfied before any code change. A full end-to-end `generate_grid()`
+  run on both seeds of the standard 15×10 benchmark (Flash mode)
+  confirmed no regression: 0 mismatches, 0 empty white cells each — seed
+  2 in 31.5s, 59 words, 29 black cells; seed 7 in 26.6s, 56 words, 29
+  black cells. A real, non-mocked end-to-end check through the actual
+  running API (15×10, seed 2, Flash mode) confirmed the fix holds through
+  the real HTTP/job-polling path too: 70 real `pre_cleanup_optimized`
+  examples inspected via `GET /api/generate/status/{job_id}`, every
+  `locked_cells` entry correctly shaped.
+
+  **That fix never actually reached the displayed preview at all**,
+  reported directly by the user right after: "La grille après
+  optimisation de fin de cycle montre encore les cases verrouillées du
+  cycle. Est-ce que cette phase réinitialise bien les cases verrouillées
+  avant de s'appliquer ? On devrait aussi voir les cases blanches et
+  noires verrouillées, or elles ne sont pas entourées de rouge." A second,
+  independent bug, found by tracing the exact call site that builds the
+  `"pre_cleanup_optimized"` event's own `examples` list (`generate_grid`,
+  right where `optimized_pairs` gets built) — not by re-doubting the
+  already-fixed function itself, which turned out to still be entirely
+  correct in isolation: `optimized_examples.append({..., "locked_cells":
+  cand_diag.get("locked_cells", []), ...})` read `locked_cells` from
+  `cand_diag` — the *pre*-optimization diag, from `failed_pairs`, carrying
+  whatever the ORIGINAL search's own `preseed_assignment`/`locked_letters`
+  had computed — never from `d` (`new_diag`, `_optimize_before_cleanup`'s
+  own return value, the exact field the previous fix corrected). The
+  previous session's own verification (`GET /api/generate/status/
+  {job_id}`, "every `locked_cells` entry correctly shaped") only checked
+  that entries were well-formed `[row, col]` pairs — never that they were
+  actually the *corrected* ones — so a genuinely wrong-but-well-formed
+  list passed that check undetected, a real gap in that verification's
+  own thoroughness.
+
+  This single wrong variable name explains both halves of the report at
+  once: (1) "montre encore les cases verrouillées du cycle" — literally
+  true, since `cand_diag["locked_cells"]` is the state from *before* this
+  optimization step ran, exactly the staleness the previous fix was
+  supposed to eliminate but, through this separate bug, never actually
+  did; (2) "on devrait aussi voir les cases noires verrouillées, or elles
+  ne sont pas entourées" — `cand_diag["locked_cells"]` can never contain a
+  black cell at all (that concept — a black cell bordering a still-empty
+  slot — only exists in `_optimize_before_cleanup`'s own corrected output),
+  so no black cell was ever going to be highlighted here regardless of
+  color, confirmed directly: a live instrumented run captured 30 real
+  `(cand_grid, cand_diag)` pairs and found 481 genuine interior slot
+  boundaries, every single one already black in the underlying grid (i.e.
+  `_optimize_before_cleanup`'s own `locked_black_cells` computation was
+  never the problem) — yet the same live check against the actual
+  progress events showed **zero** of 410 real examples ever carrying a
+  locked black cell, proving the corrected value was being computed
+  correctly and then discarded at this one call site. Fixed by reading
+  `d.get("locked_cells", [])` instead — `forced_cells` deliberately kept
+  reading from `cand_diag` right next to it (a real, verified no-op:
+  `_optimize_before_cleanup` never recomputes `forced_cells` at all, no
+  statistical sampling happens during this step, so `d`/`cand_diag` carry
+  the identical value there).
+
+  A genuinely separate, second bug was found in the same investigation,
+  in the frontend rendering itself, not the backend data: `script.js`'s
+  `renderAttemptPreview()` only ever registered *white* cells in
+  `cellElementsByCoord` (the lookup the final `.forced`/`.locked`/
+  `.low-candidates`/`.noise` overlay passes use to find a cell element by
+  coordinate) — a *black* cell was never added to that map at all, so
+  even a correctly-supplied locked black-cell coordinate would silently
+  find nothing (`cellElementsByCoord.get(...)` returning `undefined`) and
+  never receive the `.locked` class. This pre-dates `_optimize_before_
+  cleanup`'s own extension of `locked_cells` to include black cells at
+  all — every other caller of this same field only ever supplied white
+  cells (a real, previously-confirmed letter carried over from a prior
+  palier), so this gap was invisible until a black-cell-carrying source
+  existed. Fixed by registering black cells in `cellElementsByCoord` too;
+  `style.css` gained a matching `.attempt-preview-grid .cell.black.locked`
+  rule (the same orange inset border as the existing white-cell one,
+  `--locked` — not red; no red-bordered "locked" convention exists
+  anywhere in this file, and the user's own "rouge" wording is treated
+  here as a loose description of "should be visibly marked," not a
+  request for a new color, disclosed as such in the reply rather than
+  silently reinterpreted). The other three overlays (`.forced`/`.low-
+  candidates`/`.noise`) never receive a black-cell coordinate from any
+  current backend caller, so now finding one in the map is a harmless
+  no-op for them — their own CSS rules stay scoped to `.white`.
+
+  Verified live in stages. First, isolated instrumentation (a monkeypatch
+  around `_optimize_before_cleanup` capturing 30 real `(cand_grid,
+  cand_diag)` pairs from an actual failed-palier run) confirmed the
+  function's own `locked_black_cells` computation was never the problem:
+  481 genuine interior slot boundaries found across those pairs, all 481
+  already black. Then, before any fix, a live `generate_grid()` run (15×10,
+  seed 2) with `on_progress` confirmed the bug precisely: 0 of 410 real
+  `pre_cleanup_optimized` examples ever carried a locked black cell,
+  despite 351 of them carrying at least one locked white cell (proof
+  empty slots were being found and reported correctly — only their own
+  black boundaries were missing). After the one-line backend fix, the
+  identical check on the same seed showed 313 of 380 examples now
+  carrying at least one locked black cell (matching the white-cell count
+  exactly, 313/313) — and a second seed (7) confirmed every locked cell
+  reported this way is genuinely black (`"#"`) in that same example's own
+  `example_grid` (3,337 instances checked across 520 examples, zero
+  inconsistencies). A real JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) and a CSS brace-balance check
+  confirmed `script.js`/`style.css` still parse correctly after the
+  frontend fix. A full end-to-end `generate_grid()` run on both seeds of
+  the standard 15×10 benchmark confirmed no regression: 0 mismatches, 0
+  empty white cells each — seed 2 in 22.1s, 56 words; seed 7 in 21.7s, 52
+  words. A real, non-mocked check through the actual running API (15×10,
+  seed 2, Flash mode) confirmed the fix holds end to end: all 10 real
+  `pre_cleanup_optimized` examples produced during that run carried a
+  locked black cell. **Not yet visually confirmed in an actual browser**
+  — the same tooling limitation noted throughout this project's UI work
+  — verified structurally (the syntax/brace checks) and via the real
+  backend data reaching the frontend correctly instead.
+
+  **A screenshot-backed report exposed a third, deeper bug in this exact
+  area, this time in `forced_cells` rather than `locked_cells`**: "La
+  première optimisation montre une grille correcte, où les emplacements
+  vides sont verrouillés, et les emplacements non vide ne sont pas
+  verrouillés. Mais, les optimisations suivantes montrent les emplacements
+  non vides en bleu (les emplacements vides semblent correctement
+  verrouillés en rouge). Ce n'est pas normal." Root-caused precisely, not
+  guessed at: `_pattern_attempt`/`_pattern_continue` both used to merge
+  `locked_letters`/`known_letters` directly into `forced_letters` before
+  calling `try_fill` (`forced_letters = {**forced_letters, **locked_
+  letters}`) — a leftover from *before* `Filler` gained its own dedicated
+  `locked_letters` parameter (see that fix's own entry above), when this
+  merge was the only way for a locked cell to reach `Filler._domain` as a
+  hard constraint at all. Verified directly that this merge is now
+  genuinely redundant for the search itself: `_domain` already checks
+  `self.locked_letters` unconditionally, *before* ever falling back to
+  `self.forced_letters` — a grep across the whole file confirmed `self.
+  forced_letters` is read nowhere else. But the merge's *other* effect
+  never went away: `build_partial_letters_grid` (called from inside
+  `try_fill` to build `diagnostics["forced_cells"]`) returns `sorted(
+  forced_letters)` as-is, with no way to tell a genuine statistical guess
+  apart from a real, confirmed locked letter that only ended up in the
+  same dict via this merge — so every locked cell was *also* always
+  reported as "forced."
+
+  This was invisible everywhere else because `diagnostics["locked_cells"]`
+  (computed separately, from the same unmerged `locked_letters`) already
+  flagged the identical cells, and `style.css` declares `.locked` *after*
+  `.forced` — the later rule always won the `box-shadow` cascade on a cell
+  carrying both classes, painting it orange regardless. `_optimize_
+  before_cleanup`'s own `locked_cells` (a *different* set — cells of a
+  still-entirely-empty slot plus its bordering black cells, unrelated to
+  the *original* search's own locked/preseed content) is what finally
+  broke this coincidental masking: a non-empty cell carrying a leftover
+  "forced" tag from the merge, but *not* part of this optimization step's
+  own narrower locked set, had nothing left to override it — showing
+  blue exactly where the user reported it, and correctly *not* on the
+  very first palier (`carry_seed_grid is None`), which has no `locked_
+  letters` at all yet to merge in the first place, matching "la première
+  optimisation... est correcte" precisely.
+
+  Fixed at the root: the merge is removed from both `_pattern_attempt` and
+  `_pattern_continue` (verified live, on the real functions directly, not
+  a simulation: identical `(slots, assignment)` search outcome with and
+  without the merge, confirming it was genuinely inert for the search).
+  `build_partial_letters_grid` gained its own `locked_letters=None`
+  parameter, overlaid onto `example_grid` the same way `forced_letters`
+  already is (before it, so `forced_letters` could in principle still win
+  on a literal collision — never observed in practice, since `sample_
+  letter_biases` already excludes `known_letters`'s own cells from its own
+  sampling) — but *never* folded into the returned `forced_cells`, which
+  now reports only genuine statistical guesses. Removing the merge alone,
+  without this, would have quietly regressed a real, previously-working
+  behavior: a locked cell not yet covered by any real crossing assignment
+  this search would have simply vanished from `example_grid` (shown as
+  "." instead of its real, confirmed letter) once it could no longer piggy-
+  back on `forced_letters`'s own overlay pass — caught by an isolated test
+  before it ever shipped, comparing the exact same scenario with and
+  without the new `locked_letters` parameter.
+
+  Verified live in stages. Isolated: a hand-built scenario (a slot only
+  partially covered by `locked_letters`, so it never reaches `preseed_
+  assignment`, forcing it through the plain forced-domain path) confirmed
+  the search's own real outcome is byte-identical whether `forced_letters`
+  is merged or not, that the merged version's own `forced_cells`
+  incorrectly includes the locked cell (the reproduced bug) while the
+  unmerged version's doesn't, and that both versions still show the real
+  locked letter in `example_grid` (confirming the `locked_letters`
+  parameter addition closes the regression risk noted above). Called
+  `_pattern_attempt`/`_pattern_continue` directly (not simulated) with
+  real locked/known letters: `forced_cells` and `locked_cells` came back
+  correctly disjoint in both, `example_grid` correctly showed every locked
+  letter regardless. A live sweep of a real `generate_grid()` run (15×10,
+  seed 2), checking every `pre_cleanup_optimized`/`pattern_attempt_failed`/
+  `pattern_found` example for any cell appearing in *both* `forced_cells`
+  and `locked_cells`, found zero overlaps across 180 real examples — the
+  direct, general-purpose invariant this whole bug violated. A full
+  end-to-end `generate_grid()` run on both seeds of the standard 15×10
+  benchmark confirmed no regression: 0 mismatches, 0 empty white cells
+  each. A real, non-mocked check through the actual running API (15×10,
+  seed 2, Flash mode) confirmed the fix holds end to end: 140 real
+  examples inspected via `GET /api/generate/status/{job_id}`, zero
+  overlaps. On the reported "rouge" color: confirmed directly there is no
+  red-bordered "locked" convention anywhere in this codebase — `--locked`
+  is a saturated orange, unchanged by this fix — treated as the user
+  describing "should be visibly marked" rather than requesting a new
+  color, disclosed as such rather than silently reinterpreted.
+
+  Every preview's own `examples` list is now always displayed **in
+  process-number order** (1..N), at the user's explicit request: "afficher
+  les prévisualisations toujours dans l'ordre des process." Before this,
+  every multi-grid preview sorted by whatever score decided which
+  candidate mattered most for that specific event (`_playable_score`,
+  `_cleaned_playable_score`, `_words_in_place_score`/`_candidate_black_
+  count`, depending on the event) — a real, useful signal for deciding
+  which candidate becomes the actual carried-forward basis, but one that
+  made a specific process's own grid visually jump around from one
+  displayed position to another, cycle to cycle, defeating the very
+  purpose the process-number feature above was built for in the first
+  place.
+
+  A new `_sort_examples_by_process(examples)` (placed right before
+  `_optimize_before_cleanup`) sorts a list of already-built example dicts
+  by `process_number` ascending — entries with no process number at all
+  (only ever the very first palier's own parent-computed, pre-dispatch
+  previews) sort last rather than raising (`None` isn't comparable to an
+  `int` in Python), via a `(is_none, value_or_0)` tuple key. Since the
+  *selection* logic itself (which candidate actually becomes `carry_seed_
+  grid`/`best`/etc.) is completely unaffected — this sort only ever
+  touches the *display* list, built as a separate copy — every one of
+  the five spots that build such a list now does two things in order:
+  first mark exactly one entry `"is_best": True` (using its own position
+  in whatever *pre-sort* order already identified the real winner —
+  `display_pairs[0]`, `failed_pairs[0]`/`optimized_pairs[0]`, `pool[0]`/
+  `continue_pool[0]`, all already-established "winner is first" contracts
+  this file's own history relies on elsewhere), *then* call `_sort_
+  examples_by_process` on the whole list right before handing it to
+  `progress(...)`. The one case with no real winner concept at all yet
+  (`"pattern_generated"`'s very-first-palier branch, every worker starting
+  independently from a blank grid with nothing to compare) marks every
+  entry `is_best: False` instead of guessing. The two single-grid
+  previews (`"minimizing"`, and `backend/app.py`'s own `"clues"` step)
+  simply mark their one entry `is_best: True` unconditionally — trivially
+  true, nothing to rank against.
+
+  `frontend/static/script.js`'s `renderAttemptPreview()` destructures the
+  new `is_best` field and adds a new `.attempt-preview-best` class to
+  that one mini-grid — a new `--best` CSS token (`#16a34a`, a clear
+  medium green) drives a thicker (3px vs. the plain 2px gray default)
+  green border around it, at the user's explicit request: "entourer d'un
+  filet vert la grille considérée comme la meilleure" — needed
+  specifically because the display order no longer implies rank on its
+  own once it's always by process number, so the winner needs its own
+  explicit visual marker instead of "always shown first." Deliberately a
+  new token rather than reusing `--correct-fg` (the existing dark green
+  used for "Vérification" mode's own correct-letter feedback on the real
+  playable grid) — two unrelated concepts that only coincidentally share
+  the same color family, kept independently tunable.
+
+  Verified: an isolated test of `_sort_examples_by_process` confirmed
+  ascending order for a normal mixed-order list, that an all-`None` list
+  never raises and keeps its original order (a stable sort with nothing
+  to actually reorder), and that a *mixed* None/real-number list correctly
+  sorts every real number first and pushes every `None` to the end without
+  ever raising a `TypeError` (Python cannot compare `None` to an `int`
+  directly, which is exactly why the sort key wraps each value in a
+  `(is_none, ...)` tuple rather than sorting on the raw value). A real,
+  non-mocked `generate_grid()` run (8×6, seed 2, Flash-scale `deadline_
+  checks=1000`) with `on_progress` checked, for every single multi-example
+  event across the whole run, that the real (non-`None`) process numbers
+  shown were always already in non-decreasing order and that at most one
+  example ever carried `is_best: True` — zero violations found across 5
+  distinct multi-example events actually exercised (`pattern`,
+  `pattern_generated`, `pattern_attempt_failed`, `pre_cleanup_optimized`,
+  and the single-grid `minimizing`), including the one genuinely expected
+  edge case (the very-first-palier `"pattern_generated"` batch correctly
+  showing zero `is_best: True` entries out of its 10, not one). An
+  end-to-end run on the standard 15×10 benchmark's own seed 2 (the more
+  historically fragile of its two reference seeds) confirmed no
+  regression to reliability (82.2s, 0 mismatches, 0 empty white cells) —
+  seed 7's own run was stopped mid-flight at the user's own explicit
+  request before it could finish, so this benchmark's usual "both seeds"
+  confirmation is only partial this time, disclosed here rather than
+  claimed in full. A real JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) and a CSS brace-balance check
+  both confirmed `script.js`/`style.css` still parse correctly after the
+  change. **Not yet verified**: the actual visual appearance of the green
+  outline in a real browser — the same tooling limitation noted
+  throughout this project's UI work.
+
+  **Two real bugs in this same process-numbering feature were reported
+  right after**, directly by the user: "Vérifie que les process sont
+  correctement numérotés à leur création, et gardent ce numéro tout au
+  long du déroulement des cycles. A l'affichage, j'ai parfois des
+  numérotation qui manquent (pas de numéro ?), et des numéros dupliqués
+  (4 fois le 1, 3 fois le 2, etc)." Both were root-caused with live,
+  reproducible diagnostics (a small 9×7/seed=5 scenario, `attempts=200`,
+  a tiny `deadline_checks=1500` so many paliers happen quickly) before
+  any fix was attempted — not merely reasoned about.
+
+  **Duplication**, the more serious of the two, traced to a genuine
+  `ProcessPoolExecutor` characteristic, confirmed in two stages. First
+  measurement: `worker_pid_numbers` (this feature's own PID → small
+  stable number map) grew from 4 to 10 distinct entries only gradually,
+  across paliers 1 through 7 of a real run — before that point, several
+  of a palier's `PARALLEL_ATTEMPTS` (10) tasks landed on the *same* PID
+  (one instance handled 5 of 10 tasks at palier 1), because the pool
+  spawns its worker processes lazily: `submit()` only *requests* a new
+  spawn, which then completes asynchronously (fork/exec +
+  `_init_worker`, slow here due to deserializing the large word `index`)
+  well after `submit()` itself returns — so on an early palier, only a
+  handful of workers are genuinely ready by the time that palier's tasks
+  get distributed, and the rest simply never receive one for that round.
+  This self-resolves once every worker has finished spawning at least
+  once (by palier 7 in this test), matching the report's own "parfois"
+  qualifier exactly.
+
+  A first fix attempt — submit exactly `PARALLEL_ATTEMPTS` trivial
+  warm-up tasks (`_warmup_worker`, returning `os.getpid()`) right after
+  creating the pool, and block (`concurrent.futures.wait(...)`) until all
+  of them complete, before the first real palier ever runs — was
+  measured and found **still insufficient**: a live re-run showed only 3
+  distinct PIDs among the 10 warm-up tasks (one worker alone handled 6 of
+  them). Root cause, confirmed by re-reading `ProcessPoolExecutor.
+  _adjust_process_count()`'s own real logic: it only requests a new
+  spawn when it has **no idle worker at all** — the moment even a single
+  worker becomes idle (which, for a near-instant trivial task, happens
+  almost immediately), every subsequent `submit()` is simply handed to
+  that already-idle worker instead of triggering a new spawn, regardless
+  of how many tasks are still queued. A second attempt — repeat
+  submitting only the still-missing count, round after round, until the
+  *union* of observed PIDs reaches `PARALLEL_ATTEMPTS` — was also
+  measured insufficient: after `PARALLEL_ATTEMPTS * 20` rounds, only 6 of
+  10 workers had ever appeared, proving the ceiling isn't "not yet
+  reached" but structurally blocked once at least one worker is already
+  idle — no number of additional rounds helps, since every round's own
+  submissions keep finding that same idle worker(s) first.
+
+  Fixed properly with a `multiprocessing.Barrier(PARALLEL_ATTEMPTS)`
+  (`warmup_barrier`, created once per `generate_grid()` call and threaded
+  through the pool's `initializer`/`initargs` exactly like `cancel_event`/
+  `batch_abandoned_event`/etc. — a `multiprocessing.Barrier` submitted as
+  a per-task argument hits the same macOS-spawn `RuntimeError` already
+  documented for those). `_warmup_worker` now calls `_worker_warmup_
+  barrier.wait(timeout=60)` before returning its PID: a worker that grabs
+  one of these tasks stays **blocked inside the barrier**, never
+  returning to the pool's own idle state, until all `PARALLEL_ATTEMPTS`
+  arrivals have happened — so it can structurally never absorb a second
+  warm-up task before the pool has been forced to spawn a fresh process
+  for every remaining one (no already-dispatched worker can ever be
+  "idle" to steal it). `generate_grid` submits exactly `PARALLEL_
+  ATTEMPTS` such tasks in one batch and waits for them all
+  (`concurrent.futures.wait`, inside a `try/except threading.
+  BrokenBarrierError` — a defensive, never-yet-observed fallback for the
+  hypothetical case where the machine genuinely can't run
+  `PARALLEL_ATTEMPTS` processes at once; the 60s per-worker timeout keeps
+  this from ever hanging forever) before the palier loop starts.
+
+  **Missing numbers** traced to two independent gaps, both in how a
+  *displayed* example's `process_number` gets populated — never in
+  `worker_pid_numbers` itself, which was already correct. (1)
+  `_publish_new_best` (the callback publishing intermediate best-
+  assignment snapshots to `best_state_queue` for display, mid-search —
+  see its own section above) never included `worker_pid` in its
+  published dict at all, unlike the real per-task diag `_pattern_
+  attempt`/`_pattern_continue` already build (`diag["worker_pid"] = os.
+  getpid()`) — so any such intermediate snapshot that made it into a
+  displayed batch showed `process_number: None`. Fixed by adding
+  `"worker_pid": os.getpid()` to that same published dict. (2) Even after
+  fix (1), a *second*, independent gap remained: the loop that translates
+  every real PID into its `worker_pid_numbers`-assigned number
+  (`generate_grid`, right after `concurrent.futures.as_completed(futures)`)
+  only ever iterates `outcomes` (the raw per-task future results) — never
+  `published_this_palier` (the states drained from `best_state_queue` a
+  few lines below and merged into `display_unique`), so a queue-published
+  entry's own `worker_pid` (now present thanks to fix (1)) was still
+  never translated into a `process_number` at all. Fixed by applying the
+  exact same translation (reusing the same `worker_pid_numbers` dict) to
+  each `published` entry right where it's drained, before its dedup key
+  is computed.
+
+  A separate anomaly noticed along the way — `attempt_id: None` on a
+  genuinely *successful* (`reason: "solved"`) task's own diag — was
+  investigated and confirmed **not a bug**: `try_fill`'s own docstring
+  already documents `diagnostics["attempt_id"]` as populated only "en cas
+  d'échec" (on failure) — this identifier exists solely so `generate_grid`
+  can deduplicate *failed*-attempt preview candidates by which parallel
+  attempt produced them (see `_publish_new_best`'s own docstring); a
+  genuine success never enters that same dedup pool (there's only ever
+  one), so it has no need for the field at all.
+
+  Verified live in stages, methodically, given how much this exact
+  investigation's own conclusions shifted attempt to attempt. Two
+  isolated `generate_grid()` diagnostics (direct Python calls, not the
+  web API) reproduced both original symptoms first (duplication:
+  `pnums=[1,1,1,1,1,2,3,3,4,None]` on an early palier; the `None` from
+  the not-yet-fixed queue-translation gap), then confirmed each fix
+  attempt's own real effect step by step — including the two *rejected*
+  warm-up designs, each measured and shown insufficient before moving to
+  the barrier-based one, and each of the two independent missing-number
+  gaps confirmed separately (fixing (1) alone still left a `None` in the
+  display list; adding (2) closed it). A 3-seed sweep (9×7/seed=5,
+  9×7/seed=11, 15×10/seed=2, the last one the standard benchmark) with an
+  `on_progress` hook checking every multi-example event across each
+  entire run found **zero** duplicate process numbers and **zero**
+  unexpected `None` values (the sole expected `None` — the very-first-
+  palier `"pattern_generated"` batch, computed directly in the parent
+  process before any real worker exists — correctly excluded from the
+  check). A real, non-mocked end-to-end check through the actual running
+  API (not just direct `generate_grid()` calls) submitted two real jobs
+  (9×7/seed=5 and the standard 15×10 benchmark's seed=7, both Flash mode)
+  and polled `GET /api/generate/status/{job_id}` to inspect
+  `examples_history` directly — 22 real multi-example events checked on
+  the 15×10 run alone, zero duplicates, zero unexpected `None`s,
+  confirming the fix holds through the real HTTP/job-polling path, not
+  only via a direct Python call.
+
+  **The whole PID-based numbering mechanism above was replaced outright**,
+  reported directly by the user right after: "Les grilles changent de
+  numéro d'un cycle sur l'autre. Probablement dû à l'introduction de la
+  grille entièrement nouvelle qui décale les numéros. Il faut que les
+  grilles portent leur propre numéro, et le gardent jusqu'à la fin de la
+  résolution. La grille entièrement nouvelle doit reprendre le numéro de
+  la grille qui disparaît (normalement, la moins bonne)." Root-caused by
+  tracing the actual dispatch mechanics, not just the user's own
+  hypothesis (which turned out to be a real but secondary contributor,
+  not the fundamental cause): `process_number` was built from `worker_
+  pid_numbers`, a real OS PID → stable small-int map — stable for the
+  *PID itself*, correctly, for the whole `generate_grid()` call — but
+  `ProcessPoolExecutor` never guarantees that "the task continuing pool
+  slot K" lands on the *same* worker process from one palier to the
+  next; whichever worker happens to be idle first gets the next task,
+  regardless of which pool entry it continues. A lineage that genuinely
+  keeps winning and getting carried forward can therefore land on a
+  *different* real PID — and so a *different* displayed number — every
+  single palier, even with no reset involved at all.
+
+  Fixed by replacing PID-based numbering with genuine lineage tracking,
+  keyed by *pool position* (inherited across paliers) rather than by
+  which OS process happened to execute a task. Two new module-level
+  helpers, both verified in isolation before any wiring: `_build_
+  dispatch_lineage(seeds_count, reset_count, pool_lineage)` computes, for
+  every one of a palier's `PARALLEL_ATTEMPTS` dispatch slots (index order,
+  never completion order), the lineage number it inherits — `None` for a
+  reset slot (`i < reset_count`, a brand-new independent grid with no
+  lineage to inherit yet), `pool_lineage[(i - reset_count) % len(pool_
+  lineage)]` otherwise (the exact same cyclic distribution formula
+  `generate_grid`'s own real dispatch already used to hand out `pool`/
+  `continue_pool` entries — computed once, alongside it, from the *same*
+  source). `_reassign_lineage_numbers(raw_lineage, previous_lineage,
+  next_lineage_number)` then resolves every remaining `None` in the
+  *surviving* candidates of a palier's own cleaned pool: it computes which
+  numbers were active going into this palier (`previous_lineage`, i.e.
+  that same `dispatch_lineage`) but no longer appear among the survivors'
+  resolved numbers — the ones a real, previously-continuing lineage
+  vacated by losing out in `_seed_pool`'s own score-based trimming — and
+  hands each one, in order, to a still-unresolved (reset-originated)
+  survivor, exactly matching "la grille entièrement nouvelle doit
+  reprendre le numéro de la grille qui disparaît." A persistent `next_
+  lineage_number` counter (starting at `PARALLEL_ATTEMPTS + 1`, since the
+  very first palier already hands out `1..PARALLEL_ATTEMPTS` directly to
+  its own independent workers) is only ever consulted as a last-resort
+  fallback, for the degenerate case where no number happens to be free
+  that round — verified live never to fire in dozens of real paliers
+  across two full benchmark seeds.
+
+  `generate_grid` computes `dispatch_lineage` once per palier (in
+  whichever of the three shapes applies — the very first palier's own
+  `list(range(1, PARALLEL_ATTEMPTS + 1))`, since every one of its workers
+  is already independent by construction; the "reprise telle quelle"
+  branch's own `continue_pool_lineage`-based cyclic distribution; the
+  "motif neuf" branch's own `pool_lineage`-based one) and immediately
+  derives `seed_to_lineage = {seeds[i]: dispatch_lineage[i] for i in
+  range(PARALLEL_ATTEMPTS)}` — reusing `seeds[i]`, already the exact
+  `attempt_id` every real diag (`_pattern_attempt`/`_pattern_continue`)
+  and every intermediate queue-published snapshot (`_publish_new_best`)
+  already carries for an *entirely different*, pre-existing reason (the
+  per-attempt display-dedup mechanism) — so no new plumbing was needed
+  through the worker/subprocess boundary at all: both existing
+  translation loops (`outcomes`, `published_this_palier`) now simply do
+  `d["process_number"] = seed_to_lineage.get(d.get("attempt_id"))`
+  instead of a PID lookup. This made the entire PID-tracking apparatus
+  genuinely dead code, removed outright per this project's own
+  convention: `diag["worker_pid"] = os.getpid()` in `_pattern_attempt`/
+  `_pattern_continue`, the equivalent line in `_publish_new_best`, and
+  `worker_pid_numbers` itself (the pool-level PID → number map) are all
+  gone.
+
+  `carry_seed_pool_process_numbers`/`carry_seed_pool_continue_process_
+  numbers` (content-keyed dicts, an approximation the PID-based design
+  needed since a PID alone couldn't reliably identify *which* pool
+  entry produced a given preview grid) become `carry_seed_pool_lineage`/
+  `carry_seed_pool_continue_lineage` — plain lists, strictly parallel
+  (same order, same length) to `carry_seed_pool`/`carry_seed_pool_
+  continue` themselves, extracted via the exact same `_seed_pool` call
+  used to build the real pool but with a different `extract` lambda
+  (`sc[3]` for the nettoyage shape, `sc[5]` for the continue shape — both
+  already `cand_diag.get("process_number")`, so already lineage-correct
+  by the time they reach here, no extra plumbing needed in `_clean_all_
+  candidates`/`_clean_continue_candidate` at all) — every preview loop
+  that used to look a number up by grid content (`pattern`/`pattern_
+  generated`, both branches) now simply reads `pool_lineage[p]`/
+  `continue_pool_lineage[pool_idx]` directly by position, which is both
+  simpler and, unlike a content-keyed lookup, immune to two different
+  pool entries ever coincidentally sharing identical content.
+
+  One deliberate, disclosed trade-off: a reset worker's own *raw* outcome,
+  the first time it's ever shown (that palier's own "pattern_attempt_
+  failed"/"pre_cleanup_optimized" preview, before end-of-palier
+  reassignment has run), still shows no number at all — reassignment only
+  updates the *next* palier's own pool, it can't retroactively rewrite a
+  progress event already sent for the palier that just ran. This differs
+  from the old PID-based design, where even a reset worker's raw outcome
+  always showed *some* number (its own real PID, however uninformative).
+  Matches the user's own literal wording ("la grille entièrement nouvelle
+  doit reprendre le numéro de la grille qui disparaît") precisely,
+  though: a brand-new grid genuinely has no established identity until
+  it's shown to be worth keeping — the fixed-point-detection re-clean
+  pass (`exclude_impossible_locked=True`) re-runs `_reassign_lineage_
+  numbers` a second time on the same `dispatch_lineage`, so it never
+  double-consumes a freed number across the two passes.
+
+  Verified in stages. Isolated: `_build_dispatch_lineage` (no reset,
+  reset with several non-reset slots cycling through a real pool,
+  degenerate single-entry pool) and `_reassign_lineage_numbers` (no
+  `None` at all; one `None` with a matching freed number; one `None`
+  with nothing freed, falling back to `next_lineage_number` and
+  incrementing it; two `None`s matched against two freed numbers; a
+  `None` inside `previous_lineage` itself correctly never treated as a
+  freed number) — all passed before any wiring. Live: a direct internal
+  trace (temporary, removed afterward) of every palier's own `dispatch_
+  lineage`/`raw_lineage`/final `carry_seed_pool_lineage` on a real 15×10/
+  seed 2 run confirmed the algorithm end to end — e.g. attempt 3's own
+  `raw` list showed exactly one unresolved survivor and exactly one
+  number (`4`) present in `dispatch_lineage` but absent from every other
+  resolved survivor; `final` correctly closed the gap by assigning that
+  exact freed number to that exact survivor — repeated correctly across
+  17 consecutive paliers, spanning both "reprise telle quelle" and
+  "motif neuf" transitions, `next_lineage_number` never once needing its
+  own fallback path. A broader 4-seed sweep (9×7/seed 5, 9×7/seed 11,
+  15×10/seed 2, 15×10/seed 7) confirmed zero duplicate process numbers
+  in any displayed batch throughout — the one earlier verification
+  methodology (comparing `is_best`'s own process_number across
+  consecutive `pattern_attempt_failed`/`pattern` events) was found to be
+  invalid and abandoned mid-investigation: `is_best` marks `failed_pairs
+  [0]` (ranked by fewest impossible cells, a *pre*-cleanup criterion),
+  while the grid actually carried forward as `carry_seed_pool[0]` is
+  ranked separately, *post*-cleanup, by `_words_in_place_score` — the two
+  can legitimately be different candidates, a real, pre-existing,
+  unrelated property of this pipeline's own two independent selection
+  criteria, not a defect this change introduced or needed to fix. A
+  full end-to-end `generate_grid()` run on both seeds of the standard
+  15×10 benchmark confirmed no regression: 0 mismatches, 0 empty white
+  cells each — seed 2 in 23.7s, 55 words, 33 black cells; seed 7 in
+  15.6s, 52 words, 32 black cells. A real, non-mocked check through the
+  actual running API (15×10, seed 2, Flash mode) confirmed the fix holds
+  end to end: 12 real multi-example events inspected via `GET /api/
+  generate/status/{job_id}`, zero duplicate process numbers throughout.
 - `backend/app.py` — **back** FastAPI server: exposes `generate_grid()` as a JSON API
   via a relative import (`from .crossword_gen import ...`). No static files, no
   `/docs`/`/openapi.json` (disabled) — any other path 404s by default. The request's
@@ -3213,6 +4225,79 @@ There is no test suite, linter, or build step in this repo.
    2-letter words covering the same 20 letters only scores 40). See the
    `project-best-practices` SKILL for the full measured progression across all
    changes to this function.
+
+   **This pre-optimization sum-of-squares selection was found to have a real
+   gap much later in this project's history**, reported by the user from
+   direct observation of the web UI: "Lorsque plusieurs grilles terminent,
+   l'interface semble d'abord afficher la première, puis affiche une autre
+   après optimisation. Vérifier que l'affichage des grilles terminées ...
+   attend bien que tous les process terminent. Vérifier que toutes les
+   grilles terminées passent par la phase d'optimisation, et que c'est bien
+   la meilleure après optimisation qui est gardée." Investigated by reading
+   the code directly (not from a live reproduction) rather than guessed at:
+   `concurrent.futures.as_completed(futures)` already drains every one of a
+   palier's `PARALLEL_ATTEMPTS` futures before this selection ever runs
+   (`attempt_done_event` only tells a straggler to *stop searching* early —
+   it doesn't skip waiting for its future to actually return), so the first
+   concern was already unfounded: the UI never shows a candidate before
+   every process of that palier has genuinely finished. The second and
+   third concerns were real, though: only the single candidate chosen by
+   the pre-optimization sum-of-squares score above was ever passed to
+   `minimize_black_squares` — every *other* successful attempt of the same
+   palier was silently discarded, unoptimized and never compared, even
+   though a candidate that looks weaker before optimization (fewer/shorter
+   words) can legitimately end up with *fewer* black cells once optimized,
+   since optimization depends on the pattern's precise shape (which black
+   cells happen to be individually removable), not on how many words/
+   letters were already placed. So "the best after optimization" was never
+   actually verified — only ever trivially true because there was only one
+   optimized candidate to begin with.
+
+   Fixed by trialing every successful candidate of a palier through its own
+   `minimize_black_squares` pass (each on its own defensive grid copy —
+   that function mutates its `grid` argument in place, so a real attempt's
+   own grid is never touched by another candidate's trial) whenever more
+   than one succeeded, and picking whichever trial ends with the fewest
+   black cells (the pre-existing sum-of-squares-of-word-lengths score
+   demoted to a tie-break at equal black-cell count) — consistent with this
+   whole project's own long-standing black-cell-minimization goal (see
+   `minimize_black_squares` itself). Skipped entirely when there's only a
+   single success (the overwhelmingly common case, confirmed live below) —
+   nothing to compare, so trialing it would just pay for the same
+   optimization work twice (once as a throwaway trial, once for real right
+   after the palier loop) for no benefit. `best`/`best_result` are still
+   set to the *winning* candidate's own state *before* optimization,
+   exactly as before this change — the trial above only ranks candidates
+   against each other, its own result is thrown away — so the existing
+   "minimizing" preview (built from `best_result`, shown right before the
+   one real, non-throwaway `minimize_black_squares` call that already
+   existed right after the palier loop) still faithfully shows the true
+   pre-optimization state of whichever candidate really does end up
+   chosen, and `optimization_duration_seconds` (`backend/app.py`) still
+   measures exactly one real optimization pass, never several — the
+   "d'abord une grille, puis une autre après optimisation" sequence the
+   user observed is itself expected, unchanged UI behavior (the
+   "minimizing" preview always shows the pre-optimization state, the final
+   grid always shows the post-optimization one); what changed is only
+   *which* candidate that sequence is now guaranteed to be about.
+
+   Verified live: a scan across 24 small, real (non-mocked) generations
+   (6×6/7×6/8×6, 8 seeds each, Flash-scale `deadline_checks=1000`) found
+   more than one successful attempt in the same palier on 10 of the 24 runs
+   (up to 6 simultaneous successes in one case) — confirming this isn't a
+   rare edge case but something a real generation hits routinely — and, for
+   every one of those 10 cases, direct instrumentation confirmed the new
+   selection correctly picked the candidate with the fewest post-
+   optimization black cells regardless of its own pre-optimization score
+   (e.g. one palier's own 4 successes scored `(2, 349), (3, 336), (4, 290),
+   (4, 287)` — `(black_count, word_length_score)` — and the tuple with 2
+   black cells was chosen even though two other candidates had a higher
+   score; a tie at 6 black cells between two candidates was broken by the
+   higher score, `432` over `414`, exactly as designed). All 24 generations
+   still succeeded. A full end-to-end `generate_grid()` run on both seeds
+   of the standard 15×10 benchmark confirmed no regression: 0 mismatches, 0
+   empty white cells each — seed 2 in 112.9s, 58 words, 31 black cells;
+   seed 7 in 157.2s, 56 words, 27 black cells.
 
    **`PARALLEL_ATTEMPTS`'s own default was changed from a fixed 10 to this
    machine's own CPU count**, much later in this project's history, at the

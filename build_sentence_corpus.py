@@ -2,14 +2,26 @@
 """
 Builds a reference sentence corpus per language from five OPUS
 (opus.nlpl.eu) sources — OpenSubtitles, Wikipedia, Books, TED2013, and
-CCMatrix — merged together. Used two ways downstream: backend/example_
+CCMatrix — merged together, in TWO variants, at the user's explicit
+request: a full, uncapped one (data/reference_corpus/<lang>_sentences_
+full.txt, gitignored, never distributed) and a capped one (data/
+reference_corpus/<lang>_sentences.txt, at most MAX_SENTENCES_PER_LANGUAGE
+sentences) meant to be compressed and published (see
+compress_reference_corpus.py) — the two feed two genuinely different
+downstream consumers with genuinely different size needs:
+build_wordlist_freq.py counts word occurrences to build this project's own
+word-frequency source (replacing the previously-used HermitDave
+FrequencyWords lists — see the project-best-practices SKILL for why) and
+MUST read the full, uncapped corpus — capping it would silently bias every
+word's own frequency count downward by whatever fraction of sentences got
+discarded, and unevenly so across words (a word overrepresented in a
+now-discarded chunk loses more than one that wasn't); backend/example_
 sentences.py looks up real usage examples of a word's exact inflected form
-in it (to ground backend/clues.py's clue-writing prompt for rare/ambiguous
-words — see the French "ARE" case in the project-best-practices SKILL);
-build_wordlist_freq.py counts word occurrences in it to build this
-project's own word-frequency source, replacing the previously-used
-HermitDave FrequencyWords lists (see the project-best-practices SKILL for
-why).
+(to ground backend/clues.py's clue-writing prompt for rare/ambiguous
+words — see the French "ARE" case in the project-best-practices SKILL) and
+has no such requirement — a random 10-million-sentence subset is exactly
+as useful a source of example sentences as the full 80-100 million, just
+smaller, so it's the one this project distributes.
 
 Wikipedia, Books, TED2013, and CCMatrix are deliberate additional sources,
 not a replacement for OpenSubtitles: subtitle dialogue is colloquial and
@@ -52,9 +64,10 @@ downloaded text instead of re-fetching multi-hundred-thousand-line
 partial downloads from opus.nlpl.eu every time; a source already cached
 there is read from disk instead of downloaded again. This is a *raw*
 cache (one file per source, before language-filtering or merging) —
-distinct from data/reference_corpus/<lang>_sentences.txt, which stays the
-final, filtered-and-merged-across-all-sources output the rest of the
-pipeline actually reads.
+distinct from data/reference_corpus/<lang>_sentences_full.txt, which
+stays the final, filtered-and-merged-across-all-sources output (and from
+<lang>_sentences.txt, the capped subset of it — see this module's own
+docstring above for why there are two).
 
 Kept sentences must be:
 - between 5 and 50 words (MIN_WORDS_PER_SENTENCE/MAX_WORDS_PER_SENTENCE) —
@@ -82,6 +95,7 @@ Usage:
     python3 build_sentence_corpus.py en --max-bytes 100000000
 """
 import argparse
+import random
 import re
 import subprocess
 import sys
@@ -129,7 +143,108 @@ MIN_WORDS_PER_SENTENCE = 5
 MAX_INVALID_RUN = 3
 MAX_INVALID_WORD_FRACTION = 0.25
 
+# Hard cap on how many sentences the CAPPED corpus (<lang>_sentences.txt,
+# never *_full.txt) can hold, added at the user's explicit request once
+# compress_reference_corpus.py's own GitHub-size validation (see that
+# script) showed the corpus this project's own DEFAULT_MAX_BYTES (1 GB)
+# produces is wildly incompatible with GitHub: French alone, at 1 GB/
+# source, kept 86.2M sentences — a 5.25 GB raw file. This value went
+# through two real, measured (never just estimated) rounds before landing
+# here:
+#   - An initial xz compression test on a contiguous 200 MB *slice* of the
+#     raw 5.25 GB file (not a random sample) measured a 4.41x ratio,
+#     extrapolating to ~1.19 GB compressed for the full corpus — this
+#     estimate is what first flagged the problem, but turned out to be
+#     optimistic for the actual output shape (see next point).
+#   - At the user's own first chosen cap, 10,000,000, a REAL compression
+#     of the real capped output measured only 173.0 MB (3.52x ratio) —
+#     still over GitHub's 100 MB hard per-file limit (see GITHUB_HARD_
+#     LIMIT_BYTES in compress_reference_corpus.py). The lower real ratio
+#     (3.52x vs. the estimated 4.41x) makes sense in hindsight: a
+#     *contiguous* slice of the raw file preserves source-locality (many
+#     consecutive sentences from the same source), which compresses
+#     somewhat better than a *shuffled* random sample drawn evenly across
+#     all 5 sources, which is what the real capped output actually is.
+#   - A second real test at 3,000,000 sentences measured 52.8 MB (3.47x
+#     ratio, consistent with the 10M measurement) — under the 100 MB hard
+#     limit, only marginally over GitHub's 50 MB *soft* warning threshold.
+#     The user picked this value directly, from the real measurement, over
+#     a smaller (2.5M, more safety margin) or larger (keep 10M, needing
+#     Git LFS) alternative.
+# A uniform random sample of the language's own already-validated `kept`
+# sentences (order among sources/within a source carries no meaning worth
+# preserving — a corpus this size is a frequency/example-sentence pool,
+# never read start-to-end — so a random subset is exactly as
+# representative as the full set, just smaller), not the first N in
+# whatever order the 5 sources happened to be concatenated (which would
+# instead be biased toward the earliest-listed sources in the `SOURCES`
+# dict — books/wikipedia — since sentence order follows source-processing
+# order). `random.Random(0)`, a fixed seed rather than the unseeded
+# global `random` module, so re-running this script for the same
+# already-cached raw sentences reproduces the exact same sample every
+# time, matching this whole project's own established preference for
+# reproducible builds wherever randomness is involved.
+MAX_SENTENCES_PER_LANGUAGE = 3_000_000
+
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+
+def _cap_sentence_count(sentences, cap=None):
+    """Returns `sentences` unchanged if already at or under `cap`;
+    otherwise a reproducible uniform random sample of exactly `cap`
+    sentences from it — see MAX_SENTENCES_PER_LANGUAGE's own docstring
+    for why a random sample rather than a first-N truncation. Only ever
+    called on a list already fully in memory (build_sentence_corpus()'s
+    own freshly-filtered `kept`) — for downsampling an already-huge file
+    on disk instead, see recap_from_full()'s own streaming reservoir
+    sample, which never loads the whole file into memory at once.
+
+    `cap=None` (the default — every real caller in this file) resolves
+    to the current `MAX_SENTENCES_PER_LANGUAGE` module global, looked up
+    fresh inside this function body rather than bound as a default
+    argument value: a plain `cap=MAX_SENTENCES_PER_LANGUAGE` default
+    would freeze that value the moment this module is first imported,
+    silently ignoring any later change to the module-level constant
+    (e.g. a test monkeypatching it) — `None`-as-sentinel avoids that
+    footgun."""
+    if cap is None:
+        cap = MAX_SENTENCES_PER_LANGUAGE
+    if len(sentences) <= cap:
+        return sentences
+    sampled = random.Random(0).sample(sentences, cap)
+    print(f"  capped from {len(sentences)} to {cap} sentences "
+          f"(MAX_SENTENCES_PER_LANGUAGE, random sample)", file=sys.stderr)
+    return sampled
+
+
+def _reservoir_sample_file(path, cap, seed=0):
+    """Like _cap_sentence_count, but reads `path` one line at a time
+    (Algorithm R reservoir sampling) instead of loading it whole into
+    memory first — needed because the *full* corpus this reads from can
+    be multiple gigabytes (French: 5.25 GB/86.2M lines at DEFAULT_MAX_
+    BYTES) and this machine's own available RAM is not guaranteed to
+    comfortably hold a Python list of every line at once (verified live:
+    ~31/34 GB already in use on this machine while this pipeline's other
+    languages build concurrently). Returns (sampled_lines, total_line_
+    count) — the caller decides what "total <= cap" should mean (skip
+    the rewrite entirely, in recap_from_full()'s case) rather than this
+    function silently special-casing it, since it already has to read
+    the whole file exactly once regardless of whether cap ends up
+    mattering."""
+    rng = random.Random(seed)
+    reservoir = []
+    total = 0
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if total < cap:
+                reservoir.append(line)
+            else:
+                j = rng.randint(0, total)
+                if j < cap:
+                    reservoir[j] = line
+            total += 1
+    return reservoir, total
 
 
 def _download_partial(url, max_bytes, dst_path):
@@ -248,11 +363,66 @@ def build_sentence_corpus(lang, max_bytes=DEFAULT_MAX_BYTES, sources=SOURCES):
           f"the {lang!r} dictionary...", file=sys.stderr)
     kept = _filter_by_language(all_sentences, lang)
 
-    dst = CORPUS_DIR / f"{lang}_sentences.txt"
-    with open(dst, "w", encoding="utf-8") as out:
+    # The FULL, uncapped corpus is written first and is what build_
+    # wordlist_freq.py reads (see this module's own docstring for why it
+    # must never be the capped variant) — never overwritten or touched by
+    # the capping step below, so it always reflects everything this run
+    # actually validated, regardless of MAX_SENTENCES_PER_LANGUAGE.
+    full_dst = CORPUS_DIR / f"{lang}_sentences_full.txt"
+    with open(full_dst, "w", encoding="utf-8") as out:
         out.write("\n".join(kept))
         out.write("\n")
-    print(f"{len(kept)} sentences written to {dst}")
+    print(f"{len(kept)} sentences written to {full_dst}")
+
+    # The capped variant — data/reference_corpus/<lang>_sentences.txt,
+    # unchanged filename from before the full/capped split — is what
+    # backend/example_sentences.py reads and what compress_reference_
+    # corpus.py publishes; derived from the very same `kept` already in
+    # memory, so this never re-reads full_dst back off disk.
+    capped = _cap_sentence_count(kept)
+    dst = CORPUS_DIR / f"{lang}_sentences.txt"
+    with open(dst, "w", encoding="utf-8") as out:
+        out.write("\n".join(capped))
+        out.write("\n")
+    print(f"{len(capped)} sentences written to {dst}")
+    return full_dst, dst
+
+
+def recap_from_full(lang):
+    """(Re)derives the capped data/reference_corpus/<lang>_sentences.txt
+    from the already-built, full <lang>_sentences_full.txt — without
+    re-running the download/filter pipeline at all, and without ever
+    reading the full file's own many-gigabyte content into memory in one
+    piece (see _reservoir_sample_file). For a corpus built before the
+    full/capped split existed (this project's own French/English corpus,
+    rebuilt at DEFAULT_MAX_BYTES=1GB the same session the cap was added —
+    both already fully valid full corpora, just still under the old,
+    single-file name at the time) the file must first be renamed/moved to
+    the *_full.txt name by hand; this function only ever reads from
+    *_full.txt, never from the plain <lang>_sentences.txt name, so it
+    can't accidentally derive a capped sample from an already-capped file.
+
+    A no-op (prints and returns without touching anything) if the full
+    corpus is missing, or if it's already at/under the cap (in which case
+    the "capped" file would just be an exact copy — still written, so
+    <lang>_sentences.txt always exists once a full corpus does, but
+    reported as a no-op-equivalent copy rather than a genuine sample)."""
+    full_src = CORPUS_DIR / f"{lang}_sentences_full.txt"
+    if not full_src.exists():
+        print(f"error: {full_src} does not exist — run build_sentence_corpus.py "
+              f"{lang} first (or rename an already-built full corpus to this name)",
+              file=sys.stderr)
+        return None
+    sampled, total = _reservoir_sample_file(full_src, MAX_SENTENCES_PER_LANGUAGE)
+    dst = CORPUS_DIR / f"{lang}_sentences.txt"
+    with open(dst, "w", encoding="utf-8") as out:
+        out.write("\n".join(sampled))
+        out.write("\n")
+    if total <= MAX_SENTENCES_PER_LANGUAGE:
+        print(f"{full_src}: {total} sentences, already at/under the "
+              f"{MAX_SENTENCES_PER_LANGUAGE} cap — {dst} written as a full copy")
+    else:
+        print(f"{dst}: sampled {len(sampled)} of {total} sentences from {full_src}")
     return dst
 
 
@@ -263,8 +433,15 @@ def main():
                      help=f"how much of each compressed source to download (default: {DEFAULT_MAX_BYTES:,})")
     ap.add_argument("--sources", nargs="+", choices=sorted(SOURCES), default=sorted(SOURCES),
                      help="which OPUS sources to include (default: both)")
+    ap.add_argument("--recap", action="store_true",
+                     help="skip the download/filter pipeline entirely and just "
+                          "(re)derive data/reference_corpus/<language>_sentences.txt "
+                          "(capped) from the already-built <language>_sentences_full.txt")
     args = ap.parse_args()
-    build_sentence_corpus(args.language, args.max_bytes, {k: SOURCES[k] for k in args.sources})
+    if args.recap:
+        recap_from_full(args.language)
+    else:
+        build_sentence_corpus(args.language, args.max_bytes, {k: SOURCES[k] for k in args.sources})
 
 
 if __name__ == "__main__":

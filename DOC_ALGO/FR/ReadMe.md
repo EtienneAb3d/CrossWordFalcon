@@ -207,9 +207,8 @@ transforme le nombre de cases encore blanches nécessaire en cases noires
 supplémentaires.
 
 Si le remplissage de l'étape 2 échoue malgré tout, on ne repart pas
-forcément de zéro : voir l'étape 3 ("Simplifier la grille"), qui couvre
-aussi bien la simplification d'une tentative bloquée que celle d'une grille
-déjà réussie. Le nombre maximal de paliers avant d'abandonner est de 200.
+forcément de zéro : voir l'étape 3 ("Simplifier une tentative échouée").
+Le nombre maximal de paliers avant d'abandonner est de 200.
 
 Si les 200 paliers sont épuisés sans succès, l'interface web propose un
 bouton "Continuer" : il relance 200 nouveaux paliers, mais en repartant
@@ -251,15 +250,38 @@ dans `Filler._backtrack`) : le palier n'attendrait alors plus
 systématiquement la tentative la plus lente du lot. Cette fraction est
 pour l'instant fixée à **100 %** : le palier attend donc que **toutes** les
 tentatives du lot se terminent d'elles-mêmes avant de passer à la
-sélection, sans interruption anticipée. Parmi les
-tentatives ainsi conclues avant l'interruption, si plusieurs réussissent,
-ce n'est pas simplement la première trouvée qui est retenue : c'est celle
-dont les mots ont la plus grande **somme des carrés de leurs longueurs**.
-Ce score favorise quelques mots longs plutôt que beaucoup de mots courts
-pour le même
-total de lettres — un mot de 10 lettres pèse 100 dans ce score, alors que
-dix mots de 2 lettres (qui couvrent pourtant le même nombre de lettres au
-total) ne pèsent que 40.
+sélection, sans interruption anticipée — la sélection ci-dessous ne voit
+donc jamais qu'un lot partiel.
+
+Si une seule tentative réussit, elle est retenue telle quelle. Si
+**plusieurs** tentatives réussissent au même palier — un cas courant, pas
+une exception : mesuré en direct, plus de 40 % des paliers réussis testés
+en comportaient plusieurs, jusqu'à 6 simultanées sur une même machine à 10
+processeurs — ce n'est pas simplement la première trouvée qui est retenue,
+ni celle qui semble la meilleure avant optimisation : **chacune** de ces
+réussites est d'abord réellement optimisée (sa propre passe de
+minimisation des cases noires — voir "Minimisation des cases noires" plus
+bas —, sur sa propre copie de grille, jamais sur celle d'une autre
+tentative), puis c'est celle qui a le **moins de cases noires une fois
+optimisée** qui est gardée (`backend/crossword_gen.py`, `generate_grid`,
+la branche `if successes:`). À égalité de cases noires après
+optimisation, le départage se fait par la **somme des carrés des
+longueurs de mots** (ce score favorise quelques mots longs plutôt que
+beaucoup de mots courts pour le même total de lettres — un mot de 10
+lettres pèse 100 dans ce score, alors que dix mots de 2 lettres, qui
+couvrent pourtant le même nombre de lettres au total, ne pèsent que 40).
+
+Cette optimisation d'essai est jetée une fois la comparaison faite —
+seule la grille de la tentative gagnante, dans son état d'AVANT
+optimisation, est conservée à ce stade (`best`/`best_result`) ; la seule
+optimisation réelle qui produit la grille effectivement utilisée reste
+celle appliquée une fois, juste après ce palier gagnant (voir plus bas) —
+donc l'aperçu "avant optimisation" affiché côté interface reste fidèle à
+l'état réel de la tentative retenue, et la mesure du temps d'optimisation
+ne compte qu'une seule passe réelle, jamais plusieurs. Quand une seule
+tentative réussit (le cas le plus courant), cette comparaison est
+sautée entièrement — rien à comparer, l'optimiser deux fois (une fois à
+blanc, une fois pour de vrai) n'apporterait rien.
 
 #### Publication en temps réel des records de chaque tentative
 
@@ -715,6 +737,23 @@ l'identique, cycle après cycle, sans jamais progresser ni jamais être
 signalée (`backend/crossword_gen.py`, `Filler.locked_letters`, distinct de
 `Filler.forced_letters`).
 
+#### Affichage : lettres verrouillées vs. graines statistiques
+
+Les cases verrouillées (contenu réellement confirmé, porté d'un palier au
+suivant) et les cases forcées (une simple graine statistique de
+`sample_letter_biases`) restent deux ensembles strictement disjoints dans
+tout aperçu affiché — jamais une même case dans les deux à la fois. Une
+case verrouillée reste visible dans l'aperçu (sa lettre réelle s'affiche)
+même si aucun mot croisé ne l'a encore redécouverte pendant cette
+tentative précise, mais elle n'est jamais comptée comme "graine
+statistique" pour autant : `Filler`/`try_fill` transmettent les deux
+notions séparément à `build_partial_letters_grid`, qui superpose les deux
+sur la grille affichée mais ne renvoie que les vraies graines statistiques
+comme "cases forcées". Aucune fusion des deux ensembles n'a plus lieu
+nulle part dans le pipeline — une case verrouillée n'a donc plus aucune
+raison de s'afficher, même un instant, avec le liseré bleu réservé aux
+graines statistiques.
+
 #### Emplacements condamnés dès le départ
 
 Un emplacement condamné dès le départ (par exemple une case noire qui coupe
@@ -754,13 +793,61 @@ la recherche elle-même (aucun mot deviné ou statistique n'est jamais
 placé ici) — il ne fait que confirmer ce qui, par construction, est déjà
 la seule possibilité restante.
 
-## Étape 3 — Simplifier la grille
+## Étape 3 — Simplifier une tentative échouée
 
-Cette étape intervient dans deux circonstances différentes : quand un
-palier échoue (pour en récupérer ce qui reste exploitable avant de
-continuer), et quand une grille est déjà entièrement remplie (pour la
-densifier encore davantage). Les deux retirent du contenu plutôt que d'en
-ajouter — d'où le même nom.
+Cette étape intervient quand un palier échoue, pour en récupérer ce qui
+reste exploitable avant de continuer plutôt que de tout recommencer de
+zéro. Elle retire du contenu (mots, cases noires) plutôt que d'en
+ajouter — d'où son nom. Une seconde étape, distincte, fait la même chose
+sur la grille *finale* une fois entièrement remplie — voir "Étape 4 —
+Optimiser la grille finale" plus bas.
+
+### Optimisation avant nettoyage
+
+Avant même le nettoyage proprement dit (que la reprise soit "telle
+quelle" ou par motif neuf — voir plus bas), chaque tentative distincte du
+palier passe par une optimisation dédiée, appliquée séparément à chacune
+(`backend/crossword_gen.py`, `_optimize_before_cleanup`) :
+
+1. tout emplacement **entièrement vide** — aucune case ne porte de
+   lettre, ni directement ni via un croisement — est verrouillé, ainsi
+   que la ou les cases noires qui le bordent immédiatement ;
+2. un remplissage complémentaire est tenté sur tout le reste de la
+   grille (les emplacements déjà connus impossibles restent, eux aussi,
+   de côté pour cette tentative, sans quoi leur seule présence ferait
+   échouer tout le remplissage) — un budget de recherche resté inexploité
+   par la recherche d'origine peut ainsi acheter un progrès réel, gratuit ;
+3. puis un cycle de retrait de cases noires, exactement comme l'étape 4
+   plus bas, mais restreint aux cases noires non verrouillées — aucune
+   case blanche ou noire verrouillée n'est jamais touchée par ce retrait.
+
+Le résultat de cette optimisation remplace la tentative d'origine pour
+tout le reste du palier : c'est sur cette grille optimisée, jamais sur
+l'état brut, que le nettoyage habituel ci-dessous s'applique ensuite.
+L'interface web affiche l'état de chaque tentative avant cette
+optimisation (l'aperçu de fin de palier habituel) puis après (un aperçu
+dédié, avant tout nettoyage), pour que le joueur puisse comparer les
+deux directement.
+
+Les cases affichées comme verrouillées pour cet aperçu "après
+optimisation" ne reprennent jamais celles d'un état antérieur : la grille
+entière repart de zéro (aucune case verrouillée), puis seules les cases
+des emplacements entièrement vides et leurs cases noires bordantes
+(l'étape 1 ci-dessus) sont reverrouillées — la seule définition du
+"verrouillé" qui ait un sens pour cette étape précise. Une case ainsi
+verrouillée peut malgré tout finir par porter une lettre réelle (si
+l'étape 2 la remplit) sans perdre son statut verrouillé : ce statut
+signifie "la zone est restée hors de portée du retrait de cases noires",
+pas "la case est encore vide". Ces cases verrouillées incluent aussi bien
+des cases blanches (celles de l'emplacement vide lui-même) que des cases
+noires (celles qui le bordent) — les deux sont mises en évidence dans
+l'aperçu, avec le même liseré orange.
+
+Le même principe s'applique au tout début du palier suivant : l'aperçu
+montré avant même que la recherche ne démarre repart lui aussi d'une
+grille entièrement déverrouillée, puis reverrouille exactement les cases
+qui portent une lettre réellement confirmée à cet instant — jamais un
+reliquat d'un palier antérieur.
 
 ### Quand un palier échoue
 
@@ -1161,19 +1248,48 @@ compte tenu des lettres déjà imposées par ses croisements — y compris quand
 tous les mots qui correspondraient encore aux lettres imposées sont déjà
 utilisés ailleurs dans cette même grille.
 
-### Une fois une grille entièrement remplie
+## Étape 4 — Optimiser la grille finale
 
-Une fois une grille entièrement remplie, on essaie d'**enlever des cases
-noires** pour densifier la grille encore davantage (moins de cases noires =
-plus de lettres visibles = grille plus intéressante à résoudre) : pour
-chaque case noire encore présente, prise individuellement, on la retire
-temporairement et on relance un remplissage complet à cet endroit. Si la
-grille reste remplissable sans casser les règles structurelles de l'étape 1,
-le retrait est conservé ; sinon, on remet la case noire en place et on passe
-à la suivante.
+Une fois qu'un palier a réussi (une grille entièrement remplie, un vrai mot
+dans chaque emplacement), une dernière passe essaie d'**enlever encore des
+cases noires** de cette grille déjà valide, pour la densifier davantage
+(moins de cases noires = plus de lettres visibles = grille plus
+intéressante à résoudre) — `backend/crossword_gen.py`,
+`minimize_black_squares`.
 
-Cette partie de l'étape ne peut donc **jamais dégrader** une grille déjà
-valide — elle ne fait que l'améliorer quand c'est possible, jamais l'inverse.
+Le principe : pour chaque case noire encore présente dans la grille, prise
+individuellement, on la retire temporairement (elle redevient une case
+blanche) et on relance un remplissage complet à cet endroit
+(`try_fill`, avec un budget de vérifications propre à cette phase,
+`deadline_checks=6_000` — nettement plus petit que le budget de la
+recherche principale, puisqu'il ne s'agit ici que de reconfirmer une
+grille déjà quasiment remplissable, pas de partir de rien). Deux issues
+possibles :
+- si la grille reste structurellement valide (mêmes règles qu'à l'étape 1,
+  mais avec la variante la plus permissive, `min_interior_free=1` : la
+  seule chose qui compte encore ici est qu'aucune case ne se retrouve
+  orpheline et que la grille reste connexe — la préférence esthétique pour
+  des zones d'au moins 8 cases, elle, ne s'applique qu'à la *pose* initiale
+  des cases noires, jamais à ce retrait) **et** qu'un remplissage complet
+  réussit, le retrait est conservé ;
+- sinon, la case noire est remise en place et on passe à la suivante.
+
+L'ordre dans lequel les cases noires sont essayées est mélangé (`rng.shuffle`)
+à chaque passage, pour ne jamais favoriser systématiquement une case parce
+qu'elle apparaît plus tôt dans la grille. Toute la grille est repassée en
+revue en boucle tant qu'au moins un retrait a réussi lors du dernier tour
+complet — un retrait peut en effet rendre un autre retrait, auparavant
+impossible, réalisable à son tour (une case noire qui bloquait un
+allongement d'emplacement peut elle-même disparaître une fois une case
+voisine déjà retirée).
+
+Cette étape ne peut donc **jamais dégrader** une grille déjà valide — elle
+ne fait que l'améliorer quand c'est possible, jamais l'inverse : à tout
+moment, la dernière solution connue et valide est conservée, et une
+tentative de retrait qui échoue n'a d'autre effet que de remettre la case
+noire concernée en place. Le bouton "Stop" de l'interface web reste actif
+pendant cette phase : un point de contrôle (`cancel_event`) est vérifié
+entre deux cases noires candidates.
 
 ### Aperçu affiché pendant la génération
 
@@ -1184,7 +1300,9 @@ que les cases noires de ce palier sont posées mais avant que la recherche
 de mots ne démarre, le motif noir/blanc obtenu ; puis, si le palier
 échoue, toutes les meilleures tentatives échouées distinctes de ce
 palier, sans plafond, avec leurs lettres réelles et leurs diagnostics
-complets (cases injouables, cases verrouillées).
+complets (cases injouables, cases verrouillées) ; puis, juste avant le
+nettoyage, l'état de chacune de ces mêmes tentatives une fois passées par
+l'optimisation dédiée (voir "Optimisation avant nettoyage" plus haut).
 
 #### Cas particulier : palier « motif neuf »
 
@@ -1256,6 +1374,65 @@ donc pas), mais si aucun de leurs mots réellement jouables (ni déjà posé
 ailleurs dans la grille, ni une entrée quasi nulle en fréquence — donc
 probablement pas un vrai mot) ne partage la même lettre à cette case
 précise, elle reste en pratique injouable telle quelle.
+
+#### Numéro de la grille (lignée) qui a produit chaque aperçu
+
+Au-dessus de chaque grille d'aperçu, un préfixe en gras ("Process N :")
+indique le numéro de sa propre **lignée** — permet de suivre une grille
+précise d'un cycle à l'autre, même si son classement change. Ce numéro
+n'est PAS le PID du processus qui l'a calculée (une même lignée peut très
+bien être traitée par un processus différent d'un palier à l'autre, le
+pool de workers ne garantissant aucune affectation fixe) : il suit la
+POSITION de la grille dans le vivier de départ de chaque palier, héritée
+d'un palier au suivant tant que cette lignée continue d'exister.
+
+Chaque grille du tout premier palier reçoit directement son propre numéro
+(1..N, un par tentative indépendante). À chaque palier suivant, chaque
+tentative non réinitialisée hérite du numéro de l'entrée du vivier dont
+elle repart ; une tentative réinitialisée (grille entièrement nouvelle,
+voir plus bas) n'a par définition aucun numéro à hériter — si elle
+survit au tri par score qui construit le vivier du palier suivant, elle
+reprend alors le numéro d'une lignée qui, elle, n'a pas survécu ce
+palier-là (la moins bonne, éliminée par ce même tri) — jamais un numéro
+tout neuf tant qu'un numéro existant s'est justement libéré. Une grille
+réinitialisée n'a donc, le temps de son tout premier aperçu (avant que ce
+tri n'ait eu lieu), encore aucun numéro à afficher — un cas isolé,
+attendu, distinct du bug historique de numéros manquants documenté
+ci-dessus.
+
+Les grilles d'un même aperçu s'affichent toujours **dans l'ordre des
+lignées** (1 à N), jamais par score — ce dernier continue de décider en
+coulisses laquelle est réellement conservée comme base du palier suivant,
+mais n'influence plus du tout l'ordre d'affichage : une grille précise
+(identifiée par son numéro de lignée) reste donc toujours à la même
+position relative d'un cycle à l'autre, plutôt que de changer de place
+selon son classement. La grille effectivement retenue comme la meilleure
+est signalée par un filet vert autour d'elle-même — le seul indice visuel
+de son statut, puisque sa position dans la liste ne l'indique plus.
+
+Seul le tout premier aperçu du tout premier palier d'une génération n'a
+aucun numéro à afficher : à cet instant précis, il est reconstruit dans le
+processus parent lui-même, avant même qu'une seule tentative parallèle
+n'ait été soumise à un worker réel.
+
+Avant même le tout premier palier, une phase de **pré-chauffage** force
+tous les `PARALLEL_ATTEMPTS` processus du pool à démarrer réellement,
+plutôt que de laisser le premier palier découvrir progressivement combien
+de workers sont déjà prêts. Sans elle, un pool tout juste créé ne spawn
+ses processus que paresseusement : seule une poignée sont réellement
+disponibles pour les premiers paliers, ce qui répartit les tâches de
+façon inégale entre eux (un même process peut en traiter plusieurs à la
+fois pendant que d'autres restent inactifs) — un numéro de process
+apparaît alors plusieurs fois dans un même aperçu, jusqu'à ce que le pool
+finisse par se stabiliser tout seul au bout de quelques paliers. Le
+pré-chauffage soumet exactement `PARALLEL_ATTEMPTS` tâches factices d'un
+coup, chacune bloquée dans une barrière de synchronisation partagée tant
+que toutes ne sont pas arrivées — un process qui en attrape une reste
+donc occupé (jamais "au repos" pour le pool) tant que les autres n'ont
+pas eux aussi fini de démarrer, ce qui force le pool à en spawn un
+nouveau pour chaque tâche restante plutôt que de laisser un process déjà
+prêt les absorber toutes. La répartition est donc déjà parfaitement 1:1
+dès le tout premier palier.
 
 ## Résumé en une phrase
 

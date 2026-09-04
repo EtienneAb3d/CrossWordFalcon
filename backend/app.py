@@ -564,6 +564,13 @@ async def _run_generate_job(job_id, req, resume_state=None):
                 "impossible_cells": [],
                 "forced_cells": [],
                 "locked_cells": [],
+                # Numéro du process qui a réellement produit cette grille
+                # gagnante (backend/crossword_gen.py's own `winning_
+                # process_number`, threaded through the result dict — see
+                # its own docstring for the full "numéro du process"
+                # feature), à la demande explicite de l'utilisateur.
+                "process_number": result.get("winning_process_number"),
+                "is_best": True,
             }],
             word_table=word_table,
         )

@@ -264,14 +264,23 @@ function setStatus(message, isError) {
 // also ended up there. Each `locked_cells` (diagnostics["locked_cells"],
 // possibly empty — see try_fill's own docstring) is likewise an array of
 // [row, col] pairs, highlighted with a thick orange inset border (--locked,
-// see style.css's .cell.white.locked — a border rather than a background
-// fill, at the user's own explicit follow-up request, so it never covers
-// up .impossible's red background underneath) at the user's explicit
-// request — cells whose shown letter was carried over verbatim, real and
-// already confirmed, from a *previous* palier via the "reprise
-// telle-quelle" mechanism (crossword_gen.py's preseed_assignment), a
-// genuinely different mechanism from `forced_cells`'s statistical guess,
-// so it gets a visually distinct color rather than reusing --accent.
+// see style.css's .cell.white.locked/.cell.black.locked — a border rather
+// than a background fill, at the user's own explicit follow-up request, so
+// it never covers up .impossible's red background underneath) at the
+// user's explicit request — most often cells whose shown letter was
+// carried over verbatim, real and already confirmed, from a *previous*
+// palier via the "reprise telle-quelle" mechanism (crossword_gen.py's
+// preseed_assignment), a genuinely different mechanism from `forced_
+// cells`'s statistical guess, so it gets a visually distinct color rather
+// than reusing --accent — but also, for the "pre_cleanup_optimized" step
+// specifically (crossword_gen.py's `_optimize_before_cleanup`), the black
+// cells bordering a still-entirely-empty slot, protected from removal
+// during that step's own optimization pass. `cellElementsByCoord` (below)
+// registers every cell, black or white, precisely so a locked *black*
+// cell can be found by this overlay too — the other three overlays
+// (.forced/.low-candidates/.noise) never receive a black-cell coordinate
+// from any current backend caller, but finding one harmlessly no-ops
+// since their own CSS rules stay scoped to `.white`.
 // Applied in a dedicated final pass per mini-grid, *after* every cell of
 // that mini-grid already exists in the DOM (see the loop below) — at the
 // user's own explicit follow-up request, so the overlay is unambiguously
@@ -315,6 +324,8 @@ function renderAttemptPreview(examples) {
     locked_cells: lockedCells,
     low_candidate_cells: lowCandidateCells,
     noise_cells: noiseCells,
+    process_number: processNumber,
+    is_best: isBest,
   } of examples) {
     if (!exampleGrid || !exampleGrid.length) continue;
     const height = exampleGrid.length;
@@ -324,6 +335,14 @@ function renderAttemptPreview(examples) {
     item.className = "attempt-preview-item";
     const miniGrid = document.createElement("div");
     miniGrid.className = "attempt-preview-grid";
+    // Green outline around whichever grid the backend considers the real
+    // winner of this batch (backend/crossword_gen.py's own `is_best`, see
+    // its own docstring on `_sort_examples_by_process`) — at the user's
+    // explicit request, added specifically because the display order is
+    // now always by process number rather than by score, so the winner's
+    // own position in the list no longer says anything about rank on its
+    // own.
+    if (isBest) miniGrid.classList.add("attempt-preview-best");
     miniGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
     const cellElementsByCoord = new Map();
     // Taux affichés au-dessus de chaque grille, à la demande explicite de
@@ -345,6 +364,19 @@ function renderAttemptPreview(examples) {
         if (ch === BLACK) {
           cell.className = "cell black";
           blackCount++;
+          // Enregistrée elle aussi (voir crossword_gen.py's
+          // `_optimize_before_cleanup`, à la demande explicite de
+          // l'utilisateur) — un `locked_cells` peut désormais désigner une
+          // case noire (une case bordant un emplacement encore
+          // entièrement vide, protégée du retrait pendant cette
+          // optimisation), pas seulement des cases blanches comme pour
+          // les autres appelants de ce mécanisme. Sans cet enregistrement,
+          // la case était introuvable par la passe de recouvrement plus
+          // bas (`cellElementsByCoord.get(...)` renvoyait `undefined`),
+          // donc jamais mise en évidence — signalé directement par
+          // l'utilisateur : "On devrait aussi voir les cases blanches et
+          // noires verrouillées, or elles ne sont pas entourées."
+          cellElementsByCoord.set(`${r},${c}`, cell);
         } else {
           cell.className = "cell white";
           if (ch !== ".") filledCount++;
@@ -389,7 +421,24 @@ function renderAttemptPreview(examples) {
     const impossiblePercent = Math.round((100 * impossibleSet.size) / totalCells);
     const stats = document.createElement("p");
     stats.className = "attempt-preview-stats";
-    stats.textContent = I18N[uiLanguage].attemptPreviewStats(blackPercent, fillPercent, impossiblePercent);
+    // Préfixe en gras par le numéro du process qui a réellement produit
+    // cette grille (backend/crossword_gen.py's own `process_number`, voir
+    // sa propre docstring), à la demande explicite de l'utilisateur :
+    // "permet de suivre une grille qui change de place d'un cycle à
+    // l'autre." Absent (`null`/`undefined`) pour la seule prévisualisation
+    // qui n'a jamais de vrai process derrière elle (le tout premier palier
+    // d'une génération, avant toute soumission réelle) — dans ce cas, pas
+    // de préfixe du tout plutôt qu'un numéro inventé.
+    if (processNumber != null) {
+      const processLabel = document.createElement("strong");
+      processLabel.className = "attempt-preview-process";
+      processLabel.textContent = I18N[uiLanguage].attemptPreviewProcessLabel(processNumber);
+      stats.appendChild(processLabel);
+      stats.appendChild(document.createTextNode(" "));
+    }
+    stats.appendChild(
+      document.createTextNode(I18N[uiLanguage].attemptPreviewStats(blackPercent, fillPercent, impossiblePercent))
+    );
     item.appendChild(stats);
     item.appendChild(miniGrid);
     attemptPreviewGrids.appendChild(item);
@@ -1111,6 +1160,9 @@ function describeStep(t, step) {
       break;
     case "pattern_attempt_failed":
       message = t.statusPatternAttemptFailed(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
+      break;
+    case "pre_cleanup_optimized":
+      message = t.statusPreCleanupOptimized(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
       break;
     case "pattern_found":
       message = t.statusPatternFound(step.attempt, formatAttemptCount(step.total_attempts));

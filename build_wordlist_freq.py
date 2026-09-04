@@ -1,10 +1,21 @@
 #!/usr/bin/env python3
 """
 Builds a crossword wordlist (WORD<TAB>ACCENTED<TAB>FREQUENCY<TAB>CANONICAL)
-for one language, from its reference sentence corpus
-(data/reference_corpus/<lang>_sentences.txt, built by
-build_sentence_corpus.py from OpenSubtitles + Wikipedia + Books) — used
-for all five languages (data/wordlist_{fr,en,de,es,it}_full.tsv). Word frequency is
+for one language, from its FULL reference sentence corpus
+(data/reference_corpus/<lang>_sentences_full.txt, built by
+build_sentence_corpus.py from OpenSubtitles + Wikipedia + Books + TED2013
++ CCMatrix) — used for all five languages (data/wordlist_{fr,en,de,es,it}
+_full.tsv). Deliberately the *_full.txt variant, never the capped <lang>_
+sentences.txt (build_sentence_corpus.py's own docstring covers why there
+are two): word frequency must be counted over every validated sentence
+this project actually has, not an arbitrary subset — capping the corpus
+before counting would silently bias every word's own frequency downward,
+and unevenly so across words (one overrepresented in a discarded chunk
+loses more than one that wasn't), at the user's explicit request after
+noticing this distinction was blurred when the size-capped variant was
+first introduced ("le travail de construction des glossaires ... ne doit
+pas se limiter à ces corpus de référence réduits, mais traiter la
+totalité"). Word frequency is
 computed directly here (counting occurrences in the corpus) rather than
 via a separate persisted intermediate file: an earlier version of this
 pipeline wrote that count to data/raw/<lang>_50k.txt as a hand-off between
@@ -163,9 +174,11 @@ def strip_accents(s):
 
 def _count_word_frequencies(lang):
     """Counts word occurrences (case-insensitive, accents kept) in
-    `lang`'s reference sentence corpus — see build_sentence_corpus.py.
-    Returns [(raw_word, count), ...], most frequent first."""
-    corpus_path = CORPUS_DIR / f"{lang}_sentences.txt"
+    `lang`'s FULL reference sentence corpus (never the capped variant —
+    see this module's own docstring and build_sentence_corpus.py's) —
+    see build_sentence_corpus.py. Returns [(raw_word, count), ...], most
+    frequent first."""
+    corpus_path = CORPUS_DIR / f"{lang}_sentences_full.txt"
     counts = Counter()
     with open(corpus_path, encoding="utf-8") as f:
         for line in f:

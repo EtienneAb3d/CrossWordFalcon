@@ -1617,3 +1617,46 @@ English (see `project-best-practices`).
   aloud — "ligne, colonne"). No new CSS: still plain text inside the same
   first `<td>`, unaffected by the `.raw-line`/`vertical-align: top`
   treatment already applied to columns 2/3.
+
+- each attempt-preview grid's own stats line (`.attempt-preview-stats`,
+  small/dimmed) now gets a bold prefix naming which real process produced
+  that specific grid — "Process N:" (localized per UI language), at the
+  user's explicit request, to let a grid be tracked visually across
+  cycles even as its position among the shown examples reorders. New
+  class `.attempt-preview-process` (a `<strong>` element): full opacity
+  and `var(--accent)` (the same blue used for buttons/the info badge),
+  deliberately *not* the dimmed `--fg`/`opacity: 0.7` treatment
+  `.attempt-preview-stats` itself uses — this is an identifying label, not
+  a secondary statistic, so it needed to read as visually distinct from
+  the percentages it's attached to, not blend into them. Omitted entirely
+  (no prefix at all, not a placeholder) for the one case with genuinely no
+  real process behind it yet — the very first preview of a whole
+  generation, built directly in the parent process before any worker task
+  is ever submitted. **Not yet visually confirmed in an actual browser** —
+  same tooling limitation noted throughout this file; verified structurally
+  instead (a real JS syntax check via `esprima`, and confirming via direct
+  `generate_grid()` calls that the backend's own `process_number` field
+  reaches every preview event correctly — see CLAUDE.md for the full
+  verification trail).
+
+- once every preview's own examples started displaying in a fixed
+  process-number order (see CLAUDE.md) rather than sorted by score, the
+  winning grid's position in the list could no longer say anything about
+  its own status — a new green outline, `.attempt-preview-grid.attempt-
+  preview-best`, marks it explicitly instead, at the user's own explicit
+  request: "entourer d'un filet vert la grille considérée comme la
+  meilleure." A new `--best: #16a34a` token (a clear, medium-saturation
+  green) drives a slightly thicker border (3px vs. the plain 2px
+  `--border` gray every mini-grid already has) — deliberately its own
+  token rather than reusing `--correct-fg` (the existing dark green used
+  for "Vérification" mode's own correct-letter feedback on the real
+  playable grid): the two are unrelated concepts that only coincidentally
+  share the same color family (green = "good"/"right"), and keeping them
+  independently tunable avoids a future change to one accidentally
+  affecting the other. **Not yet visually confirmed in an actual
+  browser** — same tooling limitation noted throughout this file; verified
+  structurally instead (a real JS syntax check via `esprima`, a CSS
+  brace-balance check, and confirming via a direct `generate_grid()` call
+  that the backend's own `is_best` field is present exactly once per
+  multi-example event and correctly absent/false for the one case with no
+  real winner yet — see CLAUDE.md for the full verification trail).

@@ -40,14 +40,22 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 # data/reference_corpus_<lang>.tar.xz (optional, one archive per language) —
-# a pre-built snapshot of data/reference_corpus/ (build_sentence_corpus.py's
-# output), so a fresh clone can skip the multi-source OPUS download/filter
-# pass instead of always rebuilding it from scratch. Split per language
-# (rather than one combined archive) so each file stays under GitHub's
-# 100MB hard file-size limit. Each language is unpacked independently if its
-# archive is present; a language with no archive just falls back to the
-# from-scratch path (build_sentence_corpus.py, then build_wordlist_freq.py —
-# see CLAUDE.md) for that language only.
+# a pre-built snapshot of the CAPPED reference corpus (data/reference_
+# corpus/<lang>_sentences.txt, at most build_sentence_corpus.MAX_SENTENCES_
+# PER_LANGUAGE sentences — see that script), so a fresh clone gets backend/
+# example_sentences.py's own LLM-grounding lookups working without any OPUS
+# download at all. Split per language (rather than one combined archive) so
+# each file stays under GitHub's 100MB hard file-size limit. Each language
+# is unpacked independently if its archive is present; a language with no
+# archive just has no example-sentence grounding for that language until
+# build_sentence_corpus.py is run for it. NOT sufficient to regenerate a
+# language's data/wordlist_<lang>_full.tsv from scratch, though — that
+# needs the FULL, uncapped corpus (<lang>_sentences_full.txt), never
+# published here (see build_sentence_corpus.py/build_wordlist_freq.py's own
+# docstrings for why) — but data/wordlist_<lang>_full.tsv is itself already
+# checked into the repo, so a fresh clone never needs to rebuild it just to
+# use the app; only actually regenerating it (e.g. after a pipeline change)
+# needs the full corpus, via build_sentence_corpus.py from scratch.
 found_corpus_archive=0
 for lang in fr en de es it; do
     archive="data/reference_corpus_${lang}.tar.xz"

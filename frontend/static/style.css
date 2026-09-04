@@ -16,6 +16,7 @@
   --locked: #ea580c;
   --low-candidates-bg: #fed7aa;
   --noise-bg: #e9d5ff;
+  --best: #16a34a;
 }
 
 * {
@@ -407,6 +408,19 @@ button:disabled {
   opacity: 0.7;
 }
 
+/* Prefix identifying which real process produced this specific preview
+   grid, at the user's explicit request — "permet de suivre une grille qui
+   change de place d'un cycle à l'autre." Full opacity and the accent
+   color (unlike .attempt-preview-stats' own dimmed --fg) so it reads as
+   the identifying label it is, distinct from the plain percentage stats
+   it's prefixed to. `<strong>` already carries its own bold weight; the
+   explicit font-weight here just makes that intent unambiguous regardless
+   of any future base-style change. */
+.attempt-preview-process {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 /* Each individual mini-grid: reuses the same .cell/.white/.black classes/
    colors as #grid for visual consistency, but scoped smaller (1.1rem vs.
    2rem) since this is a quick, secondary glance, not the main puzzle, and
@@ -443,6 +457,22 @@ button:disabled {
   border: 2px solid var(--border);
   align-content: start;
   align-self: flex-start;
+}
+
+/* Green outline around the grid the backend reports as the real winner of
+   its own batch (`is_best`, see backend/crossword_gen.py's `_sort_
+   examples_by_process`) — at the user's explicit request, needed once the
+   display order became always-by-process-number rather than by score:
+   the winner's own position in the list no longer implies anything about
+   rank on its own, so it needs an explicit visual marker instead. A
+   slightly thicker border (3px vs. the plain 2px gray default) in a
+   distinct green (`--best`, separate from `--correct-fg`'s own darker
+   green used for the real playable grid's "Vérification" feedback —
+   two unrelated concepts that only coincidentally share the same color
+   family) so it reads clearly as a special outline, not just a color
+   change easy to miss at this small a scale. */
+.attempt-preview-grid.attempt-preview-best {
+  border: 3px solid var(--best);
 }
 
 .attempt-preview-grid .cell {
@@ -539,6 +569,23 @@ button:disabled {
    the same reasoning that already made .forced border-only instead of a
    fill. */
 .attempt-preview-grid .cell.white.locked {
+  box-shadow: inset 0 0 0 2px var(--locked);
+}
+
+/* Même traitement pour une case NOIRE verrouillée — à la demande
+   explicite de l'utilisateur, une fois `_optimize_before_cleanup`
+   (backend/crossword_gen.py) étendu pour verrouiller aussi les cases
+   noires qui bordent un emplacement encore entièrement vide, pas
+   seulement les cases blanches de cet emplacement lui-même. Même liseré
+   orange (`--locked`) — reste visible sur le fond déjà sombre de
+   `.cell.black` puisque `box-shadow: inset` se dessine par-dessus le
+   fond, jamais masqué par lui. Règle distincte plutôt qu'un sélecteur
+   commun `.cell.locked` : garde la même convention "un sélecteur par
+   couleur de case" déjà en place pour chaque autre overlay de ce
+   fichier, et rend explicite que .forced/.low-candidates/.noise restent,
+   eux, volontairement réservés aux cases blanches (aucun appelant ne
+   fournit aujourd'hui de case noire pour ces trois-là). */
+.attempt-preview-grid .cell.black.locked {
   box-shadow: inset 0 0 0 2px var(--locked);
 }
 

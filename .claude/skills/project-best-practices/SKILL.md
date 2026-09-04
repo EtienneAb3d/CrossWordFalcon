@@ -341,8 +341,9 @@ project's engineering language.
   committed directly: `CORPUS/` (raw per-source sentence cache), `DICS/`
   (raw Wiktionary/Kaikki dumps), `GRID_SVG/`, `GRID_PNG/`, `LOG_LLM/`,
   `models/` (LLM GGUF weights, auto-downloaded by `run_llm.sh`), `data/
-  hunspell_cache/`, and `data/reference_corpus/` (the uncompressed sentence
-  corpus, ~1GB+ of raw text). If one of these ever shows as staged/committed
+  hunspell_cache/`, and `data/reference_corpus/` (both the full and the
+  capped sentence corpus — see the next bullet — the full one alone can be
+  multiple GB of raw text). If one of these ever shows as staged/committed
   by mistake and hasn't been pushed yet, undo with a plain `git reset
   HEAD~1` (uncommits without touching the working tree) rather than a
   history rewrite.
@@ -350,18 +351,43 @@ project's engineering language.
   of MB total) — small enough to ship directly and load-bearing at runtime
   (the "easy"-difficulty gloss filter, LLM clue grounding), unlike the much
   larger raw corpus/dump caches above.
+- `build_sentence_corpus.py` writes TWO files per language, not one, at the
+  user's explicit request once it was noticed that capping the corpus for
+  GitHub distribution was also silently starving `build_wordlist_freq.py`
+  of data it needs uncapped (see the data pipeline section below): `data/
+  reference_corpus/<lang>_sentences_full.txt` (every validated sentence,
+  gitignored, never distributed — `build_wordlist_freq.py`'s own input) and
+  `data/reference_corpus/<lang>_sentences.txt` (a `MAX_SENTENCES_PER_
+  LANGUAGE`-capped random sample of it, also gitignored locally, but this
+  is the one `compress_reference_corpus.py` publishes and `backend/
+  example_sentences.py` reads at runtime — the two have genuinely
+  different size needs and must never be confused for each other).
 - `data/reference_corpus_<lang>.tar.xz` (one archive per language,
-  committed) is a fast-path `Install.sh` can unpack instead of re-running
-  `build_sentence_corpus.py` from scratch. GitHub enforces a **hard** 100MB
-  per-file limit (not just a soft warning) — that's why this is split per
-  language rather than one combined archive. When rebuilding one of these
-  archives, compress by piping through the real `xz` CLI directly
-  (`tar -cf - -C data reference_corpus/<lang>_sentences.txt | xz -9e -T0 >
-  data/reference_corpus_<lang>.tar.xz`), **not** `tar -cJf ... ` with
-  `XZ_OPT` — on a machine whose `tar` is `bsdtar`/libarchive (common on
-  macOS), `XZ_OPT` is silently ignored by libarchive's built-in `-J` filter,
-  producing a materially worse (and on at least one language, over-the-limit)
-  compression ratio with no error or warning.
+  committed) is `compress_reference_corpus.py`'s own output — a fast-path
+  `Install.sh` can unpack instead of re-running `build_sentence_corpus.py`
+  from scratch, sufficient for `backend/example_sentences.py`'s own
+  runtime lookups but NOT for regenerating a wordlist (see the full/capped
+  split above). GitHub enforces a **hard** 100MB per-file limit (not just
+  a soft warning, which instead starts at 50MB) — checked directly by the
+  script itself (`GITHUB_HARD_LIMIT_BYTES`/`GITHUB_WARN_LIMIT_BYTES`), and
+  the reason this archive is split per language rather than one combined
+  one in the first place (a single combined archive once got rejected
+  outright by a real `git push`, "GH001: Large files detected," when this
+  mechanism was first built). `compress_reference_corpus.py` already
+  compresses correctly internally — do not "fix" it by switching to `tar
+  -cJf ... ` with `XZ_OPT`: that exact mistake was already made and found
+  live, twice, in this project's own history (first when this per-language
+  split was originally introduced, then again when the full/capped split
+  above was added and the script rewritten from scratch without checking
+  this entry first) — on a machine whose `tar` is `bsdtar`/libarchive
+  (common on macOS, confirmed via `tar --version`), `tar -cJf`'s own
+  built-in xz filter silently ignores `XZ_OPT`, producing a materially
+  worse compression ratio with no error or warning (measured live on the
+  same French corpus: 52.7 MB via the broken method vs. 48.6 MB via the
+  correct one — the exact difference between failing and passing GitHub's
+  50MB soft-warning threshold). The script instead pipes a real `tar -cf -`
+  stream through a directly-invoked `xz -9e -T0` process — check
+  `compress_reference_corpus.py`'s own source before changing this again.
 - `GRID_SAMPLES/` (project root) **is** committed and the app never writes
   to it automatically — it's a small, hand-curated selection of example
   grids, populated only when someone deliberately picks a grid and adds it.
@@ -376,10 +402,15 @@ project's engineering language.
   check: reject a sentence with a contiguous run of `MAX_INVALID_RUN` (3+)
   unrecognized words, or too high an overall invalid-word fraction). Only
   sentences between `MIN_WORDS_PER_SENTENCE` (5) and `MAX_WORDS_PER_
-  SENTENCE` (50) words are kept. Output:
-  `data/reference_corpus/<lang>_sentences.txt`; each source's own raw
-  sentences are cached under `CORPUS/` so a reprocessing pass doesn't
-  re-download from opus.nlpl.eu.
+  SENTENCE` (50) words are kept. Writes TWO outputs (see "Data & git
+  hygiene" above for why): `data/reference_corpus/<lang>_sentences_full.txt`
+  (everything kept) and `data/reference_corpus/<lang>_sentences.txt` (a
+  reproducible random sample capped at `MAX_SENTENCES_PER_LANGUAGE`, 3M).
+  `--recap` re-derives just the capped file from an already-built full one
+  (memory-safe streaming reservoir sample — never loads the full,
+  multi-gigabyte file into memory at once) without re-running the download/
+  filter pipeline. Each source's own raw sentences are cached under
+  `CORPUS/` so a reprocessing pass doesn't re-download from opus.nlpl.eu.
 - `build_wordlist_freq.py` writes `data/wordlist_<lang>_full.tsv` as
   `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE` — the bare accent-stripped
   uppercase grid form, its natural accented/inflected spelling, a blended
@@ -799,11 +830,19 @@ the current defaults/behavior to know before touching this code.
 18. **Keep `DOC_DIC/FR/ReadMe.md` current, on the same footing as
     `DOC_ALGO/FR/ReadMe.md`** — a French, present-tense-only, timeless
     reference explaining how `build_sentence_corpus.py`,
-    `build_wordlist_freq.py`, and `build_gloss_dictionary.py` build this
-    project's per-language dictionaries (`data/reference_corpus/`,
-    `data/wordlist_<lang>_full.tsv`, `data/gloss_dictionary/`). Whenever
-    any of those three scripts' behavior changes, update it to describe
-    the new current behavior directly — the same rules already governing
+    `build_wordlist_freq.py`, `build_gloss_dictionary.py`, and
+    `compress_reference_corpus.py` build and package this project's
+    per-language dictionaries (`data/reference_corpus/`, `data/wordlist_
+    <lang>_full.tsv`, `data/gloss_dictionary/`, `data/reference_corpus_
+    <lang>.tar.xz`) — this list of scripts is itself illustrative, not
+    exhaustive: any future script added to this same corpus/wordlist/
+    gloss/packaging pipeline family falls under this same rule
+    automatically, whether or not it's been named here yet (a real gap
+    found live: `compress_reference_corpus.py` shipped an entire session
+    without DOC_DIC ever mentioning it, specifically because this rule's
+    own scope sentence only ever named the original three scripts by
+    name). Whenever any pipeline script's behavior changes, update it to
+    describe the new current behavior directly — the same rules already governing
     `DOC_ALGO/FR/ReadMe.md` apply here identically: no narrative ("à la
     demande explicite de l'utilisateur", "précédemment", a changed-N-times
     account, a bug-fix/incident trace — see permanent rule 11, which that

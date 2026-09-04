@@ -1,22 +1,30 @@
 # Comment CrossWordFalcon construit ses dictionnaires
 
-Ce document décrit, en termes simples, comment les trois scripts à la racine
-du projet — `build_sentence_corpus.py`, `build_wordlist_freq.py` et
-`build_gloss_dictionary.py` — fabriquent, pour une langue donnée (français,
-anglais, allemand, espagnol ou italien), les trois fichiers que
-`backend/crossword_gen.py` et `backend/clues.py` utilisent ensuite pour
-générer une grille et ses définitions :
+Ce document décrit, en termes simples, comment les quatre scripts à la
+racine du projet — `build_sentence_corpus.py`, `build_wordlist_freq.py`,
+`build_gloss_dictionary.py` et `compress_reference_corpus.py` — fabriquent,
+pour une langue donnée (français, anglais, allemand, espagnol ou italien),
+les fichiers que `backend/crossword_gen.py` et `backend/clues.py` utilisent
+ensuite pour générer une grille et ses définitions :
 
-1. un corpus de phrases de référence (`data/reference_corpus/<lang>_
-   sentences.txt`) ;
+1. un corpus de phrases de référence, en deux variantes — complète (`data/
+   reference_corpus/<lang>_sentences_full.txt`) et plafonnée (`data/
+   reference_corpus/<lang>_sentences.txt`) — voir "Deux variantes du
+   corpus" plus bas ;
 2. une liste de mots avec fréquence, orthographe naturelle et forme racine
    (`data/wordlist_<lang>_full.tsv`) ;
 3. un dictionnaire de définitions (`data/gloss_dictionary/<lang>_
-   glosses.jsonl`).
+   glosses.jsonl`) ;
+4. une archive compressée de la variante plafonnée du corpus (`data/
+   reference_corpus_<lang>.tar.xz`), destinée à être publiée sur GitHub —
+   voir "Étape 4 — Compresser le corpus pour publication" plus bas.
 
-Ces trois étapes s'enchaînent dans cet ordre — chacune consomme la sortie de
-la précédente — mais sont indépendantes d'une langue à l'autre : rien
-n'impose de traiter les cinq langues dans un ordre particulier.
+Les trois premières étapes s'enchaînent dans cet ordre — chacune consomme la
+sortie de la précédente — mais sont indépendantes d'une langue à l'autre :
+rien n'impose de traiter les cinq langues dans un ordre particulier. La
+quatrième étape (compression) ne dépend que de la sortie de la première ;
+elle peut être lancée dès que celle-ci existe, sans attendre les étapes 2
+et 3.
 
 ## Étape 1 — Construire le corpus de phrases
 
@@ -106,27 +114,51 @@ contamination (du dialogue anglais qui s'invite dans un fichier d'une autre
 langue) par rapport à des phrases authentiques ne comportant qu'un ou deux
 noms propres étrangers.
 
-### Résultat
+### Deux variantes du corpus
 
 Les phrases retenues, toutes sources confondues et déjà filtrées par
-longueur puis par langue, sont écrites dans
-`data/reference_corpus/<lang>_sentences.txt` (`build_sentence_corpus.py`,
-`build_sentence_corpus`) — un fichier texte, une phrase par ligne.
+longueur puis par langue, sont écrites dans **deux** fichiers distincts
+(`build_sentence_corpus.py`, `build_sentence_corpus`) — chacun un fichier
+texte, une phrase par ligne :
+
+- `data/reference_corpus/<lang>_sentences_full.txt` — la totalité des
+  phrases retenues, sans aucune limite. C'est la seule variante que lit
+  l'étape 2 (`build_wordlist_freq.py`) : compter les fréquences sur un
+  sous-ensemble plutôt que sur la totalité biaiserait le score de chaque
+  mot, et de façon inégale d'un mot à l'autre.
+- `data/reference_corpus/<lang>_sentences.txt` — un échantillon aléatoire
+  reproductible (graine fixe) d'au plus `MAX_SENTENCES_PER_LANGUAGE`
+  (3 000 000) phrases tirées de la variante complète
+  (`build_sentence_corpus.py`, `_cap_sentence_count`). C'est la variante que
+  lit `backend/example_sentences.py` au moment de rédiger une définition, et
+  celle que compresse l'étape 4 pour publication — un échantillon aléatoire
+  de cette taille est tout aussi utile qu'exemple d'usage réel que la
+  totalité, pour une fraction de la taille.
+
+`--recap` (`build_sentence_corpus.py`, `recap_from_full`) reconstruit la
+seule variante plafonnée à partir d'une variante complète déjà présente sur
+disque, sans retélécharger ni refiltrer quoi que ce soit — utile après un
+changement de `MAX_SENTENCES_PER_LANGUAGE` seul. La lecture se fait en
+flux (un tirage aléatoire par réservoir, jamais un chargement du fichier
+entier en mémoire), pour rester praticable sur une variante complète de
+plusieurs gigaoctets.
 
 ## Étape 2 — Construire la liste de mots avec fréquence
 
 (`build_wordlist_freq.py`)
 
-Cette étape lit le corpus de l'étape précédente et produit
+Cette étape lit la variante **complète** du corpus de l'étape précédente
+(`data/reference_corpus/<lang>_sentences_full.txt`, jamais la variante
+plafonnée — voir "Deux variantes du corpus" ci-dessus) et produit
 `data/wordlist_<lang>_full.tsv`, un fichier à quatre colonnes séparées par
 des tabulations : `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`.
 
 ### Comptage des occurrences
 
-La fréquence de chaque mot est le nombre de fois où il apparaît dans le
-corpus de l'étape 1, compté directement à cette étape (pas de fichier
-intermédiaire séparé) — insensible à la casse, accents conservés
-(`build_wordlist_freq.py`, `_count_word_frequencies`).
+La fréquence de chaque mot est le nombre de fois où il apparaît dans la
+variante complète du corpus de l'étape 1, compté directement à cette étape
+(pas de fichier intermédiaire séparé) — insensible à la casse, accents
+conservés (`build_wordlist_freq.py`, `_count_word_frequencies`).
 
 ### Les quatre colonnes
 
@@ -272,23 +304,75 @@ ligne par lemme trouvé :
 de rédiger une définition (`backend/clues.py`), une vraie définition d'un
 mot de la grille par sa forme canonique.
 
-## Ordre et dépendances entre les trois étapes
+## Étape 4 — Compresser le corpus pour publication
 
-Les trois scripts s'enchaînent dans l'ordre décrit ci-dessus, chacun lisant
-la sortie du précédent : `build_wordlist_freq.py` a besoin du corpus de
-`build_sentence_corpus.py`, et `build_gloss_dictionary.py` a besoin de la
-colonne CANONIQUE produite par `build_wordlist_freq.py`. Un changement dans
-l'une des sources ou des règles de l'étape 1 ou 2 peut donc modifier quels
-mots/lemmes existent en aval — les trois étapes sont recalculées ensemble à
-chaque changement de ce genre, jamais seulement la première.
+(`compress_reference_corpus.py`)
+
+Cette étape compresse la variante **plafonnée** du corpus d'une langue
+(`data/reference_corpus/<lang>_sentences.txt`, jamais la variante complète
+— voir "Deux variantes du corpus" plus haut) en une seule archive
+`data/reference_corpus_<lang>.tar.xz`, destinée à être suivie par git et
+publiée — contrairement aux deux variantes du corpus elles-mêmes, toujours
+ignorées par git.
+
+### Une archive par langue
+
+GitHub bloque tout fichier poussé au-delà de 100 Mo (limite stricte, pas un
+simple avertissement) et affiche un avertissement dans son interface web
+au-delà de 50 Mo (`GITHUB_HARD_LIMIT_BYTES`/`GITHUB_WARN_LIMIT_BYTES`,
+`compress_reference_corpus.py`) — une archive par langue reste sous la
+limite stricte, jamais une archive unique regroupant les cinq langues.
+`compress_reference_corpus.py` mesure la taille réelle de l'archive produite
+et rapporte explicitement laquelle des deux limites, si une seule, est
+dépassée.
+
+### Méthode de compression
+
+L'archive est produite en connectant directement un flux `tar` non
+compressé (`tar -cf -`) à un processus `xz -9e -T0` distinct — jamais
+`tar -cJf ...` (le filtre xz intégré à `tar`) : sur une machine dont `tar`
+est `bsdtar`/libarchive (le cas par défaut sur macOS), ce filtre intégré
+ignore silencieusement toute tentative de compression multi-fil (`XZ_OPT`),
+sans la moindre erreur, produisant un taux de compression nettement moins
+bon (`compress_reference_corpus.py`, `compress_reference_corpus`).
+
+### Utilisation ultérieure
+
+Une archive publiée permet à un clone du dépôt de récupérer directement des
+exemples de phrases pour `backend/example_sentences.py`, sans passer par le
+téléchargement/filtrage complet de l'étape 1 — mais jamais de reconstruire
+`data/wordlist_<lang>_full.tsv` à partir de cette seule archive, puisqu'elle
+ne contient que la variante plafonnée du corpus, insuffisante pour l'étape 2
+(voir "Deux variantes du corpus" plus haut). `data/wordlist_<lang>_full.tsv`
+lui-même reste néanmoins déjà présent dans le dépôt — un clone n'a donc
+jamais besoin de reconstruire quoi que ce soit pour utiliser l'application
+telle quelle ; seule une reconstruction volontaire du dictionnaire d'une
+langue exige de relancer l'étape 1 en entier.
+
+## Ordre et dépendances entre les étapes
+
+Les trois premières étapes s'enchaînent dans l'ordre décrit ci-dessus,
+chacune lisant la sortie de la précédente : `build_wordlist_freq.py` a
+besoin de la variante complète du corpus de `build_sentence_corpus.py`, et
+`build_gloss_dictionary.py` a besoin de la colonne CANONIQUE produite par
+`build_wordlist_freq.py`. Un changement dans l'une des sources ou des règles
+de l'étape 1 ou 2 peut donc modifier quels mots/lemmes existent en aval —
+les trois étapes sont recalculées ensemble à chaque changement de ce genre,
+jamais seulement la première. La quatrième étape (compression) ne dépend,
+elle, que de la variante plafonnée produite par l'étape 1 — un changement
+purement dans `MAX_SENTENCES_PER_LANGUAGE` ou dans la méthode de
+compression n'exige pas de relancer les étapes 2 et 3.
 
 ## Résumé en une phrase
 
 CrossWordFalcon fabrique, pour chaque langue, un corpus de phrases réelles
-tiré de cinq registres d'écriture différents, en compte les mots pour en
+tiré de cinq registres d'écriture différents (gardé en deux variantes,
+complète et plafonnée), en compte les mots de la variante complète pour en
 tirer une liste triée par fréquence — corrigée par la forme canonique de
 chaque mot et par la détection des noms propres probables — puis va
 chercher, pour chaque forme canonique de cette liste, une vraie définition
-dans Wiktionary ; le générateur de grille (`backend/crossword_gen.py`) et le
-rédacteur de définitions (`backend/clues.py`) n'utilisent ensuite plus que
-ces trois fichiers, jamais les sources brutes elles-mêmes.
+dans Wiktionary, et compresse enfin la variante plafonnée du corpus pour
+publication ; le générateur de grille (`backend/crossword_gen.py`), le
+rédacteur de définitions (`backend/clues.py`) et la recherche d'exemples
+d'usage (`backend/example_sentences.py`) n'utilisent ensuite plus que ces
+fichiers, jamais les sources brutes elles-mêmes.
