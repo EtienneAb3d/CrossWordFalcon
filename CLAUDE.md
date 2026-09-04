@@ -1144,6 +1144,161 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   describing "should be visibly marked" rather than requesting a new
   color, disclosed as such rather than silently reinterpreted.
 
+  **A fourth, genuinely new bug — an invented word slipping past
+  optimization into the final grid — was reported directly by the user,
+  with the exact word involved**: "L'optimisation de la grille laisse
+  passer des mots qui n'existent pas. Il vient de générer une grille avec
+  'UNT' qui ne se trouve pas dans le dictionnaire. Cette optimisation ne
+  doit valider une modification que si tous les mots sont valides."
+  Confirmed directly against `data/wordlist_fr_full.tsv` that "UNT" is
+  genuinely absent before investigating further.
+
+  Two real, independent gaps were found and fixed, in two rounds — the
+  first prompted directly by the user's own request, the second by a
+  live E2E reproduction that surfaced a second, distinct instance of the
+  exact same bug class right after the first fix shipped.
+
+  **Round 1 — `minimize_black_squares`**: added a defensive, blanket
+  validation as the user explicitly asked for ("ne doit valider une
+  modification que si tous les mots sont valides"): a `word_sets`
+  dict (`{length: set(index[length]["words"])}`, built once before the
+  removal loop, not reconverted per candidate) is checked against every
+  word of a successful `try_fill` result before accepting the black-cell
+  removal — any candidate containing a word absent from the dictionary
+  is rejected exactly like a `try_fill` failure (the black cell is
+  restored, no other cell is retried in its place this same pass). In
+  principle `try_fill`/`Filler` should never produce a word outside the
+  dictionary at all (every real assignment is drawn from `index`) — this
+  is a cheap safety net (a handful of set lookups per accepted removal,
+  never inside the `Filler` search loop itself), not a fix to a bug
+  located inside `minimize_black_squares` itself, which further
+  investigation confirmed.
+
+  **Round 2 — the real root cause, in `_optimize_before_cleanup`**:
+  right after Round 1 shipped, the user pinpointed precisely where "UNT"
+  actually came from, correcting the investigation's own direction:
+  "J'ai identifié le problème : avant optimisation, le mot 'UNT' était
+  déjà là, mais identifié en fond rouge comme impossible. L'optimisation
+  a perdu cette information que le mot était impossible, et il n'a pas
+  été nettoyé dans la phase suivante avant d'être envoyé verrouillé au
+  cycle suivant (et conservé par la suite). Les mots pouvant changer
+  pendant l'optimisation, il est important que cette optimisation
+  recalcule les mots impossibles avant de passer la main au nettoyage."
+
+  Root-caused precisely from this lead: `_optimize_before_cleanup`'s own
+  final `final_impossible` computation only ever *reprojected* the
+  ORIGINAL `cand_diag["impossible_slots"]` list (by matching each slot's
+  cell-tuple against the pre-optimization impossible set) — it never
+  re-validated whether a slot still listed there had, in the meantime,
+  been entirely completed by `confirmed` (the cell->letter map `_try_
+  complete`/`_absorb` accumulate from every OTHER, genuinely validated
+  crossing slot solved during optimization). `final_assignment` itself is
+  built purely from `confirmed`, with no check at all that the resulting
+  string is a real dictionary word for that exact combination — the
+  identical "invented word" class already known and fixed once in this
+  file for `_shorten_impossible_zones` (`_invalid_fully_known_indices`,
+  see its own docstring: "un mot inventé... jamais réellement choisi par
+  personne, simplement recomposé tel quel à partir de lettres
+  individuellement correctes mais jamais vérifiées ensemble"), reproduced
+  independently here. Since `_clean_blocked_slots` (the nettoyage that
+  follows) only ever removes words *crossing* an impossible slot, never
+  touching the impossible slot's own `assignment[i]` directly, a spuriously
+  "completed" impossible slot survived untouched, and — being now
+  non-`None` — got silently carried forward and locked into the next
+  palier as if genuinely confirmed: exactly "verrouillé au cycle suivant
+  (et conservé par la suite)."
+
+  Fixed by recomputing `final_impossible`/`final_assignment` from the
+  real final state instead of reprojecting the old list: reused the two
+  existing, already-proven helpers from `_shorten_impossible_zones`
+  (`_invalid_fully_known_indices`, `_impossible_indices`) directly against
+  `final_slots`/`confirmed` — `invalid_fully_known` (fully-known but
+  invalid) has its `final_assignment` entry cleared to `None`;
+  `final_impossible` becomes the union of both functions' results. This
+  also correctly *un-marks* a slot as impossible the moment optimization
+  genuinely solves it with a real, validated word (a case this function's
+  own docstring already anticipated: "un vrai retrait de case noire peut
+  donc parfois débloquer un emplacement autrefois impossible") — neither
+  helper flags a fully-known-and-valid slot, so it naturally drops out of
+  `final_impossible` with no special-casing needed.
+
+  Verified with a direct, hand-built reproduction of the exact "UNT"
+  shape: a 3×3 grid, no black cells, 3 across words already assigned
+  (covering every cell of the grid, including the "impossible" down slot
+  purely via crossing), one down slot flagged impossible whose crossed
+  letters spell an invalid combination in a small controlled dictionary
+  (2 OTHER down slots, using different crossed letters, spelling
+  genuinely valid entries) — confirmed the invalid down slot's
+  `assignment` comes back `None` and stays listed in `impossible_slots`,
+  while the 2 valid down slots are left completely untouched, their real
+  words preserved. `minimize_black_squares`'s own Round-1 validation was
+  separately verified too: a monkeypatched `try_fill` forced to return an
+  invalid word confirmed the black-cell removal producing it is rejected
+  (reverted), never accepted.
+
+  **A live, real-wordlist E2E check (never a restricted vocabulary, per
+  this project's own permanent rule) then surfaced a THIRD, independent
+  instance of the exact same bug class**, through the actual running API
+  rather than a hand-built test: submitting real generation jobs (15×10,
+  Flash mode) and reading `word_table`'s own `in_wordlist` flag (already
+  computed by `backend/app.py`'s `_build_word_verification_table`, see its
+  own entry) found "AMN" — also genuinely absent from the dictionary —
+  slipping through on seed 2, even after both rounds above shipped. Traced
+  directly to `_clean_blocked_slots` itself: its own "recompose the word
+  of an already fully-locked slot" step (added earlier in this project's
+  history specifically to stop a *different* bug — silently *losing*
+  already-confirmed content across paliers, see `_build_retry_seed`'s own
+  docstring) reconstructs `assignment[i] = "".join(locked_letters[cell]
+  for cell in cells)` for any slot whose every cell is already in `locked_
+  letters`, with **no validation against the dictionary at all** — unlike
+  every other place in this file that performs this exact kind of
+  reconstruction (`_pattern_attempt`'s own `locked_impossible_slots`
+  computation, `_invalid_fully_known_indices`, and the `_optimize_before_
+  cleanup` fix just above). This is the single other spot in the whole
+  file that assembles a complete word from `locked_letters` without ever
+  calling `_slot_candidates` first — and it runs at the end of *every*
+  single palier (both "reprise telle quelle" and full nettoyage), making
+  it the most central instance of this bug class, matching the user's own
+  diagnosis almost verbatim: this reconstruction step *is* "la phase
+  suivante" that was supposed to clean up but instead locked an unvalidated
+  word forward indefinitely.
+
+  Fixed the same way as every other validated reconstruction in this file:
+  before accepting the recomposed word, checks `_slot_candidates(index,
+  len(cells), cells, locked_letters)` is non-empty (gated on `index is not
+  None`, a no-op for the one hypothetical caller that omits it — every
+  real caller through `generate_grid` always supplies it). A slot whose
+  locked combination turns out invalid is simply left `None` rather than
+  additionally forced into `impossible_slots` here — deliberately: its
+  letters stay locked regardless, so the *next* palier's own `Filler.
+  exclude_immediately_impossible_slots()` (already run at the very start
+  of every real search) will naturally rediscover the same empty domain
+  and correctly report it through the normal `impossible_slots` channel,
+  rather than needing a second, parallel "impossible" bookkeeping path
+  introduced just for this one reconstruction step.
+
+  Verified: 3 isolated `_clean_blocked_slots` calls against a tiny
+  dictionary containing only "CAT" — a locked combination spelling "CAT"
+  is correctly reconstructed; the exact reported "AMN" combination is
+  correctly left `None`, never reconstructed; the same "AMN" case with
+  `index=None` (no real caller does this) correctly reproduces the old,
+  pre-fix behavior verbatim, confirming the guard is genuinely additive.
+  A real, non-mocked sweep across 6 seeds (2, 7, 30, 1000, 1001, 1002) on
+  the standard 15×10 grid, full French dictionary, easy difficulty, Flash
+  mode — 335 real placed words cross-checked directly against `data/
+  wordlist_fr_full.tsv` — found zero invalid words, both before this
+  round's fix was even needed (Round 1+2 alone already covered the "UNT"
+  reproduction) and after it (confirming no regression). A full,
+  non-mocked E2E check through the actual running API, restarted to load
+  every fix: 3 real jobs (seeds 2, 7, 1001, 15×10, Flash mode) polled to
+  their own `word_table`, all reporting zero invalid words — seed 2
+  specifically confirmed the fix directly, since it's the exact seed that
+  had shown "AMN" moments earlier, before this round's fix was deployed.
+  Two full end-to-end `generate_grid()` runs on the standard 15×10
+  benchmark (both reference seeds) confirmed no regression to ordinary
+  correctness: 0 mismatches between placed words and the solution grid,
+  each run.
+
   Every preview's own `examples` list is now always displayed **in
   process-number order** (1..N), at the user's explicit request: "afficher
   les prévisualisations toujours dans l'ordre des process." Before this,

@@ -3609,7 +3609,29 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
     est borné par `deadline_checks`, bien plus petit que la recherche
     principale), mais une grande grille peut avoir beaucoup de cases
     noires à essayer, donc ce point de contrôle reste utile plutôt que
-    d'attendre la fin de toute la boucle."""
+    d'attendre la fin de toute la boucle.
+
+    Valide aussi, à la demande explicite de l'utilisateur ("cette
+    optimisation ne doit valider une modification que si tous les mots
+    sont valides"), que le résultat d'un `try_fill` réussi ne contient QUE
+    des mots réellement présents dans `index` (à leur longueur exacte)
+    avant d'accepter le retrait de cette case noire : `try_fill`/`Filler`
+    ne devraient en principe jamais produire un mot absent du
+    dictionnaire, mais un cas résiduel et rare déjà documenté ailleurs
+    dans ce fichier (`_shorten_impossible_zones` : un emplacement peut se
+    retrouver entièrement complété par ses seuls croisements sans jamais
+    être validé lui-même) montre que ce n'est pas une garantie absolue.
+    Rapporté en direct par l'utilisateur : une grille optimisée contenant
+    "UNT", absent du dictionnaire français. Ce garde-fou est bon marché
+    (une poignée de recherches d'ensemble par retrait accepté — `word_sets`
+    est construit une seule fois, jamais reconverti à chaque essai — et
+    jamais dans la boucle de recherche `Filler` elle-même) et élimine ce
+    risque précisément là où une grille "optimisée" est sur le point
+    d'être acceptée comme nouvel état de référence ; un candidat rejeté
+    ici est traité exactement comme un échec de `try_fill` — la case
+    noire retirée est restaurée, aucune autre case n'est retentée à sa
+    place dans cette même passe."""
+    word_sets = {length: set(data["words"]) for length, data in index.items()}
     slots, assignment = result
     improved = True
     while improved:
@@ -3627,9 +3649,14 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                 new_result = try_fill(grid, rows, cols, index, rng, deadline_checks,
                                        cancel_event=cancel_event)
                 if new_result is not None:
-                    slots, assignment = new_result
-                    improved = True
-                    continue
+                    new_slots, new_assignment = new_result
+                    if all(
+                        w is not None and w in word_sets.get(len(w), ())
+                        for w in new_assignment
+                    ):
+                        slots, assignment = new_slots, new_assignment
+                        improved = True
+                        continue
             grid[r][c] = saved
     return grid, slots, assignment
 
@@ -4375,7 +4402,11 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
     jour (tout le reste, `process_number` compris, est transmis tel quel)
     — prête à remplacer `(cand_grid, cand_diag)` partout où le nettoyage
     habituel les attendait, sans qu'aucun appelant n'ait besoin de
-    connaître le détail de cette étape."""
+    connaître le détail de cette étape. `assignment`/`impossible_slots`
+    sont recalculés depuis zéro sur l'état FINAL (jamais reprojetés depuis
+    `cand_diag` par simple correspondance de cases) — voir le commentaire
+    juste avant leur calcul, plus bas, pour le bug réel ("UNT") que cette
+    recomputation corrige."""
     cand_slots = extract_slots(cand_grid, rows, cols)
     example_grid = cand_diag["example_grid"]
     empty_cell_tuples = {
@@ -4459,10 +4490,45 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
         if all(cell in confirmed for cell in cells) else None
         for cells in final_slots
     ]
-    final_impossible = [
-        j for j, cells in enumerate(final_slots)
-        if tuple(cells) in impossible_cell_tuples
-    ]
+    # Recalcule les emplacements impossibles à partir de l'état RÉEL après
+    # optimisation, à la demande explicite de l'utilisateur : "les mots
+    # pouvant changer pendant l'optimisation, il est important que cette
+    # optimisation recalcule les mots impossibles avant de passer la main
+    # au nettoyage." L'ancienne version se contentait de reprojeter la
+    # liste `impossible_slots` D'ORIGINE (par correspondance de cases,
+    # `tuple(cells) in impossible_cell_tuples`) sans jamais revalider si un
+    # emplacement encore listé "impossible" avait, entre-temps, été
+    # entièrement recomposé — via `confirmed`, ci-dessus — par ses seuls
+    # croisements (chacun individuellement valide) en un mot qui, lui,
+    # n'existe dans le dictionnaire pour AUCUNE combinaison de ces lettres
+    # précises. Bug réel rapporté en direct par l'utilisateur : une grille
+    # optimisée contenant "UNT" (absent du dictionnaire français), déjà
+    # signalé "réputé impossible" avant optimisation — mais dont
+    # l'invalidité n'était plus reflétée nulle part une fois cette
+    # fonction terminée, puisque `_clean_blocked_slots` (le nettoyage qui
+    # suit) ne retire jamais un mot déjà présent sur l'emplacement
+    # impossible lui-même, seulement ceux qui le CROISENT — "UNT" restait
+    # donc tel quel, verrouillé au palier suivant. `_invalid_fully_known_
+    # indices` (un emplacement entièrement couvert par `confirmed` mais
+    # dont la combinaison de lettres ne correspond à aucun mot réel — même
+    # classe de bug déjà corrigée une fois pour `_shorten_impossible_
+    # zones`, voir sa propre docstring) efface ce genre de mot inventé
+    # avant qu'il ne soit jamais transmis plus loin ; `_impossible_indices`
+    # (un emplacement pas entièrement couvert, sans aucun candidat réel
+    # une fois ses lettres connues appliquées) capture le cas complémentaire
+    # — un emplacement toujours bloqué, touché ou non par l'optimisation.
+    # L'union des deux, et non plus la seule reprojection de l'ancienne
+    # liste, est la définition correcte d'"impossible" une fois cette
+    # étape terminée — y compris le cas, déjà anticipé plus haut dans cette
+    # docstring, où un retrait de case noire débloque légitimement un
+    # emplacement autrefois impossible : ni l'une ni l'autre fonction ne le
+    # signale alors, il disparaît naturellement de `final_impossible`.
+    invalid_fully_known = set(_invalid_fully_known_indices(final_slots, index, confirmed))
+    for j in invalid_fully_known:
+        final_assignment[j] = None
+    final_impossible = sorted(
+        invalid_fully_known | set(_impossible_indices(final_slots, index, confirmed))
+    )
     # build_partial_letters_grid returns (letters_grid, forced_cells,
     # covered_count) — only the grid itself is needed here; `forced_letters`
     # is never passed (no statistical seeding happens in this optimization
@@ -4659,7 +4725,25 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     docstring pour le bug que ce préremplissage corrige) — un no-op sans
     `locked_letters` (le cas du nettoyage "telle quelle" en fin de palier,
     qui a déjà un `assignment` complet, mot par mot, sans rien à
-    recomposer).
+    recomposer). Cette reconstruction valide désormais la combinaison
+    (`index` fourni) via `_slot_candidates` avant de l'accepter — bug réel
+    trouvé en direct, via l'API réelle, juste après avoir corrigé un bug
+    similaire dans `_optimize_before_cleanup` (voir CLAUDE.md, "UNT") :
+    "AMN", absent du dictionnaire, assemblé ici tel quel à partir de
+    lettres verrouillées individuellement correctes mais jamais vérifiées
+    ensemble — exactement la même classe de bug que `_invalid_fully_known_
+    indices` corrige déjà pour `_shorten_impossible_zones`, mais jamais
+    corrigée ici (le seul autre endroit du fichier qui recompose un mot
+    entier à partir de `locked_letters` sans jamais interroger le
+    dictionnaire). Un emplacement dont la combinaison verrouillée est
+    invalide reste `None` — jamais signalé "impossible" explicitement ici
+    (il ne l'est pas encore, au sens de `impossible_slots`), mais le
+    palier suivant le redécouvrira naturellement : ses lettres restent
+    verrouillées, donc `Filler.exclude_immediately_impossible_slots()` (au
+    tout début de la prochaine recherche) l'exclura de lui-même dès que
+    cette même combinaison invalide sera à nouveau soumise, le faisant
+    apparaître dans `impossible_slots` par la voie normale plutôt que de
+    laisser un mot inventé survivre.
 
     Retire ensuite TOUS les mots croisant chaque emplacement de
     `impossible_slots`, d'un coup — comportement à nouveau en vigueur, à
@@ -4749,6 +4833,10 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                 and i not in impossible_set
                 and all(cell in locked_letters for cell in cells)
             ):
+                if index is not None and not _slot_candidates(
+                    index, len(cells), cells, locked_letters
+                ):
+                    continue
                 assignment[i] = "".join(locked_letters[cell] for cell in cells)
     else:
         assignment = list(assignment)

@@ -849,6 +849,25 @@ grille entièrement déverrouillée, puis reverrouille exactement les cases
 qui portent une lettre réellement confirmée à cet instant — jamais un
 reliquat d'un palier antérieur.
 
+#### Emplacements impossibles recalculés après optimisation
+
+Les mots pouvant changer pendant les étapes 2 et 3 ci-dessus (un
+remplissage complémentaire, ou un retrait de case noire, peuvent achever
+de couvrir un emplacement autrefois signalé impossible par ses seuls
+croisements), la liste des emplacements impossibles n'est jamais reprise
+telle quelle depuis avant l'optimisation : elle est intégralement
+recalculée sur l'état final (`backend/crossword_gen.py`,
+`_optimize_before_cleanup`) — un emplacement reste (ou redevient)
+impossible s'il n'a toujours aucun candidat réel une fois ses lettres
+connues appliquées, ou si ses cases sont désormais toutes couvertes mais
+que la combinaison qui en résulte ne correspond à aucun mot du
+dictionnaire (un mot assemblé lettre par lettre à partir de croisements
+individuellement corrects, mais jamais vérifié comme un tout — voir
+"Validation des mots recomposés par croisement" plus bas) ; dans ce
+dernier cas, le mot n'est pas conservé, l'emplacement reste vide. À
+l'inverse, un emplacement dont l'optimisation a réellement fourni un mot
+valide n'est plus signalé impossible.
+
 ### Quand un palier échoue
 
 Quand un palier échoue entièrement (aucune des tentatives parallèles n'a
@@ -1032,6 +1051,20 @@ emplacements déjà connus comme impossibles sont eux-mêmes mis de côté
 (ignorés plutôt que redemandés), pour laisser la recherche continuer là
 où elle s'était arrêtée plutôt que de repartir de zéro sur le même
 motif.
+
+##### Validation des mots recomposés par croisement
+
+Avant ce retrait, tout emplacement encore sans mot mais dont toutes les
+cases sont déjà verrouillées par une lettre confirmée est d'abord
+recomposé (`backend/crossword_gen.py`, `_clean_blocked_slots`) — mais
+uniquement si la combinaison obtenue correspond à un vrai mot du
+dictionnaire ; sinon, l'emplacement reste sans mot plutôt que de porter
+une combinaison jamais vérifiée. Un emplacement ainsi laissé de côté
+n'a pas besoin d'être explicitement signalé impossible ici : ses
+lettres restent verrouillées, donc la toute prochaine recherche
+redécouvre d'elle-même que la combinaison ne mène à aucun mot
+(`Filler.exclude_immediately_impossible_slots`), et le signale par la
+voie normale.
 
 ##### Exception : ajout d'une case noire (probabilité 1/10)
 
@@ -1271,8 +1304,11 @@ possibles :
   orpheline et que la grille reste connexe — la préférence esthétique pour
   des zones d'au moins 8 cases, elle, ne s'applique qu'à la *pose* initiale
   des cases noires, jamais à ce retrait) **et** qu'un remplissage complet
-  réussit, le retrait est conservé ;
-- sinon, la case noire est remise en place et on passe à la suivante.
+  réussit **et** que chacun des mots du résultat existe bien dans le
+  dictionnaire, le retrait est conservé ;
+- sinon (grille invalide, remplissage échoué, ou au moins un mot absent du
+  dictionnaire), la case noire est remise en place et on passe à la
+  suivante.
 
 L'ordre dans lequel les cases noires sont essayées est mélangé (`rng.shuffle`)
 à chaque passage, pour ne jamais favoriser systématiquement une case parce
