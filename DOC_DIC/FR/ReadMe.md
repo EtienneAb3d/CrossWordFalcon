@@ -240,7 +240,7 @@ Un mot dont seule la forme à majuscule initiale a validé Hunspell — alors
 qu'il n'était pas déjà en majuscule dans le corpus — est presque
 certainement un nom propre (personne, lieu, marque) qui apparaissait en
 minuscule dans une phrase du corpus. Son FREQUENCE final est alors multiplié
-par `PROPER_NOUN_SCORE_FACTOR` (0,5) : pas une exclusion pure, un nom propre
+par `PROPER_NOUN_SCORE_FACTOR` (0,25) : pas une exclusion pure, un nom propre
 réellement très fréquent peut toujours figurer parmi les mots faciles, mais
 un nom propre rare est repoussé plus loin dans le classement
 (`build_wordlist_freq.py`, `PROPER_NOUN_SCORE_FACTOR`). Cette règle ne

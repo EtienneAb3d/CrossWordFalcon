@@ -270,6 +270,55 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `MARIA`, `FRANCIA`, `CAMPANIA` — all genuine proper nouns, no false positives
   spotted in the sample) — before deleting that smoke-test output and re-running for
   real as part of the full 5-language reprocessing.
+
+  `PROPER_NOUN_SCORE_FACTOR` was later lowered from 0.5 to 0.25, at the
+  user's explicit request ("Abaisser PROPER_NOUN_SCORE_FACTOR à 0.25, et
+  recalculer les dictionnaires"), followed by a real rebuild of all 5
+  languages' wordlists (never just the constant edited in isolation).
+  Confirmed first, by reading the script directly, that this constant is
+  purely a multiplier on the final `FREQUENCE` score — it never changes
+  *which* words are kept, only how a likely-proper-noun's score ranks
+  against everything else — so only `build_wordlist_freq.py` itself
+  needed to run again, never `build_sentence_corpus.py` (no corpus
+  change) nor `build_gloss_dictionary.py` (the `CANONIQUE`/lemma set,
+  what that script's own filtering depends on, is untouched by a pure
+  score reweighting) — a deliberate, narrower exception to rule 6 of the
+  project-best-practices SKILL ("a corpus-source change ripples through
+  the whole pipeline"), which was never triggered here since nothing
+  about the corpus or the word/lemma set itself changed.
+
+  Ran for all 5 languages against the already-cached Hunspell dictionaries
+  and the already-built full corpora (`data/reference_corpus/<lang>_
+  sentences_full.txt`, 3.7-6.6GB each) — no network access needed, no
+  re-download. French/Spanish/Italian/English (`fr`/`es`/`it`/`en`, run
+  first sequentially then the last four in parallel) each completed in a
+  few minutes; German (`de`) took by far the longest (~27 minutes total,
+  its own `hunspell -G`/`-m` calls alone running ~20+ CPU-minutes each,
+  confirmed genuinely active via `ps`/`lsof` rather than stuck) — expected
+  given `PROPER_NOUN_LANGS` already excludes German, and this rebuild's
+  own corpus produced a dramatically larger German candidate vocabulary
+  than earlier runs of this same script (1,584,478 words written, vs.
+  this file's own much smaller historical figures — a reflection of the
+  corpus itself having grown substantially since those were written, not
+  of anything this specific change touched).
+
+  Verified directly, not assumed: `git diff --stat` on the 4 affected
+  languages' `data/wordlist_<lang>_full.tsv` showed an equal number of
+  insertions and deletions each (e.g. French: 13,364/13,364) — the exact
+  signature of every line being re-scored/re-sorted with no line added or
+  removed; a stronger check (diffing the sorted set of `MOT` column
+  values before vs. after, for all 4) found **zero** differences — proof
+  the word set itself never changed. `data/wordlist_de_full.tsv` came
+  back completely untouched by `git status` (byte-identical to before),
+  exactly as expected since `PROPER_NOUN_LANGS` excludes German from this
+  multiplier entirely — the rebuild cost real time but changed nothing
+  for that one language, by design. A direct before/after comparison of
+  French `FRANCE`'s own score confirmed the arithmetic precisely: 126435.0
+  (factor 0.5) → 63217.5 (factor 0.25) — exactly halved again, as the
+  formula requires. A real, non-mocked `generate_grid()` run on both
+  reference seeds of the standard 15×10 benchmark, against the freshly
+  rebuilt French wordlist, confirmed no regression: 0 mismatches between
+  placed words and the solution grid, each run.
 - `backend/crossword_gen.py` — the core grid generator library/CLI (all the grid-generation
   business logic lives in `backend/`). `generate_grid()` is the reusable entry point (used
   by both the CLI `main()` and `backend/app.py`); it takes a word list and produces a

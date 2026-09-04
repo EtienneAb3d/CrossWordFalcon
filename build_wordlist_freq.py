@@ -74,8 +74,9 @@ for, so it was folded into one script and the file removed.
   which sees the word in its actual clue-writing context, rather than
   silently committing to one meaning at dictionary-build time.
 - Likely proper nouns (person/place/brand names) have their FREQUENCY
-  multiplied by PROPER_NOUN_SCORE_FACTOR (0.5), after a report that they
-  showed up too often at "easy" difficulty (see backend/crossword_gen.py's
+  multiplied by PROPER_NOUN_SCORE_FACTOR (0.25, lowered from an original
+  0.5 at the user's explicit request), after a report that they showed up
+  too often at "easy" difficulty (see backend/crossword_gen.py's
   DIFFICULTY_PRESETS, which caps "easy" to the globally-highest-scored
   words). Detected via the same as-is-vs-title-cased check `_spellcheck_
   valid` already does for every candidate: in French/English/Spanish/
@@ -117,15 +118,19 @@ _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 CANONICAL_WEIGHT = 0.9
 
 # Multiplier applied to a likely proper noun's final score — see the
-# "Likely proper nouns" bullet in the module docstring. A flat halving
-# rather than a more elaborate formula: this is a coarse signal (one
-# Hunspell capitalization check, not real named-entity recognition), so a
-# coarse correction matches it — enough to push most proper nouns out of
-# "easy" difficulty's globally-highest-scored cutoff without pretending to
-# rank them precisely against each other or against common words.
+# "Likely proper nouns" bullet in the module docstring. A flat, coarse
+# multiplier rather than a more elaborate formula: this is a coarse signal
+# (one Hunspell capitalization check, not real named-entity recognition),
+# so a coarse correction matches it — enough to push most proper nouns out
+# of "easy" difficulty's globally-highest-scored cutoff without pretending
+# to rank them precisely against each other or against common words.
+# Lowered from 0.5 (a flat halving) to 0.25, at the user's explicit
+# request — a stronger demotion, still never a hard exclusion: a
+# genuinely very frequent proper noun can still rank high enough to
+# qualify, just even less often than under the previous factor.
 # Languages where every noun requires capitalization regardless of common/
 # proper status (German) get no adjustment at all: see PROPER_NOUN_LANGS.
-PROPER_NOUN_SCORE_FACTOR = 0.5
+PROPER_NOUN_SCORE_FACTOR = 0.25
 
 # Parses one "-m" morphological-analysis output line, e.g.
 # "déterminées  st:déterminer fl:p+" -> ("déterminées", "déterminer").
