@@ -1064,6 +1064,24 @@ applyTranslations();
 // search processes, see crossword_gen.py).
 const POLL_INTERVAL_MS = 2000;
 
+// How many consecutive failed polls pollJob() tolerates (a network error,
+// or a "backend_unavailable" 502 from the proxy) before actually declaring
+// the connection lost, at the user's explicit request: "Est-ce possible
+// que le Front effectue quelques tentatives de reconnexion avant de
+// déclarer la liaison brisée ?" A single missed poll is often just a brief
+// blip (a Wi-Fi hiccup, or the exact kind of momentarily-CPU-starved-
+// event-loop 502 already documented in frontend/server.py's own
+// PROXY_TIMEOUT_S entry) — the job itself keeps running server-side the
+// whole time regardless (see errorConnectionLostDuringGeneration/
+// errorBackendUnavailableDuringGeneration's own reasoning), so there's no
+// reason to give up on the very first one. Deliberately scoped to the poll
+// loop only, never to the initial POST /api/generate(/continue) calls (see
+// their own comments) — those aren't safely retriable the same way (a lost
+// response there could just as easily mean the request never reached the
+// server, or that it did and a job already got created; retrying blindly
+// risks launching a second, redundant generation).
+const POLL_RECONNECT_ATTEMPTS = 3;
+
 // How often the live attempt-preview advances by one more previewHistory
 // entry (see pollJob() below) — deliberately its own, faster-ticking timer,
 // independent of POLL_INTERVAL_MS, at the user's explicit report: "quand le
@@ -1214,7 +1232,17 @@ function describeStep(t, step) {
 // falling back to the generic "unknown error" message) for a code this
 // version of the frontend doesn't recognize, so an older UI degrades to
 // plain text instead of breaking against a newer backend.
-function describeErrorCode(t, code, fallbackText) {
+// `duringGeneration` (false by default) only changes the "backend_
+// unavailable" case (the proxy reaching the back but getting no response —
+// see frontend/server.py's own PROXY_TIMEOUT_S comment on why this can be
+// a transient hiccup, not necessarily the back having actually crashed):
+// when true, the job this call was polling for may well still be running
+// server-side despite this one poll failing, so the message adds a note
+// that it may still show up in the library once finished. Every other
+// caller (the initial POST /api/generate(/continue), and loadLibraryGrid)
+// never has a real job in flight yet at that exact call, so they keep the
+// plain message.
+function describeErrorCode(t, code, fallbackText, duringGeneration = false) {
   switch (code) {
     case "no_fillable_grid":
       return t.errorNoFillableGrid;
@@ -1223,7 +1251,9 @@ function describeErrorCode(t, code, fallbackText) {
     case "internal_error":
       return t.errorInternal;
     case "backend_unavailable":
-      return t.errorBackendUnavailable;
+      return duringGeneration
+        ? t.errorBackendUnavailableDuringGeneration
+        : t.errorBackendUnavailable;
     default:
       return fallbackText || t.statusErrorFallback;
   }
@@ -1274,6 +1304,10 @@ async function pollJob(jobId, t) {
   // entry the moment the job reaches a terminal status, so a large
   // remaining backlog never delays the actual result.
   let nextExampleIndex = 0;
+  // Consecutive failed polls so far (network error or backend_unavailable
+  // 502) — reset to 0 the moment a poll actually succeeds. See
+  // POLL_RECONNECT_ATTEMPTS's own comment for why this exists.
+  let consecutivePollFailures = 0;
   const revealTimer = setInterval(() => {
     if (autoFollowPreview) showNextPreview();
   }, PREVIEW_REVEAL_INTERVAL_MS);
@@ -1287,13 +1321,34 @@ async function pollJob(jobId, t) {
         // outright connection failure (e.g. the server process died) — either
         // way there's no response to read a structured error code from, so a
         // dedicated, translated message stands in for describeErrorCode's
-        // usual backend-error-code lookup.
-        throw new Error(t.errorConnectionLost);
+        // usual backend-error-code lookup. Deliberately a distinct string
+        // from the plain errorConnectionLost used by the initial POST
+        // /api/generate(/continue) calls below: unlike those (where no job
+        // was ever created, so there's nothing to look for later), this poll
+        // loss happens once a real job_id already exists and is running on
+        // the backend independently of this browser tab's own connection —
+        // generation keeps going server-side and, on success, still gets
+        // saved to GRID_STORE/ (see backend/app.py's _run_generate_job), so
+        // it's worth telling the player it may still show up in the library.
+        consecutivePollFailures += 1;
+        if (consecutivePollFailures <= POLL_RECONNECT_ATTEMPTS) {
+          setStatus(t.statusReconnecting(consecutivePollFailures, POLL_RECONNECT_ATTEMPTS), false);
+          await sleep(POLL_INTERVAL_MS);
+          continue;
+        }
+        throw new Error(t.errorConnectionLostDuringGeneration);
       }
       const data = await response.json();
       if (!response.ok) {
-        throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+        consecutivePollFailures += 1;
+        if (consecutivePollFailures <= POLL_RECONNECT_ATTEMPTS) {
+          setStatus(t.statusReconnecting(consecutivePollFailures, POLL_RECONNECT_ATTEMPTS), false);
+          await sleep(POLL_INTERVAL_MS);
+          continue;
+        }
+        throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail, true));
       }
+      consecutivePollFailures = 0;
       const history = data.examples_history || [];
       if (history.length > nextExampleIndex) {
         recordPreviewHistory(history.slice(nextExampleIndex));

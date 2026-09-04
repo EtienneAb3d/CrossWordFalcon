@@ -3042,6 +3042,42 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   system-prompt text (the rule the model is asked, not something enforced
   against its answer afterward).
 
+  A fourth rule was added to `generate_title()`'s own system prompt, at
+  the user's explicit request: "Modifier le prompt des définitions pour
+  préciser que le titre d'une grille ne doit pas contenir de mot de la
+  grille, en dehors de mots creux (un, des, à, etc)." Rule 4 now forbids
+  reusing any of the grid's own words "in any form (singular/plural,
+  conjugated, accented or not)," carving out an explicit exception for
+  "common short function words (articles, prepositions, conjunctions...)"
+  — matching the user's own "un, des, à" examples, phrased in English
+  (this project's own engineering language for prompt *structure*, see
+  `backend/clues.py`'s per-language `rule_bad`/`rule_good` split
+  elsewhere in this file) since the rule concerns a structural property
+  of the title (word reuse) rather than a language-specific grammar
+  point that needs its own worked example per language. Prompt-only, by
+  design and by explicit scope of the request (no code-level containment
+  filter added, unlike `_contains_target_word` for clues) — `generate_
+  title()`'s own docstring already establishes this whole method as a
+  single best-effort call with none of `generate()`'s own retry/filtering
+  machinery, and the user's request was specifically to "modifier le
+  prompt," not to add a new mechanism.
+
+  Verified live against the real local LLM server (Qwen3.5-0.8B):
+  rebuilt the system prompt directly and confirmed rule 4's text appears
+  correctly, then generated 5 real titles for the same 5-word test grid
+  (`FAUCON`/`GRILLE`/`MOT`/`CROISE`/`MYSTERE`) — 2 of the 5 came back
+  clean (`"L'art de la croisée"` twice, `"Mystère"` once — the latter is
+  itself a grid word, so only 1 of the 5 was genuinely clean), the other
+  3 leaked a grid word regardless (`"La grille du mot"`; `"Les mots
+  croisés : grille, mot, mystère"`). Reported honestly as a partial,
+  prompt-level improvement rather than a guarantee — entirely consistent
+  with this whole file's own established pattern for this specific small
+  local model's reliability ceiling on structural/grammar rules (see
+  `backend/clues.py`'s extensive clue-generation rule history above): the
+  rule measurably exists and is followed some of the time, but nothing
+  here enforces it against the model's actual answer the way a
+  code-level filter would.
+
   Separately, `DIFFICULTY_STYLE["easy"]` gained a second sentence, at the
   user's explicit request: "Modifier le prompt de génération des
   définitions pour la difficulté FACILE pour préciser : quand une
@@ -3579,6 +3615,82 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   all) that `describeErrorCode()` maps to the UI's current language, falling back to
   whatever raw text the backend sent for a code it doesn't recognize. UI
   styling decisions live in the `style-guide` SKILL, not here.
+
+  `describeErrorCode()` gained a `duringGeneration=false` parameter, at
+  the user's explicit request: "Quand l'interface perd l'accès au
+  serveur ou au Back pendant la génération, un message d'erreur
+  s'affiche. Préciser entre parenthèse que quand la génération de la
+  grille sera terminée, elle devrait apparaître dans la bibliothèque."
+  Scoped precisely to the one place where this note is actually true:
+  `pollJob()`'s own two ways of losing contact mid-poll — a hard network
+  failure (`fetchWithTimeout` itself throwing, now `t.errorConnectionLost
+  DuringGeneration` instead of the plain `errorConnectionLost`) and a
+  `backend_unavailable` 502 from the proxy (`describeErrorCode(..., true)`,
+  now `t.errorBackendUnavailableDuringGeneration`) — both cases where a
+  real `job_id` already exists and is running server-side independently
+  of this one browser tab's own connection, so a finished generation
+  still gets saved to `GRID_STORE/` regardless (see `backend/grid_store.py`)
+  and really can show up in the library later. `backend_unavailable`
+  specifically can be a transient proxy hiccup rather than the back
+  actually having crashed — see this same file's own `PROXY_TIMEOUT_S`
+  entry on a CPU-starved event loop briefly failing to `accept()` a new
+  connection during a heavy generation — so the note is a genuine,
+  reasonably likely outcome there, not just a technicality.
+
+  Deliberately *not* added to the plain `errorConnectionLost`/
+  `errorBackendUnavailable` messages used by the initial `POST /api/
+  generate`/`POST /api/generate/continue/{job_id}` calls (form submit,
+  "Continuer" button) or by `loadLibraryGrid()`: none of those have a real
+  job in flight yet at the point they can fail (the POST itself is what
+  would create one), so promising a library entry there would be false —
+  every one of those 3 call sites keeps calling `describeErrorCode()`
+  with its 4th argument omitted (defaulting to `false`). Verified: a real
+  JS syntax check (`esprima`, temporarily installed and removed again
+  afterward) confirmed `script.js`/`i18n.js` still parse correctly; a
+  direct read of every `describeErrorCode(...)` call site confirmed only
+  `pollJob()`'s own `!response.ok` branch passes `true`, and that the
+  `catch` branch right above it now throws the dedicated `..._during
+  Generation` string instead of the plain one.
+
+  `pollJob()` was given a small reconnection tolerance right after, at
+  the user's explicit follow-up request: "Est-ce que le Front effectue
+  quelques tentatives de reconnexion avant de déclarer la liaison
+  brisée ?" — until then, either failure mode above (a hard network
+  error, or a `backend_unavailable` 502) declared the connection lost on
+  the very first missed poll, even though the job itself keeps running
+  server-side the whole time regardless (exactly the reasoning the
+  `...DuringGeneration` messages above already rely on) — a single blip
+  (a brief Wi-Fi hiccup, or the same momentarily-CPU-starved-event-loop
+  502 already documented in `frontend/server.py`'s own `PROXY_TIMEOUT_S`
+  entry) shouldn't need to end the whole polling loop.
+
+  A new `POLL_RECONNECT_ATTEMPTS = 3` constant and a `consecutivePoll
+  Failures` counter (reset to `0` the moment a poll actually succeeds)
+  let both failure branches retry instead of throwing immediately: on
+  a failure, the counter is incremented and, as long as it's still
+  `<= POLL_RECONNECT_ATTEMPTS`, the loop shows a new `t.status
+  Reconnecting(attempt, attempts)` status line ("Connexion perdue,
+  nouvelle tentative X/3…"), waits `POLL_INTERVAL_MS`, and `continue`s
+  to the next poll — only once a 4th consecutive failure happens does it
+  finally throw the same `...DuringGeneration` error as before (unchanged
+  otherwise). Deliberately scoped to the poll loop only, never to the
+  initial `POST /api/generate(/continue)` calls: those aren't safely
+  retriable the same way — a lost response there could mean the request
+  never reached the server *or* that it did and a job already got
+  created, and blindly retrying risks launching a second, redundant
+  generation; `POLL_RECONNECT_ATTEMPTS`'s own comment states this
+  explicitly. Verified: a real JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) confirmed `script.js`/`i18n.js`
+  still parse correctly; a Python mirror of the exact counter logic (no
+  `node`/browser tooling available in this environment, the same
+  limitation noted throughout this project's UI work) confirmed 3
+  consecutive failures followed by a recovery survive without ever
+  throwing (3 retries taken), that a 4th consecutive failure throws
+  right after those same 3 retries, that a single isolated blip recovers
+  after just 1 retry, and that failures interspersed with successes
+  (never 4 in a row) never accumulate toward the threshold at all,
+  confirming the "consecutive" semantics hold rather than a plain
+  lifetime failure count.
 
   A real bug was reported live right after the "Continuer" button (see
   `backend/crossword_gen.py`'s `_serialize_resume_state`/`backend/app.py`'s

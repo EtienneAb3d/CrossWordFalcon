@@ -717,6 +717,11 @@ class LLMClueGenerator:
             "\"Title:\".\n"
             f"3. The title must be entirely in {language_name}, even if "
             "some of the words below are foreign proper nouns.\n"
+            "4. Must not reuse any of the words listed below, in any form "
+            "(singular/plural, conjugated, accented or not) — except "
+            "common short function words (articles, prepositions, "
+            "conjunctions — e.g. \"a\", \"the\", \"of\", \"in\" in "
+            "English), which may still appear normally.\n"
         )
         user_message = "Words: " + ", ".join(words)
         try:
