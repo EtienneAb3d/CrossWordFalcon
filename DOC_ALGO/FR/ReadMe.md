@@ -821,6 +821,19 @@ palier passe par une optimisation dédiée, appliquée séparément à chacune
    plus bas, mais restreint aux cases noires non verrouillées — aucune
    case blanche ou noire verrouillée n'est jamais touchée par ce retrait.
 
+Contrairement à l'étape 4 (jamais exécutée qu'une seule fois, sur la
+grille finale déjà réussie), cette optimisation tourne à *chaque*
+tentative distincte de *chaque* palier — un vrai coût sur une grille
+dense en cases noires. Au-delà de `PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE`
+(50) cases noires candidates au retrait, seul un échantillon aléatoire de
+50 d'entre elles est essayé par tour, plutôt que la totalité ; dès que
+l'une d'elles est effectivement retirée, ce tour s'arrête aussitôt et un
+nouveau tirage de 50, recalculé sur l'état à jour de la grille, prend
+immédiatement sa place. Sous ce seuil, le comportement reste exhaustif :
+toutes les cases candidates d'un même tour sont essayées avant de
+vérifier si un nouveau tour est nécessaire. Seule l'étape 4 (la grille
+finale) reste une optimisation complète, sans échantillonnage.
+
 Le résultat de cette optimisation remplace la tentative d'origine pour
 tout le reste du palier : c'est sur cette grille optimisée, jamais sur
 l'état brut, que le nettoyage habituel ci-dessous s'applique ensuite.

@@ -4337,6 +4337,21 @@ def _sort_examples_by_process(examples):
     return sorted(examples, key=lambda ex: (ex.get("process_number") is None, ex.get("process_number") or 0))
 
 
+# Sur une grosse grille très noire, `_optimize_before_cleanup` (ci-dessous)
+# pouvait tenter le retrait de chacune de ses cases noires non verrouillées
+# à CHAQUE tentative distincte d'un palier — potentiellement plusieurs
+# centaines de cases, chacune coûtant un `try_fill` complet — rendant cette
+# étape, exécutée à *chaque* cycle, très lente sur ce genre de grille. À la
+# demande explicite de l'utilisateur : "Ne faire l'optimisation complète
+# que sur la grille finale [minimize_black_squares, qui garde son propre
+# retrait exhaustif, inchangé]. Sur les optimisations à chaque cycle, au
+# dessus de 50 cases noires, échantillonner 50 cases au hasard à
+# optimiser." Une seule constante sert les deux rôles demandés — le seuil
+# de déclenchement de l'échantillonnage ET la taille de l'échantillon
+# lui-même partagent la même valeur (50).
+PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50
+
+
 def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                               deadline_checks=6_000, cancel_event=None):
     """Nouvelle étape insérée AVANT même `_shorten_impossible_zones`/
@@ -4396,6 +4411,20 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
        grille reste structurellement valide (`min_interior_free=1`, la
        même invariant absolu que `minimize_black_squares`) et à nouveau
        remplissable dans ces mêmes conditions.
+
+       Contrairement à `minimize_black_squares` (jamais exécutée qu'une
+       seule fois, sur la grille finale déjà réussie), cette étape tourne
+       à *chaque* tentative de *chaque* palier — un vrai coût sur une
+       grille dense en cases noires. Au-delà de `PER_CYCLE_OPTIMIZATION_
+       SAMPLE_SIZE` (50) cases noires candidates au retrait, un seul
+       échantillon aléatoire de 50 d'entre elles est essayé par tour,
+       plutôt que la totalité — dès que l'une d'elles est effectivement
+       retirée, l'échantillon en cours est abandonné et un nouveau tirage
+       de 50, recalculé sur l'état à jour de la grille, prend
+       immédiatement sa place, à la demande explicite de l'utilisateur.
+       Sous ce seuil, le comportement reste exhaustif, inchangé : toutes
+       les cases candidates d'un même tour sont essayées avant de vérifier
+       si un nouveau tour est nécessaire.
 
     Retourne `(new_grid, new_diag)` — `new_diag` une copie de `cand_diag`
     dont seuls `assignment`/`impossible_slots`/`example_grid` sont mis à
@@ -4469,6 +4498,17 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
             if grid[r][c] == BLACK and (r, c) not in locked_black_cells
         ]
         rng.shuffle(removable)
+        # Échantillonnage au-delà de PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE
+        # (voir la docstring ci-dessus et le commentaire de la constante) :
+        # `sampling` distingue les deux régimes — sous le seuil, `break`
+        # n'est jamais atteint plus bas, comportement exhaustif inchangé ;
+        # au-dessus, le premier retrait réussi de l'échantillon interrompt
+        # immédiatement ce tour (`break`) pour retirer un TOUT nouvel
+        # échantillon de 50, recalculé sur l'état à jour de `grid` dès le
+        # prochain passage dans `while improved`.
+        sampling = len(removable) > PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE
+        if sampling:
+            removable = removable[:PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE]
         for (r, c) in removable:
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
@@ -4481,6 +4521,8 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                 if result is not None:
                     _absorb(result)
                     improved = True
+                    if sampling:
+                        break
                     continue
             grid[r][c] = saved
 
@@ -7707,6 +7749,25 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # palier (`optimized_pairs`) : le nettoyage qui suit, quel que
             # soit le mode choisi, opère désormais sur la grille
             # optimisée, jamais sur l'état brut d'avant cette étape.
+            #
+            # Cette liste en compréhension peut prendre du temps sur une
+            # grille dense en cases noires (voir PER_CYCLE_OPTIMIZATION_
+            # SAMPLE_SIZE, qui borne ce coût sans l'annuler) — sans le
+            # `progress(...)` juste en dessous, rien ne le signale à
+            # l'écran pendant tout ce calcul : le statut affiché restait
+            # celui du tout dernier événement déjà connu (typiquement
+            # "pattern_attempt_failed", "nouvelle tentative en cours…"),
+            # ce qui pouvait laisser croire à tort qu'une toute nouvelle
+            # recherche de motif était en cours plutôt qu'une optimisation
+            # de la meilleure grille déjà trouvée. Corrigé à la demande
+            # explicite de l'utilisateur ("indiquer clairement qu'une
+            # optimisation est en cours") par un événement dédié, fixé
+            # juste avant que le calcul ne démarre — sans `examples` (rien
+            # à montrer encore), donc sans effet sur `job["examples_
+            # history"]`, seulement sur le texte de statut affiché en
+            # direct pendant que `_optimize_before_cleanup` tourne.
+            progress("pre_cleanup_optimizing", attempt=attempt + 1, attempts=attempts,
+                     total_attempts=total_attempts_tried)
             optimized_pairs = [
                 _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                                           cancel_event=cancel_event)

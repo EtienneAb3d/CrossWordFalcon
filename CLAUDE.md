@@ -1364,6 +1364,104 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   15×10 benchmark confirmed no regression: 0 mismatches between placed
   words and the solution grid, each run.
 
+  **`_optimize_before_cleanup`'s own black-cell removal loop was bounded
+  with random sampling on a dense grid, and a live "optimizing" status
+  was added, both at the user's explicit request**: "Sur de grosses
+  grilles avec beaucoup de cases noires, l'optimisation prend beaucoup de
+  temps. Ne faire l'optimisation complète que sur la grille finale. Sur
+  les optimisations à chaque cycle, au dessus de 50 cases noires (donner
+  un nom de variable), échantillonner 50 cases au hasard à optimiser. Si
+  un changement intervient, recommencer avec un nouveau tirage de 50
+  cases. Dans le statut, indiquer clairement qu'une optimisation est en
+  cours (actuellement, il n'indique que 'Tentative 30/200 échouée (47M
+  mots testés au total), nouvelle tentative en cours…' sans préciser ce
+  qu'il est en train de faire."
+
+  Root cause, confirmed by re-reading the function directly: unlike
+  `minimize_black_squares` (run exactly once, on the already-successful
+  final grid), `_optimize_before_cleanup` runs its own full black-cell
+  removal loop (`while improved: ... removable = [every non-locked black
+  cell]`) on *every* distinct failed candidate of *every* palier — each
+  candidate cell tried costs a real `try_fill` call. On a grid with
+  hundreds of black cells this is genuinely expensive, repeated dozens or
+  hundreds of times across a generation's own paliers.
+
+  New module-level constant `PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50`
+  (placed right before `_optimize_before_cleanup`) serves both roles the
+  user asked for at once, since both happen to share the same value: the
+  threshold above which sampling engages, and the sample size itself. In
+  the removal loop, `sampling = len(removable) > PER_CYCLE_OPTIMIZATION_
+  SAMPLE_SIZE`; when `True`, `removable` is sliced down to its first 50
+  entries (already shuffled beforehand, so this is a genuine uniform
+  random sample, not a positional bias) before the `for` loop runs, and
+  the very first successful removal within that sample `break`s out of
+  the `for` loop immediately — sending control back to the top of `while
+  improved`, which rebuilds `removable` fresh from the grid's own
+  now-updated state and draws an entirely new random sample of 50,
+  exactly "recommencer avec un nouveau tirage de 50 cases." Below the
+  threshold, behavior is completely unchanged: the existing `continue`
+  (not `break`) keeps processing the rest of the same shuffled pass
+  before checking `improved` again, matching the pre-existing exhaustive
+  behavior this project's history already established for a grid that
+  isn't especially dense. `minimize_black_squares` itself — the "grille
+  finale" the user explicitly asked to keep exhaustive — was left
+  completely untouched, matching "ne faire l'optimisation complète que
+  sur la grille finale" literally: it's the one caller that was already,
+  and remains, unbounded.
+
+  A live "optimizing" status was missing because `progress("pre_cleanup_
+  optimized", ..., examples=optimized_examples)` only ever fired *after*
+  `optimized_pairs = [_optimize_before_cleanup(...) for ...]` had already
+  finished computing every candidate — during that entire computation
+  (the expensive part, especially before the sampling fix above), the UI
+  was still showing whatever the *previous* event said, typically
+  `pattern_attempt_failed`'s own "Tentative N/200 échouée..., nouvelle
+  tentative en cours…", which reads as if a brand new pattern search were
+  underway rather than an optimization pass on the already-found best
+  grid. Fixed with a new, purely status-only `progress("pre_cleanup_
+  optimizing", attempt=attempt + 1, attempts=attempts, total_attempts=
+  total_attempts_tried)` call, fired right before that same list
+  comprehension starts — carrying no `examples` at all, so it never adds
+  an entry to `job["examples_history"]` (see `backend/app.py`'s own
+  `progress()` closure: `examples_history` only ever grows `if examples:`
+  is truthy), only updating the live status line. `frontend/static/
+  script.js`'s `describeStep()` gained a matching `"pre_cleanup_
+  optimizing"` case, and `frontend/static/i18n.js` gained a new
+  `statusPreCleanupOptimizing` key in all 5 languages, phrased in the
+  present progressive ("optimisation de la grille en cours…") to read
+  unambiguously as "happening right now" — distinct both from the
+  pre-existing `statusPreCleanupOptimized` (results already available,
+  past participle) and from `statusMinimizing`'s own plain "Optimisation
+  de la grille…" (the one-time final step, no attempt count).
+
+  Verified in stages. Isolated: a synthetic 20×20 grid with 399 candidate
+  black cells (a `counting_is_valid` wrapper around the real `is_
+  structurally_valid`, always returning `False` so no removal ever
+  actually succeeds) confirmed exactly 50 calls happen in total — proving
+  the per-pass cap holds precisely, not approximately. A real, non-mocked
+  call directly on a genuinely dense pattern (`make_pattern` at a high
+  black ratio on an 18×15 grid, 81 real black cells after pre-fill/
+  structural constraints settled — the actual achievable density for
+  this shape/seed, not an artificially inflated one) confirmed a real
+  1.5-1.6× wall-clock speedup for `_optimize_before_cleanup` itself
+  (sampled vs. the threshold temporarily disabled to reproduce the old,
+  fully-exhaustive behavior on the exact same captured scenario) —
+  disclosed honestly as a real but modest figure at this specific density
+  (81 vs. a 50-cell cap is not a large multiple), expected to scale
+  considerably further on the much denser, hundreds-of-black-cells grids
+  the user's own report specifically described. A full end-to-end
+  `generate_grid()` run on both reference seeds of the standard 15×10
+  benchmark confirmed no regression to correctness: 0 mismatches between
+  placed words and the solution grid, each run (122.3s/29.4s — within
+  this benchmark's own well-documented Flash-mode run-to-run variance,
+  not a regression). A real JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) confirmed `script.js`/`i18n.js`
+  still parse correctly after the change. **Not yet visually confirmed in
+  an actual browser** — the same tooling limitation already noted
+  throughout this project's UI work — the new status text was verified
+  structurally (the syntax check) and by tracing `describeStep()`'s own
+  dispatch logic directly, not by watching it render live.
+
   Every preview's own `examples` list is now always displayed **in
   process-number order** (1..N), at the user's explicit request: "afficher
   les prévisualisations toujours dans l'ordre des process." Before this,

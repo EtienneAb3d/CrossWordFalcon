@@ -1161,6 +1161,9 @@ function describeStep(t, step) {
     case "pattern_attempt_failed":
       message = t.statusPatternAttemptFailed(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
       break;
+    case "pre_cleanup_optimizing":
+      message = t.statusPreCleanupOptimizing(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
+      break;
     case "pre_cleanup_optimized":
       message = t.statusPreCleanupOptimized(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
       break;
