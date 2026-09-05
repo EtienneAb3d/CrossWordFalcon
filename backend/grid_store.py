@@ -53,8 +53,16 @@ _SLUG_RE = re.compile(r"[^a-zA-Z0-9]+")
 # before it's ever interpolated into a glob pattern, and to reject
 # anything else outright, so a hand-crafted id can never walk out of
 # GRID_STORE_DIR via "../" or similar: no slash, "..", or other path
-# metacharacter can ever match this pattern.
-_GRID_ID_RE = re.compile(r"^\d{8}-\d{6}-\d{6}_[a-z0-9-]+_\d{4}$")
+# metacharacter can ever match this pattern. The slug segment's own
+# charset (`[a-z0-9_-]+`) deliberately still accepts a hyphen too, even
+# though _slugify_title() itself only ever *produces* underscores now
+# (see its own history) — a handful of real grids saved before that
+# switch already exist on disk with hyphen-based slugs, and narrowing
+# this pattern to underscore-only would make GET /api/library/{grid_id}
+# 404 on every one of them (list_grids() itself never validates a
+# filename against this regex at all, only get_grid() does, so they'd
+# still be listed — just impossible to actually load and play).
+_GRID_ID_RE = re.compile(r"^\d{8}-\d{6}-\d{6}_[a-z0-9_-]+_\d{4}$")
 
 
 def _slugify_title(title):
@@ -63,15 +71,21 @@ def _slugify_title(title):
     stripped via NFKD decomposition + ASCII-only re-encode (the words
     themselves stay fully readable in the filename for anyone browsing
     GRID_STORE/ by hand, just without diacritics), every run of
-    non-alphanumeric characters collapsed to a single hyphen, capped at
-    MAX_SLUG_LENGTH. Falls back to the generic "grille" for an empty/
-    unusable title (title generation itself failed — see generate_title's
-    own "" return on failure) rather than leaving the filename's own
-    title segment blank, which would look like a mistake to anyone
-    browsing the directory."""
+    non-alphanumeric characters (including plain spaces between words)
+    collapsed to a single underscore, capped at MAX_SLUG_LENGTH —
+    underscore rather than hyphen, at the user's explicit request:
+    "Les titres des grilles étant ajoutées aux noms de fichiers, remplace
+    les caractères spéciaux du titre, y compris les espaces, par des '_'
+    pour la sauvegarde." (a plain hyphen was already what the very first
+    version of this function used — this only changes which character,
+    never whether non-alphanumeric runs get collapsed at all). Falls back
+    to the generic "grille" for an empty/unusable title (title generation
+    itself failed — see generate_title's own "" return on failure) rather
+    than leaving the filename's own title segment blank, which would look
+    like a mistake to anyone browsing the directory."""
     ascii_title = unicodedata.normalize("NFKD", title or "").encode("ascii", "ignore").decode("ascii")
-    slug = _SLUG_RE.sub("-", ascii_title).strip("-").lower()
-    return slug[:MAX_SLUG_LENGTH].strip("-") or "grille"
+    slug = _SLUG_RE.sub("_", ascii_title).strip("_").lower()
+    return slug[:MAX_SLUG_LENGTH].strip("_") or "grille"
 
 
 def save_grid_json(result, language, difficulty, mode, title):

@@ -1,4 +1,6 @@
 .venv/*
+.venv-sglang/*
+/sglang-src/
 env.sh
 *__pycache__*
 /models/
@@ -10,4 +12,7 @@ env.sh
 /GRID_PNG/
 /GRID_STORE/
 /LOG_LLM/
+/LOG_CHAT/
+/RSS/
+/SCRAPP/
 *.log

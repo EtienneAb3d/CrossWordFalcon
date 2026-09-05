@@ -115,3 +115,77 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export LLM_BASE_URL="https://api.mistral.ai/v1/chat/completions"
 # export LLM_MODEL="mistral-small-latest"
 # export LLM_API_KEY="your-mistral-api-key-here"
+
+# Alternative engine: SGLang instead of llama.cpp (run_llm.sh's own
+# default above), at the user's explicit request — see run_sglang.sh's
+# own header for the full reasoning and CLAUDE.md for the live-verified
+# trail. Needs a separate, one-time install (its own Python 3.12 venv,
+# `.venv-sglang/`, plus an editable install from a cloned `sglang-src/`
+# checkout — see run_sglang.sh) never done by Install.sh automatically
+# for every machine, since SGLang's own hardware support is still young
+# and platform-specific; Install.sh only detects what's *possible* on
+# this machine and reports it, it never installs SGLang itself. Uncomment
+# LLM_ENGINE below (and pick one of the two SGLANG_MODEL_PATH blocks that
+# actually matches your own hardware) only once that one-time install has
+# already been done.
+#
+# export LLM_ENGINE="sglang"
+#
+# CUDA (a real NVIDIA GPU): SGLang's normal path, which does support GGUF
+# directly. Untested on this project's own dev machine (a Mac, no CUDA
+# hardware available) — reported here as the user's own intended default
+# for a fresh install elsewhere, not as something already verified live
+# the way the Apple Silicon block below has been.
+# export SGLANG_MODEL_PATH="unsloth/Qwen3.8-27B-GGUF"
+# export SGLANG_QUANTIZATION="gguf"
+#
+# Apple Silicon (Metal, via SGLang's native MLX backend): verified live on
+# this project's own dev machine (a MacBook M1 Max) — a real chat
+# completion was served successfully end to end. Qwen3-4B, not Qwen3.5/
+# Qwen3.8, deliberately: BOTH Qwen3.5-9B-4bit and Qwen3.8-27B-GGUF crash
+# outright on this backend (any quantization format, GGUF or MLX-native,
+# both tried) with `AssertionError: extra_buffer needs CUDA/MUSA/NPU/ROCm/
+# XPU (FLA)` — their shared hybrid Mamba-attention architecture
+# unconditionally requires a CUDA-family platform for this, regardless of
+# quantization (confirmed by reading SGLang's own arg_groups/mamba_hook.py
+# directly — see run_sglang.sh's own header). Every plain, non-hybrid
+# Qwen3 model (no ".5"/".8" suffix) passes the same code path with no
+# crash — Qwen3-14B was tried first (already vetted for clue quality in
+# this project's own llama.cpp history) and confirmed working, but found
+# too slow on this specific machine at the user's own explicit follow-up
+# request ("sur cette machine le modèle est trop lent, trouver un modèle
+# plus petit") — also confirmed live to strain this machine's own Metal/
+# unified-memory ceiling under a large prompt (a real, reproduced `RuntimeError:
+# [METAL] Command buffer execution failed: Insufficient Memory`, twice,
+# once compounded by two SGLang/MLX servers loaded at once — never run
+# two of them concurrently on one machine). Qwen3-4B measured at
+# ~1.2s/word for a real, clue-shaped prompt (0.46-2.63s across 3 sampled
+# words), against several seconds/word for Qwen3-14B, with no repeat of
+# the OOM crash — a clear net win on this hardware, at some cost to clue
+# quality (this project's own llama.cpp history already rates 4B "decent/
+# respectable" vs. 14B's "larger... same non-reasoning behavior"). No
+# SGLANG_QUANTIZATION line needed — this repo is already MLX-native
+# 4-bit. Like every Qwen3/Qwen3.5 model this project has used, it's a
+# hybrid thinking/non-thinking model that reasons via a <think> block by
+# default — SGLang's own equivalent of run_llm.sh's LLAMA_CHAT_TEMPLATE_
+# KWARGS is SGLANG_CHAT_TEMPLATE_KWARGS just below (verified live to
+# actually suppress it), so uncomment that too rather than relying solely
+# on backend/clues.py's own <think>-stripping (which still works
+# regardless, as a safety net, but disabling reasoning outright is both
+# faster and avoids burning tokens on it in the first place). A larger
+# model in this same family (Qwen3-8B/14B/32B-4bit — swap the repo name
+# below, same convention) is a reasonable alternative on a machine with
+# more headroom than this one, or where clue quality matters more than
+# raw speed.
+# export SGLANG_MODEL_PATH="mlx-community/Qwen3-4B-4bit"
+#
+# Disables the <think> reasoning block entirely (verified live, a real
+# request/response comparison with and without it — see run_sglang.sh's
+# own header): "none" (enable_thinking=false) is the only real option for
+# this model's chat template, a plain on/off toggle with no graduated
+# "low"/"high" effort support at all (an earlier idea to configure a
+# "low" reasoning effort instead was tested and found to still fully
+# enable thinking for this exact model). Applies regardless of engine/
+# hardware path above — no space inside the JSON value, see run_sglang.sh
+# for why.
+# export SGLANG_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'

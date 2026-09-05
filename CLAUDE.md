@@ -1861,6 +1861,96 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   actual running API (15×10, seed 2, Flash mode) confirmed the fix holds
   end to end: 12 real multi-example events inspected via `GET /api/
   generate/status/{job_id}`, zero duplicate process numbers throughout.
+
+  **The proper-noun rule was changed from an all-or-nothing exclusion to a
+  real per-grid budget**, at the user's explicit request: "en mode FACILE
+  ne pas autoriser à placer des noms propres, en mode MOYEN autoriser au
+  plus 2 noms propres, en mode DIFFICILE autoriser jusqu'à 5 noms
+  propres." Previously (see `load_wordlist`'s own `exclude_proper_nouns`
+  entry further above), both "easy" and "medium" excluded a likely proper
+  noun from the wordlist entirely, "hard" allowed any number — this
+  request keeps "easy" as a strict exclusion but replaces the "medium"
+  exclusion with a genuine cap on how many can appear in the *finished*
+  grid, and adds a new cap for "hard" (previously unlimited).
+
+  Deliberately implemented as a **final safety-net check inside
+  `try_fill`**, rather than as an active constraint woven into `Filler.
+  _backtrack`'s own candidate selection — a conscious, disclosed scope
+  decision given this exact area of the file's own extensive, repeatedly-
+  documented fragility (see the many regression stories throughout this
+  section): touching the recursive search loop or its `impossible_zone_
+  slots`/`exclude_immediately_impossible_slots` diagnostics has
+  historically been the riskiest kind of change here, while a blanket
+  "reject and let the existing retry mechanism try again" gate is exactly
+  the same low-risk pattern `minimize_black_squares` already uses for its
+  own "every word must be a real dictionary entry" validation (see its
+  own docstring, "cette optimisation ne doit valider une modification que
+  si tous les mots sont valides").
+
+  A new `MAX_PROPER_NOUNS = {"easy": 0, "medium": 2, "hard": 5}` constant
+  sits next to `DIFFICULTY_PRESETS`. `try_fill` gained `proper_noun_words=
+  None, max_proper_nouns=None` parameters (no effect for any pre-existing
+  caller): right where `truly_complete` is computed, an otherwise-
+  successful completion is rejected (`truly_complete` forced back to
+  `False`, `diagnostics["reason"]` becomes a new `"too_many_proper_nouns"`
+  value) if the count of `filler.assignment` entries present in
+  `proper_noun_words` exceeds `max_proper_nouns` — this reuses the exact
+  same "just return `None`, like any other failure" contract every other
+  reason already has, so `generate_grid`'s own cross-palier retry
+  mechanism needed zero changes to correctly retry with different words
+  on this new failure reason too, exactly like any other. Threaded
+  through to every place that can produce the grid actually delivered to
+  the player: `_pattern_attempt`/`_pattern_continue`'s own `try_fill`
+  calls (via two new worker-global variables, `_worker_proper_noun_words`/
+  `_worker_max_proper_nouns`, set once via `_init_worker`'s own
+  initializer — the same mechanism already used for `_worker_index`,
+  chosen over a per-task argument specifically because the set can be
+  sizable and this way it's never re-pickled per submitted task) and
+  `minimize_black_squares`'s own internal `try_fill` call (gained the
+  same two parameters, simply passed straight through — no extra logic
+  needed there at all, since a rejected over-budget completion is already
+  indistinguishable from any other kind of failed re-fill to that
+  function's own existing accept/revert loop). The one throwaway
+  candidate-scoring trial inside the multi-success comparison (deciding
+  which of several successful parallel attempts to keep before real
+  optimization) also received the same two parameters, for consistency
+  — its own result is discarded either way, only used to rank candidates,
+  but this keeps its black-cell-count estimate from being systematically
+  too optimistic about a candidate that the real, budget-respecting
+  optimization pass could never actually achieve.
+
+  `generate_grid` computes `proper_noun_words` once per call, right after
+  `load_wordlist` — reusing the *exact* same detection `exclude_proper_
+  nouns` itself already relies on (`accents[word][:1].isupper()`, and the
+  same `PROPER_NOUN_EXCLUDED_LANGS` German exemption), never a second,
+  separately-computed signal — and `max_proper_nouns` from the new
+  `MAX_PROPER_NOUNS` dict. `exclude_proper_nouns=(difficulty in ("easy",
+  "medium"))` became `exclude_proper_nouns=(difficulty == "easy")` — the
+  one-line change that actually stops excluding proper nouns from
+  "medium"'s own wordlist outright, letting the new budget mechanism
+  govern it instead. For "easy" itself, `proper_noun_words` naturally
+  ends up empty (nothing proper-noun-shaped ever entered the wordlist to
+  begin with, per `exclude_proper_nouns=True`), so the redundant `0`
+  budget for that difficulty is a harmless no-op, never actually
+  evaluated against anything.
+
+  Verified in stages. Isolated: a hand-built 1×11 grid with 3 independent
+  3-letter slots, a tiny 3-word dictionary where every word is marked as
+  a proper noun, confirmed `try_fill` succeeds with no budget at all,
+  fails with `reason="too_many_proper_nouns"` at `max_proper_nouns=1`
+  (3 needed, only 1 allowed), and succeeds again at `max_proper_nouns=3`
+  (exactly enough) — the safety net engages precisely at the boundary,
+  neither too early nor too late. A real, non-mocked `generate_grid()`
+  sweep (9×9, seed 3, the full French dictionary, Flash-scale `deadline_
+  checks=1000`) across all three difficulties confirmed the real-world
+  outcome: "easy" placed 0 proper nouns (32 words), "medium" placed
+  exactly 2 (31 words, right at its own cap), "hard" placed 1 (27 words,
+  comfortably under its cap of 5) — direct, measured confirmation the
+  budget is respected end to end, not just in the isolated unit test. A
+  full end-to-end run on both seeds of the standard 15×10 benchmark
+  (easy, Flash-scale) confirmed no regression to the ordinary case: 0
+  mismatches, 0 empty white cells each — seed 2 in 70.5s, 59 words; seed 7
+  in 20.7s, 56 words.
 - `backend/app.py` — **back** FastAPI server: exposes `generate_grid()` as a JSON API
   via a relative import (`from .crossword_gen import ...`). No static files, no
   `/docs`/`/openapi.json` (disabled) — any other path 404s by default. The request's
@@ -2208,6 +2298,33 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   with a 422 naming the old `le=25` constraint) is now accepted and
   starts a real generation job instead of being rejected at validation.
 
+  An upper bound was reinstated later in this project's history, at the
+  user's explicit request: "Limite la taille maximum des dimensions de
+  grilles qui peuvent être saisies dans l'interface à 30." A different
+  value from the one just removed (25 → 30), and scoped only to the *web
+  UI* ("l'interface") this time, not the CLI: `GenerateRequest.width`/
+  `.height` are now `Field(ge=5, le=30, ...)`, and `frontend/static/
+  index.html`'s matching `<input type="number">` fields both got their
+  `max="30"` back — `crossword_gen.py`'s own `main()`/`--width`/`--height`
+  argparse arguments are deliberately untouched, still with no upper bound
+  at all, exactly matching the request's own wording. `backend/app.py`'s
+  `_validate_generate_request()` (shared by `POST /api/generate` and
+  `POST /api/generate/continue/{job_id}`) never needed any change — it
+  only ever validates `language`/`difficulty`/`mode` by hand, `width`/
+  `height` are validated automatically by pydantic's own `Field`
+  constraints the moment a `GenerateRequest` is constructed, in both
+  code paths alike. Verified: 6 direct `GenerateRequest(...)` constructions
+  confirmed the exact boundary (`30`/`30` accepted, `31`/anything and
+  anything/`31` rejected with "Input should be less than or equal to 30",
+  `5`/`5` still accepted, `4`/anything still rejected on the pre-existing
+  lower bound) — then a real `POST /api/generate` with `width=31` against
+  the actual running (not-yet-restarted) backend confirmed the *old*
+  code still accepted it (202, a real job started) — expected, since the
+  fix hadn't been loaded by a running process yet — that job was
+  cancelled via `POST /api/generate/cancel/{job_id}` (confirmed `status:
+  "cancelled"` on a follow-up poll) rather than left to run to completion
+  needlessly before the servers were restarted with the actual fix.
+
   Three generation-phase durations are now measured and returned on the
   job's `result`, at the user's explicit request: "Durées affichées en
   haut de la grille finale à jour... 'grille générée en XhXmnXs'...
@@ -2324,6 +2441,197 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   si ce n'est pas la langue de l'interface" precisely. A malformed id
   (`../../etc/passwd`) and a well-shaped-but-nonexistent one both
   correctly returned 404 through the real HTTP API, confirmed directly.
+
+  `GET /api/library` gained pagination, at the user's explicit request:
+  "Ajoute une pagination à la liste des grilles de la bibliothèque : 20
+  lignes affichées max à chaque page." A new `page: int = 1` query
+  parameter, and a new `LIBRARY_PAGE_SIZE = 20` module constant —
+  `list_grids()` itself is unchanged (still returns the whole, already-
+  sorted list; pagination is purely a presentation concern of this one
+  route, not of the sort itself, which must stay consistent across pages)
+  — the endpoint slices `grids[start:start + LIBRARY_PAGE_SIZE]` and
+  returns `total`/`page`/`page_size` alongside `grids` so the frontend can
+  compute the page count and disable its own "prev"/"next" buttons at
+  either end. `page` is floored to 1 (never a literal 0/negative slice),
+  and a page past the last one simply returns an empty `grids` list
+  rather than an error. `frontend/static/script.js`'s `renderLibraryList()`
+  gained a module-level `libraryCurrentPage` (reset to 1 every time the
+  panel is opened) and reads `total`/`page_size` back from the response
+  to render a "Page X/Y" indicator (`#library-position`) and two prev/
+  next buttons (`#library-prev-btn`/`#library-next-btn`, new `frontend/
+  static/index.html` markup, reusing the existing `.nav-btn` style) —
+  both handlers bound-check against a `libraryTotalPages` variable before
+  moving, the same defensive belt-and-suspenders style already used by
+  `showNextPreview()`'s own out-of-range guard, never relying solely on
+  the button's native `disabled` attribute. Verified: a direct call to
+  `library_list()` with `list_grids` monkeypatched to return 45 fake
+  entries confirmed the slicing/floor/overflow behavior exactly (page 1/2
+  return 20 each, page 3 returns the remaining 5, page 0/negative both
+  resolve to page 1, page 100 returns an empty list with `total` still
+  45); a real JS syntax check (`esprima`, temporarily installed and
+  removed again afterward) confirmed `script.js`/`i18n.js` still parse
+  correctly; a real `GET /api/library?page=1` through the actual running
+  API confirmed the new `total`/`page`/`page_size` fields are present and
+  correct against the real (small, 3-4 grid) library on disk.
+
+  **Two single-concurrency queues** now gate the two heaviest phases of
+  every generation, at the user's explicit request: "La génération étant
+  coûteuse en ressources, mets les informations de la génération d'une
+  grille dans une classe de tâche, et gère deux files d'attente : une
+  file pour la génération de la grille (CPU), et une autre pour la
+  génération des définitions (GPU). Informe l'utilisateur de sa position
+  dans la file d'attente à chacune des deux étapes, tant que sa grille
+  n'est pas traitée. Dans le message d'information, explique à
+  l'utilisateur qu'il peut jouer les grilles de la Bibliothèque pour
+  patienter, et que sa grille y sera ajoutée quand elle sera terminée."
+  Before this, every concurrently-submitted job ran its own CPU-heavy
+  pattern search (up to `PARALLEL_ATTEMPTS` parallel `ProcessPoolExecutor`
+  workers each, see `crossword_gen.py`) and its own LLM clue-writing pass
+  fully independently — several jobs at once could oversubscribe the
+  machine's CPU many times over, or hammer the single local LLM server
+  with concurrent requests it was never sized for.
+
+  A new `GenerationTask` dataclass (`job_id`/`req`/`resume_state`) wraps
+  everything a job needs across both stages — the user's own literal
+  framing ("mets les informations... dans une classe de tâche"), replacing
+  what used to be two loose parameters threaded through `_run_generate_job`
+  directly. Two module-level plain lists, `GRID_QUEUE`/`CLUES_QUEUE`
+  (deliberately not an `asyncio.Queue`, which only supports put/get with
+  no way to inspect what else is waiting without consuming it), each hold
+  the FIFO of tasks either waiting for or actively occupying that queue's
+  one processing slot — index 0 is always whichever task is either about
+  to start or already running (the two are indistinguishable from
+  outside, since nothing ever `await`s in between), never reordered.
+
+  A new `_wait_in_queue(queue, task, job, cancel_event, step_code)`
+  blocks until `task` reaches index 0, updating `job["step"]` with
+  `{"code": step_code, "position": ..., "queue_length": ...}` once every
+  `QUEUE_STATUS_POLL_INTERVAL_S` (2.0s, a plain polling loop — deliberately
+  simpler than an event/condition-variable wakeup, since a couple of
+  seconds' latency before a freshly-freed slot is noticed is a complete
+  non-issue for a background job the player is already waiting on
+  regardless) while still waiting. Also checks `cancel_event.is_set()` on
+  every iteration and raises `GenerationCancelled` (removing the task from
+  the queue first) if set — without this, clicking "Stop" on a still-
+  queued job would silently do nothing until its turn finally came, since
+  nothing else ever checks this event while a job is merely waiting in
+  line. Never removes the task from the queue on the *normal* path (task
+  reaches the front) — that's the caller's own responsibility, via a
+  `try/finally` around each stage's real work, so the task keeps
+  "holding" the queue's one slot for the whole duration of that real work
+  too, not just while waiting.
+
+  `_run_generate_job` wraps the existing `generate_grid()` call in
+  `GRID_QUEUE.append(task)` / `await _wait_in_queue(GRID_QUEUE, ...)` /
+  `finally: GRID_QUEUE.remove(task)`, and the existing `clue_generator.
+  generate()` + `generate_title()` pair (both hit the same local LLM
+  server, so they share one queue slot) the same way with `CLUES_QUEUE`.
+  `grid_start` (feeding `generation_duration_seconds`) is measured *after*
+  the grid-queue wait, deliberately — queue wait time is not generation
+  time, and reporting it as such would misleadingly inflate the "Grille
+  générée en..." duration with time spent merely queued, not computed.
+  The grid queue's own slot is freed the instant this job's CPU work
+  finishes, *before* its own (often much slower) clue-writing stage even
+  starts — the whole point of two independent queues is that the next
+  queued job's grid search can start right away rather than waiting for
+  this job's own definitions too. The "final grid" preview (`progress(
+  "clues", current=0, ..., examples=[...])`) still fires unconditionally
+  right after the grid is ready, regardless of whether this job then has
+  to wait in `CLUES_QUEUE` — a queued job's grid is already known/
+  finished, only its definitions are still pending.
+
+  `frontend/static/script.js`'s `describeStep()` gained two new cases,
+  `"queued_grid"`/`"queued_clues"`, each rendering a new i18n function
+  (`statusQueuedGrid`/`statusQueuedClues`, all 5 languages) that states
+  the live position/queue-length and — per the user's own explicit
+  requirement — explains that the player can play a grid from the
+  Bibliothèque while waiting, and that their own grid will be added there
+  once finished.
+
+  **Fair-scheduling round-robin preemption** was added right after, at
+  the user's explicit follow-up request: "Lorsqu'une génération de grille
+  ou de définitions dure depuis plus de 15mn, et qu'il y a des tâches en
+  attente dans la phase en cours, au moment de passer au cycle suivant ou
+  à la génération de définition suivante, replacer la tâche en cours dans
+  la file d'attente de cette phase, et traiter la demande suivante dans
+  la file de cette tâche. Les tâches doivent pouvoir être reprises là où
+  elles ont été interrompues. Informer l'utilisateur de sa position dans
+  la file d'attente." Without this, a single very long-running job (a
+  large/hard grid, or a slow LLM) could monopolize its whole queue
+  indefinitely, starving every other job waiting behind it even though
+  each job only ever gets one turn at a time either way.
+
+  A new `GenerationPaused` exception (`crossword_gen.py`, next to
+  `GenerationCancelled`) carries a `resume_state` — unlike
+  `GenerationCancelled` (a final, user-requested stop that discards all
+  progress), a pause is meant to resume later exactly where it left off.
+  `generate_grid()` gained a `should_pause=None` parameter (a callable,
+  no arguments), checked at the exact same palier-boundary checkpoint as
+  `cancel_event` — never inside a palier itself, since yielding a turn
+  only makes sense between two complete search cycles, not by
+  interrupting one already in progress. When it returns true,
+  `generate_grid()` raises `GenerationPaused` with the *exact same*
+  resume-state serialization already built for the "Continuer" button
+  (`_serialize_resume_state`, from `carry_seed_grid`/`carry_locked_
+  letters`/`carry_preseed_assignment`/`carry_excluded_slots`) — reusing
+  a mechanism that already existed and was already proven, rather than
+  inventing a second, parallel one. `LLMClueGenerator.generate()` (`backend/
+  clues.py`) gained the same `should_pause` parameter, checked once per
+  word (the same point `cancel_event` already checks) — since every
+  word's own clue is independent, its own "resume state" needs no
+  serialization at all: `GenerationPaused` there simply carries
+  `(clues_so_far, remaining_entries)`, letting the caller merge what's
+  already done and retry only what's left.
+
+  `backend/app.py` gained `MAX_TURN_DURATION_S` (15 minutes) and
+  `_make_should_pause(queue, task)` — builds a fresh closure per turn
+  (so "more than 15 minutes" is always measured from *this* turn's own
+  start, never accumulated across several pause/resume cycles), true only
+  once both `time.monotonic() - turn_start >= MAX_TURN_DURATION_S` *and*
+  `len(queue) > 1` (pausing a job nobody is waiting behind would serve no
+  purpose, and would only delay it for nothing in return via the queue's
+  own polling cadence). `_run_generate_job`'s two queue stages both became
+  `while True:` loops: on `GenerationPaused`, the task moves to the *back*
+  of its own queue (`queue.remove(task); queue.append(task)`) and the loop
+  waits its turn again via `_wait_in_queue` (which already reports its new
+  position — no separate mechanism needed for that half of the request),
+  then resumes with the saved state. Real compute time is accumulated
+  across every turn (`grid_paused_compute_s`/`clues_compute_s`) so the
+  final `generation_duration_seconds`/`clues_duration_seconds` reflect the
+  true total work done, not just the last turn's own duration; the
+  "N/total mots" progress shown during clue writing is computed as
+  `len(accumulated_clues) + current` against the *original* total word
+  count, never the current turn's own shrinking remaining-word count, so
+  it never appears to jump backward across a pause/resume cycle.
+
+  Verified in stages. Isolated (`generate_grid()`/`LLMClueGenerator.
+  generate()` called directly, no queueing): a `should_pause` forced true
+  after a few palier-boundary checks confirmed `generate_grid()` raises
+  `GenerationPaused` with a real, usable `resume_state`, and that a
+  follow-up call with `resume_state=...` and no further pausing completes
+  correctly (0 empty white cells); the same pattern against the real
+  local LLM server confirmed `LLMClueGenerator.generate()` pauses after
+  the requested number of words, returns the exact right partial-clues/
+  remaining-entries split, and that resuming with just the remaining
+  entries completes coverage of every word. Isolated queue-only tests
+  (`_wait_in_queue` called directly, `MAX_TURN_DURATION_S` temporarily
+  shrunk) confirmed strict FIFO ordering, correct live positions reported
+  while waiting, and that `cancel_event` correctly removes and cancels a
+  still-queued (never-started) task. A real, non-mocked, full end-to-end
+  check through the actual running API, with `MAX_TURN_DURATION_S`
+  temporarily lowered to 3 seconds for the test and restored to 15
+  minutes immediately after: two real jobs submitted back to back (a
+  15x10/medium-mode grid, then a 6x6/flash-mode grid) — the log showed
+  the first job pause and yield the CPU queue's front slot after ~3.5s
+  ("grid turn paused, back of the queue"), the second job immediately
+  starting and running its own real search to completion (grid + clues),
+  and the first job genuinely resuming (a fresh `wordlist_loaded` log
+  line, i.e. a real re-entry into `generate_grid()` with its own saved
+  `resume_state`) the moment the CPU queue freed up again — an
+  unambiguous, live confirmation of the full pause/requeue/resume cycle,
+  not just its individual pieces in isolation. No leftover
+  `multiprocessing` worker processes beyond the ordinary
+  `resource_tracker` helper were found after any of these checks.
 - `backend/system_info.py` — `get_system_info(llm_model)`, best-effort *local
   machine* hardware detection for that info badge: `nvidia-smi --query-gpu=name,
   memory.total` for a discrete NVIDIA GPU's exact name and dedicated VRAM if present,
@@ -3109,6 +3417,1309 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   established pattern of disclosing a small local model's real
   reliability ceiling on qualitative prompt rules rather than overstating
   it.
+- `backend/chatbot.py` — "David FALCON", the web UI's in-app chat assistant, at the
+  user's explicit request: "En bas à droite de l'interface, ajoute un ChatBot (ouvert
+  par défaut) avec l'icône de l'application. Le ChatBot utilise le LLM pour répondre
+  à l'utilisateur. Il s'appelle David FALCON. Il parle à l'utilisateur dans la langue
+  sélectionnée. Il affiche un message de bienvenue proposant à l'utilisateur de l'aider
+  dans l'utilisation de l'outil ou lui donner des indices dans la résolution des
+  grilles. Le message de bienvenu doit être réécrit si l'utilisateur change la langue.
+  A chaque question de l'utilisateur, le LLM est informé de la doc contenue dans
+  DOC_USER et de l'état de l'interface, y compris la position et le sens d'un éventuel
+  mot sélectionner dans la grille à jouer. Si l'interface affiche une grille à jouer,
+  il est informé de la liste des définitions qui doit contenir toutes les infos utiles
+  pour comprendre la grille : numéro de ligne et de colonne de chaque mot, vertical ou
+  horizontal, définition, valeur du mot (réponse). Le ChatBot doit toujours répondre
+  très poliement, et refuser de répondre à toute question qui ne concernerait pas
+  l'interface ou la résolution de la grille, en proposant d'aller consulter un site
+  approprié pour la question." A separate `ChatBot` class rather than reusing
+  `LLMClueGenerator` directly — clue/title generation and chatting are different
+  enough concerns (retry loops and per-call `LOG_LLM/` records make no sense for a
+  live conversation) that sharing a class would mean more special-casing than code
+  actually shared — but it reads the exact same `LLM_BASE_URL`/`LLM_MODEL`/
+  `LLM_API_KEY` environment configuration, since there's only ever one LLM server
+  configured for this whole app.
+
+  `reply(history, message, language, ui_context)` rebuilds its own system prompt fresh
+  on every single call (never cached) from four pieces: (1) the persona/scope/
+  politeness rules named directly in the request above; (2) `DOC_USER/EN/ReadMe.md`'s
+  own full content, read once and cached for the process's lifetime (`_load_doc_user`,
+  degrading to an empty string rather than raising if the file is ever missing) — the
+  bot's own knowledge of how the interface works; (3) the live UI state the frontend
+  sends along with every message (`ui_context`: `puzzle_loaded`, `selected_cell`, and,
+  if a grid is loaded, every one of its words — row/col/direction/clue/answer, see
+  `_format_words_block`); (4) the conversation's own prior turns (`history`, a plain
+  `{role, content}` list the frontend keeps client-side and resends each time — no
+  server-side session/conversation store at all, consistent with this whole backend's
+  stateless-per-request design elsewhere). Deliberately no "selected word" concept of
+  its own: the frontend has no persistent notion of a word's own direction at the
+  currently-selected *cell* (only `selected = {row, col}`, see
+  `frontend/static/script.js`) — rather than inventing one, the raw selected-cell
+  position is sent alongside the *entire* word list, and the system prompt spells out
+  how to derive which word(s) touch it (each word's own row/col/direction, plus its
+  length via `len(answer)`) — a word's own length needs no separate field this way.
+
+  Deliberately never routed through `GRID_QUEUE`/`CLUES_QUEUE` (see `backend/app.py`'s
+  own entry) — a chat reply is a single, comparatively quick call a player expects
+  answered promptly, not a multi-minute batch job; it competes for the same LLM
+  server as clue writing on an ordinary best-effort basis, with no explicit fairness
+  mechanism between the two (a real one would need the same care as those two
+  queues' own preemption logic, for comparatively little benefit here — one call is
+  never going to starve anyone else for 15 minutes the way a whole clue-writing pass
+  legitimately could). `POST /api/chat` (`backend/app.py`) is a plain, synchronous
+  endpoint (`async def chat(req: ChatRequest)`, `asyncio.to_thread`-wrapped like every
+  other blocking LLM call in this file) rather than the job/polling pattern
+  `POST /api/generate` uses — a `ChatError` (mirroring `ClueGenerationError`) on
+  connection failure becomes a 502 with a French detail message, matching the
+  existing convention for backend HTTP errors elsewhere in this file. A matching
+  `POST /api/chat` proxy route was added to `frontend/server.py` in the same change
+  (per this project's own established rule that every new backend endpoint needs
+  one), with its own longer `CHAT_PROXY_TIMEOUT_S` (150s) — a chat reply is a single
+  synchronous LLM call, not a quick status check, so the existing `PROXY_TIMEOUT_S`
+  (30s) alone would abort the request before a genuinely slow model ever finished;
+  the frontend's own `fetchWithTimeout` call for this endpoint uses a matching,
+  even-longer `CHAT_FETCH_TIMEOUT_MS` (160s) — the same "each layer's timeout set
+  above the one it calls" convention already established for `FETCH_TIMEOUT_MS`/
+  `PROXY_TIMEOUT_S`/the backend's own per-call timeouts elsewhere in this project.
+
+  On the web UI (`frontend/static/index.html`/`script.js`/`style.css`), `#chatbot` is
+  a fixed-position widget anchored to the viewport's bottom-right corner (independent
+  of page scroll, unlike every other section, which flows normally inside `<main>`),
+  open by default, reusing `logo.svg` (the same app icon already used in the page
+  header) and a collapse/expand button (`#chatbot-toggle-btn`, toggling a
+  `.chatbot-collapsed` class that hides everything below the title bar — the widget
+  shrinks to just its own header rather than disappearing outright). A welcome
+  message (`renderChatWelcome()`) is shown as soon as the page loads and again on
+  every UI-language change (`languageSelect`'s own "change" handler), but only while
+  `chatUserHasSpoken` is still `false` — at the user's own explicit requirement that
+  the greeting be rewritten on a language switch, deliberately scoped to *before* any
+  real exchange has happened: once the player has actually sent a message, that
+  earlier greeting is already part of the conversation's own past and is left alone,
+  rather than retroactively rewriting an earlier turn mid-conversation on a later
+  language change. `chatHistory` (the array threaded to the backend as `history`)
+  only ever holds genuine user/assistant turns actually exchanged with the LLM — the
+  purely cosmetic welcome bubble is rendered straight to the DOM and never added to
+  it, since it's not something the model itself ever said.
+
+  Verified live, end to end, against the real running API and the real local LLM
+  server (not mocked): a question with no grid loaded ("Comment est-ce que je peux
+  vérifier mes réponses ?") correctly described the real "Vérification"/"Solution"
+  buttons; a question with a real 2-word grid context and a selected cell ("un
+  indice pour le mot horizontal sélectionné") correctly identified the right word
+  from the supplied list and offered a hint; the same request in English
+  ("What can you help me with?") replied entirely in English, confirming the
+  language parameter is honored. The scope-restriction rule (never answer an
+  off-topic question) was tested directly and found **not reliably enforced** by
+  this project's own small default local model: a first test ("Quelle est la
+  capitale de l'Australie ?") had the model acknowledge it shouldn't answer, then
+  answer anyway; the rule's own wording was strengthened once (explicitly forbidding
+  "decline, then answer anyway" as its own failure mode) and re-tested — still not
+  reliable, with further off-topic requests (a poem, the weather) answered directly
+  or only partially redirected, one even doing so while stating a factually wrong
+  capital. Reported honestly here as a real, disclosed reliability gap rather than
+  chased further or hidden — consistent with this whole project's own established,
+  repeated finding that this specific small local model does not reliably follow a
+  behavioral/scope-restriction instruction however it's worded, the same ceiling
+  already documented at length for the clue-generation grammar rules in
+  `backend/clues.py`'s own entry above. A real JS syntax check (`esprima`,
+  temporarily installed and removed again afterward) and HTML/CSS brace-balance
+  checks confirmed `script.js`/`i18n.js`/`index.html`/`style.css` still parse
+  correctly after the change. **Not yet visually confirmed in an actual browser** —
+  the same tooling limitation noted throughout this project's UI work.
+
+  **The reply is now streamed**, at the user's explicit request: "Le Bot doit
+  afficher la réponse en streaming." `reply()` (a single blocking call
+  returning the full text at once) was replaced outright by `reply_stream()`,
+  an async generator using `httpx.AsyncClient`'s own streaming mode (`"stream":
+  true` in the request body — the same Server-Sent-Events protocol llama.cpp's
+  own OpenAI-compatible server already implements, no different endpoint or
+  API needed) instead of the plain sync `httpx.post()` used everywhere else in
+  this project's LLM-calling code — the one method in this whole codebase that
+  needs to yield control back to the event loop between chunks rather than
+  block once for the whole call.
+
+  A `<think>...</think>` reasoning block is still stripped, matching `_strip_
+  reasoning()`'s own non-streaming behavior, but this is genuinely harder to
+  get right while streaming: either tag can arrive split across an arbitrary
+  number of chunk boundaries (a model can, in principle, emit `<think>` one
+  character at a time). `_longest_tag_prefix_suffix(buffer, tag)` computes
+  exactly how many trailing characters of a still-tag-free buffer might yet
+  complete `_THINK_OPEN` on a future chunk, and only that exact slice is held
+  back — everything else is flushed immediately, so a normal (non-reasoning)
+  reply streams with no perceptible delay at all. An inner `while progressed:`
+  loop re-checks both tags within the *same* incoming chunk before waiting for
+  the next one — needed for a small/fast model that emits open tag, close tag,
+  and the real answer all within one single chunk (e.g. `"<think>x</think>
+  Answer"`); without it, the close-tag check would only ever run on the next
+  chunk's arrival, one iteration too late, and the whole reply would appear to
+  hang forever on a response that had, in fact, already finished reasoning.
+
+  `POST /api/chat` (`backend/app.py`) became a `StreamingResponse` of `data:
+  {"delta": "..."}\n\n` events (a bespoke, minimal shape — the frontend is the
+  only consumer, so there's no reason to mirror the OpenAI wire format
+  verbatim, only a reason to keep the frontend's own parsing simple),
+  terminated by `data: [DONE]\n\n`; a failure before any chunk was ever
+  produced yields a single `data: {"error": "..."}\n\n` instead — a failure
+  *mid-stream* (rarer, but possible) simply ends the generator early with
+  whatever was already yielded, an accepted, disclosed edge case, since there's
+  no clean way to retroactively signal "actually, that was incomplete" once
+  real content already reached the player.
+
+  `frontend/server.py`'s own `proxy_chat` relays the backend's stream chunk by
+  chunk (`client.stream(...)`/`resp.aiter_bytes()`) rather than buffering the
+  whole reply and forwarding it in one piece the way every other proxy route
+  here does — buffering it at this hop would silently defeat the whole point
+  of streaming the moment it crosses the proxy. A genuine, disclosed
+  asymmetry versus every other route: a backend-connection failure here can't
+  become a clean 502 the usual way, since by the time `StreamingResponse`
+  starts iterating this generator, the response's own 200 status has already
+  been committed — instead it yields a single `data: {"error":
+  "backend_unavailable"}` event, in the same shape the backend's own stream-
+  side failure already uses, so the frontend's chat-handling code needed no
+  extra case to handle it.
+
+  `frontend/static/script.js`'s new `readChatStream(response, onDelta)` reads
+  `response.body`'s own `ReadableStream` via `getReader()`, decodes chunks
+  with a `TextDecoder`, splits on `"\n\n"` for individual SSE events, and calls
+  `onDelta(fullTextSoFar)` for every `{"delta": ...}` event — the chat form's
+  own submit handler now starts the assistant's bubble empty and grows it
+  live, in place, rather than waiting for one final `await response.json()`
+  the way the original, non-streaming version did. A `{"error": ...}` event
+  arriving before any real delta ever came through raises (shown as the
+  existing `chatbotErrorFailed` message); one arriving *after* some real
+  content already streamed in is treated as "stop here, keep what's already
+  shown" instead, matching the backend's own same disclosed mid-stream-failure
+  trade-off.
+
+  Verified in stages. Isolated: the exact `_longest_tag_prefix_suffix`/
+  buffering state machine was mirrored in a standalone script and run against
+  8 scenarios — no reasoning at all; a `<think>...</think>` block split
+  character by character; both tags plus the real answer arriving together in
+  one single chunk (the specific case the inner `while progressed:` loop
+  exists for — confirmed broken without it, in an earlier draft, before this
+  loop was added); reasoning that never closes (yields nothing, matching
+  `_strip_reasoning`'s own `""` case); a lone `"<"` that isn't the start of any
+  tag at all (confirmed never mistakenly held back) — all 8 passed against the
+  real `_longest_tag_prefix_suffix` function itself, not just a hand-reasoned
+  copy of it. Live, end to end, through both hops of the real running stack
+  (not mocked): a direct call to the backend's own port (3001) captured 47
+  real SSE events over ~450ms, each a small, genuine text fragment, correctly
+  reassembling into the exact same kind of coherent reply the non-streaming
+  version used to return in one piece; an identical check through the actual
+  frontend proxy (port 3000, English language) captured 93 real events spread
+  over ~860ms, confirming `proxy_chat` genuinely relays the stream rather than
+  buffering it before forwarding. A real JS syntax check (`esprima`,
+  temporarily installed and removed again afterward) confirmed `script.js`
+  still parses correctly after the change. **Not yet visually confirmed in an
+  actual browser** — the same tooling limitation noted throughout this
+  project's UI work.
+
+  **A real information gap in "what is the selected word" was found and
+  fixed right after**, reported directly by the user: "il me dit qu'il ne
+  sait pas répondre à la question 'quel est le mot sélectionné'... peut-être
+  que le petit LLM est trop limité pour bien comprendre les infos en entrée,
+  mais peut-être que ces infos manquent." The original prompt only ever
+  stated the raw selected cell's own `(row, column)` and left the actual
+  spatial reasoning ("does this cell fall within this word's own span") to
+  the model itself — asking it to cross-reference that position against
+  every word's own row/col/direction/length live, in its head, on every
+  single message. A new `_find_selected_words(selected_cell, words)`
+  computes this directly in Python instead (the same span logic the prompt
+  used to merely *describe*) — regardless of whether the original gap was
+  "the model can't do this reasoning" or "the info wasn't quite there," doing
+  the actual lookup once, server-side, and stating its result plainly (
+  "The word(s) occupying that exact selected cell right now (this IS the
+  answer to \"what word is currently selected\")") removes the ambiguity
+  either way, rather than requiring the small model to get a multi-step
+  geometric derivation right on its own. Verified: 5 isolated `_find_
+  selected_words` cases (a cell shared by two crossing words, a cell
+  belonging to only one of two words in each direction, no selection at all,
+  a cell touching neither word) all matched expectations. A real, non-mocked
+  call through the actual running API (a 2-word grid, `CHAT` across crossing
+  `GRIL` down, both starting at the same cell) asking "Quel est le mot
+  sélectionné ?" now correctly names `CHAT`; a follow-up asking for a hint on
+  "every word at the selected cell" correctly identified *both* crossing
+  words this time (`CHAT` and `GRIL`) — confirming the fix resolves the
+  originally reported symptom, not just the isolated helper's own logic.
+
+  Rule 6 (never greet outside the one-time welcome bubble) was strengthened
+  at the user's explicit request: "Modifie le prompt du Bot pour préciser
+  qu'il ne doit pas dire 'bonjour' à chaque réponse, mais seulement pour le
+  message d'accueil." A first, softer wording ("avoid opening with a
+  greeting") still had the model greet on every single reply when tested
+  live. Reworded to be far more forceful and explicit — naming several
+  greeting variants directly ("Hello", "Hi", "Bonjour", "Hi there", or
+  re-introducing itself by name), stating this applies to "NONE of your
+  replies, not just most of them," and explicitly calling out that this
+  includes "your very first one" (the reply most likely to default back to
+  a greeting, since it's the first thing the model itself ever says in the
+  conversation) — and explaining *why*: the welcome bubble already covers
+  the one and only greeting this conversation will ever have. Verified
+  live with a real 3-turn conversation through the actual running API: the
+  greeting only appeared on the very first reply, not on the 2nd or 3rd —
+  a real, disclosed partial improvement (not a complete fix), consistent
+  with this small local model's already-documented ceiling on strict
+  behavioral rules (see rule 3's own scope-restriction limitation below).
+
+  Rule 3 (never answer an out-of-scope question, even after declining) was
+  tested directly and found unreliable on this project's small local
+  model: a real out-of-scope question sometimes got a correct decline
+  followed immediately by an answer anyway (once even a factually
+  incorrect one) — reported honestly as a known, disclosed limitation
+  rather than chased further, matching this project's established pattern
+  for this model's own behavioral-rule compliance ceiling (see
+  `backend/clues.py`'s own extensive history of the same kind of finding).
+
+  **`selected_cell` was replaced by two genuinely distinct concepts**,
+  `hovered_word` and `filling_cell`, at the user's explicit correction:
+  "un mot est sélectionné en passant la souris au dessus sans forcément
+  cliquer sur une case. Faire la différence entre 'mot sélectionné'
+  (survol) et 'case/mot en cours de remplissage' (cliqué)." Until this,
+  `buildChatUiContext()` only ever reported the click-to-type target
+  (`selected`, see `selectCell()`) under the ambiguous label "selected" —
+  but "mot sélectionné"/"quel est le mot sélectionné" actually refers to
+  whichever word the mouse is currently hovering over (the bidirectional
+  grid/clue hover-highlight mechanism, see the `style-guide` SKILL), a
+  completely independent piece of UI state the chatbot never had access to
+  at all.
+
+  `frontend/static/script.js` gained a new `hoveredWord` variable (`{row,
+  col, direction}` of the hovered word's own starting cell, or `null`) —
+  set inside `highlightWordAt()` (the one function already shared by both
+  grid-cell hover and clue-segment hover, see the `style-guide` SKILL's own
+  entry on it) right after that function resolves which word's cells to
+  frame, and cleared inside `clearHighlights()`. `buildChatUiContext()` now
+  sends both `hovered_word` (from `hoveredWord`) and `filling_cell` (the
+  renamed `selected`-derived field, semantics otherwise unchanged) rather
+  than a single ambiguous `selected_cell`.
+
+  `backend/chatbot.py`'s `_find_selected_words` was renamed to `_words_
+  touching_cell` (logic unchanged, still used for `filling_cell` — a bare
+  click position that can belong to up to two crossing words at once) and
+  a new `_find_word_by_start(word_start, words)` was added for `hovered_
+  word` — an exact `(row, col, direction)` match, since the frontend
+  already resolves hover down to one specific word before ever sending it,
+  unlike a click position. `_build_system_prompt` now states both as two
+  clearly, explicitly separately labeled blocks ("THIS is the answer to
+  \"what word is selected\"... NOT the filling-cell state" / "Separately
+  (this is NOT the hovered word)...") rather than a single, conflated
+  concept.
+
+  **A live test surfaced a second, real bug along the way**: with nothing
+  hovered/selected at all, the model still answered with the grid's very
+  first listed word instead of honestly saying nothing was selected —
+  reproduced directly through the real running API (`hovered_word: null`,
+  a 3-word grid) before touching any code, confirming the state block
+  already correctly said "No cell is currently selected" and the model
+  still ignored it outright. Fixed by making that instruction far more
+  forceful, the same treatment already applied to rule 6 above: "you MUST
+  reply that no cell is currently selected... do NOT name any word from
+  the list below as if it were selected, not even the first one listed."
+
+  **A third, deeper bug was then found by direct measurement, not
+  guesswork**: even with the correct word explicitly and unambiguously
+  named in the prompt (verified by printing the actual built system
+  prompt, not just trusting the reply), a real test with a hovered word
+  genuinely different from both the click target and the first word in
+  the list (`hovered_word` = MAISON, `filling_cell` = TABLE, grid's first
+  word = CHAT) still answered CHAT — neither of the two real candidates.
+  Root-caused as a small-model recency bias: the resolved hover/filling-
+  cell states were built *before* the full word list in `state_lines`, so
+  the very last thing the model read before the player's own question was
+  the plain word list (CHAT first), not the explicit answer stated a few
+  lines earlier. Fixed by reordering `state_lines` — the full word list
+  now comes first, and the two resolved single-answer states (filling
+  cell, then hover, in that order) come last, immediately before the
+  question — a direct countermeasure to the bias, not a cosmetic change.
+  Verified live: the exact previously-failing scenario (hover=MAISON,
+  click=TABLE) now answers MAISON correctly in 4/4 repeated real calls
+  through the running API, up from wrong every time before the reorder.
+  The "nothing hovered at all" case improved to 2/4 correct (no word
+  invented) after the same reorder — a real, if partial, improvement,
+  disclosed honestly rather than claimed as fully solved, consistent with
+  this model's own established reliability ceiling on strict prompt rules.
+
+  David FALCON's own replies are now rendered as real Markdown instead of
+  plain text, at the user's explicit request: "L'affichage du Bot doit
+  être capable de formatter du Markdown produit par le LLM." A small,
+  self-contained Markdown-to-HTML renderer was added directly in
+  `frontend/static/script.js` (`escapeHtml`/`renderInlineMarkdown`/
+  `renderMarkdown`) rather than pulling in a third-party library from a
+  CDN — this project has never had an external frontend dependency of any
+  kind (`index.html` only ever loads two plain, local `<script>` tags),
+  and the small subset of Markdown this project's own small local model
+  actually produces (bold, italics, inline code, bullet/numbered lists,
+  the occasional heading, the occasional link) doesn't need one.
+  `renderMarkdown(text)` HTML-escapes the input FIRST, unconditionally,
+  before any Markdown syntax is turned into a real tag — this is the one
+  thing that makes it safe to render via `innerHTML` at all: whatever the
+  LLM writes can only ever become one of the small, fixed set of tags this
+  function itself emits (`<p>`, `<ul>`/`<ol>`/`<li>`, `<code>`,
+  `<strong>`, `<em>`, `<a>` — the last restricted to `http(s)://` links
+  only), never arbitrary markup of its own. `appendChatBubble(role, text)`
+  now uses `bubble.innerHTML = renderMarkdown(text)` for the assistant's
+  own messages only — the player's own typed message still gets the safe,
+  literal `bubble.textContent = text`, never interpreted as Markdown at
+  all. The streaming `onDelta` callback (see the streaming entry above)
+  re-renders the *raw Markdown source accumulated so far* through
+  `renderMarkdown()` on every chunk, rather than growing pre-rendered HTML
+  incrementally — so a `**bold**` marker split across two separate
+  streamed chunks still renders correctly the moment its closing `**`
+  arrives, instead of ever showing a stray, unmatched `**` mid-stream.
+  `style.css` gained rules scoped to `.chatbot-message-assistant`'s own
+  child elements (`p`/`ul`/`ol`/`li`/`code`) to tame the browser's default
+  block-spacing/list-indent down to something that reads naturally inside
+  the narrow chat bubble, rather than a full page's own generous spacing.
+
+  Verified: a full line-for-line Python port of `renderMarkdown`/
+  `renderInlineMarkdown`'s own regex logic confirmed a representative
+  sample (a bullet list mixing bold/inline-code/italic, plus a trailing
+  link) converts to exactly the expected `<p>`/`<ul>`/`<li>`/`<strong>`/
+  `<code>`/`<em>`/`<a>` structure; a dedicated XSS-safety check fed the
+  same port a hostile input containing a literal `<script>` tag and an
+  `<img onerror=...>` attribute — confirmed neither ever reached the
+  rendered output as a real tag, both correctly appearing only as escaped,
+  inert text (`&lt;script&gt;...`). A real JS syntax check (`esprima`,
+  temporarily installed and removed again afterward) and a CSS brace-
+  balance check both confirmed `script.js`/`style.css` still parse
+  correctly after the change. **Not yet visually confirmed in an actual
+  browser** — the same tooling limitation noted throughout this project's
+  UI work — verified structurally (the Python-ported logic, the syntax/
+  brace checks) rather than by watching it render live.
+
+  **A real, unrelated bug was found and fixed in the same investigation**,
+  reported directly by the user: "Lorsque l'utilisateur clique sur une
+  case pour remplir, la grille intercepte toutes les actions clavier. Ca
+  empêche de saisir une question dans le Bot." Root cause: `handleKeydown`
+  (the grid's own letter-typing handler, bound globally via `document.
+  addEventListener("keydown", handleKeydown)`) only ever checked whether a
+  grid cell was `selected`, never which element actually had keyboard
+  focus — so once a cell was selected for typing, every subsequent
+  letter/Backspace keystroke was `preventDefault()`'d and written into the
+  grid's own `userLetters`, even while the player had since clicked into
+  `#chatbot-input` to type a question there instead. Fixed with a guard at
+  the very top of `handleKeydown`: `if (active.tagName === "INPUT" ||
+  active.tagName === "TEXTAREA") return;`, checked against `document.
+  activeElement` generically (not `#chatbot-input` by id specifically) —
+  so any other text field added to the page later is protected the same
+  way with no further change needed here. Verified: confirmed `#chatbot-
+  input` is a real `<input>` element (its `tagName` is genuinely
+  `"INPUT"`, not e.g. a `contenteditable` div the guard would have missed)
+  and that no other keydown handler in the file (arrow-key grid navigation
+  doesn't exist) needed the same guard. **Not yet visually confirmed in an
+  actual browser** — same tooling limitation as above.
+
+  Rule 4 (hint vs. explicit answer) was substantially rewritten, at the
+  user's explicit request: "Quand l'utilisateur demande un indice pour
+  l'aider dans la résolution de la grille, le Bot ne doit pas donner les
+  mots exacts, mais formuler une réponse indirecte. Le mot exact ne doit
+  être donné que si l'utilisateur le demande explicitement." Measured
+  live before touching any code: on a real, non-mocked call, a plain
+  "peux-tu me donner un indice ?" leaked the exact answer 3 times out of
+  4 — the old rule 4 wording ("prefer... reveal only if clearly asks")
+  was too soft, and each word's own `answer=` text sits right there in
+  the prompt's own word list, trivial for the model to just copy out.
+
+  Rewritten to explicitly name the two request types, forbid the exact
+  answer text in ANY form (not just "the word", but also spelled-out
+  letters or the word embedded inside a sentence) for a hint, state that
+  the `answer=` field is for the model's own internal consistency check
+  only, never for copying into a hint reply, and default to "treat it as
+  a hint" whenever the request is ambiguous — the same "err toward the
+  safer interpretation" pattern already established elsewhere in this
+  file. A worked good/bad example (MAISON, clue "Habitation") was added,
+  matching this project's established pattern for helping this small
+  model generalize a rule (see `backend/clues.py`'s own `rule_bad`/
+  `rule_good` history) rather than relying on prose alone.
+
+  Verified live: re-ran the same test — leaks dropped from 3/4 to 1/6 on
+  hint requests for the exact example word (MAISON), with explicit
+  answer requests for the same word still correctly revealing it 4/4
+  times. But a second test, on a genuinely different word never
+  mentioned in the prompt (SOLEIL, clue "Astre du jour"), leaked 4/6
+  times — the single worked example helped mainly for the literal case
+  it covers, generalizing poorly to an unrelated word. A second worked
+  example (SOLEIL itself) was added, explicitly stated as illustrating
+  "the SAME general rule... apply it the same way to ANY word", and
+  re-verified on a *third*, still-fresh word never used in either
+  example (CHEVAL, clue "Animal de trait") — leaks stayed at 4/6, no
+  measurable improvement from the second example; one reply even echoed
+  the MAISON example's own wording verbatim while discussing CHEVAL,
+  showing the model sometimes recites a memorized example rather than
+  reasoning about the current word. Reported honestly as a genuine,
+  disclosed partial improvement (roughly a 75%→65% leak-rate reduction
+  on a truly unseen word, not full compliance), consistent with this
+  small local model's already-documented reliability ceiling on strict
+  behavioral rules (rule 3's scope restriction, rule 6's greeting
+  suppression) — not chased further with a third/fourth example, per
+  this project's established practice of disclosing this ceiling rather
+  than iterating on prompt wording indefinitely. The explicit-answer-
+  request half of the rule remained fully reliable throughout every test
+  (4/4 each time), so this rewrite is a clear, unambiguous net
+  improvement even though hint-leaking isn't fully eliminated.
+- `fetch_rss_feeds.py` — one-off/scheduled script (project root, alongside
+  `build_sentence_corpus.py` and this project's other one-off scripts), at
+  the user's explicit request: "Configure un demon qui lit tous ces flux
+  RSS une fois par jour (par exemple, le matin à 8H, et sauvegarde chaque
+  flux RSS dans un dossier RSS (écrasé chaque jour)." Followed a direct
+  question ("Existe-t-il des flux RSS spécialisés sur les mots croisés ?")
+  answered via a real web search rather than guessed at.
+
+  `RSS_FEEDS` only lists sources individually verified live, by a real
+  HTTP fetch, before being added — not simply copied from a generic
+  "puzzle" RSS directory listing. That distinction mattered here twice
+  over: the user directly caught a real problem with the first, broader
+  candidate list ("il y a aussi des flux Jeux d'Echec mélangés aux listes
+  fournies" — the generic puzzle-RSS directories this project's own web
+  search first turned up mix crossword feeds with chess and other puzzle
+  types indiscriminately); and, independently, live-checking 4 individual
+  crossword-blog candidates by direct HTTP fetch found 3 of them dead —
+  one blog's own most recent post literally read "archival blog... it's
+  been 15 years"; a second's most recent post was titled "Concluding
+  Thoughts" ("Sally's Final Takes" — the author signing off); a third's
+  feed URL 302-redirected to a URL that resolved with zero items. Only two
+  survived this check, confirmed live to be currently active (post dates
+  matching the actual day they were checked) and unambiguously,
+  exclusively about crosswords (post titles are literally built from
+  crossword clue text): Rex Parker Does the NYT Crossword Puzzle
+  (`rexwordpuzzle.blogspot.com`) and Diary of a Crossword Fiend
+  (`crosswordfiend.com` — itself the successor site the first, dead
+  candidate's own final post pointed readers toward, discovered only by
+  reading that dead blog's own last post rather than giving up on it
+  outright).
+
+  `fetch_all()` downloads each feed (`httpx.Client`, a real browser-like
+  `User-Agent` — some feed hosts otherwise degrade or block a bare Python
+  client), saves each one's raw XML under `RSS/<key>.xml` (project root,
+  gitignored — a generated cache, not source content, the same convention
+  as `CORPUS/`/`DICS`/etc.), overwritten every call per the user's own
+  "écrasé chaque jour", and writes a single `RSS/combined.json` — every
+  item from every feed merged and sorted by publication date descending
+  (most recent first), so the web UI's own panel needs no XML parsing at
+  all, just a JSON read. Prefers a WordPress/Blogger feed's own richer
+  `<content:encoded>` body over the plain `<description>` (often just a
+  short excerpt) when present. Best-effort per feed — one feed failing to
+  download or parse is logged and skipped, never aborts the whole run, so
+  the panel still shows whatever did succeed rather than nothing at all.
+
+  `backend/app.py` gained a background `_rss_daily_scheduler()` coroutine,
+  started via `@app.on_event("startup")`: sleeps until the next
+  `RSS_FETCH_HOUR` (8, local time — "le matin à 8H") and calls `fetch_
+  rss_feeds.fetch_all()` via `asyncio.to_thread` (the same pattern already
+  used for every other blocking call in this file), forever, once a day.
+  A plain `asyncio.sleep`-based loop rather than a real system scheduler
+  (cron/launchd) — this project has never had any system-service
+  infrastructure, everything already runs as a manually-launched Python
+  process (see `run_Falcon.sh`), so this refreshes only as long as the
+  back end itself is running, matching the project's existing operational
+  reality rather than adding a new one. `fetch_rss_feeds.py` lives at the
+  project root, not inside `backend/` itself (alongside every other
+  one-off script), so it can't be reached by a plain relative import — the
+  project root is added to `sys.path` once, at module load, specifically
+  to import it. A new `GET /api/rss` endpoint just reads `RSS/combined.
+  json` back (never re-parses XML) — returns an empty list, never an
+  error, if that file doesn't exist yet (a fresh installation before its
+  first scheduled/manual run), a normal, expected state. `frontend/
+  server.py` gained the matching proxy route, `proxy_rss`, per this
+  project's own established rule that every new backend endpoint needs
+  one.
+
+  On the web UI, a new persistent `#rss-panel` section — "Actu Croisée",
+  the panel's own title, given directly by the user, translated per
+  language (`rssPanelTitle`; English "Cross Talk", German "Kreuzworträtsel-
+  News", Spanish "Noticias Cruzadas", Italian "Notizie Incrociate" — the
+  first/third/fourth keep a similar crossword/"crossed" wordplay to the
+  French original, German goes plainly functional rather than forcing an
+  unnatural pun) — lists every fetched item (title + source), most recent
+  first (already sorted server-side), inside a height-capped, internally
+  scrollable `<ul>` ("le panneau doit tenir sur la page d'accueil avec sa
+  propre barre pour scroller"). Deliberately placed as its own section
+  right after the page header, a sibling of — never nested inside — the
+  group of sections that toggle between each other (`#library`/
+  `#attempt-preview`/`#result`), at the user's own direct correction after
+  seeing an early version disappear: "la liste des flux RSS disparaît de
+  l'interface quand quelque chose d'autre doit être affiché dans le
+  panneau central." Fetched once, at page load (`fetch("/api/rss")`, the
+  same "fetch once" pattern already used for `/api/system_info`) — no
+  live refresh during a session, matching the back end's own once-a-day
+  cadence.
+
+  Clicking (or Enter/Space-activating, via `tabIndex`) a list item opens
+  `#rss-detail`, a small overlaid card (not a native `<dialog>` — this
+  page has never used one anywhere else) showing the full title, source +
+  localized publication date/time, and the item's full HTML content — at
+  the user's explicit request: "Quand l'utilisateur clique sur une entrée
+  dans le liste des flux RSS, afficher le message complet correspondant.
+  Assure-toi que les liens éventuellement indiqués soient cliquables et
+  renvoient vers un nouvel onglet." The raw feed content is third-party,
+  unsanitized HTML (Blogger/WordPress's own post markup) — never inserted
+  via a direct `innerHTML`, which would let arbitrary third-party markup
+  (`<script>`, an `onerror` handler, a `javascript:` link) execute in this
+  page's own origin. A new `sanitizeRssHtml(rawHtml)` parses it with the
+  browser's own real `DOMParser` (never a regex-based approach on the raw
+  string, too easy to bypass) and rebuilds a brand-new DOM tree containing
+  only an explicit allowlist of tags (`RSS_ALLOWED_TAGS`: `p`, lists,
+  headings, `a`, `img`, `table`, `code`, etc. — no `script`/`style`/
+  `iframe`) and, per tag, an explicit allowlist of attributes
+  (`RSS_ALLOWED_ATTRS`: only `href` on `a`, only `src`/`alt` on `img`) —
+  anything else (an unknown tag, a stray `on*` attribute, any attribute
+  not on that tag's own list) is silently dropped, though an unknown
+  tag's own children still survive (only the tag itself is discarded, not
+  necessarily-meaningful nested content). Every `<a>` unconditionally gets
+  `target="_blank" rel="noopener noreferrer"` forced onto it regardless of
+  whether the original markup already had it, and `href` is kept only if
+  it starts with `http:`/`https:`/`mailto:` (never `javascript:` or an
+  unrecognized scheme) — satisfying "cliquables et renvoient vers un
+  nouvel onglet" for every surviving link, not just well-behaved ones.
+
+  This project has never had an external frontend dependency (see the
+  chatbot's own `renderMarkdown()` entry for the same reasoning) — this
+  sanitizer is hand-rolled for the same reason, using only the browser's
+  own built-in `DOMParser`, not a third-party sanitization library from a
+  CDN.
+
+  Verified in stages. A first, broader candidate list (drawn from generic
+  "puzzle" RSS directories) was verified live with real HTTP fetches and
+  found wanting exactly as the user warned — abandoned in favor of the
+  final two hand-verified sources. `python3 fetch_rss_feeds.py` was run
+  for real (not simulated) as the very first save the user explicitly
+  asked for: 32 real articles saved to `RSS/combined.json`, correctly
+  sorted most-recent-first (spot-checked: the newest entry's own
+  `pub_date`, `2026-09-05T09:33:03+00:00`, matches the actual day this
+  was run), `RSS/rexwordpuzzle.xml`/`RSS/crosswordfiend.xml` both present
+  and non-empty. `GET /api/rss` was checked through both the real running
+  backend (port 3001) and the real frontend proxy (port 3000) — both
+  returned the identical 32 items. The real served `index.html`/
+  `style.css`/`script.js` were fetched directly from the running frontend
+  server and confirmed to contain the new markup/CSS rules/JS functions.
+  `sanitizeRssHtml`'s exact logic was ported line-for-line to Python
+  (`html.parser`-based, mirroring `DOMParser`'s own tree-walk) and run
+  against both a synthetic hostile payload (a `<script>` tag, an `onerror`
+  attribute, a `javascript:` link) — confirmed none of the three survived,
+  while a legitimate `https://` link correctly gained `target="_blank"
+  rel="noopener noreferrer"` — and a real, full-length article body from
+  the actual downloaded feed, confirming realistic third-party content
+  degrades to sensible, safe output rather than breaking. A real JS
+  syntax check (`esprima`, temporarily installed and removed again
+  afterward) and CSS/HTML brace/tag-balance checks confirmed `script.js`/
+  `i18n.js`/`style.css`/`index.html` all still parse correctly after the
+  change; the backend's own startup log ("Application startup complete")
+  confirmed `_rss_daily_scheduler`'s registration via `@app.on_event
+  ("startup")` raises nothing at boot. **Not yet visually confirmed in an
+  actual browser** — the same tooling limitation noted throughout this
+  project's UI work (no `chromium-cli`/`node`/Python `playwright`
+  available in this environment) — verified structurally and via the real
+  data reaching the frontend correctly instead.
+
+  Repositioned right after this, at the user's explicit follow-up
+  request: "Afficher les actus en dessous des boutons de l'application,
+  sur ce qui reste de fenêtre vide" — moved from above `#generate-form`
+  to right after its closing `</form>` (still a sibling of, never nested
+  inside, `#library`/`#attempt-preview`/`#result`, preserving the earlier
+  "never hidden by the central panel" fix). `main` became a flex column
+  with `min-height: 100vh`; `#rss-panel` alone gets `flex: 1` (plus the
+  classic `min-height: 0` flexbox fix, needed so its own list can still
+  scroll internally rather than growing unbounded and overflowing the
+  page) so it stretches to fill whatever vertical space the rest of the
+  page doesn't use, instead of a fixed `max-height: 10rem`. Verified: CSS
+  brace-balance and HTML section/form tag-balance checks passed; the real
+  served `index.html` was fetched directly and confirmed the panel now
+  sits right after `</form>` in document order.
+
+  Two further refinements landed right after, both at the user's explicit
+  request. First: "Le panneau en overlay qui affiche une entrée du flux
+  RSS doit garder sont bouton pour fermer visible en haut à droite. Il
+  doit pouvoir être fermé avec la touche ESC/ECHAP." `#rss-detail`'s own
+  close button used to `float: right` inside the same directly-scrolling
+  container as the article body — scrolling a long article would carry
+  the button away with it. Restructured: only a new inner `#rss-detail-
+  body` wrapper (title/meta/content) scrolls (`overflow-y: auto; flex:
+  1`), with the close button as a separate, non-scrolling flex sibling
+  (`align-self: flex-end`) — it now stays pinned in place regardless of
+  how far the article scrolls. A new `document.addEventListener
+  ("keydown", ...)` closes the overlay on `Escape`, gated on `!rssDetail.
+  hidden` first so it costs nothing and does nothing while the overlay
+  isn't open.
+
+  Second: "A droite du titre des entrées RSS, afficher un sélecteur
+  permettant de ne voir que les flux RSS dans une des langues de l'appli.
+  Par défaut, la langue de l'interface, mais en tête de liste du
+  sélecteur mettre un bouton 'Toutes les langues'." `fetch_rss_feeds.py`'s
+  `RSS_FEEDS` gained a `"language"` field per feed (one of this app's own
+  5 supported languages), propagated onto every item it produces — both
+  feeds verified so far happen to be English-language sources (no French/
+  German/Spanish/Italian crossword-specific feed has been found and
+  verified yet, disclosed honestly rather than implied as a deliberate
+  design), so with the filter defaulting to the UI's own current
+  language (`fr` by default), the panel legitimately shows "aucun article
+  disponible" out of the box until either the player switches the filter
+  to "English"/"Toutes les langues" or a feed in another language is
+  added later. A new `#rss-language-filter` `<select>` sits in a new
+  `#rss-panel-header` flex row next to the title, with a fixed list of
+  the app's 5 languages plus `"all"` (`rssLanguageFilterAll`, first in
+  the list) — deliberately a fixed list rather than one derived from
+  whatever languages happen to be present in the currently fetched items,
+  matching the user's own framing ("une des langues de l'appli"). Set
+  once, to `uiLanguage`, right after page load — never resynchronized on
+  a later UI-language change, so it doesn't silently overwrite a filter
+  choice the player may have since made on this specific control.
+  `renderRssList()` filters `rssItems` by `item.language === filterLang`
+  (a no-op filter for `"all"`) before rendering.
+
+  Verified: `fetch_rss_feeds.py` was re-run for real after adding the
+  `language` field — confirmed both real fetched items sampled correctly
+  carry `"language": "en"`; `GET /api/rss` (through the frontend proxy)
+  confirmed the field reaches the API end to end; the real served
+  `index.html` was fetched directly and confirmed to contain the new
+  `#rss-panel-header`/`#rss-language-filter` markup with all 6 options.
+  CSS brace-balance, HTML div/select tag-balance, and a real JS syntax
+  check (`esprima`, temporarily installed and removed again afterward)
+  all passed. **Not yet visually confirmed in an actual browser** — same
+  tooling limitation noted throughout this project's UI work.
+
+  A third refinement followed immediately, at the user's explicit
+  request: "Si la liste des flux RSS dans une langue est vide, afficher
+  la liste anglaise (ajouter un message en haut de la liste indiquant
+  qu'il n'y a pas d'actu disponible dans la langue choisie)" — directly
+  addressing the very consequence the language-filter entry above already
+  disclosed (both feeds are English-only today, so `fr`/`de`/`es`/`it`
+  would otherwise always show empty). `renderRssList()` now falls back to
+  the English subset whenever the chosen filter yields zero items — never
+  when the filter is already `"en"` or `"all"` (both would just be
+  falling back to themselves, or masking a genuine "nothing at all"
+  state) — prefixing the list with a small notice
+  (`rssLanguageFallbackNotice`, all 5 languages) explaining that no news
+  exists in the chosen language and English is shown instead; the plain
+  `rssEmpty` message is only ever shown once this fallback itself also
+  comes up empty. Verified: the exact filter/fallback logic was ported to
+  Python and run against the real fetched `RSS/combined.json` (32 English
+  items) — `fr`/`de` correctly show all 32 English items with the
+  fallback notice, `en`/`all` show them with no notice at all, matching
+  the intended behavior precisely. A real JS syntax check (`esprima`) and
+  a CSS brace-balance check both passed after the change.
+
+  A real bug was reported live right after: reloading the page showed
+  `#rss-detail` already open, with no way to close it. Root-caused
+  precisely: `#rss-detail`'s own CSS unconditionally set `display: flex`
+  on the bare ID selector (specificity 100) — beating the browser's
+  built-in `[hidden] { display: none }` rule (an attribute selector,
+  specificity 10) — so the HTML `hidden` attribute, and every later
+  `rssDetail.hidden = true/false` toggle from `script.js`, had no visual
+  effect whatsoever. Fixed with a `#rss-detail[hidden] { display: none;
+  }` rule (ID + attribute, specificity 110, correctly wins). Checked
+  every other `hidden`-by-default element on the page for the same
+  latent bug while at it — `#library`/`#attempt-preview`/`#result`/
+  `#word-verification-wrap`/`#grid-title`/`#version-badge`/`#library-
+  pagination` all never declare their own `display` at all, so none of
+  them were ever at risk — `#rss-detail` was the only offender,
+  introduced by this same feature. Verified: CSS brace-balance check
+  passed; the real served `style.css` was fetched directly and confirmed
+  to contain the new override rule.
+
+  Two further real crossword-specific feeds were searched for, in the
+  app's 4 other languages, at the user's explicit request: "Cherche des
+  flux RSS mots croisé dans toutes les langues, ajoute-les, et réinitialise
+  la sauvegarde quotidienne de ces flux." Following this whole feature's
+  own established discipline (every candidate verified live before being
+  trusted, never taken from a directory listing at face value), 7 direct
+  candidates were tested by real HTTP fetch across French/German/Spanish/
+  Italian: a French crossword-enthusiast blog (`motsfleches.over-blog.
+  com`, last post 2020), three German candidates (`blog.raetselstunde.de`,
+  last post 2012; `kreuzwoertraetsel.blogspot.com`, a single 2013 post;
+  `kreuzwortblog.wordpress.com`, last post 2018) — all confirmed dead by
+  their own feed's own dates — and one genuinely live, currently-updated
+  Italian candidate (`rebusdellasettimana.wordpress.com`, posts dated up
+  to the actual day it was checked) that turned out, on inspection of its
+  own real titles, to cover *rebus* puzzles exclusively ("Soluzioni
+  rebus..."), never crosswords — excluded on that basis alone, precisely
+  the same "wrong puzzle type mixed in" mistake the user had already
+  caught once for chess feeds mixed into a generic directory listing; no
+  viable Spanish candidate was even found worth testing. `RSS_FEEDS`
+  itself is unchanged — still only the two English-language sources
+  verified in the original entry above; this was a genuine, disclosed
+  null result, not silently skipped or padded with something off-topic
+  just to have an entry per language. `python3 fetch_rss_feeds.py` was
+  still re-run as requested ("réinitialise la sauvegarde quotidienne"),
+  confirming 32 fresh articles saved.
+
+  **A second, independent aggregation mechanism was added right after**,
+  at the user's explicit request, covering something RSS feeds don't:
+  "Voici un agrégateur de liens vers des grilles :
+  https://grillesdujour.fr/mots-croises/. Scrappe (une seule fois) la
+  totalité de la page pour inventorier les URL qu'il utilise. Scrappe
+  (une seule fois) les URL qui sont unique pour chaque jour et trouve
+  comment identifier les description des dernières grilles. Reproduit
+  l'agrégation que fait le site ci-dessus, pour récupérer les liens et
+  descriptions une fois par jour (comme les flux RSS), et stock ce qu'il
+  faut dans un dossier SCRAPP, comme pour le flux RSS. Ajoute les
+  entrées de SCRAPP aux journal de la première page, sachant que cette
+  fois, un clic renvoie directement sur la page de la grille (pas
+  d'article à afficher sur notre site)."
+
+  A single, one-off HTML fetch of the page (never repeated — the real,
+  daily mechanism this feature ships never touches the plain HTML page
+  at all) inventoried every href on it, then a direct inspection of the
+  raw markup around one entry (`<div class="wp-block-uagb-container
+  clickable-container" ... data-gdj-url="...">`, a `<h2 class="wp-block-
+  post-title">Source – DD/MM/YYYY – #ID</h2>`) revealed the site is a
+  plain WordPress install with a custom REST-exposed post type. Checking
+  `GET /wp-json/wp/v2/types` (a second one-off fetch) confirmed a
+  `puzzle` type (`rest_base: "puzzle"`), and a sample fetch of that
+  endpoint showed every post already carries exactly the fields needed
+  as real structured data — `meta.puzzle_url` (the direct external grid
+  link), `meta.puzzle_date` (a clean ISO date), `title.rendered` (the
+  human-readable description) — rather than anything that needs to be
+  picked out of rendered HTML at all. A third one-off fetch (`GET
+  /wp-json/wp/v2/taxonomies` then `/wp-json/wp/v2/puzzle_type`) found the
+  exact taxonomy term id distinguishing crosswords from the site's other
+  puzzle types it also aggregates (mots fléchés, sudoku, wordle, etc.):
+  `PUZZLE_TYPE_TERM_ID = 15` ("Mots croisés", 2785 posts at the time),
+  confirmed by fetching 30 posts filtered on it and checking every
+  single title read as a genuine crossword entry. This satisfies the
+  user's own two "scrappe une seule fois" instructions directly — the
+  REST API *is* the real aggregation mechanism the page's own rendering
+  is built from, discovered by the one-off inventory rather than assumed,
+  and reproducing it via this clean, structured API is strictly more
+  robust than parsing the rendered HTML page ever could be (immune to a
+  CSS class or markup structure changing under this project later).
+
+  `fetch_grid_links.py` (new file, project root, mirroring `fetch_rss_
+  feeds.py`'s own shape and conventions closely) queries this API once
+  (`puzzle_type=15, per_page=50, orderby=date, order=desc`) — 50, not a
+  bare ~24-25 (one day's own typical batch size, counted directly from
+  the live inventory), deliberately over-fetching a bit so a run landing
+  right at a day boundary still ends up with a genuinely multi-source
+  list rather than a half-populated one; harmless since `SCRAPP/
+  combined.json` is fully overwritten every run regardless, exactly like
+  `RSS/combined.json`. Saves the raw JSON response to `SCRAPP/
+  grillesdujour.json` (mirroring `RSS/<key>.xml`) and writes `SCRAPP/
+  combined.json` in the *exact* `{"fetched_at", "items"}` shape `RSS/
+  combined.json` already uses, plus one new discriminator field, `"kind":
+  "grid"` (`fetch_rss_feeds.py`'s own items gained the matching `"kind":
+  "rss"`, at no behavior cost — a value the web UI needs to tell the two
+  origins apart once merged, see below). `content_html` is always `None`
+  for a grid entry — there is no article to show for it at all, matching
+  the user's own "pas d'article à afficher sur notre site." A post
+  missing `meta.puzzle_url` entirely (a handful of older ones, confirmed
+  live) is skipped outright rather than kept with a dead/empty link.
+  `SCRAPP/` is gitignored, a generated artifact like `RSS/`, never source
+  content.
+
+  `backend/app.py` gained a matching `GET /api/scrapp` (an exact mirror
+  of `GET /api/rss` — reads `SCRAPP/combined.json` back verbatim, empty
+  list if the file doesn't exist yet, never re-queries grillesdujour.fr
+  per request) and `_rss_daily_scheduler`'s single daily tick now also
+  calls `fetch_grid_links.fetch_all()` right after `fetch_rss_feeds.
+  fetch_all()` — its own `try/except`, independent of the RSS call's own,
+  so a failure in either can never prevent the other from running that
+  same day, the same principle each individual RSS feed already applies
+  to itself. `frontend/server.py` gained the matching `proxy_scrapp`
+  route, per this project's own established rule that every new backend
+  endpoint needs one.
+
+  On the web UI, `frontend/static/script.js`'s single `fetch("/api/rss")`
+  call became a `Promise.allSettled` fetching both `/api/rss` and
+  `/api/scrapp` at once — either failing independently of the other (so
+  a `SCRAPP/combined.json` that doesn't exist yet on a fresh install
+  still lets real RSS articles show) — merged into one `rssItems` array
+  and re-sorted by `pub_date` descending once, since simply concatenating
+  two already-sorted lists doesn't itself guarantee the combined result
+  stays sorted. `renderRssList()`'s per-item click handler now branches
+  on `item.kind`: a `"grid"` entry opens `item.link` directly in a new
+  tab (`window.open(..., "_blank", "noopener,noreferrer")`) with no
+  overlay involved at all, matching "un clic renvoie directement sur la
+  page de la grille (pas d'article à afficher sur notre site)" precisely
+  — an `"rss"` entry (or a missing `kind`, defensively treated the same
+  way for a cache written before this field existed) keeps opening the
+  existing in-page `#rss-detail` overlay exactly as before. No other part
+  of the panel (the language filter, the English-fallback notice, the
+  "Actu Croisée" title) needed any change — a grid entry's own `language`
+  is always `"fr"` (every aggregated source publishes in French), so it
+  participates in the existing filter mechanism for free.
+
+  Verified live, end to end, with real network calls throughout, never
+  simulated: the real `python3 fetch_grid_links.py` run (this project's
+  own established "run it for real once" convention, matching how `fetch_
+  rss_feeds.py` was first verified) saved 50 real grid entries spanning
+  2026-09-03 through 2026-09-05, every one with a real, non-empty
+  external `link`; `GET /api/scrapp` (through the real running backend,
+  port 3001, and through the frontend's own proxy, port 3000) returned
+  the identical 50 items either way; the real served `script.js` was
+  fetched directly from the running frontend server and confirmed to
+  contain the new `/api/scrapp` fetch call. A real JS syntax check
+  (`esprima`, temporarily installed and removed again afterward, this
+  project's own established one-off-tool pattern) and a Python `py_
+  compile` check both confirmed every touched file still parses
+  correctly. **Not yet visually confirmed in an actual browser** — the
+  same tooling limitation noted throughout this project's UI work (no
+  `chromium-cli`/`node`/Python `playwright` available in this
+  environment) — verified structurally and via the real data reaching
+  the frontend correctly instead.
+
+  Equivalent aggregator sites were searched for in German, Italian, and
+  Spanish right after, at the user's explicit request ("Trouve des sites
+  similaires à scrapper une fois par jour pour DE, IT, ES") — delegated
+  to a dedicated research agent given the volume of candidates to check,
+  following this exact feature's own established verification discipline
+  (every candidate fetched live, never trusted from a search snippet
+  alone; a WordPress REST API checked for specifically, the same way
+  grillesdujour.fr's own was discovered). Across ~15 distinct search
+  queries and 6+ live page fetches, **no viable equivalent was found in
+  any of the three languages** — every German candidate turned out to be
+  a single newspaper's own standalone Kreuzworträtsel page (never an
+  aggregator of *several* distinct sources), a self-produced/PDF puzzle
+  directory with no external press links, or an unrelated logic-puzzle
+  community site; every Italian candidate was a single provider (isbooth.
+  com, La Settimana Enigmistica, cruciverba-lab.it) that produces and
+  sells its own puzzles rather than aggregating other outlets'; every
+  Spanish candidate was likewise either one newspaper's own crucigrama
+  page or, for isbooth.com's Spanish variant, the same single white-label
+  provider already rejected for Italian. This mirrors a conclusion this
+  project already reached once before for RSS feeds in these same three
+  languages (see above) — reported honestly as a genuine null result
+  rather than padded with a weak candidate that doesn't actually match
+  grillesdujour.fr's own defining trait (many distinct press sources,
+  aggregated daily, each with its own direct external link).
+
+  **`fetch_grid_links.py`'s own dependency on grillesdujour.fr's REST API
+  was removed entirely right after**, at the user's explicit correction:
+  "Le journal ne doit pas scrapper grillesdujour.fr à chaque fois, mais
+  reproduire son fonctionnement maintenant qu'on connaît les URL des
+  pages donnant des mots croisés. L'URL grillesdujour.fr n'a donc pas de
+  raison d'être affiché dans la liste, on ne passe pas par lui au
+  quotidien." The API-based version above worked, but kept this project
+  dependent on a third-party site staying up and keeping the same shape
+  forever, purely to relay links this project could hold onto directly
+  once discovered.
+
+  Verified live, source by source, rather than copied blindly from
+  grillesdujour.fr's own dated archive links: its own aggregation mostly
+  points at a *specific day's* archived URL (a slug embedding the date
+  plus an unpredictable numeric grid id, e.g. 20 Minutes' own `puzzleid=
+  KFR-11677284`, Franceinfo's `grille-1272_8177972.html`) — but for every
+  one of the ~21 sources it lists, a direct live fetch of the
+  *publisher's own* site (not grillesdujour.fr) confirmed each one *also*
+  exposes its own stable, undated URL that always shows whatever its
+  current crossword is (real crossword content confirmed in the fetched
+  page itself — game iframes, "mots croisés"/"crossword" text repeated
+  throughout, in several cases literally a live `puzzleid` embedded in
+  the page's own script/markup — never just a bare 200 status code
+  trusted on its own). This was checked by grouping the already-fetched
+  API data by source across the 3 days it spanned and confirming which
+  sources' own links stayed byte-identical across days (already stable)
+  versus which changed daily (20 Minutes, Franceinfo, La Croix, Le
+  Télégramme, Notre Temps) — for those 5, the publisher's own generic
+  base URL (stripped of the dated/id-bearing slug) was fetched directly
+  and confirmed to work exactly the same way. One source (Notre Temps)
+  returned a false-negative 403 with a bare `User-Agent` alone and a real
+  200 once a fuller, realistic header set (`Accept`/`Accept-Language`)
+  was added — confirmed by a direct before/after comparison, not assumed;
+  `_REQUEST_HEADERS` reflects this. A further candidate (Megastar)
+  returned 403 even with that fuller set and was dropped outright rather
+  than included on an unverified guess.
+
+  `fetch_grid_links.py` was rewritten around a hardcoded `SOURCES` dict
+  (mirroring `fetch_rss_feeds.py`'s own `RSS_FEEDS` shape exactly — one
+  entry per source, `{name, url}`) instead of any API call at all —
+  `fetch_all()` now just does a lightweight per-source `GET` (best-effort,
+  one failed source logged and skipped, never aborting the rest, the same
+  principle every other per-item loop in this project's data-fetching
+  scripts already follows) to confirm each link still resolves, then
+  writes one `SCRAPP/combined.json` entry per healthy source, dated to
+  *today* (the run's own date — these links are permanently current by
+  construction, there's no separate "grid date" to extract from anywhere
+  else the way the API-based version had). `SCRAPP/grillesdujour.json`
+  (the old raw-API-response cache) and the whole `PUZZLE_TYPE_TERM_ID`/
+  `API_BASE` machinery are gone outright, per this project's own
+  no-dead-code convention — nothing in this script touches grillesdujour.fr
+  any more, and no such URL can appear anywhere in `SCRAPP/combined.json`
+  or the web UI's own merged journal.
+
+  Verified live end to end: a real `python3 fetch_grid_links.py` run
+  saved 20 of the 21 sources (CNews returned a transient 403 on this
+  specific run — already confirmed live and working moments earlier
+  during the source-by-source verification pass, consistent with
+  ordinary bot-detection flakiness rather than a genuinely dead link, and
+  handled exactly like any other single-source failure: logged, skipped,
+  never blocking the other 20); `GET /api/scrapp` (through the real
+  running backend and the frontend's own proxy) returned the identical
+  20 items, and a direct check confirmed **zero** occurrences of
+  "grillesdujour" anywhere in the response. A Python syntax check (`py_
+  compile`) confirmed the rewritten file still parses correctly.
+
+  Equivalent DE/IT/ES sources were searched for once more right after, in
+  a genuinely different shape than the earlier aggregator search: "Cherche
+  des sites donnant des grilles quotidiennes en DE/IT/ES pour les
+  scrapper une fois par jour et donner un lien précis dans l'actu" — not
+  a single aggregator this time (already established to not exist in
+  these languages, see above), but a small hand-picked list of individual
+  publishers each with their own stable "today" crossword page, mirroring
+  exactly the FR redesign above. Delegated to a dedicated research agent
+  given the volume of candidates, with the same verification discipline
+  (every candidate fetched live, a stable/undated URL required, a fuller
+  header set tried before concluding a 403 is genuine bot-blocking rather
+  than a dead page) — the DE/IT/ES agent itself hit this session's own
+  API rate limit before finishing; deferred to be retried once it resets.
+
+  **Every one of the 21 FR sources was then individually re-verified with
+  a real fetch**, at the user's own explicit follow-up request: "Dans
+  SCRAPP, il faut scrapper les pages pour récupérer les informations
+  utiles (notamment le numéro de grille). Fais le pour chaque lien
+  ajouté à la liste des URL à scrapper pour vérifier qu'on peut bien
+  récupérer l'info en automatique, et éliminer les pages qui ne sont pas
+  des proposition de grilles. Par exemple, le lien générique
+  https://jeux.franceinfo.fr/mots-croises/classique/ ne marche pas et
+  redirige vers une autre page (mais la version Mini fonctionne)." Every
+  page was fetched fresh and saved locally for careful inspection rather
+  than re-fetched repeatedly, and a small custom `HTMLParser` subclass
+  was used to strip `<script>`/`<style>` content before searching for a
+  grid number — a first, cruder pass (a plain regex over the raw HTML)
+  produced obvious false positives (CSS hex color codes like `#039`
+  matching a "grid number" pattern), caught and corrected before drawing
+  any real conclusion from it.
+
+  This confirmed the user's own reported example exactly:
+  `franceinfo_classique` (the bare, no-slug "classique" URL) really does
+  redirect to `https://www.franceinfo.fr/culture/musique/classique/` (a
+  totally unrelated "classical music" section of the same broadcaster's
+  site) — while the Mini variant works correctly and even exposes a real,
+  extractable number ("Mots croisés #1272" in its own visible text). Two
+  further sources were dropped for their own, independently confirmed
+  reasons: `cnews` returns Cloudflare's own bot-challenge interstitial
+  page ("Just a moment...", read directly in the raw response, not
+  inferred from a bare 403 alone) rather than any real content;
+  `lebelage` is a client-side-rendered app whose actual crossword content
+  never appears in the raw HTTP response at all (measured directly: 7
+  characters of visible text extracted, against thousands for every
+  other source) — this project's fetch mechanism has always been a plain
+  `httpx` GET, never a JS-executing browser, so a source that needs one
+  genuinely can't be automated here regardless of whether the page
+  itself is legitimate.
+
+  Of the 18 sources that survived, 4 were confirmed to expose a real,
+  human-readable grid number automatically: `franceinfo_mini` and
+  `notretemps`/`telesept` via their own visible page text ("Mots croisés
+  #1272", "Grille n°1512", "Grille n°2565" respectively — read from the
+  *actual* rendered text, confirmed by print inspection, not assumed from
+  a regex match alone), and `rustica` via its own embedded game iframe's
+  `src` attribute (`https://www.rcijeux.fr/game/rustica/mcroises?id=
+  260905`) — this last one turned out to be a date encoded as `AAMMJJ`
+  (260905 = 2026-09-05), not a sequential grid number like the other
+  three, confirmed by checking it against the actual fetch date; its own
+  `extract` rule reformats it into a readable date (`"Grille du
+  05/09/2026"`) rather than showing the raw digits, which would have
+  misleadingly looked like a genuine sequential grid number. The
+  remaining 14 sources were kept with no number extraction at all (their
+  own real crossword content was independently confirmed live — genuine
+  "mots croisés"/"crossword" text, or a real embedded game iframe
+  pointing at an actual game platform) — dropping a source purely for not
+  exposing a human-readable number, when it's otherwise a perfectly
+  functional link, would have defeated the point of listing as many real
+  publishers as this project already went to the trouble of verifying.
+
+  `fetch_grid_links.py` gained two small extraction helpers,
+  `_extract_from_visible_text`/`_extract_from_iframe_src` (both sharing
+  one contract: return the full tuple of regex capture groups, or `None`
+  — needed since Rustica's own pattern captures 3 groups, day/month/year,
+  while the other three capture only 1), and each of the 4 sources with a
+  confirmed number gained an `"extract": (extractor_fn, pattern,
+  title_template)` entry in `SOURCES` — `fetch_all()` applies it right
+  after the existing per-source health check, falling back to the plain
+  source name (never a crash, never dropping the source) if extraction
+  fails on a given day, logged as a warning since a previously-working
+  pattern suddenly failing is worth knowing about (the site's own format
+  may have changed) without being treated as fatal.
+
+  Verified live end to end: a real `python3 fetch_grid_links.py` run
+  (after removing the 3 dropped sources) saved 18 of 18 sources
+  successfully, all 4 extraction rules firing correctly on the first
+  real run (`"Franceinfo – Mini #1272"`, `"Notre Temps – Grille n°1512"`,
+  `"Rustica – Grille du 05/09/2026"`, `"Télé 7 Jours – Grille n°2565"` —
+  every number matching what had already been confirmed by hand during
+  the investigation itself); `GET /api/scrapp` (through the real running
+  backend and the frontend's own proxy) returned the identical 18 items.
+  A Python syntax check (`py_compile`) confirmed the file parses
+  correctly.
+
+  **4 English-language sources were added right after**, at the user's
+  explicit request: "Ajoute EN aussi (complémentaire des flux RSS)" — the
+  existing RSS feeds (`fetch_rss_feeds.py`'s `RSS_FEEDS`) are both blogs
+  *about* crosswords (Rex Parker, Diary of a Crossword Fiend), never a
+  direct link to a playable grid, so this fills a genuine gap the RSS
+  mechanism never covered for English. Found via `WebSearch` and verified
+  live exactly like every FR source above (`WebFetch` first, falling
+  back to a direct `curl` with the same realistic header set when
+  `WebFetch` itself couldn't reach a domain at all). Two strong
+  candidates were tested and rejected for their own concrete, confirmed
+  reasons: the Washington Post's own crossword page could not be reached
+  from this machine at all (`WebFetch` returned a 403, a direct `curl`
+  returned a hard connection failure — HTTP 000 — a genuine network-
+  level block, not merely assumed); USA Today's own games platform
+  (`games.usatoday.com`) **really does redirect** to `https://eu.
+  usatoday.com/unsupported-eu/` — a geographic block against European
+  visitors, confirmed live via `curl -L`'s own `%{url_effective}` output
+  — the exact same "redirects to an unrelated page" failure class already
+  caught once for Franceinfo Classique, just for a different underlying
+  reason (geo-blocking rather than a dead/renamed URL).
+
+  4 sources survived verification: Fox News (a real, current "Daily
+  Crossword Puzzle" landing page, no redirect); The Guardian's own
+  Cryptic crossword archive (`/crosswords/series/cryptic` — a listing of
+  several recent puzzles, the same "archive page, extract the newest
+  entry" shape already used for Notre Temps/Télé 7 Jours in French,
+  rather than a single "today only" page); BestCrosswords and
+  OnlineCrosswords.net (two smaller, dedicated crossword sites, both
+  confirmed live with substantial real crossword content). The Guardian
+  gained its own `extract` rule too, the same mechanism already built for
+  the 4 French sources — `Cryptic crossword No 30,103` read directly from
+  the page's own visible text (confirmed by print inspection, not
+  assumed), the first (most recent) match taken exactly like Notre
+  Temps'/Télé 7 Jours' own extraction.
+
+  This was the first time `SOURCES` needed to represent more than one
+  language at once, so `fetch_grid_links.py` gained a real (if minimal)
+  design change: every entry can now carry its own `"language"` key,
+  defaulted to `"fr"` via `source.get("language", "fr")` in `fetch_all()`
+  rather than the previous hardcoded literal — every one of the 18
+  existing French entries was left completely untouched (no `"language"`
+  key added to any of them, relying entirely on the new default), only
+  the 4 new English entries needed the explicit `"language": "en"` key.
+
+  Verified live: a real `python3 fetch_grid_links.py` run (22 sources
+  total now) succeeded for all 22, the 4 English entries correctly
+  tagged `"language": "en"` in the output, and the Guardian's own
+  extraction firing correctly on the very first run (`"The Guardian –
+  Cryptic No 30,103"`). A Python syntax check (`py_compile`) confirmed
+  the file still parses correctly after the change.
+
+  **German, Italian, and Spanish sources were added right after**, at the
+  user's explicit request: "Cherche des sites donnant des grilles
+  quotidiennes en DE/IT/ES pour les scrapper une fois par jour et donner
+  un lien précis dans l'actu." Delegated to a dedicated research agent
+  (`WebSearch`/`WebFetch`), then — per this project's own established
+  rule of never trusting even its own subagent's report without a final
+  live check — every single reported candidate was independently
+  re-verified with a direct `curl` (the same realistic header set/
+  redirect-tracking method already used throughout this whole feature)
+  before being added to `SOURCES`.
+
+  This second pass caught one genuine false negative in the agent's own
+  report: it had rejected `eldiario.es` believing it silently redirects
+  to a generic games hub — a direct `curl -L` fetch found **no redirect
+  at all** (same URL, HTTP 200), and reading the actual page content
+  confirmed a real, dedicated crossword page (`<title>Crucigramas en
+  Juegos elDiario.es</title>`, several genuine "Crucigrama" mentions) —
+  kept on the strength of this independent, contradicting verification
+  rather than the agent's own initial call. One real, confirmed quirk
+  was also caught this same way: `t-online.de`'s own candidate URL *does*
+  redirect, but only to an almost-identical canonical URL (same numeric
+  id, `id_87469764`, just two words of the slug reordered) — not the
+  "redirects to something unrelated" failure class this project has
+  already rejected sources for twice; the final, redirected-to URL was
+  used directly rather than the original.
+
+  6 German sources survived verification (T-Online, NZZ, Die Rheinpfalz,
+  Ruhr Nachrichten, Weser-Kurier, and Focus via its own Arkadium-hosted
+  game sub-domain) — each confirmed live to show genuine, substantial
+  "Kreuzworträtsel" content (116 and 99 real mentions counted directly
+  on two of them, not merely assumed from the agent's own quoted
+  snippets). Italian came back the weakest of the three, disclosed
+  honestly rather than padded: only 2 sources passed at all (Cruciverba
+  Lab; Il Tuo Cruciverba, which — noted directly in its own `SOURCES`
+  comment — actually publishes *weekly*, not daily, unlike every other
+  source in this list, kept anyway since the page itself is still a
+  real, stable crossword page, just with a different update cadence)
+  — every major Italian outlet checked (Corriere della Sera, La
+  Settimana Enigmistica) turned out to be paywalled, and others
+  (La Repubblica, Il Fatto Quotidiano) had no findable stable crossword
+  page at all. 3 Spanish sources survived (El Debate, La Nación, and
+  `eldiario.es` per the false-negative correction above) — several
+  strong candidates (El País, El Mundo, 20minutos.es, ABC.es) couldn't
+  be reached or verified at all in this session, left out rather than
+  guessed at.
+
+  `SOURCES` needed no further structural change beyond the existing
+  per-entry `"language"` key (already introduced for the English
+  sources) — each new entry simply carries its own `"de"`/`"it"`/`"es"`
+  value. Verified live: a real `python3 fetch_grid_links.py` run (33
+  sources total now: 18 fr + 4 en + 6 de + 2 it + 3 es) succeeded for
+  every single one, confirmed by grouping the real output by `language`
+  and checking the count matched exactly; `GET /api/scrapp` (through the
+  real running backend and the frontend's own proxy) returned the
+  identical 33 items.
+
+  `Install.sh` gained a matching first-run initialization step right
+  after, at the user's explicit request: "Lors de l'installation sur une
+  nouvelle machine, il faudra automatiquement initialiser une première
+  fois les RSS et SCRAPP si ils n'existent pas encore." Without this, a
+  freshly cloned machine would show an empty "Actu Croisée" panel
+  (`GET /api/rss`/`/api/scrapp` both already degrade gracefully to an
+  empty list when their own `combined.json` doesn't exist yet, but that
+  means an empty panel) until the daily 8am scheduler's own first run —
+  up to a full day's wait depending on install time. Each of `RSS/
+  combined.json`/`SCRAPP/combined.json` is checked and initialized
+  independently (`[ ! -f ... ]`, never re-run if the file already exists
+  — including on a repeat `Install.sh` run, so this never re-downloads
+  anything on a machine that's already initialized), and a failure in
+  either is a warning, never a fatal error — a one-off network hiccup
+  during install shouldn't block the rest of the installation, and the
+  daily scheduler will simply retry the next day regardless. Verified
+  live: both real files were moved aside on this machine to genuinely
+  simulate a fresh install, the new block correctly regenerated both
+  (32/33 SCRAPP sources succeeded, one transient single-source timeout
+  handled exactly as designed — logged, skipped, didn't block the other
+  32 or `RSS/combined.json`'s own generation), and a second run with the
+  files already present confirmed the skip path engages correctly
+  instead of needlessly re-fetching.
+
+  **A systematic sweep for a real, extractable date (not only a grid
+  number) was run once more right after, across every source that still
+  had no `extract` rule**, at the user's explicit request: "Chaque fois
+  que c'est possible, il faut que le SCRAPP récupère l'information de la
+  date et du numéro de grille. Par exemple, c'est indiqué '<h3
+  class="date">Saturday, September 5th</h3>' sur https://www.foxnews.com/
+  games/daily-crossword-puzzle, mais pas mentionné dans le fil Actu."
+  Every remaining page was fetched fresh and its own visible text (never
+  the raw HTML — the same script/style-stripping `_extract_from_visible_
+  text` already established) searched for real day-name + month-name
+  date patterns, one set of month names per language.
+
+  Two more genuine, safely-extractable dates were found and wired up:
+  `foxnews` — the user's own exact example, "Saturday, September 5th",
+  confirmed to already be genuinely visible text (an `<h3>`, not hidden
+  behind JS) rather than needing any special HTML-attribute-scoped
+  extraction at all; `letelegramme` — "L'édition numérique du 5 septembre
+  2026" (the newspaper's own daily digital-edition date, not a dedicated
+  crossword date — none exists on this page — but still a genuine,
+  reliable "today" signal, extracted across two separate text nodes the
+  page happens to split it into). Three further date-shaped matches were
+  found and **rejected** as false positives, confirmed by reading their
+  own surrounding context rather than trusted at face value: `ledevoir`
+  ("28 août 2026") and `tf1info` ("2/3 septembre 2026") both belonged to
+  an unrelated news article elsewhere on the same page (a general games/
+  news hub, not the crossword itself) — and neither date even matched
+  the actual fetch date (5 septembre), a second, independent tell they
+  were unrelated; `weserkurier` ("21. Dezember 1913") turned out to be
+  the crossword's own invention-history trivia blurb, not a current date
+  at all. No further genuinely new extractable signal was found among
+  the other 20+ sources checked this same way.
+
+  Verified live: a real `python3 fetch_grid_links.py` run confirmed both
+  new rules firing correctly on the very first try (`"Fox News –
+  Saturday, September 5th"`, `"Le Télégramme – Édition du 5 septembre
+  2026"` — both dates matching the actual day the run happened), and
+  `GET /api/scrapp` (through the real running backend and the frontend's
+  own proxy) returned the identical, updated titles.
+
+  **Two URLs corrected right after, both directly by the user**: "Sur ce
+  site, la page de mots croisés du jour est en fait ici :
+  https://www.bestcrosswords.com/daily-crossword-puzzles" and, right
+  after, "Sur ce site, c'est cette page : https://www.onlinecrosswords.
+  net/online-daily-crosswords-1.php" — both had originally been added
+  pointing at their site's own bare homepage (still a real, live page,
+  just not the one specifically dedicated to the daily puzzle). Both
+  corrected URLs were verified live the same way as every other source
+  in this file (a real fetch, no redirect, substantial genuine crossword
+  content) before being adopted — and both turned out to also expose a
+  real, extractable date once actually inspected (never assumed just
+  because a fix was already in hand): BestCrosswords shows "Puzzles for
+  Saturday, September 5, 2026" in its own visible text; OnlineCrosswords.
+  net shows "This is the online crossword puzzle #1 for Sep 5, 2026" —
+  genuinely exposing *both* a puzzle number and a date together, split
+  across 4 separate text nodes on the page (captured as 4 distinct regex
+  groups — number, month, day, year — rather than one combined date
+  group, specifically to avoid reproducing a stray double-space the raw
+  source text happens to contain between "Sep" and "5").
+
+  Verified live: a real `python3 fetch_grid_links.py` run confirmed both
+  new rules firing correctly (`"BestCrosswords – Saturday, September 5,
+  2026"`, `"OnlineCrosswords.net – #1 (Sep 5, 2026)"`), and `GET /api/
+  scrapp` (through the real running backend and the frontend's own
+  proxy) returned the identical, corrected titles/links.
+
+  **A third URL corrected the same way, again directly by the user**:
+  "Sur ce site, c'est cette page : https://cruciverba-lab.it/cruciverba"
+  — same pattern as the two entries above (the bare homepage had been
+  used instead of the page dedicated to the puzzle itself). Verified
+  live the same way (real fetch, no redirect, substantial genuine
+  "cruciverba" content) and found to expose its own real, extractable
+  date once inspected: "Cruciverba Lab | 5 settembre 2026" in its own
+  visible text.
+
+  Verified live: a real `python3 fetch_grid_links.py` run confirmed the
+  new rule firing correctly (`"Cruciverba Lab – 5 settembre 2026"`), and
+  `GET /api/scrapp` (through the real running backend and the frontend's
+  own proxy) returned the identical, corrected title/link.
+
+  Every David FALCON conversation is also logged, one file per session, at
+  the user's explicit request: "Pour chaque discussion dans le ChatBot,
+  crée un LOG des questions/réponses dans un dossier LOG_CHAT. Chaque log
+  est préfixé par un timestamp permettant de voir les fichiers dans l'ordre
+  temporel. Un fichier par session utilisateur." `frontend/static/
+  script.js` generates a `chatSessionId` once per page load
+  (`crypto.randomUUID()`, with a plain timestamp+random-number fallback for
+  a browser/context where the Web Crypto API isn't exposed) and sends it as
+  a new `session_id` field on every `POST /api/chat` call — `ChatRequest`
+  gained the matching optional field. `backend/app.py`'s new `CHAT_LOG_DIR`
+  (`LOG_CHAT/`, project root, gitignored — a generated log, not source
+  content, the same convention as `LOG_LLM/`) and `_chat_log_path_for_
+  session(session_id)` map each session id to a file named `<timestamp>_
+  <sanitized-session-id>.md`, the timestamp taken once, at the very first
+  message of that session, so files sort chronologically by when each
+  conversation actually started — every later turn of the same session
+  just appends to that same file rather than computing a new timestamp
+  each time. A missing/empty `session_id` (a client predating this
+  feature, or any other edge case) still gets logged, under a fresh
+  `uuid.uuid4()`-based fallback name, rather than silently dropped.
+  `_append_chat_log` writes each full question/answer turn (best-effort,
+  like every other file write in this project — a failure is logged, never
+  allowed to break the chat itself) once the reply has fully streamed
+  (`event_stream()`'s own `full_reply` accumulator, built chunk by chunk as
+  `ChatBot.reply_stream()` yields them) — a `ChatError` mid-stream still
+  logs whatever partial reply had already streamed, tagged as a failure,
+  rather than dropping the exchange from the log entirely.
+
+  Verified live: two real chat turns sent through the actual running
+  backend with the same `session_id` confirmed both turns landed in a
+  single file (`LOG_CHAT/20260905-124543_test-session-abc123.md`), correctly
+  timestamped from the first turn only, each turn's own question/answer
+  pair appended below the previous one in order — exactly the "un fichier
+  par session" / "ordre temporel" behavior requested.
+
+  Each logged turn now also carries its own timing, at the user's later
+  explicit request: "Dans les LOG_CHAT, en dessous de chaque réponse,
+  noter le temps de récupération du premier mot, et le temps total de
+  génération de la réponse." `chat()`'s `event_stream()` measures
+  `start = time.monotonic()` right before the `async for chunk in
+  chatbot.reply_stream(...)` loop (never `time.time()` — the same
+  wall-clock-jump reasoning already established for `crossword_gen.py`'s
+  own generation/optimization/clue durations), setting `first_token_s`
+  once, on the very first chunk actually yielded, and computing `total_s`
+  once the stream (or the `ChatError` branch) concludes. Both are passed
+  to `_append_chat_log`'s two new optional parameters (`first_token_s=
+  None, total_s=None` — a complete no-op for a hypothetical caller that
+  doesn't measure timing), written as one small italic line right under
+  the reply, before the closing `---` separator (e.g. "*premier mot reçu
+  après 0.42s — temps total : 1.37s*"). `first_token_s` can legitimately
+  be `None` even when `total_s` isn't — a call that fails before ever
+  streaming a single chunk (the `ChatError` branch, no reply text at all)
+  still has a real total elapsed time worth logging, just no "first word"
+  to report; in that case only the total-time bit is written, never a
+  fabricated `0s`.
+
+  Verified: an isolated call to `_append_chat_log` with a temporary
+  `CHAT_LOG_DIR` confirmed all three shapes render correctly — both
+  timings present (the ordinary success case), only `total_s` present (a
+  failure with no reply ever streamed), and neither present at all (a
+  hypothetical caller that never measures timing, confirming the whole
+  line is omitted rather than showing empty/placeholder values). A first
+  real end-to-end attempt (`POST /api/chat` via the frontend proxy) was
+  interrupted mid-verification by an unrelated SGLang OOM crash (see the
+  model-swap entry above) rather than a bug in this feature itself —
+  re-verified once the LLM server (by then already swapped to Qwen3-4B,
+  see above) was stable again: the real logged file correctly showed
+  `*premier mot reçu après 9.97s — temps total : 10.38s*` right under a
+  genuine reply, matching this call's own two measured durations exactly.
 - `backend/grid_store.py` — persists every finished grid as a durable,
   self-contained JSON record under `GRID_STORE/<language>/` (project
   root, gitignored — a generated artifact, not source content, the same
@@ -3174,6 +4785,30 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   passwd"`) and a well-shaped but nonexistent id. Then re-verified
   end-to-end through the real running API — see `backend/app.py`'s own
   entry for those results.
+
+  `_slugify_title()` was changed from collapsing non-alphanumeric runs
+  (including plain spaces between words) to a single hyphen to a single
+  underscore instead, at the user's explicit request: "Les titres des
+  grilles étant ajoutées aux noms de fichiers, remplace les caractères
+  spéciaux du titre, y compris les espaces, par des '_' pour la
+  sauvegarde." A one-character change (`_SLUG_RE.sub("-", ...)` →
+  `_SLUG_RE.sub("_", ...)`, `.strip("-")` → `.strip("_")` in both
+  places) — the collapsing/stripping/truncation behavior itself is
+  unchanged, only which character it collapses to. `_GRID_ID_RE`'s own
+  slug-segment charset was widened from `[a-z0-9-]+` to `[a-z0-9_-]+`
+  (accepting *both* characters) rather than narrowed to underscore-only:
+  a handful of real grids already saved on disk before this change still
+  use the old hyphen-based slug, and narrowing the pattern would have
+  made `GET /api/library/{grid_id}` 404 on every one of them — `list_
+  grids()` itself never validates a filename against this regex at all
+  (only `get_grid()` does), so they'd still be *listed*, just impossible
+  to actually load and play. Verified: `_slugify_title()` on several real
+  titles (accented, punctuated, empty) now produces underscore-separated
+  slugs (`"Le Mystère de la Grille"` → `"le_mystere_de_la_grille"`); a
+  freshly-built id using the new slug format still matches `_GRID_ID_RE`;
+  all 3 real, pre-existing grids on disk at the time of this change
+  (their own ids still hyphen-based) were confirmed to still match `_GRID_
+  ID_RE` and still load correctly via `get_grid()`.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -3474,6 +5109,339 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   printed, the actual server process launched with `--n_gpu_layers 0` (checked via
   `ps`), and it served a real request correctly — then restarted normally (unset)
   and confirmed the process went back to `--n_gpu_layers -1`.
+- `run_sglang.sh` — alternative local LLM launcher, at the user's explicit
+  request: "Installer SGLang (avec un venv spécifique) et le configurer
+  comme le moteur par défaut avec ce modèle unsloth/Qwen3.8-27B-GGUF par
+  défaut." Started by first answering a direct question — "Est-ce que
+  SGLang sait faire tourner le modèle unsloth/Qwen3.8-27B-GGUF ?" — via a
+  real web search rather than guessed: SGLang can load GGUF, but only on
+  its CUDA path, and Unsloth's own model card for this exact model warned
+  it also needs SGLang built from `main` (not a stable release) because
+  the model quantizes its `lm_head` to FP8.
+
+  **A hardware reality check came first**: this project's own dev machine
+  is a MacBook M1 Max (`uname -a`/`system_profiler` confirmed Apple
+  Silicon, no NVIDIA GPU, no `nvidia-smi`) — SGLang's CUDA path (the one
+  with GGUF support) is unusable here regardless of configuration. A
+  second, live web-fetch of SGLang's own official Apple Silicon docs
+  (`docs/hardware-platforms/apple_metal.mdx`, fetched from inside the
+  actual cloned repo, not just a search-engine summary) confirmed a real,
+  currently-experimental native MLX backend exists for Apple Silicon —
+  but its own quantization section states plainly: only an `mlx-
+  community/<model>-Nbit` pre-quantized HF repo, or on-the-fly `mlx_q4`/
+  `mlx_q8` quantization of an fp16 safetensors model — **never GGUF**, no
+  exception. This was reported to the user directly, with the exact
+  finding and three concrete options, via `AskUserQuestion`, rather than
+  silently either abandoning the request or picking a workaround
+  unilaterally.
+
+  **The user's own answer set the final architecture**: "Configurer
+  SGLang avec un modèle MLX sur cette machine (env.sh) et configurer par
+  défaut SGLang avec le modèle GGUF lors d'une installation sur une autre
+  machine (env_default.sh). Détecter les possibilités de la machine dans
+  le Install.sh pour configurer le env.sh au mieux." This is why the
+  design below has three distinct, cooperating pieces rather than one:
+  `run_sglang.sh` itself (hardware-branching at *run* time), `Install.sh`
+  (hardware *detection* — report-only, never auto-installs SGLang, since
+  its own install is heavy/platform-specific and young enough that
+  forcing it on every fresh clone would be the wrong default), and
+  `env_default.sh`/`env.sh` (which model/engine is actually configured,
+  a static per-machine choice, not re-detected at every launch).
+
+  **Install itself required real troubleshooting, not just following
+  the docs verbatim.** A dedicated `.venv-sglang/` (Python 3.12, via a
+  freshly `brew install python@3.12`'d interpreter — this machine only
+  had Python 3.14, and SGLang's own Apple Silicon docs specify 3.12) is
+  kept entirely separate from this project's main `.venv` (Python 3.14),
+  at the user's own explicit request ("avec un venv spécifique") — a
+  reasonable precaution regardless, given how heavy and fast-moving
+  SGLang's own dependency stack (`torch`, `mlx`, `mlx-lm`, dozens more) is
+  compared to this project's own comparatively light `requirements.txt`.
+  SGLang's MLX backend is installed from a cloned `sglang-src/` checkout
+  (`git clone --depth 1`, both directories gitignored — generated/
+  downloaded artifacts, not source content, the same convention as
+  `models/`) rather than a plain PyPI release, per SGLang's own official
+  docs: the platform-specific `python/pyproject_other.toml` has to be
+  swapped in as the active `pyproject.toml` (`rm -f python/pyproject.toml
+  && mv python/pyproject_other.toml python/pyproject.toml`) before
+  `uv pip install -e "python[all_mps]"` — the `all_mps` extra (which
+  pulls in `mlx`/`mlx-lm`/PyTorch 2.13) lives only in that platform
+  variant, never the default `pyproject.toml`, confirmed by grepping the
+  actual cloned file rather than trusting the first, slightly-imprecise
+  web-fetched doc summary. The first real install attempt failed outright
+  (`cargo is required to discover the Rust extension modules` — this repo
+  auto-discovers Rust extensions via a Cargo workspace at build time) —
+  fixed with `SGLANG_BUILD_RUST_EXTS=none` (documented directly in the
+  repo's own `setup.py`) rather than installing a whole Rust toolchain
+  for extensions this project's own MLX-only usage doesn't need at all.
+
+  **A real, measured architectural limitation was found next, not
+  assumed from documentation alone.** A first live test — the exact
+  model originally requested, `unsloth/Qwen3.8-27B-GGUF` with
+  `--quantization gguf` — crashed immediately (`AssertionError:
+  extra_buffer needs CUDA/MUSA/NPU/ROCm/XPU (FLA)`), *not* a generic
+  "GGUF unsupported" message but a hard crash tied to this specific
+  model's own hybrid Mamba/linear-attention architecture, which
+  unconditionally requires one of those platforms for its radix-cache
+  "extra buffer" regardless of quantization/file format — confirmed by
+  reading the actual assertion's own code
+  (`arg_groups/mamba_hook.py`'s `validate_mamba_extra_buffer`), not
+  inferred from the crash message alone. A tiny, known-good reference
+  model from SGLang's own docs (`mlx-community/Qwen3-0.6B-4bit`) was
+  tested next specifically to confirm the *pipeline itself* (not just
+  this one model) genuinely works on this machine — it did: a real
+  `Uvicorn running on http://127.0.0.1:30000`, and a real, live `POST
+  /v1/chat/completions` call returned genuine generated text through the
+  same OpenAI-compatible shape `backend/clues.py`/`backend/chatbot.py`
+  already expect, confirming zero code changes are needed anywhere else
+  in this project to use SGLang as the serving engine.
+
+  This still left an open question — would switching to an MLX-native
+  (not GGUF) build of the *same* model family avoid the crash? A live
+  test of `mlx-community/Qwen3.5-9B-4bit` (chosen initially because this
+  project's own llama.cpp history already calls Qwen3.5-9B "a good
+  middle-ground" default) answered this directly: it hit the *exact
+  same* `extra_buffer` assertion, proving the limitation is about the
+  Qwen3.5/Qwen3.8 generation's own shared hybrid-attention architecture,
+  never about GGUF specifically as first assumed — the earlier fix
+  attempt (a bash `QUANT_ARGS` array, see below) was itself corrected in
+  the same test cycle, then this deeper finding surfaced once that fix
+  let the real model-loading code actually run. A further live test of
+  `mlx-community/Qwen3-14B-4bit` — a *plain* Qwen3 model (no ".5"), also
+  already used successfully in this project's own llama.cpp history —
+  confirmed it passes straight through the same code path with no crash
+  at all, pinning the limitation precisely on the "3.5"/"3.8" generation
+  rather than on model size or this project's own quantization choice.
+  `env_default.sh`'s new commented Apple-Silicon block and this machine's
+  own active `env.sh` were both set to this confirmed-working model
+  rather than either member of the crashing family.
+
+  **A second, independent bug was found and fixed live in `run_sglang.sh`
+  itself, unrelated to SGLang's own code**: the very first real launch
+  attempt failed with `QUANT_ARGS[@]: unbound variable` — macOS's own
+  default `/bin/bash` is 3.2.57 (Apple has never shipped a newer one),
+  and `"${ARRAY[@]}"` on a genuinely *empty* array raises exactly this
+  error under `set -u` on bash before 4.4, even though the identical code
+  is safe on a newer bash. Fixed by building the optional `--quantization
+  ...` flag as a plain string (word-split unquoted at the call site, safe
+  here since `SGLANG_QUANTIZATION` is always a single bare token like
+  `gguf`/`mlx_q4`, never anything needing its own quoting) instead of a
+  bash array, sidestepping the version-dependent behavior entirely rather
+  than working around it with a `${ARR[@]+"${ARR[@]}"}`-style idiom.
+
+  `run_sglang.sh` mirrors `run_llm.sh`'s own conventions (same
+  `LLM_HOST`/`LLM_PORT` variables, same stop-existing-server-on-port
+  logic, same `nohup ... & disown` detachment) but branches on real,
+  live-detected hardware (`uname -s`/`uname -m`) rather than a
+  configured flag: Apple Silicon sets `SGLANG_USE_MLX=1` and
+  `--disable-cuda-graph` (irrelevant without a CUDA GPU); anything else
+  assumes the CUDA path and passes `SGLANG_QUANTIZATION`/`SGLANG_
+  MODEL_PATH` straight through with neither. `run_llm.sh` itself gained
+  a minimal, three-line dispatch right after sourcing `env.sh`/
+  `env_default.sh`: `LLM_ENGINE` (default `llama_cpp`, matching every
+  pre-existing `env.sh`/`env_default.sh` with zero behavior change) —
+  `sglang` `exec`s straight into `run_sglang.sh` instead, before any of
+  `run_llm.sh`'s own llama.cpp-specific logic (GPU rebuild detection,
+  GGUF download, etc.) ever runs.
+
+  `env_default.sh` keeps llama.cpp + Qwen3.5-0.8B as its own real,
+  active, universal default (unchanged) — a new commented-out section
+  documents both the CUDA+GGUF path (`unsloth/Qwen3.8-27B-GGUF`,
+  `SGLANG_QUANTIZATION=gguf` — the user's own originally-requested
+  default for a future CUDA install, honestly disclosed as *not*
+  directly tested on this project's own dev machine, unlike the Apple
+  Silicon block right below it) and the Apple-Silicon+MLX path
+  (`mlx-community/Qwen3-14B-4bit`, no quantization flag needed — a real,
+  live-verified-on-this-machine default). This machine's own `env.sh`
+  was switched to the Apple-Silicon block as its real, active
+  configuration, with the previous llama.cpp/Qwen3.5-0.8B block kept
+  commented out as a documented fallback rather than deleted.
+
+  `Install.sh` gained a small, report-only hardware-detection block at
+  the very end (after its own existing `.venv`/`requirements.txt`/corpus-
+  archive setup, all of which stays completely unaffected) — deliberately
+  never installs SGLang itself (a separate, heavier, one-time,
+  platform-specific process, see above) and never touches an existing
+  `env.sh` — it only tells the user, in plain language, which SGLang path
+  (if any) is realistically usable on the machine `Install.sh` is
+  currently running on, pointing at `run_sglang.sh`'s own header and the
+  matching `env_default.sh` block for the actual setup steps.
+
+  Verified in stages, end to end, with real hardware and real network
+  calls throughout — never simulated: `.venv-sglang`'s own Python version
+  (3.12.14) and the install's own resolved `torch`/`mlx` versions (2.13.0/
+  0.32.2) both checked directly against SGLang's own stated minimums
+  (2.13.x/0.32.0+); `import mlx.core as mx; mx.default_device()` confirmed
+  a real `Device(gpu, 0)` (the Metal GPU, correctly detected); the tiny
+  reference model's own full request/response cycle (`curl` against the
+  real running `/v1/chat/completions` endpoint) returned genuine
+  model-generated text; the `unsloth/Qwen3.8-27B-GGUF` and
+  `mlx-community/Qwen3.5-9B-4bit` crashes were each reproduced and their
+  exact tracebacks read line by line (not just "it failed") before being
+  attributed to the Mamba/FLA architecture rather than guessed at;
+  `mlx-community/Qwen3-14B-4bit` was confirmed live to pass the exact
+  same code path with no crash at all — a real, full cold download (10
+  files, ~8GB, no `HF_TOKEN` set so genuinely subject to unauthenticated
+  Hugging Face Hub rate limiting, ~51 minutes end to end — not a hang,
+  confirmed by watching the on-disk `.incomplete` blob files grow across
+  several checks rather than assumed stuck) followed by `"MLX model
+  loaded in 3069.27s"`, a real `"Uvicorn running on http://127.0.0.1:
+  30000"`, and a real, successful `POST /v1/chat/completions` round trip
+  returning genuine model-generated text — then the exact same real,
+  final `run_llm.sh` → `run_sglang.sh` dispatch chain (not a direct,
+  hand-typed `sglang.launch_server` invocation) was used for the actual
+  production launch, exactly as a real user's own `./run_llm.sh` call
+  would exercise it, with `env.sh`/`env_default.sh` both switched to this
+  confirmed-working model. One further, disclosed finding from that same
+  test: like every Qwen3/Qwen3.5 model this project has used, Qwen3-14B
+  is a hybrid thinking/non-thinking model that reasons via a `<think>`
+  block by default on SGLang — unlike this project's own llama.cpp path,
+  there is no `LLAMA_CHAT_TEMPLATE_KWARGS`-equivalent mechanism here to
+  disable it — but `backend/clues.py`'s existing `_strip_reasoning()`
+  already strips a `<think>...</think>` block from any LLM response
+  regardless of which engine produced it, so this needs no new handling,
+  only slower per-word clue generation than a non-reasoning model would
+  give. `Install.sh`'s own new detection block was
+  checked directly (its exact `uname` condition re-run standalone)
+  against this real machine's own values, confirming it reports "Apple
+  Silicon detected" here as expected; every shell script touched
+  (`run_sglang.sh`, `run_llm.sh`, `env.sh`, `env_default.sh`,
+  `Install.sh`) was syntax-checked with `bash -n` after every edit.
+
+  **Reasoning was disabled outright right after**, at the user's explicit
+  request: "Essaye de configurer l'option reasoning à low, voire none."
+  Investigated directly in SGLang's own source rather than guessed:
+  `serving_chat.py`/`protocol.py` accept a request-level `reasoning_
+  effort` field ('none'/'low'/'medium'/'high'/...) that gets translated
+  into `chat_template_kwargs["enable_thinking"]` — but for Qwen3's own
+  chat template, SGLang auto-detects a plain on/off `ReasoningToggleConfig`
+  with `effort_kwarg=None` (no graduated support at all), and its own
+  translation logic (`thinking = effort != "none"`) means any value other
+  than `"none"` — `"low"` included — still fully *enables* thinking for
+  this model; only `"none"` (`enable_thinking=False`) actually disables it.
+  Verified live with a real, isolated A/B on an unused port (3099): the
+  identical request produced a full `<think>...</think>` block by default,
+  and a clean, direct answer (`reasoning_tokens: 0`, `finish_reason:
+  "stop"` instead of the "length" cutoff mid-thought seen earlier) with
+  `enable_thinking=false` set.
+
+  Rather than pass this per-request (which would mean plumbing a new
+  parameter through `backend/clues.py`/`backend/chatbot.py` for an
+  engine-specific quirk), a real, existing SGLang server flag was found
+  and used instead: `--default-chat-template-kwargs` (confirmed live via
+  `sglang.launch_server --help`), which applies a JSON object as the
+  default `chat_template_kwargs` for every request that doesn't override
+  it itself — SGLang's own direct equivalent of `run_llm.sh`'s
+  `LLAMA_CHAT_TEMPLATE_KWARGS`. `run_sglang.sh` gained a new
+  `SGLANG_CHAT_TEMPLATE_KWARGS` variable (empty by default, no effect for
+  a caller that never sets it) and a `THINK_ARGS` string built the exact
+  same bash-3.2-safe way as `QUANT_ARGS` (a plain string, not an array,
+  since `"${ARRAY[@]}"` on an empty array raises "unbound variable" on
+  this machine's own default bash) — passed unquoted to both launch
+  branches (Apple Silicon and CUDA alike, since this flag is engine-
+  generic, not MLX-specific). One real constraint the plain-string/
+  unquoted-word-splitting design imposes: the JSON value must contain no
+  internal whitespace (`{"enable_thinking":false}`, not `{"enable_
+  thinking": false}`) or bash would split it into two broken argv tokens
+  before SGLang ever sees it — documented directly in the variable's own
+  comment. `env.sh` (this machine, now active) and `env_default.sh` (the
+  matching commented example) both set
+  `SGLANG_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'`.
+
+  **A real, disclosed GPU/unified-memory crash surfaced while verifying
+  this end to end**, unrelated to the reasoning change itself: the first
+  real chat message sent through the actual app right after a restart
+  (a large prompt — `backend/chatbot.py`'s own system prompt, DOC_USER
+  plus UI context, `#new-token: 4096` in the log) crashed the SGLang
+  scheduler outright with `RuntimeError: [METAL] Command buffer execution
+  failed: Insufficient Memory` — even though `vm_stat` showed ~23GB of
+  system RAM still free at the time, pointing at a Metal-specific
+  working-set/allocation limit rather than genuine system-wide memory
+  pressure. Not chased further as a bug to fix (out of scope for this
+  request) — relaunching the server and resending the exact same real
+  chat message succeeded cleanly on the very next attempt (a normal,
+  no-`<think>` reply), so this reads as a transient, one-off GPU
+  contention spike (plausibly from other running GPU-compositing
+  applications, e.g. the browser/editor already active on this machine)
+  rather than a reproducible failure of this specific configuration —
+  reported honestly as an observed-but-not-reproduced risk rather than
+  hidden or silently retried.
+
+  Verified live, end to end: a direct isolated test (port 3099) confirmed
+  `enable_thinking=false` genuinely suppresses the `<think>` block; the
+  real production launch (`./run_llm.sh`, port 3002, the real `env.sh`)
+  confirmed the same result through the actual served endpoint; a real
+  chat message sent through the running app itself (`POST /api/chat` via
+  the frontend proxy, `backend/chatbot.py`'s real streaming path) returned
+  a clean, reasoning-free French reply with no `<think>` leakage — after
+  the one transient OOM crash above was hit, diagnosed from `logs/
+  sglang.log`'s own real traceback, and shown to not reproduce on a
+  fresh retry. `GET /api/system_info` still correctly reports `mlx-
+  community/Qwen3-14B-4bit` after the final restart, and no orphaned
+  `multiprocessing`/`resource_tracker` process was left behind (the one
+  present was confirmed, via `ps -o pid,ppid`, to be a legitimate child
+  of the running SGLang server, not an orphan).
+
+  **Swapped from Qwen3-14B to Qwen3-4B right after**, at the user's
+  explicit follow-up request: "Sur cette machine le modèle est trop lent.
+  Trouver un modèle plus petit." Every smaller, *plain* Qwen3 variant
+  (no ".5"/".8" suffix — the family confirmed to avoid the Mamba/FLA
+  crash above) was confirmed to actually exist on `mlx-community`
+  first (`GET https://huggingface.co/api/models/<repo>`, all four —
+  0.6B/1.7B/4B/8B — returning HTTP 200) and its own weight-file size
+  measured via the HF API before choosing (0.97/2.26/4.61 GB
+  respectively for 1.7B/4B/8B) rather than guessed at. Qwen3-4B-4bit
+  (2.26 GB) was picked as the trade-off point and tested live on an
+  isolated port (3098, alongside — never inside — the still-running
+  production 14B instance): loaded cleanly with no Mamba crash (expected,
+  same architecture family already vetted), and measured directly with a
+  real, clue-shaped prompt matching `backend/clues.py`'s own one-word-
+  per-call convention — 3 sampled French words averaged **~1.2s/word**
+  (0.46s/0.46s/2.63s), against several seconds/word for Qwen3-14B on this
+  same machine — a clear, measured win, not merely assumed from parameter
+  count alone.
+
+  **A second, more serious OOM crash was reproduced along the way, this
+  time with an unambiguous cause**: running the Qwen3-4B test server
+  (port 3098) *concurrently* with the still-loaded production Qwen3-14B
+  instance (port 3002) crashed the 14B scheduler with the identical
+  `RuntimeError: [METAL] Command buffer execution failed: Insufficient
+  Memory` seen once before in isolation — this time triggered reliably by
+  two SGLang/MLX server processes holding GPU memory at once, each with
+  its own multi-GB KV cache pool, rather than a one-off transient spike.
+  Lesson applied for the rest of this session and recorded here directly:
+  **never run two SGLang/MLX server processes concurrently on this
+  machine** — every later test was done one server at a time, killing the
+  previous one first.
+
+  `env.sh` (this machine) and `env_default.sh`'s matching commented
+  example were both switched to `mlx-community/Qwen3-4B-4bit`
+  (`SGLANG_MODEL_PATH`/`LLM_MODEL`, `SGLANG_CHAT_TEMPLATE_KWARGS`
+  unchanged — reasoning stays disabled) — `env_default.sh`'s own comment
+  now records the honest quality/speed trade-off (this project's own
+  llama.cpp history already rates 4B "decent/respectable" vs. 14B's
+  larger, presumably-better output) and names Qwen3-8B/14B/32B-4bit as a
+  reasonable alternative on a machine with more headroom.
+
+  Verified live, end to end, one server at a time throughout: the
+  isolated 4B test (port 3098) confirmed the real per-word timing above;
+  the real production launch (`./run_llm.sh`, port 3002, the real,
+  switched `env.sh`) confirmed a clean start with no crash; `GET /api/
+  system_info` confirmed `mlx-community/Qwen3-4B-4bit` after a full
+  backend/frontend restart; a real chat message sent through the actual
+  running app (`POST /api/chat`) returned a correct, reasoning-free
+  French reply, logged to `LOG_CHAT/` with both new timing fields
+  populated (`*premier mot reçu après 9.97s — temps total : 10.38s*` —
+  the ChatBot's own much larger system prompt, DOC_USER plus live UI
+  context, dominates this specific call's prefill time far more than the
+  short, isolated clue-style test prompts did, consistent with this
+  project's own already-documented finding elsewhere that prompt
+  processing, not decode speed, is the dominant cost for this kind of
+  local-model call) — confirming both this feature and the LOG_CHAT
+  timing feature below together, on real, non-mocked data. No orphaned
+  `multiprocessing`/`resource_tracker` process was left behind after the
+  final restart (confirmed via `ps -o pid,ppid`, a legitimate child of
+  the running SGLang server).
 - `frontend/server.py` — **middleware** FastAPI server: serves the static UI
   (`frontend/static/index.html`, `script.js`, `style.css`) and proxies `/api/*` to the
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default
@@ -3732,6 +5700,54 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   the real running proxy (port 3000, not just the back end's own port
   3001): both routes returned the same data as calling the back end
   directly.
+- **Virtual on-screen keyboard** (`frontend/static/index.html`/`style.css`/
+  `script.js`), at the user's explicit request: "En bas à gauche de
+  l'interface, au même niveau que le ChatBot, ajouter un bouton
+  permettant de monter/cacher un clavier virtuel ne contenant que les 26
+  lettres de l'alphabet en majuscules dans l'ordre naturel sur 2 lignes,
+  plus une flèche vers le bas pour configurer le sens vertical (similaire
+  à SHIFT/CAPS LOCK) et une flèche vers la droite pour configurer le sens
+  horizontalement." A new `#virtual-keyboard` widget mirrors `#chatbot`'s
+  own established fixed-position/collapse mechanism exactly (same
+  header-always-visible/body-collapses structure, same `.nav-btn`-styled
+  toggle button in an accent-colored header) — bottom-left instead of
+  bottom-right, narrower (280px, no need for a chat window's width for
+  26 single-character buttons), and collapsed by default (unlike the
+  chatbot, open by default) since a virtual keyboard is only useful to a
+  minority of players (touch screens, no convenient physical keyboard).
+
+  `buildVirtualKeyboard()` generates the 26 letters as real `<button>`
+  elements, split into exactly two rows of 13 (`"ABCDEFGHIJKLM"` /
+  `"NOPQRSTUVWXYZ"`) — plain alphabetical order, deliberately never a
+  QWERTY/AZERTY layout, matching "dans l'ordre naturel" literally.
+  `virtualKeyboardDirection` ("across"/"down", defaulting to "across") is
+  a persistent mode — the two direction buttons (→/↓, reusing the
+  existing `.toggle-btn`/`.active` mutual-exclusivity convention already
+  established for Solution/Vérification) toggle it on click and stay in
+  that state until the other one is clicked, closer to a CAPS LOCK-style
+  persistent toggle than a held SHIFT — the only design that makes sense
+  for a clicked button, which can't be "held down" the way a physical key
+  can; the user's own parenthetical ("similaire à SHIFT/CAPS LOCK")
+  already anticipated this. `typeVirtualLetter(letter)` mirrors
+  `handleKeydown()`'s own letter-typing logic exactly (same guards — no
+  puzzle, no selected cell, or the solution being shown all make a click
+  a no-op — same `userLetters`/`renderGrid()` update), calling the
+  existing `moveSelection()` afterward with its own expected argument
+  shape (`"right"` for across, anything else for down — not the same
+  labels as `virtualKeyboardDirection` itself, translated at the one call
+  site rather than changing `moveSelection()`'s own long-established
+  contract).
+
+  Verified: the row-split logic was independently confirmed in Python
+  (`"ABCDEFGHIJKLM"`/`"NOPQRSTUVWXYZ"`, 13 letters each); a real JS syntax
+  check (`esprima`, temporarily installed and removed again afterward),
+  CSS brace-balance, and HTML div-tag-balance checks all passed; the real
+  served `index.html`/`style.css`/`script.js` were fetched directly from
+  the running frontend server and confirmed to contain the new markup/
+  CSS rules/JS functions. **Not yet visually confirmed in an actual
+  browser** — the same tooling limitation noted throughout this project's
+  UI work (no `chromium-cli`/`node`/Python `playwright` available in this
+  environment) — verified structurally instead.
 - `frontend/static/i18n.js` — the internationalization config: every user-visible
   interface string (labels, buttons, headings, progress/status messages, error
   messages), for every supported language (fr/en/de/es/it), as one `I18N` object —
@@ -11219,6 +13235,67 @@ instead of the filter no-op'ing, since `require_gloss=True` is the default
 `easy`-difficulty behavior. Caught live: a deployed instance with a wordlist file but
 no gloss dictionary built produced `wordlist_loaded {'word_count': 0, ...}` in
 `backend.log` and "no fillable grid found" on every request.
+
+`load_wordlist()` also gained an `exclude_proper_nouns=False` parameter, at
+the user's explicit request: "Dans la remplissage des mots de la grille,
+niveaux FACILE et MOYEN, interdire les mots étant potentiellement des
+noms propres." `generate_grid()`'s one call site passes `exclude_proper_
+nouns=(difficulty in ("easy", "medium"))` — `"hard"` is completely
+unaffected, still able to place any word regardless of how proper-noun-
+like it looks, exactly as before this change. This is a genuinely
+different, stronger remedy than the pre-existing `PROPER_NOUN_SCORE_
+FACTOR` demotion in `build_wordlist_freq.py` (0.25× score, which only
+makes a likely proper noun *less competitive* for the difficulty cutoff,
+never impossible to place) — the two now stack: a demoted-but-still-
+scored-high-enough proper noun that could still have slipped into "easy"/
+"medium" purely on raw frequency is now excluded outright at either of
+those two difficulties, while `hard` (which never applies the difficulty
+cap at all — 100% of the lexicon) is untouched by both mechanisms alike.
+
+Implemented as a runtime reconstruction of the exact same signal
+`build_wordlist_freq.py` already computes at build time
+(`likely_proper_noun = lang in PROPER_NOUN_LANGS and accented !=
+raw_word`) rather than a new, separate detection — no new preprocessing
+or wordlist rebuild needed, since the wordlist TSV never needed to store
+this as a dedicated column in the first place: every corpus word is
+counted fully lowercase (`_count_word_frequencies`'s own `token.lower()`),
+so a word's `ACCENTED` column only ever ends up capitalized when Hunspell
+required the title-cased form to validate it — precisely the proper-noun
+signal, recoverable at runtime from `ACCENTED[:1].isupper()` alone,
+against the same `PROPER_NOUN_EXCLUDED_LANGS = {"de"}` exemption
+`build_wordlist_freq.py`'s own `PROPER_NOUN_LANGS` already establishes
+(German capitalizes every noun, common or proper, so this signal carries
+no proper-noun information there — the same reasoning already documented
+for the score-demotion mechanism, mirrored here as its own small
+module-level constant in `crossword_gen.py` rather than importing from a
+preprocessing-only script). Falls back to a silent no-op (same convention
+as `require_gloss`) when the wordlist's language can't be inferred from
+its filename at all.
+
+Verified: 4 isolated `load_wordlist()` calls against a small, hand-built
+4-word fixture (`CHAT`/`chat`, `PARIS`/`Paris`, `MAISON`/`maison`,
+`GEORGES`/`Georges`) — `exclude_proper_nouns=False` keeps all 4; `True`
+against a `wordlist_fr_full.tsv`-shaped path keeps only `CHAT`/`MAISON`,
+correctly dropping the two capitalized ones; the identical fixture named
+`wordlist_de_full.tsv` keeps all 4 (the German exemption engaging
+correctly); the identical fixture under an unrecognized filename
+(`custom_list.tsv`, language can't be inferred) also keeps all 4 (silent
+no-op). A direct call against the real French wordlist confirmed a real,
+measurable effect at scale: `easy` (`require_gloss=True`) drops from
+126,930 to 123,417 words once `exclude_proper_nouns=True` is added — 3,513
+likely proper nouns removed outright — while the same check against the
+real German wordlist shows **zero** difference (196,755 words either way),
+confirming the exemption holds in practice, not just in the isolated
+test. A real, non-mocked `generate_grid()` sweep (9×9, French, seed 3,
+Flash-scale `deadline_checks=1000`) across all three difficulties
+confirmed the actual placed words: `easy` and `medium` both came back
+with **zero** words whose accented spelling starts with a capital letter,
+while `hard` (deliberately unaffected) still placed two (`Sétif`, a real
+Algerian city; `Gs`) — direct, live confirmation the exclusion engages at
+exactly the two intended difficulties and nowhere else. A full end-to-end
+run on both seeds of the standard 15×10 benchmark (`easy`, Flash mode)
+confirmed no regression: both seeds still succeed (60 and 58 words
+respectively), zero proper-noun-looking words in either.
 
 `build_wordlist_freq.py` counts word occurrences directly from a language's reference
 corpus (`data/reference_corpus/<lang>_sentences.txt`, `_count_word_frequencies`) —

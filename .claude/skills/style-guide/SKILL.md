@@ -1718,3 +1718,289 @@ English (see `project-best-practices`).
   to end (real generations saved to and correctly listed/sorted from
   `GRID_STORE/`, see CLAUDE.md for the full trail) rather than by
   looking at the rendered page.
+
+- Library pagination (`#library-pagination`, 20 rows/page, at the user's
+  explicit request), styled as a small `.nav-btn`-pair-plus-position row
+  identical in shape to the attempt-preview panel's own ⏮/◀/▶/⏭ +
+  position pattern above, right below the (now possibly-empty-looking on
+  a short page) table and the "no grids yet" message — reusing an
+  already-established navigation idiom rather than inventing a new one
+  for what is, visually, the same kind of "step through a list" control.
+
+- "David FALCON" chat widget (`#chatbot`), at the user's explicit
+  request: a floating, fixed-position panel anchored to the viewport's
+  bottom-right corner — the one element on this page that deliberately
+  does *not* live inside `main`'s normal document flow, since a chat
+  widget is conventionally expected to float above page content and stay
+  put regardless of scroll position, unlike every other section here.
+  Open by default with a solid `--accent`-colored title bar (icon +
+  "David FALCON" + a collapse button) — collapsing hides everything
+  below the title bar rather than the whole widget disappearing, so it
+  stays a one-click-away affordance rather than needing some other
+  trigger to reopen. Messages render as chat bubbles, right-aligned in a
+  `--selected` tint for the player's own messages and left-aligned in a
+  plain `--bg` tint for David FALCON's replies — the same left/right
+  speaker convention as virtually every chat UI, chosen so the two
+  speakers are told apart at a glance without re-reading each bubble.
+  Reuses `logo.svg` (the same app icon already in the page header) and
+  `.nav-btn`'s own small/neutral button look for the collapse control,
+  restyled with the header's own accent-foreground color rather than
+  the default white-on-border look, which would be nearly invisible
+  against the accent-colored title bar. Its own width was widened by
+  50% right after (320px → 480px), at the user's explicit request
+  ("Elargis la fenêtre du Bot de 50%") — still capped by `max-width:
+  calc(100vw - 2rem)` so it never overflows a narrow viewport. **Not yet
+  visually confirmed in an actual browser** — same tooling limitation
+  noted throughout this
+  file; verified structurally (a real JS syntax check via `esprima`, an
+  HTML tag-balance check, a CSS brace-balance check) and functionally
+  through the real running API (real chat exchanges against the actual
+  local LLM server, see CLAUDE.md for the full trail) rather than by
+  looking at the rendered page.
+
+- David FALCON's own replies (`.chatbot-message-assistant`) now render
+  real Markdown (bold/italic/inline-code/lists/links — see CLAUDE.md's
+  `backend/chatbot.py` entry for `renderMarkdown()`'s own logic and its
+  XSS-safety reasoning), at the user's explicit request. The bubble's
+  own pre-existing `white-space: pre-wrap` (kept, still needed for the
+  player's own plain-text bubbles) is now largely redundant for the
+  assistant's rendered HTML, but harmless — `renderMarkdown()` never
+  leaves a bare newline inside the emitted markup, only real block
+  elements. Added scoped child-element rules (`.chatbot-message-
+  assistant p/ul/ol/li/code`): zero default margin on `<p>` (would
+  otherwise double-space against the bubble's own tight line-height),
+  a small `margin`/`padding-left` on `<ul>`/`<ol>`/`<li>` so a list reads
+  as compact rather than page-sized inside the ~480px bubble, and a
+  subtle monospace/tinted treatment on `<code>` (`--white-cell`
+  background, a thin `--border` outline, small padding) — reusing
+  existing tokens rather than introducing new ones, since this is a
+  minor typographic accent, not a new interactive state. **Not yet
+  visually confirmed in an actual browser** — same tooling limitation
+  noted throughout this file; verified structurally (a CSS brace-balance
+  check, a real JS syntax check via `esprima`) and by porting
+  `renderMarkdown()`'s exact logic to Python and confirming it against a
+  representative sample and a dedicated XSS-injection probe (see
+  CLAUDE.md) rather than by watching it render live.
+
+- "Actu Croisée" RSS news panel (`#rss-panel`), at the user's explicit
+  request: a persistent section, always visible, placed right after
+  `#generate-form`'s own closing tag (its buttons) — deliberately a
+  sibling of, never nested inside, the group of sections that toggle
+  between each other (`#library`/`#attempt-preview`/`#result`), after
+  the user caught an early version disappearing whenever that central
+  group swapped states. `main` became a flex column (`min-height:
+  100vh`); `#rss-panel` alone carries `flex: 1` (+ the classic `min-
+  height: 0` flexbox fix) so it stretches to fill whatever vertical
+  space the rest of the page leaves empty, rather than a fixed height —
+  "afficher les actus... sur ce qui reste de fenêtre vide." Same card
+  look as `#library` (white background, thin border) for visual
+  consistency with this page's other content panels. Its own internal
+  list (`#rss-list`) gets `flex: 1; min-height: 0; overflow-y: auto` so
+  *it* scrolls internally once content overflows, never the page itself.
+  Clicking (or Enter/Space-activating) an item opens `#rss-detail`, a
+  small overlaid card (`position: fixed`, centered, its own `box-shadow`)
+  showing the full article — see CLAUDE.md's `fetch_rss_feeds.py` entry
+  for `sanitizeRssHtml()`'s own security reasoning (a real `DOMParser`-
+  based allowlist sanitizer, never a direct `innerHTML` of third-party
+  feed content). **Not yet visually confirmed in an actual browser** —
+  same tooling limitation noted throughout this file; verified
+  structurally (CSS brace-balance, HTML tag-balance, a real JS syntax
+  check via `esprima`) and via the real data reaching the frontend
+  correctly (`GET /api/rss` checked through both the backend and the
+  frontend proxy) rather than by watching it render live.
+
+- Virtual on-screen keyboard (`#virtual-keyboard`), at the user's
+  explicit request: fixed bottom-left, mirroring `#chatbot`'s own
+  established fixed-position/collapse mechanism exactly — same
+  accent-colored header with a `.nav-btn`-styled toggle button, same
+  "collapse hides everything below the header" behavior — just narrower
+  (280px vs. the chat window's 480px) and collapsed by default rather
+  than open, since a virtual keyboard only benefits a minority of players
+  (touch screens, no convenient physical keyboard) unlike the chatbot.
+  26 letter keys (`.virtual-keyboard-key`, plain bordered buttons reusing
+  `--bg`/`--border`/`--selected` tokens, no new color introduced) laid
+  out as two rows of 13 in plain alphabetical order (never QWERTY/
+  AZERTY). Two direction-toggle buttons (→/↓) reuse the existing
+  `.toggle-btn`/`.active` convention already established for Solution/
+  Vérification — a persistent CAPS-LOCK-style mode switch, not a held
+  SHIFT, since a clicked button can't be "held." **Not yet visually
+  confirmed in an actual browser** — same tooling limitation noted
+  throughout this file; verified structurally (CSS brace-balance, HTML
+  tag-balance, a real JS syntax check via `esprima`) rather than by
+  watching it render live.
+
+- **Real bug found and fixed**: the virtual keyboard's letters were
+  invisible, reported directly by the user ("Les touches du clavier
+  virtuel sont trop petites, et on ne voit pas les lettres"). Root cause:
+  the page's generic `button` rule sets `color: var(--accent-fg)` (white)
+  for *every* button, and `.virtual-keyboard-key` only ever overrode
+  `background` (to `--bg`, a light color) — never `color` — so the text
+  stayed white-on-light, unreadable. Fixed with an explicit `color: var
+  (--fg)` (the page's normal near-black text color) on `.virtual-
+  keyboard-key`. At the same time, at the user's explicit request, the
+  keyboard grew from a fixed 280px to `60vw` (60% of the viewport width)
+  and each key's own padding/font-size grew to match (`0.9rem 0`/
+  `1.4rem`, up from `0.35rem 0`/`0.85rem`) — a fixed-width key sized for
+  the old 280px container would have looked tiny and sparse once
+  stretched to 60% of a typical screen.
+
+- Both `#chatbot` and `#virtual-keyboard` now collapse down to "a single
+  simple icon" rather than a full-width title bar, at the user's
+  explicit request: "Une fois repliés, le clavier virtuel et le ChatBot
+  ne doivent montrer qu'une simple icône." The logo image (`#chatbot-
+  icon`) and the title text (both widgets') are hidden in the collapsed
+  state; the header itself shrinks (`width: auto`, minimal padding) to
+  fit tightly around the one remaining element, the toggle button — its
+  own existing glyph ("–" for chat, "⌨" for the keyboard) is already the
+  single icon-shaped, clickable affordance needed, so no new icon asset
+  or click-handler rewiring was needed, only hiding what surrounds it.
+
+- The "Actu Croisée" panel (`#rss-panel`) now hides whenever any of the
+  three central sections (`#library`/`#attempt-preview`/`#result`) is
+  shown, reversing an earlier decision recorded in this same file (it
+  used to be a persistent sibling section, deliberately never hidden by
+  them) — at the user's own later, explicit correction: "Le journal
+  d'actu doit disparaître quand quelque chose d'autre doit s'afficher,
+  par exemple la Bibliothèque (actuellement, la Bibliothèque s'affiche
+  sous le journal)." Implemented as one small helper,
+  `syncRssPanelVisibility()` (`frontend/static/script.js`), called from
+  every single place that toggles one of those three sections' own
+  `hidden` state (9 call sites) rather than duplicating the "is any of
+  them visible" check at each one — a single point of truth for the
+  rule, so the two states (panel visible ⟺ every central section
+  hidden) can never drift out of sync from one another.
+
+- **Real mistake found and fixed in the collapsed-icon design above**:
+  the user's own follow-up clarified exactly what each widget's single
+  collapsed icon should actually be: "En mode 'réduit', le ChatBot doit
+  afficher l'icône du site, et le clavier doit afficher une icône
+  représentant un clavier." The virtual keyboard was already correct
+  (its toggle button's own "⌨" glyph already is a keyboard icon, and was
+  already the one element left visible) — but the chatbot had it
+  backwards: it kept the toggle button (a generic "–" minimize dash) and
+  hid `#chatbot-icon` (the real app logo), the opposite of "l'icône du
+  site." Fixed by swapping which element stays visible when collapsed —
+  `#chatbot-toggle-btn` now hides too, `#chatbot-icon` stays, and
+  `script.js` adds a click listener directly on the icon (`toggleChatbot
+  Collapsed()`, factored out of the toggle button's own existing
+  listener so both share one function rather than duplicating the
+  `classList.toggle` call) so the icon itself is the one-click affordance
+  to re-expand once the dedicated button is no longer shown.
+
+- **A second real bug found and fixed, this time in the virtual
+  keyboard's own collapsed state**: reported directly by the user, "Le
+  clavier virtuel réduit doit être une simple icône, pas une barre de
+  fenêtre complète" — the header never actually shrank when collapsed,
+  despite the CSS rule intended to do exactly that. Root cause: a real
+  CSS-specificity bug, the same class already fixed once before in this
+  project for `#rss-detail[hidden]`. The collapsed-width override used a
+  bare `.virtual-keyboard-collapsed` class selector (specificity 0-1-0),
+  while `#virtual-keyboard`'s own base rule (an ID selector, specificity
+  1-0-0) also sets `width: 60vw` — the ID selector always wins regardless
+  of source order, so the override never took effect. Fixed by
+  compounding the selector with the id
+  (`#virtual-keyboard.virtual-keyboard-collapsed`, specificity 1-1-0),
+  mirroring `#chatbot.chatbot-collapsed`'s own selector, which was never
+  affected by this exact bug only because it happened to already be
+  written this same, correctly-compounded way from the start.
+
+- **A real gap in the "Actu Croisée" hide-on-central-panel rule was
+  found and fixed**, reported directly by the user: "Le panneau d'actu
+  doit disparaître quand on doit afficher autre chose sur la partie
+  centrale (Bibliothèque, génération de grille, etc)." `syncRssPanel
+  Visibility()`'s own rule only ever looked at whether `#library`/
+  `#attempt-preview`/`#result` were currently visible — but right after
+  submitting the generation form, none of the three become visible
+  immediately (the attempt-preview panel only gets shown once the first
+  real progress event actually arrives from the backend, a few seconds
+  in) — during that window the rule incorrectly let the journal panel
+  stay visible. Fixed with a new `generationInProgress` flag, set `true`
+  at the very top of `runGeneration()` and back to `false` in its own
+  `finally` block (covering success, failure, and cancellation alike) —
+  folded into `syncRssPanelVisibility()`'s own condition alongside the
+  three panels' visibility, so the journal now hides for the entire
+  span of a generation, not only once something visual happens to be
+  ready to show.
+
+- **The real, root-cause bug behind "le masquage ne fonctionne pas du
+  tout" was found right after**, reported directly by the user: "Le
+  masquage du fil d'actu ne fonctionne pas, ni pour la Bibliothèque, ni
+  pour la génération de la grille. Une seule action doit s'afficher à un
+  moment dans la partie centrale. Là, j'ai les 3 affichés l'un au dessus
+  de l'autre." Both JS fixes above (`syncRssPanelVisibility()`, the
+  `generationInProgress` flag) were logically correct but had **zero
+  visible effect**, for a reason neither of them could have caught: a
+  third occurrence of the exact same CSS-specificity bug already found
+  twice this session (`#rss-detail[hidden]`, `#virtual-keyboard.virtual-
+  keyboard-collapsed`) — `#rss-panel`'s own base rule sets `display:
+  flex` unconditionally on the bare ID selector (specificity 1-0-0),
+  which always beats the browser's built-in `[hidden] { display: none }`
+  rule (an attribute selector, specificity 0-1-0) regardless of rule
+  order. `rssPanel.hidden = true` therefore never actually hid anything
+  — the panel stayed visually present the entire time, stacked above
+  whichever central section also happened to be showing, exactly
+  matching the report. This bug pre-dates both JS fixes above by several
+  turns (introduced the moment `#rss-panel` itself was first built,
+  before `syncRssPanelVisibility()` ever existed) — a systematic sweep
+  was run afterward across *every* element this file's own script.js
+  ever sets `.hidden` on, to confirm no other one shares it (only `#rss-
+  detail` and `#rss-panel` declare their own `display` at all; both now
+  carry the matching `[hidden]` override; every other toggled element
+  never declares `display` in the first place, so none of them were ever
+  at risk). Fixed with `#rss-panel[hidden] { display: none; }`, the exact
+  same higher-specificity (ID + attribute, 1-1-0) override pattern
+  already used for `#rss-detail`.
+
+- **Virtual keyboard restructured again**, at the user's explicit
+  request, for three reasons together: "Actuellement, la page principale
+  ne peut pas être scrollée plus bas que la grille. Quand le clavier
+  virtuel est affiché, il masque le bas de la grille. Il faut autoriser
+  à scroller plus bas... Sur le clavier virtuel, mettre les flèches de
+  direction sur la droite des lettres, pour gagner en hauteur. Ne pas
+  mettre un titre 'Clavier virtuel' qui prend aussi de la place en
+  hauteur. Mettre simplement l'icône de fermeture en petit au dessus des
+  flèches." Three changes together:
+  1. The title bar (`#virtual-keyboard-header`, an accent-colored strip
+     with a title `<span>` and the toggle button) is gone entirely — the
+     toggle button is now a direct child of `#virtual-keyboard` itself.
+     The whole widget became a flex column with `align-items: flex-end`,
+     so the small toggle button naturally floats right-aligned above the
+     direction-arrow column (the other right-aligned element) with no
+     dedicated header markup needed for that positioning at all.
+  2. The direction arrows (→/↓) moved from a row above the letters to a
+     column to its right (`#virtual-keyboard-direction-col`, renamed from
+     `#virtual-keyboard-direction-row`) — `#virtual-keyboard-body` is now
+     a flex row of two columns (the letter rows, then the arrows), with
+     flexbox's own default `align-items: stretch` making the arrow column
+     match the exact height of the two letter rows for free, no extra
+     rule needed.
+  3. A real, separate bug fixed alongside the restructuring: `#virtual-
+     keyboard` is `position: fixed`, so it was never accounted for in
+     `<main>`'s own natural scrollable height — with the keyboard
+     expanded, its floating footprint could permanently cover the bottom
+     of the grid with no way to scroll further and reveal it. A new
+     `main.keyboard-open-padding` class (14rem bottom padding, generous
+     enough to clear the keyboard's real expanded height) is toggled by
+     `script.js` in lockstep with the keyboard's own expand/collapse —
+     never applied while collapsed, so no space is wasted in the common,
+     collapsed-by-default case.
+  The now-orphaned `virtualKeyboardTitle` i18n key (all 5 languages) was
+  removed outright, per this project's no-dead-code convention, once its
+  one and only HTML reference (the removed title `<span>`) was gone.
+
+- A small icon was added at the left of every "Actu Croisée" row, at the
+  user's explicit request: "ajoute à gauche une petite icône permettant
+  de savoir si c'est un lien vers une page web ou une infos RSS." A
+  plain Unicode character (`.rss-item-kind-icon`, matching this project's
+  established convention of never using an external icon font/image for
+  small UI glyphs — see `⌨`/`→`/`↓` elsewhere in this same file) — 🔗 for
+  a `"grid"` item (opens the external grid page directly), 📰 for an
+  `"rss"` item (opens the existing in-page article overlay), the same
+  `kind`-based branch the click handler right below it already used.
+  `#rss-list li` became a flex row (icon, `flex-shrink: 0` so a long
+  title can never compress it, next to a new `.rss-item-text` wrapper
+  holding the existing title/source stack) rather than a single block of
+  text. `title`/`aria-hidden="true"` on the icon give it an accessible
+  tooltip/label (two new i18n keys, `rssItemKindGrid`/`rssItemKindRss`,
+  all 5 languages) without exposing the decorative glyph itself to
+  assistive tech twice over.

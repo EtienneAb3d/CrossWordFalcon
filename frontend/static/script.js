@@ -17,11 +17,16 @@ function applyTranslations() {
     const key = el.getAttribute("data-i18n-aria");
     if (t[key]) el.setAttribute("aria-label", t[key]);
   });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-placeholder");
+    if (t[key]) el.setAttribute("placeholder", t[key]);
+  });
   renderSystemInfoTooltip();
   // Only redraws the idle-state placeholder, never a live hover
   // definition (that's puzzle content, in the grid's own language, not
   // interface chrome — see highlightWordAt()/clearHighlights() below).
   if (!hoveredGridCell) renderHoverDefinitionPlaceholder();
+  renderRssList();
 }
 
 // Idle state for #hover-definition (see the style-guide SKILL) — shown
@@ -76,6 +81,28 @@ const libraryPanel = document.getElementById("library");
 const libraryCloseBtn = document.getElementById("library-close-btn");
 const libraryTbody = document.getElementById("library-tbody");
 const libraryEmpty = document.getElementById("library-empty");
+const libraryPagination = document.getElementById("library-pagination");
+const libraryPrevBtn = document.getElementById("library-prev-btn");
+const libraryNextBtn = document.getElementById("library-next-btn");
+const libraryPosition = document.getElementById("library-position");
+const rssPanel = document.getElementById("rss-panel");
+const virtualKeyboardEl = document.getElementById("virtual-keyboard");
+const virtualKeyboardToggleBtn = document.getElementById("virtual-keyboard-toggle-btn");
+const virtualKeyboardRows = document.getElementById("virtual-keyboard-rows");
+const virtualKeyboardAcrossBtn = document.getElementById("virtual-keyboard-across-btn");
+const virtualKeyboardDownBtn = document.getElementById("virtual-keyboard-down-btn");
+const rssLanguageFilter = document.getElementById("rss-language-filter");
+const rssList = document.getElementById("rss-list");
+const rssDetail = document.getElementById("rss-detail");
+const rssDetailCloseBtn = document.getElementById("rss-detail-close-btn");
+const rssDetailTitle = document.getElementById("rss-detail-title");
+const rssDetailMeta = document.getElementById("rss-detail-meta");
+const rssDetailContent = document.getElementById("rss-detail-content");
+const chatbotEl = document.getElementById("chatbot");
+const chatbotToggleBtn = document.getElementById("chatbot-toggle-btn");
+const chatbotMessages = document.getElementById("chatbot-messages");
+const chatbotForm = document.getElementById("chatbot-form");
+const chatbotInput = document.getElementById("chatbot-input");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
@@ -134,6 +161,265 @@ fetch("/api/system_info")
   })
   .catch(() => {});
 
+// Panneau "Actu Croisée" (flux RSS spécialisés mots croisés — voir
+// fetch_rss_feeds.py/backend/app.py), à la demande explicite de
+// l'utilisateur. Chargé une seule fois, au démarrage de la page — pas de
+// rafraîchissement live pendant la session, le back lui-même ne
+// rafraîchit qu'une fois par jour (voir _rss_daily_scheduler côté back).
+let rssItems = [];
+
+// Autorise un petit sous-ensemble de balises/attributs HTML issus du
+// contenu brut d'un flux RSS (tiers, non maîtrisé) avant de l'insérer
+// dans la page — jamais un innerHTML direct du contenu brut, à la
+// demande explicite de l'utilisateur : "Assure-toi que les liens
+// éventuellement indiqués soient cliquables et renvoient vers un nouvel
+// onglet." Parse via le DOMParser réel du navigateur (jamais une
+// approche par regex sur une chaîne HTML, trop facile à contourner) puis
+// reconstruit un nouvel arbre ne contenant que des éléments/attributs
+// explicitement autorisés — tout le reste (balises non listées, tout
+// attribut "on*", tout attribut absent de la liste blanche de sa propre
+// balise) est silencieusement abandonné plutôt que copié tel quel. Un
+// <a> conserve son "href" uniquement s'il commence par http(s):/mailto:
+// (jamais "javascript:" ou un schéma inconnu) et se voit systématiquement
+// forcer target="_blank" rel="noopener noreferrer", qu'il l'ait déjà eu
+// ou non dans le flux d'origine.
+const RSS_ALLOWED_TAGS = new Set([
+  "p", "br", "b", "strong", "i", "em", "u", "ul", "ol", "li", "blockquote",
+  "a", "img", "div", "span", "h1", "h2", "h3", "h4", "h5", "h6",
+  "table", "thead", "tbody", "tr", "td", "th", "hr", "code", "pre",
+]);
+const RSS_ALLOWED_ATTRS = {
+  a: ["href"],
+  img: ["src", "alt"],
+};
+
+function sanitizeRssHtml(rawHtml) {
+  const doc = new DOMParser().parseFromString(rawHtml || "", "text/html");
+  const out = document.createDocumentFragment();
+  function cloneSafe(node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return document.createTextNode(node.textContent);
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+    const tag = node.tagName.toLowerCase();
+    if (!RSS_ALLOWED_TAGS.has(tag)) {
+      // Balise non autorisée : on garde quand même son propre contenu
+      // textuel/enfants (un <script>/<style> n'a normalement aucun enfant
+      // "visible" pertinent, mais un simple <font>/<center> inconnu, lui,
+      // a un contenu qui mérite de survivre) — seule la balise elle-même
+      // est abandonnée, pas ce qu'elle contenait.
+      const frag = document.createDocumentFragment();
+      node.childNodes.forEach((child) => {
+        const safe = cloneSafe(child);
+        if (safe) frag.appendChild(safe);
+      });
+      return frag;
+    }
+    const el = document.createElement(tag);
+    for (const attr of RSS_ALLOWED_ATTRS[tag] || []) {
+      const value = node.getAttribute(attr);
+      if (!value) continue;
+      if (attr === "href" && !/^(https?:|mailto:)/i.test(value.trim())) continue;
+      el.setAttribute(attr, value);
+    }
+    if (tag === "a") {
+      el.setAttribute("target", "_blank");
+      el.setAttribute("rel", "noopener noreferrer");
+    }
+    node.childNodes.forEach((child) => {
+      const safe = cloneSafe(child);
+      if (safe) el.appendChild(safe);
+    });
+    return el;
+  }
+  doc.body.childNodes.forEach((child) => {
+    const safe = cloneSafe(child);
+    if (safe) out.appendChild(safe);
+  });
+  return out;
+}
+
+function renderRssList() {
+  const t = I18N[uiLanguage];
+  rssList.replaceChildren();
+  // Filtre par langue (voir #rss-language-filter), à la demande explicite
+  // de l'utilisateur — "all" (Toutes les langues, en tête de liste)
+  // n'exclut rien ; toute autre valeur ne garde que les articles de cette
+  // langue exacte (voir fetch_rss_feeds.py's own "language" field).
+  const filterLang = rssLanguageFilter.value;
+  let filteredItems = filterLang === "all"
+    ? rssItems
+    : rssItems.filter((item) => item.language === filterLang);
+  // Repli sur l'anglais si la langue choisie n'a aucun article, à la
+  // demande explicite de l'utilisateur ("afficher la liste anglaise" +
+  // un message l'expliquant en haut de la liste) — jamais quand la langue
+  // choisie est déjà "en" ou "all" (le repli lui-même, ou déjà tout
+  // montré), pour ne jamais boucler sur lui-même ni masquer un "aucun
+  // article" réellement global (tout repli anglais lui-même vide).
+  let showFallbackNotice = false;
+  if (!filteredItems.length && filterLang !== "all" && filterLang !== "en") {
+    const englishItems = rssItems.filter((item) => item.language === "en");
+    if (englishItems.length) {
+      filteredItems = englishItems;
+      showFallbackNotice = true;
+    }
+  }
+  if (showFallbackNotice) {
+    const notice = document.createElement("p");
+    notice.id = "rss-language-fallback-notice";
+    notice.textContent = t.rssLanguageFallbackNotice;
+    rssList.appendChild(notice);
+  }
+  if (!filteredItems.length) {
+    const empty = document.createElement("p");
+    empty.id = "rss-empty";
+    empty.textContent = t.rssEmpty;
+    rssList.appendChild(empty);
+    return;
+  }
+  filteredItems.forEach((item) => {
+    const index = rssItems.indexOf(item);
+    const li = document.createElement("li");
+    li.tabIndex = 0;
+    // Petite icône à gauche indiquant l'origine de l'entrée, à la demande
+    // explicite de l'utilisateur : "ajoute à gauche une petite icône
+    // permettant de savoir si c'est un lien vers une page web ou une
+    // infos RSS." Un simple caractère Unicode (comme #virtual-keyboard's
+    // own "⌨"/"→"/"↓" ailleurs dans ce fichier), jamais une image/icône
+    // externe — 🔗 pour "grid" (un clic ouvre directement la page externe
+    // de la grille), 📰 pour "rss" (un clic ouvre l'aperçu d'article
+    // interne) — le même repli "rss" qu'ailleurs pour un item sans
+    // `kind` du tout (cache écrit avant l'ajout de ce champ).
+    const isGrid = item.kind === "grid";
+    const kindIcon = document.createElement("span");
+    kindIcon.className = "rss-item-kind-icon";
+    kindIcon.textContent = isGrid ? "🔗" : "📰";
+    kindIcon.title = isGrid ? t.rssItemKindGrid : t.rssItemKindRss;
+    kindIcon.setAttribute("aria-hidden", "true");
+    li.appendChild(kindIcon);
+    const textWrap = document.createElement("div");
+    textWrap.className = "rss-item-text";
+    const title = document.createElement("div");
+    title.textContent = item.title;
+    const source = document.createElement("div");
+    source.className = "rss-item-source";
+    source.textContent = item.source;
+    textWrap.appendChild(title);
+    textWrap.appendChild(source);
+    li.appendChild(textWrap);
+    // Deux origines fusionnées dans le même journal, à la demande
+    // explicite de l'utilisateur ("Ajoute les entrées de SCRAPP aux
+    // journal de la première page, sachant que cette fois, un clic
+    // renvoie directement sur la page de la grille — pas d'article à
+    // afficher sur notre site") : une entrée RSS (item.kind === "rss",
+    // ou absent — repli pour un cache déjà écrit avant l'ajout de ce
+    // champ) ouvre toujours l'aperçu interne existant ; une entrée
+    // "grid" (fetch_grid_links.py/SCRAPP) ouvre directement l'URL
+    // externe de la grille dans un nouvel onglet, sans aucun aperçu.
+    // (`isGrid` déjà calculé plus haut pour l'icône.)
+    const open = isGrid
+      ? () => window.open(item.link, "_blank", "noopener,noreferrer")
+      : () => openRssDetail(index);
+    li.addEventListener("click", open);
+    li.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open();
+      }
+    });
+    rssList.appendChild(li);
+  });
+}
+
+function openRssDetail(index) {
+  const item = rssItems[index];
+  if (!item) return;
+  rssDetailTitle.textContent = item.title;
+  rssDetailMeta.textContent = item.pub_date
+    ? `${item.source} — ${new Date(item.pub_date).toLocaleString(uiLanguage)}`
+    : item.source;
+  rssDetailContent.replaceChildren(sanitizeRssHtml(item.content_html));
+  rssDetail.hidden = false;
+}
+
+function closeRssDetail() {
+  rssDetail.hidden = true;
+}
+
+rssDetailCloseBtn.addEventListener("click", closeRssDetail);
+
+// Fermeture au clavier (touche Echap), à la demande explicite de
+// l'utilisateur — vérifie `!rssDetail.hidden` en premier, pas de coût ni
+// d'effet quand l'overlay n'est de toute façon pas ouvert.
+document.addEventListener("keydown", (event) => {
+  if (!rssDetail.hidden && event.key === "Escape") {
+    closeRssDetail();
+  }
+});
+
+// Valeur par défaut = langue courante de l'interface au chargement de la
+// page, à la demande explicite de l'utilisateur ("Par défaut, la langue
+// de l'interface"). Resynchronisée à chaque changement ultérieur de
+// langue de l'interface aussi, désormais (voir languageSelect's own
+// "change" listener plus bas) — un revirement assumé par rapport à la
+// décision initiale ("jamais resynchronisée... pour ne pas écraser un
+// choix du joueur"), suite à une demande explicite et plus récente de
+// l'utilisateur : "Quand l'utilisateur change la langue de l'interface,
+// il faut adapter la langue du fil d'actu."
+rssLanguageFilter.value = uiLanguage;
+rssLanguageFilter.addEventListener("change", renderRssList);
+
+// Le panneau "Actu Croisée" (#rss-panel) disparaît dès que l'un des trois
+// panneaux centraux (#library, #attempt-preview, #result) est affiché, à
+// la demande explicite de l'utilisateur : "Le journal d'actu doit
+// disparaître quand quelque chose d'autre doit s'afficher, par exemple
+// la Bibliothèque (actuellement, la Bibliothèque s'affiche sous le
+// journal)." Un revirement assumé par rapport à une demande antérieure
+// de ce même projet (le panneau était devenu un frère de ces trois
+// sections, jamais caché par elles, justement pour ne plus disparaître
+// — voir plus haut dans ce fichier) : la préférence la plus récente de
+// l'utilisateur prévaut. Appelée à chaque endroit qui bascule la
+// visibilité de l'un des trois panneaux plutôt que de dupliquer cette
+// logique — un seul point de vérité pour la règle "au moins un des
+// trois est visible => masquer le journal".
+// Vrai pendant toute la durée d'une génération de grille (voir
+// runGeneration() plus bas), pas seulement une fois qu'un des trois
+// panneaux centraux est effectivement visible — corrige un vrai trou
+// rapporté par l'utilisateur : "Le panneau d'actu doit disparaître quand
+// on doit afficher autre chose sur la partie centrale (Bibliothèque,
+// génération de grille, etc)." Entre l'envoi du formulaire et le tout
+// premier événement d'aperçu reçu du back, ni #library, ni #attempt-
+// preview, ni #result ne sont encore visibles — sans ce drapeau,
+// syncRssPanelVisibility() aurait alors, à tort, laissé réapparaître le
+// journal pendant cette fenêtre.
+let generationInProgress = false;
+
+function syncRssPanelVisibility() {
+  rssPanel.hidden = generationInProgress
+    || !(libraryPanel.hidden && attemptPreview.hidden && result.hidden);
+}
+// Etat initial explicite plutôt que de compter sur une simple coïncidence
+// entre l'état `hidden` par défaut de index.html et cette règle.
+syncRssPanelVisibility();
+
+// Fusionne les deux sources dans un seul journal chronologique, à la
+// demande explicite de l'utilisateur — deux fetch indépendants
+// (Promise.allSettled : l'échec de l'un ne doit jamais empêcher
+// d'afficher ce que l'autre a bien renvoyé), rassemblés puis triés une
+// seule fois par date de publication décroissante (même critère de tri
+// que chaque script d'origine applique déjà côté serveur — refait ici
+// car merger deux listes déjà triées ne garantit pas, à lui seul, que le
+// résultat combiné le reste).
+Promise.allSettled([
+  fetch("/api/rss").then((r) => r.json()),
+  fetch("/api/scrapp").then((r) => r.json()),
+]).then(([rssResult, scrappResult]) => {
+  const rss = rssResult.status === "fulfilled" ? (rssResult.value.items || []) : [];
+  const scrapp = scrappResult.status === "fulfilled" ? (scrappResult.value.items || []) : [];
+  rssItems = [...rss, ...scrapp].sort((a, b) => (b.pub_date || "").localeCompare(a.pub_date || ""));
+  renderRssList();
+});
+
 // Current puzzle state.
 let puzzle = null; // { width, height, pattern, solution, words }
 let userLetters = []; // [row][col] -> letter typed by the player, or ""
@@ -152,6 +438,15 @@ let showDefinitions = false;
 // grid itself is fully re-rendered rather than patched.
 let cellElements = new Map(); // "row,col" -> cell element (white cells only)
 let hoveredGridCell = null; // { row, col } while the mouse is over a grid cell, else null
+// The word currently framed by the hover highlight — { row, col, direction }
+// of its own starting cell, matching a puzzle.words entry's own shape — or
+// null when nothing is hovered. Distinct from `selected` (the clicked cell
+// the player is actively typing into): the user explicitly pointed out that
+// "quel est le mot sélectionné" refers to whichever word the mouse is
+// currently over (hover), never the click-to-type target — David FALCON
+// (see buildChatUiContext()) is told about both, under clearly separate
+// labels, precisely so it doesn't conflate the two.
+let hoveredWord = null;
 
 // Finds every cell of the white-cell run through (row, col) in `direction`
 // ("across"/"down") by scanning the pattern outward until a black cell or
@@ -177,6 +472,7 @@ function wordCellsAt(row, col, direction) {
 function clearHighlights() {
   document.querySelectorAll(".cell.word-highlight").forEach((el) => el.classList.remove("word-highlight"));
   document.querySelectorAll(".clue-segment.hover-highlight").forEach((el) => el.classList.remove("hover-highlight"));
+  hoveredWord = null;
   renderHoverDefinitionPlaceholder();
 }
 
@@ -202,6 +498,7 @@ function highlightWordAt(row, col, direction) {
     if (el) el.classList.add("word-highlight");
   }
   const start = cells[0];
+  hoveredWord = { row: start.row, col: start.col, direction };
   const selector = `.clue-segment[data-row="${start.row}"][data-col="${start.col}"][data-direction="${direction}"]`;
   const segment = document.querySelector(selector);
   if (segment) {
@@ -450,6 +747,7 @@ function renderAttemptPreview(examples) {
     attemptPreviewGrids.appendChild(item);
   }
   attemptPreview.hidden = false;
+  syncRssPanelVisibility();
 }
 
 // Bi-stable toggle (same pattern as solutionBtn/checkBtn below), at the
@@ -768,6 +1066,7 @@ function hideAttemptPreview() {
   autoFollowPreview = true;
   renderWordTable(null);
   updatePreviewNavButtons();
+  syncRssPanelVisibility();
 }
 
 // Hides the attempt-preview panel WITHOUT wiping previewHistory, at the
@@ -782,6 +1081,7 @@ function hideAttemptPreview() {
 // runGeneration().
 function hideAttemptPreviewPanel() {
   attemptPreview.hidden = true;
+  syncRssPanelVisibility();
 }
 
 // The two buttons at the end of #generation-times reuse the exact same
@@ -791,10 +1091,12 @@ function hideAttemptPreviewPanel() {
 // leaves it hidden but its content/history intact once a grid is ready.
 generationTimesPrevBtn.addEventListener("click", () => {
   attemptPreview.hidden = false;
+  syncRssPanelVisibility();
   showPreviousPreview();
 });
 generationTimesNextBtn.addEventListener("click", () => {
   attemptPreview.hidden = false;
+  syncRssPanelVisibility();
   showNextPreview();
 });
 
@@ -828,6 +1130,16 @@ function moveSelection(direction) {
 }
 
 function handleKeydown(event) {
+  // Never intercept a keystroke meant for a focused text field — reported
+  // live by the user: with a grid cell selected, clicking into #chatbot-
+  // input to type a question still had every letter/Backspace keystroke
+  // swallowed here (preventDefault()'d and written into the grid) instead
+  // of reaching the chat box. Guards on whatever element is actually
+  // focused, generically (any <input>/<textarea>), not just the chat
+  // input by id — so any other text field added later is protected the
+  // same way, with no need to special-case it here too.
+  const active = document.activeElement;
+  if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
   if (!puzzle || !selected || showSolution) return;
   const key = event.key;
 
@@ -1037,6 +1349,83 @@ checkBtn.addEventListener("click", toggleChecking);
 definitionsBtn.addEventListener("click", toggleDefinitions);
 document.addEventListener("keydown", handleKeydown);
 
+// Clavier virtuel, à la demande explicite de l'utilisateur : "un clavier
+// virtuel ne contenant que les 26 lettres de l'alphabet en majuscules
+// dans l'ordre naturel sur 2 lignes, plus une flèche vers le bas pour
+// configurer le sens vertical... et une flèche vers la droite pour
+// configurer le sens horizontalement." `virtualKeyboardDirection` est un
+// mode persistant (façon CAPS LOCK, pas SHIFT maintenu — un bouton
+// cliqué ne peut pas vraiment être "maintenu") plutôt qu'un état par
+// touche : reste actif jusqu'à ce que l'autre bouton de direction soit
+// cliqué, exactement comme handleKeydown()'s propre distinction
+// Shift/CapsLock (isUpper) décide déjà du sens pour une frappe physique,
+// mais fixé une fois pour toutes ici plutôt que réévalué à chaque lettre.
+let virtualKeyboardDirection = "across";
+
+function setVirtualKeyboardDirection(direction) {
+  virtualKeyboardDirection = direction;
+  virtualKeyboardAcrossBtn.classList.toggle("active", direction === "across");
+  virtualKeyboardDownBtn.classList.toggle("active", direction === "down");
+}
+
+function typeVirtualLetter(letter) {
+  // Mêmes gardes que handleKeydown() : une lettre cliquée quand aucune
+  // case n'est sélectionnée, ou que la solution est affichée, ne fait
+  // rien plutôt que d'écrire dans le vide ou d'écraser la solution.
+  if (!puzzle || !selected || showSolution) return;
+  userLetters[selected.row][selected.col] = letter;
+  // moveSelection() attend "right" pour horizontal, n'importe quelle
+  // autre valeur pour vertical (voir sa propre définition) — pas les
+  // mêmes libellés que virtualKeyboardDirection ("across"/"down").
+  moveSelection(virtualKeyboardDirection === "across" ? "right" : "down");
+  renderGrid();
+}
+
+function buildVirtualKeyboard() {
+  virtualKeyboardRows.replaceChildren();
+  const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  // 2 rangs de 13 lettres chacun (A-M puis N-Z), l'ordre alphabétique
+  // naturel demandé — pas une disposition QWERTY/AZERTY.
+  const rows = [letters.slice(0, 13), letters.slice(13)];
+  for (const row of rows) {
+    const rowEl = document.createElement("div");
+    rowEl.className = "virtual-keyboard-row";
+    for (const letter of row) {
+      const key = document.createElement("button");
+      key.type = "button";
+      key.className = "virtual-keyboard-key";
+      key.textContent = letter;
+      key.addEventListener("click", () => typeVirtualLetter(letter));
+      rowEl.appendChild(key);
+    }
+    virtualKeyboardRows.appendChild(rowEl);
+  }
+}
+
+buildVirtualKeyboard();
+virtualKeyboardAcrossBtn.addEventListener("click", () => setVirtualKeyboardDirection("across"));
+virtualKeyboardDownBtn.addEventListener("click", () => setVirtualKeyboardDirection("down"));
+// La grille (ou tout autre contenu en bas de page) était masquée par le
+// clavier virtuel déplié, sans aucun moyen de défiler plus bas pour la
+// faire remonter au-dessus — rapporté directement par l'utilisateur.
+// #virtual-keyboard est en `position: fixed`, donc totalement indépendant
+// de la hauteur réelle de <main> : la page ne peut jamais défiler plus
+// loin que le bas naturel de <main> lui-même, qui n'a aucune raison de
+// réserver de la place pour un widget flottant qu'il ignore. Une classe
+// dédiée sur <main>, ajoutée/retirée en même temps que le clavier se
+// déplie/replie, réserve un espace supplémentaire en bas de page
+// uniquement pendant que le clavier est réellement ouvert — jamais tout
+// le temps, pour ne pas gâcher d'espace quand il est replié (repli par
+// défaut).
+const mainEl = document.querySelector("main");
+virtualKeyboardToggleBtn.addEventListener("click", () => {
+  virtualKeyboardEl.classList.toggle("virtual-keyboard-collapsed");
+  mainEl.classList.toggle(
+    "keyboard-open-padding",
+    !virtualKeyboardEl.classList.contains("virtual-keyboard-collapsed"),
+  );
+});
+
 languageSelect.addEventListener("change", () => {
   uiLanguage = languageSelect.value;
   applyTranslations();
@@ -1051,6 +1440,22 @@ languageSelect.addEventListener("change", () => {
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
   renderPreviewStatus();
   renderPreviewPosition();
+  // "David FALCON"'s own welcome bubble, at the user's explicit request
+  // — see renderChatWelcome()'s own docstring for why this only ever
+  // does anything before the player's first real message.
+  renderChatWelcome();
+  // Le filtre de langue du panneau "Actu Croisée" suit désormais la
+  // langue de l'interface à chaque changement, à la demande explicite de
+  // l'utilisateur : "Quand l'utilisateur change la langue de
+  // l'interface, il faut adapter la langue du fil d'actu." Revirement
+  // assumé par rapport à la décision initiale de ce même panneau (fixé
+  // une seule fois au chargement, jamais resynchronisé ensuite pour ne
+  // pas écraser un choix manuel du joueur sur ce sélecteur précisément)
+  // — la préférence la plus récente de l'utilisateur prévaut, même
+  // schéma de revirement déjà appliqué cette session à la visibilité du
+  // panneau lui-même.
+  rssLanguageFilter.value = uiLanguage;
+  renderRssList();
 });
 
 applyTranslations();
@@ -1116,6 +1521,12 @@ const PREVIEW_REVEAL_INTERVAL_MS = 500;
 // round trip through the proxy doesn't race against this client-side abort.
 const FETCH_TIMEOUT_MS = 35000;
 
+// A chat reply (POST /api/chat) is a single, synchronous LLM call, not a
+// quick status check — set above frontend/server.py's own CHAT_PROXY_
+// TIMEOUT_S (150s), same "above the callee's own timeout" reasoning as
+// FETCH_TIMEOUT_MS itself vs. PROXY_TIMEOUT_S.
+const CHAT_FETCH_TIMEOUT_MS = 160000;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -1175,6 +1586,12 @@ function describeStep(t, step) {
   switch (step.code) {
     case "starting":
       message = t.statusStarting;
+      break;
+    case "queued_grid":
+      message = t.statusQueuedGrid(step.position, step.queue_length);
+      break;
+    case "queued_clues":
+      message = t.statusQueuedClues(step.position, step.queue_length);
       break;
     case "pattern":
       message = t.statusPattern(step.attempt, step.attempts, formatAttemptCount(step.total_attempts));
@@ -1400,6 +1817,7 @@ function displayFinalGrid(gridData) {
   // renderGrid() runs — see runGeneration()'s own historical note on this
   // exact ordering requirement (renderGrid() measures gridEl.offsetWidth).
   result.hidden = false;
+  syncRssPanelVisibility();
   // Grid title (see backend/clues.py's LLMClueGenerator.generate_title),
   // at the user's explicit request: "Affiche ce nom en haut de la grille
   // à jouer." A grid saved before this feature existed (or one whose
@@ -1432,7 +1850,22 @@ function displayFinalGrid(gridData) {
 
 function hideLibraryPanel() {
   libraryPanel.hidden = true;
+  syncRssPanelVisibility();
 }
+
+// 1-based, reset to 1 every time the panel is (re)opened (see the
+// libraryBtn click handler below) — module-level rather than a
+// renderLibraryList() parameter so libraryPrevBtn/libraryNextBtn's own
+// click handlers can mutate it and re-render without threading it
+// through every call site.
+let libraryCurrentPage = 1;
+// Recomputed on every renderLibraryList() call from the response's own
+// `total`/`page_size` — kept around (rather than only a local variable
+// there) so libraryNextBtn's own click handler can bound-check against it
+// too, the same defensive belt-and-suspenders style already used by
+// showNextPreview()'s own out-of-range guard (never relying solely on the
+// button's native `disabled` attribute to prevent an out-of-range click).
+let libraryTotalPages = 1;
 
 // "Bibliothèque" button (permanent, unlike every other button in
 // #generate-form — see index.html), at the user's explicit request:
@@ -1444,24 +1877,47 @@ function hideLibraryPanel() {
 // fresh every time the panel opens rather than cached, since a grid saved
 // by a generation finishing in another tab (or another browser entirely)
 // should show up without needing a page reload.
+//
+// Paginated (20 rows per page — see backend/app.py's own LIBRARY_PAGE_
+// SIZE, the actual source of truth this reads back from the response
+// rather than duplicating the number client-side), at the user's
+// explicit request: "Ajoute une pagination à la liste des grilles de la
+// bibliothèque : 20 lignes affichées max à chaque page." The pagination
+// itself is server-side (GET /api/library?page=N) — this just renders
+// whichever single page's worth of rows came back, plus a "Page X/Y"
+// readout and disables libraryPrevBtn/libraryNextBtn at either end, from
+// the `total`/`page_size` the same response carries.
 async function renderLibraryList() {
   const t = I18N[uiLanguage];
   libraryTbody.replaceChildren();
   libraryEmpty.hidden = true;
+  libraryPagination.hidden = true;
   let entries = [];
+  let total = 0;
+  let pageSize = 1;
   try {
     const response = await fetchWithTimeout(
-      `/api/library?preferred_language=${encodeURIComponent(uiLanguage)}`, {}, FETCH_TIMEOUT_MS,
+      `/api/library?preferred_language=${encodeURIComponent(uiLanguage)}&page=${libraryCurrentPage}`,
+      {}, FETCH_TIMEOUT_MS,
     );
     if (response.ok) {
       const data = await response.json();
       entries = data.grids || [];
+      total = data.total || 0;
+      pageSize = data.page_size || 1;
     }
   } catch (err) {
     // Best-effort: a browsing feature failing silently (empty list) is
     // preferable to surfacing a connection error over it, especially
     // since #status may currently be showing an unrelated generation's
     // own progress.
+  }
+  if (total > 0) {
+    libraryTotalPages = Math.max(1, Math.ceil(total / pageSize));
+    libraryPagination.hidden = false;
+    libraryPosition.textContent = t.libraryPosition(libraryCurrentPage, libraryTotalPages);
+    libraryPrevBtn.disabled = libraryCurrentPage <= 1;
+    libraryNextBtn.disabled = libraryCurrentPage >= libraryTotalPages;
   }
   if (entries.length === 0) {
     libraryEmpty.hidden = false;
@@ -1534,6 +1990,8 @@ async function loadLibraryGrid(gridId) {
 libraryBtn.addEventListener("click", () => {
   if (libraryPanel.hidden) {
     libraryPanel.hidden = false;
+    syncRssPanelVisibility();
+    libraryCurrentPage = 1;
     renderLibraryList();
   } else {
     hideLibraryPanel();
@@ -1541,6 +1999,281 @@ libraryBtn.addEventListener("click", () => {
 });
 
 libraryCloseBtn.addEventListener("click", hideLibraryPanel);
+
+libraryPrevBtn.addEventListener("click", () => {
+  if (libraryCurrentPage <= 1) return;
+  libraryCurrentPage -= 1;
+  renderLibraryList();
+});
+
+libraryNextBtn.addEventListener("click", () => {
+  if (libraryCurrentPage >= libraryTotalPages) return;
+  libraryCurrentPage += 1;
+  renderLibraryList();
+});
+
+// "David FALCON" chat widget, at the user's explicit request: "En bas à
+// droite de l'interface, ajoute un ChatBot (ouvert par défaut) avec
+// l'icône de l'application... Il affiche un message de bienvenue...
+// Le message de bienvenu doit être réécrit si l'utilisateur change la
+// langue." `chatHistory` only ever holds genuine user/assistant turns
+// actually exchanged with the LLM (backend/chatbot.py rebuilds its own
+// system prompt fresh every call, so this never includes it) — the
+// purely cosmetic welcome bubble is rendered straight to the DOM and
+// deliberately never added here, since it was never something the model
+// actually said. `chatUserHasSpoken` gates the "rewrite the welcome
+// message on language change" behavior: once the player has sent a real
+// message, the welcome bubble is already part of the conversation's own
+// past and is left alone on a later language change, rather than
+// retroactively rewriting an earlier turn mid-conversation — only
+// before any real exchange has happened does switching languages
+// replace the single greeting bubble shown so far.
+let chatHistory = [];
+let chatUserHasSpoken = false;
+// Identifiant opaque, généré une seule fois par chargement de page, à la
+// demande explicite de l'utilisateur : "Pour chaque discussion dans le
+// ChatBot, crée un LOG des questions/réponses... Un fichier par session
+// utilisateur." Envoyé sur chaque message (voir plus bas) pour que
+// backend/app.py route tous les tours de cette même conversation vers le
+// même fichier de log. `crypto.randomUUID()` est disponible dans tout
+// navigateur moderne servant cette page en HTTPS/localhost (les deux
+// seuls contextes où l'API Web Crypto est exposée) ; un repli simple
+// (horodatage + nombre aléatoire) couvre le cas contraire plutôt que de
+// faire planter le chat entier pour un identifiant qui n'a besoin que
+// d'être raisonnablement unique, jamais cryptographiquement sûr.
+const chatSessionId = (window.crypto && window.crypto.randomUUID)
+  ? window.crypto.randomUUID()
+  : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// A small, self-contained Markdown-to-HTML renderer for David FALCON's own
+// replies, at the user's explicit request: "L'affichage du Bot doit être
+// capable de formatter du Markdown produit par le LLM." Deliberately not a
+// third-party library pulled in from a CDN — this project has never had an
+// external frontend dependency of any kind (see index.html's own two plain
+// <script> tags), and the small subset of Markdown this project's own small
+// local model actually produces (bold, italics, inline code, bullet/
+// numbered lists, the occasional heading) doesn't need one. `text` is
+// HTML-escaped FIRST, unconditionally, before any Markdown syntax is
+// turned into real tags — this is the one thing that makes it safe to
+// render as `innerHTML` at all: whatever the LLM writes can only ever
+// become the small, fixed set of tags this function itself emits below,
+// never arbitrary markup of its own.
+function renderInlineMarkdown(escaped) {
+  return escaped
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\s][^*]*?)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/(^|[^_\w])_([^_\s][^_]*?)_(?!_)/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+}
+
+function renderMarkdown(text) {
+  const lines = escapeHtml(text).split("\n");
+  const htmlParts = [];
+  let listItems = null;
+  let listTag = null;
+  const flushList = () => {
+    if (listItems) {
+      htmlParts.push(`<${listTag}>${listItems.join("")}</${listTag}>`);
+      listItems = null;
+      listTag = null;
+    }
+  };
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    const bulletMatch = line.match(/^[-*+]\s+(.*)$/);
+    const numberedMatch = line.match(/^\d+[.)]\s+(.*)$/);
+    const headingMatch = line.match(/^#{1,6}\s+(.*)$/);
+    if (bulletMatch || numberedMatch) {
+      const tag = bulletMatch ? "ul" : "ol";
+      const content = bulletMatch ? bulletMatch[1] : numberedMatch[1];
+      if (listTag && listTag !== tag) flushList();
+      listTag = tag;
+      listItems = listItems || [];
+      listItems.push(`<li>${renderInlineMarkdown(content)}</li>`);
+    } else {
+      flushList();
+      if (headingMatch) {
+        htmlParts.push(`<p><strong>${renderInlineMarkdown(headingMatch[1])}</strong></p>`);
+      } else if (line) {
+        htmlParts.push(`<p>${renderInlineMarkdown(line)}</p>`);
+      }
+    }
+  }
+  flushList();
+  return htmlParts.join("");
+}
+
+function appendChatBubble(role, text) {
+  const bubble = document.createElement("div");
+  bubble.className = `chatbot-message chatbot-message-${role}`;
+  // Only the assistant's own replies are ever interpreted as Markdown —
+  // the player's own typed message stays literal plain text, exactly as
+  // typed, with no reason to interpret any Markdown-like syntax in it.
+  if (role === "assistant") {
+    bubble.innerHTML = renderMarkdown(text);
+  } else {
+    bubble.textContent = text;
+  }
+  chatbotMessages.appendChild(bubble);
+  chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
+  return bubble;
+}
+
+function renderChatWelcome() {
+  if (chatUserHasSpoken) return;
+  chatbotMessages.replaceChildren();
+  appendChatBubble("assistant", I18N[uiLanguage].chatbotWelcome);
+}
+
+// Everything David FALCON is told about the live interface state, at the
+// user's explicit request: "A chaque question de l'utilisateur, le LLM
+// est informé de... l'état de l'interface, y compris la position et le
+// sens d'un éventuel mot sélectionner dans la grille à jouer [et] la
+// liste des définitions... numéro de ligne et de colonne de chaque mot,
+// vertical ou horizontal, définition, valeur du mot (réponse)." Reports
+// two genuinely distinct concepts, at the user's own later, explicit
+// clarification: "un mot est sélectionné en passant la souris au dessus
+// sans forcément cliquer sur une case. Faire la différence entre 'mot
+// sélectionné' (survol) et 'case/mot en cours de remplissage' (cliqué)."
+//   - `hovered_word` — the word currently framed by the mouse-hover
+//     highlight (`hoveredWord`, see highlightWordAt()/clearHighlights()),
+//     already resolved to one specific word's own (row, col, direction) —
+//     this is what "quel est le mot sélectionné" actually refers to.
+//   - `filling_cell` — the clicked cell the player is actively typing
+//     into (`selected`, see selectCell()), which has no direction of its
+//     own and can belong to up to two words (across and down) at once;
+//     sent as a raw position rather than pre-resolved to one word, same
+//     as before this clarification — backend/chatbot.py's own
+//     _find_selected_words() does that resolution.
+// Both are sent alongside the *entire* word list either way (each word's
+// own row/col/direction/answer lets a lookup by either concept work, and
+// each word's own length is simply len(answer) — no separate field
+// needed for it).
+function buildChatUiContext() {
+  return {
+    puzzle_loaded: !!puzzle,
+    hovered_word: hoveredWord ? { row: hoveredWord.row, col: hoveredWord.col, direction: hoveredWord.direction } : null,
+    filling_cell: selected ? { row: selected.row, col: selected.col } : null,
+    words: puzzle
+      ? puzzle.words.map((w) => ({
+          row: w.row, col: w.col, direction: w.direction, clue: w.clue, answer: w.answer,
+        }))
+      : [],
+  };
+}
+
+function toggleChatbotCollapsed() {
+  chatbotEl.classList.toggle("chatbot-collapsed");
+}
+chatbotToggleBtn.addEventListener("click", toggleChatbotCollapsed);
+// Icône cliquable en mode réduit (le bouton "–" lui-même est alors caché,
+// voir style.css), à la demande explicite de l'utilisateur : "En mode
+// 'réduit', le ChatBot doit afficher l'icône du site" — même fonction de
+// bascule que le bouton, réutilisée telle quelle plutôt que dupliquée.
+document.getElementById("chatbot-icon").addEventListener("click", toggleChatbotCollapsed);
+
+// Reads POST /api/chat's own text/event-stream body (frontend/server.py
+// relays it chunk by chunk, backend/app.py/backend/chatbot.py's own
+// ChatBot.reply_stream() produce it) and calls `onDelta(text)` for every
+// `{"delta": ...}` event as it arrives, in order — at the user's
+// explicit request: "Le Bot doit afficher la réponse en streaming."
+// Returns the full reply once the stream ends (`data: [DONE]`), or
+// throws if the very first event is a `{"error": ...}` one (a connection
+// failure that happened before any real content was ever produced —
+// see frontend/server.py's own proxy_chat docstring for why this arrives
+// as a normal 200 stream event rather than a non-2xx HTTP status). A
+// `{"error": ...}` event arriving *after* some real content already
+// streamed in is treated as "stop here, keep what we have" rather than
+// discarding it — there's no clean way to retroactively un-show text the
+// player has already seen appear.
+async function readChatStream(response, onDelta) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let full = "";
+  let sawAnyDelta = false;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let sepIndex;
+    while ((sepIndex = buffer.indexOf("\n\n")) !== -1) {
+      const rawEvent = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+      if (!rawEvent.startsWith("data: ")) continue;
+      const payload = rawEvent.slice(6).trim();
+      if (payload === "[DONE]") return full;
+      let event;
+      try {
+        event = JSON.parse(payload);
+      } catch (err) {
+        continue;
+      }
+      if (event.error) {
+        if (!sawAnyDelta) throw new Error(event.error);
+        return full;
+      }
+      if (event.delta) {
+        sawAnyDelta = true;
+        full += event.delta;
+        onDelta(full);
+      }
+    }
+  }
+  return full;
+}
+
+chatbotForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const message = chatbotInput.value.trim();
+  if (!message) return;
+  const t = I18N[uiLanguage];
+  chatUserHasSpoken = true;
+  chatbotInput.value = "";
+  chatbotInput.disabled = true;
+  appendChatBubble("user", message);
+  const replyBubble = appendChatBubble("assistant", "");
+  let fullReply = "";
+  try {
+    const response = await fetchWithTimeout("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message,
+        history: chatHistory,
+        language: uiLanguage,
+        ui_context: buildChatUiContext(),
+        session_id: chatSessionId,
+      }),
+    }, CHAT_FETCH_TIMEOUT_MS);
+    if (!response.ok || !response.body) throw new Error(t.chatbotErrorFailed);
+    fullReply = await readChatStream(response, (textSoFar) => {
+      // Re-rendered from scratch on every incremental chunk — the raw
+      // Markdown source itself (never partially-rendered HTML) is what's
+      // accumulated, so a `**bold**` marker split across two separate
+      // stream chunks still renders correctly once its closing `**`
+      // finally arrives, rather than ever being parsed a token at a time.
+      replyBubble.innerHTML = renderMarkdown(textSoFar);
+      chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
+    });
+    if (!fullReply) throw new Error(t.chatbotErrorFailed);
+    chatHistory.push({ role: "user", content: message });
+    chatHistory.push({ role: "assistant", content: fullReply });
+  } catch (err) {
+    replyBubble.innerHTML = renderMarkdown(t.chatbotErrorFailed);
+  } finally {
+    chatbotInput.disabled = false;
+    chatbotInput.focus();
+    chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
+  }
+});
+
+renderChatWelcome();
 
 // Shared by the form's own submit handler and continueBtn's click handler
 // (both further below) — at the user's explicit request: "Continuer"
@@ -1554,8 +2287,10 @@ libraryCloseBtn.addEventListener("click", hideLibraryPanel);
 async function runGeneration(startJob) {
   const t = I18N[uiLanguage];
 
+  generationInProgress = true;
   button.disabled = true;
   result.hidden = true;
+  syncRssPanelVisibility();
   solutionBtn.hidden = true;
   checkBtn.hidden = true;
   definitionsBtn.hidden = true;
@@ -1601,6 +2336,8 @@ async function runGeneration(startJob) {
     button.disabled = false;
     stopBtn.hidden = true;
     currentJobId = null;
+    generationInProgress = false;
+    syncRssPanelVisibility();
   }
 }
 

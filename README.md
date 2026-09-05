@@ -146,6 +146,33 @@ Two buttons above the grid help you check your progress:
   turn green, wrong ones turn red; click it again to return to the plain
   grid.
 
+### Library
+
+The **"Library"** button (always visible, top right of the form) opens a
+list of every grid you've ever generated on this server — its language,
+date, title, difficulty, and size, 20 per page, most recent first.
+Click a row to load that grid straight into the player, exactly as if it
+had just finished generating.
+
+If two people generate grids around the same time, each generation
+waits its turn in one of two short queues (one for building the grid
+itself, one for writing its definitions) so the machine isn't asked to
+do too much at once — the status line shows your place in line while
+you wait. While waiting, you can always browse and play a grid from the
+Library instead — yours will be added there automatically the moment
+it's ready.
+
+### Chatting with David FALCON
+
+A small chat panel, open by default in the bottom-right corner of the
+page, lets you talk to **David FALCON**, an in-app assistant. Ask it how
+to use a feature of the page, or for a hint on the word you currently
+have selected in the grid — it can see the whole grid's clues and
+answers, and replies in whatever language you've chosen. It only
+answers questions about this app or about solving the current grid; for
+anything else, it will politely point you elsewhere. Click the small
+button in its title bar to collapse or reopen it.
+
 ## Going further
 
 A technical document, for developers who want to understand or modify how

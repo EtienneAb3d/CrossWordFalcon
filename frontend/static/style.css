@@ -58,10 +58,35 @@ body::before {
   pointer-events: none;
 }
 
+/* `min-height: 100vh` + une colonne flexible, à la demande explicite de
+   l'utilisateur ("Afficher les actus en dessous des boutons de
+   l'application, sur ce qui reste de fenêtre vide") — #rss-panel (seul
+   enfant avec `flex: 1`, voir plus bas) grandit alors pour occuper tout
+   l'espace vertical encore libre de la fenêtre, quelle que soit la
+   hauteur réelle du formulaire au-dessus de lui ; les autres enfants
+   (#generate-form, #library/#attempt-preview/#result une fois affichés)
+   gardent leur propre hauteur naturelle, `display: flex` en colonne ne
+   change rien à leur mise en page interne. */
 main {
   width: 80%;
   margin: 0 auto;
   padding: 2rem 1rem 4rem;
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Marge de défilement réservée pendant que le clavier virtuel est
+   déplié, à la demande explicite de l'utilisateur — voir script.js pour
+   quand cette classe est posée/retirée. `position: fixed` (voir
+   #virtual-keyboard) fait que le clavier ne pousse jamais naturellement
+   le bas de <main> ; sans ce padding, rien ne permet de faire défiler la
+   page assez loin pour dégager le bas de la grille de dessous le
+   clavier. 14rem (~224px) suffit largement à couvrir la hauteur réelle
+   du clavier déplié (2 rangées de lettres + la marge du widget). */
+main.keyboard-open-padding {
+  padding-bottom: 14rem;
 }
 
 #page-header {
@@ -821,6 +846,234 @@ button:disabled {
   font-style: italic;
 }
 
+/* Panneau "Actu Croisée" (flux RSS + agrégation de grilles, voir
+   fetch_rss_feeds.py/fetch_grid_links.py), à la demande explicite de
+   l'utilisateur. **Revirement assumé** par rapport à une décision
+   antérieure de ce même projet : il vivait jusqu'ici comme une section
+   persistante, jamais masquée par les sections centrales qui se
+   basculent entre elles (#library/#attempt-preview/#result) — l'inverse
+   a été explicitement redemandé plus tard ("Le journal d'actu doit
+   disparaître quand quelque chose d'autre doit s'afficher, par exemple
+   la Bibliothèque"), voir script.js's syncRssPanelVisibility() pour le
+   mécanisme réel qui masque désormais ce panneau dès que l'un des trois
+   autres est visible. Même look que #library (carte blanche, bordure
+   fine) pour rester cohérent avec les autres panneaux de contenu de la
+   page, mais avec sa propre hauteur bornée + défilement interne ("le
+   panneau doit tenir sur la page d'accueil avec sa propre barre pour
+   scroller") plutôt qu'une hauteur qui grandit avec le nombre
+   d'articles. */
+/* `flex: 1` (voir main's propre commentaire ci-dessus) : ce panneau
+   grandit pour occuper tout l'espace vertical encore libre de la
+   fenêtre, jamais une hauteur fixe. `min-height: 0` est nécessaire ici
+   (un piège flexbox classique) : sans lui, un enfant flex ne peut jamais
+   se laisser rétrécir sous la hauteur de son propre contenu, ce qui
+   empêcherait #rss-list (voir plus bas) de jamais défiler en interne —
+   il grandirait plutôt indéfiniment et ferait déborder la page entière.
+   `display: flex; flex-direction: column` à son tour, pour que son
+   propre titre (h2) garde une hauteur fixe pendant que #rss-list (avec
+   son propre `flex: 1`) absorbe tout le reste de cet espace. */
+#rss-panel {
+  margin: 0.75rem 0 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white-cell);
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Le vrai bug derrière "le masquage du fil d'actu ne fonctionne pas",
+   rapporté directement par l'utilisateur — la même classe de bug CSS déjà
+   corrigée une fois pour #rss-detail[hidden], jamais réappliquée ici
+   puisque #rss-panel n'existait pas encore à l'époque. `display: flex`
+   ci-dessus est fixé inconditionnellement sur le sélecteur d'ID
+   (spécificité 1-0-0), qui l'emporte toujours sur la règle native du
+   navigateur `[hidden] { display: none }` (sélecteur d'attribut,
+   spécificité 0-1-0), quel que soit l'ordre des règles dans le fichier —
+   donc `rssPanel.hidden = true` (voir syncRssPanelVisibility() dans
+   script.js) n'avait jamais d'effet visuel réel : le panneau restait
+   affiché en permanence, peu importe la justesse de la logique JS qui
+   décide quand il devrait disparaître. Corrigé par une règle plus
+   spécifique (ID + attribut, spécificité 1-1-0) qui l'emporte enfin. */
+#rss-panel[hidden] {
+  display: none;
+}
+
+/* Titre + sélecteur de langue sur une même ligne, à la demande explicite
+   de l'utilisateur ("A droite du titre des entrées RSS, afficher un
+   sélecteur"). */
+#rss-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+  flex-shrink: 0;
+}
+
+#rss-panel-header h2 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+#rss-language-filter {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+#rss-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+#rss-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#rss-list li:last-child {
+  border-bottom: none;
+}
+
+#rss-list li:hover,
+#rss-list li:focus-visible {
+  background: var(--selected);
+  outline: none;
+}
+
+/* Icône d'origine (lien externe vs article RSS), à la demande explicite
+   de l'utilisateur : "ajoute à gauche une petite icône permettant de
+   savoir si c'est un lien vers une page web ou une infos RSS." Taille
+   fixe (`flex-shrink: 0`) pour ne jamais se comprimer si le titre est
+   long — c'est le texte qui doit s'adapter, pas l'icône. */
+#rss-list .rss-item-kind-icon {
+  flex-shrink: 0;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+#rss-list .rss-item-text {
+  min-width: 0;
+}
+
+#rss-list .rss-item-source {
+  color: #777;
+  font-size: 0.75rem;
+}
+
+#rss-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #777;
+  font-style: italic;
+}
+
+/* Note de repli sur l'anglais (voir renderRssList() dans script.js) —
+   même taille que #rss-empty mais sans l'italique/le gris estompé : ce
+   n'est pas "rien à afficher", c'est une information sur ce qui s'affiche
+   quand même juste en dessous. */
+#rss-language-fallback-notice {
+  margin: 0 0 0.4rem;
+  font-size: 0.8rem;
+  color: #777;
+}
+
+/* Détail d'un article, ouvert en cliquant une ligne de #rss-list — une
+   simple carte superposée (pas une vraie boîte de dialogue modale native,
+   cohérent avec le reste de cette page qui n'en utilise nulle part
+   ailleurs) plutôt qu'un remplacement du panneau lui-même, pour ne
+   jamais faire disparaître la liste sous-jacente. */
+/* `display: flex; flex-direction: column` plutôt qu'un simple bloc à
+   défilement direct, à la demande explicite de l'utilisateur ("doit
+   garder son bouton pour fermer visible en haut à droite") : seul
+   #rss-detail-body (voir plus bas) défile en interne — le bouton fermer,
+   hors de cette zone défilante, reste toujours visible quelle que soit la
+   longueur de l'article affiché. */
+#rss-detail {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  margin: 3rem auto;
+  max-width: 640px;
+  max-height: calc(100vh - 6rem);
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white-cell);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Bug réel signalé en direct : un rechargement de page affichait ce
+   panneau déjà ouvert, impossible à refermer. Cause : `display: flex`
+   ci-dessus, fixé sans condition sur ce sélecteur d'ID (spécificité 100),
+   l'emportait sur la règle par défaut du navigateur pour l'attribut
+   `hidden` (`[hidden] { display: none }`, un simple sélecteur
+   d'attribut, spécificité 10) — l'attribut `hidden` du HTML restait donc
+   sans le moindre effet visuel, que ce soit au chargement de la page ou
+   après un clic sur "Fermer" (`rssDetail.hidden = true` en JS, tout aussi
+   inefficace pour la même raison). Cette règle, plus spécifique que la
+   précédente (ID + attribut), rétablit le comportement attendu. Aucun
+   autre panneau de cette page n'a ce problème : #library/#attempt-preview/
+   #result ne déclarent jamais leur propre `display` du tout, laissant la
+   règle par défaut du navigateur s'appliquer sans conflit. */
+#rss-detail[hidden] {
+  display: none;
+}
+
+#rss-detail-close-btn {
+  align-self: flex-end;
+  flex-shrink: 0;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  padding: 0.25rem 0.6rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+#rss-detail-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+#rss-detail-title {
+  margin: 0 0 0.25rem;
+  font-size: 1rem;
+}
+
+#rss-detail-meta {
+  margin: 0 0 0.75rem;
+  font-size: 0.75rem;
+  color: #777;
+}
+
+/* Contenu brut du flux (voir renderRssDetail() dans script.js) : un sous-
+   ensemble de balises HTML autorisées, chaque lien forcé vers un nouvel
+   onglet côté JS avant l'insertion — même esprit que les règles
+   .chatbot-message-assistant ci-dessus, une simple tempérance de l'espacement
+   par défaut du navigateur pour ce contenu inséré dynamiquement. */
+#rss-detail-content img {
+  max-width: 100%;
+}
+
 /* A word absent from the wordlist file — the one directly visible symptom
    of the rare "invented word" edge case documented in CLAUDE.md — is
    shown in the page's own error color rather than the normal text color,
@@ -938,4 +1191,341 @@ button:disabled {
 .clue-lines-columns .clue-line {
   break-inside: avoid;
   margin: 0 0 0.4rem;
+}
+
+/* "David FALCON" chat widget (#chatbot), at the user's explicit request:
+   "En bas à droite de l'interface, ajoute un ChatBot (ouvert par défaut)
+   avec l'icône de l'application." Fixed to the viewport's bottom-right
+   corner (independent of page scroll, unlike every other section on the
+   page, which flows normally inside <main>) — a floating widget rather
+   than another in-flow section, matching the conventional look of a
+   chat/help widget on the web. z-index: 5 (auto/0 for everything else
+   in normal flow, -1 for the background watermark) keeps it above the
+   page's own content without needing to touch anything else's stacking
+   order. */
+#chatbot {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  width: 480px;
+  max-width: calc(100vw - 2rem);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white-cell);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#chatbot-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+#chatbot-icon {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+#chatbot-title {
+  flex: 1;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+/* Reuses .nav-btn's own small/neutral look, but on the accent-colored
+   header it needs its own contrasting colors rather than .nav-btn's
+   default white-on-border, which would be nearly invisible here. */
+#chatbot-toggle-btn {
+  background: transparent;
+  border-color: var(--accent-fg);
+  color: var(--accent-fg);
+}
+
+/* Collapsed state (toggled by #chatbot-toggle-btn, script.js) hides
+   everything below the header — the widget shrinks down to just its own
+   title bar, the same behavior as a typical chat-widget minimize button,
+   rather than disappearing outright (so it stays a visible, one-click-
+   away affordance instead of vanishing until some other trigger reopens
+   it). */
+#chatbot.chatbot-collapsed #chatbot-body {
+  display: none;
+}
+
+/* Collapsed down to "a single simple icon", at the user's explicit
+   request: "Une fois repliés, le clavier virtuel et le ChatBot ne
+   doivent montrer qu'une simple icône" — the title bar used to stay a
+   full-width strip (icon + title text + toggle button) even once
+   collapsed, which read as a large, mostly-empty header rather than a
+   compact icon. The title text disappears and the header shrinks to fit
+   around just one visible element, instead of stretching to #chatbot's
+   own full 480px width.
+
+   Which single element that is was corrected right after, at the
+   user's own explicit follow-up: "En mode 'réduit', le ChatBot doit
+   afficher l'icône du site" — a first version kept the toggle button
+   (its own "–" glyph, meant as a minimize indicator) and hid #chatbot-
+   icon (the real app logo) instead, the opposite of what was asked.
+   Fixed by hiding the toggle button here and keeping #chatbot-icon
+   visible — script.js makes the icon itself clickable (toggling the
+   exact same collapsed state as the button always did) so there's
+   still a one-click affordance to re-expand, just presented as the
+   site's own icon rather than a generic minimize dash. */
+#chatbot.chatbot-collapsed {
+  width: auto;
+}
+
+#chatbot.chatbot-collapsed #chatbot-header {
+  padding: 0.4rem;
+  gap: 0;
+}
+
+#chatbot.chatbot-collapsed #chatbot-title,
+#chatbot.chatbot-collapsed #chatbot-toggle-btn {
+  display: none;
+}
+
+#chatbot.chatbot-collapsed #chatbot-icon {
+  cursor: pointer;
+}
+
+#chatbot-body {
+  display: flex;
+  flex-direction: column;
+}
+
+#chatbot-messages {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* One bubble per message, at the user's explicit request that this read
+   as a real conversation, not a plain transcript — the player's own
+   messages align right (a light accent tint) and David FALCON's replies
+   align left (a neutral, page-background tint), the same left/right
+   convention as virtually every chat UI, so the two speakers are told
+   apart at a glance without needing to re-read each bubble's own label. */
+.chatbot-message {
+  max-width: 85%;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.chatbot-message-user {
+  align-self: flex-end;
+  background: var(--selected);
+}
+
+.chatbot-message-assistant {
+  align-self: flex-start;
+  background: var(--bg);
+}
+
+/* David FALCON's own replies are rendered as real Markdown (see
+   script.js's renderMarkdown()), not plain text, at the user's explicit
+   request — these rules tame the browser's own default block-element
+   spacing/list styling down to something that reads naturally inside a
+   small chat bubble rather than a full page. */
+.chatbot-message-assistant p {
+  margin: 0 0 0.4rem;
+}
+
+.chatbot-message-assistant p:last-child {
+  margin-bottom: 0;
+}
+
+.chatbot-message-assistant ul,
+.chatbot-message-assistant ol {
+  margin: 0 0 0.4rem;
+  padding-left: 1.2rem;
+}
+
+.chatbot-message-assistant li {
+  margin-bottom: 0.15rem;
+}
+
+.chatbot-message-assistant code {
+  background: var(--white-cell);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.05rem 0.25rem;
+  font-size: 0.85em;
+}
+
+#chatbot-form {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.6rem;
+  border-top: 1px solid var(--border);
+}
+
+#chatbot-input {
+  flex: 1;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+#chatbot-send-btn {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  border: none;
+  border-radius: 4px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  cursor: pointer;
+}
+
+/* Clavier virtuel, à la demande explicite de l'utilisateur : "En bas à
+   gauche de l'interface, au même niveau que le ChatBot" — même
+   positionnement fixe/même niveau vertical que #chatbot, mais côté
+   gauche plutôt que droit, et sa propre largeur (bien plus étroite,
+   26 lettres sur 2 rangs n'a pas besoin de la largeur d'une fenêtre de
+   discussion). Même mécanisme de repli que #chatbot (en-tête toujours
+   visible, corps caché en mode réduit) — voir #chatbot-collapsed
+   ci-dessus pour le raisonnement déjà établi, repris ici à l'identique. */
+/* Restructuré deux fois à la demande explicite de l'utilisateur : plus
+   de bandeau de titre pleine largeur (voir #virtual-keyboard-toggle-btn
+   ci-dessous, désormais un enfant direct plutôt que niché dans un
+   en-tête), et les flèches de direction passent d'une rangée au-dessus
+   des lettres à une colonne à droite de celles-ci ("mettre les flèches
+   de direction sur la droite des lettres, pour gagner en hauteur"). Le
+   widget entier devient une colonne flex alignée à droite
+   (`align-items: flex-end`) : le petit bouton replier/déplier flotte
+   ainsi naturellement au-dessus de la colonne de flèches (le seul autre
+   enfant aligné à droite), sans bandeau ni titre dédiés — exactement
+   "l'icône de fermeture en petit au-dessus des flèches". */
+#virtual-keyboard {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  /* 60% de la largeur de l'écran, à la demande explicite de l'utilisateur
+     ("Le clavier doit occupé 60% de la largeur de l'écran") — remplace
+     l'ancienne largeur fixe de 280px, bien trop étroite pour que 13
+     touches par rangée restent lisibles. */
+  width: 60vw;
+  max-width: calc(100vw - 2rem);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white-cell);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  z-index: 5;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.3rem;
+  padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+/* Plus d'en-tête à colorer en accent (voir la note ci-dessus) : ce
+   bouton vit désormais sur le fond clair du widget lui-même, donc plus
+   besoin de la surcharge blanc-sur-transparent qui visait un fond
+   accent — .nav-btn (déjà appliqué via la classe HTML) fournit déjà un
+   contraste correct par défaut sur fond clair. */
+#virtual-keyboard-toggle-btn {
+  font-size: 0.9rem;
+}
+
+.virtual-keyboard-collapsed #virtual-keyboard-body {
+  display: none;
+}
+
+/* Collapsed down to "a single simple icon", same request and same
+   reasoning as #chatbot's own matching rule above. The glyph itself was
+   already correct (confirmed once the user clarified "le clavier doit
+   afficher une icône représentant un clavier" — "⌨" already is one) —
+   but the *shrinking* never actually happened: a **real CSS-specificity
+   bug**, the exact same class already fixed once before in this project
+   for `#rss-detail[hidden]`. This rule used to use a bare `.virtual-
+   keyboard-collapsed` class selector (specificity 0-1-0), while
+   `#virtual-keyboard`'s own base rule (specificity 1-0-0, an ID
+   selector) also sets `width: 60vw` — the ID selector always wins
+   regardless of source order, so `width: auto` here never took effect.
+   Fixed by compounding the selector with the id
+   (`#virtual-keyboard.virtual-keyboard-collapsed`, specificity 1-1-0,
+   now correctly beats the base rule) — mirroring `#chatbot.chatbot-
+   collapsed`'s own selector, which was never affected by this bug
+   precisely because it was already written this same way from the
+   start. */
+#virtual-keyboard.virtual-keyboard-collapsed {
+  width: auto;
+}
+
+#virtual-keyboard-body {
+  display: flex;
+  align-self: stretch;
+  gap: 0.4rem;
+}
+
+#virtual-keyboard-rows {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.virtual-keyboard-row {
+  display: flex;
+  gap: 0.25rem;
+}
+
+/* Colonne de flèches (→ puis ↓), à droite des lettres — voir la note en
+   tête de ce bloc. `align-items: stretch` par défaut sur
+   #virtual-keyboard-body (aucune surcharge nécessaire) étire déjà cette
+   colonne pour occuper exactement la même hauteur que les 2 rangées de
+   lettres à sa gauche. */
+#virtual-keyboard-direction-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+#virtual-keyboard-direction-col .toggle-btn {
+  flex: 1;
+  font-size: 1rem;
+  padding: 0 0.6rem;
+}
+
+.virtual-keyboard-key {
+  flex: 1;
+  /* Touches agrandies pour rester lisibles à la largeur du clavier (60vw,
+     voir #virtual-keyboard ci-dessus) — l'ancien padding/taille de police
+     visait la précédente largeur fixe de 280px, bien trop petite une fois
+     étirée. `color` explicite : la règle générique `button` (plus haut
+     dans ce fichier) fixe `color: var(--accent-fg)` (blanc) pour TOUT
+     bouton — sans cette surcharge, le texte des touches restait blanc sur
+     un fond clair (`--bg`), donc invisible. C'était le bug rapporté par
+     l'utilisateur ("on ne voit pas les lettres"), pas un simple défaut de
+     contraste réglable en changeant juste le fond. */
+  padding: 0.9rem 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.virtual-keyboard-key:hover,
+.virtual-keyboard-key:focus-visible {
+  background: var(--selected);
+  outline: none;
 }

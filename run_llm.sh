@@ -32,6 +32,18 @@ if [ -f env.sh ]; then
 elif [ -f env_default.sh ]; then
     source env_default.sh
 fi
+
+# Alternative engine, at the user's explicit request: SGLang instead of
+# this script's own long-standing llama.cpp default — see run_sglang.sh
+# for the full reasoning (dedicated venv/Python version, MLX vs. CUDA
+# paths, a real model-architecture limitation found and verified live).
+# Unset/"llama_cpp" (every existing env.sh/env_default.sh) keeps this
+# script's own behavior completely unchanged below this point.
+LLM_ENGINE="${LLM_ENGINE:-llama_cpp}"
+if [ "$LLM_ENGINE" = "sglang" ]; then
+    exec ./run_sglang.sh
+fi
+
 GGUF_REPO="${LLAMA_GGUF_REPO:?LLAMA_GGUF_REPO not set — check env.sh (or env_default.sh)}"
 GGUF_FILE="${LLAMA_GGUF_FILE:?LLAMA_GGUF_FILE not set — check env.sh (or env_default.sh)}"
 CHAT_TEMPLATE_KWARGS="${LLAMA_CHAT_TEMPLATE_KWARGS:?LLAMA_CHAT_TEMPLATE_KWARGS not set — check env.sh (or env_default.sh)}"

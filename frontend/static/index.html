@@ -36,12 +36,12 @@
 
       <label for="width">
         <span data-i18n="widthLabel">Largeur</span>
-        <input type="number" id="width" name="width" min="5" step="1" value="15" required>
+        <input type="number" id="width" name="width" min="5" max="30" step="1" value="15" required>
       </label>
 
       <label for="height">
         <span data-i18n="heightLabel">Hauteur</span>
-        <input type="number" id="height" name="height" min="5" step="1" value="10" required>
+        <input type="number" id="height" name="height" min="5" max="30" step="1" value="10" required>
       </label>
 
       <label for="difficulty">
@@ -93,6 +93,39 @@
       <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
     </form>
 
+    <!-- Panneau "Actu Croisée" : toujours visible, jamais masqué par les
+         sections centrales (#library/#attempt-preview/#result) qui se
+         basculent entre elles — à la demande explicite de l'utilisateur
+         ("la liste des flux RSS disparaît de l'interface quand quelque
+         chose d'autre doit être affiché dans le panneau central"), donc
+         placé comme sa propre section persistante, hors de ce groupe.
+         Positionné juste en dessous des boutons de l'application, sur
+         l'espace de fenêtre restant (voir #rss-panel dans style.css,
+         `flex: 1` sur un `main` devenu colonne flexible), à la demande
+         explicite de l'utilisateur. -->
+    <section id="rss-panel">
+      <div id="rss-panel-header">
+        <h2 data-i18n="rssPanelTitle">Actu Croisée</h2>
+        <select id="rss-language-filter" data-i18n-aria="rssLanguageFilterLabel">
+          <option value="all" data-i18n="rssLanguageFilterAll">Toutes les langues</option>
+          <option value="fr">Français</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="it">Italiano</option>
+        </select>
+      </div>
+      <ul id="rss-list"></ul>
+      <div id="rss-detail" hidden>
+        <button type="button" id="rss-detail-close-btn" data-i18n="rssDetailCloseBtn">Fermer</button>
+        <div id="rss-detail-body">
+          <h3 id="rss-detail-title"></h3>
+          <p id="rss-detail-meta"></p>
+          <div id="rss-detail-content"></div>
+        </div>
+      </div>
+    </section>
+
     <p id="status" role="status"></p>
 
     <section id="library" hidden>
@@ -116,6 +149,13 @@
         </table>
       </div>
       <p id="library-empty" data-i18n="libraryEmpty" hidden></p>
+      <div id="library-pagination" hidden>
+        <button type="button" id="library-prev-btn" class="nav-btn"
+                data-i18n-aria="libraryPrevBtn" disabled>◀</button>
+        <span id="library-position"></span>
+        <button type="button" id="library-next-btn" class="nav-btn"
+                data-i18n-aria="libraryNextBtn" disabled>▶</button>
+      </div>
     </section>
 
     <section id="attempt-preview" hidden>
@@ -177,6 +217,72 @@
       </div>
     </section>
   </main>
+
+  <div id="chatbot">
+    <div id="chatbot-header">
+      <img src="logo.svg" alt="" id="chatbot-icon">
+      <span id="chatbot-title">David FALCON</span>
+      <button type="button" id="chatbot-toggle-btn" class="nav-btn"
+              data-i18n-aria="chatbotToggleBtn">–</button>
+    </div>
+    <div id="chatbot-body">
+      <div id="chatbot-messages"></div>
+      <form id="chatbot-form">
+        <input type="text" id="chatbot-input" data-i18n-placeholder="chatbotInputPlaceholder"
+               autocomplete="off">
+        <button type="submit" id="chatbot-send-btn" data-i18n="chatbotSendBtn">Envoyer</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Clavier virtuel, à la demande explicite de l'utilisateur : "En bas
+       à gauche de l'interface, au même niveau que le ChatBot, ajouter un
+       bouton permettant de monter/cacher un clavier virtuel." Même
+       structure que #chatbot ci-dessus (en-tête toujours visible +
+       bouton replier/déplier, corps qui se cache) mais repliée par
+       défaut — contrairement au Bot, ouvert par défaut, un clavier
+       virtuel n'est utile qu'à une minorité de joueurs (écran tactile,
+       absence de clavier physique pratique), pas la peine de l'imposer
+       ouvert à tout le monde. -->
+  <div id="virtual-keyboard" class="virtual-keyboard-collapsed">
+    <!-- Plus de bandeau de titre ("Clavier virtuel") ni de rangée dédiée
+         aux flèches de direction, à la demande explicite de
+         l'utilisateur : "Ne pas mettre un titre 'Clavier virtuel' qui
+         prend aussi de la place en hauteur. Mettre simplement l'icône de
+         fermeture en petit au dessus des flèches" + "mettre les flèches
+         de direction sur la droite des lettres, pour gagner en hauteur."
+         Le bouton replier/déplier vit maintenant seul, directement
+         au-dessus de la colonne de flèches (#virtual-keyboard-side
+         ci-dessous), plutôt que dans un en-tête pleine largeur — visible
+         aussi bien replié (seule icône affichée, voir style.css) que
+         déplié. -->
+    <button type="button" id="virtual-keyboard-toggle-btn" class="nav-btn"
+            data-i18n-aria="virtualKeyboardToggleBtn">⌨</button>
+    <div id="virtual-keyboard-body">
+      <!-- Les 26 lettres, en majuscules, dans l'ordre alphabétique
+           naturel sur 2 lignes (voir script.js's buildVirtualKeyboard()
+           pour la génération réelle des boutons — un rang de 13 lettres
+           chacun, A-M puis N-Z). -->
+      <div id="virtual-keyboard-rows"></div>
+      <!-- Bascule du sens de saisie, à la demande explicite de
+           l'utilisateur : "une flèche vers le bas pour configurer le sens
+           vertical (similaire à SHIFT/CAPS LOCK) et une flèche vers la
+           droite pour configurer le sens horizontalement." Deux boutons
+           mutuellement exclusifs (.toggle-btn, même convention que
+           Solution/Vérification) plutôt qu'un vrai Shift (maintenu) —
+           un clic bascule un mode persistant, plus proche d'un
+           comportement CAPS LOCK que SHIFT pour un bouton cliqué, comme
+           le nom même de la demande le suggère. Placées à droite des
+           lettres (colonne, pas rangée) plutôt qu'au-dessus, pour gagner
+           en hauteur. -->
+      <div id="virtual-keyboard-direction-col">
+        <button type="button" id="virtual-keyboard-across-btn" class="toggle-btn active"
+                data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
+        <button type="button" id="virtual-keyboard-down-btn" class="toggle-btn"
+                data-i18n-aria="virtualKeyboardDownBtn">↓</button>
+      </div>
+    </div>
+  </div>
 
   <script src="i18n.js"></script>
   <script src="script.js"></script>

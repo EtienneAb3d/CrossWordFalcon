@@ -819,6 +819,17 @@ the current defaults/behavior to know before touching this code.
   dictionary-generation pipeline (`build_sentence_corpus.py` ->
   `build_wordlist_freq.py` -> `build_gloss_dictionary.py`) — kept in sync
   the same way, per permanent rule 18.
+- `DOC_USER/EN/ReadMe.md` is the English, user-facing explanation of every
+  element of the web UI (`frontend/static/index.html`/`script.js`/
+  `style.css`/`i18n.js`) — how it works and what it's for, for a reader
+  who wants to understand the interface without reading its code — kept
+  in sync the same way, per permanent rule 19. It also carries its own
+  "How a grid is actually built" section — a condensed, plain-English
+  summary of `DOC_ALGO/FR/ReadMe.md`'s own algorithm, one substantial
+  paragraph per major stage (black-cell placement, slot-selection
+  priority, candidate-word selection, backtracking, the parallel/
+  incremental cross-cycle construction, final optimization) — kept in
+  sync with `DOC_ALGO/FR/ReadMe.md` per permanent rule 20.
 - `README.md` stays non-technical (permanent rule 5); anything about
   implementation, JSON formats, or internal module behavior belongs in
   `CLAUDE.md` instead.
@@ -853,3 +864,62 @@ the current defaults/behavior to know before touching this code.
     sync on *current* facts about these three scripts, exactly as already
     required between `DOC_ALGO/FR/ReadMe.md` and `CLAUDE.md` for
     `backend/crossword_gen.py`.
+
+19. **Keep `DOC_USER/EN/ReadMe.md` current, automatically, on every change
+    to the web UI** — at the user's explicit request: "Crée une
+    documentation expliquant (en anglais) le fonctionnement de chaque
+    élément de l'interface dans DOC_USER. Consigne dans le SKILL de
+    bonnes pratiques que cette documentation doit être tenue à jour
+    automatiquement à chaque modification de l'interface." An English,
+    present-tense-only, timeless reference explaining what every element
+    of `frontend/static/index.html` (form fields, buttons, panels, the
+    playable grid) does and how a player uses it — never how the code
+    implements it (that's `CLAUDE.md`'s job) and never a decision log
+    (that's `CLAUDE.md`'s job too). Whenever `frontend/static/index.html`/
+    `script.js`/`style.css`/`i18n.js` change in any way a user would
+    notice — a new control, a changed label/behavior, a removed feature,
+    a new status/error message, a new interactive state — update this
+    file in the same change, not as a separate follow-up. The same rules
+    already governing `DOC_ALGO/FR/ReadMe.md` apply here identically: no
+    narrative ("à la demande explicite de l'utilisateur", "previously", a
+    changed-N-times account, a bug-fix/incident trace — see permanent
+    rule 11, which that narrative belongs in `CLAUDE.md` alone), every
+    point cites its source location (see permanent rule 13, no line
+    numbers — e.g. "(`frontend/static/script.js`, `renderLibraryList`)"),
+    and the file must always stay tracked in git, never gitignored (see
+    permanent rule 16). Both `DOC_USER/EN/ReadMe.md` and `CLAUDE.md` must
+    stay in sync on *current* facts about the UI, exactly as already
+    required between `DOC_ALGO/FR/ReadMe.md` and `CLAUDE.md` for
+    `backend/crossword_gen.py` — the two documents serve different
+    readers (a player vs. a future engineer) but must never describe two
+    different versions of the same interface.
+
+20. **Keep `DOC_USER/EN/ReadMe.md`'s "How a grid is actually built" section
+    current, automatically, every time a significant change is made to the
+    generation algorithm** — at the user's explicit request: "Enrichis le
+    DOC_USER avec un résumé du DOC_ALGO (en anglais). Ecris un gros
+    paragraphe pour chaque étape (placement des cases noires, choix des
+    emplacements, choix des mots, backtracking, construction en parallèle
+    incrémentale, etc). Ajoute dans le SKILL de bonnes pratiques que ce
+    résumé doit être mis à jour chaque fois qu'un changement important est
+    effectué dans les algos." This section is a condensed, plain-English,
+    player-facing summary of `DOC_ALGO/FR/ReadMe.md`'s own current algorithm
+    — not a line-by-line translation, and not exhaustive the way `DOC_ALGO/
+    FR/ReadMe.md` itself is, but it must never describe a stage of the
+    algorithm that no longer matches current behavior. Whenever `DOC_ALGO/
+    FR/ReadMe.md` itself is updated for a real algorithm change (per
+    permanent rule 11), check whether this summary's own matching paragraph
+    still holds — update it in the same change if not. A change small
+    enough that `DOC_ALGO/FR/ReadMe.md` only needed a one-line constant/
+    formula edit (e.g. a threshold or fraction changing value, with no
+    change to the underlying mechanism it governs) does not by itself
+    require touching this summary, which is meant to stay stable at the
+    level of "what each stage does," not track every tuned constant's own
+    exact current value — but a change to which mechanism exists at all, or
+    to the overall shape of a stage (a new stage, a removed one, a
+    fundamentally different selection/backtracking/parallelism strategy),
+    always does. Same anti-narrative convention as every other timeless
+    reference in this project (permanent rule 11): present tense, no "à la
+    demande explicite de l'utilisateur," no changed-N-times account — this
+    summary describes the *current* algorithm as if it had always worked
+    this way, the story stays `CLAUDE.md`-only.

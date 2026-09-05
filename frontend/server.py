@@ -12,12 +12,13 @@ routes inconnues).
 Usage :
     uvicorn frontend.server:app --port 3000
 """
+import json
 import os
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -82,6 +83,33 @@ async def proxy_generate(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/rss")
+async def proxy_rss():
+    """Relaie le panneau "Actu Croisée" de la page d'accueil (voir
+    backend/app.py/script.js) vers le back — même schéma que les autres
+    routes GET simples de ce proxy."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/rss")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.get("/api/scrapp")
+async def proxy_scrapp():
+    """Miroir exact de proxy_rss ci-dessus, pour l'agrégation de grilles
+    (SCRAPP/, voir fetch_grid_links.py) — même panneau "Actu Croisée",
+    à la demande explicite de l'utilisateur : "Ajoute les entrées de
+    SCRAPP aux journal de la première page." """
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/scrapp")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.get("/api/generate/status/{job_id}")
 async def proxy_generate_status(job_id: str):
     try:
@@ -102,6 +130,56 @@ async def proxy_generate_cancel(job_id: str):
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
     return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+# A real chat reply (POST /api/chat below) is a single, synchronous LLM
+# call (backend/chatbot.py's own DEFAULT_TIMEOUT, 120s) rather than a
+# quick status check — PROXY_TIMEOUT_S (30s) alone would abort the proxy
+# request before a genuinely slow model ever got the chance to finish,
+# exactly the same "set above the callee's own timeout" reasoning already
+# documented for PROXY_TIMEOUT_S itself vs. the backend it forwards to.
+CHAT_PROXY_TIMEOUT_S = 150.0
+
+
+@app.post("/api/chat")
+async def proxy_chat(request: Request):
+    """"David FALCON" chat widget (see frontend/static/script.js) — relays
+    the backend's own streamed `text/event-stream` response chunk by
+    chunk as it arrives, rather than buffering the whole reply and
+    returning it in one piece like every other route here: streaming the
+    reply is the whole point of this endpoint, at the user's explicit
+    request ("Le Bot doit afficher la réponse en streaming"), and
+    buffering it here would silently defeat that the moment it crosses
+    this proxy hop. Still uses CHAT_PROXY_TIMEOUT_S (see its own comment)
+    as the connection's own overall timeout.
+
+    Unlike every other route here, a connection failure to the back end
+    can't be turned into a clean 502 the usual way: by the time
+    StreamingResponse starts iterating this generator, the response's own
+    status code (200) has already been committed — there's no way to
+    retroactively change it once even one chunk may already be on the
+    wire. Instead, a connection failure yields a single `data: {"error":
+    "backend_unavailable"}` event, in the exact same shape the backend's
+    own `POST /api/chat` already uses for a *stream-side* failure — the
+    frontend's own chat-handling code already has to parse this event
+    shape for that case regardless, so it degrades to the same handling
+    here too, just reached a different way."""
+    body = await request.body()
+
+    async def relay():
+        try:
+            async with httpx.AsyncClient(timeout=CHAT_PROXY_TIMEOUT_S) as client:
+                async with client.stream(
+                    "POST", f"{BACKEND_URL}/api/chat",
+                    content=body,
+                    headers={"content-type": "application/json"},
+                ) as resp:
+                    async for chunk in resp.aiter_bytes():
+                        yield chunk
+        except httpx.RequestError:
+            yield f"data: {json.dumps({'error': 'backend_unavailable'})}\n\n".encode()
+
+    return StreamingResponse(relay(), media_type="text/event-stream")
 
 
 @app.post("/api/generate/continue/{job_id}")

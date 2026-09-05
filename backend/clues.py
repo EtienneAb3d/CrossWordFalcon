@@ -62,7 +62,7 @@ from pathlib import Path
 
 import httpx
 
-from .crossword_gen import GenerationCancelled
+from .crossword_gen import GenerationCancelled, GenerationPaused
 from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
 
@@ -535,7 +535,7 @@ class LLMClueGenerator:
         self.api_key = os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
 
     def generate(self, word_entries, difficulty, language="fr", timeout=DEFAULT_TIMEOUT,
-                 on_progress=None, cancel_event=None):
+                 on_progress=None, cancel_event=None, should_pause=None):
         """`word_entries` is an iterable of (answer, accented, canonical)
         triples — `answer` is the grid's bare uppercase form (used as the
         returned dict's key, to match backend/crossword_gen.py's
@@ -565,7 +565,20 @@ class LLMClueGenerator:
         phase of a generation (see this module's docstring), so a coarse,
         once-per-word checkpoint is still frequent enough in practice —
         the interruption can take up to one word's own remaining LLM
-        round-trip(s) to actually take effect, never mid-call."""
+        round-trip(s) to actually take effect, never mid-call.
+
+        `should_pause` (`None` by default — no effect for any pre-existing
+        caller), at the user's explicit request (backend/app.py's own
+        CLUES_QUEUE, the GPU/LLM job queue's fair-scheduling mechanism —
+        see its own docstring): a callable, checked at the exact same
+        once-per-word point as `cancel_event`. Unlike `cancel_event`,
+        which discards everything and raises to abort outright, this
+        raises `crossword_gen.GenerationPaused` carrying `(clues,
+        remaining_entries)` — every clue already found so far, and the
+        list of `word_entries` not yet attempted — so the caller can
+        merge the partial result immediately and, whenever this job's
+        turn comes back around, resume by calling `generate()` again with
+        only `remaining_entries`, never losing the words already done."""
         entries = list({
             (answer.upper(), accented, tuple(canonical))
             for answer, accented, canonical in word_entries
@@ -593,6 +606,9 @@ class LLMClueGenerator:
         for entry in entries:
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
+            if should_pause is not None and should_pause():
+                remaining = [e for e in entries if e[0] not in clues]
+                raise GenerationPaused((clues, remaining))
             answer, accented, canonical = entry
             system_prompt = self._build_system_prompt(difficulty, language)
             user_message = self._build_user_message(entry, language)

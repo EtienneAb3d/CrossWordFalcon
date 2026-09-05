@@ -81,6 +81,31 @@ class GenerationCancelled(Exception):
     limite que ça implique : l'arrêt peut prendre jusqu'à la fin du point
     de contrôle en cours, pas instantané)."""
 
+
+class GenerationPaused(Exception):
+    """Levée par generate_grid() quand le `should_pause` (callable)
+    optionnel qu'on lui a fourni renvoie vrai à la frontière entre deux
+    paliers — à la demande explicite de l'utilisateur : "Lorsqu'une
+    génération de grille ou de définitions dure depuis plus de 15mn, et
+    qu'il y a des tâches en attente dans la phase en cours, au moment de
+    passer au cycle suivant..., replacer la tâche en cours dans la file
+    d'attente de cette phase... Les tâches doivent pouvoir être reprises
+    là où elles ont été interrompues." Contrairement à
+    `GenerationCancelled` (un arrêt définitif, demandé par l'utilisateur,
+    qui jette tout l'état accumulé), une pause est censée reprendre plus
+    tard exactement là où elle s'est arrêtée — `resume_state` porte donc
+    l'état sérialisable (`_serialize_resume_state`, le même mécanisme déjà
+    utilisé pour le bouton "Continuer") nécessaire pour qu'un futur appel
+    à `generate_grid(resume_state=...)` reprenne le palier suivant
+    exactement comme si aucune pause n'avait eu lieu — jamais `None` sauf
+    dans le cas dégénéré où la boucle des paliers n'a encore jamais tourné
+    du tout (`attempt == 0`, `carry_seed_grid` encore `None`)."""
+
+    def __init__(self, resume_state):
+        super().__init__("generation paused (queue turn yielded)")
+        self.resume_state = resume_state
+
+
 DEFAULT_WIDTH = 15
 DEFAULT_HEIGHT = 10
 
@@ -155,6 +180,39 @@ DIFFICULTY_PRESETS = {
     "hard": 1.0,
 }
 
+# Nombre maximum de mots ayant l'air d'un nom propre (voir PROPER_NOUN_
+# EXCLUDED_LANGS/exclude_proper_nouns ci-dessous) tolérés dans la grille
+# finale, par difficulté — à la demande explicite de l'utilisateur :
+# "en mode FACILE ne pas autoriser à placer des noms propres, en mode
+# MOYEN autoriser au plus 2 noms propres, en mode DIFFICILE autoriser
+# jusqu'à 5 noms propres." Remplace l'ancienne règle tout-ou-rien
+# (`exclude_proper_nouns=(difficulty in ("easy", "medium"))`, qui
+# excluait totalement les noms propres du lexique aussi bien en facile
+# qu'en moyen) par un vrai budget par grille pour "medium"/"hard" — "easy"
+# reste couvert par `load_wordlist`'s propre `exclude_proper_nouns` (aucun
+# nom propre n'entre même dans le lexique à cette difficulté, donc ce
+# budget de 0 y est redondant mais inoffensif). Appliqué comme un
+# garde-fou final dans `try_fill` (voir sa propre docstring) plutôt que
+# comme une contrainte active à l'intérieur même de `Filler._backtrack` —
+# un dépassement du quota est traité exactement comme n'importe quel
+# autre échec de remplissage (le palier échoue, le mécanisme de reprise
+# entre paliers déjà en place retente normalement), plutôt que de risquer
+# une modification profonde de cette zone du fichier, documentée comme
+# particulièrement fragile.
+MAX_PROPER_NOUNS = {"easy": 0, "medium": 2, "hard": 5}
+
+# Languages where "Hunspell only validated the title-cased form" (see
+# load_wordlist's own exclude_proper_nouns) carries no proper-noun signal
+# at all: German capitalizes every noun, common or proper, so this exact
+# same detection would just flag ordinary nouns ("Haus") instead — see
+# build_wordlist_freq.py's own PROPER_NOUN_LANGS/PROPER_NOUN_SCORE_FACTOR,
+# which this mirrors at runtime (the wordlist TSV itself never stores this
+# flag directly — only the ACCENTED column's own capitalization does, since
+# every corpus word is counted lowercase in build_wordlist_freq.py's own
+# _count_word_frequencies, so ACCENTED only ever ends up capitalized when
+# Hunspell needed the title-cased form to validate it in the first place).
+PROPER_NOUN_EXCLUDED_LANGS = {"de"}
+
 
 def _lang_from_path(path):
     match = re.search(r"wordlist_([a-z]{2})_full\.tsv$", os.path.basename(str(path)))
@@ -176,7 +234,7 @@ def _try_import_gloss_lookup():
         return None, None
 
 
-def load_wordlist(path, max_words=None, require_gloss=False):
+def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_nouns=False):
     """Charge un lexique au format
     `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE` (build_wordlist_freq.py)
     ou, en repli, un format à 3 ou 2 colonnes (sans CANONIQUE), ou un simple
@@ -187,7 +245,28 @@ def load_wordlist(path, max_words=None, require_gloss=False):
     backend/gloss_lookup.py — la fréquence seule ne suffit pas à repérer un
     mot courant mais indéfinissable, ex. l'abréviation "ABD"), en repli
     silencieux si la langue ne peut pas être déduite du nom de fichier ou si
-    aucun dictionnaire de définitions n'a été construit pour elle. `max_words`
+    aucun dictionnaire de définitions n'a été construit pour elle.
+
+    Si `exclude_proper_nouns` est vrai, un mot potentiellement un nom
+    propre est exclu purement et simplement, plutôt que seulement démoté
+    dans le classement par fréquence (voir PROPER_NOUN_SCORE_FACTOR dans
+    build_wordlist_freq.py, qui reste actif indépendamment de ce
+    paramètre — les deux se cumulent) — à la demande explicite de
+    l'utilisateur : "Dans la remplissage des mots de la grille, niveaux
+    FACILE et MOYEN, interdire les mots étant potentiellement des noms
+    propres." Le signal réutilisé est celui déjà calculé à la construction
+    du lexique (build_wordlist_freq.py's `likely_proper_noun`), mais
+    reconstruit ici à partir de la seule colonne ACCENTUE — chaque mot du
+    corpus y est compté tout en minuscules (`_count_word_frequencies`),
+    donc ACCENTUE ne finit capitalisé que si Hunspell n'a validé le mot
+    QUE sous sa forme avec majuscule initiale, exactement le signal
+    "probable nom propre" ; un mot correctement orthographié en minuscules
+    (un nom/adjectif/verbe ordinaire) garde une valeur ACCENTUE en
+    minuscules et n'est jamais touché par ce filtre. En repli silencieux
+    (comme `require_gloss`) si la langue ne peut pas être déduite du nom de
+    fichier ; sans effet pour l'allemand (`PROPER_NOUN_EXCLUDED_LANGS`),
+    où ce même signal ne veut rien dire (tous les noms y sont capitalisés,
+    propres ou non — voir ce module-level constant). `max_words`
     accepte deux types, avec des sens différents : un `int` est un nombre
     absolu de mots à garder (comportement historique, utilisé par
     `--max-words` en ligne de commande) ; un `float` (0 < x <= 1, voir
@@ -272,6 +351,14 @@ def load_wordlist(path, max_words=None, require_gloss=False):
             best = {
                 word: v for word, v in best.items()
                 if has_any_gloss([v[0], *v[2]], lang)
+            }
+
+    if exclude_proper_nouns:
+        lang = _lang_from_path(path)
+        if lang and lang not in PROPER_NOUN_EXCLUDED_LANGS:
+            best = {
+                word: v for word, v in best.items()
+                if not v[0][:1].isupper()
             }
 
     # Global frequency ranking (see DIFFICULTY_PRESETS above for why this
@@ -3281,8 +3368,28 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              forced_letters=None, letter_scores=None, preseed_assignment=None,
              excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
              attempt_done_event=None, locked_letters=None, best_state_queue=None,
-             attempt_id=None):
-    """`preseed_assignment`/`excluded_slots` (both `None` by default — every
+             attempt_id=None, proper_noun_words=None, max_proper_nouns=None):
+    """`proper_noun_words`/`max_proper_nouns` (both `None` by default — every
+    pre-existing caller is unaffected), à la demande explicite de
+    l'utilisateur : "en mode FACILE ne pas autoriser à placer des noms
+    propres, en mode MOYEN autoriser au plus 2 noms propres, en mode
+    DIFFICILE autoriser jusqu'à 5 noms propres" (voir MAX_PROPER_NOUNS).
+    `proper_noun_words` est l'ensemble des mots (forme grille, sans accent)
+    considérés comme des noms propres pour cette langue (voir generate_grid,
+    qui le construit une seule fois depuis `accents`/`PROPER_NOUN_EXCLUDED_
+    LANGS`). Vérifié ici, une fois la recherche terminée, comme un dernier
+    garde-fou plutôt que comme une contrainte active à l'intérieur même de
+    `Filler._backtrack` (une zone du fichier documentée comme
+    particulièrement fragile — voir MAX_PROPER_NOUNS) : si le nombre de
+    mots de `filler.assignment` présents dans `proper_noun_words` dépasse
+    `max_proper_nouns`, cette tentative n'est PAS considérée réussie même
+    si `truly_complete` serait autrement vrai — traitée exactement comme
+    n'importe quel autre échec de remplissage (`reason` devient
+    `"too_many_proper_nouns"`, un nouveau code de diagnostic), pour que le
+    palier échoue et que le mécanisme de reprise entre paliers déjà en
+    place (voir generate_grid) retente normalement, avec d'autres mots.
+
+    `preseed_assignment`/`excluded_slots` (both `None` by default — every
     pre-existing caller is unaffected), à la demande explicite de
     l'utilisateur : mécanique de reprise « telle-quelle » d'un palier sur
     l'autre (voir generate_grid/_pattern_continue), distincte de la reprise
@@ -3552,10 +3659,25 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     # Sans `excluded_slots` (tout appelant existant), les deux coïncident
     # toujours exactement.
     truly_complete = all(w is not None for w in filler.assignment)
+    # Garde-fou final "quota de noms propres" (voir MAX_PROPER_NOUNS/la
+    # docstring de cette fonction) : une grille par ailleurs complète mais
+    # qui contient trop de mots présents dans `proper_noun_words` n'est
+    # PAS acceptée comme un succès réel — `truly_complete` bascule à
+    # `False`, ce qui fait renvoyer `None` plus bas exactement comme
+    # n'importe quel autre échec de remplissage, sans code de récupération
+    # séparé à écrire : le mécanisme de reprise entre paliers déjà en
+    # place (generate_grid) retente déjà normalement sur tout `None`.
+    over_proper_noun_budget = False
+    if truly_complete and max_proper_nouns is not None and proper_noun_words:
+        proper_noun_count = sum(1 for w in filler.assignment if w in proper_noun_words)
+        over_proper_noun_budget = proper_noun_count > max_proper_nouns
+        if over_proper_noun_budget:
+            truly_complete = False
     if diagnostics is not None:
         diagnostics["checks"] = filler.checks
         diagnostics["reason"] = (
-            "solved" if truly_complete
+            "too_many_proper_nouns" if over_proper_noun_budget
+            else "solved" if truly_complete
             else "interrupted_other_attempt_done" if filler.interrupted_by_sibling
             else "abandoned_too_unfillable" if filler.abandoned
             else "deadline_exceeded" if filler.checks >= deadline_checks
@@ -3582,7 +3704,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
 # ---------- Minimisation locale des cases noires ----------
 
 def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks=6_000,
-                            cancel_event=None):
+                            cancel_event=None, proper_noun_words=None, max_proper_nouns=None):
     """Retire itérativement des cases noires une par une (indépendamment,
     sans les apparier avec une case miroir — cohérent avec make_pattern,
     qui ne pose plus les cases noires par paires symétriques) tant que la
@@ -3630,7 +3752,17 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
     d'être acceptée comme nouvel état de référence ; un candidat rejeté
     ici est traité exactement comme un échec de `try_fill` — la case
     noire retirée est restaurée, aucune autre case n'est retentée à sa
-    place dans cette même passe."""
+    place dans cette même passe.
+
+    `proper_noun_words`/`max_proper_nouns` (tous deux `None` par défaut —
+    aucun effet pour tout appelant existant), à la demande explicite de
+    l'utilisateur (voir MAX_PROPER_NOUNS) : transmis tels quels à chaque
+    appel interne à `try_fill`, qui refuse déjà tout seul (voir son propre
+    garde-fou) une solution dépassant le quota — aucun contrôle
+    supplémentaire à écrire ici, un `try_fill` renvoyant `None` pour cette
+    raison est déjà traité exactement comme n'importe quel autre échec de
+    remplissage par la boucle ci-dessous (case noire restaurée, aucune
+    autre case retentée à sa place dans cette même passe)."""
     word_sets = {length: set(data["words"]) for length, data in index.items()}
     slots, assignment = result
     improved = True
@@ -3647,7 +3779,9 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
             grid[r][c] = WHITE
             if is_structurally_valid(grid, rows, cols, min_interior_free=1):
                 new_result = try_fill(grid, rows, cols, index, rng, deadline_checks,
-                                       cancel_event=cancel_event)
+                                       cancel_event=cancel_event,
+                                       proper_noun_words=proper_noun_words,
+                                       max_proper_nouns=max_proper_nouns)
                 if new_result is not None:
                     new_slots, new_assignment = new_result
                     if all(
@@ -5732,6 +5866,15 @@ _worker_best_state_queue = None
 # `_warmup_worker` de ce worker (les vraies tâches, `_pattern_attempt`/
 # `_pattern_continue`, ne le touchent jamais).
 _worker_warmup_barrier = None
+# Ensemble des mots (forme grille) considérés comme des noms propres pour
+# cette langue, et quota maximum autorisé dans la grille finale — voir
+# MAX_PROPER_NOUNS/generate_grid, à la demande explicite de l'utilisateur.
+# Transmis une seule fois via l'initializer du pool, comme les globals
+# ci-dessus (l'ensemble peut être volumineux — pas la peine de le
+# re-sérialiser à chaque tâche soumise), plutôt qu'en argument de
+# `_pattern_attempt`/`_pattern_continue` directement.
+_worker_proper_noun_words = None
+_worker_max_proper_nouns = None
 
 
 def _warmup_worker():
@@ -5813,15 +5956,19 @@ def _warmup_worker():
 
 
 def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_done_event=None,
-                  best_state_queue=None, warmup_barrier=None):
+                  best_state_queue=None, warmup_barrier=None, proper_noun_words=None,
+                  max_proper_nouns=None):
     global _worker_index, _worker_cancel_event, _worker_batch_abandoned_event, \
-        _worker_attempt_done_event, _worker_best_state_queue, _worker_warmup_barrier
+        _worker_attempt_done_event, _worker_best_state_queue, _worker_warmup_barrier, \
+        _worker_proper_noun_words, _worker_max_proper_nouns
     _worker_index = index
     _worker_cancel_event = cancel_event
     _worker_batch_abandoned_event = batch_abandoned_event
     _worker_attempt_done_event = attempt_done_event
     _worker_best_state_queue = best_state_queue
     _worker_warmup_barrier = warmup_barrier
+    _worker_proper_noun_words = proper_noun_words
+    _worker_max_proper_nouns = max_proper_nouns
 
 
 def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
@@ -5996,7 +6143,9 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                        attempt_done_event=_worker_attempt_done_event,
                        locked_letters=locked_letters,
                        best_state_queue=_worker_best_state_queue,
-                       attempt_id=seed)
+                       attempt_id=seed,
+                       proper_noun_words=_worker_proper_noun_words,
+                       max_proper_nouns=_worker_max_proper_nouns)
     return grid, result, diag
 
 
@@ -6150,7 +6299,9 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        attempt_done_event=_worker_attempt_done_event,
                        locked_letters=known_letters,
                        best_state_queue=_worker_best_state_queue,
-                       attempt_id=seed)
+                       attempt_id=seed,
+                       proper_noun_words=_worker_proper_noun_words,
+                       max_proper_nouns=_worker_max_proper_nouns)
     return seed_grid, result, diag
 
 
@@ -6212,12 +6363,24 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    wordlist_path="data/wordlist_fr_full.tsv", on_progress=None,
                    force_letters_fraction=0.0, cancel_event=None,
                    black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
-                   deadline_checks=None, resume_state=None):
+                   deadline_checks=None, resume_state=None, should_pause=None):
     """Génère une grille remplie de bout en bout (motif + CSP + minimisation).
     `width` est le nombre de colonnes (horizontal), `height` le nombre de lignes
     (vertical). Retourne un dict {width, height, pattern, solution, words,
     word_count, black_count, black_ratio}, ou None si aucune grille remplissable
     n'a été trouvée en `attempts` essais.
+
+    `should_pause` (`None` par défaut — aucun effet pour tout appelant
+    existant, notamment le CLI), à la demande explicite de l'utilisateur —
+    voir GenerationPaused's own docstring : un callable optionnel, sans
+    argument, vérifié à la même frontière entre deux paliers que
+    `cancel_event` (jamais à l'intérieur d'un palier lui-même — la
+    décision de céder son tour n'a de sens qu'entre deux cycles complets,
+    jamais en interrompant une recherche déjà en cours) — s'il renvoie
+    vrai, lève `GenerationPaused` avec l'état de reprise exact (le même
+    mécanisme que le bouton "Continuer"), pour qu'un appel ultérieur avec
+    `resume_state=...` reprenne au palier suivant, sans rien perdre de la
+    progression déjà accumulée.
 
     `on_progress`, si fourni, est appelé `on_progress(step, **data)` à chaque
     étape notable (voir backend/app.py, qui s'en sert à la fois pour tracer
@@ -6303,7 +6466,33 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     rng = random.Random(seed)
     mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
     by_length, accents, canonicals, frequencies = load_wordlist(
-        wordlist_path, mw, require_gloss=(difficulty == "easy")
+        wordlist_path, mw, require_gloss=(difficulty == "easy"),
+        # Seul "easy" exclut désormais totalement les noms propres du
+        # lexique — "medium"/"hard" les tolèrent maintenant, mais dans la
+        # limite d'un vrai quota par grille (voir MAX_PROPER_NOUNS/
+        # proper_noun_words ci-dessous), à la demande explicite de
+        # l'utilisateur : "en mode FACILE ne pas autoriser à placer des
+        # noms propres, en mode MOYEN autoriser au plus 2 noms propres, en
+        # mode DIFFICILE autoriser jusqu'à 5 noms propres." Remplace
+        # l'ancienne règle tout-ou-rien qui excluait "medium" aussi
+        # strictement que "easy".
+        exclude_proper_nouns=(difficulty == "easy"),
+    )
+    # Quota de noms propres pour cette génération (voir MAX_PROPER_NOUNS) et
+    # l'ensemble des mots (forme grille) réellement considérés comme des
+    # noms propres pour cette langue — même signal, calculé au même endroit,
+    # que celui déjà utilisé par `exclude_proper_nouns` ci-dessus
+    # (`accents[mot][:1].isupper()`), jamais recalculé une seconde fois.
+    # Toujours calculé, même pour "easy" : `by_length`/`accents` n'y
+    # contiennent alors déjà plus aucun nom propre (exclu ci-dessus), donc
+    # cet ensemble ressort naturellement vide et ce quota (0) n'a
+    # simplement jamais l'occasion de s'appliquer.
+    max_proper_nouns = MAX_PROPER_NOUNS.get(difficulty, MAX_PROPER_NOUNS["hard"])
+    _proper_noun_lang = _lang_from_path(wordlist_path)
+    proper_noun_words = (
+        {w for w, acc in accents.items() if acc[:1].isupper()}
+        if _proper_noun_lang not in PROPER_NOUN_EXCLUDED_LANGS
+        else set()
     )
     index = build_index(by_length, frequencies)
     # Précalculé une seule fois (pas par palier) — mêmes longueurs pour
@@ -6640,7 +6829,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
-                  warmup_barrier)
+                  warmup_barrier, proper_noun_words, max_proper_nouns)
     ) as executor:
         # Pré-chauffage du pool : force tous les workers à finir leur
         # démarrage réel avant le tout premier palier (voir le docstring de
@@ -6668,6 +6857,20 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         for attempt in range(attempts):
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
+            if should_pause is not None and should_pause():
+                # Même mécanisme de sérialisation que la sortie "attempts
+                # épuisés" plus bas (voir _serialize_resume_state) — voir
+                # GenerationPaused's own docstring. `None` seulement si
+                # cette toute première itération (attempt == 0) est déjà
+                # celle qui cède son tour, avant qu'aucun palier n'ait
+                # jamais tourné du tout.
+                raise GenerationPaused(
+                    _serialize_resume_state(
+                        carry_seed_grid, carry_locked_letters,
+                        carry_preseed_assignment, carry_excluded_slots,
+                    )
+                    if carry_seed_grid is not None else None
+                )
             batch_abandoned_event.clear()
             attempt_done_event.clear()
             # Vivier des grilles de départ candidates pour ce palier (voir
@@ -7345,6 +7548,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         opt_grid, opt_slots, _opt_assignment = minimize_black_squares(
                             trial_grid, (cand_slots, cand_assignment), rows, cols,
                             index, rng, cancel_event=cancel_event,
+                            proper_noun_words=proper_noun_words,
+                            max_proper_nouns=max_proper_nouns,
                         )
                         opt_black = sum(row.count(BLACK) for row in opt_grid)
                         opt_score = sum(len(slot) ** 2 for slot in opt_slots)
@@ -8190,7 +8395,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         }],
     )
     grid, slots, assignment = minimize_black_squares(
-        best, best_result, rows, cols, index, rng, cancel_event=cancel_event
+        best, best_result, rows, cols, index, rng, cancel_event=cancel_event,
+        proper_noun_words=proper_noun_words, max_proper_nouns=max_proper_nouns,
     )
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)
