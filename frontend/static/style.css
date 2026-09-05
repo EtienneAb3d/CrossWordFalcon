@@ -791,7 +791,16 @@ button:disabled {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--white-cell);
+  /* Fond transparent, à la demande explicite de l'utilisateur ("Afficher
+     également la bibliothèque sur fond transparent"), le même traitement
+     et la même justification déjà appliqués à #rss-panel juste au-dessus
+     dans ce fichier : était `var(--white-cell)` (opaque), ce qui masquait
+     entièrement le filigrane logo du corps de page (`body::before`) sous
+     ce panneau. Aucune cellule de #library-table n'a de fond opaque
+     propre (seul un survol/focus de ligne en donne un, voir plus bas), le
+     texte reste donc parfaitement lisible sur le fond de page clair,
+     filigrane compris. */
+  background: transparent;
 }
 
 #library-header {
@@ -877,7 +886,16 @@ button:disabled {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--white-cell);
+  /* Fond transparent, à la demande explicite de l'utilisateur ("Afficher
+     le fil Actu avec un fond transparent pour laisser voir le fond de
+     page avec le logo") — était `var(--white-cell)` (opaque), ce qui
+     masquait entièrement le filigrane logo du corps de page
+     (`body::before`, voir plus haut dans ce fichier) partout où ce
+     panneau s'affichait. Aucune ligne de #rss-list n'a son propre fond
+     opaque (seul un survol/focus en donne un, voir plus bas) — le texte
+     reste donc parfaitement lisible sur le fond de page clair, filigrane
+     compris. */
+  background: transparent;
   flex: 1;
   min-height: 0;
   display: flex;

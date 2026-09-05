@@ -2004,3 +2004,26 @@ English (see `project-best-practices`).
   tooltip/label (two new i18n keys, `rssItemKindGrid`/`rssItemKindRss`,
   all 5 languages) without exposing the decorative glyph itself to
   assistive tech twice over.
+
+- `#rss-panel`'s own background changed from `var(--white-cell)` (opaque)
+  to `transparent`, at the user's explicit request: "Afficher le fil
+  Actu avec un fond transparent pour laisser voir le fond de page avec
+  le logo" — the opaque white background was fully hiding the page-wide
+  watermark logo (`body::before`, see its own earlier entry above)
+  wherever this panel was displayed. Safe with no readability change:
+  no `#rss-list li` has its own opaque background either (only a
+  hover/focus state does, `var(--selected)`), so the panel's text still
+  reads cleanly against the page's own light background/watermark.
+  `#rss-detail` (the separate click-to-open article overlay) keeps its
+  own, independent opaque background — a modal-style overlay reads best
+  solid, and the request was specifically about the persistent panel,
+  not this one.
+
+- `#library`'s own background changed from `var(--white-cell)` (opaque)
+  to `transparent`, at the user's explicit follow-up request ("Afficher
+  également la bibliothèque sur fond transparent") — the exact same
+  treatment and reasoning just applied to `#rss-panel` right above,
+  extended to this second panel. Safe with no readability change: no
+  `#library-table` cell has its own opaque background either (only a
+  row's hover/focus state does, `var(--selected)`), so the panel's text
+  still reads cleanly against the page's own light background/watermark.

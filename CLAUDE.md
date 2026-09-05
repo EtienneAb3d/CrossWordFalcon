@@ -5442,6 +5442,143 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `multiprocessing`/`resource_tracker` process was left behind after the
   final restart (confirmed via `ps -o pid,ppid`, a legitimate child of
   the running SGLang server).
+
+  **`Install.sh`'s own SGLang section was upgraded from report-only to a
+  real install-and-reconfigure step**, at the user's explicit request,
+  after a real gap was reported directly: "Sur une machine déjà
+  installée, Install.sh n'installe pas SGLang avec le modèle prévu." The
+  previous version (see above) only ever printed which SGLang path was
+  usable on the current machine — it never touched `env.sh` and never
+  installed anything. Two further explicit requests shaped the final
+  scope: asked whether to only auto-configure `env.sh` when SGLang was
+  already installed, or to install it from scratch when absent, the user
+  chose **"Installer SGLang de zéro si absent."** Then: "Install.sh doit
+  considérer qu'il reconfigure la machine, donc installer la meilleure
+  option" — i.e. this isn't a first-run-only step, it re-detects and
+  re-applies the best engine/model on *every* run, not just the first.
+  Then: "Install.sh doit tuer le llm en cours de fonctionnement si il
+  reconfigure un autre" — a running LLM server serving the *old*
+  configuration must be stopped, since it would otherwise keep serving
+  the previous model/engine indefinitely with no visible sign anything
+  changed.
+
+  Detection is unchanged from the report-only version (`uname -s`/`uname
+  -m` for Apple Silicon; `nvidia-smi -L` for a real, live NVIDIA GPU) —
+  what happens once a GPU-capable machine is detected changed completely.
+  A new `sglang_already_working()` check (`.venv-sglang/bin/python3 -c
+  "import sglang"`) gates the install step: SGLang is *installed* only
+  the first time (or after `.venv-sglang` is deleted/broken) — a working
+  install is never redone, only re-detected — but `env.sh` is still
+  *reconfigured* every single run regardless, per the user's own
+  "reconfigure la machine" wording.
+
+  The Apple Silicon install path mirrors `run_sglang.sh`'s own header
+  exactly (a dedicated `.venv-sglang`, Python 3.12 via `brew install
+  python@3.12` if missing, a shallow clone of `sglang-src/` if absent,
+  `SGLANG_BUILD_RUST_EXTS=none pip install -e ".[all_mps]"`) — but
+  simplified from that original install's own history in one respect,
+  confirmed live before writing this code: `sglang-src`'s upstream
+  `python/` directory no longer has a separate `pyproject_other.toml`
+  variant to swap in at all (checked directly — only `pyproject.toml`/
+  `pyproject_cpu.toml`/`pyproject_npu.toml`/`pyproject_xpu.toml` exist
+  now), the `all_mps`/`srt_mps`/`diffusion_mps` extras having since been
+  merged straight into the main `pyproject.toml` upstream — so the
+  once-necessary variant-swap step this project's own history documented
+  is now dead weight and was correctly left out of this new code. A new
+  CUDA install path was added too (this project never had one before,
+  only ever tested/used on Apple Silicon) — verified live via a real
+  `WebFetch` against SGLang's own official docs rather than guessed:
+  `pip install --upgrade pip && pip install uv && uv pip install
+  --prerelease=allow sglang`, directly from PyPI, no source clone needed
+  (unlike the Apple Silicon/MLX path) — installed into the same
+  `.venv-sglang` convention for consistency between the two platforms.
+  Either install failing (network, missing Python 3.12, a broken
+  toolchain) is caught and logged as a warning; llama.cpp is always left
+  as the fallback, exactly as `run_llm.sh` itself already treats it — a
+  failed SGLang install is never fatal to `Install.sh` as a whole.
+
+  `env.sh` is rewritten via a marker-delimited block
+  (`# BEGIN SGLANG AUTOCONFIG (gere par Install.sh — modifiez en dehors
+  de ce bloc, jamais a l'interieur)` / `# END SGLANG AUTOCONFIG`) —
+  `awk` (not `sed -i`, which differs between macOS/BSD and GNU) strips
+  any previous instance of the block before a fresh one is appended, so
+  re-running `Install.sh` any number of times never accumulates
+  duplicate blocks (verified live: re-running the script back to back
+  left exactly one `BEGIN SGLANG AUTOCONFIG` line in `env.sh`, not two).
+  Everything outside the block — the port variables, a personal cloud
+  API key, any other manual edit — is left completely untouched, since
+  `awk` only ever removes lines strictly between the two markers.
+  `env.sh`'s own older, hand-written SGLang block (predating this
+  feature, setting the exact same variables to the exact same values by
+  hand) was cleaned up as dead weight once the auto-managed block took
+  over the same role — replaced with a short comment pointing at the
+  auto-managed block instead of a second, redundant copy of the same
+  `export` lines.
+
+  Model choice per platform: Apple Silicon → `mlx-community/Qwen3-4B-4bit`
+  (this exact machine's own already-confirmed-best pick, see this same
+  entry's history above); CUDA → `unsloth/Qwen3.8-27B-GGUF` with
+  `SGLANG_QUANTIZATION=gguf` (this project's own originally-requested
+  CUDA default from earlier in this file's history) — honestly disclosed
+  as **not** directly tested end-to-end on this machine, which has no
+  NVIDIA GPU at all; only the Apple Silicon path could be exercised live
+  here. A machine with neither Apple Silicon nor a detected NVIDIA GPU is
+  left completely untouched — no install attempted, no `env.sh` rewrite
+  — llama.cpp remains the only, correct choice there, matching this
+  file's own long-standing default.
+
+  Once `env.sh` is rewritten, any LLM server already listening on
+  `LLM_PORT` (sourced from `env.sh`/`env_default.sh`, defaulting to 3002
+  — the same `${LLM_PORT:-3002}` fallback convention already used
+  throughout this project) is stopped via `lsof -ti tcp:$PORT` + `kill`
+  (then `kill -9` for a survivor after a short grace period) — the same
+  pattern already established in `run_Falcon.sh`'s own `stop_port()` for
+  the back/front ports, reused here rather than invented separately.
+  This never touches the back/front servers themselves, only the LLM
+  server — restarting *it* is what actually picks up the new engine/
+  model; the back/front servers keep running against whatever LLM
+  endpoint is configured, unaffected by this step, and don't need
+  restarting for this specific change to take effect once the LLM server
+  itself comes back up on the same port.
+
+  Verified in stages, real hardware and real commands throughout, no
+  simulation: the new section was extracted and run in isolation (to
+  avoid re-running the heavy `.venv`/`requirements.txt`/corpus-extraction
+  steps unnecessarily) against the real, already-configured machine —
+  correctly detected SGLang as already installed and working (no
+  reinstall attempted), rewrote `env.sh`'s marker block with the exact
+  expected Apple-Silicon values, and genuinely killed the real, running
+  LLM server (`ps aux | grep sglang.launch_server` returned nothing
+  immediately after, confirming the kill actually took effect, not just
+  that the command was issued). Re-running the identical script a second
+  time back to back confirmed idempotency: `sglang_already_working()`
+  still correctly skipped reinstalling, and `env.sh` still held exactly
+  one marker block afterward (`grep -c` confirmed 1, not 2). `bash -n`
+  confirmed the whole file's syntax after every edit. The real, full
+  restart sequence was then run for real (not simulated): `./run_llm.sh`
+  brought the LLM server back up on the reconfigured model (`GET /v1/
+  models` confirmed `mlx-community/Qwen3-4B-4bit` correctly serving
+  again), then `./run_Falcon.sh` restarted the back/front servers (`GET
+  /api/health` and `GET /api/system_info`, the latter through the real
+  frontend proxy, both confirmed healthy and reporting the correct
+  model/GPU) — the whole chain working end to end after a genuine
+  reconfiguration, not just each piece in isolation. No orphaned
+  `multiprocessing`/`resource_tracker` process was left behind (exactly
+  one, a legitimate child of the newly-started SGLang server, matching
+  this project's own already-established expectation for this exact
+  kind of process).
+
+  **Not verified this session, disclosed honestly rather than claimed**:
+  the actual *fresh-install* code paths — neither the Apple Silicon
+  "SGLang not yet installed at all" branch nor the CUDA branch was
+  exercised end-to-end, since this machine already has a working
+  `.venv-sglang` and has no NVIDIA GPU at all respectively. Both were
+  read carefully against `run_sglang.sh`'s own already-proven install
+  steps (Apple Silicon) and SGLang's own official docs (CUDA, fetched
+  live) rather than guessed at, but a genuinely fresh install of either
+  has not been run in this session — a real first-time install on a
+  clean machine of either kind would be the natural next verification
+  step, not yet performed.
 - `frontend/server.py` — **middleware** FastAPI server: serves the static UI
   (`frontend/static/index.html`, `script.js`, `style.css`) and proxies `/api/*` to the
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default
