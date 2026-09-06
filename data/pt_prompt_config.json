@@ -1,0 +1,60 @@
+{
+  "subject_pronouns": "\"eu\", \"tu\", \"ele/ela\", \"nós\", \"vós\", or \"eles/elas\"",
+  "difficulty_examples": {
+    "easy": {
+      "word": "GATO",
+      "clue": "Animal doméstico que mia."
+    },
+    "medium": {
+      "word": "GATO",
+      "clue": "Companheiro de quatro patas que ronrona."
+    },
+    "hard": {
+      "word": "GATO",
+      "clue": "Cai sempre de pé."
+    }
+  },
+  "rule_bad": [
+    "For GATO, answering \"GATO\", \"gato\", or \"Gato\".",
+    "For SERIA, answering \"Eu seria feliz se chovesse amanhã\" — SERIA itself must never appear in the clue text, even as part of a sentence.",
+    "\"verbo haver na segunda pessoa do presente do indicativo\" for a verb form.",
+    "For FADAS, \"Plural de 'fada'\" — naming the grammatical operation (pluralization) and repeating the singular form is still a label, not a clue.",
+    "For TARDE, \"Palavra que começa por T e termina em E.\" — that describes how the word is written, not what it means.",
+    "For ERA — first/third person singular IMPERFECT of \"ser\" (to be) — answering \"Comemoramos o fim dos exames\" (\"we celebrated the end of exams\", plural) or \"Elas já não eram as mesmas depois da viagem\" (\"they were no longer the same after the trip\", plural): both describe a past state but neither is singular, so neither fits.",
+    "For APERTARIA — third person singular CONDITIONAL, \"ele/ela apertaria\" — answering \"Vou aproximar as cadeiras\" (\"I will bring the chairs closer\", future tense, wrong person too): wrong person (eu instead of ele/ela) AND wrong mood/tense (future instead of conditional) — getting only the rough idea (\"bringing things closer together\") right is not enough.",
+    "For MENTIRÁ — third person singular FUTURE, \"ele/ela mentirá\" — answering \"Esconder a verdade\" (a bare infinitive, no tense at all): the clue itself must be phrased in the future tense to match, e.g. \"Esconderá a verdade\" — the meaning (hiding the truth, i.e. lying) is right, but a clue with no tense marking of its own doesn't fit a word that is specifically future tense.",
+    "For ANOS — PLURAL, \"years\" — answering \"Período de doze meses\" (\"a 12-month period\"): that describes a single 12-month period, i.e. ONE year (\"um ano\", singular), not several years — the clue must itself refer to more than one to fit a plural word.",
+    "For SERÍAMOS — first person plural CONDITIONAL of \"ser\" (to be), \"nós seríamos\" — answering \"Existem soluções\" (\"there are solutions\"): that has no connection at all to the meaning of \"to be\", it is simply a different, unrelated idea.",
+    "For SEMEEI — first person singular PRETÉRITO PERFEITO of \"semear\" (to sow), \"eu semeei\" — answering \"Ação de espalhar sementes na terra\": that's a generic dictionary-style definition of the infinitive \"semear\", not phrased for a specific past action by \"eu\" — the clue must itself read as something \"I\" did, e.g. \"O que fiz numa manhã de primavera, com um saco de sementes na mão.\"",
+    "For CANSADO — MASCULINE singular past participle/adjective (\"tired\") — answering \"Diz-se de uma pessoa esgotada após a maratona\": \"pessoa\" is feminine, so this clue's own gender doesn't match masculine CANSADO — the clue's subject noun must itself be masculine to fit, e.g. \"Diz-se de um corredor esgotado após a maratona.\"",
+    "For NOVA — FEMININE singular adjective (\"new\") — answering \"Diz-se de um edifício recém-construído\": \"edifício\" is masculine, so this clue's own gender doesn't match feminine NOVA (the mirror case of the CANSADO example above: the mismatch can go either direction) — the clue's subject noun must itself be feminine to fit, e.g. \"Diz-se de uma casa recém-construída.\"",
+    "For BARBEADA — FEMININE singular past participle of \"barbear\" (to shave), \"ela está barbeada\" — answering \"Está barbeado de perto para a festa\": besides the gender mismatch (masculine \"barbeado\" for a feminine target — the same trap as CANSADO), \"barbeado\" is a different inflection of this exact same word, not just an unrelated word — using it still gives the answer away just as directly as writing \"barbeada\" itself would. Avoid any form of the word's own conjugation entirely, e.g. \"Diz-se de uma face lisa e sem pelos, pronta para a festa.\"",
+    "For DERRUBARÁ — third person singular FUTURE of \"derrubar\" (to knock down), \"ele/ela derrubará\" — answering \"Arrasaria... não, derrubará-o no chão com um golpe seco\": the visible self-correction (\"arrasaria... não\") is exactly what must never appear in a clue — decide on the final answer entirely before writing anything down, and write only \"Derrubá-lo-á no chão com um golpe seco\", never the discarded first attempt too.",
+    "For RI — THIRD person singular PRESENT of \"rir\" (to laugh), \"ele/ela ri\" — answering \"O que fazes quando uma piada te agrada\": wrong person — \"tu\" (second person, implied by \"fazes\"/\"te\") instead of \"ele/ela\" (third person), even though the meaning itself is right — the clue must itself be framed for the correct subject, e.g. \"O que faz quando uma piada lhe agrada.\"",
+    "For CORUJAS — PLURAL of \"coruja\" (owl) — answering \"corujas - aves de rapina noturnas\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would. Write only the definition itself, with nothing labeling it, e.g. \"Aves de rapina noturnas.\"",
+    "For SECO — MASCULINE singular adjective (\"dry\") — answering \"Diz-se de uma erva privada de humidade\": \"erva\" is feminine, so this clue's own gender doesn't match masculine SECO — the same trap as CANSADO/NOVA above, but note it's just as easy to get wrong with an ordinary, unremarkable noun like \"erva\" as with an obviously gendered one — the clue's subject noun must itself be masculine to fit, e.g. \"Diz-se de um solo privado de humidade.\""
+  ],
+  "rule_good": [
+    "For FADAS, \"Personagens mágicas dos contos.\" (in the correct plural form, per rule 4).",
+    "FALAS (tu, presente) : O que fazes agora mesmo para te fazeres entender",
+    "FALÁVAMOS (nós, imperfeito) : O que fazíamos juntos todas as noites, em crianças",
+    "FALARÁ (ele/ela, futuro) : O que fará diante do microfone amanhã à noite",
+    "FALARÍEIS (vós, condicional) : O que faríeis se vos cedessem o microfone",
+    "VENDÍAMOS (nós, imperfeito) : O que fazíamos no mercado todos os sábados de manhã",
+    "VENDERÃO (eles/elas, futuro) : O que farão com a sua casa no próximo ano",
+    "TINHA (eu/ele/ela, imperfeito) : O que eu possuía, em criança, no meu mealheiro",
+    "TEREMOS (nós, futuro) : O que possuiremos assim que o empréstimo estiver pago",
+    "SERIAM (eles/elas, condicional) : No que se tornariam várias pessoas, num mundo mais justo",
+    "FOSTE (tu, pretérito perfeito de ser/ir) : O que foste ou aonde chegaste, naquele verão memorável",
+    "FORAM (eles/elas, pretérito perfeito de ser/ir) : O que várias pessoas fizeram, ou aonde chegaram, naquela tarde decisiva",
+    "GRANDE (singular) : Diz-se de um edifício que domina toda a cidade",
+    "NOVA (feminino singular) : Diz-se de uma loja recém-inaugurada",
+    "GRANDES (plural) : Diz-se de várias casas que dominam o bairro",
+    "PEQUENAS (feminino plural) : Diz-se de vários quartos onde mal se cabe",
+    "FELIZES (plural) : Diz-se de várias mulheres realizadas na vida",
+    "NOVOS (masculino plural) : Diz-se de vários aparelhos acabados de sair para venda",
+    "VELHAS (feminino plural) : Diz-se de várias pedras desgastadas pelo tempo",
+    "CAVALOS (masculino plural) : O que se encontra, em grande número, numa coudelaria",
+    "TRABALHOS (masculino plural) : O que ocupa vários operários numa obra"
+  ]
+}

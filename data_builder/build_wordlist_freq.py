@@ -147,6 +147,11 @@ HUNSPELL_SOURCE = {
     "de": "de/de_DE_frami",
     "es": "es/es_ES",
     "it": "it_IT/it_IT",
+    # Brazilian, not European: pt_BR/pt_BR.dic carries ~312k entries vs
+    # pt_PT/pt_PT.dic's ~44k, and the post-1990 Orthographic Agreement
+    # keeps the two spellings largely unified — the bigger dictionary is
+    # the better validator against a mixed pt OPUS corpus.
+    "pt": "pt_BR/pt_BR",
 }
 
 # Languages where an ordinary common word is normally written lowercase in
@@ -167,6 +172,7 @@ HUNSPELL_ENCODING = {
     "de": "iso-8859-1",
     "es": "utf-8",
     "it": "utf-8",
+    "pt": "utf-8",  # pt_BR.aff declares "SET UTF-8"
 }
 
 

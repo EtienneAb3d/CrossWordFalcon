@@ -160,6 +160,7 @@ WORDLISTS = {
     "de": DATA_DIR / "wordlist_de_full.tsv",
     "es": DATA_DIR / "wordlist_es_full.tsv",
     "it": DATA_DIR / "wordlist_it_full.tsv",
+    "pt": DATA_DIR / "wordlist_pt_full.tsv",
 }
 
 # Sélecteur "Mode" de l'interface web (voir frontend/static/index.html), à
@@ -1334,6 +1335,16 @@ def _validate_generate_request(req):
         raise HTTPException(
             status_code=400,
             detail=f"langue inconnue : {req.language!r} (attendu : {sorted(WORDLISTS)})",
+        )
+    # A language can be wired up (WORDLISTS entry, UI option, i18n block)
+    # before its data pipeline has finished producing data/wordlist_<lang>_
+    # full.tsv — reject cleanly here rather than let the job fail deep
+    # inside load_wordlist() with a bare FileNotFoundError.
+    if not WORDLISTS[req.language].exists():
+        raise HTTPException(
+            status_code=400,
+            detail=f"le dictionnaire pour {req.language!r} n'est pas encore "
+                   "construit sur ce serveur — réessayez plus tard.",
         )
     if req.difficulty not in DIFFICULTY_PRESETS:
         raise HTTPException(

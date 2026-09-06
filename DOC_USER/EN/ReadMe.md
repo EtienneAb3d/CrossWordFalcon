@@ -27,8 +27,8 @@ Every field below (`#generate-form`) is used to start a new grid
 generation (`frontend/static/script.js`, the form's own `submit` handler,
 `runGeneration`).
 
-- **Langue / Language** (`#language`) — which of the five supported
-  languages (French, English, German, Spanish, Italian) the grid's own
+- **Langue / Language** (`#language`) — which of the six supported
+  languages (French, English, German, Spanish, Italian, Portuguese) the grid's own
   words and clues are written in. Also switches every label/message on
   the page to that same language.
 - **Largeur / Width** and **Hauteur / Height** (`#width`/`#height`) — the

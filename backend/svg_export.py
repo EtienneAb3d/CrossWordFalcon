@@ -69,6 +69,7 @@ _HEADINGS = {
     "de": ("Waagerecht", "Senkrecht", "Lösung"),
     "es": ("Horizontales", "Verticales", "Solución"),
     "it": ("Orizzontali", "Verticali", "Soluzione"),
+    "pt": ("Horizontais", "Verticais", "Solução"),
 }
 
 _NO_DEFINITION = {
@@ -77,6 +78,7 @@ _NO_DEFINITION = {
     "de": "Keine Definition verfügbar",
     "es": "Definición no disponible",
     "it": "Definizione non disponibile",
+    "pt": "Definição indisponível",
 }
 
 # The language <select>'s own option labels in frontend/static/index.html are
@@ -88,6 +90,7 @@ _NATIVE_LANGUAGE_NAMES = {
     "de": "Deutsch",
     "es": "Español",
     "it": "Italiano",
+    "pt": "Português",
 }
 
 # Mirrors frontend/static/i18n.js's difficultyLabel/difficultyEasy/
@@ -98,6 +101,7 @@ _DIFFICULTY_LABELS = {
     "de": ("Schwierigkeit", {"easy": "Leicht", "medium": "Mittel", "hard": "Schwer"}),
     "es": ("Dificultad", {"easy": "Fácil", "medium": "Media", "hard": "Difícil"}),
     "it": ("Difficoltà", {"easy": "Facile", "medium": "Media", "hard": "Difficile"}),
+    "pt": ("Dificuldade", {"easy": "Fácil", "medium": "Média", "hard": "Difícil"}),
 }
 
 # Mirrors frontend/static/i18n.js's modeLabel/modeFlash/modeTurbo/modeFast/
@@ -124,6 +128,10 @@ _MODE_LABELS = {
         "flash": "Flash", "turbo": "Turbo", "fast": "Veloce",
         "medium": "Medio", "ultra": "Ultra",
     }),
+    "pt": ("Modo", {
+        "flash": "Flash", "turbo": "Turbo", "fast": "Rápido",
+        "medium": "Médio", "ultra": "Ultra",
+    }),
 }
 
 # Mirrors frontend/static/script.js's gridGenerationTime/gridOptimizationTime/
@@ -134,6 +142,7 @@ _DURATION_LABELS = {
     "de": ("Gitter erzeugt in", "Optimiert in", "Definitionen erzeugt in"),
     "es": ("Crucigrama generado en", "Optimizado en", "Definiciones generadas en"),
     "it": ("Griglia generata in", "Ottimizzata in", "Definizioni generate in"),
+    "pt": ("Grelha gerada em", "Otimizada em", "Definições geradas em"),
 }
 
 # Mirrors frontend/static/i18n.js's attemptPreviewStats own "XX % noir"/
@@ -148,6 +157,7 @@ _BLACK_RATIO_LABELS = {
     "de": "{p}% schwarz",
     "es": "{p}% negro",
     "it": "{p}% nero",
+    "pt": "{p}% preto",
 }
 
 

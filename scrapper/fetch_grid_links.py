@@ -337,6 +337,34 @@ SOURCES = {
     "eldebate": {"name": "El Debate", "url": "https://www.eldebate.com/juegos/crucigrama/", "language": "es"},
     "lanacion": {"name": "La Nación", "url": "https://www.lanacion.com.ar/juegos/crucigrama/", "language": "es"},
     "eldiario": {"name": "elDiario.es", "url": "https://www.eldiario.es/juegos/game/crossword/", "language": "es"},
+
+    # PT : une seule source a passé la vérification, sur ~15 candidats
+    # testés en direct. Aucun quotidien portugais n'est exploitable avec
+    # le mécanisme (httpx simple, sans navigateur) : Público renvoie une
+    # page anti-robot Cloudflare (HTTP 202, "verify you're not a robot") ;
+    # Record, Sábado et Correio da Manhã (groupe Medialivre) ne servent
+    # qu'une page de rubrique dont la grille est rendue en JS, sans grille
+    # ni iframe de jeu dans le HTML brut ; Jornal de Notícias et Diário de
+    # Notícias renvoient 404 sur tout chemin /passatempos/palavras-cruzadas
+    # essayé ; palavrascruzadas.pt (le site de l'auteur Paulo Freixinho)
+    # est une bibliothèque/boutique organisée par séries, sans URL stable
+    # "grille du jour". Côté Brésil : geniol.com.br est bloqué par
+    # Cloudflare (403 dur) ; ojogos.com.br embarque un jeu générique
+    # étranger reskiné, pas une grille brésilienne ; sopalavrascruzadas.
+    # com.br n'a plus rien de récent (dernières grilles datées 2024) ;
+    # rachacuca.com.br n'a qu'un petit archivage numéroté (#1..#55, pas
+    # une publication quotidienne) et la grille y est uniquement en JS.
+    # Cruzadas Clube, lui, publie une nouvelle grille datée chaque jour
+    # (vérifié en direct : "Cruzadas clássicas 682", "postado em
+    # 04/09/2026") — la page de catégorie est stable et liste la plus
+    # récente en premier, d'où la règle "extract" qui prend le premier
+    # numéro visible.
+    "cruzadasclube": {
+        "name": "Cruzadas Clube",
+        "url": "https://cruzadasclube.com.br/jogo/categoria/id/1/n/cruzadas-classicas",
+        "language": "pt",
+        "extract": (_extract_from_visible_text, r"Cruzadas cl[aá]ssicas\s+(\d{2,5})", "Cruzadas Clube – Clássicas {}"),
+    },
 }
 
 SCRAPP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SCRAPP")

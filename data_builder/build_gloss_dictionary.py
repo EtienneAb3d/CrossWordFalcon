@@ -66,6 +66,7 @@ KAIKKI_SOURCE = {
     "de": ("dewiktionary", "Deutsch"),
     "es": ("eswiktionary", "Español"),
     "it": ("itwiktionary", "Italiano"),
+    "pt": ("ptwiktionary", "Português"),
 }
 
 MAX_GLOSSES_PER_WORD = 3

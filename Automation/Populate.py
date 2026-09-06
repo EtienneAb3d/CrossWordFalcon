@@ -36,7 +36,7 @@ import time
 import urllib.error
 import urllib.request
 
-LANGUAGES = ["fr", "en", "de", "es", "it"]
+LANGUAGES = ["fr", "en", "de", "es", "it", "pt"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 MODES = ["flash", "turbo", "fast", "medium", "ultra"]
 
@@ -113,7 +113,16 @@ def _generate_one(base_url, req, poll_interval, per_grid_timeout):
     """Soumet une génération et sonde sa phase jusqu'à la fin. Renvoie
     (job_id, phase_finale, error_code|None, secondes_écoulées)."""
     started = time.monotonic()
-    resp = _http_json(f"{base_url}/api/generate", payload=req, timeout=60)
+    try:
+        resp = _http_json(f"{base_url}/api/generate", payload=req, timeout=60)
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            # Requête refusée d'emblée (ex. une langue tout juste ajoutée
+            # dont le dictionnaire n'est pas encore construit) — pas une
+            # panne : on retire cette combinaison et on retire une autre,
+            # sans la compter comme échec ni consommer un retry.
+            return None, "rejected", None, time.monotonic() - started
+        raise
     job_id = resp["job_id"]
     last_phase = None
     while True:
@@ -230,6 +239,17 @@ def main():
             if phase == "timeout":
                 timeouts += 1
                 print(f"    délai dépassé ({args.per_grid_timeout:.0f}s), on passe.", flush=True)
+                break
+            if phase == "rejected":
+                # Combinaison refusée par le back (langue pas encore prête).
+                # Si la langue n'est pas figée, on retire une autre requête
+                # au hasard sans rien compter ; sinon c'est un vrai échec.
+                print("    combinaison refusée par le serveur (langue pas prête ?)", flush=True)
+                if args.language is None and not _stop_requested:
+                    attempt -= 1  # ne consomme pas de tentative
+                    time.sleep(0.2)
+                    continue
+                errors += 1
                 break
             # error / cancelled / gone / network_error
             print(f"    échec : phase={phase} error_code={error_code}", flush=True)

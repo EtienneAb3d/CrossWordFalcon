@@ -4,8 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**CrossWordFalcon** — a crossword grid generator (French, English, German, Spanish, or
-Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
+**CrossWordFalcon** — a crossword grid generator (French, English, German, Spanish,
+Italian, or Portuguese), usable from the CLI or from a web UI backed by two FastAPI
+servers:
 
 - `data_builder/build_sentence_corpus.py` (moved from the project root into
   `data_builder/` at the user's explicit request, together with the other
@@ -2840,7 +2841,7 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   French only, regardless of which of the 5 languages the request was actually in (the
   model was just expected to generalize the underlying grammatical *concept*, e.g.
   "match person and mood", to whichever language it was writing in). These now live in
-  `data/<lang>_prompt_config.json` (one file per supported language: fr/en/de/es/it),
+  `data/<lang>_prompt_config.json` (one file per supported language: fr/en/de/es/it/pt),
   loaded and cached per language by `_load_prompt_config()` (falls back to `fr` if a
   language's file is missing) and assembled by `_build_system_prompt()` via a small
   `_bullets()` helper — the *structure*/explanatory prose of the prompt (the numbered
@@ -5910,7 +5911,7 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   environment) — verified structurally instead.
 - `frontend/static/i18n.js` — the internationalization config: every user-visible
   interface string (labels, buttons, headings, progress/status messages, error
-  messages), for every supported language (fr/en/de/es/it), as one `I18N` object —
+  messages), for every supported language (fr/en/de/es/it/pt), as one `I18N` object —
   pure data, no logic, loaded as a plain `<script>` before `script.js` in
   `index.html` (both are classic non-module scripts sharing the global scope, so
   order in `index.html` is what makes `I18N` available to `script.js`, not an
@@ -5925,7 +5926,7 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   `project-best-practices` SKILL.
 
 `data/wordlist_fr_full.tsv` is the CLI's default dictionary (`--wordlist`); the backend
-picks among `data/wordlist_{fr,en,de,es,it}_full.tsv` per the request's `language` (see
+picks among `data/wordlist_{fr,en,de,es,it,pt}_full.tsv` per the request's `language` (see
 `backend/app.py`'s `WORDLISTS`). There is no plain-text fallback list checked into the
 repo; `load_wordlist` still accepts a free-text format as a fallback parser, but no file
 of that kind ships here.

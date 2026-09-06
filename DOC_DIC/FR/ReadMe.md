@@ -3,7 +3,8 @@
 Ce document décrit, en termes simples, comment les quatre scripts à la
 racine du projet — `build_sentence_corpus.py`, `build_wordlist_freq.py`,
 `build_gloss_dictionary.py` et `compress_reference_corpus.py` — fabriquent,
-pour une langue donnée (français, anglais, allemand, espagnol ou italien),
+pour une langue donnée (français, anglais, allemand, espagnol, italien ou
+portugais),
 les fichiers que `backend/crossword_gen.py` et `backend/clues.py` utilisent
 ensuite pour générer une grille et ses définitions :
 
@@ -21,7 +22,7 @@ ensuite pour générer une grille et ses définitions :
 
 Les trois premières étapes s'enchaînent dans cet ordre — chacune consomme la
 sortie de la précédente — mais sont indépendantes d'une langue à l'autre :
-rien n'impose de traiter les cinq langues dans un ordre particulier. La
+rien n'impose de traiter les six langues dans un ordre particulier. La
 quatrième étape (compression) ne dépend que de la sortie de la première ;
 elle peut être lancée dès que celle-ci existe, sans attendre les étapes 2
 et 3.
@@ -264,12 +265,13 @@ par la colonne CANONIQUE de `data/wordlist_<lang>_full.tsv` de l'étape 2.
 
 Pour l'anglais, l'extraction principale de Kaikki (regroupée par langue du
 mot défini) est déjà en anglais, puisque le Wiktionary anglophone définit
-les mots anglais en anglais. Pour le français, l'allemand, l'espagnol et
-l'italien, cette même extraction principale donne des définitions
-**en anglais** (le regard du Wiktionary anglophone sur un mot étranger) —
-ce n'est pas ce qu'il faut ici, donc ces quatre langues utilisent chacune
-leur propre édition Wiktionary dans sa propre langue (frwiktionary,
-dewiktionary, eswiktionary, itwiktionary), qui donne des définitions
+les mots anglais en anglais. Pour le français, l'allemand, l'espagnol,
+l'italien et le portugais, cette même extraction principale donne des
+définitions **en anglais** (le regard du Wiktionary anglophone sur un mot
+étranger) — ce n'est pas ce qu'il faut ici, donc ces cinq langues
+utilisent chacune leur propre édition Wiktionary dans sa propre langue
+(frwiktionary, dewiktionary, eswiktionary, itwiktionary, ptwiktionary),
+qui donne des définitions
 rédigées dans la langue même du mot (`build_gloss_dictionary.py`,
 `KAIKKI_SOURCE`).
 
@@ -321,7 +323,7 @@ GitHub bloque tout fichier poussé au-delà de 100 Mo (limite stricte, pas un
 simple avertissement) et affiche un avertissement dans son interface web
 au-delà de 50 Mo (`GITHUB_HARD_LIMIT_BYTES`/`GITHUB_WARN_LIMIT_BYTES`,
 `compress_reference_corpus.py`) — une archive par langue reste sous la
-limite stricte, jamais une archive unique regroupant les cinq langues.
+limite stricte, jamais une archive unique regroupant les six langues.
 `compress_reference_corpus.py` mesure la taille réelle de l'archive produite
 et rapporte explicitement laquelle des deux limites, si une seule, est
 dépassée.

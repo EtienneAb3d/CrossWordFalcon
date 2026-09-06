@@ -195,6 +195,7 @@ _TITLE_INTRO_RE = re.compile(
     r"un\s+titre\s+possible|mon\s+titre|mes\s+titres|"
     r"propongo|el\s+t[íi]tulo\s+(?:es|ser[íi]a)|aqu[íi]\s+(?:est[áa]|tienes)|"
     r"propongo\s+il\s+titolo|il\s+titolo\s+(?:[èe]|potrebbe\s+essere)|ecco(?:\s+il\s+titolo)?|"
+    r"proponho|sugiro|o\s+t[íi]tulo\s+(?:[ée]|seria)|aqui\s+est[áa](?:\s+o\s+t[íi]tulo)?|"
     r"ich\s+schlage\s+vor|der\s+titel\s+(?:ist|lautet|k[öo]nnte)|hier\s+ist(?:\s+der\s+titel)?|"
     r"here\s+is(?:\s+(?:a|the|my)\s+title)?|how\s+about|i\s+(?:propose|suggest)|my\s+title|the\s+title\s+(?:is|would\s+be)"
     r")(?:\s*[:\-–—,]\s*|\s+(?=[\"'“”«»]))",
@@ -390,6 +391,7 @@ LANGUAGE_NAMES = {
     "de": "German",
     "es": "Spanish",
     "it": "Italian",
+    "pt": "Portuguese",
 }
 
 # Every worked example in the system prompt below — the difficulty-style
@@ -613,6 +615,16 @@ _TITLE_HOLLOW_WORDS = {
         "non", "piu", "molto", "due", "tre", "quattro", "cinque", "sei",
         "sette", "otto", "nove", "dieci",
     },
+    "pt": {
+        "o", "a", "os", "as", "um", "uma", "uns", "umas", "de", "do",
+        "da", "dos", "das", "ao", "aos", "no", "na", "nos", "nas", "e",
+        "ou", "nem", "mas", "porem", "logo", "pois", "que", "se", "este",
+        "esta", "estes", "estas", "esse", "essa", "isso", "isto", "aquele",
+        "aquela", "meu", "minha", "teu", "tua", "seu", "sua", "nosso",
+        "vosso", "em", "com", "sem", "por", "para", "sobre", "sob",
+        "entre", "ate", "nao", "mais", "muito", "dois", "duas", "tres",
+        "quatro", "cinco", "seis", "sete", "oito", "nove", "dez",
+    },
 }
 _TITLE_HOLLOW_WORDS = {
     lang: {_normalize(w) for w in words}
@@ -667,6 +679,11 @@ _LANGUAGE_STOPWORDS_RAW = {
         "il", "lo", "la", "gli", "le", "di", "un", "una", "che", "è", "e",
         "per", "con", "non", "in", "del", "della", "voi", "noi", "lei",
         "sono", "anche", "però", "quindi", "questo",
+    },
+    "pt": {
+        "o", "os", "um", "uma", "que", "de", "do", "da", "dos", "das",
+        "em", "no", "na", "com", "não", "para", "por", "mais", "você",
+        "está", "são", "também", "então", "mas", "isso", "seu", "sua",
     },
 }
 # Several function words are spelled identically across two Romance

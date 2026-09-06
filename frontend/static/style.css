@@ -143,7 +143,8 @@ h1 {
 /* Lien vers le dépôt GitHub, en haut à droite du header (dernier élément
    de la ligne flex, après le badge d'info). Discret par défaut, comme
    le badge d'info, et mis en avant au survol / focus clavier. */
-#github-link {
+#github-link,
+#discussions-link {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
@@ -154,12 +155,15 @@ h1 {
 }
 
 #github-link:hover,
-#github-link:focus-visible {
+#github-link:focus-visible,
+#discussions-link:hover,
+#discussions-link:focus-visible {
   color: var(--accent);
   outline: none;
 }
 
-#github-link svg {
+#github-link svg,
+#discussions-link svg {
   display: block;
 }
 

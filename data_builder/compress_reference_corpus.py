@@ -39,7 +39,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-LANGUAGES = ("fr", "en", "de", "es", "it")
+LANGUAGES = ("fr", "en", "de", "es", "it", "pt")
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CORPUS_DIR = DATA_DIR / "reference_corpus"

@@ -3,7 +3,8 @@
 ![CrossWordFalcon](frontend/static/logo.png)
 
 CrossWordFalcon generates crossword grids, complete with clues, straight
-from a web page — in French, English, German, Spanish, or Italian. Pick a
+from a web page — in French, English, German, Spanish, Italian, or
+Portuguese. Pick a
 language, a size, and a difficulty level, and the app builds a full grid.
 
 - **Runs 100% locally** — no cloud account, no AI subscription needed.
