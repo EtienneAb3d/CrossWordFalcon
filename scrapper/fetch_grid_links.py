@@ -365,6 +365,29 @@ SOURCES = {
         "language": "pt",
         "extract": (_extract_from_visible_text, r"Cruzadas cl[aá]ssicas\s+(\d{2,5})", "Cruzadas Clube – Clássicas {}"),
     },
+    "onlinecrosswords_pt": {
+        # Ajoutée directement par l'utilisateur : "Site Portugais à ajouter
+        # au SCAPP : https://www.onlinecrosswords.net/br/online-daily-
+        # crosswords-1.php" — la variante brésilienne/portugaise de la
+        # source anglaise "onlinecrosswords" déjà présente plus haut, sur
+        # le même site (OnlineCrosswords.net). Confirmée en direct (200,
+        # aucune redirection, ~450 caractères de texte visible réel,
+        # contenu authentiquement en portugais : "Palavras Cruzadas
+        # Online... Este é o puzzle #1 para Sep 6, 2026"). Numéro ET date
+        # extractibles ensemble ici, exactement comme la source anglaise
+        # (même site, même structure de page, seul "for" devient "para") —
+        # 4 groupes captés séparément (numéro, mois, jour, année), même
+        # raison que la version anglaise : ne pas recopier tel quel le
+        # double espace réel trouvé dans le texte source ("Sep  6, 2026").
+        "name": "OnlineCrosswords.net (BR)",
+        "url": "https://www.onlinecrosswords.net/br/online-daily-crosswords-1.php",
+        "language": "pt",
+        "extract": (
+            _extract_from_visible_text,
+            r"puzzle\s*\|\s*#(\d+)\s*\|\s*para\s*\|\s*([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})",
+            "OnlineCrosswords.net (BR) – #{} ({} {}, {})",
+        ),
+    },
 }
 
 SCRAPP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "SCRAPP")

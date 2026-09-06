@@ -4673,6 +4673,48 @@ servers:
   `GET /api/scrapp` (through the real running backend and the frontend's
   own proxy) returned the identical, corrected title/link.
 
+  **A second Portuguese source was added directly by the user**: "Site
+  Portugais à ajouter au SCAPP : https://www.onlinecrosswords.net/br/
+  online-daily-crosswords-1.php" — the Brazilian/Portuguese variant of
+  the same site's own already-verified English source
+  (`onlinecrosswords`), on the same domain. Verified live the same way as
+  every other source in this file: a real fetch (200, no redirect), ~450
+  characters of genuine Portuguese visible text ("Palavras Cruzadas
+  Online... Este é o puzzle #1 para Sep 6, 2026" — matching the actual
+  fetch date), and the exact same number+date extraction shape as the
+  English source (only "for" becomes "para"), including the same
+  double-space quirk in the raw source text ("Sep  6, 2026") already
+  documented for the English page — handled the identical way, by
+  capturing the number/month/day/year as 4 separate groups rather than
+  one combined date block. Added as `onlinecrosswords_pt`.
+
+  A second candidate offered in the same exchange, `https://www.record.
+  pt/passatempos/palavras-cruzadas`, was checked live the same way and
+  **rejected** — confirming, on this exact URL, the same finding this
+  file's own earlier PT research already recorded for record.pt in
+  general: a real 200/no-redirect fetch (186KB) whose raw HTML contains
+  no `crossword`/`puzzle`/`arkadium` token anywhere, no game-platform
+  `<iframe>` (only Google Tag Manager and an ad bar), and every one of
+  its 173 occurrences of "cruzadas" turned out to be either the page's
+  own title/hidden section-name field or a UTM tracking parameter
+  (`ref=Palavras Cruzadas_1BlocoAreasemDestaques`) attached to unrelated
+  sports-news article links — the visible text itself is an ordinary
+  sports-news homepage (Sporting/Benfica/Luis Suárez articles), not a
+  crossword. The real puzzle widget is evidently rendered by
+  client-side JS not present in a plain HTTP fetch, the identical
+  "JS-rendered widget, no game content in the raw response" failure
+  class already established for `lebelage`/several other rejected
+  sources elsewhere in this project — not added.
+
+  Verified live: a real `python3 fetch_grid_links.py` run confirmed
+  `onlinecrosswords_pt` fires correctly (`"OnlineCrosswords.net (BR) –
+  #1 (Sep 6, 2026)"`, matching the real fetch date) alongside the
+  pre-existing `cruzadasclube` entry (both `language: "pt"`, 2/2), with
+  every other language's own count unchanged (fr 18, en 4, de 6, it 2,
+  es 3 — 35 sources total, up from 34); `GET /api/scrapp` (through the
+  real running backend and the frontend's own proxy) returned the
+  identical items.
+
   Every David FALCON conversation is also logged, one file per session, at
   the user's explicit request: "Pour chaque discussion dans le ChatBot,
   crée un LOG des questions/réponses dans un dossier LOG_CHAT. Chaque log
