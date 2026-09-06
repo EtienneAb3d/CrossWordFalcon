@@ -120,6 +120,16 @@ async def proxy_generate_status(job_id: str):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/generate/phase/{job_id}")
+async def proxy_generate_phase(job_id: str):
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/generate/phase/{job_id}")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.post("/api/generate/cancel/{job_id}")
 async def proxy_generate_cancel(job_id: str):
     """Relaie le bouton "Stop" de l'interface (voir script.js) vers le
@@ -238,6 +248,25 @@ async def proxy_library_list(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/library")
+async def proxy_library_list_filtered(request: Request):
+    """Variante POST : le corps JSON porte `seen_filter` + `seen_ids` (les
+    grilles déjà vues par ce client — voir script.js, qui garde
+    l'ensemble en localStorage) pour que le back filtre/annote la liste.
+    Corps relayé tel quel."""
+    try:
+        body = await request.body()
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/library",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
     return JSONResponse(status_code=resp.status_code, content=resp.json())

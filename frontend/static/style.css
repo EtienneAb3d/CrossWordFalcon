@@ -842,14 +842,22 @@ button:disabled {
 #library-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.5rem;
   margin: 0 0 0.5rem;
 }
 
 #library-label {
   margin: 0;
+  margin-right: auto;
   font-size: 0.9rem;
   font-weight: 600;
+}
+
+/* Les deux sélecteurs en haut de la Bibliothèque (langue, "déjà vues"). */
+#library-header select {
+  font-size: 0.8rem;
+  padding: 0.15rem 0.3rem;
 }
 
 #library-table {
@@ -882,6 +890,13 @@ button:disabled {
 #library-table tbody tr:focus-visible {
   background: var(--selected);
   outline: none;
+}
+
+/* Grille déjà vue par ce navigateur (script.js's markGridSeen / le champ
+   `seen` renvoyé par POST /api/library) — texte grisé, la ligne reste
+   pleinement cliquable et garde son survol. */
+#library-table tbody tr.library-grid-seen td {
+  color: #9aa0a6;
 }
 
 #library-empty {
@@ -917,6 +932,11 @@ button:disabled {
   align-items: center;
   margin: 0;
   flex: 1;
+}
+
+#dictionary-language {
+  font-size: 0.85rem;
+  padding: 0.15rem 0.3rem;
 }
 
 #dictionary-input {

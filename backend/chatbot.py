@@ -371,10 +371,16 @@ class ChatBot:
             "crossword-puzzle web app. You help the player use the interface and solve the "
             "crossword grid currently on screen (explaining a clue, giving a hint, or, if "
             "explicitly asked, the answer itself).\n\n"
+            f"Write EVERY reply entirely in {language_name}. This is not optional and applies "
+            "to every message you ever send.\n\n"
             "STRICT RULES:\n"
             "1. Always reply extremely politely.\n"
-            f"2. Always reply entirely in {language_name}, regardless of what language the "
-            "player wrote in.\n"
+            f"2. LANGUAGE. Your entire reply MUST be written in {language_name} — every word "
+            "of it, not just the first sentence. This holds no matter what language the "
+            f"player writes to you in: reply in {language_name} anyway. It also holds even "
+            "though many examples in these rules happen to be written in French — those "
+            "French snippets illustrate FORMAT and WORDING STYLE only, never the language "
+            f"to answer in. If {language_name} is not French, do NOT reply in French.\n"
             "3. You must ONLY answer questions about using this interface, or about solving/"
             "understanding the crossword grid currently on screen. For ANY other question "
             "(general knowledge, other software, personal questions, anything unrelated to "
@@ -477,6 +483,8 @@ class ChatBot:
             "developer):\n"
             f"{doc_user}\n\n"
             "Current state of the interface:\n" + "\n".join(state_lines)
+            + f"\n\nFINAL REMINDER: write your entire reply in {language_name}, "
+            "starting directly with the answer and no greeting."
         )
 
     async def reply_stream(self, history, message, language="fr", ui_context=None, timeout=DEFAULT_TIMEOUT):

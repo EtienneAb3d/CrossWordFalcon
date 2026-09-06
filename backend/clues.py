@@ -281,6 +281,30 @@ def _clean_title(content):
     return titles[0] if titles else ""
 
 
+# A plain title reads as words separated by spaces, at most a comma —
+# anything else (a stray "<p>", an HTML/markdown fragment, ". ! ? : ;",
+# brackets, parentheses, quotes, slashes…) means the model emitted
+# structural junk rather than a real title. At the user's explicit
+# request: "Eliminer les noms de grilles avec des ponctuations (autres
+# que l'espace et la virgule)." The apostrophe (' / ’) and the hyphen
+# (-) are kept: in French/Italian/Spanish they are intra-word
+# orthography ("L'aube", "arc-en-ciel"), not sentence punctuation —
+# every other punctuation or symbol character triggers rejection.
+_TITLE_ALLOWED_PUNCT = " ,'’-"
+
+
+def _title_has_bad_punctuation(title):
+    """True if `title` contains any character that is neither a letter,
+    a digit, nor one of the few marks a plain title may legitimately use
+    (space, comma, apostrophe, hyphen — see _TITLE_ALLOWED_PUNCT).
+    generate_title rejects such a candidate and retries, exactly like a
+    grid-word-reuse hit."""
+    return any(
+        not (ch.isalnum() or ch in _TITLE_ALLOWED_PUNCT)
+        for ch in title
+    )
+
+
 # Even a modest batch (5-6 words) was unreliable on the small local model —
 # it would produce good clues for the first couple of words then degrade
 # into empty/off-topic/malformed lines for the rest of the same response.
@@ -1191,6 +1215,13 @@ class LLMClueGenerator:
             # obey reliably.
             clean = []
             for t in kept:
+                if _title_has_bad_punctuation(t):
+                    logger.info(
+                        "title generation attempt %d/%d: rejecting %r "
+                        "(punctuation other than space/comma)",
+                        attempt + 1, _TITLE_RETRIES, t,
+                    )
+                    continue
                 reused = _title_grid_word_reuse(t, grid_norm, hollow)
                 if reused:
                     logger.info(
@@ -1211,7 +1242,7 @@ class LLMClueGenerator:
                 return title
             logger.info(
                 "title generation attempt %d/%d: no usable candidate "
-                "(empty / wrong-language / all reuse a grid word), retrying",
+                "(empty / wrong-language / bad punctuation / all reuse a grid word), retrying",
                 attempt + 1, _TITLE_RETRIES,
             )
         logger.info(

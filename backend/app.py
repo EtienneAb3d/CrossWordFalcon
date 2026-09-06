@@ -530,39 +530,99 @@ def system_info():
     return get_system_info(clue_generator.model)
 
 
-@app.get("/api/library")
-def library_list(preferred_language: str = "fr", page: int = 1):
-    """Bouton "Bibliothèque" de l'interface, à la demande explicite de
-    l'utilisateur — la liste (métadonnées seulement, jamais la grille
-    entière : voir backend/grid_store.py's list_grids) de toutes les
-    grilles déjà sauvegardées dans GRID_STORE/, triées langue configurée
-    d'abord, puis anglais, puis le reste, plus récente en premier dans
-    chaque groupe. `preferred_language` est la langue actuellement
-    sélectionnée côté interface (le même sélecteur pilote à la fois la
-    langue de la grille et celle de l'interface — voir CLAUDE.md),
-    transmise explicitement par le frontend à chaque ouverture du
-    panneau plutôt que déduite ici d'un cookie ou d'un en-tête.
+_LIBRARY_SEEN_FILTERS = ("all", "unseen", "seen")
 
-    Paginée par `LIBRARY_PAGE_SIZE` (20) lignes, à la demande explicite de
-    l'utilisateur — `list_grids()` elle-même reste inchangée (elle rend
-    toujours la liste complète, déjà triée ; la pagination est une
-    préoccupation de présentation de cette seule route, pas du tri
-    lui-même, qui doit rester cohérent sur l'ensemble de la liste d'une
-    page à l'autre). `page` est 1-indexée et bornée à 1 au minimum (une
-    valeur absurde comme 0 ou négative ne renvoie jamais une tranche vide
-    par accident) ; une page au-delà de la dernière renvoie simplement une
-    liste vide plutôt qu'une erreur — `total`/`page_size` dans la réponse
-    donnent au frontend tout ce qu'il faut pour calculer le nombre de
-    pages et désactiver ses boutons "précédent"/"suivant" en conséquence."""
-    grids = list_grids(preferred_language)
+
+class LibraryListRequest(BaseModel):
+    """Corps de POST /api/library — même rôle que les paramètres de query
+    de la route GET, mais en POST pour pouvoir transporter `seen_ids`, qui
+    peut compter des milliers d'identifiants (bien au-delà de ce qu'une
+    query string, ou un cookie, encaisse raisonnablement — voir
+    frontend/static/script.js, qui garde l'ensemble en localStorage)."""
+    preferred_language: str = "fr"
+    page: int = 1
+    # Filtre de langue, à la demande explicite de l'utilisateur ("Par
+    # défaut, n'afficher que les grilles dans la langue de l'interface") :
+    # "all" -> toutes langues ; un code (fr/en/de/es/it) -> seulement
+    # cette langue. `preferred_language` continue de piloter l'ordre de
+    # tri (cette langue d'abord), indépendamment de ce filtre. Le
+    # frontend l'initialise à la langue de l'interface (voir
+    # #library-language-filter).
+    language_filter: str = "all"
+    # "all" (défaut) : liste complète, chaque grille juste annotée seen=…
+    # "unseen" : seulement les grilles absentes de seen_ids
+    # "seen"   : seulement celles présentes dans seen_ids
+    seen_filter: str = "all"
+    # Identifiants (champ `id` d'un fichier GRID_STORE) des grilles que ce
+    # client a déjà vues. Borné défensivement — un client normal en a au
+    # plus quelques milliers ; au-delà c'est du bruit qu'on ignore.
+    seen_ids: list[str] = Field(default_factory=list, max_length=100_000)
+
+
+def _library_page(preferred_language, page, seen_filter, seen_ids, language_filter="all"):
+    """Coeur partagé de GET et POST /api/library — la liste (métadonnées
+    seulement, jamais la grille entière : voir backend/grid_store.py's
+    list_grids) des grilles de GRID_STORE/, triées langue configurée
+    d'abord puis anglais puis le reste, plus récente en premier dans
+    chaque groupe, filtrée par `language_filter` puis par `seen_filter`/
+    `seen_ids`, puis paginée par `LIBRARY_PAGE_SIZE` (20).
+
+    `list_grids()` elle-même reste inchangée (toujours la liste complète
+    triée, toutes langues) ; le filtrage par langue ("all" ou un code) et
+    "déjà vue / pas encore vue" et la pagination sont des préoccupations
+    de cette route. `preferred_language` pilote seulement l'ordre de tri,
+    pas le filtrage. Les filtrages se font AVANT la pagination pour que
+    `total`/le nombre de pages reflètent la liste réellement montrée.
+    Chaque grille renvoyée porte en plus `seen` (bool) pour que le
+    frontend puisse la griser sans re-consulter son propre stockage.
+    `page` bornée à 1 au minimum ; une page au-delà de la dernière renvoie
+    une liste vide, pas une erreur."""
+    if seen_filter not in _LIBRARY_SEEN_FILTERS:
+        seen_filter = "all"
+    only_language = language_filter if language_filter in WORDLISTS else None
+    seen = set(seen_ids or ())
+    rows = []
+    for g in list_grids(preferred_language):
+        if only_language is not None and g.get("language") != only_language:
+            continue
+        is_seen = g.get("id") in seen
+        if seen_filter == "unseen" and is_seen:
+            continue
+        if seen_filter == "seen" and not is_seen:
+            continue
+        rows.append({**g, "seen": is_seen})
     page = max(1, page)
     start = (page - 1) * LIBRARY_PAGE_SIZE
     return {
-        "grids": grids[start:start + LIBRARY_PAGE_SIZE],
-        "total": len(grids),
+        "grids": rows[start:start + LIBRARY_PAGE_SIZE],
+        "total": len(rows),
         "page": page,
         "page_size": LIBRARY_PAGE_SIZE,
     }
+
+
+@app.get("/api/library")
+def library_list(preferred_language: str = "fr", page: int = 1):
+    """Bouton "Bibliothèque" de l'interface — voir _library_page. Cette
+    variante GET (sans filtre langue ni notion de grilles vues) est
+    conservée pour un accès simple ; le frontend utilise POST /api/library
+    pour transmettre le filtre de langue et la liste des grilles déjà vues
+    (voir LibraryListRequest)."""
+    return _library_page(preferred_language, page, "all", (), "all")
+
+
+@app.post("/api/library")
+def library_list_filtered(req: LibraryListRequest):
+    """Comme GET /api/library, mais le corps porte `language_filter`,
+    `seen_filter` + `seen_ids` (voir LibraryListRequest) : le back filtre
+    la liste par langue et par "déjà vue", l'annote, puis la pagine, à la
+    demande explicite de l'utilisateur ("Passer les grilles déjà vues au
+    Back pour qu'il sache comment gérer la liste à transmettre au
+    Front")."""
+    return _library_page(
+        req.preferred_language, req.page, req.seen_filter, req.seen_ids,
+        req.language_filter,
+    )
 
 
 @app.get("/api/library/{grid_id}")
@@ -1229,6 +1289,13 @@ async def _run_generate_job(job_id, req, resume_state=None):
                 save_grid_json, result, req.language, req.difficulty, req.mode, title
             )
             logger.info("[%s] saved to library: %s", short_id, grid_id)
+            # L'identifiant du fichier GRID_STORE de cette grille, pour que
+            # le frontend puisse la marquer "déjà vue" (localStorage) dès
+            # qu'il l'affiche — à la demande explicite de l'utilisateur
+            # ("y compris la grille qu'il vient de générer"). Même clé
+            # (`id`) que GET /api/library/{grid_id} renvoie pour une grille
+            # rechargée, donc le frontend traite les deux cas pareil.
+            result["id"] = grid_id
         except OSError as e:
             logger.warning("[%s] failed to save grid to library: %s", short_id, e)
 
@@ -1297,6 +1364,80 @@ def generate_status(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
     return job
+
+
+# Les cinq phases exposées par GET /api/generate/phase/{job_id}, à la
+# demande explicite de l'utilisateur ("file d'attente grille, génération
+# de la grille, file d'attente définition, génération des définitions,
+# grille terminée") — plus "error"/"cancelled" pour un job qui ne finira
+# jamais normalement. Un condensé stable de `job["step"]["code"]` (voir
+# _run_generate_job's own progress() closure), pensé pour un client
+# d'automatisation (Automation/Populate.py) qui veut juste savoir "où en
+# est ce job" sans avoir à connaître la dizaine de codes internes
+# (pattern, pattern_attempt_failed, minimizing, pre_cleanup_optimized...).
+_GRID_GENERATION_STEPS = frozenset({
+    "starting", "pattern", "pattern_generated", "pattern_attempt_failed",
+    "pattern_found", "pattern_failed", "pre_cleanup_optimizing",
+    "pre_cleanup_optimized", "minimizing", "grid_ready",
+})
+_CLUES_GENERATION_STEPS = frozenset({"clues", "saving"})
+
+
+def _job_phase(job):
+    """Réduit l'état interne d'un job à l'une des cinq phases publiques
+    (+ error/cancelled). `queued_grid`/`queued_clues` ne sont posés par
+    _wait_in_queue que tant qu'il y a réellement de la contention ; sans
+    file d'attente, un job passe directement de `starting` à la
+    génération, donc `grid_queue`/`clues_queue` peuvent tout simplement
+    ne jamais apparaître — c'est normal."""
+    status = job.get("status")
+    if status in ("done", "error", "cancelled"):
+        return status
+    code = (job.get("step") or {}).get("code")
+    if code == "queued_grid":
+        return "grid_queue"
+    if code == "queued_clues":
+        return "clues_queue"
+    if code in _CLUES_GENERATION_STEPS:
+        return "clues_generation"
+    # `starting`, tous les codes de recherche de grille, et tout code
+    # inattendu tant que le job tourne encore.
+    return "grid_generation"
+
+
+@app.get("/api/generate/phase/{job_id}")
+def generate_phase(job_id: str):
+    """Code de phase d'un job de génération, à la demande explicite de
+    l'utilisateur. `phase` vaut l'une de : "grid_queue" (file d'attente
+    grille), "grid_generation" (génération de la grille), "clues_queue"
+    (file d'attente définitions), "clues_generation" (génération des
+    définitions), "done" (grille terminée), ou "error"/"cancelled". Les
+    autres champs (step_code brut, position/longueur de file, avancement
+    des définitions) sont là pour le confort d'un client d'automatisation
+    et peuvent être ignorés."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
+    step = job.get("step") or {}
+    phase = _job_phase(job)
+    out = {
+        "job_id": job_id,
+        "phase": phase,
+        "finished": phase in ("done", "error", "cancelled"),
+        "status": job.get("status"),
+        "step_code": step.get("code"),
+    }
+    if step.get("code") in ("queued_grid", "queued_clues"):
+        out["queue_position"] = step.get("position")
+        out["queue_length"] = step.get("queue_length")
+    if step.get("code") == "clues":
+        out["clues_done"] = step.get("current")
+        out["clues_total"] = step.get("total")
+    if job.get("error_code"):
+        out["error_code"] = job["error_code"]
+    if phase == "error" and job.get("error"):
+        out["error"] = job["error"]
+    return out
 
 
 @app.post("/api/generate/cancel/{job_id}")

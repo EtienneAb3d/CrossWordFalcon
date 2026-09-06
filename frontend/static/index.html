@@ -145,6 +145,19 @@
     <section id="library" hidden>
       <div id="library-header">
         <p id="library-label" data-i18n="libraryLabel"></p>
+        <select id="library-language-filter" data-i18n-aria="libraryLanguageFilterLabel">
+          <option value="all" data-i18n="libraryLanguageFilterAll">Toutes les langues</option>
+          <option value="fr">Français</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="it">Italiano</option>
+        </select>
+        <select id="library-seen-filter" data-i18n-aria="librarySeenFilterLabel">
+          <option value="all" data-i18n="librarySeenFilterAll">Toutes les grilles</option>
+          <option value="unseen" data-i18n="librarySeenFilterUnseen">Non vues</option>
+          <option value="seen" data-i18n="librarySeenFilterSeen">Déjà vues</option>
+        </select>
         <button type="button" id="library-close-btn" class="nav-btn"
                 data-i18n-aria="libraryCloseBtn">✕</button>
       </div>
@@ -179,6 +192,13 @@
     <section id="dictionary" hidden>
       <div id="dictionary-header">
         <form id="dictionary-form">
+          <select id="dictionary-language" data-i18n-aria="dictionaryLanguageLabel">
+            <option value="fr">Français</option>
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+            <option value="it">Italiano</option>
+          </select>
           <input type="text" id="dictionary-input" autocomplete="off"
                  data-i18n-placeholder="dictionaryInputPlaceholder">
           <button type="submit" id="dictionary-search-btn"

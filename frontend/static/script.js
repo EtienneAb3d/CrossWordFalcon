@@ -83,6 +83,8 @@ const gridTitleEl = document.getElementById("grid-title");
 const libraryBtn = document.getElementById("library-btn");
 const libraryPanel = document.getElementById("library");
 const libraryCloseBtn = document.getElementById("library-close-btn");
+const libraryLanguageFilter = document.getElementById("library-language-filter");
+const librarySeenFilter = document.getElementById("library-seen-filter");
 const libraryTbody = document.getElementById("library-tbody");
 const libraryEmpty = document.getElementById("library-empty");
 const libraryPagination = document.getElementById("library-pagination");
@@ -97,6 +99,7 @@ const dictionarySearchBtn = document.getElementById("dictionary-search-btn");
 const dictionaryResults = document.getElementById("dictionary-results");
 const dictionaryClearBtn = document.getElementById("dictionary-clear-btn");
 const dictionaryCloseBtn = document.getElementById("dictionary-close-btn");
+const dictionaryLanguage = document.getElementById("dictionary-language");
 const rssPanel = document.getElementById("rss-panel");
 const virtualKeyboardEl = document.getElementById("virtual-keyboard");
 const virtualKeyboardToggleBtn = document.getElementById("virtual-keyboard-toggle-btn");
@@ -1515,6 +1518,19 @@ languageSelect.addEventListener("change", () => {
   // panneau lui-même.
   rssLanguageFilter.value = uiLanguage;
   renderRssList();
+  // Le filtre de langue de la Bibliothèque suit lui aussi la langue de
+  // l'interface, à la demande explicite de l'utilisateur ("modifiée si la
+  // langue de l'interface change"). Si le panneau est ouvert, on le
+  // re-rend depuis la page 1.
+  libraryLanguageFilter.value = uiLanguage;
+  if (!libraryPanel.hidden) {
+    libraryCurrentPage = 1;
+    renderLibraryList();
+  }
+  // Le sélecteur de langue du dictionnaire suit lui aussi la langue de
+  // l'interface (défaut demandé), tant que le joueur n'a rien changé
+  // dessus sur ce panneau précisément.
+  dictionaryLanguage.value = uiLanguage;
 });
 
 applyTranslations();
@@ -1852,6 +1868,44 @@ async function pollJob(jobId, t) {
   }
 }
 
+// "Déjà vues" — l'ensemble des identifiants (champ `id` d'un fichier
+// GRID_STORE, voir backend/grid_store.py) des grilles que ce navigateur a
+// déjà affichées, à la demande explicite de l'utilisateur ("stocker le
+// nom du fichier de GRID_STORE ... pour savoir qu'il l'a déjà vue").
+// Conservé en localStorage plutôt qu'un vrai cookie : après le peuplement
+// automatique (Automation/Populate.py, 1000 grilles) la liste peut
+// compter des milliers d'entrées — bien au-delà des ~4 Ko qu'un cookie
+// encaisse, et un cookie serait renvoyé à chaque requête pour rien. La
+// liste complète est passée au back dans le corps de POST /api/library
+// (voir renderLibraryList) pour qu'il filtre/annote la liste lui-même.
+// Plafond FIFO généreux : ~35 octets par id, 20000 ids ≈ 700 Ko, très
+// en dessous de la limite localStorage.
+const SEEN_GRIDS_KEY = "cwf-seen-grids";
+const SEEN_GRIDS_MAX = 20000;
+
+function loadSeenGridIds() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SEEN_GRIDS_KEY) || "[]");
+    return Array.isArray(raw) ? raw : [];
+  } catch (err) {
+    return [];
+  }
+}
+
+function markGridSeen(gridId) {
+  if (!gridId) return;
+  let ids = loadSeenGridIds();
+  if (ids.includes(gridId)) return;
+  ids.push(gridId);
+  if (ids.length > SEEN_GRIDS_MAX) ids = ids.slice(ids.length - SEEN_GRIDS_MAX);
+  try {
+    localStorage.setItem(SEEN_GRIDS_KEY, JSON.stringify(ids));
+  } catch (err) {
+    // Quota plein / stockage désactivé : tant pis, le suivi "déjà vue"
+    // est un confort, pas une fonctionnalité critique.
+  }
+}
+
 // Renders a finished grid's own `result` (backend/crossword_gen.py's
 // generate_grid() return dict, extended by backend/app.py with the three
 // duration fields and, at the user's explicit request, a short LLM-
@@ -1884,6 +1938,12 @@ function displayFinalGrid(gridData) {
   // simply has no title line shown, rather than an empty heading.
   gridTitleEl.textContent = gridData.title || "";
   gridTitleEl.hidden = !gridData.title;
+  // Marque cette grille "déjà vue" — même chemin pour une grille qui vient
+  // d'être générée (backend/app.py ajoute `id` au `result`, voir son
+  // commentaire) et une grille rechargée depuis la bibliothèque
+  // (GET /api/library/{grid_id} renvoie déjà `id`). À la demande explicite
+  // de l'utilisateur : "y compris la grille qu'il vient de générer".
+  markGridSeen(gridData.id);
   renderGrid();
   renderClues(gridData.words);
   const t = I18N[uiLanguage];
@@ -1942,10 +2002,19 @@ let libraryTotalPages = 1;
 // rather than duplicating the number client-side), at the user's
 // explicit request: "Ajoute une pagination à la liste des grilles de la
 // bibliothèque : 20 lignes affichées max à chaque page." The pagination
-// itself is server-side (GET /api/library?page=N) — this just renders
-// whichever single page's worth of rows came back, plus a "Page X/Y"
-// readout and disables libraryPrevBtn/libraryNextBtn at either end, from
-// the `total`/`page_size` the same response carries.
+// itself is server-side (POST /api/library, page in the body) — this just
+// renders whichever single page's worth of rows came back, plus a "Page
+// X/Y" readout and disables libraryPrevBtn/libraryNextBtn at either end,
+// from the `total`/`page_size` the same response carries.
+//
+// POST (not GET) so the request body can carry `seen_ids` — the list of
+// grids this browser has already viewed (see markGridSeen / SEEN_GRIDS_
+// KEY) — plus `seen_filter` (#library-seen-filter: all / unseen / seen).
+// The back does the filtering + pagination and annotates each grid with
+// `seen`, at the user's explicit request ("Passer les grilles déjà vues
+// au Back pour qu'il sache comment gérer la liste à transmettre au
+// Front"). A `seen` row is greyed (.library-grid-seen) but still fully
+// clickable.
 async function renderLibraryList() {
   const t = I18N[uiLanguage];
   libraryTbody.replaceChildren();
@@ -1956,8 +2025,23 @@ async function renderLibraryList() {
   let pageSize = 1;
   try {
     const response = await fetchWithTimeout(
-      `/api/library?preferred_language=${encodeURIComponent(uiLanguage)}&page=${libraryCurrentPage}`,
-      {}, FETCH_TIMEOUT_MS,
+      "/api/library",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          preferred_language: uiLanguage,
+          page: libraryCurrentPage,
+          // "all" ou un code langue — par défaut la langue de l'interface
+          // (voir #library-language-filter), à la demande explicite de
+          // l'utilisateur : "Par défaut, n'afficher que les grilles dans
+          // la langue de l'interface".
+          language_filter: libraryLanguageFilter.value,
+          seen_filter: librarySeenFilter.value,
+          seen_ids: loadSeenGridIds(),
+        }),
+      },
+      FETCH_TIMEOUT_MS,
     );
     if (response.ok) {
       const data = await response.json();
@@ -1985,9 +2069,15 @@ async function renderLibraryList() {
   const difficultyLabels = {
     easy: t.difficultyEasy, medium: t.difficultyMedium, hard: t.difficultyHard,
   };
+  const seenSet = new Set(loadSeenGridIds());
   for (const entry of entries) {
     const tr = document.createElement("tr");
     tr.tabIndex = 0;
+    // Grisé si le back l'a annotée `seen` (ou, par sécurité, si notre
+    // propre localStorage la connaît) — reste cliquable.
+    if (entry.seen || seenSet.has(entry.id)) {
+      tr.classList.add("library-grid-seen");
+    }
     // First column, at the user's explicit request: "la première colonne
     // doit indiquer la langue (la langue de l'interface en premier)" — the
     // sort itself already puts the UI's own language first (GET /api/
@@ -2038,6 +2128,10 @@ async function loadLibraryGrid(gridId) {
     hideAttemptPreview();
     stopBtn.hidden = true;
     continueBtn.hidden = true;
+    // gridId est toujours connu ici ; displayFinalGrid marque déjà
+    // data.id, ce doublon couvre le cas improbable où le disque n'aurait
+    // pas renvoyé le champ.
+    markGridSeen(gridId);
     displayFinalGrid(data);
     hideLibraryPanel();
     setStatus(t.statusLibraryLoaded, false);
@@ -2058,6 +2152,22 @@ libraryBtn.addEventListener("click", () => {
 });
 
 libraryCloseBtn.addEventListener("click", hideLibraryPanel);
+
+// Les deux sélecteurs en haut de la Bibliothèque : filtre de langue
+// (toutes / une langue) et filtre "déjà vues" (toutes / non vues / déjà
+// vues). Chaque changement repart de la page 1 et re-rend la liste. Le
+// filtre de langue vaut par défaut la langue de l'interface et suit ses
+// changements (voir le handler de #language plus bas), à la demande
+// explicite de l'utilisateur.
+libraryLanguageFilter.value = uiLanguage;
+libraryLanguageFilter.addEventListener("change", () => {
+  libraryCurrentPage = 1;
+  renderLibraryList();
+});
+librarySeenFilter.addEventListener("change", () => {
+  libraryCurrentPage = 1;
+  renderLibraryList();
+});
 
 libraryPrevBtn.addEventListener("click", () => {
   if (libraryCurrentPage <= 1) return;
@@ -2162,6 +2272,7 @@ function renderDictionaryResult(query, data) {
 dictionaryBtn.addEventListener("click", () => {
   if (dictionaryPanel.hidden) {
     dictionaryPanel.hidden = false;
+    dictionaryLanguage.value = uiLanguage;
     syncRssPanelVisibility();
     dictionaryInput.focus();
   } else {
@@ -2185,7 +2296,7 @@ dictionaryForm.addEventListener("submit", async (event) => {
   dictionarySearchBtn.disabled = true;
   try {
     const response = await fetchWithTimeout(
-      `/api/dictionary?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(uiLanguage)}`,
+      `/api/dictionary?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(dictionaryLanguage.value)}`,
       {}, FETCH_TIMEOUT_MS,
     );
     if (!response.ok) throw new Error(t.dictionaryError);
