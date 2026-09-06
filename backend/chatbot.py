@@ -243,7 +243,19 @@ class ChatBot:
         (script.js's own `selected`, the click-to-type target, no
         direction of its own — see selectCell()) is a separate, clearly
         distinctly-labeled concept the model is told never to confuse
-        with it."""
+        with it.
+
+        Rule 4 (hints) leans on both: a hint request is resolved to the
+        hovered word if any, else the word(s) at the clicked cell, else a
+        word the player's own message names, else a refusal that asks the
+        player to hover/click first. The reply must name which word it
+        chose (short preamble only), then give an ALTERNATIVE definition —
+        a fresh rewording that adds information the on-screen clue does
+        not, never just echoing the position + existing clue + letter
+        count — and must never contain the answer unless the player
+        explicitly asked for it. The clicked-cell word's own clue is
+        passed to the model (the `filling_words` block, with `clue=` and
+        `answer=`), so it always has what it needs to build that hint."""
         language_name = LANGUAGE_NAMES.get(language, language)
         doc_user = _load_doc_user()
 
@@ -253,6 +265,10 @@ class ChatBot:
         words = ui_context.get("words") or []
 
         state_lines = [f"A crossword puzzle is currently loaded: {puzzle_loaded}."]
+        # Word(s) at the clicked cell, if any — resolved once here so the
+        # hover-else branch further below can also see whether there is
+        # any word at all to give a hint about.
+        filling_words = _words_touching_cell(filling_cell, words) if filling_cell else []
         if puzzle_loaded:
             # Order matters here, deliberately: the full word list is
             # listed FIRST and the two resolved, single-answer states
@@ -280,13 +296,12 @@ class ChatBot:
             # a player can have a cell clicked for typing with the mouse
             # hovering somewhere else entirely, or vice versa.
             if filling_cell:
-                # 0-based internally, shown 1-based to match what the
-                # player actually sees (grid row/column headers). The
-                # word(s) at that exact cell are computed directly here
-                # (_words_touching_cell), not left for the model to work
-                # out from raw coordinates — see that function's own
-                # docstring for why.
-                filling_words = _words_touching_cell(filling_cell, words)
+                # `filling_words` (the word(s) at that exact cell) is
+                # computed once above, near `state_lines` — directly here
+                # in Python, not left for the model to derive from raw
+                # coordinates (see _words_touching_cell's own docstring).
+                # 0-based internally, shown 1-based below to match the
+                # grid's own on-screen row/column headers.
                 state_lines.append(
                     f"Separately (this is NOT the hovered word further below), the player "
                     f"has clicked cell (row {filling_cell.get('row', 0) + 1}, column "
@@ -294,10 +309,15 @@ class ChatBot:
                 )
                 if filling_words:
                     state_lines.append(
-                        "The word(s) occupying that exact clicked cell right now "
-                        "(the word being filled in — only relevant if the player asks "
-                        "about that specifically, not about the hovered word further "
-                        "below):\n" + _format_words_block(filling_words)
+                        "The word(s) occupying that exact clicked cell right now (the "
+                        "word being filled in). If the player asks for a hint and NO word "
+                        "is hovered (see below), this is the word the hint is about. If "
+                        "there are two words here (a crossing), ask the player which one, "
+                        "unless they already said. The line(s) below carry 'clue=' and "
+                        "'answer=' for your internal use — NEVER quote such a line back to "
+                        "the player, and never let its 'answer=' value appear in your "
+                        "reply:\n"
+                        + _format_words_block(filling_words)
                     )
                 else:
                     state_lines.append(
@@ -328,6 +348,7 @@ class ChatBot:
                         "no word were hovered."
                     )
             else:
+                no_target = not filling_words
                 state_lines.append(
                     "No word is currently under the player's mouse (hover) right now. If "
                     "the player asks what word is selected/hovered ('mot sélectionné'), "
@@ -335,6 +356,14 @@ class ChatBot:
                     "move their mouse over a word in the grid or a clue first — do NOT "
                     "name any word from the list above as if it were hovered, not even "
                     "the first one listed."
+                    + (
+                        " The same applies to a HINT request: with no word hovered AND no "
+                        "cell clicked (see above), you have NO word to give a hint for — "
+                        "you MUST ask the player to hover a word or click a cell first, "
+                        "and say NOTHING else. Do NOT pick a word from the list, do NOT "
+                        "use a word from the examples in rule 4, do NOT give any hint."
+                        if no_target else ""
+                    )
                 )
 
         return (
@@ -355,31 +384,77 @@ class ChatBot:
             "out-of-scope question afterward, not even briefly, not even after declining — "
             "declining and then still giving the answer right after is exactly what this "
             "rule forbids.\n"
-            "4. Distinguish clearly between a HINT request and an EXPLICIT ANSWER request "
-            "when the player asks for help with a word:\n"
-            "   - A HINT ('un indice', 'aide-moi', 'je suis bloqué', asking about a clue, or "
-            "anything not explicitly asking for the answer itself) must NEVER contain the "
-            "exact answer text — not the word itself, not spelled out letter by letter, not "
-            "even inside a sentence. Even though each word's own answer is given to you above "
-            "(the 'answer=' field in the word list/state), that text is for your own internal "
-            "use only when replying to a hint — copying or stating it is exactly what this "
-            "rule forbids. Instead, give an INDIRECT reply: rephrase the clue in different "
-            "words, describe the meaning without naming it, mention how many letters it has, "
-            "or confirm/deny one specific letter the player proposes.\n"
-            "   - Reveal the exact answer text ONLY when the player unambiguously and "
-            "explicitly asks for it (e.g. 'donne-moi la réponse', 'quel est le mot exact', "
-            "'quelle est la solution', 'dis-moi le mot'). If genuinely unsure which the "
-            "player wants, treat it as a hint request, never as an answer request.\n"
-            "   - Example 1: asked for a hint about MAISON (clue 'Habitation'), a BAD reply "
-            "says 'Le mot est MAISON' or spells out 'M-A-I-S-O-N' — a GOOD reply stays "
-            "indirect, e.g. 'C'est un lieu où l'on vit, avec plusieurs pièces — le mot compte "
-            "6 lettres.'\n"
-            "   - Example 2: asked for a hint about SOLEIL (clue 'Astre du jour'), a BAD "
-            "reply says 'Le mot est SOLEIL' or 'C'est SOLEIL' — a GOOD reply stays indirect, "
-            "e.g. 'C'est l'étoile autour de laquelle tourne la Terre, celle qui nous éclaire "
-            "le jour — le mot compte 6 lettres.' These two examples both illustrate the SAME "
-            "general rule — apply it the same way to ANY word the player asks a hint about, "
-            "not just these two.\n"
+            "4. Helping with a word. FIRST decide which kind of request it is. If the "
+            "player EXPLICITLY asks for the answer/solution/exact word (e.g. 'donne-moi la "
+            "réponse', 'la réponse exacte', 'quel est le mot exact', 'quelle est la "
+            "solution', 'dis-moi le mot'), that is an ANSWER request: skip straight to "
+            "rule 4e and give the answer. Otherwise ('un indice', 'aide-moi', 'je suis "
+            "bloqué', a question about a clue — anything not explicitly asking for the "
+            "answer) it is a HINT request; if genuinely unsure, treat it as a HINT. "
+            "Handle a HINT request with steps a–d below; handle an ANSWER request with "
+            "step e:\n"
+            "   a. FIRST work out WHICH word the hint is about, using the interface state "
+            "below:\n"
+            "      - If a word is under the player's mouse (the hovered / 'selected' word — "
+            "'mot sélectionné' — see the state below), the hint is about THAT word.\n"
+            "      - Otherwise, if the player has a cell clicked for typing (the 'filling' "
+            "cell in the state below), the hint is about the word — or the two crossing "
+            "words — at that clicked cell.\n"
+            "      - If the player's own message names a word (a clue number, a position "
+            "like '3 horizontal', a direction), use that word instead.\n"
+            "      - If NONE of these identifies a word (nothing hovered, no cell clicked, "
+            "and the message does not say which word), do NOT guess and do NOT pick a word "
+            "from the list: politely ask the player to move their mouse over a word (or a "
+            "clue), or to click a cell of the word they need help with, and stop there.\n"
+            "      - If a cell is clicked at the crossing of two words and nothing is "
+            "hovered, say so and ask which of the two they mean (or, if both hints are "
+            "short, give one for each, each clearly labelled).\n"
+            "   b. Begin with a SHORT preamble naming WHICH word it is about — ONLY its "
+            "starting (row, column), its direction, and whether it is the word under the "
+            "mouse (hovered / selected) or the word at the clicked cell — so the player "
+            "can correct you. One short clause, e.g. « Indice pour le mot vertical en "
+            "(l, c), celui de la case cliquée : ». The preamble must contain NOTHING else: "
+            "do NOT repeat the on-screen clue text in it, do NOT include the word's answer, "
+            "and NEVER paste a raw line from the interface state below (those lines contain "
+            "'clue=' and 'answer=' fields that must not appear in your reply). This "
+            "preamble is NOT the hint. (If the word's clue shows '(none yet)', just say its "
+            "clue has not been generated yet.)\n"
+            "   c. THE HINT ITSELF MUST BE AN ALTERNATIVE DEFINITION — a genuinely fresh "
+            "wording, DIFFERENT from the clue the player already sees on screen. It is "
+            "forbidden to: copy the existing 'clue=' text, lightly reword or reorder it, or "
+            "reply with just the position + that clue + a letter count (the player already "
+            "has every bit of that — such a reply gives them nothing). You MUST add new "
+            "information the clue does not state: a synonym or near-synonym phrase, a "
+            "broader category the word belongs to, a concrete example of it, the role or "
+            "function it has, or a paraphrase from a clearly different angle. Give 1 to 2 "
+            "sentences of this fresh description. You MAY additionally give the letter "
+            "count or confirm/deny one specific letter the player proposes — but only IN "
+            "ADDITION to the fresh description, never instead of it.\n"
+            "   d. In a HINT reply, NEVER put the exact answer text anywhere — not in the "
+            "preamble, not in the description, not spelled out letter by letter, not "
+            "inside a sentence, not quoted from a state line. The 'answer=' value in the "
+            "state below is for your own silent check only; in a HINT reply, if it appears "
+            "in any form, the reply is wrong. (This restriction is for HINT replies only — "
+            "it does NOT apply to an ANSWER request, see e.)\n"
+            "   e. ANSWER request (the player explicitly asked for the answer/solution/"
+            "exact word — see the top of rule 4). Here you DO give it: state which word "
+            "(same short preamble as 4b) and then the exact answer plainly, e.g. « Le mot "
+            "vertical en (l, c) est : … ». Rules b–d do not restrict this case.\n"
+            "   - Example 1: word MAISON, clue on screen 'Habitation'. BAD: 'Le mot est "
+            "MAISON' / 'M-A-I-S-O-N'. ALSO BAD (just echoes what is on screen): 'Le mot "
+            "horizontal en (l, c) a pour définition « Habitation », 6 lettres.' GOOD: a "
+            "short preamble then a FRESH alternative definition, e.g. '… : pensez à un "
+            "bâtiment privé où réside une famille, avec des murs, un toit et plusieurs "
+            "pièces — 6 lettres.'\n"
+            "   - Example 2: word SOLEIL, clue on screen 'Astre du jour'. BAD: 'C'est "
+            "SOLEIL'. ALSO BAD (echoes the clue): 'Le mot vertical en (l, c), sa définition "
+            "est « Astre du jour ».' GOOD: '… : l'étoile la plus proche de la Terre, source "
+            "de sa lumière et de sa chaleur, au centre du système solaire — 6 lettres.'\n"
+            "   These examples illustrate the SAME general rule — apply it to ANY word the "
+            "player asks a hint about. The positions in the examples are illustrative only: "
+            "NEVER copy a position from an example; always take the real one from the "
+            "interface state below, and if the state says nothing is hovered and no cell "
+            "is clicked, ask the player instead (rule 4a) — do not invent one.\n"
             "5. Keep replies reasonably short and conversational — this is a chat, not an "
             "essay.\n"
             "6. NEVER start your reply with a greeting (no \"Hello\", \"Hi\", \"Bonjour\", "

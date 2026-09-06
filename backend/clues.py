@@ -990,11 +990,12 @@ class LLMClueGenerator:
         backend/grid_store.py), never as a reason to fail the request.
 
         `word_entries` is the same (answer, accented, canonical) shape
-        generate() takes; only each word's accented spelling is actually
-        used here (the model is shown the real, natural spelling of every
-        answer, the same reasoning as generate()'s own accented/inflected
-        choice) — deduplicated and sorted so the prompt is stable/
-        reproducible regardless of the words' own original grid order."""
+        generate() takes; only each word's accented spelling is used here
+        (the model is shown the real, natural spelling, the same reasoning
+        as generate()'s own accented/inflected choice), deduplicated. Each
+        attempt shows the model only a random ~1/3 slice of the words
+        (re-drawn per attempt, at the user's request) — the full grid is
+        still what the grid-word-reuse filter checks against."""
         if cancel_event is not None and cancel_event.is_set():
             raise GenerationCancelled()
         words = sorted({accented for _, accented, _ in word_entries})
@@ -1097,17 +1098,28 @@ class LLMClueGenerator:
             "(this is the rule broken most often — check every line "
             "against the list before sending).\n"
         )
-        user_message = (
-            "Grid words: " + ", ".join(words) + f"\n{_TITLE_COUNT} titles, "
-            "one per line:"
-        )
+        # Show the model only a random ~1/3 of the grid words, re-drawn
+        # every attempt, at the user's explicit request ("rather than
+        # providing the whole grid, randomize 1/3 of it each attempt").
+        # Fewer words to fixate on / echo back, and a different slice each
+        # retry gives the model a genuinely fresh angle — the grid-word
+        # reuse check (grid_norm, above) still runs against the FULL grid,
+        # so a title reusing a word that happened to be hidden this
+        # attempt is still rejected and re-asked.
+        sample_size = max(1, round(len(words) / 3))
         # Retry only when a whole response is unusable — an empty reply,
-        # only header/lead-in lines, every candidate wrong-language, or
-        # the HTTP call itself failing. At the user's explicit request
-        # ("Si le titre est vide, demander une nouvelle génération").
+        # only header/lead-in lines, every candidate wrong-language, every
+        # candidate reusing a grid word, or the HTTP call itself failing.
+        # At the user's explicit request ("Si le titre est vide, demander
+        # une nouvelle génération").
         for attempt in range(_TITLE_RETRIES):
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
+            shown = sorted(random.sample(words, sample_size))
+            user_message = (
+                "Some words from the grid: " + ", ".join(shown)
+                + f"\n{_TITLE_COUNT} titles, one per line:"
+            )
             try:
                 response = httpx.post(
                     self.base_url,
