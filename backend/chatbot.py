@@ -51,6 +51,40 @@ MAX_TOKENS = 1024
 _THINK_OPEN = "<think>"
 _THINK_CLOSE = "</think>"
 
+# How ChatBot.reply_stream() should treat a reasoning block, set via
+# CHATBOT_THINK_FILTER (env.sh/env_default.sh) — configured explicitly
+# rather than guessed at dynamically (an earlier version of this file
+# tried a window-based auto-detection instead, buffering the first
+# _REASONING_LEAK_WINDOW_CHARS of every reply before deciding; reverted
+# at the user's own explicit request, since which behavior a given
+# model/server needs is already known in advance from its own config —
+# guessing dynamically only ever cost every reply a real, needless
+# streaming delay for no benefit). Three real, live-measured model
+# behaviors this project has actually run into, see reply_stream()'s own
+# docstring for the two-real-model story behind each:
+#   "open_close" (default) — the safe, general default: wait to see a
+#     real, visible <think> opening tag before ever holding anything
+#     back; a model that never emits one (the common case for a non-
+#     reasoning model) streams every chunk immediately from the first
+#     token, exactly as if no filtering existed at all.
+#   "close_only" — for a setup where the opening tag is silently
+#     injected into the *prompt* itself and never echoed back in the
+#     completion (confirmed live for this project's own SGLang/Qwen3
+#     setup) — starts already "inside" a reasoning block, discarding
+#     everything up to the first </think>. Never use this for a model
+#     that can also produce an entirely non-reasoning reply with no tag
+#     at all: with no </think> to end on, that reply's every chunk would
+#     be held back and silently lost in full (confirmed live too — the
+#     original bug report this whole mechanism exists to fix).
+#   "none" — never look for either tag at all; every chunk streams the
+#     instant it arrives. For a model already confirmed to never emit
+#     either tag (this project's own current default, llama.cpp serving
+#     Qwen3.8-27B with thinking disabled) — the one setting with zero
+#     runtime cost, and immune to a real reply that happens to contain
+#     the literal text "<think>" being mistaken for a reasoning block.
+CHATBOT_THINK_FILTER_CHOICES = ("open_close", "close_only", "none")
+DEFAULT_CHATBOT_THINK_FILTER = "open_close"
+
 
 def _longest_tag_prefix_suffix(buffer, tag):
     """Longest suffix of `buffer` that's also a (strict, not full-tag)
@@ -172,6 +206,13 @@ class ChatBot:
         self.base_url = os.environ.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
         self.model = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
         self.api_key = os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
+        self.think_filter = os.environ.get("CHATBOT_THINK_FILTER", DEFAULT_CHATBOT_THINK_FILTER)
+        if self.think_filter not in CHATBOT_THINK_FILTER_CHOICES:
+            logger.warning(
+                "CHATBOT_THINK_FILTER=%r is not one of %s — falling back to %r.",
+                self.think_filter, CHATBOT_THINK_FILTER_CHOICES, DEFAULT_CHATBOT_THINK_FILTER,
+            )
+            self.think_filter = DEFAULT_CHATBOT_THINK_FILTER
 
     def _build_system_prompt(self, language, ui_context):
         """Builds the one system message driving every reply: persona,
@@ -348,7 +389,14 @@ class ChatBot:
             "player ever asked anything — that is the ONLY greeting this conversation will "
             "ever have. Every single reply after it, including your very first one, must "
             "start directly with the actual answer, with zero greeting or self-introduction "
-            "of any kind.\n\n"
+            "of any kind.\n"
+            "7. NEVER think out loud or show your reasoning process. Do not write things like "
+            "\"Let me check...\", \"Okay, the user is asking...\", \"Looking at the rules...\", "
+            "or any other deliberation about how you are deciding what to answer. Do not weigh "
+            "several possible interpretations of the question in your reply, and do not start "
+            "one answer then correct yourself mid-reply (\"wait, no\", \"actually\"...). Decide "
+            "the final answer entirely before writing anything down, then write ONLY that "
+            "final answer, starting directly with it — nothing before it.\n\n"
             "Reference documentation for how the interface itself works "
             "(frontend/static/index.html and script.js, described here for a player, not a "
             "developer):\n"
@@ -381,23 +429,63 @@ class ChatBot:
         as an accepted, disclosed edge case rather than something worth
         adding a second failure-signaling channel for.
 
-        A `<think>...</think>` reasoning block (only ever emitted by a
-        reasoning-capable model — this project's own default, Qwen3.5,
-        has thinking disabled) is buffered and discarded rather than
-        streamed to the player raw, mirroring backend/clues.py's own
-        `_strip_reasoning()` behavior for the non-streaming case — a
-        model that never closes its own `<think>` block within its token
-        budget therefore yields nothing at all, exactly like `_strip_
-        reasoning`'s own `""` case. Unlike the non-streaming case, either
-        tag can arrive split across an arbitrary number of separate
-        chunks (a real model can, in principle, emit `<think>` one
-        character at a time) — `_longest_tag_prefix_suffix` is what makes
-        sure a still-forming tag is never mistaken for ordinary visible
-        text and flushed to the player prematurely, holding back only the
-        exact trailing slice of the buffer that could still complete
-        `_THINK_OPEN`, never more. The inner `while progressed:` loop
-        exists specifically so both tags can be found and consumed within
-        the very same incoming chunk when a small/fast response happens
+        A `<think>...</think>` reasoning block is buffered and discarded
+        rather than streamed to the player raw, mirroring backend/
+        clues.py's own `_strip_reasoning()` behavior for the non-streaming
+        case — a model that never closes its own `<think>` block within
+        its token budget therefore yields nothing at all, exactly like
+        `_strip_reasoning`'s own `""` case.
+
+        Which of the 3 filtering behaviors applies is read once, at
+        construction time, from `self.think_filter` (`CHATBOT_THINK_
+        FILTER`, see its own module-level comment for the 3 real, live-
+        measured model behaviors this project has actually run into) —
+        deliberately a fixed, explicit setting rather than guessed at
+        dynamically per reply. An earlier version of this function tried
+        exactly that (buffering the first several thousand characters of
+        every single reply, watching for either tag to decide which
+        behavior applied), reverted at the user's own explicit request
+        after it broke real-time streaming for every reply on a model
+        that never reasons at all — which behavior a given model/server
+        needs is already known in advance from its own configuration, so
+        guessing it per reply only ever cost every reply a real, needless
+        delay for no benefit.
+
+        `reasoning_state` starts at one of three values depending on
+        `self.think_filter`:
+        - `"none"` → `"disabled"`: every chunk is yielded immediately,
+          with no tag search of any kind — the cheapest, safest choice
+          for a model already confirmed to never emit either tag.
+        - `"close_only"` → `"in_reasoning"` directly: for a setup where
+          the opening tag lives in the *prompt* itself (silently injected
+          ahead of the model's own first generated token) and is never
+          echoed back in the completion — confirmed live for this
+          project's own SGLang/Qwen3 setup, where the whole reasoning
+          block would otherwise stream straight to the player as if it
+          were the real reply, `</think>` included, no matter how
+          forcefully the system prompt itself asks the model not to
+          think out loud (see `_build_system_prompt`'s own rule 7,
+          confirmed live to not fix this on its own).
+        - `"open_close"` (default) → `"pending"`: the original, safe
+          design — wait to *see* a real `_THINK_OPEN` before ever
+          holding anything back. A model that never emits one (an
+          ordinary non-reasoning reply) never has anything filtered at
+          all, streaming from the very first token exactly as if no
+          filtering existed. Never pair this with a model whose opening
+          tag lives in the prompt (see `"close_only"` above) — with no
+          visible `<think>` to ever trigger the switch, the whole
+          reasoning block would leak through unfiltered.
+
+        Unlike the non-streaming case, either tag can arrive split across
+        an arbitrary number of separate chunks (a real model can, in
+        principle, emit `<think>` one character at a time) —
+        `_longest_tag_prefix_suffix` is what makes sure a still-forming
+        tag is never mistaken for ordinary visible text and flushed to
+        the player prematurely, holding back only the exact trailing
+        slice of the buffer that could still complete `_THINK_OPEN`,
+        never more. The inner `while progressed:` loop exists
+        specifically so both tags can be found and consumed within the
+        very same incoming chunk when a small/fast response happens
         to deliver them together (e.g. `"<think>x</think>Answer"` all at
         once) — without it, the close-tag check would only ever run on
         the *next* chunk's arrival, one iteration too late."""
@@ -406,7 +494,11 @@ class ChatBot:
         messages.extend(history)
         messages.append({"role": "user", "content": message})
         buffer = ""
-        in_reasoning = False
+        reasoning_state = {
+            "none": "disabled",
+            "close_only": "in_reasoning",
+            "open_close": "pending",
+        }[self.think_filter]
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
@@ -418,6 +510,23 @@ class ChatBot:
                         "temperature": TEMPERATURE,
                         "max_tokens": MAX_TOKENS,
                         "stream": True,
+                        # A per-request reinforcement of the same intent as
+                        # LLAMA_CHAT_TEMPLATE_KWARGS/SGLANG_CHAT_TEMPLATE_
+                        # KWARGS's own enable_thinking:false (run_llm.sh/
+                        # run_sglang.sh) — harmless for a server that
+                        # doesn't recognize this field (confirmed live for
+                        # llama_cpp.server, no strict extra-field
+                        # validation), but a real, request-level "none" for
+                        # a server that does (confirmed live for SGLang
+                        # earlier in this project's own investigation —
+                        # only "none", never "low", actually disables
+                        # thinking for a Qwen3 chat template). This is
+                        # separate from CHATBOT_THINK_FILTER (env.sh) —
+                        # this field asks the model not to reason at all;
+                        # that setting controls how a reasoning block is
+                        # filtered out of the reply if the model reasons
+                        # anyway despite this.
+                        "reasoning_effort": "none",
                     },
                 ) as response:
                     response.raise_for_status()
@@ -435,28 +544,42 @@ class ChatBot:
                         if not delta:
                             continue
                         logger.info("chat: raw LLM chunk: %r", delta)
+                        if reasoning_state == "disabled":
+                            # CHATBOT_THINK_FILTER=none — no tag search at
+                            # all, stream every chunk immediately.
+                            yield delta
+                            continue
                         buffer += delta
                         progressed = True
                         while progressed:
                             progressed = False
-                            if in_reasoning:
+                            if reasoning_state == "in_reasoning":
                                 if _THINK_CLOSE in buffer:
                                     buffer = buffer.split(_THINK_CLOSE, 1)[1]
-                                    in_reasoning = False
+                                    reasoning_state = "clear"
                                     progressed = True
                                 # else: still inside <think>...</think> —
                                 # keep buffering, yield nothing this round.
-                            elif _THINK_OPEN in buffer:
-                                buffer = buffer.split(_THINK_OPEN, 1)[1]
-                                in_reasoning = True
-                                progressed = True
                             elif buffer:
-                                hold = _longest_tag_prefix_suffix(buffer, _THINK_OPEN)
-                                if hold < len(buffer):
-                                    to_flush = buffer[:len(buffer) - hold] if hold else buffer
-                                    buffer = buffer[len(buffer) - hold:] if hold else ""
-                                    if to_flush:
-                                        yield to_flush
+                                # "pending" (CHATBOT_THINK_FILTER=open_close,
+                                # never yet seen an opening tag) and "clear"
+                                # (already past a reasoning block, or this
+                                # filter never holds anything back to begin
+                                # with) share the exact same logic: watch for
+                                # a fresh _THINK_OPEN, otherwise flush
+                                # everything except a still-forming tag's own
+                                # trailing prefix.
+                                if _THINK_OPEN in buffer:
+                                    buffer = buffer.split(_THINK_OPEN, 1)[1]
+                                    reasoning_state = "in_reasoning"
+                                    progressed = True
+                                else:
+                                    hold = _longest_tag_prefix_suffix(buffer, _THINK_OPEN)
+                                    if hold < len(buffer):
+                                        to_flush = buffer[:len(buffer) - hold] if hold else buffer
+                                        buffer = buffer[len(buffer) - hold:] if hold else ""
+                                        if to_flush:
+                                            yield to_flush
         except httpx.HTTPError as e:
             logger.warning("chat stream failed (%s, model=%r): %s", self.base_url, self.model, e)
             raise ChatError(f"Le serveur de langage est indisponible ({e}).") from e

@@ -7,7 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **CrossWordFalcon** — a crossword grid generator (French, English, German, Spanish, or
 Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
 
-- `build_sentence_corpus.py` — one-off preprocessing script: downloads a partial
+- `data_builder/build_sentence_corpus.py` (moved from the project root into
+  `data_builder/` at the user's explicit request, together with the other
+  `build_*.py`/`compress_*.py` dictionary-building scripts — the news/grid
+  scrapers went to `scrapper/` in the same move; all still read/write the
+  repo-root `data/`, `CORPUS/`, `DICS/` etc. because each one anchors its
+  paths on `Path(__file__).resolve().parent.parent`, not `.parent`) —
+  one-off preprocessing script: downloads a partial
   chunk (`--max-bytes`, default 50MB per source) of five OPUS (opus.nlpl.eu) corpora —
   OpenSubtitles (colloquial/dialogue vocabulary), Wikipedia (formal/technical
   vocabulary, and rare-but-real words dialogue rarely uses), Books (literary/
@@ -147,7 +153,9 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   re-validation), and the resulting capped files' own real compressed
   sizes were measured directly (see `compress_reference_corpus.py`'s own
   entry) rather than assumed correct from the isolated tests alone.
-- `compress_reference_corpus.py` — new one-off packaging script, at the
+- `data_builder/compress_reference_corpus.py` (moved into `data_builder/`
+  with the other build scripts — see `build_sentence_corpus.py`'s entry
+  above) — one-off packaging script, at the
   user's explicit request, once the 1GB-`--max-bytes` rebuild above made
   the existing (already gitignored) `data/reference_corpus/<lang>_
   sentences.txt` far too large to keep serving double duty as both the
@@ -209,7 +217,11 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   exactly 3,000,000 lines, confirming the archive is genuinely usable by
   `Install.sh`'s own pre-existing extraction step, not just correctly
   *sized*.
-- `build_wordlist_freq.py` — one-off preprocessing script that reads a language's
+- `data_builder/build_wordlist_freq.py` (moved into `data_builder/` with the
+  other build scripts — see `build_sentence_corpus.py`'s entry above;
+  `build_sentence_corpus.py`'s `from build_wordlist_freq import ...` still
+  works because both sit side by side in `data_builder/` and it's run as a
+  script) — one-off preprocessing script that reads a language's
   FULL reference corpus (`data/reference_corpus/<lang>_sentences_full.txt` —
   never the capped `<lang>_sentences.txt` variant; see build_sentence_
   corpus.py's own entry above for why the two must never be conflated,
@@ -3857,9 +3869,16 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   request half of the rule remained fully reliable throughout every test
   (4/4 each time), so this rewrite is a clear, unambiguous net
   improvement even though hint-leaking isn't fully eliminated.
-- `fetch_rss_feeds.py` — one-off/scheduled script (project root, alongside
-  `build_sentence_corpus.py` and this project's other one-off scripts), at
-  the user's explicit request: "Configure un demon qui lit tous ces flux
+- `scrapper/fetch_rss_feeds.py` (moved from the project root into the
+  `scrapper/` package — a real `scrapper/__init__.py` — at the user's
+  explicit request, together with `fetch_grid_links.py`; the dictionary
+  build scripts went to `data_builder/` in the same move. `backend/app.py`
+  now does `from scrapper import fetch_rss_feeds, fetch_grid_links` (it
+  already put the repo root on `sys.path`), `Install.sh` uses
+  `python3 -c "from scrapper import ..."`, and both scrapers anchor
+  `RSS/`/`SCRAPP/` on `os.path.dirname(os.path.dirname(os.path.abspath(
+  __file__)))` so they still write to the repo root) — one-off/scheduled
+  script, at the user's explicit request: "Configure un demon qui lit tous ces flux
   RSS une fois par jour (par exemple, le matin à 8H, et sauvegarde chaque
   flux RSS dans un dossier RSS (écrasé chaque jour)." Followed a direct
   question ("Existe-t-il des flux RSS spécialisés sur les mots croisés ?")
@@ -4183,8 +4202,10 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   robust than parsing the rendered HTML page ever could be (immune to a
   CSS class or markup structure changing under this project later).
 
-  `fetch_grid_links.py` (new file, project root, mirroring `fetch_rss_
-  feeds.py`'s own shape and conventions closely) queries this API once
+  `fetch_grid_links.py` (new file — since moved into the `scrapper/`
+  package alongside `fetch_rss_feeds.py`, see that file's own entry
+  above — mirroring `fetch_rss_feeds.py`'s own shape and conventions
+  closely) queries this API once
   (`puzzle_type=15, per_page=50, orderby=date, order=desc`) — 50, not a
   bare ~24-25 (one day's own typical batch size, counted directly from
   the live inventory), deliberately over-fetching a bit so a run landing
@@ -4864,7 +4885,9 @@ Italian), usable from the CLI or from a web UI backed by two FastAPI servers:
   German) — all now find real examples where they previously found none; confirmed via
   `_build_user_message()` directly that a real generated prompt for `élu` now includes
   the full "Real example sentences" section end to end.
-- `build_gloss_dictionary.py` — one-off preprocessing script: downloads a language's
+- `data_builder/build_gloss_dictionary.py` (moved into `data_builder/` with
+  the other build scripts — see `build_sentence_corpus.py`'s entry above) —
+  one-off preprocessing script: downloads a language's
   Wiktionary extract in full from Kaikki.org (kaikki.org, CC-BY-SA/GFDL like
   Wiktionary itself) — for English, the primary (English-Wiktionary-sourced)
   extraction, already in English; for French/German/Spanish/Italian, that same
@@ -5922,13 +5945,21 @@ hit it.
 # Full pipeline to rebuild one language's wordlist from scratch (only needed to
 # refresh the source corpus/frequencies; data/wordlist_*.tsv are already checked
 # into data/). Each language is independent — no particular build order required.
-python3 build_sentence_corpus.py fr    # downloads OpenSubtitles+Wikipedia+Books+TED2013, filters
-python3 build_wordlist_freq.py fr      # counts words, validates, writes wordlist_fr_full.tsv
+# The dictionary-building scripts live in data_builder/ (the news/grid scrapers
+# live in scrapper/); both still write to the repo-root data/, RSS/, SCRAPP/,
+# CORPUS/, DICS/ directories regardless of where they're launched from.
+python3 data_builder/build_sentence_corpus.py fr  # downloads OpenSubtitles+Wikipedia+Books+TED2013, filters
+python3 data_builder/build_wordlist_freq.py fr    # counts words, validates, writes wordlist_fr_full.tsv
 
 # Optional: rebuild a language's gloss dictionary from scratch (large
-# one-time download — see build_gloss_dictionary.py). Not needed for a normal
-# clone: data/gloss_dictionary/*.jsonl is already checked into the repo.
-python3 build_gloss_dictionary.py fr
+# one-time download — see data_builder/build_gloss_dictionary.py). Not needed
+# for a normal clone: data/gloss_dictionary/*.jsonl is already checked into the repo.
+python3 data_builder/build_gloss_dictionary.py fr
+
+# Refresh the "Actu Croisée" panel data by hand (Install.sh does this once on a
+# fresh clone; backend/app.py's scheduler does it daily at 08:00):
+python3 -c "from scrapper import fetch_rss_feeds; fetch_rss_feeds.fetch_all()"
+python3 -c "from scrapper import fetch_grid_links; fetch_grid_links.fetch_all()"
 
 # Generate a crossword grid from the CLI (defaults: 15x10, easy difficulty)
 python3 backend/crossword_gen.py

@@ -27,7 +27,7 @@ checked):
 
 Called once a day by backend/app.py's own background scheduler (see
 `_rss_daily_scheduler`) — but also runnable directly (`python3
-fetch_rss_feeds.py`) for a manual refresh or a first, one-off run."""
+scrapper/fetch_rss_feeds.py`) for a manual refresh or a first, one-off run."""
 
 import json
 import os
@@ -64,7 +64,7 @@ RSS_FEEDS = {
     },
 }
 
-RSS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "RSS")
+RSS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "RSS")
 
 
 def _parse_pub_date(raw):

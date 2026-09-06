@@ -91,8 +91,8 @@ Kept sentences must be:
   into our own frequency table.
 
 Usage:
-    python3 build_sentence_corpus.py fr
-    python3 build_sentence_corpus.py en --max-bytes 100000000
+    python3 data_builder/build_sentence_corpus.py fr
+    python3 data_builder/build_sentence_corpus.py en --max-bytes 100000000
 """
 import argparse
 import random
@@ -102,16 +102,26 @@ import sys
 import zlib
 from pathlib import Path
 
-from build_wordlist_freq import HUNSPELL_ENCODING, HUNSPELL_SOURCE, _fetch_hunspell
+# Sibling module in data_builder/. Works both when this file is run as a
+# script (`python3 data_builder/build_sentence_corpus.py fr` — Python puts
+# data_builder/ on sys.path[0], so the bare import resolves) and when it's
+# imported as a package submodule (`data_builder.build_sentence_corpus` —
+# data_builder/ is not on the path then, only the repo root is).
+try:
+    from build_wordlist_freq import HUNSPELL_ENCODING, HUNSPELL_SOURCE, _fetch_hunspell
+except ModuleNotFoundError:
+    from data_builder.build_wordlist_freq import (
+        HUNSPELL_ENCODING, HUNSPELL_SOURCE, _fetch_hunspell,
+    )
 
-CORPUS_DIR = Path(__file__).resolve().parent / "data" / "reference_corpus"
+CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "reference_corpus"
 # Raw, pre-filter, per-source sentence cache — see the module docstring's
 # "Each source's raw..." paragraph. Deliberately a project-root sibling of
 # data/, not nested under it: data/ is this project's shipped/generated
 # *output* (some of it checked in), while CORPUS/ is a purely local,
 # gitignored working cache of upstream downloads, closer in spirit to
 # data/hunspell_cache/ or models/ than to data/reference_corpus/ itself.
-RAW_CORPUS_DIR = Path(__file__).resolve().parent / "CORPUS"
+RAW_CORPUS_DIR = Path(__file__).resolve().parent.parent / "CORPUS"
 
 # path template (language filled in) -> full download URL, per OPUS source.
 SOURCES = {
@@ -409,7 +419,7 @@ def recap_from_full(lang):
     reported as a no-op-equivalent copy rather than a genuine sample)."""
     full_src = CORPUS_DIR / f"{lang}_sentences_full.txt"
     if not full_src.exists():
-        print(f"error: {full_src} does not exist — run build_sentence_corpus.py "
+        print(f"error: {full_src} does not exist — run data_builder/build_sentence_corpus.py "
               f"{lang} first (or rename an already-built full corpus to this name)",
               file=sys.stderr)
         return None

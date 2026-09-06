@@ -26,7 +26,7 @@ Run once per language, as the last step of the corpus-generation pipeline
 (after build_sentence_corpus.py has produced that language's own
 _sentences.txt, the capped one — see its own docstring):
 
-    python3 compress_reference_corpus.py fr
+    python3 data_builder/compress_reference_corpus.py fr
 
 Validates the resulting archive against GitHub's own size limits — a
 plain git push is hard-rejected past GITHUB_HARD_LIMIT_BYTES (100 MB) and
@@ -41,7 +41,7 @@ from pathlib import Path
 
 LANGUAGES = ("fr", "en", "de", "es", "it")
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 CORPUS_DIR = DATA_DIR / "reference_corpus"
 
 # GitHub hard-blocks any pushed file over 100 MB (decimal megabytes, the
@@ -56,7 +56,7 @@ GITHUB_WARN_LIMIT_BYTES = 50_000_000
 def compress_reference_corpus(lang):
     src = CORPUS_DIR / f"{lang}_sentences.txt"
     if not src.exists():
-        print(f"error: {src} does not exist — run build_sentence_corpus.py {lang} first",
+        print(f"error: {src} does not exist — run data_builder/build_sentence_corpus.py {lang} first",
               file=sys.stderr)
         return None
 

@@ -201,6 +201,20 @@ DIFFICULTY_PRESETS = {
 # particulièrement fragile.
 MAX_PROPER_NOUNS = {"easy": 0, "medium": 2, "hard": 5}
 
+# Même principe que MAX_PROPER_NOUNS ci-dessus, appliqué de la même
+# manière (garde-fou final dans `try_fill`, jamais une contrainte active
+# dans `Filler._backtrack`), mais pour les mots absents du dictionnaire de
+# définitions `data/gloss_dictionary/<lang>_glosses.jsonl` — aucune entrée
+# pour aucune de leurs formes canoniques, le même signal que celui de
+# `load_wordlist(require_gloss=...)`. À la demande explicite de
+# l'utilisateur : "FACILE : aucun mot inconnu ; MOYEN : au plus 2 mots
+# inconnus ; DIFFICILE : au plus 5 mots inconnus." Pour "easy",
+# `load_wordlist(require_gloss=True)` retire déjà purement et simplement
+# ces mots du lexique en amont, donc l'ensemble `non_gloss_words` calculé
+# dans `generate_grid` ressort vide et ce quota (0) ne fait que doubler
+# une garantie déjà acquise, sans jamais avoir l'occasion de s'appliquer.
+MAX_NON_GLOSS_WORDS = {"easy": 0, "medium": 2, "hard": 5}
+
 # Languages where "Hunspell only validated the title-cased form" (see
 # load_wordlist's own exclude_proper_nouns) carries no proper-noun signal
 # at all: German capitalizes every noun, common or proper, so this exact
@@ -3368,8 +3382,21 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              forced_letters=None, letter_scores=None, preseed_assignment=None,
              excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
              attempt_done_event=None, locked_letters=None, best_state_queue=None,
-             attempt_id=None, proper_noun_words=None, max_proper_nouns=None):
-    """`proper_noun_words`/`max_proper_nouns` (both `None` by default — every
+             attempt_id=None, proper_noun_words=None, max_proper_nouns=None,
+             non_gloss_words=None, max_non_gloss=None):
+    """`non_gloss_words`/`max_non_gloss` (both `None` by default — every
+    pre-existing caller unaffected) work exactly like `proper_noun_words`/
+    `max_proper_nouns` below, but count words absent from the definition
+    dictionary `data/gloss_dictionary/<lang>_glosses.jsonl` instead of
+    likely proper nouns — same final-guardrail mechanism, same
+    difficulty caps by request (voir MAX_NON_GLOSS_WORDS) : "FACILE :
+    aucun mot inconnu ; MOYEN : au plus 2 ; DIFFICILE : au plus 5". If
+    `filler.assignment` ends up with more than `max_non_gloss` of its
+    words in `non_gloss_words`, the completion is rejected the same way
+    an over-`max_proper_nouns` one is (`truly_complete` -> False,
+    `diagnostics["reason"] = "too_many_non_gloss_words"`).
+
+    `proper_noun_words`/`max_proper_nouns` (both `None` by default — every
     pre-existing caller is unaffected), à la demande explicite de
     l'utilisateur : "en mode FACILE ne pas autoriser à placer des noms
     propres, en mode MOYEN autoriser au plus 2 noms propres, en mode
@@ -3673,10 +3700,19 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
         over_proper_noun_budget = proper_noun_count > max_proper_nouns
         if over_proper_noun_budget:
             truly_complete = False
+    # Même garde-fou pour les mots absents du dictionnaire de définitions
+    # (voir MAX_NON_GLOSS_WORDS / la docstring de cette fonction).
+    over_non_gloss_budget = False
+    if truly_complete and max_non_gloss is not None and non_gloss_words:
+        non_gloss_count = sum(1 for w in filler.assignment if w in non_gloss_words)
+        over_non_gloss_budget = non_gloss_count > max_non_gloss
+        if over_non_gloss_budget:
+            truly_complete = False
     if diagnostics is not None:
         diagnostics["checks"] = filler.checks
         diagnostics["reason"] = (
             "too_many_proper_nouns" if over_proper_noun_budget
+            else "too_many_non_gloss_words" if over_non_gloss_budget
             else "solved" if truly_complete
             else "interrupted_other_attempt_done" if filler.interrupted_by_sibling
             else "abandoned_too_unfillable" if filler.abandoned
@@ -3704,7 +3740,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
 # ---------- Minimisation locale des cases noires ----------
 
 def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks=6_000,
-                            cancel_event=None, proper_noun_words=None, max_proper_nouns=None):
+                            cancel_event=None, proper_noun_words=None, max_proper_nouns=None,
+                            non_gloss_words=None, max_non_gloss=None):
     """Retire itérativement des cases noires une par une (indépendamment,
     sans les apparier avec une case miroir — cohérent avec make_pattern,
     qui ne pose plus les cases noires par paires symétriques) tant que la
@@ -3781,7 +3818,9 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                 new_result = try_fill(grid, rows, cols, index, rng, deadline_checks,
                                        cancel_event=cancel_event,
                                        proper_noun_words=proper_noun_words,
-                                       max_proper_nouns=max_proper_nouns)
+                                       max_proper_nouns=max_proper_nouns,
+                                       non_gloss_words=non_gloss_words,
+                                       max_non_gloss=max_non_gloss)
                 if new_result is not None:
                     new_slots, new_assignment = new_result
                     if all(
@@ -5875,6 +5914,10 @@ _worker_warmup_barrier = None
 # `_pattern_attempt`/`_pattern_continue` directement.
 _worker_proper_noun_words = None
 _worker_max_proper_nouns = None
+# Idem pour les mots absents du dictionnaire de définitions — voir
+# MAX_NON_GLOSS_WORDS/generate_grid.
+_worker_non_gloss_words = None
+_worker_max_non_gloss = None
 
 
 def _warmup_worker():
@@ -5957,10 +6000,11 @@ def _warmup_worker():
 
 def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_done_event=None,
                   best_state_queue=None, warmup_barrier=None, proper_noun_words=None,
-                  max_proper_nouns=None):
+                  max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None):
     global _worker_index, _worker_cancel_event, _worker_batch_abandoned_event, \
         _worker_attempt_done_event, _worker_best_state_queue, _worker_warmup_barrier, \
-        _worker_proper_noun_words, _worker_max_proper_nouns
+        _worker_proper_noun_words, _worker_max_proper_nouns, \
+        _worker_non_gloss_words, _worker_max_non_gloss
     _worker_index = index
     _worker_cancel_event = cancel_event
     _worker_batch_abandoned_event = batch_abandoned_event
@@ -5969,6 +6013,8 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
     _worker_warmup_barrier = warmup_barrier
     _worker_proper_noun_words = proper_noun_words
     _worker_max_proper_nouns = max_proper_nouns
+    _worker_non_gloss_words = non_gloss_words
+    _worker_max_non_gloss = max_non_gloss
 
 
 def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
@@ -6145,7 +6191,9 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                        best_state_queue=_worker_best_state_queue,
                        attempt_id=seed,
                        proper_noun_words=_worker_proper_noun_words,
-                       max_proper_nouns=_worker_max_proper_nouns)
+                       max_proper_nouns=_worker_max_proper_nouns,
+                       non_gloss_words=_worker_non_gloss_words,
+                       max_non_gloss=_worker_max_non_gloss)
     return grid, result, diag
 
 
@@ -6301,7 +6349,9 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        best_state_queue=_worker_best_state_queue,
                        attempt_id=seed,
                        proper_noun_words=_worker_proper_noun_words,
-                       max_proper_nouns=_worker_max_proper_nouns)
+                       max_proper_nouns=_worker_max_proper_nouns,
+                       non_gloss_words=_worker_non_gloss_words,
+                       max_non_gloss=_worker_max_non_gloss)
     return seed_grid, result, diag
 
 
@@ -6494,6 +6544,23 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         if _proper_noun_lang not in PROPER_NOUN_EXCLUDED_LANGS
         else set()
     )
+    # Quota de mots absents du dictionnaire de définitions pour cette
+    # génération (voir MAX_NON_GLOSS_WORDS) et l'ensemble des mots (forme
+    # grille) réellement sans entrée gloss pour cette langue — même signal
+    # que `load_wordlist(require_gloss=...)`, réutilisé ici. Vide (donc
+    # quota jamais déclenché) si la langue ne peut pas être déduite du
+    # chemin, si le dictionnaire n'est pas construit, ou pour "easy" (où
+    # `require_gloss=True` a déjà retiré ces mots du lexique en amont).
+    max_non_gloss = MAX_NON_GLOSS_WORDS.get(difficulty, MAX_NON_GLOSS_WORDS["hard"])
+    non_gloss_words = set()
+    _gloss_lang = _lang_from_path(wordlist_path)
+    if _gloss_lang:
+        _has_any_gloss, _has_gloss_dictionary = _try_import_gloss_lookup()
+        if _has_any_gloss and _has_gloss_dictionary and _has_gloss_dictionary(_gloss_lang):
+            non_gloss_words = {
+                w for w in accents
+                if not _has_any_gloss([accents[w], *canonicals.get(w, [])], _gloss_lang)
+            }
     index = build_index(by_length, frequencies)
     # Précalculé une seule fois (pas par palier) — mêmes longueurs pour
     # toute la génération, `index` ne change jamais. Reproduit exactement
@@ -6829,7 +6896,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
-                  warmup_barrier, proper_noun_words, max_proper_nouns)
+                  warmup_barrier, proper_noun_words, max_proper_nouns,
+                  non_gloss_words, max_non_gloss)
     ) as executor:
         # Pré-chauffage du pool : force tous les workers à finir leur
         # démarrage réel avant le tout premier palier (voir le docstring de
@@ -7550,6 +7618,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             index, rng, cancel_event=cancel_event,
                             proper_noun_words=proper_noun_words,
                             max_proper_nouns=max_proper_nouns,
+                            non_gloss_words=non_gloss_words,
+                            max_non_gloss=max_non_gloss,
                         )
                         opt_black = sum(row.count(BLACK) for row in opt_grid)
                         opt_score = sum(len(slot) ** 2 for slot in opt_slots)
@@ -8397,6 +8467,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     grid, slots, assignment = minimize_black_squares(
         best, best_result, rows, cols, index, rng, cancel_event=cancel_event,
         proper_noun_words=proper_noun_words, max_proper_nouns=max_proper_nouns,
+        non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
     )
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)

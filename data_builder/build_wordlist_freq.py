@@ -94,7 +94,7 @@ for, so it was folded into one script and the file removed.
   rare common word, just not among the very easiest words by default.
 
 Usage:
-    python3 build_wordlist_freq.py fr
+    python3 data_builder/build_wordlist_freq.py fr
 """
 import argparse
 import os
@@ -106,9 +106,9 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "hunspell_cache")
-CORPUS_DIR = Path(__file__).resolve().parent / "data" / "reference_corpus"
-WORDLIST_DIR = Path(__file__).resolve().parent / "data"
+CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "hunspell_cache")
+CORPUS_DIR = Path(__file__).resolve().parent.parent / "data" / "reference_corpus"
+WORDLIST_DIR = Path(__file__).resolve().parent.parent / "data"
 
 _WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 

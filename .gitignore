@@ -16,3 +16,4 @@ env.sh
 /RSS/
 /SCRAPP/
 *.log
+install_cuda13.sh

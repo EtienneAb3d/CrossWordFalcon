@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from .chatbot import ChatBot, ChatError
 from .clues import ClueGenerationError, LLMClueGenerator
+from .dictionary_lookup import search as dictionary_search_impl
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     generate_grid,
@@ -51,18 +52,20 @@ logger = logging.getLogger("crosswordfalcon")
 clue_generator = LLMClueGenerator()
 chatbot = ChatBot()
 
-# fetch_rss_feeds.py vit à la racine du projet (à côté de build_sentence_
-# corpus.py et des autres scripts one-off), pas dans backend/ lui-même — un
-# import relatif ordinaire ne peut pas l'atteindre. Le chemin racine est
-# ajouté une seule fois à sys.path, au démarrage du module, plutôt que de
-# dupliquer sa logique de récupération ici : à la demande explicite de
-# l'utilisateur, "Configure un demon qui lit tous ces flux RSS une fois par
-# jour... et sauvegarde chaque flux RSS dans un dossier RSS."
+# Les scripts de récupération vivent dans le paquet `scrapper/` à la racine
+# du projet (déplacés là à la demande explicite de l'utilisateur, avec
+# data_builder/ pour les scripts de construction de dictionnaires), pas
+# dans backend/ lui-même. Le chemin racine est ajouté à sys.path pour que
+# `from scrapper import ...` résolve quel que soit le répertoire de
+# lancement, plutôt que de dupliquer ici leur logique de récupération : à
+# la demande explicite de l'utilisateur, "Configure un demon qui lit tous
+# ces flux RSS une fois par jour... et sauvegarde chaque flux RSS dans un
+# dossier RSS."
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-import fetch_rss_feeds  # noqa: E402  (import après la manipulation de sys.path, volontaire)
-import fetch_grid_links  # noqa: E402  (meme raison, meme dossier racine)
+from scrapper import fetch_rss_feeds  # noqa: E402  (import après la manipulation de sys.path, volontaire)
+from scrapper import fetch_grid_links  # noqa: E402  (meme raison)
 
 RSS_DIR = _PROJECT_ROOT / "RSS"
 SCRAPP_DIR = _PROJECT_ROOT / "SCRAPP"
@@ -574,6 +577,21 @@ def library_get(grid_id: str):
     if record is None:
         raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
     return record
+
+
+@app.get("/api/dictionary")
+async def dictionary_search(q: str, lang: str = "fr"):
+    """Recherche de dictionnaire pour le panneau "Dictionnaire" de
+    l'interface, à la demande explicite de l'utilisateur : à partir d'un
+    mot (accents et casse ignorés), liste tous les mots de la même racine
+    tirés de data/wordlist_<lang>_full.tsv, chacun avec ses définitions
+    réelles de data/gloss_dictionary/<lang>_glosses.jsonl. Voir
+    backend/dictionary_lookup.search — l'index par langue est construit une
+    seule fois puis mis en cache (le wordlist fr fait ~200k lignes), d'où
+    l'exécution via asyncio.to_thread."""
+    if lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
+    return await asyncio.to_thread(dictionary_search_impl, q, lang)
 
 
 class ChatMessage(BaseModel):

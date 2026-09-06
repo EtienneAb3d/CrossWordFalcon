@@ -63,6 +63,36 @@ export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_P
 # these must always be kept in sync as a group (switch models by
 # commenting/uncommenting a full four-line block, never just one line).
 #
+# How backend/chatbot.py's ChatBot.reply_stream() filters a <think>...
+# </think> reasoning block out of David FALCON's own chat replies — see
+# backend/chatbot.py's own CHATBOT_THINK_FILTER_CHOICES comment for the
+# full explanation. Left unset here (defaults to "open_close" inside the
+# module itself) — that default is the safe choice for any model whose
+# own reasoning-tag behavior hasn't been specifically verified: it only
+# ever holds text back once it has actually SEEN a real <think> tag, so a
+# model that never reasons at all is completely unaffected either way,
+# streaming normally from the first token. Only switch this to "none" (a
+# model confirmed to never emit either tag — the cheapest, safest choice
+# once verified) or "close_only" (a model/server confirmed to inject the
+# opening tag into the prompt itself, never echoing it back — verified
+# live for this project's own SGLang/Qwen3 setup) once you've actually
+# checked which applies to your own chosen model below; getting this
+# wrong in the "close_only" direction for a model that doesn't need it
+# can silently discard an entire reply with no visible error at all.
+#
+# To SEE which value your current model+engine needs: start the LLM server
+# (./run_llm.sh) and run ./test_llm.sh — it lists the exposed models and
+# asks for one short random sentence TWICE (once with reasoning_effort
+# "none", once with "low"), printing the full raw JSON each time. Read the
+# "content" / "reasoning_content" fields:
+#   - no <think>/</think> anywhere, reasoning_content null  -> "none"
+#   - a lone </think> in content, never an opening <think>   -> "close_only"
+#   - a full <think>...</think> block in content             -> "open_close"
+# (The SGLang + Qwen3-4B option above needs "close_only" — verified this
+# exact way: "none" still emits a leading </think>, "low" moves the whole
+# answer into reasoning_content.)
+# export CHATBOT_THINK_FILTER="open_close"
+
 # Models below are ordered smallest to largest, each with a one-line
 # hardware/quality summary — pick the one that fits your machine and how
 # good you need the clues to be:
@@ -108,6 +138,50 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export LLAMA_GGUF_FILE="Qwen3.8-27B-UD-Q2_K_XL.gguf"
 # export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 
+# ============================================================================
+# SGLang + Qwen3-4B (Q4_K_M GGUF) — THE RECOMMENDED, HIGHEST-PERFORMANCE
+# LOCAL OPTION ON A 12GB NVIDIA CARD (RTX 3060 and similar).
+# ============================================================================
+# Verified live end to end on an RTX 3060 (12GB): ~0.1s to first token,
+# ~1-2s/word, ~11.2GB VRAM in use (weights + a 46k-token KV cache).
+# Clue quality is the same "decent/respectable" tier as the Qwen3.5-4B
+# llama.cpp option above — this block's win is purely throughput: SGLang's
+# CUDA engine is markedly faster than llama.cpp for the same model size.
+#
+# Trade-offs / requirements, be aware before choosing this:
+#  - Needs a one-time SGLang install (its own Python 3.12 venv,
+#    .venv-sglang/ — several minutes). Install.sh sets this up for you and
+#    can write this exact block into env.sh; you can also run it by hand
+#    (see run_sglang.sh's header).
+#  - CUDA only. SGLang's GGUF support does not exist on Apple Silicon (use
+#    the MLX block further down) or CPU (use llama.cpp above).
+#  - SGLang's GGUF path is version-sensitive. THIS exact model+quant
+#    (plain, non-hybrid Qwen3-4B) is verified working. Qwen3.5-4B and
+#    Qwen3.8-27B GGUFs are NOT — their hybrid Mamba/linear-attention
+#    architecture hits real, unresolved upstream bugs on this path (see
+#    CLAUDE.md's sglang.log trail). Stick to a plain "Qwen3-*" GGUF here,
+#    never a "Qwen3.5"/"Qwen3.8" one.
+#  - On CUDA 13, nvcc rejects gcc > 12 as its host compiler — set
+#    SGLANG_NVCC_CC to an older gcc if your system default is newer
+#    (Install.sh picks one automatically; see run_sglang.sh's header).
+#
+# To use it, comment out the active llama.cpp block above and uncomment
+# ALL of the lines below (Install.sh does this for you when you pick this
+# option). CHATBOT_THINK_FILTER MUST be "close_only" here — verified live,
+# this model+engine emits only a lone closing </think> with no opening
+# tag, so "open_close"/"none" would let it leak into the chat reply.
+# export LLM_ENGINE="sglang"
+# export SGLANG_MODEL_PATH="bartowski/Qwen_Qwen3-4B-GGUF/Qwen_Qwen3-4B-Q4_K_M.gguf"
+# export SGLANG_QUANTIZATION="gguf"
+# export LLM_MODEL="Qwen/Qwen3-4B"
+# export LLM_BASE_URL="http://127.0.0.1:${LLM_PORT}/v1/chat/completions"
+# export LLM_API_KEY="EMPTY"
+# export SGLANG_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
+# export SGLANG_REASONING_PARSER="qwen3"
+# export SGLANG_MEM_FRACTION_STATIC="0.78"
+# export SGLANG_NVCC_CC="/usr/bin/gcc-12"
+# export CHATBOT_THINK_FILTER="close_only"
+
 # Mistral cloud API — the best possible result, no local hardware needed,
 # but requires a paid API key (console.mistral.ai). To use it, comment out
 # the three LLM_* lines in whichever block above is active and uncomment
@@ -117,67 +191,45 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export LLM_API_KEY="your-mistral-api-key-here"
 
 # Alternative engine: SGLang instead of llama.cpp (run_llm.sh's own
-# default above), at the user's explicit request — see run_sglang.sh's
-# own header for the full reasoning and CLAUDE.md for the live-verified
-# trail. Needs a separate, one-time install (its own Python 3.12 venv,
-# `.venv-sglang/`, plus an editable install from a cloned `sglang-src/`
-# checkout — see run_sglang.sh) never done by Install.sh automatically
-# for every machine, since SGLang's own hardware support is still young
-# and platform-specific; Install.sh only detects what's *possible* on
-# this machine and reports it, it never installs SGLang itself. Uncomment
-# LLM_ENGINE below (and pick one of the two SGLANG_MODEL_PATH blocks that
-# actually matches your own hardware) only once that one-time install has
-# already been done.
+# default above). Faster than llama.cpp for the same model, but needs a
+# separate one-time install (its own Python 3.12 venv, `.venv-sglang/`
+# — see run_sglang.sh's header). Install.sh now offers this
+# interactively: it detects your hardware, explains the trade-offs, and
+# writes the right block below into env.sh for you (inside its own
+# BEGIN/END LLM AUTOCONFIG markers, which override everything above).
+# You only need the manual instructions here if you're not using
+# Install.sh.
 #
+# --- CUDA (a real NVIDIA GPU) ---
+# Use the dedicated, live-verified "SGLang + Qwen3-4B (Q4_K_M GGUF)"
+# block much further up in this file (right before the Mistral section)
+# — it has the full, correct set of variables and the risk notes. Do NOT
+# point SGLANG_MODEL_PATH at a "Qwen3.5"/"Qwen3.8" GGUF on this path:
+# their hybrid architecture hits unresolved upstream bugs (CLAUDE.md).
+#
+# --- Apple Silicon (Metal, via SGLang's native MLX backend) ---
+# Verified live on a MacBook M1 Max — a real chat completion served end
+# to end. Qwen3-4B, not Qwen3.5/Qwen3.8, deliberately: BOTH Qwen3.5-9B
+# and Qwen3.8-27B crash outright on this backend (any quant format,
+# GGUF or MLX-native) with `AssertionError: extra_buffer needs CUDA/
+# MUSA/NPU/ROCm/XPU (FLA)` — their hybrid Mamba-attention architecture
+# needs a CUDA-family platform for this (confirmed by reading SGLang's
+# own arg_groups/mamba_hook.py — see run_sglang.sh's header). Every
+# plain, non-hybrid Qwen3 model (no ".5"/".8" suffix) passes the same
+# path fine. Qwen3-14B works but was too slow on this machine and
+# strained its Metal/unified-memory ceiling under a large prompt (a
+# real, reproduced `RuntimeError: [METAL] Command buffer execution
+# failed: Insufficient Memory`, twice — never run two SGLang/MLX servers
+# at once). Qwen3-4B: ~1.2s/word for a real clue-shaped prompt, no OOM,
+# at some cost to clue quality (4B is "decent/respectable" vs. 14B's
+# larger). No SGLANG_QUANTIZATION line needed — this repo is already
+# MLX-native 4-bit. A larger model in this family (Qwen3-8B/14B/32B-4bit
+# — swap the repo name, same convention) is fine on a machine with more
+# headroom. Uncomment ALL of:
 # export LLM_ENGINE="sglang"
-#
-# CUDA (a real NVIDIA GPU): SGLang's normal path, which does support GGUF
-# directly. Untested on this project's own dev machine (a Mac, no CUDA
-# hardware available) — reported here as the user's own intended default
-# for a fresh install elsewhere, not as something already verified live
-# the way the Apple Silicon block below has been.
-# export SGLANG_MODEL_PATH="unsloth/Qwen3.8-27B-GGUF"
-# export SGLANG_QUANTIZATION="gguf"
-#
-# Apple Silicon (Metal, via SGLang's native MLX backend): verified live on
-# this project's own dev machine (a MacBook M1 Max) — a real chat
-# completion was served successfully end to end. Qwen3-4B, not Qwen3.5/
-# Qwen3.8, deliberately: BOTH Qwen3.5-9B-4bit and Qwen3.8-27B-GGUF crash
-# outright on this backend (any quantization format, GGUF or MLX-native,
-# both tried) with `AssertionError: extra_buffer needs CUDA/MUSA/NPU/ROCm/
-# XPU (FLA)` — their shared hybrid Mamba-attention architecture
-# unconditionally requires a CUDA-family platform for this, regardless of
-# quantization (confirmed by reading SGLang's own arg_groups/mamba_hook.py
-# directly — see run_sglang.sh's own header). Every plain, non-hybrid
-# Qwen3 model (no ".5"/".8" suffix) passes the same code path with no
-# crash — Qwen3-14B was tried first (already vetted for clue quality in
-# this project's own llama.cpp history) and confirmed working, but found
-# too slow on this specific machine at the user's own explicit follow-up
-# request ("sur cette machine le modèle est trop lent, trouver un modèle
-# plus petit") — also confirmed live to strain this machine's own Metal/
-# unified-memory ceiling under a large prompt (a real, reproduced `RuntimeError:
-# [METAL] Command buffer execution failed: Insufficient Memory`, twice,
-# once compounded by two SGLang/MLX servers loaded at once — never run
-# two of them concurrently on one machine). Qwen3-4B measured at
-# ~1.2s/word for a real, clue-shaped prompt (0.46-2.63s across 3 sampled
-# words), against several seconds/word for Qwen3-14B, with no repeat of
-# the OOM crash — a clear net win on this hardware, at some cost to clue
-# quality (this project's own llama.cpp history already rates 4B "decent/
-# respectable" vs. 14B's "larger... same non-reasoning behavior"). No
-# SGLANG_QUANTIZATION line needed — this repo is already MLX-native
-# 4-bit. Like every Qwen3/Qwen3.5 model this project has used, it's a
-# hybrid thinking/non-thinking model that reasons via a <think> block by
-# default — SGLang's own equivalent of run_llm.sh's LLAMA_CHAT_TEMPLATE_
-# KWARGS is SGLANG_CHAT_TEMPLATE_KWARGS just below (verified live to
-# actually suppress it), so uncomment that too rather than relying solely
-# on backend/clues.py's own <think>-stripping (which still works
-# regardless, as a safety net, but disabling reasoning outright is both
-# faster and avoids burning tokens on it in the first place). A larger
-# model in this same family (Qwen3-8B/14B/32B-4bit — swap the repo name
-# below, same convention) is a reasonable alternative on a machine with
-# more headroom than this one, or where clue quality matters more than
-# raw speed.
 # export SGLANG_MODEL_PATH="mlx-community/Qwen3-4B-4bit"
+# export SGLANG_REASONING_PARSER="qwen3"
+# export CHATBOT_THINK_FILTER="close_only"
 #
 # Disables the <think> reasoning block entirely (verified live, a real
 # request/response comparison with and without it — see run_sglang.sh's

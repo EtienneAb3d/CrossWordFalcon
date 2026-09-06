@@ -57,6 +57,7 @@ import os
 import random
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -195,6 +196,19 @@ def _clean_title(content):
 # absorb many sequential calls per grid.
 _BATCH_SIZE = 1
 
+# Still one word per LLM *request* (_BATCH_SIZE above) — but generate()
+# now fires up to this many of those single-word requests concurrently,
+# at the user's explicit request ("SGLang fait du continuous batching.
+# Parallélise la génération des questions 10 par 10."). SGLang's
+# continuous batching runs the concurrent requests together on the GPU,
+# turning what used to be N sequential round-trips per grid into about
+# N/CLUE_BATCH_PARALLELISM. Safe on any OpenAI-compatible server: one
+# without request concurrency (e.g. a plain llama.cpp build with no
+# --parallel) simply serialises them — no speed-up but no harm either.
+# Env-overridable, same convention as CROSSWORDFALCON_PARALLEL_ATTEMPTS —
+# set to 1 to force the old fully-sequential behaviour.
+CLUE_BATCH_PARALLELISM = max(1, int(os.environ.get("CLUE_BATCH_PARALLELISM", "10")))
+
 # A worked example per level, not just an abstract description — small
 # models follow a concrete style anchor far more reliably than an adjective
 # list (verified: without an example, "easy" and "hard" clues came out
@@ -219,15 +233,24 @@ DIFFICULTY_STYLE = {
     # ("the clue must reflect the word's actual meaning") — that rule is
     # about correctness (not inventing a meaning), this one is about
     # *which* real, correct meaning to pick when more than one exists.
+    # Reinforced further at the user's explicit follow-up request ("bien
+    # préciser de choisir la signification la plus simple, et éviter de
+    # définir un mot avec son sens le plus technique") — hence the blunt,
+    # repeated framing below.
     "easy": (
         "very easy: simple, literal, everyday vocabulary, no wordplay, no "
-        "ambiguity — a clue a child could answer. If the word has more "
-        "than one real meaning and a simple, everyday one exists, always "
-        "use that one — never a sense that refers to a person's name, a "
-        "city or other place name, a river, a specialized/technical term, "
-        "or in general any sense that would require advanced general "
-        "knowledge/culture to recognize. Those senses are for medium/hard "
-        "difficulty, not easy."
+        "ambiguity — a clue a child could answer. THE MOST IMPORTANT "
+        "THING at this level: when the word has more than one real "
+        "meaning, always clue its SIMPLEST, most common, most everyday "
+        "sense — the one an ordinary person thinks of first — and NEVER "
+        "its rarest, most technical or most specialized sense. Reject "
+        "outright any meaning that refers to a person's name, a city or "
+        "other place name, a river or mountain, a brand or work title, a "
+        "scientific/medical/legal/technical term, or anything that needs "
+        "advanced general knowledge to recognize. Those senses exist only "
+        "for medium/hard difficulty. If the only senses available are of "
+        "that kind, fall back to the plainest possible description of the "
+        "word rather than leaning into the technical or proper-noun one."
     ),
     "medium": (
         "medium: classic newspaper-crossword style — reworded and a "
@@ -549,29 +572,38 @@ class LLMClueGenerator:
         for extra grounding. Returns {ANSWER: clue}, written in `language`
         (fr/en/de/es/it), in the style matching `difficulty` (easy/medium/hard).
 
+        Words are generated in parallel, CLUE_BATCH_PARALLELISM at a time
+        (one LLM request per word, `_BATCH_SIZE=1`, but many in flight at
+        once so SGLang's continuous batching decodes them together — see
+        that constant). Each word's own up-to-3 retry attempts still run
+        in immediate succession within its own worker.
+
         `on_progress`, if given, is called `on_progress(current, total)`
-        after every attempt (one LLM call each, `_BATCH_SIZE=1`) —
-        `current` is how many words have a clue so far, `total` how many
-        were asked for; used to surface live progress (see backend/app.py)
-        since this is by far the slowest phase of grid generation.
+        as each word finishes (its clue found, or its 3 attempts
+        exhausted) — `current` is how many words have a clue so far,
+        `total` how many were asked for; used to surface live progress
+        (see backend/app.py) since this is by far the slowest phase of
+        grid generation.
 
         `cancel_event` (a `threading.Event`, `None` by default — no effect
         for any pre-existing caller), at the user's explicit request:
-        checked once per word, right before starting its own round of up
-        to 3 LLM calls — raises `crossword_gen.GenerationCancelled` (see
-        its own docstring) rather than continuing, letting the "Stop"
+        checked once per batch (right before dispatching the next
+        CLUE_BATCH_PARALLELISM words) and again by each worker before each
+        of its own attempts — raises `crossword_gen.GenerationCancelled`
+        (see its own docstring) rather than continuing, letting the "Stop"
         button interrupt clue generation too, not just pattern search/
         minimization (see backend/app.py). This is by far the slowest
-        phase of a generation (see this module's docstring), so a coarse,
-        once-per-word checkpoint is still frequent enough in practice —
-        the interruption can take up to one word's own remaining LLM
+        phase of a generation (see this module's docstring), so a coarse
+        checkpoint is still frequent enough in practice — the interruption
+        can take up to the currently-running batch's own remaining LLM
         round-trip(s) to actually take effect, never mid-call.
 
         `should_pause` (`None` by default — no effect for any pre-existing
         caller), at the user's explicit request (backend/app.py's own
         CLUES_QUEUE, the GPU/LLM job queue's fair-scheduling mechanism —
         see its own docstring): a callable, checked at the exact same
-        once-per-word point as `cancel_event`. Unlike `cancel_event`,
+        once-per-batch (and per-attempt inside a worker) points as
+        `cancel_event`. Unlike `cancel_event`,
         which discards everything and raises to abort outright, this
         raises `crossword_gen.GenerationPaused` carrying `(clues,
         remaining_entries)` — every clue already found so far, and the
@@ -590,90 +622,77 @@ class LLMClueGenerator:
         clues = {}
         errors = []
         max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * _BATCH_SIZE
-        # A word can end up with no clue after filtering (every candidate
-        # was a copy of the word itself, or non-Latin drift) just as easily
-        # as from the LLM never answering for it — either way, ask again
-        # rather than leaving it without a clue. Retries happen immediately,
-        # 3 attempts in a row on the *same* word, before moving to the next
-        # one — not spread one-attempt-per-word across 3 passes over the
-        # whole list (an earlier design, changed at the user's explicit
-        # request: with that design, a word's own final, third attempt
-        # only happened after every other word's first attempt had already
-        # run, which read confusingly in the log — two consecutive "round
-        # 1/3" lines for two different words look like a retry that
-        # silently moved on, when it's really just two different words'
-        # first attempts).
-        for entry in entries:
-            if cancel_event is not None and cancel_event.is_set():
-                raise GenerationCancelled()
-            if should_pause is not None and should_pause():
-                remaining = [e for e in entries if e[0] not in clues]
-                raise GenerationPaused((clues, remaining))
-            answer, accented, canonical = entry
-            system_prompt = self._build_system_prompt(difficulty, language)
-            user_message = self._build_user_message(entry, language)
-            for attempt in range(3):
-                content = None
-                error = None
-                candidate_details = []
-                try:
-                    content = self._call(
-                        answer, accented, attempt + 1,
-                        system_prompt, user_message, max_tokens, timeout,
-                    )
-                    candidates = self._parse_response(content)
-                    if not candidates:
-                        outcome = "model gave no candidate lines at all"
-                        logger.warning(
-                            "clue round %d/3: %r (%r) — model gave no "
-                            "candidate lines at all",
-                            attempt + 1, answer, accented,
-                        )
-                    else:
-                        clue, candidate_details = self._pick_clue(
-                            candidates, answer, accented, canonical, language, attempt + 1,
-                        )
-                        if clue:
-                            clues[answer] = clue
-                            outcome = f"selected: {clue!r}"
-                        else:
-                            # Each candidate's own rejection reason was already
-                            # logged individually inside _pick_clue() — this is
-                            # just the round-level "so none of them worked" verdict.
-                            outcome = (
-                                f"all {len(candidates)} candidate(s) rejected "
-                                "(see the Candidates section below, or backend.log)"
-                            )
-                            logger.warning(
-                                "clue round %d/3: %r (%r) — all %d candidate(s) "
-                                "rejected (see the per-candidate reasons just above)",
-                                attempt + 1, answer, accented, len(candidates),
-                            )
-                except ClueGenerationError as e:
-                    errors.append(e)
-                    error = e
-                    outcome = f"LLM call failed: {e}"
-                    logger.warning(
-                        "clue round %d/3: %r (%r) — LLM call failed: %s",
-                        attempt + 1, answer, accented, e,
-                    )
-                # Every single call gets its own record, successes included —
-                # not just failures — at the user's explicit request, so a
-                # whole grid's worth of calls can be reviewed after the fact,
-                # not just the ones that went wrong. `success` (this specific
-                # attempt produced a usable clue) drives the filename's own
-                # SUCCES/ERROR suffix — also requested explicitly, so a
-                # directory listing alone shows which calls need attention
-                # without opening every file.
-                self._write_call_log(
-                    answer, accented, language, difficulty, attempt + 1,
-                    system_prompt, user_message, content, error, outcome,
-                    candidate_details, success=answer in clues,
+        # Identical for every word of this call (only difficulty+language
+        # feed it, and both are fixed here) — built once rather than
+        # rebuilt inside the per-word loop as it used to be.
+        system_prompt = self._build_system_prompt(difficulty, language)
+
+        # User messages are built here, up front and sequentially, on
+        # purpose: the gloss / example-sentence lookups they trigger
+        # lazily populate module-level caches (gloss_lookup.py /
+        # example_sentences.py) that aren't safe for concurrent first
+        # access — the worker threads below only ever do the HTTP call
+        # plus parsing / filtering / logging.
+        prepared = [(entry, self._build_user_message(entry, language, difficulty)) for entry in entries]
+
+        # All words dispatched at once to a rolling pool of
+        # CLUE_BATCH_PARALLELISM worker threads (see that constant): a
+        # worker that finishes a word immediately starts the next one, so
+        # a word that has to retry never leaves the other workers idle
+        # (an earlier batch-of-N design did — the whole batch waited on
+        # its slowest retrier). SGLang's continuous batching decodes the
+        # up-to-CLUE_BATCH_PARALLELISM concurrent requests together.
+        #
+        # Each word's own up-to-3 attempts still run in immediate
+        # succession inside its own worker — never spread across passes —
+        # so one word's log still reads "round 1, round 2, round 3" in
+        # order (a property an earlier change deliberately established,
+        # see the note below).
+        #
+        # cancel_event / should_pause: checked once here before dispatch,
+        # then again as each word completes; each worker also re-checks
+        # both before every one of its own attempts (_generate_one), so
+        # in-flight work winds down promptly instead of running every
+        # remaining attempt first. A running worker can't be force-killed
+        # mid-call, so the interruption still takes up to one word's own
+        # remaining round-trip(s) to fully take effect.
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelled()
+        if should_pause is not None and should_pause():
+            raise GenerationPaused((clues, list(entries)))
+
+        executor = ThreadPoolExecutor(max_workers=min(CLUE_BATCH_PARALLELISM, total))
+        try:
+            futures = [
+                executor.submit(
+                    self._generate_one, entry, user_message, system_prompt,
+                    max_tokens, timeout, language, difficulty,
+                    cancel_event, should_pause,
                 )
+                for entry, user_message in prepared
+            ]
+            for future in as_completed(futures):
+                answer, clue, word_errors = future.result()
+                if clue is not None:
+                    clues[answer] = clue
+                errors.extend(word_errors)
                 if on_progress:
                     on_progress(len(clues), total)
-                if answer in clues:
-                    break
+                # Checked here, as each word lands, rather than only after
+                # the whole pool drains: cancel_futures=True drops every
+                # word not yet started so we don't wait it out, and we
+                # raise straight away — the ≤CLUE_BATCH_PARALLELISM still
+                # mid-call finish in the background (an interrupted call
+                # can't be force-killed) and their results are discarded.
+                if cancel_event is not None and cancel_event.is_set():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    raise GenerationCancelled()
+                if should_pause is not None and should_pause():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    remaining = [e for e in entries if e[0] not in clues]
+                    raise GenerationPaused((clues, remaining))
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         missing = [e for e in entries if e[0] not in clues]
         if missing:
@@ -688,6 +707,91 @@ class LLMClueGenerator:
         if errors and not clues:
             raise errors[0]
         return clues
+
+    def _generate_one(self, entry, user_message, system_prompt, max_tokens,
+                      timeout, language, difficulty, cancel_event, should_pause):
+        """One word's complete clue-generation work — up to 3 immediate
+        retry attempts on the *same* word — run in its own worker thread
+        by generate()'s batched-parallel loop. Returns
+        `(answer, clue_or_None, errors)`, where `errors` is the list of
+        ClueGenerationError raised across this word's attempts (merged
+        into generate()'s own `errors` by the single-threaded caller).
+
+        Mutates no shared state: `_write_call_log` (distinct
+        microsecond-stamped filenames) and `logger` (the stdlib logging
+        lock) are its only side effects and both are thread-safe.
+        Re-checks cancel_event/should_pause before each attempt so an
+        interrupted batch stops retrying promptly — it simply returns
+        whatever it has; generate() re-checks after the batch and raises
+        GenerationCancelled / GenerationPaused as appropriate."""
+        answer, accented, canonical = entry
+        clue = None
+        errors = []
+        for attempt in range(3):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+            if should_pause is not None and should_pause():
+                break
+            content = None
+            error = None
+            candidate_details = []
+            try:
+                content = self._call(
+                    answer, accented, attempt + 1,
+                    system_prompt, user_message, max_tokens, timeout,
+                )
+                candidates = self._parse_response(content)
+                if not candidates:
+                    outcome = "model gave no candidate lines at all"
+                    logger.warning(
+                        "clue round %d/3: %r (%r) — model gave no "
+                        "candidate lines at all",
+                        attempt + 1, answer, accented,
+                    )
+                else:
+                    picked, candidate_details = self._pick_clue(
+                        candidates, answer, accented, canonical, language, attempt + 1,
+                    )
+                    if picked:
+                        clue = picked
+                        outcome = f"selected: {picked!r}"
+                    else:
+                        # Each candidate's own rejection reason was already
+                        # logged individually inside _pick_clue() — this is
+                        # just the round-level "so none of them worked" verdict.
+                        outcome = (
+                            f"all {len(candidates)} candidate(s) rejected "
+                            "(see the Candidates section below, or backend.log)"
+                        )
+                        logger.warning(
+                            "clue round %d/3: %r (%r) — all %d candidate(s) "
+                            "rejected (see the per-candidate reasons just above)",
+                            attempt + 1, answer, accented, len(candidates),
+                        )
+            except ClueGenerationError as e:
+                errors.append(e)
+                error = e
+                outcome = f"LLM call failed: {e}"
+                logger.warning(
+                    "clue round %d/3: %r (%r) — LLM call failed: %s",
+                    attempt + 1, answer, accented, e,
+                )
+            # Every single call gets its own record, successes included —
+            # not just failures — at the user's explicit request, so a
+            # whole grid's worth of calls can be reviewed after the fact,
+            # not just the ones that went wrong. `success` (this specific
+            # attempt produced a usable clue) drives the filename's own
+            # SUCCES/ERROR suffix — also requested explicitly, so a
+            # directory listing alone shows which calls need attention
+            # without opening every file.
+            self._write_call_log(
+                answer, accented, language, difficulty, attempt + 1,
+                system_prompt, user_message, content, error, outcome,
+                candidate_details, success=clue is not None,
+            )
+            if clue is not None:
+                break
+        return answer, clue, errors
 
     def generate_title(self, word_entries, language="fr", timeout=DEFAULT_TIMEOUT,
                         cancel_event=None):
@@ -719,27 +823,48 @@ class LLMClueGenerator:
         if not words:
             return ""
         language_name = LANGUAGE_NAMES.get(language, language)
+        # Rewritten at the user's explicit request after the small local
+        # model returned "Titre de mots croisés en français" — it echoed a
+        # DESCRIPTION of the task instead of inventing a title. The fix
+        # follows this module's own established pattern for small models
+        # (see DIFFICULTY_STYLE's comment): a concrete worked example is
+        # far more reliable than an adjective list, and the exact observed
+        # failure is now named and shown as an explicit BAD example.
         system_prompt = (
-            "You are naming a crossword puzzle. You will be given the list "
-            "of every answer word placed in the grid.\n\n"
-            f"Reply with a short, catchy title for this puzzle, entirely in "
-            f"{language_name}, loosely evoking its words/theme if a theme is "
-            "apparent from them — never a literal list of the words "
-            "themselves.\n\n"
-            "STRICT RULES:\n"
-            f"1. At most {MAX_TITLE_WORDS} words.\n"
-            "2. Reply with the title only — no quotes, no ending "
-            "punctuation, no explanation, no leading label such as "
-            "\"Title:\".\n"
-            f"3. The title must be entirely in {language_name}, even if "
-            "some of the words below are foreign proper nouns.\n"
-            "4. Must not reuse any of the words listed below, in any form "
-            "(singular/plural, conjugated, accented or not) — except "
-            "common short function words (articles, prepositions, "
-            "conjunctions — e.g. \"a\", \"the\", \"of\", \"in\" in "
-            "English), which may still appear normally.\n"
+            "You invent the TITLE of a crossword puzzle — a short name, "
+            "like the title of a book, a song, or a film. You are given "
+            "the list of every answer word in the grid.\n\n"
+            f"Output ONLY the title, 1 to {MAX_TITLE_WORDS} words, entirely "
+            f"in {language_name}, loosely evoking the words or their shared "
+            "theme if one is apparent.\n\n"
+            "NEVER do any of these:\n"
+            "- Describe the task or explain yourself. Your reply must NOT "
+            "mean things like \"a crossword title\", \"title in "
+            f"{language_name}\", \"here is a title\", \"puzzle name\" — "
+            "that is a description, not a title.\n"
+            "- Output a whole sentence, a definition, or a list of the "
+            "grid words.\n"
+            "- Add quotes, a trailing period, or a label such as "
+            "\"Title:\" / \"Titre :\".\n"
+            f"- Write in any language other than {language_name}, even if "
+            "some answers are foreign names.\n"
+            "- Reuse any grid word below, in any form (singular/plural, "
+            "conjugated, accented or not). Only tiny function words "
+            "(a, the, of, in, and their equivalents) may appear.\n\n"
+            "EXAMPLES — these are written in English ONLY to show the "
+            "SHAPE of a good answer (a short evocative name); yours must "
+            f"be original, in {language_name}, and fit YOUR own word "
+            "list:\n"
+            "  words: sea, boat, wave, sailor, salt   -> The salty horizon\n"
+            "  words: piano, note, silence, rhythm    -> After the silence\n"
+            "  words: snow, fire, wool, night, winter -> Frost and embers\n"
+            "Do NOT copy those example titles. Do NOT keep them in "
+            f"English — translate the spirit into {language_name}.\n"
+            "WRONG answer, never do this:\n"
+            f"  words: (anything)  ->  Title of a crossword in {language_name}\n"
+            "  (that describes the task instead of naming the puzzle)\n"
         )
-        user_message = "Words: " + ", ".join(words)
+        user_message = "Grid words: " + ", ".join(words) + "\nTitle:"
         try:
             response = httpx.post(
                 self.base_url,
@@ -752,6 +877,19 @@ class LLMClueGenerator:
                     ],
                     "temperature": TEMPERATURE,
                     "max_tokens": REASONING_TOKEN_BUDGET + 30,
+                    # A per-request reinforcement of the same intent as
+                    # LLAMA_CHAT_TEMPLATE_KWARGS/SGLANG_CHAT_TEMPLATE_KWARGS's
+                    # own enable_thinking:false (run_llm.sh/run_sglang.sh) —
+                    # harmless for a server that doesn't recognize this field
+                    # at all (verified live for llama_cpp.server: its own
+                    # request schema has no `model_config = {"extra":
+                    # "forbid"}`, so Pydantic's default behavior silently
+                    # ignores it), but a real, request-level "none" for a
+                    # server that does — confirmed live earlier in this
+                    # project's own SGLang investigation: SGLang accepts
+                    # this exact field and only "none" (not "low") actually
+                    # disables thinking for a Qwen3 chat template.
+                    "reasoning_effort": "none",
                 },
                 timeout=timeout,
             )
@@ -773,7 +911,7 @@ class LLMClueGenerator:
         return title
 
     @staticmethod
-    def _build_examples_block(entry, language):
+    def _build_examples_block(entry, language, difficulty):
         """Real sentences (from the OpenSubtitles+Wikipedia reference
         corpus, see backend/example_sentences.py) using this word's exact
         accented form, if any exist — grounds the model's sense of what a
@@ -782,22 +920,39 @@ class LLMClueGenerator:
         French `are` — the 100 m² land-area unit — as the English verb "to
         be", since it had never reliably learned the rare French sense).
         Returns "" (no section added) when no example sentences were found
-        for this word."""
+        for this word.
+
+        In "easy" difficulty, an extra warning is appended, at the user's
+        explicit request: these corpus sentences often contain proper
+        nouns (people, cities, brands, work titles) sitting right next to
+        the target word, and the small model tends to latch onto one and
+        clue the everyday word via that proper-noun reading — the warning
+        tells it to ignore any proper noun appearing in the examples and
+        use them only to confirm the ordinary sense."""
         _, accented, _ = entry
         sentences = find_examples_for_words([accented], language).get(accented)
         if not sentences:
             return ""
         lines = "\n".join(f"- {s}" for s in sentences)
-        return (
+        block = (
             f'Real example sentences using "{accented}":\n{lines}\n\n'
             "These are genuine sentences, not hints about difficulty or "
             "style — use them only to confirm what the word actually means "
             "(this matters most for short or unusual words that might look "
             "like a word from another language) before writing your clues."
         )
+        if difficulty == "easy":
+            block += (
+                " These sentences may contain proper nouns (names of "
+                "people, places, brands, works) near the target word — "
+                "IGNORE those completely. They are not the meaning to "
+                "clue; at this difficulty you must define the word's "
+                "plain, everyday sense only."
+            )
+        return block
 
     @staticmethod
-    def _build_gloss_block(entry, language):
+    def _build_gloss_block(entry, language, difficulty):
         """Real dictionary definitions (from Wiktionary via Kaikki.org, see
         backend/gloss_lookup.py) for this word's candidate canonical
         form(s), if any exist. Looked up by canonical form/lemma, not the
@@ -813,14 +968,25 @@ class LLMClueGenerator:
         rest — an earlier version of this instruction did exactly that
         ("only one may be the meaning that fits... ignore the others"),
         found to be counter-productive at the user's explicit request.
+        In "easy" difficulty, proper-noun senses (`pos == "name"`) are
+        dropped, at the user's explicit request: an ordinary word can also
+        have a `name` sense in the dictionary (French "manga" is a
+        Japanese comic *and* a village in Burkina Faso), and passing that
+        sense to the model risks it cluing the everyday word via the
+        obscure proper-noun reading — exactly what "easy" must avoid.
+        medium/hard keep every sense.
+
         Returns "" when this word has no canonical form with dictionary
-        coverage."""
+        coverage (or, in "easy", none left once `name` senses are
+        removed)."""
         _, accented, canonical = entry
         glosses_by_lemma = find_glosses_for_canonicals(canonical, language)
+        drop_name_senses = difficulty == "easy"
         word_parts = [
             f'- "{lemma}" ({sense["pos"]}): {gloss}'
             for lemma in canonical
             for sense in glosses_by_lemma.get(lemma, [])
+            if not (drop_name_senses and sense.get("pos") == "name")
             for gloss in sense["glosses"]
         ]
         if not word_parts:
@@ -828,16 +994,19 @@ class LLMClueGenerator:
         return (
             f'Dictionary definition(s) related to "{accented}":\n'
             + "\n".join(word_parts) + "\n\nThese are real dictionary "
-            "definitions of the word's root form(s) — use them to confirm "
-            "the word's actual meaning(s) before writing your clues. If "
-            "more than one distinct sense is shown, the word may genuinely "
-            "have several different meanings — use this as an opportunity: "
-            "make your 3 candidates as different from each other as "
-            "possible by drawing on different senses across them, rather "
-            "than writing 3 variations of the same single meaning. Each "
-            "candidate must still stay true to one of the word's real, "
-            "genuine senses shown above — never invent a meaning that "
-            "isn't actually there."
+            "definitions of the word's root form(s), and they are the "
+            "ONLY meanings you are allowed to clue (see the ABSOLUTE RULE "
+            "in the instructions). Every one of your 3 clues must come "
+            "from a definition line above and from nothing else — not "
+            "from what the word 'reminds you of', not from a similar-"
+            "looking word in another language, not from a meaning you "
+            "half-remember. If a root form above resembles a more "
+            "familiar word, that resemblance is a trap: define only what "
+            "the text after the colon says. If more than one distinct "
+            "sense is shown, treat that as a chance to make your 3 "
+            "candidates genuinely different by drawing on different "
+            "senses, rather than 3 rewordings of one — but each must "
+            "still trace back to a specific line above."
         )
 
     def _build_system_prompt(self, difficulty, language):
@@ -888,7 +1057,22 @@ class LLMClueGenerator:
             "gender, number, and conjugation) — use that to write "
             "grammatically accurate clues. It may also include real "
             "dictionary definitions and/or real example sentences for that "
-            "word; use them to confirm its actual meaning before writing.\n\n"
+            "word.\n\n"
+            "ABSOLUTE RULE — THE DICTIONARY DEFINITION IS THE ONLY SOURCE "
+            "OF MEANING. If the user message contains a \"Dictionary "
+            "definition(s)\" section, every one of your 3 clues MUST be "
+            "built from a meaning written there, and from NOTHING ELSE. "
+            "You may not clue any sense that is not in that section. If "
+            "your own memory of the word disagrees with the definition "
+            "given, your memory is wrong — follow the definition. If a "
+            "listed root form happens to look like a word in another "
+            "language, or like a different, more familiar word, ignore "
+            "that resemblance completely: only the definition TEXT next "
+            "to it counts (e.g. a French entry 'choir (verb): Tomber.' "
+            "means the verb 'to fall' — it has nothing to do with an "
+            "English 'choir'/a singing group). Inventing a plausible-"
+            "sounding meaning that is not in the definitions is the single "
+            "worst mistake you can make here.\n\n"
             "Propose exactly 3 different possible crossword clues for that "
             "single word, all matching the difficulty level above.\n\n"
             "Rules:\n"
@@ -940,11 +1124,16 @@ class LLMClueGenerator:
             "if they don't match exactly; never let it silently "
             "disagree.\n"
             "5. The clue must reflect the word's actual, real meaning — "
-            "never an unrelated sentence that merely sounds plausible. "
-            "Check any dictionary definition(s)/example(s) you were given "
-            "and confirm your clue actually corresponds to that meaning, "
-            "rather than free-associating a clue that merely sounds like "
-            "it could be one.\n"
+            "never an unrelated sentence that merely sounds plausible, and "
+            "never a meaning you 'recognise' that isn't in the definitions "
+            "you were given. This is the same point as the ABSOLUTE RULE "
+            "above, restated as a check: for EACH of your 3 candidates, "
+            "before writing it, point to the exact dictionary definition "
+            "line it comes from. If you cannot, that candidate is invalid "
+            "— rewrite it from a definition that IS listed. If no "
+            "dictionary section was provided at all, only then may you "
+            "rely on your own knowledge, and even then stay to the "
+            "plainest, most certain everyday sense.\n"
             "6. A synonym or near-synonym is a perfectly good clue.\n"
             f"7. Keep each candidate clue short: a single clause or "
             f"sentence, at most {MAX_CLUE_WORDS} words. Never write out "
@@ -985,17 +1174,19 @@ class LLMClueGenerator:
             "after these 3 lines."
         )
 
-    def _build_user_message(self, entry, language):
+    def _build_user_message(self, entry, language, difficulty):
         """The one thing that varies per call: the word itself, plus its
         grounding block (real dictionary definitions/example sentences,
         when available) — sent as the `user` message, paired with the
-        fixed `system` message from `_build_system_prompt()`."""
+        fixed `system` message from `_build_system_prompt()`. `difficulty`
+        only reaches the gloss block, which drops proper-noun senses in
+        "easy" (see `_build_gloss_block`)."""
         _, accented, _ = entry
         parts = [f"Word: {accented}"]
-        gloss_block = self._build_gloss_block(entry, language)
+        gloss_block = self._build_gloss_block(entry, language, difficulty)
         if gloss_block:
             parts.append(gloss_block)
-        examples_block = self._build_examples_block(entry, language)
+        examples_block = self._build_examples_block(entry, language, difficulty)
         if examples_block:
             parts.append(examples_block)
         return "\n\n".join(parts)
@@ -1013,6 +1204,10 @@ class LLMClueGenerator:
                     ],
                     "temperature": TEMPERATURE,
                     "max_tokens": max_tokens,
+                    # See the identical field on generate_title's own call
+                    # above for why this is here and why it's safe for a
+                    # server that doesn't recognize it.
+                    "reasoning_effort": "none",
                 },
                 timeout=timeout,
             )

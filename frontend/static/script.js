@@ -21,6 +21,10 @@ function applyTranslations() {
     const key = el.getAttribute("data-i18n-placeholder");
     if (t[key]) el.setAttribute("placeholder", t[key]);
   });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    if (t[key]) el.setAttribute("title", t[key]);
+  });
   renderSystemInfoTooltip();
   // Only redraws the idle-state placeholder, never a live hover
   // definition (that's puzzle content, in the grid's own language, not
@@ -85,6 +89,14 @@ const libraryPagination = document.getElementById("library-pagination");
 const libraryPrevBtn = document.getElementById("library-prev-btn");
 const libraryNextBtn = document.getElementById("library-next-btn");
 const libraryPosition = document.getElementById("library-position");
+const dictionaryBtn = document.getElementById("dictionary-btn");
+const dictionaryPanel = document.getElementById("dictionary");
+const dictionaryForm = document.getElementById("dictionary-form");
+const dictionaryInput = document.getElementById("dictionary-input");
+const dictionarySearchBtn = document.getElementById("dictionary-search-btn");
+const dictionaryResults = document.getElementById("dictionary-results");
+const dictionaryClearBtn = document.getElementById("dictionary-clear-btn");
+const dictionaryCloseBtn = document.getElementById("dictionary-close-btn");
 const rssPanel = document.getElementById("rss-panel");
 const virtualKeyboardEl = document.getElementById("virtual-keyboard");
 const virtualKeyboardToggleBtn = document.getElementById("virtual-keyboard-toggle-btn");
@@ -102,6 +114,7 @@ const chatbotEl = document.getElementById("chatbot");
 const chatbotToggleBtn = document.getElementById("chatbot-toggle-btn");
 const chatbotMessages = document.getElementById("chatbot-messages");
 const chatbotForm = document.getElementById("chatbot-form");
+const chatbotResetBtn = document.getElementById("chatbot-reset-btn");
 const chatbotInput = document.getElementById("chatbot-input");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
@@ -301,9 +314,15 @@ function renderRssList() {
     textWrap.className = "rss-item-text";
     const title = document.createElement("div");
     title.textContent = item.title;
+    // Ligne sous le titre : pour une entrée RSS, c'est le nom du flux
+    // (information complémentaire — de quel blog vient l'article). Pour
+    // une entrée "grid" (lien direct), le nom de la source est déjà dans
+    // le titre lui-même (ex. "Fox News – Saturday…") : cette ligne serait
+    // redondante — à la demande explicite de l'utilisateur, on y affiche
+    // à la place l'URL réellement ouverte au clic.
     const source = document.createElement("div");
-    source.className = "rss-item-source";
-    source.textContent = item.source;
+    source.className = isGrid ? "rss-item-source rss-item-url" : "rss-item-source";
+    source.textContent = isGrid ? item.link : item.source;
     textWrap.appendChild(title);
     textWrap.appendChild(source);
     li.appendChild(textWrap);
@@ -396,7 +415,7 @@ let generationInProgress = false;
 
 function syncRssPanelVisibility() {
   rssPanel.hidden = generationInProgress
-    || !(libraryPanel.hidden && attemptPreview.hidden && result.hidden);
+    || !(libraryPanel.hidden && dictionaryPanel.hidden && attemptPreview.hidden && result.hidden);
 }
 // Etat initial explicite plutôt que de compter sur une simple coïncidence
 // entre l'état `hidden` par défaut de index.html et cette règle.
@@ -2012,6 +2031,137 @@ libraryNextBtn.addEventListener("click", () => {
   renderLibraryList();
 });
 
+// Panneau "Dictionnaire", à la demande explicite de l'utilisateur : à
+// partir d'un mot (accents/casse ignorés), le back liste tous les mots de
+// la même racine tirés du wordlist, avec leurs définitions du fichier
+// <lang>_glosses.jsonl (voir backend/dictionary_lookup.py + GET
+// /api/dictionary). Chaque recherche produit son propre tableau, empilé
+// en haut (le plus récent d'abord) ; "Effacer" vide la pile.
+function hideDictionaryPanel() {
+  dictionaryPanel.hidden = true;
+  syncRssPanelVisibility();
+}
+
+// Un tableau par mot cherché : colonne 1 = forme complète (forme canonique
+// entre parenthèses), colonne 2 = liste "type grammatical : définition".
+// Construit entièrement via l'API DOM (textContent) — aucune donnée
+// dictionnaire n'est jamais injectée en innerHTML.
+function renderDictionaryResult(query, data) {
+  const t = I18N[uiLanguage];
+  const block = document.createElement("div");
+  block.className = "dictionary-result";
+
+  const heading = document.createElement("h3");
+  heading.textContent = query;
+  block.appendChild(heading);
+
+  const rows = (data && data.rows) || [];
+  if (!rows.length) {
+    const empty = document.createElement("p");
+    empty.className = "dictionary-empty";
+    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
+    block.appendChild(empty);
+    dictionaryResults.prepend(block);
+    return;
+  }
+
+  if (data.truncated) {
+    const note = document.createElement("p");
+    note.className = "dictionary-truncated";
+    note.textContent = t.dictionaryTruncated;
+    block.appendChild(note);
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "table-scroll";
+  const table = document.createElement("table");
+  table.className = "dictionary-table";
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  for (const label of [t.dictionaryColForm, t.dictionaryColDefinitions]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    htr.appendChild(th);
+  }
+  thead.appendChild(htr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const row of rows) {
+    const tr = document.createElement("tr");
+    const c1 = document.createElement("td");
+    c1.className = "dictionary-form-cell";
+    c1.textContent = `${row.form} (${row.canonical})`;
+    tr.appendChild(c1);
+
+    const c2 = document.createElement("td");
+    c2.className = "dictionary-def-cell";
+    if (!row.definitions || !row.definitions.length) {
+      const em = document.createElement("em");
+      em.textContent = t.dictionaryNoDefinition;
+      c2.appendChild(em);
+    } else {
+      for (const d of row.definitions) {
+        const line = document.createElement("div");
+        line.className = "dictionary-def-line";
+        const prefix = d.lemma ? `[${d.lemma}] ` : "";
+        const pos = d.pos ? `${d.pos} : ` : "";
+        line.textContent = `${prefix}${pos}${d.gloss}`;
+        c2.appendChild(line);
+      }
+    }
+    tr.appendChild(c2);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  block.appendChild(wrap);
+  dictionaryResults.prepend(block);
+}
+
+dictionaryBtn.addEventListener("click", () => {
+  if (dictionaryPanel.hidden) {
+    dictionaryPanel.hidden = false;
+    syncRssPanelVisibility();
+    dictionaryInput.focus();
+  } else {
+    hideDictionaryPanel();
+  }
+});
+
+dictionaryCloseBtn.addEventListener("click", hideDictionaryPanel);
+
+dictionaryClearBtn.addEventListener("click", () => {
+  dictionaryResults.replaceChildren();
+  dictionaryInput.value = "";
+  dictionaryInput.focus();
+});
+
+dictionaryForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = dictionaryInput.value.trim();
+  if (!query) return;
+  const t = I18N[uiLanguage];
+  dictionarySearchBtn.disabled = true;
+  try {
+    const response = await fetchWithTimeout(
+      `/api/dictionary?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(uiLanguage)}`,
+      {}, FETCH_TIMEOUT_MS,
+    );
+    if (!response.ok) throw new Error(t.dictionaryError);
+    const data = await response.json();
+    renderDictionaryResult(query, data);
+    dictionaryInput.select();
+  } catch (err) {
+    const line = document.createElement("p");
+    line.className = "dictionary-empty";
+    line.textContent = t.dictionaryError;
+    dictionaryResults.prepend(line);
+  } finally {
+    dictionarySearchBtn.disabled = false;
+  }
+});
+
 // "David FALCON" chat widget, at the user's explicit request: "En bas à
 // droite de l'interface, ajoute un ChatBot (ouvert par défaut) avec
 // l'icône de l'application... Il affiche un message de bienvenue...
@@ -2041,9 +2191,16 @@ let chatUserHasSpoken = false;
 // (horodatage + nombre aléatoire) couvre le cas contraire plutôt que de
 // faire planter le chat entier pour un identifiant qui n'a besoin que
 // d'être raisonnablement unique, jamais cryptographiquement sûr.
-const chatSessionId = (window.crypto && window.crypto.randomUUID)
-  ? window.crypto.randomUUID()
-  : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function newChatSessionId() {
+  return (window.crypto && window.crypto.randomUUID)
+    ? window.crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+// `let`, not `const` : le bouton de réinitialisation de la conversation
+// (#chatbot-reset-btn, voir plus bas) en régénère un nouveau, pour que la
+// discussion repartie soit tracée dans un nouveau fichier LOG_CHAT côté
+// backend/app.py plutôt que d'être ajoutée à la suite de la précédente.
+let chatSessionId = newChatSessionId();
 
 function escapeHtml(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -2272,6 +2429,23 @@ chatbotForm.addEventListener("submit", async (event) => {
     chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
   }
 });
+
+// Bouton icône "réinitialiser la conversation", à la demande explicite de
+// l'utilisateur : vide l'historique client (chatHistory), remet
+// chatUserHasSpoken à false pour que le message de bienvenue redevienne
+// re-traduisible sur changement de langue, en régénère un nouvel
+// identifiant de session (nouveau fichier LOG_CHAT côté backend) et
+// ré-affiche le message d'accueil.
+if (chatbotResetBtn) {
+  chatbotResetBtn.addEventListener("click", () => {
+    chatHistory = [];
+    chatUserHasSpoken = false;
+    chatSessionId = newChatSessionId();
+    chatbotInput.value = "";
+    renderChatWelcome();
+    chatbotInput.focus();
+  });
+}
 
 renderChatWelcome();
 

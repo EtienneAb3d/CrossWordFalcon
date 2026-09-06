@@ -82,15 +82,22 @@
         </select>
       </label>
 
-      <button type="submit" id="generate-btn" data-i18n="generateBtn">Générer la grille</button>
-      <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
-              data-i18n="attemptPreviewRevealBtn">Voir</button>
-      <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
-      <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
-      <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
-      <button type="button" id="solution-btn" class="toggle-btn" data-i18n="solutionBtn" hidden>Solution</button>
-      <button type="button" id="definitions-btn" class="toggle-btn" data-i18n="definitionsBtn" hidden>Définitions</button>
-      <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
+      <!-- Boutons d'action sur leur propre ligne, sous les combos d'options,
+           à la demande explicite de l'utilisateur — #form-actions prend
+           toute la largeur (flex-basis: 100%) donc passe à la ligne
+           suivante dans le flex-wrap du formulaire. -->
+      <div id="form-actions">
+        <button type="submit" id="generate-btn" data-i18n="generateBtn">Générer la grille</button>
+        <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
+                data-i18n="attemptPreviewRevealBtn">Voir</button>
+        <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
+        <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
+        <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
+        <button type="button" id="solution-btn" class="toggle-btn" data-i18n="solutionBtn" hidden>Solution</button>
+        <button type="button" id="definitions-btn" class="toggle-btn" data-i18n="definitionsBtn" hidden>Définitions</button>
+        <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
+        <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
+      </div>
     </form>
 
     <!-- Panneau "Actu Croisée" : toujours visible, jamais masqué par les
@@ -156,6 +163,26 @@
         <button type="button" id="library-next-btn" class="nav-btn"
                 data-i18n-aria="libraryNextBtn" disabled>▶</button>
       </div>
+    </section>
+
+    <!-- Panneau "Dictionnaire" : recherche accent/casse-insensible dans
+         <lang>_glosses.jsonl, liste les mots de la même racine. À la
+         demande explicite de l'utilisateur. Même groupe basculant que
+         #library / #attempt-preview / #result. -->
+    <section id="dictionary" hidden>
+      <div id="dictionary-header">
+        <form id="dictionary-form">
+          <input type="text" id="dictionary-input" autocomplete="off"
+                 data-i18n-placeholder="dictionaryInputPlaceholder">
+          <button type="submit" id="dictionary-search-btn"
+                  data-i18n="dictionarySearchBtn">Chercher</button>
+          <button type="button" id="dictionary-clear-btn" class="nav-btn"
+                  data-i18n="dictionaryClearBtn">Effacer</button>
+        </form>
+        <button type="button" id="dictionary-close-btn" class="nav-btn"
+                data-i18n-aria="dictionaryCloseBtn">✕</button>
+      </div>
+      <div id="dictionary-results"></div>
     </section>
 
     <section id="attempt-preview" hidden>
@@ -230,7 +257,18 @@
       <form id="chatbot-form">
         <input type="text" id="chatbot-input" data-i18n-placeholder="chatbotInputPlaceholder"
                autocomplete="off">
-        <button type="submit" id="chatbot-send-btn" data-i18n="chatbotSendBtn">Envoyer</button>
+        <button type="submit" id="chatbot-send-btn" class="chatbot-icon-btn"
+                data-i18n-aria="chatbotSendBtn" data-i18n-title="chatbotSendBtn">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <path d="M2.5 12 21 4l-7 17-3.2-6.8L2.5 12z" fill="currentColor"></path>
+          </svg>
+        </button>
+        <button type="button" id="chatbot-reset-btn" class="chatbot-icon-btn"
+                data-i18n-aria="chatbotResetBtn" data-i18n-title="chatbotResetBtn">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <path d="M12 5V2L7.5 6.5 12 11V7.5a4.5 4.5 0 1 1-4.5 4.5H5a7 7 0 1 0 7-7z" fill="currentColor"></path>
+          </svg>
+        </button>
       </form>
     </div>
   </div>

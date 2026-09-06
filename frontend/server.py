@@ -99,7 +99,7 @@ async def proxy_rss():
 @app.get("/api/scrapp")
 async def proxy_scrapp():
     """Miroir exact de proxy_rss ci-dessus, pour l'agrégation de grilles
-    (SCRAPP/, voir fetch_grid_links.py) — même panneau "Actu Croisée",
+    (SCRAPP/, voir scrapper/fetch_grid_links.py) — même panneau "Actu Croisée",
     à la demande explicite de l'utilisateur : "Ajoute les entrées de
     SCRAPP aux journal de la première page." """
     try:
@@ -251,6 +251,19 @@ async def proxy_library_get(grid_id: str):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.get("/api/dictionary")
+async def proxy_dictionary(request: Request):
+    """Relaie le bouton "Dictionnaire" de l'interface (voir script.js) vers
+    le back — la query string (`q`, `lang`) transmise telle quelle, même
+    schéma que proxy_library_list."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/dictionary", params=request.query_params)
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
     return JSONResponse(status_code=resp.status_code, content=resp.json())

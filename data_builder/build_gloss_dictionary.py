@@ -37,8 +37,8 @@ WORD changed, etc.) doesn't need to re-fetch several gigabytes per
 language from kaikki.org every time.
 
 Usage:
-    python3 build_gloss_dictionary.py fr
-    python3 build_gloss_dictionary.py en
+    python3 data_builder/build_gloss_dictionary.py fr
+    python3 data_builder/build_gloss_dictionary.py en
 """
 import argparse
 import json
@@ -46,7 +46,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 GLOSS_DIR = DATA_DIR / "gloss_dictionary"
 # Raw, full Kaikki/Wiktionary dump cache — see the module docstring's
 # "kept under DICS/" paragraph. A project-root sibling of CORPUS/ (build_
@@ -54,7 +54,7 @@ GLOSS_DIR = DATA_DIR / "gloss_dictionary"
 # purely local, gitignored working caches of upstream downloads, distinct
 # from GLOSS_DIR above, which stays the final, filtered, checked-into-git
 # output the rest of the pipeline actually reads.
-DICS_DIR = Path(__file__).resolve().parent / "DICS"
+DICS_DIR = Path(__file__).resolve().parent.parent / "DICS"
 
 # Kaikki source per language: (edition, word-language-name-in-that-edition).
 # English uses the primary (English-Wiktionary-sourced) extraction, already
