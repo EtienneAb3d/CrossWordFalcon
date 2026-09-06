@@ -136,6 +136,24 @@ MAX_CLUE_WORDS = 20
 # system prompt's own rule text.
 MAX_TITLE_WORDS = 3
 
+# generate_title asks the model for this many distinct candidate titles
+# (one per line) and picks one at random — same "generate N, pick one"
+# diversity trick _pick_clue already uses for clues. At the user's
+# explicit request: "Pour favoriser la diversité... générer 3 titres (un
+# par ligne) et tire une version au hasard."
+_TITLE_COUNT = 3
+
+# How many times generate_title re-asks the model when a whole response
+# yields no usable candidate at all: empty reply, only lead-in/header
+# lines, every candidate wrong-language, every candidate reusing an exact
+# grid word (see _TITLE_HOLLOW_WORDS / _title_grid_word_reuse further
+# below), or the HTTP call itself failed. At the user's explicit request
+# ("Si le titre est vide, demander une nouvelle génération"). Small — a
+# title is cosmetic, not worth many retries — and it only ever loops on a
+# genuinely unusable response, so a normal run still makes exactly one
+# call.
+_TITLE_RETRIES = 3
+
 # A wrapping quote pair the model sometimes puts around a title despite
 # rule 2 explicitly forbidding it (e.g. '"Vol de Nuit"') — stripped by
 # _clean_title. Deliberately narrow (quote characters only, not general
@@ -171,9 +189,10 @@ _TITLE_INTRO_RE = re.compile(
     r"^\s*(?:"
     r"bonjour|salut|hola|ciao|hallo|guten\s+tag|"
     r"je\s+(?:propose|sugg[eè]re|dirais|choisis|pense\s+[àa])|"
-    r"voici(?:\s+(?:le|un|mon)\s+titre)?|"
+    r"voici(?:\s+(?:le|un|mon|les|mes|des)\s+titres?)?|"
     r"le\s+titre\s+(?:est|pourrait\s+[êe]tre|serait)|"
-    r"un\s+titre\s+possible|mon\s+titre|"
+    r"les\s+titres\s+(?:sont|pourraient\s+[êe]tre)|"
+    r"un\s+titre\s+possible|mon\s+titre|mes\s+titres|"
     r"propongo|el\s+t[íi]tulo\s+(?:es|ser[íi]a)|aqu[íi]\s+(?:est[áa]|tienes)|"
     r"propongo\s+il\s+titolo|il\s+titolo\s+(?:[èe]|potrebbe\s+essere)|ecco(?:\s+il\s+titolo)?|"
     r"ich\s+schlage\s+vor|der\s+titel\s+(?:ist|lautet|k[öo]nnte)|hier\s+ist(?:\s+der\s+titel)?|"
@@ -196,45 +215,70 @@ _TITLE_TRAILING_COMMENT_RE = re.compile(
 )
 
 
-def _clean_title(content):
-    """Turns a raw LLM response into a usable title, or "" if nothing
-    usable survives — never raises, since a missing/blank title is a
-    purely cosmetic degrade for the caller (see LLMClueGenerator.
-    generate_title's own docstring), not worth treating as an error.
-    Walks the response line by line and returns the first line that
-    survives cleaning as non-empty (a model asked for a bare title
-    occasionally pads its answer with an extra line, or emits a lone
-    lead-in line like "Voici le titre :" followed by the real title on
-    the next line). Per line: strips a leading numbered/bulleted marker
+def _clean_title_line(line):
+    """Cleans ONE candidate line down to a bare title, or "" if nothing
+    usable survives. Strips, in order: a leading numbered/bulleted marker
     the same way _parse_response already does for clues
-    (_LEADING_MARKER_RE), then a leaked "Title: "-style label
-    (_TITLE_LABEL_RE), then a greeting/introductory phrase
-    (_TITLE_INTRO_RE — "Je propose : ", "Bonjour, ", …), then a wrapping
-    quote pair (_TITLE_QUOTES_RE), then a trailing explanation
-    (_TITLE_TRAILING_COMMENT_RE — ", car …", " (en référence à …)").
-    Returns the result exactly as the model wrote it from there,
+    (_LEADING_MARKER_RE), a leaked "Title: "-style label
+    (_TITLE_LABEL_RE), a greeting/introductory phrase (_TITLE_INTRO_RE —
+    "Je propose : ", "Bonjour, ", …, looped since the model can stack two
+    openers), a wrapping quote pair (_TITLE_QUOTES_RE), and a trailing
+    explanation (_TITLE_TRAILING_COMMENT_RE — ", car …", " (en référence
+    à …)"). Returns what's left exactly as the model wrote it,
     deliberately never truncated to MAX_TITLE_WORDS: see that constant's
-    own comment for why cutting a too-long title short was tried and then
-    explicitly reverted at the user's request (it can silently turn a
-    real, meaningful title into a fragment with no sense of its own)."""
-    for candidate_line in content.splitlines():
-        line = candidate_line.strip()
-        if not line:
+    own comment for why clamping a too-long title was tried and then
+    explicitly reverted (it can silently turn a real, meaningful title
+    into a fragment with no sense of its own)."""
+    line = line.strip()
+    if not line:
+        return ""
+    line = _LEADING_MARKER_RE.sub("", line).strip()
+    line = _TITLE_LABEL_RE.sub("", line).strip()
+    for _ in range(3):
+        stripped = _TITLE_INTRO_RE.sub("", line).strip()
+        if stripped == line:
+            break
+        line = stripped
+    line = _TITLE_QUOTES_RE.sub("", line).strip()
+    line = _TITLE_TRAILING_COMMENT_RE.sub("", line).strip()
+    line = _TITLE_QUOTES_RE.sub("", line).strip()
+    return line
+
+
+def _clean_titles(content):
+    """Every usable candidate title from a raw multi-line LLM response,
+    in order, case-insensitively de-duplicated — generate_title asks for
+    _TITLE_COUNT titles (one per line) and picks one at random from this
+    list. Never raises: an empty list just means the caller falls back to
+    a title-less grid (see generate_title's own docstring). A model told
+    to output N lines still sometimes pads with a lone lead-in line
+    ("Voici les titres :") or a blank line; those clean down to "" and
+    are dropped."""
+    titles = []
+    seen = set()
+    for raw_line in content.splitlines():
+        cleaned = _clean_title_line(raw_line)
+        if not cleaned:
             continue
-        line = _LEADING_MARKER_RE.sub("", line).strip()
-        line = _TITLE_LABEL_RE.sub("", line).strip()
-        # Loop: the model can stack two openers ("Bonjour, voici : X").
-        for _ in range(3):
-            stripped = _TITLE_INTRO_RE.sub("", line).strip()
-            if stripped == line:
-                break
-            line = stripped
-        line = _TITLE_QUOTES_RE.sub("", line).strip()
-        line = _TITLE_TRAILING_COMMENT_RE.sub("", line).strip()
-        line = _TITLE_QUOTES_RE.sub("", line).strip()
-        if line:
-            return line
-    return ""
+        # A real title never ends with a bare colon — a line that still
+        # does after cleaning is a leftover list header ("Voici les
+        # titres :", "Titres :") the intro regex didn't fully catch.
+        if cleaned.rstrip().endswith(":"):
+            continue
+        key = cleaned.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        titles.append(cleaned)
+    return titles
+
+
+def _clean_title(content):
+    """The single-title convenience wrapper kept for any caller/test that
+    still wants one: the first usable candidate from _clean_titles, or ""
+    ."""
+    titles = _clean_titles(content)
+    return titles[0] if titles else ""
 
 
 # Even a modest batch (5-6 words) was unreliable on the small local model —
@@ -483,6 +527,84 @@ _NON_LATIN_RE = re.compile(
 # mentioning "château" shouldn't be flagged just because it contains the
 # letters of "chat".
 _WORD_TOKEN_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
+
+# "Mots creux" — function words a grid title may contain even when the
+# same word happens to be an answer in the grid: articles, prepositions,
+# conjunctions, demonstratives, possessives, small cardinals. Anything
+# else in a title that matches a grid word EXACTLY (accent- and
+# case-insensitively, whole token) gets that candidate rejected in favour
+# of another / a re-ask, at the user's explicit request ("Si un titre...
+# contient un mot exacte (sans accent ni casse) de la grille (autre qu'un
+# mot creux comme un, une, deux, ce, cela, etc), en choisir un autre, ou
+# en redemander un autre"). The prompt already forbids grid-word reuse;
+# this is the code-level guarantee the small model doesn't provide on its
+# own — the same "prompt says it, a filter enforces it" split already
+# used for _contains_target_word in clue generation. Stored accent-
+# stripped/lowercased via _normalize (the exact form grid words are
+# compared in).
+_TITLE_HOLLOW_WORDS = {
+    "fr": {
+        "le", "la", "les", "l", "un", "une", "de", "des", "du", "d", "au",
+        "aux", "a", "et", "ou", "ni", "mais", "donc", "or", "car", "ce",
+        "cet", "cette", "ces", "ca", "cela", "ceci", "celui", "celle",
+        "ceux", "celles", "mon", "ma", "mes", "ton", "ta", "tes", "son",
+        "sa", "ses", "notre", "nos", "votre", "vos", "leur", "leurs", "en",
+        "y", "dans", "sur", "sous", "vers", "chez", "par", "pour", "avec",
+        "sans", "entre", "contre", "selon", "ne", "pas", "plus", "si",
+        "que", "qui", "dont", "quel", "quelle", "quels", "quelles",
+        "zero", "deux", "trois", "quatre", "cinq", "six", "sept", "huit",
+        "neuf", "dix",
+    },
+    "en": {
+        "the", "a", "an", "of", "and", "or", "nor", "but", "so", "for",
+        "yet", "to", "in", "on", "at", "by", "up", "as", "if", "no", "not",
+        "with", "from", "into", "onto", "over", "under", "this", "that",
+        "these", "those", "my", "your", "his", "her", "its", "our",
+        "their", "one", "two", "three", "four", "five", "six", "seven",
+        "eight", "nine", "ten",
+    },
+    "de": {
+        "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer",
+        "eines", "einem", "einen", "und", "oder", "aber", "doch", "nicht",
+        "kein", "keine", "dieser", "diese", "dieses", "jener", "jene",
+        "mein", "dein", "sein", "ihr", "unser", "euer", "in", "an", "auf",
+        "bei", "mit", "nach", "seit", "von", "zu", "aus", "zum", "zur",
+        "im", "am", "eins", "zwei", "drei", "vier", "funf", "sechs",
+        "sieben", "acht", "neun", "zehn",
+    },
+    "es": {
+        "el", "la", "los", "las", "un", "una", "unos", "unas", "de",
+        "del", "al", "a", "y", "o", "u", "ni", "pero", "sino", "que", "se",
+        "lo", "le", "les", "este", "esta", "estos", "estas", "ese", "esa",
+        "eso", "mi", "tu", "su", "nuestro", "vuestro", "en", "con", "sin",
+        "por", "para", "sobre", "bajo", "entre", "hacia", "no", "mas",
+        "muy", "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete",
+        "ocho", "nueve", "diez",
+    },
+    "it": {
+        "il", "lo", "la", "i", "gli", "le", "un", "uno", "una", "di",
+        "del", "della", "dei", "delle", "a", "al", "alla", "e", "o", "ne",
+        "che", "si", "questo", "questa", "quello", "quella", "mio", "tuo",
+        "suo", "nostro", "vostro", "in", "con", "su", "per", "tra", "fra",
+        "non", "piu", "molto", "due", "tre", "quattro", "cinque", "sei",
+        "sette", "otto", "nove", "dieci",
+    },
+}
+_TITLE_HOLLOW_WORDS = {
+    lang: {_normalize(w) for w in words}
+    for lang, words in _TITLE_HOLLOW_WORDS.items()
+}
+
+
+def _title_grid_word_reuse(title, grid_norm, hollow):
+    """The set of grid words a title reuses verbatim: each title token
+    accent-stripped/lowercased (via _normalize) and matched EXACTLY (no
+    stemming — "marins" does NOT match a grid "marin") against
+    `grid_norm`, minus `hollow` (function words a title may always
+    contain). Empty set == the title is clean. `grid_norm` / `hollow` are
+    passed already normalized so this stays cheap to call per candidate."""
+    tokens = {_normalize(t) for t in _WORD_TOKEN_RE.findall(title)}
+    return (tokens & grid_norm) - hollow
 
 # A real, observed failure mode `_NON_LATIN_RE` can't catch (still Latin
 # script) and the length cap can't catch either (can be short): the model
@@ -846,19 +968,24 @@ class LLMClueGenerator:
 
     def generate_title(self, word_entries, language="fr", timeout=DEFAULT_TIMEOUT,
                         cancel_event=None):
-        """Asks the LLM for a short (see MAX_TITLE_WORDS), catchy title for
-        the whole grid, from the list of every one of its solution words —
-        called once per grid, at the user's explicit request, right after
-        every clue is already generated (see backend/app.py's
+        """Asks the LLM for _TITLE_COUNT short (see MAX_TITLE_WORDS),
+        catchy candidate titles for the whole grid (one per line), from
+        the list of every one of its solution words, and returns ONE of
+        them chosen at random — "generate N, pick one" for diversity, at
+        the user's explicit request ("Pour favoriser la diversité...
+        générer 3 titres... et tire une version au hasard"), the same
+        trick _pick_clue uses for clues. Called once per grid, right
+        after every clue is already generated (see backend/app.py's
         _run_generate_job) and shown above the finished, playable grid
-        (frontend/static/script.js's displayFinalGrid). Unlike generate()
-        above, this is a single best-effort attempt with no retry loop and
-        no per-call LOG_LLM/ record: a title is a purely cosmetic addition,
-        not worth tripling the number of LLM round-trips per grid over (a
-        real cost — see clue generation's own documented per-word timing)
-        the way a missing clue would be. Any failure here — a connection
-        error, an empty/unusable/wrong-language response — simply returns
-        "" rather than raising; the caller treats that exactly like a
+        (frontend/static/script.js's displayFinalGrid). Re-asks the model
+        up to _TITLE_RETRIES times, but ONLY when a whole response yields
+        nothing usable at all (empty reply, only header/lead-in lines,
+        every candidate wrong-language, or the HTTP call failing) — at the
+        user's request "Si le titre est vide, demander une nouvelle
+        génération"; a normal run still makes exactly one call. There is
+        no per-call LOG_LLM/ record (unlike generate()): a title is a
+        purely cosmetic addition. If every attempt fails, returns ""
+        rather than raising; the caller treats that exactly like a
         title-less grid generated before this feature existed (see
         backend/grid_store.py), never as a reason to fail the request.
 
@@ -874,109 +1001,212 @@ class LLMClueGenerator:
         if not words:
             return ""
         language_name = LANGUAGE_NAMES.get(language, language)
-        # Rewritten at the user's explicit request after the small local
-        # model returned "Titre de mots croisés en français" — it echoed a
-        # DESCRIPTION of the task instead of inventing a title. The fix
-        # follows this module's own established pattern for small models
-        # (see DIFFICULTY_STYLE's comment): a concrete worked example is
-        # far more reliable than an adjective list, and the exact observed
-        # failure is now named and shown as an explicit BAD example.
+        # Normalized once for the per-candidate grid-word-reuse check
+        # (see _title_grid_word_reuse). A grid word that is itself a
+        # "mot creux" is dropped from grid_norm too, so a hollow answer
+        # (e.g. the grid literally contains "UNE") never causes a
+        # rejection — the check only ever fires on a content word.
+        hollow = _TITLE_HOLLOW_WORDS.get(language, set())
+        grid_norm = {_normalize(w) for w in words} - hollow
+        # History: first rewritten (after "Titre de mots croisés en
+        # français") to carry three concrete worked GOOD examples
+        # (words -> title), following this module's usual small-model
+        # pattern. That backfired badly here — Qwen3-4B simply COPIED the
+        # first example's title ("The salty horizon"), emitting
+        # "L'horizon salé" for every grid regardless of its words (the
+        # string was also the most-repeated token in the prompt, since
+        # the WRONG-answers block quoted it three more times). Titles are
+        # short and creative, so a tiny model latches onto any literal
+        # title string it sees far more than it does for a full-sentence
+        # clue. Fix: NO concrete good-example title strings at all — only
+        # an abstract shape description plus a "build it from THESE grid
+        # words" construction step, plus a higher per-request temperature
+        # (below) so the output actually varies with the input.
         system_prompt = (
-            "You invent the TITLE of a crossword puzzle — a short name, "
-            "like the title of a book, a song, or a film. You are given "
-            "the list of every answer word in the grid.\n\n"
-            f"Output ONLY the title, 1 to {MAX_TITLE_WORDS} words, entirely "
-            f"in {language_name}, loosely evoking the words or their shared "
-            "theme if one is apparent.\n\n"
-            "Your ENTIRE reply is the title itself and nothing else. The very "
-            "first character you write is the first character of the title. "
-            "No greeting, no preamble, no comment before or after it.\n\n"
+            "You invent TITLES for a crossword puzzle — short names, like "
+            "the title of a book, a song, or a film. You are given the "
+            "list of every answer word in the grid.\n\n"
+            f"Output exactly {_TITLE_COUNT} DIFFERENT titles, ONE PER "
+            f"LINE. Each title is 1 to {MAX_TITLE_WORDS} words, entirely "
+            f"in {language_name}, loosely evoking the words or their "
+            "shared theme if one is apparent. The "
+            f"{_TITLE_COUNT} must be genuinely different from each other "
+            "— a different key word or a different angle each time, not "
+            "near-duplicates.\n\n"
+            f"Your ENTIRE reply is those {_TITLE_COUNT} lines and nothing "
+            "else. Each line's first character is that title's first "
+            "character. No numbering, no bullet, no blank line between "
+            "them, no greeting, no preamble, no comment before or after.\n\n"
             "NEVER do any of these:\n"
-            "- Describe the task or explain yourself. Your reply must NOT "
+            f"- Give fewer than {_TITLE_COUNT} lines, or repeat the same "
+            "title twice.\n"
+            "- Describe the task or explain yourself. A line must NOT "
             "mean things like \"a crossword title\", \"title in "
             f"{language_name}\", \"here is a title\", \"puzzle name\" — "
             "that is a description, not a title.\n"
-            "- Start with a greeting or an introductory phrase such as "
-            "\"Bonjour\", \"Je propose\", \"Voici\", \"Voici le titre\", "
-            "\"Le titre est\", \"Un titre possible\", \"Je suggère\", "
-            "\"Here is\", \"How about\" — or any equivalent in "
-            f"{language_name}. Write the bare title with no such lead-in.\n"
-            "- Add any comment, justification or explanation after the "
+            "- Start a line with a greeting or an introductory phrase "
+            "such as \"Bonjour\", \"Je propose\", \"Voici\", \"Voici les "
+            "titres\", \"Le titre est\", \"Un titre possible\", \"Je "
+            "suggère\", \"Here is\", \"How about\" — or any equivalent in "
+            f"{language_name}. Write each bare title with no such "
+            "lead-in.\n"
+            "- Add any comment, justification or explanation after a "
             "title (\"car il évoque…\", \"parce que…\", \"(en référence "
-            "à…)\"). Stop writing the moment the title is complete.\n"
+            "à…)\"). Stop each line the moment its title is complete.\n"
             "- Output a whole sentence, a definition, or a list of the "
             "grid words.\n"
             "- Add quotes, a trailing period, or a label such as "
             "\"Title:\" / \"Titre :\".\n"
             f"- Write in any language other than {language_name}, even if "
             "some answers are foreign names.\n"
-            "- Reuse any grid word below, in any form (singular/plural, "
-            "conjugated, accented or not). Only tiny function words "
-            "(a, the, of, in, and their equivalents) may appear.\n\n"
-            "EXAMPLES — these are written in English ONLY to show the "
-            "SHAPE of a good answer (a short evocative name); yours must "
-            f"be original, in {language_name}, and fit YOUR own word "
-            "list:\n"
-            "  words: sea, boat, wave, sailor, salt   -> The salty horizon\n"
-            "  words: piano, note, silence, rhythm    -> After the silence\n"
-            "  words: snow, fire, wool, night, winter -> Frost and embers\n"
-            "Do NOT copy those example titles. Do NOT keep them in "
-            f"English — translate the spirit into {language_name}.\n"
-            "WRONG answers, never do any of these:\n"
-            f"  words: (anything)  ->  Title of a crossword in {language_name}\n"
-            "  (describes the task instead of naming the puzzle)\n"
-            "  words: sea, boat, wave  ->  Je propose : « L'horizon salé »\n"
-            "  (a lead-in phrase and quotes — the reply must be just "
-            "L'horizon salé)\n"
-            "  words: sea, boat, wave  ->  L'horizon salé, car il évoque "
-            "la mer.\n"
-            "  (a trailing explanation — stop after the title)\n"
+            "- MOST IMPORTANT RULE: never put a grid word into a title. "
+            "Not the word itself, not its singular/plural, not another "
+            "tense of it, not it with or without an accent. If a grid "
+            "word (or any form of it) appears in your title, that title "
+            "is rejected. Only tiny function words (a, the, of, in, and "
+            "their equivalents) are allowed to coincide.\n\n"
+            "SHAPE of a good title: 2 or 3 words, an evocative noun "
+            "phrase or a small play on words — an image or a mood, never "
+            "a sentence and never a definition. (No sample titles are "
+            "given on purpose: any example would just get copied. Invent "
+            "your own.)\n\n"
+            "HOW TO BUILD THEM:\n"
+            "1. Read the grid words in the user message. Note the mood, "
+            "place, season, time of day, or action they bring to mind.\n"
+            f"2. Build {_TITLE_COUNT} short names in "
+            f"{language_name} that EVOKE that mood/place/idea WITHOUT "
+            "naming any of the grid words. Say it sideways: a related "
+            "word, a broader word, a metaphor. Each of the "
+            f"{_TITLE_COUNT} anchored on a DIFFERENT idea. A title that "
+            "could sit on top of any random grid is also wrong — it must "
+            "clearly fit THESE words while never containing one.\n"
+            "3. Before writing each line, scan it word by word against "
+            "the grid list. If any word matches, replace it with a "
+            "synonym or a related image and scan again.\n\n"
+            "WRONG answers, never produce anything like these:\n"
+            "- \"Titre de mots croisés\", \"Titre de la grille\", "
+            f"\"{language_name} crossword\" — that names the task, not "
+            "this puzzle.\n"
+            "- Any line opening with \"Je propose\", \"Voici les "
+            "titres\", \"Bonjour\" or the like — each line's first "
+            "character is its title's first character.\n"
+            "- A title followed by \", car…\" / \"(en référence à…)\" — "
+            "stop the instant the title is complete.\n"
+            "- A title with no visible link to the grid words below.\n"
+            "- A title that contains any grid word from the list below "
+            "(this is the rule broken most often — check every line "
+            "against the list before sending).\n"
         )
-        user_message = "Grid words: " + ", ".join(words) + "\nTitle:"
-        try:
-            response = httpx.post(
-                self.base_url,
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message},
-                    ],
-                    "temperature": TEMPERATURE,
-                    "max_tokens": REASONING_TOKEN_BUDGET + 30,
-                    # A per-request reinforcement of the same intent as
-                    # LLAMA_CHAT_TEMPLATE_KWARGS/SGLANG_CHAT_TEMPLATE_KWARGS's
-                    # own enable_thinking:false (run_llm.sh/run_sglang.sh) —
-                    # harmless for a server that doesn't recognize this field
-                    # at all (verified live for llama_cpp.server: its own
-                    # request schema has no `model_config = {"extra":
-                    # "forbid"}`, so Pydantic's default behavior silently
-                    # ignores it), but a real, request-level "none" for a
-                    # server that does — confirmed live earlier in this
-                    # project's own SGLang investigation: SGLang accepts
-                    # this exact field and only "none" (not "low") actually
-                    # disables thinking for a Qwen3 chat template.
-                    "reasoning_effort": "none",
-                },
-                timeout=timeout,
+        user_message = (
+            "Grid words: " + ", ".join(words) + f"\n{_TITLE_COUNT} titles, "
+            "one per line:"
+        )
+        # Retry only when a whole response is unusable — an empty reply,
+        # only header/lead-in lines, every candidate wrong-language, or
+        # the HTTP call itself failing. At the user's explicit request
+        # ("Si le titre est vide, demander une nouvelle génération").
+        for attempt in range(_TITLE_RETRIES):
+            if cancel_event is not None and cancel_event.is_set():
+                raise GenerationCancelled()
+            try:
+                response = httpx.post(
+                    self.base_url,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ],
+                        # Deliberately higher than the shared TEMPERATURE
+                        # (0.4, tuned for clue accuracy): a title is
+                        # creative, not factual, and the small model was
+                        # collapsing to one constant output ("L'horizon
+                        # salé") for every grid. More randomness here makes
+                        # the title actually track the grid words — and
+                        # also makes a retry likely to produce something
+                        # different from the attempt that just failed.
+                        "temperature": 0.9,
+                        # Room for _TITLE_COUNT short lines (reasoning
+                        # itself is disabled by reasoning_effort:none, so
+                        # this is essentially just the answer budget).
+                        "max_tokens": REASONING_TOKEN_BUDGET + 60,
+                        # A per-request reinforcement of the same intent as
+                        # LLAMA_CHAT_TEMPLATE_KWARGS/SGLANG_CHAT_TEMPLATE_KWARGS's
+                        # own enable_thinking:false (run_llm.sh/run_sglang.sh) —
+                        # harmless for a server that doesn't recognize this
+                        # field at all (verified live for llama_cpp.server:
+                        # its own request schema has no `model_config =
+                        # {"extra": "forbid"}`, so Pydantic's default
+                        # behavior silently ignores it), but a real,
+                        # request-level "none" for a server that does —
+                        # confirmed live earlier in this project's own
+                        # SGLang investigation: SGLang accepts this exact
+                        # field and only "none" (not "low") actually
+                        # disables thinking for a Qwen3 chat template.
+                        "reasoning_effort": "none",
+                    },
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+            except httpx.HTTPError as e:
+                logger.warning(
+                    "title generation attempt %d/%d failed (%s, model=%r): %s",
+                    attempt + 1, _TITLE_RETRIES, self.base_url, self.model, e,
+                )
+                continue
+            logger.info(
+                "title generation attempt %d/%d: raw LLM response: %r",
+                attempt + 1, _TITLE_RETRIES, content,
             )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-        except httpx.HTTPError as e:
-            logger.warning(
-                "title generation failed (%s, model=%r): %s", self.base_url, self.model, e,
+            candidates = _clean_titles(_strip_reasoning(content))
+            # A title is short, so _detect_wrong_language is only a weak
+            # signal here — but a clearly-wrong-language candidate is
+            # still dropped rather than risk showing it (same as the
+            # single-title version did).
+            kept = [t for t in candidates if not _detect_wrong_language(t, language)]
+            if len(kept) != len(candidates):
+                logger.warning(
+                    "title generation: discarded wrong-language candidate(s): %r",
+                    [t for t in candidates if t not in kept],
+                )
+            # Reject any candidate that reuses an exact grid word (other
+            # than a "mot creux") — at the user's explicit request,
+            # "en choisir un autre" (another candidate this same attempt)
+            # "ou en redemander un autre" (a fresh attempt if none is
+            # clean). The prompt forbids this too; the model just doesn't
+            # obey reliably.
+            clean = []
+            for t in kept:
+                reused = _title_grid_word_reuse(t, grid_norm, hollow)
+                if reused:
+                    logger.info(
+                        "title generation attempt %d/%d: rejecting %r "
+                        "(reuses grid word(s): %s)",
+                        attempt + 1, _TITLE_RETRIES, t, ", ".join(sorted(reused)),
+                    )
+                else:
+                    clean.append(t)
+            if clean:
+                # "Generate N, pick one at random" — the same diversity
+                # trick _pick_clue uses for clues.
+                title = random.choice(clean)
+                logger.info(
+                    "title generation attempt %d/%d: candidates=%r chosen=%r",
+                    attempt + 1, _TITLE_RETRIES, clean, title,
+                )
+                return title
+            logger.info(
+                "title generation attempt %d/%d: no usable candidate "
+                "(empty / wrong-language / all reuse a grid word), retrying",
+                attempt + 1, _TITLE_RETRIES,
             )
-            return ""
-        logger.info("title generation: raw LLM response: %r", content)
-        title = _clean_title(_strip_reasoning(content))
-        if title and _detect_wrong_language(title, language):
-            logger.warning(
-                "title generation: %r looks like the wrong language, discarding", title,
-            )
-            return ""
-        logger.info("title generation: %r", title)
-        return title
+        logger.info(
+            "title generation: no usable candidate after %d attempts, returning no title",
+            _TITLE_RETRIES,
+        )
+        return ""
 
     @staticmethod
     def _build_examples_block(entry, language, difficulty):
