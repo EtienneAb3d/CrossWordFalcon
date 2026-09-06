@@ -1387,7 +1387,36 @@ function setVirtualKeyboardDirection(direction) {
   virtualKeyboardDownBtn.classList.toggle("active", direction === "down");
 }
 
+function insertAtCursor(input, text) {
+  // Insère `text` à la position du curseur (en remplaçant la sélection
+  // s'il y en a une) et laisse le curseur juste après. Sur un <input
+  // type="text"> ayant le focus, selectionStart/End sont toujours des
+  // nombres ; le repli sur value.length ne sert que par prudence.
+  const start = input.selectionStart == null ? input.value.length : input.selectionStart;
+  const end = input.selectionEnd == null ? input.value.length : input.selectionEnd;
+  input.value = input.value.slice(0, start) + text + input.value.slice(end);
+  const pos = start + text.length;
+  input.setSelectionRange(pos, pos);
+  // Au cas où quelque chose écouterait "input" (aucun écouteur
+  // aujourd'hui — le formulaire du dictionnaire n'agit qu'à la
+  // soumission — mais sans coût et évite une surprise plus tard).
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
 function typeVirtualLetter(letter) {
+  // Le clavier virtuel sert aussi à saisir une recherche dans le
+  // dictionnaire, à la demande explicite de l'utilisateur. Quand
+  // #dictionary-input a le focus, on écrit dedans (en minuscules,
+  // comme une frappe physique dans ce même champ — la recherche est de
+  // toute façon insensible à la casse et aux accents côté backend)
+  // plutôt que dans la grille. Le focus est préservé par le
+  // `mousedown`/preventDefault posé sur chaque touche (voir
+  // buildVirtualKeyboard) : sans lui, le clic sur le bouton retirerait
+  // le focus du champ avant même d'arriver ici.
+  if (document.activeElement === dictionaryInput) {
+    insertAtCursor(dictionaryInput, letter.toLowerCase());
+    return;
+  }
   // Mêmes gardes que handleKeydown() : une lettre cliquée quand aucune
   // case n'est sélectionnée, ou que la solution est affichée, ne fait
   // rien plutôt que d'écrire dans le vide ou d'écraser la solution.
@@ -1414,6 +1443,11 @@ function buildVirtualKeyboard() {
       key.type = "button";
       key.className = "virtual-keyboard-key";
       key.textContent = letter;
+      // Empêche le clic de retirer le focus d'un champ texte (le champ
+      // de recherche du dictionnaire) : sans ça, typeVirtualLetter ne
+      // verrait plus #dictionary-input comme document.activeElement.
+      // Inoffensif pour la grille, qui ne dépend pas du focus.
+      key.addEventListener("mousedown", (e) => e.preventDefault());
       key.addEventListener("click", () => typeVirtualLetter(letter));
       rowEl.appendChild(key);
     }
@@ -1422,6 +1456,12 @@ function buildVirtualKeyboard() {
 }
 
 buildVirtualKeyboard();
+// Comme les touches lettres : un clic sur une flèche de sens ne doit pas
+// retirer le focus du champ de recherche du dictionnaire (les flèches
+// n'ont aucun effet sur la saisie dictionnaire, mais un clic accidentel
+// ne doit pas casser la frappe en cours).
+virtualKeyboardAcrossBtn.addEventListener("mousedown", (e) => e.preventDefault());
+virtualKeyboardDownBtn.addEventListener("mousedown", (e) => e.preventDefault());
 virtualKeyboardAcrossBtn.addEventListener("click", () => setVirtualKeyboardDirection("across"));
 virtualKeyboardDownBtn.addEventListener("click", () => setVirtualKeyboardDirection("down"));
 // La grille (ou tout autre contenu en bas de page) était masquée par le

@@ -27,6 +27,31 @@ export LLM_PORT="${LLM_PORT:-3002}"
 # frontend/server.py to know where to proxy /api/* requests.
 export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_PORT}"
 
+# --- Optional HTTPS on the front end -----------------------------------
+# When BOTH cert and key point at readable PEM files, run_Falcon.sh
+# starts a SECOND uvicorn instance for the front end that terminates TLS
+# itself, on CROSSWORDFALCON_FRONTEND_HTTPS_PORT — in addition to (never
+# instead of) the plain-HTTP instance on CROSSWORDFALCON_FRONTEND_PORT,
+# which keeps serving whatever already forwards to it. Nothing here
+# touches Apache or any system-wide config; TLS is terminated by this
+# project's own front-end process and nothing else.
+#
+# A high port (3443, not 443) on purpose — no root / setcap / privileged
+# bind needed, and it stays out of the way of any standard :443 routing
+# the host may already do. Put a 443 -> 3443 forward in front of it the
+# same way :80 already reaches the plain front end, if you want the site
+# on the default HTTPS port.
+#
+# The cert here is a real Let's Encrypt certificate for
+# falcon.cubaix.com, obtained rootless with certbot's --webroot plugin
+# pointed at frontend/static/ (the running front end already serves
+# /.well-known/acme-challenge/... from there). certbot lives in .venv,
+# its state lives under the project's own letsencrypt/ dir (gitignored),
+# and renew-https.sh renews + restarts only this project's front end.
+# export CROSSWORDFALCON_FRONTEND_HTTPS_PORT="3443"
+# export CROSSWORDFALCON_TLS_CERTFILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/letsencrypt/config/live/falcon.cubaix.com/fullchain.pem"
+# export CROSSWORDFALCON_TLS_KEYFILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/letsencrypt/config/live/falcon.cubaix.com/privkey.pem"
+
 # backend/crossword_gen.py's grid generator tries several independent
 # black-square patterns in parallel (separate processes) at each black-cell
 # ratio step, rather than one at a time — the machine is typically far from

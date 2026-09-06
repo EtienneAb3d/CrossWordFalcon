@@ -140,6 +140,29 @@ h1 {
   outline: none;
 }
 
+/* Lien vers le dépôt GitHub, en haut à droite du header (dernier élément
+   de la ligne flex, après le badge d'info). Discret par défaut, comme
+   le badge d'info, et mis en avant au survol / focus clavier. */
+#github-link {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  color: #555;
+}
+
+#github-link:hover,
+#github-link:focus-visible {
+  color: var(--accent);
+  outline: none;
+}
+
+#github-link svg {
+  display: block;
+}
+
 /* Hidden by default; shown on hover/keyboard-focus of the badge itself —
    a pure-CSS tooltip, no JS needed to open/close it (script.js only fills
    in its text once, from /api/system_info, see the style-guide SKILL). */

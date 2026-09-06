@@ -24,6 +24,25 @@ fi
 BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
 FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
 
+# Optional HTTPS front end (see env.sh / env_default.sh). A SECOND uvicorn
+# instance for the same frontend.server:app, terminating TLS itself on a
+# high port (3443 by default — no privileged bind, no Apache), alongside
+# the plain-HTTP instance above which is left exactly as-is. Enabled only
+# when both PEM files are actually readable; otherwise this whole block is
+# a no-op and run_Falcon.sh behaves exactly as before.
+FRONTEND_HTTPS_PORT="${CROSSWORDFALCON_FRONTEND_HTTPS_PORT:-3443}"
+TLS_CERTFILE="${CROSSWORDFALCON_TLS_CERTFILE:-}"
+TLS_KEYFILE="${CROSSWORDFALCON_TLS_KEYFILE:-}"
+HTTPS_ENABLED=0
+if [ -n "$TLS_CERTFILE" ] && [ -n "$TLS_KEYFILE" ] \
+   && [ -r "$TLS_CERTFILE" ] && [ -r "$TLS_KEYFILE" ]; then
+    HTTPS_ENABLED=1
+elif [ -n "$TLS_CERTFILE$TLS_KEYFILE" ]; then
+    echo "Warning: TLS cert/key configured but not readable — HTTPS front end disabled."
+    echo "         cert: ${TLS_CERTFILE:-<unset>}"
+    echo "         key : ${TLS_KEYFILE:-<unset>}"
+fi
+
 # Kills a PID's entire process tree (its children first, recursively, then
 # the PID itself) instead of just the PID alone. Needed because a backend
 # process stopped mid-generation can have live `ProcessPoolExecutor`
@@ -76,6 +95,9 @@ stop_port() {
 
 stop_port "$BACKEND_PORT"
 stop_port "$FRONTEND_PORT"
+if [ "$HTTPS_ENABLED" -eq 1 ]; then
+    stop_port "$FRONTEND_HTTPS_PORT"
+fi
 
 echo "Starting back end on port $BACKEND_PORT..."
 # `nohup` alone only ignores SIGHUP — it doesn't detach from the shell's job
@@ -97,6 +119,19 @@ nohup uvicorn frontend.server:app --host 0.0.0.0 --port "$FRONTEND_PORT" < /dev/
 FRONTEND_PID=$!
 disown "$FRONTEND_PID"
 
+FRONTEND_HTTPS_PID=""
+if [ "$HTTPS_ENABLED" -eq 1 ]; then
+    echo "Starting middleware (HTTPS) on port $FRONTEND_HTTPS_PORT..."
+    # Same app, same host binding — just this instance terminates TLS with
+    # the Let's Encrypt cert. --ssl-certfile is the full chain (leaf +
+    # intermediates), --ssl-keyfile the private key.
+    nohup uvicorn frontend.server:app --host 0.0.0.0 --port "$FRONTEND_HTTPS_PORT" \
+        --ssl-certfile "$TLS_CERTFILE" --ssl-keyfile "$TLS_KEYFILE" \
+        < /dev/null > "$LOG_DIR/frontend-https.log" 2>&1 &
+    FRONTEND_HTTPS_PID=$!
+    disown "$FRONTEND_HTTPS_PID"
+fi
+
 LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || (hostname -I 2>/dev/null | awk '{print $1}') || true)
 
 echo "Back end started (pid $BACKEND_PID, log: $BACKEND_LOG)"
@@ -105,7 +140,11 @@ echo "UI available at http://127.0.0.1:$FRONTEND_PORT (this machine)"
 if [ -n "$LAN_IP" ]; then
     echo "               and http://$LAN_IP:$FRONTEND_PORT (from other machines on the network)"
 fi
-echo "To stop the servers, rerun this script or run: kill $BACKEND_PID $FRONTEND_PID"
+if [ -n "$FRONTEND_HTTPS_PID" ]; then
+    echo "Middleware (HTTPS) started (pid $FRONTEND_HTTPS_PID, log: $LOG_DIR/frontend-https.log)"
+    echo "               and https://127.0.0.1:$FRONTEND_HTTPS_PORT / https://falcon.cubaix.com:$FRONTEND_HTTPS_PORT"
+fi
+echo "To stop the servers, rerun this script or run: kill $BACKEND_PID $FRONTEND_PID${FRONTEND_HTTPS_PID:+ $FRONTEND_HTTPS_PID}"
 echo
 echo "Note: clue generation uses the local LLM server by default (see env.sh)."
 echo "If it isn't running yet, start it with: ./run_llm.sh"

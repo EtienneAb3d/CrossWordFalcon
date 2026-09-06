@@ -155,35 +155,86 @@ _TITLE_LABEL_RE = re.compile(
     r"^\s*(?:title|titre|titel|título|titolo)\s*:\s*", re.IGNORECASE,
 )
 
+# A leading greeting / introductory phrase the small local model sometimes
+# prepends despite the system prompt forbidding it ("Je propose : ...",
+# "Voici le titre : ...", "Le titre est ...", "Bonjour, ...", "Here is
+# ..."). Stripped by _clean_title after _TITLE_LABEL_RE. Kept deliberately
+# to a fixed, well-known set of lead-in openers across the 5 supported
+# languages (plus English, which the model drifts into) rather than a
+# broad "any words then a colon" rule — a real, valid title can itself
+# open with an ordinary word, and only an explicit opener list can tell
+# "Je propose : X" (leak) apart from a genuine title that happens to
+# start similarly. The trailing separator (":", "-", "—", ",") is
+# required so a title beginning with one of these words but no separator
+# (unlikely, but possible) is never wrongly truncated.
+_TITLE_INTRO_RE = re.compile(
+    r"^\s*(?:"
+    r"bonjour|salut|hola|ciao|hallo|guten\s+tag|"
+    r"je\s+(?:propose|sugg[eè]re|dirais|choisis|pense\s+[àa])|"
+    r"voici(?:\s+(?:le|un|mon)\s+titre)?|"
+    r"le\s+titre\s+(?:est|pourrait\s+[êe]tre|serait)|"
+    r"un\s+titre\s+possible|mon\s+titre|"
+    r"propongo|el\s+t[íi]tulo\s+(?:es|ser[íi]a)|aqu[íi]\s+(?:est[áa]|tienes)|"
+    r"propongo\s+il\s+titolo|il\s+titolo\s+(?:[èe]|potrebbe\s+essere)|ecco(?:\s+il\s+titolo)?|"
+    r"ich\s+schlage\s+vor|der\s+titel\s+(?:ist|lautet|k[öo]nnte)|hier\s+ist(?:\s+der\s+titel)?|"
+    r"here\s+is(?:\s+(?:a|the|my)\s+title)?|how\s+about|i\s+(?:propose|suggest)|my\s+title|the\s+title\s+(?:is|would\s+be)"
+    r")(?:\s*[:\-–—,]\s*|\s+(?=[\"'“”«»]))",
+    re.IGNORECASE,
+)
+
+# A trailing explanation/justification the model sometimes appends after
+# an otherwise-fine title (", car il évoque la mer.", " parce que…",
+# " (en référence à…)"). Stripped by _clean_title. Only fires on an
+# explicit causal/parenthetical opener, so a title legitimately
+# containing a comma ("Frost, and embers") is left alone.
+_TITLE_TRAILING_COMMENT_RE = re.compile(
+    r"\s*(?:"
+    r"[,;]\s*(?:car|parce\s+que|puisque|because|weil|denn|porque|perch[ée]|poich[ée])\b"
+    r"|\s+\((?:en\s+r[ée]f[ée]rence|r[ée]f[ée]rence|allusion|clin\b|in\s+reference|weil|porque)"
+    r").*$",
+    re.IGNORECASE | re.DOTALL,
+)
+
 
 def _clean_title(content):
     """Turns a raw LLM response into a usable title, or "" if nothing
     usable survives — never raises, since a missing/blank title is a
     purely cosmetic degrade for the caller (see LLMClueGenerator.
     generate_title's own docstring), not worth treating as an error.
-    Takes only the first non-empty line (a model asked for a bare title
-    occasionally still pads its answer with a second, explanatory line
-    despite the prompt forbidding it), strips a leading numbered/bulleted
-    marker the same way _parse_response already does for clues
+    Walks the response line by line and returns the first line that
+    survives cleaning as non-empty (a model asked for a bare title
+    occasionally pads its answer with an extra line, or emits a lone
+    lead-in line like "Voici le titre :" followed by the real title on
+    the next line). Per line: strips a leading numbered/bulleted marker
+    the same way _parse_response already does for clues
     (_LEADING_MARKER_RE), then a leaked "Title: "-style label
-    (_TITLE_LABEL_RE), then a wrapping quote pair (_TITLE_QUOTES_RE) —
-    and returns the result exactly as the model wrote it from there,
+    (_TITLE_LABEL_RE), then a greeting/introductory phrase
+    (_TITLE_INTRO_RE — "Je propose : ", "Bonjour, ", …), then a wrapping
+    quote pair (_TITLE_QUOTES_RE), then a trailing explanation
+    (_TITLE_TRAILING_COMMENT_RE — ", car …", " (en référence à …)").
+    Returns the result exactly as the model wrote it from there,
     deliberately never truncated to MAX_TITLE_WORDS: see that constant's
     own comment for why cutting a too-long title short was tried and then
     explicitly reverted at the user's request (it can silently turn a
     real, meaningful title into a fragment with no sense of its own)."""
-    line = ""
     for candidate_line in content.splitlines():
-        candidate_line = candidate_line.strip()
-        if candidate_line:
-            line = candidate_line
-            break
-    if not line:
-        return ""
-    line = _LEADING_MARKER_RE.sub("", line).strip()
-    line = _TITLE_LABEL_RE.sub("", line).strip()
-    line = _TITLE_QUOTES_RE.sub("", line).strip()
-    return line
+        line = candidate_line.strip()
+        if not line:
+            continue
+        line = _LEADING_MARKER_RE.sub("", line).strip()
+        line = _TITLE_LABEL_RE.sub("", line).strip()
+        # Loop: the model can stack two openers ("Bonjour, voici : X").
+        for _ in range(3):
+            stripped = _TITLE_INTRO_RE.sub("", line).strip()
+            if stripped == line:
+                break
+            line = stripped
+        line = _TITLE_QUOTES_RE.sub("", line).strip()
+        line = _TITLE_TRAILING_COMMENT_RE.sub("", line).strip()
+        line = _TITLE_QUOTES_RE.sub("", line).strip()
+        if line:
+            return line
+    return ""
 
 
 # Even a modest batch (5-6 words) was unreliable on the small local model —
@@ -837,11 +888,22 @@ class LLMClueGenerator:
             f"Output ONLY the title, 1 to {MAX_TITLE_WORDS} words, entirely "
             f"in {language_name}, loosely evoking the words or their shared "
             "theme if one is apparent.\n\n"
+            "Your ENTIRE reply is the title itself and nothing else. The very "
+            "first character you write is the first character of the title. "
+            "No greeting, no preamble, no comment before or after it.\n\n"
             "NEVER do any of these:\n"
             "- Describe the task or explain yourself. Your reply must NOT "
             "mean things like \"a crossword title\", \"title in "
             f"{language_name}\", \"here is a title\", \"puzzle name\" — "
             "that is a description, not a title.\n"
+            "- Start with a greeting or an introductory phrase such as "
+            "\"Bonjour\", \"Je propose\", \"Voici\", \"Voici le titre\", "
+            "\"Le titre est\", \"Un titre possible\", \"Je suggère\", "
+            "\"Here is\", \"How about\" — or any equivalent in "
+            f"{language_name}. Write the bare title with no such lead-in.\n"
+            "- Add any comment, justification or explanation after the "
+            "title (\"car il évoque…\", \"parce que…\", \"(en référence "
+            "à…)\"). Stop writing the moment the title is complete.\n"
             "- Output a whole sentence, a definition, or a list of the "
             "grid words.\n"
             "- Add quotes, a trailing period, or a label such as "
@@ -860,9 +922,15 @@ class LLMClueGenerator:
             "  words: snow, fire, wool, night, winter -> Frost and embers\n"
             "Do NOT copy those example titles. Do NOT keep them in "
             f"English — translate the spirit into {language_name}.\n"
-            "WRONG answer, never do this:\n"
+            "WRONG answers, never do any of these:\n"
             f"  words: (anything)  ->  Title of a crossword in {language_name}\n"
-            "  (that describes the task instead of naming the puzzle)\n"
+            "  (describes the task instead of naming the puzzle)\n"
+            "  words: sea, boat, wave  ->  Je propose : « L'horizon salé »\n"
+            "  (a lead-in phrase and quotes — the reply must be just "
+            "L'horizon salé)\n"
+            "  words: sea, boat, wave  ->  L'horizon salé, car il évoque "
+            "la mer.\n"
+            "  (a trailing explanation — stop after the title)\n"
         )
         user_message = "Grid words: " + ", ".join(words) + "\nTitle:"
         try:
