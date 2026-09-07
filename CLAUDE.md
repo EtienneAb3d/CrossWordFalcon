@@ -4336,9 +4336,20 @@ servers:
   returned a false-negative 403 with a bare `User-Agent` alone and a real
   200 once a fuller, realistic header set (`Accept`/`Accept-Language`)
   was added — confirmed by a direct before/after comparison, not assumed;
-  `_REQUEST_HEADERS` reflects this. A further candidate (Megastar)
-  returned 403 even with that fuller set and was dropped outright rather
-  than included on an unverified guess.
+  `_REQUEST_HEADERS` reflects this. A further candidate (Megastar,
+  `https://www.megastar.fr/mots-croises-gratuits`) returned 403 even with
+  that fuller set and was dropped outright rather than included on an
+  unverified guess. Two FR candidates proposed later, one per message, at
+  the user's explicit request — Megastar again
+  (`https://www.megastar.fr/mots-croises-gratuits`) and Sport Cérébral
+  (`https://www.sportcerebral.com/mots-croises-gratuit`) — were each
+  re-checked live and **both still serve Cloudflare's "Just a moment..."
+  bot-challenge interstitial** (identical CSP/markup on the two, very
+  likely the same platform), a consistent 403 across several retries and
+  user-agents. This is the same JS-challenge failure class already
+  documented for `cnews`, which this project's plain `httpx` GET cannot
+  pass — adding either would only log a daily 403 and contribute no link,
+  so neither was added.
 
   `fetch_grid_links.py` was rewritten around a hardcoded `SOURCES` dict
   (mirroring `fetch_rss_feeds.py`'s own `RSS_FEEDS` shape exactly — one
@@ -4714,6 +4725,30 @@ servers:
   es 3 — 35 sources total, up from 34); `GET /api/scrapp` (through the
   real running backend and the frontend's own proxy) returned the
   identical items.
+
+  A **bilingual (EN+FR)** source, `wordscroises`
+  (`https://wordscroises.wordpress.com/puzzles-grilles/` — printable
+  crosswords built to be solved DOWN in English and ACROSS in French),
+  was added directly by the user. Its `SOURCES` entry's own `"language"`
+  is a **list** (`["en", "fr"]`), not a string — the first source to use
+  that shape. `fetch_all()` passes the value straight through onto the
+  emitted item (no per-language explosion, so `SCRAPP/combined.json` still
+  has exactly one entry for it), and `frontend/static/script.js`'s
+  `renderRssList()` gained a small `itemMatchesLang(item, lang)` helper
+  (`Array.isArray(item.language) ? item.language.includes(lang) :
+  item.language === lang`) used at both its language-filter call sites
+  (the main filter and the English-fallback filter) — so the entry shows
+  under both the "English" and the "French" filter (and, as before, under
+  "Toutes les langues"), with no visible duplicate. No backend change:
+  `GET /api/scrapp` returns `combined.json` verbatim and never inspects
+  `language`. An `extract` rule pulls the latest puzzle number from the
+  page's own first `Crossword / Mots croisés N` heading (puzzles are
+  numbered and listed newest-first), producing a title like
+  `"WordsCroisés – Crossword / Mots croisés 55"`. Verified live: a real
+  `python3 fetch_grid_links.py` run wrote exactly one `wordscroises` item
+  (`language: ["en", "fr"]`, number 55 extracted), the frontend filter
+  logic (checked directly) shows it under both `en` and `fr` and not
+  under `de`, and `esprima` confirmed `script.js` still parses.
 
   Every David FALCON conversation is also logged, one file per session, at
   the user's explicit request: "Pour chaque discussion dans le ChatBot,
@@ -5998,6 +6033,12 @@ python3 data_builder/build_wordlist_freq.py fr    # counts words, validates, wri
 # one-time download — see data_builder/build_gloss_dictionary.py). Not needed
 # for a normal clone: data/gloss_dictionary/*.jsonl is already checked into the repo.
 python3 data_builder/build_gloss_dictionary.py fr
+
+# Or run all four stages for one language in dependency order via its
+# orchestration script (one per fr/en/de/es/it/pt). Long-running (hours);
+# safe to re-run — every stage reuses its own on-disk caches. Points
+# PATH/LD_LIBRARY_PATH at the rootless ~/.local hunspell build on this host.
+data_builder/build_fr.sh  # build_sentence_corpus -> build_wordlist_freq -> build_gloss_dictionary -> compress_reference_corpus
 
 # Refresh the "Actu Croisée" panel data by hand (Install.sh does this once on a
 # fresh clone; backend/app.py's scheduler does it daily at 08:00):

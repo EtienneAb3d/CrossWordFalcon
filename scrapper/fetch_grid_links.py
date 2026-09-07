@@ -174,8 +174,9 @@ def _extract_from_iframe_src(html, pattern):
 # le docstring du module pour la méthode et les 3 exclusions). "language"
 # vaut "fr" par défaut (fetch_all() applique ce repli via .get(), voir
 # plus bas) — omis sur chacune des 18 sources francophones ci-dessous
-# pour ne pas les retoucher inutilement ; explicite ("en") uniquement
-# sur les 4 sources anglophones ajoutées après coup. "extract" (optionnel)
+# pour ne pas les retoucher inutilement ; explicite ("en"/"de"/"it"/"es"/
+# "pt") sur les sources non francophones, ou une liste de codes pour une
+# source multilingue (ex. WordsCroisés, "en"+"fr"). "extract" (optionnel)
 # : (fonction, pattern, title_template) pour les sources dont un vrai
 # numéro de grille est automatiquement récupérable — voir le docstring
 # du module pour comment chacune a été confirmée en direct.
@@ -286,6 +287,27 @@ SOURCES = {
             _extract_from_visible_text,
             r"crossword puzzle\s*\|\s*#(\d+)\s*\|\s*for\s*\|\s*([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})",
             "OnlineCrosswords.net – #{} ({} {}, {})",
+        ),
+    },
+
+    # Bilingual (English + French) source, added by the user. Every
+    # puzzle is a single grid solved DOWN in English and ACROSS in
+    # French, so "language" is a list: the entry appears under both the
+    # EN and the FR filter (fetch_all() passes the value through as-is;
+    # the web UI's own language filter accepts a string or a list).
+    # Verified live: HTTP 200, no redirect, ~10 KB of real visible text,
+    # heavy "crossword"/"mots croisés"/"bilingual"/"bilingue" content,
+    # not JS-rendered. Puzzles are numbered and listed newest-first, so
+    # the latest number is the first visible "Crossword / Mots croisés N"
+    # heading.
+    "wordscroises": {
+        "name": "WordsCroisés",
+        "url": "https://wordscroises.wordpress.com/puzzles-grilles/",
+        "language": ["en", "fr"],
+        "extract": (
+            _extract_from_visible_text,
+            r"Crossword\s*/\s*Mots croisés\s+(\d{1,4})",
+            "WordsCroisés – Crossword / Mots croisés {}",
         ),
     },
 

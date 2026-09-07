@@ -263,9 +263,15 @@ function renderRssList() {
   // n'exclut rien ; toute autre valeur ne garde que les articles de cette
   // langue exacte (voir fetch_rss_feeds.py's own "language" field).
   const filterLang = rssLanguageFilter.value;
+  // An entry may be monolingual (item.language is a string) or
+  // multilingual (item.language is an array of language codes, e.g.
+  // WordsCroisés which is EN+FR and must show under both filters).
+  const itemMatchesLang = (item, lang) => Array.isArray(item.language)
+    ? item.language.includes(lang)
+    : item.language === lang;
   let filteredItems = filterLang === "all"
     ? rssItems
-    : rssItems.filter((item) => item.language === filterLang);
+    : rssItems.filter((item) => itemMatchesLang(item, filterLang));
   // Repli sur l'anglais si la langue choisie n'a aucun article, à la
   // demande explicite de l'utilisateur ("afficher la liste anglaise" +
   // un message l'expliquant en haut de la liste) — jamais quand la langue
@@ -274,7 +280,7 @@ function renderRssList() {
   // article" réellement global (tout repli anglais lui-même vide).
   let showFallbackNotice = false;
   if (!filteredItems.length && filterLang !== "all" && filterLang !== "en") {
-    const englishItems = rssItems.filter((item) => item.language === "en");
+    const englishItems = rssItems.filter((item) => itemMatchesLang(item, "en"));
     if (englishItems.length) {
       filteredItems = englishItems;
       showFallbackNotice = true;

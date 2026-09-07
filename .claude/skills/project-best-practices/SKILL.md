@@ -435,6 +435,16 @@ project's engineering language.
   `data/gloss_dictionary/<lang>_glosses.jsonl`. Raw dumps are cached under
   `DICS/` so a later rebuild re-filters instead of re-downloading several
   gigabytes per language.
+- `data_builder/build_<lang>.sh` (one per fr/en/de/es/it/pt) is a one-shot
+  orchestration wrapper that runs all four pipeline stages for that
+  language in dependency order — `build_sentence_corpus.py` ->
+  `build_wordlist_freq.py` -> `build_gloss_dictionary.py` ->
+  `compress_reference_corpus.py` — bailing out on the first failure. It
+  `cd`s to the repo root, points `PATH`/`LD_LIBRARY_PATH` at this host's
+  rootless `~/.local` hunspell build, and is safe to re-run (every stage
+  reuses its own on-disk cache: `CORPUS/`, `DICS/`, `data/hunspell_cache/`).
+  These scripts live alongside the `build_*.py`/`compress_*.py` stages in
+  `data_builder/`, not in `Automation/`.
 - `backend/gloss_lookup.py`/`backend/example_sentences.py` each lazily
   build and cache their index once per process lifetime (not per request):
   gloss lookup is keyed by canonical form(s); example-sentence lookup is
