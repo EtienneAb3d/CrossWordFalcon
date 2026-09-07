@@ -24,6 +24,7 @@ import datetime
 import json
 import logging
 import multiprocessing
+import os
 import sys
 import time
 import uuid
@@ -83,6 +84,15 @@ RSS_FETCH_HOUR = 8
 # source, la même convention que LOG_LLM/ (backend/clues.py) pour les
 # journaux d'appels LLM des définitions.
 CHAT_LOG_DIR = _PROJECT_ROOT / "LOG_CHAT"
+
+# "chat debug" option (CHATBOT_DEBUG in env.sh/env_default.sh) — when on,
+# _append_chat_log also writes the COMPLETE prompt actually sent to the
+# LLM (the full messages array: system prompt + whole conversation
+# history + the current question) into this session's LOG_CHAT/*.md
+# file, inside a collapsible <details> block above each reply, for
+# analysis. Off unless the value is one of 1/true/yes/on (case-
+# insensitive) — so CHATBOT_DEBUG=0 stays off.
+CHATBOT_DEBUG = os.environ.get("CHATBOT_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
 # session_id (fourni par le frontend, voir ChatRequest) -> chemin du
 # fichier de log de cette session, déjà créé. Un dict en mémoire, comme
 # JOBS/CANCEL_EVENTS ci-dessus — un seul processus uvicorn, pas de
@@ -116,7 +126,21 @@ def _chat_log_path_for_session(session_id):
     return _CHAT_LOG_PATHS[session_id]
 
 
-def _append_chat_log(session_id, language, message, reply, first_token_s=None, total_s=None):
+def _format_prompt_messages(messages):
+    """Renders the exact `messages` array sent to the LLM as one plain
+    text block, each message delimited by a header line naming its
+    1-based index and role, for the "chat debug" full-prompt trace (see
+    `CHATBOT_DEBUG`). Wrapped in a 6-tilde fence by the caller so the
+    system prompt's own Markdown/backticks/`~~~` runs never break out."""
+    parts = []
+    for i, m in enumerate(messages, 1):
+        role = m.get("role", "?")
+        parts.append(f"========== [{i}/{len(messages)}] role={role} ==========\n{m.get('content', '')}")
+    return "\n\n".join(parts)
+
+
+def _append_chat_log(session_id, language, message, reply, first_token_s=None, total_s=None,
+                     prompt_messages=None):
     """Ajoute un tour de conversation (question + réponse complète) au
     fichier de log de cette session — best-effort, comme toute autre
     écriture de journal de ce projet (SVG/PNG, LOG_LLM/) : une erreur
@@ -131,12 +155,26 @@ def _append_chat_log(session_id, language, message, reply, first_token_s=None, t
     reply, before the closing `---` separator. `first_token_s` can be
     `None` even when `total_s` isn't (a call failed before ever streaming
     a single chunk — see `chat()`'s own `ChatError` branch) — in that
-    case only the total-time bit is written, never a fabricated "0s"."""
+    case only the total-time bit is written, never a fabricated "0s".
+
+    `prompt_messages` (the full messages array actually sent to the LLM)
+    is only ever passed when the "chat debug" option is on (`CHATBOT_
+    DEBUG`, see its own comment) — written inside a collapsible
+    `<details>` block right under the question, so the whole prompt
+    (system prompt + history + question) is available for analysis
+    without burying the readable Q/A."""
     path = _chat_log_path_for_session(session_id)
     try:
         with path.open("a", encoding="utf-8") as f:
             f.write(f"## {time.strftime('%Y-%m-%d %H:%M:%S')} ({language})\n\n")
             f.write(f"**Utilisateur** : {message}\n\n")
+            if prompt_messages:
+                total_chars = sum(len(m.get("content", "")) for m in prompt_messages)
+                f.write(
+                    f"<details>\n<summary>Prompt complet envoyé au LLM — "
+                    f"{len(prompt_messages)} messages, {total_chars} caractères</summary>\n\n"
+                    f"~~~~~~\n{_format_prompt_messages(prompt_messages)}\n~~~~~~\n\n</details>\n\n"
+                )
             f.write(f"**David FALCON** : {reply}\n\n")
             if first_token_s is not None or total_s is not None:
                 bits = []
@@ -755,7 +793,11 @@ async def chat(req: ChatRequest):
     fully done (success or `ChatError`) — never per-chunk, since only the
     complete reply is meaningful to log. A failure logs whatever partial
     reply had already streamed (possibly empty), tagged as such, rather
-    than silently dropping the exchange from the log.
+    than silently dropping the exchange from the log. When the "chat
+    debug" option is on (`CHATBOT_DEBUG`), the log also carries the exact
+    full prompt sent to the LLM (system prompt + history + question),
+    captured via `reply_stream`'s `on_prompt` callback so it's recorded
+    even if the LLM call then fails.
 
     Also times each reply, at the user's own later explicit request:
     "noter le temps de récupération du premier mot, et le temps total de
@@ -770,9 +812,17 @@ async def chat(req: ChatRequest):
         full_reply = []
         start = time.monotonic()
         first_token_s = None
+        # Only populated (and only logged) when the "chat debug" option is
+        # on — the full messages array reply_stream() actually sends.
+        captured_prompt = []
+
+        def _capture_prompt(messages):
+            captured_prompt[:] = messages
+
         try:
             async for chunk in chatbot.reply_stream(
                 [m.model_dump() for m in req.history], req.message, req.language, req.ui_context,
+                on_prompt=_capture_prompt if CHATBOT_DEBUG else None,
             ):
                 if first_token_s is None:
                     first_token_s = time.monotonic() - start
@@ -782,7 +832,7 @@ async def chat(req: ChatRequest):
             yield "data: [DONE]\n\n"
             _append_chat_log(
                 req.session_id, req.language, req.message, "".join(full_reply),
-                first_token_s, total_s,
+                first_token_s, total_s, captured_prompt or None,
             )
         except ChatError as e:
             total_s = time.monotonic() - start
@@ -792,7 +842,7 @@ async def chat(req: ChatRequest):
                 req.session_id, req.language, req.message,
                 f"{reply_so_far}\n\n*(échec en cours de réponse : {e})*" if reply_so_far
                 else f"*(échec : {e})*",
-                first_token_s, total_s,
+                first_token_s, total_s, captured_prompt or None,
             )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

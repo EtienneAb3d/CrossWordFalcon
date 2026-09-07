@@ -3822,6 +3822,36 @@ servers:
   doesn't exist) needed the same guard. **Not yet visually confirmed in an
   actual browser** — same tooling limitation as above.
 
+  **A second keydown handler needed the exact same guard, found much
+  later while chasing a bilingual-grid bug** — reported by the user:
+  David FALCON still answered in French for an English (down) word, and
+  the user pinpointed why — "quand on appuie sur SHIFT pour écrire une
+  majuscule dans le Chat, ça change le sens de la grille." Confirmed by
+  reading `script.js`: `updateHoverForModifierKey` (bound to `document`
+  `keydown`/`keyup`) reacts to `Shift`/`CapsLock` regardless of focus,
+  calling `setActiveDirection(...)` and, if the mouse is still over a
+  grid cell (`hoveredGridCell` set), re-running `highlightWordAt(cell,
+  <new direction>)`. So with the mouse resting on a cell of a hovered
+  English down word while the player types a capital in `#chatbot-input`,
+  the `Shift` **keyup** flips `activeDirection` back to `"across"` and
+  re-resolves `hoveredWord` to the *crossing* word — the French across
+  word — which `buildChatUiContext()` then sends to the chatbot, so it
+  answers about the wrong word in the wrong language. A shared
+  `isTextInputFocused()` helper (`document.activeElement` is an `INPUT`/
+  `TEXTAREA`/`isContentEditable`) now guards both `updateHoverForModifier
+  Key` (early-return, so Shift/CapsLock never touch the grid's direction
+  or hovered word while a text field has focus) and `handleKeydown`
+  (replacing its own inline `active.tagName` check, same behavior, one
+  definition). This is a genuinely separate cause from the
+  `_build_system_prompt` recency fix in `backend/chatbot.py`'s own entry
+  — both were needed: the prompt fix makes the model switch languages
+  *given the right word*, this fix makes sure the right word (and
+  direction) is what actually gets sent. Verified: `esprima` confirms
+  `script.js` still parses. **Not yet visually confirmed in an actual
+  browser** — same tooling limitation as above; verified by tracing the
+  keydown/keyup → `setActiveDirection` → `highlightWordAt` →
+  `buildChatUiContext` path directly.
+
   Rule 4 (hint vs. explicit answer) was substantially rewritten, at the
   user's explicit request: "Quand l'utilisateur demande un indice pour
   l'aider dans la résolution de la grille, le Bot ne doit pas donner les
@@ -4902,6 +4932,36 @@ servers:
   see above) was stable again: the real logged file correctly showed
   `*premier mot reçu après 9.97s — temps total : 10.38s*` right under a
   genuine reply, matching this call's own two measured durations exactly.
+
+  A **"chat debug" option** (`CHATBOT_DEBUG` in `env.sh`/`env_default.sh`,
+  parsed as one of `1`/`true`/`yes`/`on` case-insensitively — so
+  `CHATBOT_DEBUG=0` stays off; **enabled in `env.sh` right now** at the
+  user's request, off by default in the checked-in `env_default.sh`
+  template) makes `_append_chat_log` also write the **complete prompt
+  actually sent to the LLM** — the full messages array: the system prompt
+  (persona + all 7 rules + rule 2's bilingual exception + the whole of
+  `DOC_USER/EN/ReadMe.md` + the live interface-state block, ~33 KB), the
+  entire conversation history, and the current question — into the
+  session's `LOG_CHAT/*.md` file, inside a collapsible `<details>` block
+  right under the question and above the reply, each message delimited by
+  a `========== [i/N] role=... ==========` header and the whole thing
+  wrapped in a 6-tilde fence (`~~~~~~`) so the system prompt's own
+  Markdown / backticks / `~~~` runs can't break out. `ChatBot.reply_
+  stream()` gained an `on_prompt=None` callback, called once with the
+  assembled `messages` list right *before* the HTTP call (so the prompt
+  is captured for the log even when the LLM call then fails);
+  `backend/app.py`'s `chat()` passes that callback only when
+  `CHATBOT_DEBUG` is on, and forwards the captured list to `_append_chat_
+  log`'s new `prompt_messages=None` parameter — `None`/absent leaves the
+  pre-existing log format byte-for-byte unchanged. Verified: an isolated
+  `_append_chat_log` call with a temp `CHAT_LOG_DIR` confirmed the
+  `<details>` block renders with a system message containing literal
+  ```` ``` ```` and `~~~` runs intact inside the 6-tilde fence, and that
+  passing `prompt_messages=None` omits the block entirely; a real
+  end-to-end `reply_stream(..., on_prompt=cap)` call against the running
+  local LLM confirmed the callback fires with the true 4-message array
+  (system + 2 history turns + current question, system prompt ~33 KB)
+  before the reply streams.
 - `backend/grid_store.py` — persists every finished grid as a durable,
   self-contained JSON record under `GRID_STORE/<language>/` (project
   root, gitignored — a generated artifact, not source content, the same
@@ -6314,9 +6374,181 @@ of that kind ships here.
   suivant si c'est horizontal ou vertical)." A prompt-only instruction,
   consistent with this whole file's own established pattern of trusting
   the LLM with a clearly-stated rule rather than a code-level enforcement
-  mechanism — its real-world reliability on this project's small default
-  local model was not separately re-measured beyond confirming the prompt
-  text itself builds correctly and mentions the right fields.
+  mechanism.
+
+  **That first prompt-only version did not actually work**, reported
+  directly by the user: on a real FR/EN grid, asking David FALCON for a
+  hint on a *vertically* selected (English) word still got a reply whose
+  description body was in French. Reproduced live (system prompt built
+  for that exact `ui_context`, sent straight to the running LLM,
+  bypassing the not-yet-restarted backend): 0/4 samples wrote the hint
+  in English. Root-caused to two structural weaknesses of the first
+  version, both about *recency* on a small model (the same effect this
+  file already documents at length for the hovered-word state block
+  ordering): (1) the exception was a single paragraph buried in the
+  middle of rule 2, and (2) the prompt's very last line — the "FINAL
+  REMINDER", the strongest-recency position — unconditionally re-asserted
+  "write your entire reply in {interface}" with no bilingual carve-out at
+  all, directly overriding the exception.
+
+  Fixed by resolving the target word's language *concretely in Python*
+  (`_build_system_prompt` now computes `is_bilingual_grid` — the grid's
+  words don't all share one `language` — plus `help_word`/`help_lang`/
+  `help_lang_name`/`help_lang_differs`/`help_dir_label`: the single word a
+  help request would be about right now, in rule 4a's own priority order
+  — hovered word, else the *lone* word at the clicked cell, never one of
+  two crossing words) and spelling the switch out **by language name, in
+  the two highest-recency spots**: (a) a `>>> RIGHT NOW: ... write the
+  hint / definition / answer sentences THEMSELVES entirely in ENGLISH. Do
+  NOT write that description in French. <<<` block appended as the last
+  line of the interface-state section, only when `help_lang_differs`; and
+  (b) a `final_reminder` variable that, for that same case, leads with
+  "the DOWN (vertical) word the player is asking about is in English.
+  Write your one-line preamble in French, then write the ... sentences
+  THEMSELVES entirely in English (NOT French)." The monolingual
+  `final_reminder` is kept **byte-for-byte identical** to the original
+  ("write your entire reply in {interface}, starting directly with the
+  answer and no greeting.") — verified by direct string assertion — so
+  the well-tuned monolingual path is untouched; a bilingual grid with no
+  differently-languaged target word right now (nothing hovered/clicked,
+  or the target is in the interface language) gets a middle version that
+  just restates rule 2's exception.
+
+  That recency-fix version (the concrete `>>> RIGHT NOW <<<` block + a
+  bilingual-aware `final_reminder`, keeping the "reply in French, but
+  write the hint content in English" *nuance*) got the hint *description*
+  right most of the time but still leaked the French preamble words
+  ("Indice", "Le mot … est"), and on the real model the whole framing
+  stayed fragile.
+
+  **The nuance was dropped entirely**, at the user's explicit request:
+  "Le prompt système insiste très fortement sur le fait de répondre en
+  français. Le petit LLM ne comprend pas la nuance dans le cas d'un
+  indice à donner en anglais. Il faut adapter le prompt pour être
+  entièrement dans la langue sélectionnée suivant le sens de la grille."
+  `_build_system_prompt` now resolves a single `reply_language` — the
+  language of the word/direction currently selected in the grid (the
+  hovered word, else the lone word at the clicked cell; two crossing
+  words at a clicked cell resolve to `None` → interface language), or
+  the interface `language` when nothing is selected or the selection
+  shares it — and **the entire prompt is built in that one language**:
+  the opening "Write EVERY reply entirely in X", rule 2, the
+  `final_reminder`, and a short bilingual state-block note ("The word
+  currently selected … is written in English … Write your ENTIRE reply …
+  in English. Do NOT use French anywhere"). Rule 2's whole `EXCEPTION`
+  paragraph is gone; `final_reminder` is one uniform `f"write your entire
+  reply in {language_name}, starting directly with the answer and no
+  greeting."` for every case — byte-for-byte the original when
+  `reply_language` is the interface language, which a **monolingual grid
+  always is** (verified by direct string assertion: a monolingual prompt
+  contains no injected "bilingual" text and its rule-2 tail + final
+  reminder are unchanged). One targeted splice into rule 4b/4e:
+  `preamble_lang_note` (empty unless `reply_language` differs) tells the
+  model the French preamble examples show STYLE only and shows how the
+  preamble reads in `reply_language` ("Hint for the vertical word at
+  (l, c) …" / "The vertical word at (l, c) is: …") — this is what stopped
+  the "Indice"/"Le mot" leak.
+
+  Re-verified live against the running local LLM (`Qwen/Qwen3.5-9B`,
+  prompt sent directly, backend not restarted): hint on a hovered DOWN=en
+  word — **6/6 now fully English, preamble included** ("Hint for the
+  vertical word at (3, 5), the one at the clicked cell: A large wild cat
+  found in Asia …"); explicit-answer request on the en word — **4/4**
+  clean English ("The vertical word at (3, 5) is: TIGER."), no clue echo;
+  hint on a hovered ACROSS=fr word — 3/3 fully French (no regression); a
+  *general* UI question asked while an English word is hovered — answered
+  in English too (the accepted, explicitly-requested consequence of
+  "entièrement dans la langue sélectionnée"). Pre-existing,
+  language-independent hint-quality ceiling (an occasional wrong letter
+  count, clue echo on the weaker filling-cell-only path) is unchanged.
+  **Once the backend was restarted, it still replied in French for a
+  vertically-selected English word** — reported by the user with a
+  `CHATBOT_DEBUG` prompt trace (`LOG_CHAT/*.md`) showing the whole prompt
+  built in French. Root cause, visible directly in that trace: no word
+  was hovered, and the clicked cell was a *crossing* of a French across
+  word and an English down word — `help_word` resolved to `None`
+  (`_build_system_prompt` refused to pick between two crossing words), so
+  `reply_language` fell back to the interface language. **The frontend
+  never sent the grid's current fill direction at all.** Fixed by adding
+  `active_direction` (the shared `activeDirection` state — the Across/Down
+  buttons + Shift/CapsLock) to `buildChatUiContext()`'s `ui_context`, and
+  in `_build_system_prompt`: when the clicked cell is a two-word crossing,
+  `filling_word` (and hence `help_word`/`reply_language`) is now the word
+  whose `direction` matches `active_direction`. The filling-cell state
+  block also tells the model which of the two it is ("the grid is in DOWN
+  (vertical) fill mode, so the word being filled … is the DOWN one … Do
+  NOT ask the player which word") instead of the old blanket "ask which
+  one" — which now only fires when `active_direction` is genuinely absent
+  (an old cached frontend). Verified live on the exact reported shape
+  (clicked cell at an FR-across / EN-down crossing, `active_direction=
+  "down"`): 10/10 replies now fully English, preamble included; the same
+  cell with `active_direction="across"` resolves to French. Needs a
+  browser reload (frontend `active_direction`) **and** a
+  `./run_Falcon.sh` restart (backend), which also picks up `CHATBOT_DEBUG`
+  from `env.sh`.
+
+  **Rule 4d (no answer leak in a hint) was reinforced**, at the user's
+  explicit request after a hint came back ending "The answer is:
+  HEAVIES." Three prompt-only additions, all language-independent: (1)
+  rule 4d now names the exact failure pattern (never end/begin a hint
+  with "The answer is …", "It is …", "The word is …", "La réponse est
+  …" + the solution) and adds a mandatory self-check ("Before you send
+  a HINT, re-read your own draft: if that exact 'answer=' value appears
+  … delete that part"); (2) a new worked "Example 3 (answer leak — the
+  most common mistake)" — a fine fresh description ruined by a trailing
+  "La réponse est : CHEVAL.", with the GOOD version being the identical
+  reply minus that sentence; (3) the `final_reminder` gains a hint
+  clause appended **only when a grid is loaded** (`puzzle_loaded`), so a
+  no-grid chat keeps the byte-identical reminder while any grid (mono or
+  bilingual) gets the recency-position reinforcement. Verified live on
+  the exact reported shape (HEAVIES, clicked cell, vertical mode): 12/12
+  samples across two prompt phrasings no longer contained the answer in
+  any form (was leaking it before).
+
+  When the player clicks a cell, the word running through it in the
+  current fill direction (`activeDirection`) is now tinted light green
+  on the playable grid — the clicked cell itself keeps its own light-
+  blue `.selected` fill (`frontend/static/script.js`'s new
+  `applySelectedWordHighlight()`, a `.selected-word` class + a new
+  `--selected-word-bg` token; see the `style-guide` SKILL for the full
+  visual reasoning). Called from `renderGrid()` and `setActiveDirection()`
+  so flipping Across/Down re-bands the other crossing word. Purely
+  cosmetic — unrelated to the chat `active_direction` plumbing above,
+  though both are driven by the same `activeDirection` state.
+
+  **David FALCON kept giving hints about a word from earlier in the
+  conversation instead of the one selected now** — reported with a
+  `CHATBOT_DEBUG` trace showing a 3-turn bilingual conversation: turn 1
+  hinted the DOWN/English word HEAVIES (`active_direction="down"`);
+  turns 2-3 had a different, ACROSS/French word selected and the current
+  system prompt's interface-state block said so correctly — but the
+  vague follow-up ("Un indice ?") + recent history about HEAVIES won the
+  tug-of-war on the small model, which re-hinted HEAVIES both times. The
+  interface-state block is ~40 KB into the system prompt (below all 7
+  rules + the whole of `DOC_USER`), far from the actual question. Fixed
+  two ways, both stating the current selection where it can't be missed:
+  (1) `ChatBot._current_selection_line(ui_context)` builds a one-line
+  `NOTE — right now the player has the ACROSS (horizontal) word … "
+  selected … it is about THAT word … even if an earlier reply was about
+  a different word` and `reply_stream()` **prepends it to the player's
+  own message**, so it sits immediately before the question (after all
+  history); (2) `_build_system_prompt` now ends with a visually
+  boxed `====== SELECTED WORD RIGHT NOW: … ======` block **after the
+  FINAL REMINDER** — the last thing in the system prompt — at the user's
+  explicit follow-up ("l'info est noyée dans d'autres explications …
+  précise-la bien clairement en fin de prompt système"). Rule 4a gained
+  a clause telling the model to trust the per-message NOTE over
+  everything else and never carry a previous reply's word forward. The
+  selection is now resolved once by a shared module-level
+  `_resolve_selection(ui_context)` (hovered word, else the lone/
+  direction-matched word at the clicked cell) used by both
+  `_build_system_prompt` and `_current_selection_line`, so the three
+  copies can never disagree. This changes the monolingual system prompt
+  too (it now carries the trailing SELECTED WORD block — a deliberate,
+  requested change; the FINAL REMINDER text itself is unchanged).
+  Verified live: reproducing the exact 3-turn conversation with real
+  history, turns 2 and 3 now answer about the currently-selected word
+  4/4 and 4/4 (RHUM, then ERRER), never the HEAVIES from turn 1.
 
   On the web UI: a new "Bilingue" selector (`#bilingual-language`, same 6
   language options as `#language`) sits between the Largeur and Hauteur

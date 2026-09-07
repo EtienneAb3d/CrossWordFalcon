@@ -9,6 +9,7 @@
   --white-cell: #ffffff;
   --error: #b3261e;
   --selected: #bfdbfe;
+  --selected-word-bg: #dcfce7;
   --correct-bg: #bbf7d0;
   --correct-fg: #14532d;
   --incorrect-bg: #fecaca;
@@ -1295,6 +1296,16 @@ button:disabled {
 
 .cell.white.selected {
   background: var(--selected);
+}
+
+/* Light-green fill on the other cells of the word running through the
+   clicked cell, in the current fill direction (script.js's
+   applySelectedWordHighlight()) — the clicked cell itself keeps its own
+   solid-blue .selected fill (it is excluded in JS). Placed before
+   .correct/.incorrect so those correctness states still override it in
+   check mode. */
+.cell.white.selected-word {
+  background: var(--selected-word-bg);
 }
 
 .cell.white.correct {

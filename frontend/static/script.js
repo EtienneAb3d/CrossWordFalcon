@@ -590,6 +590,37 @@ function highlightWordAt(row, col, direction) {
   }
 }
 
+// Light-green background on every cell of the word running through the
+// clicked cell, in the current fill direction (`activeDirection`), at the
+// user's explicit request — the clicked cell itself is deliberately
+// excluded so it keeps its own solid-blue `.selected` style. Operates on
+// the live `cellElements` map (rebuilt by renderGrid()), so it's called
+// both at the end of renderGrid() and from setActiveDirection() (so
+// flipping Across/Down updates the highlight without a full rebuild).
+function applySelectedWordHighlight() {
+  cellElements.forEach((el) => el.classList.remove("selected-word"));
+  if (showSolution || !selected || !puzzle || !isWhite(selected.row, selected.col)) return;
+  for (const { row, col } of wordCellsAt(selected.row, selected.col, activeDirection)) {
+    if (row === selected.row && col === selected.col) continue;
+    const el = cellElements.get(`${row},${col}`);
+    if (el) el.classList.add("selected-word");
+  }
+}
+
+// True when the keyboard focus is inside a text field (the chat box, the
+// generation-form number inputs, any future one) — used to keep grid
+// keyboard shortcuts from firing while the player is typing elsewhere.
+// Reported live: pressing Shift to type a capital in #chatbot-input was
+// flipping the grid's active direction (across <-> down) via
+// updateHoverForModifierKey below, which in turn re-resolved the hovered
+// word to the crossing word in the other direction — on a bilingual grid,
+// the other language — so the chatbot then answered about the wrong word
+// in the wrong language.
+function isTextInputFocused() {
+  const el = document.activeElement;
+  return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+}
+
 // Vertical word on Shift or CapsLock (either one), horizontal otherwise —
 // getModifierState() is part of the DOM's shared modifier-key mixin, so it
 // works on a MouseEvent (mouseenter) exactly like on a KeyboardEvent, no
@@ -613,6 +644,7 @@ function setActiveDirection(direction) {
   cluesDirectionAcrossBtn.classList.toggle("active", direction === "across");
   cluesDirectionDownBtn.classList.toggle("active", direction === "down");
   if (hoveredGridCell) highlightWordAt(hoveredGridCell.row, hoveredGridCell.col, direction);
+  applySelectedWordHighlight();
 }
 
 // Shift/CapsLock can be toggled at any time, mouse over the grid or not —
@@ -626,6 +658,10 @@ document.addEventListener("keyup", updateHoverForModifierKey);
 
 function updateHoverForModifierKey(event) {
   if (event.key !== "Shift" && event.key !== "CapsLock") return;
+  // Ignore Shift/CapsLock while typing in the chat (or any text field) —
+  // otherwise typing a capital there silently changes the grid's active
+  // direction and the currently-hovered word (see isTextInputFocused()).
+  if (isTextInputFocused()) return;
   setActiveDirection(hoverDirectionFromEvent(event));
 }
 
@@ -1236,11 +1272,10 @@ function handleKeydown(event) {
   // input to type a question still had every letter/Backspace keystroke
   // swallowed here (preventDefault()'d and written into the grid) instead
   // of reaching the chat box. Guards on whatever element is actually
-  // focused, generically (any <input>/<textarea>), not just the chat
-  // input by id — so any other text field added later is protected the
-  // same way, with no need to special-case it here too.
-  const active = document.activeElement;
-  if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return;
+  // focused, generically (any <input>/<textarea>/contenteditable), not
+  // just the chat input by id — so any other text field added later is
+  // protected the same way, with no need to special-case it here too.
+  if (isTextInputFocused()) return;
   if (!puzzle || !selected || showSolution) return;
   const key = event.key;
 
@@ -1341,6 +1376,10 @@ function renderGrid() {
       gridEl.appendChild(cell);
     }
   }
+
+  // Light-green highlight of the word running through the clicked cell,
+  // now that every cell element exists in `cellElements`.
+  applySelectedWordHighlight();
 
   // #hover-definition-row's CSS width: 100% (stretching to #grid-column's
   // own auto-computed width) turned out not to be enough to make long
@@ -2572,6 +2611,12 @@ function buildChatUiContext() {
     puzzle_loaded: !!puzzle,
     hovered_word: hoveredWord ? { row: hoveredWord.row, col: hoveredWord.col, direction: hoveredWord.direction } : null,
     filling_cell: selected ? { row: selected.row, col: selected.col } : null,
+    // The grid's current fill/selection direction ("across"/"down", the
+    // shared activeDirection state driven by the Across/Down buttons and
+    // Shift/CapsLock) — lets the backend pick WHICH of two crossing words
+    // a clicked cell is about (and, on a bilingual grid, in which
+    // language to answer) instead of having to ask the player.
+    active_direction: activeDirection,
     words: puzzle
       ? puzzle.words.map((w) => ({
           row: w.row, col: w.col, direction: w.direction, clue: w.clue, answer: w.answer,

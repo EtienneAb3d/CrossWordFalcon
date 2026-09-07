@@ -118,6 +118,13 @@ export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_P
 # answer into reasoning_content.)
 # export CHATBOT_THINK_FILTER="open_close"
 
+# Chat debug: when enabled, backend/app.py writes the COMPLETE prompt
+# actually sent to the LLM (the full messages array — system prompt +
+# whole conversation history + the current question) into this session's
+# LOG_CHAT/*.md file, inside a collapsible <details> block above each
+# reply, for analysis. Off by default; "1"/"true"/"yes"/"on" turn it on.
+# export CHATBOT_DEBUG="1"
+
 # Models below are ordered smallest to largest, each with a one-line
 # hardware/quality summary — pick the one that fits your machine and how
 # good you need the clues to be:

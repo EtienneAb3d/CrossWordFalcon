@@ -45,8 +45,9 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   script.js`, `buildChatUiContext`; `backend/clues.py`, `LLMClueGenerator.
   generate`), the **Dictionnaire / Dictionary** panel's own language
   selector (see below) follows whichever word is currently hovered or
-  clicked, and David FALCON gives a hint or answer for one particular word
-  in that word's own language too (see "David FALCON" below).
+  clicked, and David FALCON replies entirely in the language of whichever
+  word/direction is currently selected in the grid (see "David FALCON"
+  below).
 - **Hauteur / Height** (`#height`) — the grid's own height in cells, from
   5 to 30.
 - **Difficulté / Difficulty** (`#difficulty`) — Easy, Medium, or Hard.
@@ -207,11 +208,17 @@ Once generation completes, the search-progress panel disappears and
 - **The grid itself** (`#grid`, `frontend/static/script.js`,
   `renderGrid`) — a black-and-white crossword grid with 1-based
   row/column headers. Click a white cell to select it (`selectCell`, a
-  black cell can't be selected); type a letter to fill it and move to
-  the next cell of the current word (`handleKeydown`, `moveSelection`).
-  Typing a **lowercase** letter continues across (rightward); typing an
-  **uppercase** letter (or holding Shift, or with Caps Lock on) continues
-  down. Backspace/Delete clears the selected cell without moving.
+  black cell can't be selected) — the clicked cell turns light blue, and
+  the rest of the word running through it in the current Across/Down
+  direction is tinted light green (`applySelectedWordHighlight`), so it
+  is clear which word is being filled. Type a letter to fill the cell
+  and move to the next cell of that word (`handleKeydown`,
+  `moveSelection`). Typing a **lowercase** letter continues across
+  (rightward); typing an **uppercase** letter (or holding Shift, or with
+  Caps Lock on) continues down — switching direction this way (or with
+  the Across/Down buttons) re-tints the green band along the other word
+  through the same cell. Backspace/Delete clears the selected cell
+  without moving.
   Hovering a cell (or a clue line, see below) outlines every cell of that
   same word (`wordCellsAt`) and, once "Définitions" is on, shows that
   word's own clue underneath the grid (`#hover-definition`).
@@ -240,15 +247,16 @@ FALCON (`POST /api/chat`, `backend/chatbot.py`), along with the current
 conversation so far and a snapshot of the interface's own state: whether
 a grid is loaded, which cell is currently selected in it, and — if a
 grid is loaded — every one of its words with their starting position,
-direction, clue, and answer. David FALCON always replies in the
+direction, clue, and answer. David FALCON replies in the
 interface's current language, and only ever answers questions about
 using this app or about the grid currently on screen — for anything
-else, it politely suggests looking elsewhere instead. The one exception
-is a bilingual grid (see the **Bilingue / Bilingual** field above): when
-David FALCON gives a hint or the answer for one particular grid word, it
-writes that hint/answer itself in *that word's own* language — which can
-differ between an across word and a down word — while everything else in
-the same reply still stays in the interface's own language.
+else, it politely suggests looking elsewhere instead. On a bilingual
+grid (see the **Bilingue / Bilingual** field above), the reply language
+follows the grid instead: whenever a word is selected — hovered, or the
+word being filled at the clicked cell in the current Across/Down
+direction — David FALCON writes its *entire* reply in that word's own
+language, which can differ between an across word and a down word. With
+nothing selected, it uses the interface language.
 
 ## How a grid is actually built (a summary of the generation algorithm)
 

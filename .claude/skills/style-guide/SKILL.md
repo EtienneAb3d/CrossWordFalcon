@@ -2118,3 +2118,29 @@ English (see `project-best-practices`).
   verified structurally and via the real served files instead, the same
   limitation and workaround already noted throughout this project's UI
   work.
+
+- **Selected-word highlight**, at the user's explicit request: "Quand
+  l'utilisateur clique sur une case, montrer le mot sélectionné via
+  cette case en fond vert clair (en tenant compte du sens)" +
+  "La case sélectionnée elle-même reste avec son fond bleu clair." A new
+  `--selected-word-bg: #dcfce7` token (light green — deliberately one
+  step *lighter* than `--correct-bg`'s `#bbf7d0`, so the two greens
+  don't read as the same state) drives `.cell.white.selected-word`, a
+  plain background fill on every *other* cell of the word running through
+  the clicked cell, in the current fill direction (`activeDirection`).
+  The clicked cell itself is excluded in JS (`applySelectedWord
+  Highlight()`), so it keeps its own solid-blue `--selected` fill —
+  blue clicked cell inside a light-green word band. Placed *before*
+  `.correct`/`.incorrect` in the stylesheet so those correctness states
+  still override the green tint in Vérification mode (a wrong/right
+  letter matters more than showing which word is active). Composes
+  cleanly with the hover `.word-highlight` (a blue inset border, not a
+  fill) when the same word is both clicked-into and hovered.
+  `applySelectedWordHighlight()` operates on the live `cellElements`
+  map and is called both at the end of `renderGrid()` (full rebuilds —
+  click, typing, toggles) and from `setActiveDirection()` (so flipping
+  Across/Down via the buttons or Shift/CapsLock re-bands the word in the
+  new direction without a full grid rebuild). **Not yet visually
+  confirmed in an actual browser** — same tooling limitation noted
+  throughout this file; verified structurally (a real JS syntax check
+  via `esprima`, a CSS brace-balance check) instead.

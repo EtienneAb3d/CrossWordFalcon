@@ -210,6 +210,45 @@ def _find_word_by_start(word_start, words):
     return None
 
 
+def _resolve_selection(ui_context):
+    """The word currently selected in the grid, resolved once from
+    `ui_context`, in the priority order rule 4a uses: the hovered word
+    if any, else the word being filled at the clicked cell (the lone
+    word there, or — at a crossing — the one matching the grid's current
+    fill direction `active_direction`). Shared by `_build_system_prompt`
+    (the full interface-state block) and `ChatBot._current_selection_line`
+    (the one-line restatement prepended to every player message), so the
+    two can never disagree about which word is selected."""
+    puzzle_loaded = bool(ui_context.get("puzzle_loaded"))
+    words = ui_context.get("words") or []
+    hovered_word = ui_context.get("hovered_word")
+    filling_cell = ui_context.get("filling_cell")
+    active_direction = ui_context.get("active_direction")
+    hovered_resolved = _find_word_by_start(hovered_word, words) if hovered_word else None
+    filling_words = (
+        _words_touching_cell(filling_cell, words) if (filling_cell and puzzle_loaded) else []
+    )
+    if len(filling_words) == 1:
+        filling_word = filling_words[0]
+    elif len(filling_words) >= 2 and active_direction:
+        filling_word = next(
+            (w for w in filling_words if w.get("direction") == active_direction), None
+        )
+    else:
+        filling_word = None
+    return {
+        "puzzle_loaded": puzzle_loaded,
+        "words": words,
+        "hovered_word": hovered_word,
+        "filling_cell": filling_cell,
+        "active_direction": active_direction,
+        "hovered_resolved": hovered_resolved,
+        "filling_words": filling_words,
+        "filling_word": filling_word,
+        "help_word": hovered_resolved or filling_word,
+    }
+
+
 class ChatBot:
     """One instance is enough for the process's lifetime — construct once
     (e.g. at module level in backend/app.py) and call `reply()` per
@@ -268,20 +307,93 @@ class ChatBot:
         count — and must never contain the answer unless the player
         explicitly asked for it. The clicked-cell word's own clue is
         passed to the model (the `filling_words` block, with `clue=` and
-        `answer=`), so it always has what it needs to build that hint."""
-        language_name = LANGUAGE_NAMES.get(language, language)
+        `answer=`), so it always has what it needs to build that hint.
+
+        Reply language: the ENTIRE prompt (every "reply in X" instruction,
+        the state-block note, the final reminder) is built in ONE language
+        — `reply_language`: the language of the word/direction currently
+        selected in the grid (the hovered word, else the word being filled
+        at the clicked cell — resolved by `ui_context["active_direction"]`
+        when that cell is a crossing of two words), falling back to the
+        interface `language` when nothing is selected or the selection
+        shares the interface language. `active_direction` is essential on
+        a bilingual grid: a clicked crossing cell touches one across and
+        one down word in two different languages, so without knowing which
+        direction the player is filling, `reply_language` could not be
+        resolved and the whole reply defaulted to the interface language
+        (the concrete bug this fixed — vertical fill mode on an FR/EN grid
+        still got a French prompt). On a bilingual grid this means selecting an English
+        (e.g. down) word makes David FALCON answer that message entirely
+        in English, preamble included. There is deliberately no "reply in
+        the interface language but write the hint content in the word's
+        language" nuance — this project's small local model could not
+        follow it (a hint for a selected English word kept coming back in
+        French).
+
+        Which word is selected is stated THREE times, deliberately
+        redundantly, because a small model kept answering about a word
+        from earlier in the conversation instead: in the interface-state
+        block (mid-prompt, detailed), in a boxed `SELECTED WORD RIGHT
+        NOW` block appended after the FINAL REMINDER (the very end of the
+        system prompt), and — outside this method — in a one-line NOTE
+        `reply_stream()` prepends to the player's own message (highest
+        recency, right before the question). The monolingual system
+        prompt is no longer byte-for-byte identical to its pre-bilingual
+        form: it now carries the trailing SELECTED WORD block too (the
+        FINAL REMINDER text itself is unchanged)."""
         doc_user = _load_doc_user()
 
-        puzzle_loaded = bool(ui_context.get("puzzle_loaded"))
-        hovered_word = ui_context.get("hovered_word")
-        filling_cell = ui_context.get("filling_cell")
-        words = ui_context.get("words") or []
+        sel = _resolve_selection(ui_context)
+        puzzle_loaded = sel["puzzle_loaded"]
+        hovered_word = sel["hovered_word"]
+        filling_cell = sel["filling_cell"]
+        # The grid's current fill/selection direction ("across"/"down") —
+        # used to pick which of two crossing words a clicked cell is
+        # about, and hence which language to answer in.
+        active_direction = sel["active_direction"]
+        words = sel["words"]
 
         state_lines = [f"A crossword puzzle is currently loaded: {puzzle_loaded}."]
-        # Word(s) at the clicked cell, if any — resolved once here so the
-        # hover-else branch further below can also see whether there is
-        # any word at all to give a hint about.
-        filling_words = _words_touching_cell(filling_cell, words) if filling_cell else []
+        filling_words = sel["filling_words"]
+        hovered_resolved = sel["hovered_resolved"]
+        # The single word being filled: the lone word at the clicked cell,
+        # or — at a crossing — the one matching `active_direction`.
+        filling_word = sel["filling_word"]
+
+        # A grid is bilingual when its words don't all share one language
+        # (crossword_gen.generate_grid stamps each word with its own
+        # direction-based language on a bilingual grid — see
+        # _format_words_block).
+        word_languages = {w.get("language") for w in words if w.get("language")}
+        is_bilingual_grid = len(word_languages) > 1
+        # The single word a help request would currently be about, in the
+        # same priority order rule 4a uses: hovered word first, else the
+        # word being filled (see `filling_word` above — direction-resolved
+        # when the clicked cell is a crossing).
+        help_word = hovered_resolved or filling_word
+        help_lang = help_word.get("language") if help_word else None
+        help_dir_label = (
+            "DOWN (vertical)" if help_word and help_word.get("direction") == "down"
+            else "ACROSS (horizontal)"
+        )
+        # The language the WHOLE reply is written in. Deliberately NOT
+        # "reply in the interface language, but write the hint content in
+        # the word's language" — that nuance was hammered on so hard by
+        # rule 2 that this project's small local model could not follow it
+        # (a hint for a selected English word still came back in French).
+        # Instead: whenever the direction currently selected in the grid
+        # (hovered word, else the lone word at the clicked cell) is in a
+        # different language, the entire prompt — and so the entire reply
+        # — switches to that one language, at the user's explicit request:
+        # "adapter le prompt pour être entièrement dans la langue
+        # sélectionnée suivant le sens la grille." Falls back to the
+        # interface language when nothing is selected, or the selected
+        # word shares the interface language (an ordinary monolingual grid
+        # always lands here, byte-for-byte unchanged).
+        reply_language = help_lang if (puzzle_loaded and help_lang) else language
+        reply_language_differs = reply_language != language
+        language_name = LANGUAGE_NAMES.get(reply_language, reply_language)
+        interface_language_name = LANGUAGE_NAMES.get(language, language)
         if puzzle_loaded:
             # Order matters here, deliberately: the full word list is
             # listed FIRST and the two resolved, single-answer states
@@ -321,12 +433,31 @@ class ChatBot:
                     f"{filling_cell.get('col', 0) + 1}) to type an answer into."
                 )
                 if filling_words:
+                    if len(filling_words) >= 2 and filling_word is not None:
+                        crossing_note = (
+                            f" Two words cross at that cell, but the grid is in "
+                            f"{'DOWN (vertical)' if active_direction == 'down' else 'ACROSS (horizontal)'} "
+                            f"fill mode, so the word being filled — and the one any hint/help "
+                            f"is about — is the "
+                            f"{'DOWN (vertical)' if filling_word.get('direction') == 'down' else 'ACROSS (horizontal)'} "
+                            f"one: (row {filling_word.get('row', 0) + 1}, column "
+                            f"{filling_word.get('col', 0) + 1}). Do NOT ask the player which "
+                            f"word — it is that one."
+                        )
+                    elif len(filling_words) >= 2:
+                        crossing_note = (
+                            " Two words cross at that cell and the grid's fill direction is "
+                            "unknown — ask the player which of the two they mean, unless they "
+                            "already said."
+                        )
+                    else:
+                        crossing_note = ""
                     state_lines.append(
                         "The word(s) occupying that exact clicked cell right now (the "
                         "word being filled in). If the player asks for a hint and NO word "
-                        "is hovered (see below), this is the word the hint is about. If "
-                        "there are two words here (a crossing), ask the player which one, "
-                        "unless they already said. The line(s) below carry 'clue=' and "
+                        "is hovered (see below), this is the word the hint is about."
+                        + crossing_note
+                        + " The line(s) below carry 'clue=' and "
                         "'answer=' for your internal use — NEVER quote such a line back to "
                         "the player, and never let its 'answer=' value appear in your "
                         "reply:\n"
@@ -346,7 +477,7 @@ class ChatBot:
             # from the click-to-type target above; kept last, deliberately,
             # per this block's own opening comment.
             if hovered_word:
-                resolved = _find_word_by_start(hovered_word, words)
+                resolved = hovered_resolved
                 if resolved:
                     state_lines.append(
                         "The word currently under the player's mouse cursor (hover) — "
@@ -379,6 +510,102 @@ class ChatBot:
                     )
                 )
 
+            # Bilingual-grid language note — kept LAST in the state block
+            # (highest recency for a small model). No nuance for it to
+            # parse: the whole `language_name` used everywhere in this
+            # prompt is ALREADY the language of the currently-selected
+            # direction, so this line just states plainly, once, that the
+            # ENTIRE reply is in that one language.
+            if is_bilingual_grid and reply_language_differs:
+                state_lines.append(
+                    f"This is a BILINGUAL grid. The word currently selected in it (the "
+                    f"{help_dir_label} word) is written in {language_name} — DIFFERENT from "
+                    f"the interface language ({interface_language_name}). Write your ENTIRE "
+                    f"reply to this message (preamble, hint/definition/answer, and every "
+                    f"other sentence) in {language_name}. Do NOT use "
+                    f"{interface_language_name} anywhere in this reply."
+                )
+            elif is_bilingual_grid:
+                state_lines.append(
+                    "This is a BILINGUAL grid (across and down words are in two different "
+                    f"languages). The currently-selected word, if any, is in {language_name}: "
+                    f"reply in {language_name} as usual."
+                )
+
+        # The very last line of the whole prompt — strongest recency for a
+        # small model. `language_name` is already the correct per-selection
+        # language (the interface language whenever nothing differing is
+        # selected). The base sentence is byte-for-byte unchanged; the
+        # hint-safety clause is appended only when a grid is loaded (a
+        # no-grid chat stays byte-identical), reinforcing rule 4d at the
+        # recency position because the small model keeps ending hints with
+        # "the answer is <word>".
+        final_reminder = (
+            f"write your entire reply in {language_name}, "
+            "starting directly with the answer and no greeting."
+            + (
+                " And if the player asked for a HINT (not an explicit answer request), the "
+                "solution word must NOT appear anywhere in your reply — never end a hint "
+                "with \"the answer is ...\", never spell it out, never confirm it."
+                if puzzle_loaded else ""
+            )
+        )
+
+        # A crisp, isolated restatement of the currently-selected word at
+        # the VERY END of the system prompt, at the user's explicit
+        # request: "le prompt contient bien l'info Horizontal, mais elle
+        # est noyée dans d'autres explications. Reforce la visibilité de
+        # cette information, en la précisant bien clairement en fin de
+        # prompt système." The same fact is in the interface-state block
+        # above and in the per-message NOTE prefix (see
+        # `_current_selection_line`) — this is the third, deliberately
+        # redundant, hardest-to-miss copy.
+        if not puzzle_loaded:
+            selected_word_block = ""
+        elif help_word is None:
+            selected_word_block = (
+                "\n\n==================================================\n"
+                "SELECTED WORD RIGHT NOW: none (nothing hovered, no single word at a "
+                "clicked cell). A request for a hint/help/the answer that names no word "
+                "must be met by asking the player to hover a word or click a cell — never "
+                "by reusing a word from an earlier reply.\n"
+                "=================================================="
+            )
+        else:
+            _swr, _swc = help_word.get("row", 0) + 1, help_word.get("col", 0) + 1
+            _swk = (
+                "the word under the player's mouse (hovered)"
+                if sel["hovered_resolved"]
+                else "the word at the cell the player clicked"
+            )
+            selected_word_block = (
+                "\n\n==================================================\n"
+                f"SELECTED WORD RIGHT NOW: the {help_dir_label} word starting at (row "
+                f"{_swr}, column {_swc}) — {_swk}. Its clue and answer are its own line in "
+                f"the word list above.\n"
+                f"Any request for a hint / help / the answer that does not explicitly name "
+                f"a DIFFERENT word is about THIS {help_dir_label} word at (row {_swr}, "
+                f"column {_swc}). Do NOT answer about a word from an earlier reply in this "
+                f"conversation — the player may have selected a new one since.\n"
+                "=================================================="
+            )
+
+        # Rules 4b/4e give their preamble examples in French. When the
+        # reply language is NOT the interface language, a small model
+        # copies those French words ("Indice", "Le mot ... est") verbatim
+        # into an otherwise-correct reply — so, only then, spell out that
+        # the preamble is in `language_name` too and show how it reads.
+        # Empty (nothing spliced) for every same-language case, so the
+        # monolingual prompt is byte-for-byte unchanged.
+        preamble_lang_note = (
+            f" Write this preamble in {language_name} as well: the French example above "
+            f"shows the STYLE only, so do NOT copy its French words — in {language_name} it "
+            "would read, for instance, \"Hint for the vertical word at (l, c), the one at "
+            "the clicked cell:\" (and, for an ANSWER request in rule 4e, \"The vertical word "
+            "at (l, c) is: …\")."
+            if reply_language_differs else ""
+        )
+
         return (
             f"You are David FALCON, the friendly in-app assistant of CrossWordFalcon, a "
             "crossword-puzzle web app. You help the player use the interface and solve the "
@@ -393,21 +620,16 @@ class ChatBot:
             f"player writes to you in: reply in {language_name} anyway. It also holds even "
             "though many examples in these rules happen to be written in French — those "
             "French snippets illustrate FORMAT and WORDING STYLE only, never the language "
-            f"to answer in. If {language_name} is not French, do NOT reply in French.\n"
-            "   EXCEPTION to rule 2, for a BILINGUAL grid only: each word in the word list "
-            "below carries its own 'language=' field. On an ordinary grid every word shares "
-            "the same language as the interface, so this exception never actually changes "
-            "anything there. But on a bilingual grid, the across (horizontal) words and the "
-            "down (vertical) words can be written in two DIFFERENT languages — when your "
-            "reply is specifically about helping with ONE particular grid word (a HINT under "
-            "rule 4a-d, or the ANSWER under rule 4e), write the hint/definition/answer "
-            f"CONTENT itself in THAT WORD's own 'language=' field, not necessarily {language_name}. "
-            "Everything else in the same reply — the short preamble naming which word it is "
-            f"(rule 4b), and any other sentence not about that one word — still stays in {language_name} "
-            "as usual. State plainly, in the preamble, which language you are switching to "
-            "when it differs from the interface language, so the player is never confused by "
-            "the sudden change.\n"
-            "3. You must ONLY answer questions about using this interface, or about solving/"
+            f"to answer in. If {language_name} is not French, do NOT reply in French."
+            + (
+                f" {language_name} is already the language of the direction currently "
+                "selected in this bilingual grid (the across and down words are in two "
+                "different languages, and this whole prompt is built in whichever one the "
+                "selected direction uses) — there is no exception to weigh and nothing to "
+                f"switch mid-reply: the WHOLE reply is in {language_name}, start to finish.\n"
+                if is_bilingual_grid else "\n"
+            )
+            + "3. You must ONLY answer questions about using this interface, or about solving/"
             "understanding the crossword grid currently on screen. For ANY other question "
             "(general knowledge, other software, personal questions, anything unrelated to "
             "this app or its current grid — e.g. 'what is the capital of...'), politely "
@@ -425,8 +647,14 @@ class ChatBot:
             "answer) it is a HINT request; if genuinely unsure, treat it as a HINT. "
             "Handle a HINT request with steps a–d below; handle an ANSWER request with "
             "step e:\n"
-            "   a. FIRST work out WHICH word the hint is about, using the interface state "
-            "below:\n"
+            "   a. FIRST work out WHICH word the hint is about. Every one of the player's "
+            "messages is prefixed with a short 'NOTE — right now the player has ... "
+            "selected' line stating which word is selected AT THE MOMENT of that message. "
+            "Trust that NOTE above everything else: it is what is true NOW, even if an "
+            "earlier reply of yours in this conversation was about a different word — the "
+            "player may have selected a new one since. NEVER carry a previous reply's word "
+            "into a new one. If the NOTE and the fuller interface state below ever seem to "
+            "disagree, the NOTE wins. Failing a NOTE, use the interface state below:\n"
             "      - If a word is under the player's mouse (the hovered / 'selected' word — "
             "'mot sélectionné' — see the state below), the hint is about THAT word.\n"
             "      - Otherwise, if the player has a cell clicked for typing (the 'filling' "
@@ -445,7 +673,9 @@ class ChatBot:
             "starting (row, column), its direction, and whether it is the word under the "
             "mouse (hovered / selected) or the word at the clicked cell — so the player "
             "can correct you. One short clause, e.g. « Indice pour le mot vertical en "
-            "(l, c), celui de la case cliquée : ». The preamble must contain NOTHING else: "
+            "(l, c), celui de la case cliquée : »."
+            + preamble_lang_note
+            + " The preamble must contain NOTHING else: "
             "do NOT repeat the on-screen clue text in it, do NOT include the word's answer, "
             "and NEVER paste a raw line from the interface state below (those lines contain "
             "'clue=' and 'answer=' fields that must not appear in your reply). This "
@@ -462,12 +692,16 @@ class ChatBot:
             "sentences of this fresh description. You MAY additionally give the letter "
             "count or confirm/deny one specific letter the player proposes — but only IN "
             "ADDITION to the fresh description, never instead of it.\n"
-            "   d. In a HINT reply, NEVER put the exact answer text anywhere — not in the "
-            "preamble, not in the description, not spelled out letter by letter, not "
-            "inside a sentence, not quoted from a state line. The 'answer=' value in the "
-            "state below is for your own silent check only; in a HINT reply, if it appears "
-            "in any form, the reply is wrong. (This restriction is for HINT replies only — "
-            "it does NOT apply to an ANSWER request, see e.)\n"
+            "   d. A HINT reply must NEVER reveal the solution word. Do NOT write it, do NOT "
+            "spell it out letter by letter, do NOT quote it from a state line, do NOT embed "
+            "it in a sentence — and, in particular, do NOT end (or begin) the hint with a "
+            "phrase such as \"The answer is ...\", \"It is ...\", \"The word is ...\", \"so "
+            "the word is ...\", \"La réponse est ...\" followed by the solution. The "
+            "'answer=' value in the state below is for your own silent check ONLY. Before "
+            "you send a HINT, re-read your own draft: if that exact 'answer=' value appears "
+            "in it in ANY form (any case, with or without spaces/dashes between letters), "
+            "delete that part and send the rest. (This restriction is for HINT replies only "
+            "— it does NOT apply to an explicit ANSWER request, see e.)\n"
             "   e. ANSWER request (the player explicitly asked for the answer/solution/"
             "exact word — see the top of rule 4). Here you DO give it: state which word "
             "(same short preamble as 4b) and then the exact answer plainly, e.g. « Le mot "
@@ -482,6 +716,13 @@ class ChatBot:
             "SOLEIL'. ALSO BAD (echoes the clue): 'Le mot vertical en (l, c), sa définition "
             "est « Astre du jour ».' GOOD: '… : l'étoile la plus proche de la Terre, source "
             "de sa lumière et de sa chaleur, au centre du système solaire — 6 lettres.'\n"
+            "   - Example 3 (answer leak — the most common mistake): word CHEVAL. BAD: "
+            "'… : pensez à un grand animal de trait à quatre pattes. La réponse est : "
+            "CHEVAL.' — the fresh description is fine, but the final sentence hands over the "
+            "solution and RUINS the hint. GOOD: the exact same reply WITHOUT that last "
+            "sentence: '… : pensez à un grand animal de trait à quatre pattes — 6 lettres.' "
+            "A hint stops at the description (plus, optionally, the letter count); it NEVER "
+            "names the word.\n"
             "   These examples illustrate the SAME general rule — apply it to ANY word the "
             "player asks a hint about. The positions in the examples are illustrative only: "
             "NEVER copy a position from an example; always take the real one from the "
@@ -509,11 +750,46 @@ class ChatBot:
             "developer):\n"
             f"{doc_user}\n\n"
             "Current state of the interface:\n" + "\n".join(state_lines)
-            + f"\n\nFINAL REMINDER: write your entire reply in {language_name}, "
-            "starting directly with the answer and no greeting."
+            + "\n\nFINAL REMINDER: " + final_reminder
+            + selected_word_block
         )
 
-    async def reply_stream(self, history, message, language="fr", ui_context=None, timeout=DEFAULT_TIMEOUT):
+    def _current_selection_line(self, ui_context):
+        """A one-line restatement of which grid word is selected RIGHT
+        NOW, prepended to the player's own message in `reply_stream()` so
+        the model answers about the currently-selected word rather than
+        one it discussed earlier in the conversation. Reported live: with
+        a bilingual grid and vague follow-ups ("Un indice ?"), a small
+        model kept giving hints about the word from turn 1 even after the
+        player had selected a different one — the interface-state block
+        in the system prompt is far from the current question and lost
+        the tug-of-war against recent conversation history. Returns "" for
+        no puzzle (the system prompt already covers that)."""
+        sel = _resolve_selection(ui_context or {})
+        if not sel["puzzle_loaded"]:
+            return ""
+        w = sel["hovered_resolved"] or sel["filling_word"]
+        if w is None:
+            return (
+                "NOTE — right now NO single word is selected in the grid (nothing hovered, "
+                "and no unambiguous word at a clicked cell). If this message asks for help "
+                "without naming a word, ask the player to hover a word or click a cell "
+                "first; do NOT continue a word from an earlier reply."
+            )
+        kind = "under the mouse (hovered)" if sel["hovered_resolved"] else "at the clicked cell being filled"
+        d = "DOWN (vertical)" if w.get("direction") == "down" else "ACROSS (horizontal)"
+        r, c = w.get("row", 0) + 1, w.get("col", 0) + 1
+        return (
+            f"NOTE — right now the player has the {d} word starting at (row {r}, column {c}) "
+            f"selected in the grid ({kind}). If this message is a request for help / a hint "
+            f"/ the answer and does not explicitly name a different word, it is about THAT "
+            f"word — the {d} word at (row {r}, column {c}) — even if an earlier reply in "
+            f"this conversation was about a different word. Do not carry over the previous "
+            f"reply's word."
+        )
+
+    async def reply_stream(self, history, message, language="fr", ui_context=None,
+                           timeout=DEFAULT_TIMEOUT, on_prompt=None):
         """Same purpose as a plain `reply()` would have, but yields the
         assistant's reply incrementally, chunk by chunk, as the LLM
         produces it — at the user's explicit request: "Le Bot doit
@@ -529,7 +805,11 @@ class ChatBot:
         `POST /api/chat`, a real `StreamingResponse` this feeds directly.
 
         `history`/`message`/`ui_context` are exactly as before (see
-        _build_system_prompt). Raises ChatError up front on a connection
+        _build_system_prompt). `on_prompt`, if given, is called once with
+        the fully-assembled `messages` list (system prompt + history +
+        current question) right before the HTTP call — used by
+        backend/app.py to log the complete prompt for analysis when
+        CHATBOT_DEBUG is enabled. Raises ChatError up front on a connection
         failure that happens before any chunk was ever read; a failure
         *mid-stream* (rarer, but possible) simply ends the generator
         early with whatever was already yielded — the caller has no
@@ -601,7 +881,21 @@ class ChatBot:
         system_prompt = self._build_system_prompt(language, ui_context or {})
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
-        messages.append({"role": "user", "content": message})
+        # Prepend the live "which word is selected right now" NOTE to the
+        # player's own message, so it sits immediately before the question
+        # (highest recency) rather than only in the far-away system prompt
+        # — a small model was anchoring on an earlier reply's word instead
+        # (see _current_selection_line's own docstring).
+        selection_line = self._current_selection_line(ui_context or {})
+        user_content = f"{selection_line}\n\n{message}" if selection_line else message
+        messages.append({"role": "user", "content": user_content})
+        # Hand the exact wire payload to the caller before sending it —
+        # backend/app.py uses this to write the full prompt (system +
+        # history + question) into LOG_CHAT/ when CHATBOT_DEBUG is on.
+        # Called here, before the try/HTTP block, so a connection failure
+        # still leaves the prompt captured for analysis.
+        if on_prompt is not None:
+            on_prompt(messages)
         buffer = ""
         yielded_anything = False
         reasoning_state = {
