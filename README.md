@@ -99,6 +99,25 @@ This script also takes care of cleanly stopping any version of the app that
 might already be running before starting a new one — feel free to rerun it
 as often as you like.
 
+## Pre-filling the library (optional)
+
+If you want the Library to already contain a stock of grids, you can let
+the app generate a batch of them on its own, one at a time, in the
+background:
+
+```bash
+./run_Populate.sh start                 # 1000 grids, random language/level/size
+./run_Populate.sh start --count 200 --language fr --difficulty easy
+./run_Populate.sh status                # is a batch running? show recent progress
+./run_Populate.sh stop                  # stop it (finishes the current grid first)
+./run_Populate.sh restart --mode turbo  # stop, then start again
+```
+
+The app (`./run_Falcon.sh`) must be running first. Each finished grid is
+added to the Library automatically. The batch runs quietly in the
+background and survives closing the terminal; its progress is written to
+`logs/populate.log`.
+
 ## Using the app
 
 On the page:

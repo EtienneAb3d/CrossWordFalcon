@@ -28,7 +28,8 @@
     "For SÄTE — first/third person singular PRETERITE (Präteritum) of \"säen\" (to sow) — answering \"Vorgang des Ausstreuens von Samen in die Erde\" (\"the process of scattering seeds into the earth\"): that's a generic dictionary-style definition of the infinitive \"säen\", not phrased for a specific past action — the clue must itself read as something that happened in the past, e.g. \"Was er tat, als er im Frühling die Beete vorbereitete.\"",
     "For FÄLLTE — third person singular PRETERITE (Präteritum) of \"fällen\" (to fell/cut down) — answering \"Er würde ihn fällen... nein, er fällte ihn mit einem einzigen Schlag\": the visible self-correction (\"würde ihn fällen... nein\") is exactly what must never appear in a clue — decide on the final answer entirely before writing anything down, and write only \"Er fällte ihn mit einem einzigen Schlag\", never the discarded first attempt too.",
     "For LACHT — THIRD person singular PRESENT of \"lachen\" (to laugh), \"er/sie lacht\" — answering \"Was du tust, wenn dir ein Witz gefällt\": wrong person — \"du\" (second person) instead of \"er/sie\" (third person), even though the meaning itself is right — the clue must itself be framed for the correct subject, e.g. \"Was er tut, wenn ihm ein Witz gefällt.\"",
-    "For EULEN — PLURAL of \"Eule\" (owl) — answering \"Eulen - nachtaktive Greifvögel\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would. Write only the definition itself, with nothing labeling it, e.g. \"Nachtaktive Greifvögel.\""
+    "For EULEN — PLURAL of \"Eule\" (owl) — answering \"Eulen - nachtaktive Greifvögel\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would. Write only the definition itself, with nothing labeling it, e.g. \"Nachtaktive Greifvögel.\"",
+    "For ROCH — Präteritum (simple past) of \"riechen\" (to smell) — answering \"Nimmt einen Geruch mit der Nase wahr\" (present tense): the meaning is right but the clue's own verb is present, not past — it must itself be past to match, e.g. \"Nahm den Duft von frischem Brot wahr, als er die Tür öffnete.\""
   ],
   "rule_good": [
     "For FEEN, \"Magische Wesen aus Märchen.\" (in the correct plural form, per rule 4).",
@@ -51,6 +52,7 @@
     "NEUE (Plural, attributiv) : Beschreibung für mehrere Geräte, die gerade erst auf den Markt gekommen sind",
     "ALTE (Plural, attributiv) : Beschreibung für mehrere Steine, die von der Zeit gezeichnet sind",
     "PFERDE (Plural, unregelmäßig: das Pferd → die Pferde) : Was man in großer Zahl auf einem Gestüt findet",
-    "BÜCHER (Plural, unregelmäßig: das Buch → die Bücher) : Was mehrere Regale in einer gut sortierten Bibliothek füllt"
+    "BÜCHER (Plural, unregelmäßig: das Buch → die Bücher) : Was mehrere Regale in einer gut sortierten Bibliothek füllt",
+    "ROCH (Präteritum) : Nahm den Geruch von Regen wahr, bevor er fiel"
   ]
 }

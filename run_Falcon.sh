@@ -76,7 +76,13 @@ kill_tree() {
 stop_port() {
     local port="$1"
     local pids pid
-    pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
+    # -sTCP:LISTEN so this only ever matches the SERVER listening on the
+    # port, never a local CLIENT with an open connection to it. Without
+    # it, `lsof -ti tcp:PORT` also returns any process mid-request to the
+    # port (a browser, a curl, Automation/Populate.py's polling loop) and
+    # stop_port() would SIGTERM it too — which is exactly what silently
+    # killed a long Populate run once, mid-poll, on a routine restart.
+    pids=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)
     if [ -n "$pids" ]; then
         echo "Stopping server already running on port $port (pid: $pids)"
         for pid in $pids; do
@@ -84,7 +90,13 @@ stop_port() {
         done
         sleep 1
         # kill -9 (the whole tree again, not just the PID) any survivors
-        pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
+        # -sTCP:LISTEN so this only ever matches the SERVER listening on the
+    # port, never a local CLIENT with an open connection to it. Without
+    # it, `lsof -ti tcp:PORT` also returns any process mid-request to the
+    # port (a browser, a curl, Automation/Populate.py's polling loop) and
+    # stop_port() would SIGTERM it too — which is exactly what silently
+    # killed a long Populate run once, mid-poll, on a routine restart.
+    pids=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)
         if [ -n "$pids" ]; then
             for pid in $pids; do
                 kill_tree "$pid" KILL

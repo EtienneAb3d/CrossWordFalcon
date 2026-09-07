@@ -16,6 +16,7 @@ env.sh
 /RSS/
 /SCRAPP/
 *.log
+/logs/*
 install_cuda13.sh
 # Rootless certbot state (Let's Encrypt cert + account + logs for the
 # HTTPS front end) and the ACME HTTP-01 challenge dir the running front
@@ -25,3 +26,4 @@ install_cuda13.sh
 /frontend/static/.well-known/
 renew-https.sh
 
+nohup.out

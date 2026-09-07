@@ -32,7 +32,8 @@
     "For DERRIBARÁ — third person singular FUTURE of \"derribar\" (to knock down), \"él/ella derribará\" — answering \"Lo arrasaría... no, lo derribará al suelo de un golpe seco\": the visible self-correction (\"arrasaría... no\") is exactly what must never appear in a clue — decide on the final answer entirely before writing anything down, and write only \"Lo derribará al suelo de un golpe seco\", never the discarded first attempt too.",
     "For RÍE — THIRD person singular PRESENT of \"reír\" (to laugh), \"él/ella ríe\" — answering \"Lo que haces cuando un chiste te gusta\": wrong person — \"tú\" (second person, implied by \"haces\"/\"te\") instead of \"él/ella\" (third person), even though the meaning itself is right — the clue must itself be framed for the correct subject, e.g. \"Lo que hace cuando un chiste le gusta.\"",
     "For BÚHOS — PLURAL of \"búho\" (owl) — answering \"búhos - aves rapaces nocturnas\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would. Write only the definition itself, with nothing labeling it, e.g. \"Aves rapaces nocturnas.\"",
-    "For SECO — MASCULINE singular adjective (\"dry\") — answering \"Se dice de una hierba privada de humedad\": \"hierba\" is feminine, so this clue's own gender doesn't match masculine SECO — the same trap as CANSADO/NUEVA above, but note it's just as easy to get wrong with an ordinary, unremarkable noun like \"hierba\" as with an obviously gendered one — the clue's subject noun must itself be masculine to fit, e.g. \"Se dice de un suelo privado de humedad.\""
+    "For SECO — MASCULINE singular adjective (\"dry\") — answering \"Se dice de una hierba privada de humedad\": \"hierba\" is feminine, so this clue's own gender doesn't match masculine SECO — the same trap as CANSADO/NUEVA above, but note it's just as easy to get wrong with an ordinary, unremarkable noun like \"hierba\" as with an obviously gendered one — the clue's subject noun must itself be masculine to fit, e.g. \"Se dice de un suelo privado de humedad.\"",
+    "For OLERÁ — third person singular FUTURE of \"oler\" (to smell), \"él/ella olerá\" — answering \"Percibe un aroma con la nariz\" (present tense): the meaning is right but the clue's verb is present, not future — it must be in the future to match, e.g. \"Percibirá el aroma del guiso antes de probarlo.\""
   ],
   "rule_good": [
     "For HADAS, \"Personajes mágicos de los cuentos.\" (in the correct plural form, per rule 4).",
@@ -56,6 +57,7 @@
     "NUEVOS (masculino plural) : Se dice de varios aparatos recién salidos a la venta",
     "VIEJAS (femenino plural) : Se dice de varias piedras desgastadas por el tiempo",
     "CABALLOS (masculino plural) : Lo que se encuentra, en gran número, en una yeguada",
-    "TRABAJOS (masculino plural) : Lo que ocupa a varios obreros en una obra"
+    "TRABAJOS (masculino plural) : Lo que ocupa a varios obreros en una obra",
+    "OLERÁ (él/ella, futuro) : Lo que hará con el aire del campo al bajar del coche"
   ]
 }

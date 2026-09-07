@@ -89,6 +89,11 @@ project's engineering language.
    once a task/turn's work is done and verified, not per individual file
    edit within it. The version badge in the web UI reads this file
    directly, so it's the one user-visible signal that something changed.
+   **Always re-read `VERSION.txt` immediately before writing the new
+   value** — never bump from a number remembered earlier in the session.
+   The user edits this file by hand between turns; overwriting it with
+   `<remembered> + 1` can silently undo a manual bump or move the version
+   backward. Read the current value, then increment that.
 
 10. **Keep `frontend/static/i18n.js` current with every UI-visible string
     change** — any label, button, heading, status/progress message, or
@@ -304,7 +309,15 @@ project's engineering language.
   launching shell/terminal closing — `nohup` alone doesn't remove the
   process from the shell's job table on every shell. `setsid` isn't used:
   it's not available on macOS by default.
-- `run_Falcon.sh`'s `stop_port()` kills each PID's whole process tree
+- `run_Falcon.sh`'s `stop_port()` finds the server with
+  `lsof -ti tcp:$port -sTCP:LISTEN` — the `-sTCP:LISTEN` scope is
+  load-bearing: a bare `lsof -ti tcp:$port` also returns any *client*
+  with an open connection to that port (a browser, a `curl`,
+  `Automation/Populate.py`'s polling loop), and `stop_port()` would then
+  SIGTERM the client too. That silently killed a long Populate run once,
+  mid-poll, on a routine `./run_Falcon.sh` restart (no traceback, no
+  graceful shutdown — Populate has no SIGTERM handler). It then kills
+  each matched PID's whole process tree
   (`kill_tree()`, recursing via `pgrep -P` before killing the PID itself),
   not just the PID alone — fixed after 436 orphaned `ProcessPoolExecutor`
   worker processes were found live, accumulated over days: restarting
@@ -321,6 +334,18 @@ project's engineering language.
   to preserve by leaving its workers alive. Verified live: a real
   restart triggered mid-search (10 active workers confirmed via `ps`)
   left zero afterward.
+- `run_Populate.sh` (project root) is the start/stop/restart wrapper for
+  `Automation/Populate.py` (the bulk library populator). It is *not*
+  managed by `run_Falcon.sh` — Populate is a plain background process,
+  not a port listener. Subcommands: `status` (default, never starts
+  anything), `start [args…]` (pass-through to `Populate.py`), `stop`
+  (graceful SIGINT, escalating to a second SIGINT then SIGKILL after
+  `POPULATE_STOP_GRACE`, default 20s), `restart [args…]`. Tracks the
+  process via `logs/populate.pid` (validated against `/proc/<pid>/cmdline`)
+  with a `pgrep` fallback. Standing constraint: do **not** actually start
+  Populate until the user says clue grammatical agreement is good enough
+  — the script exists so it can be managed cleanly, not so it can be run
+  now.
 - `frontend/server.py` proxies `/api/*` through one shared
   `httpx.AsyncClient(timeout=PROXY_TIMEOUT_S)` (30s, one value for every
   proxied route, not a per-endpoint split) and sets
@@ -357,6 +382,16 @@ project's engineering language.
   of MB total) — small enough to ship directly and load-bearing at runtime
   (the "easy"-difficulty gloss filter, LLM clue grounding), unlike the much
   larger raw corpus/dump caches above.
+- `data/inflection/<lang>.jsonl` **is** committed (~4–23 MB per language,
+  ~100 MB total) — the exact-form grammatical-analysis table read by
+  `backend/inflection_lookup.py` for the clue prompt's `A=` line. Stored
+  **plain uncompressed** (at the user's request, so the tables can be
+  inspected / `grep`ed by hand) — each file is comfortably under GitHub's
+  100MB hard limit and its 50MB soft warning. Same "small + load-bearing,
+  ship it, don't make every deploy re-run a multi-MB-download build" call
+  as the gloss dictionary; no unpack step, so `Install.sh` needs nothing
+  for it. Its own raw source dumps live in `DICS/` (gitignored) like the
+  gloss dumps.
 - `build_sentence_corpus.py` writes TWO files per language, not one, at the
   user's explicit request once it was noticed that capping the corpus for
   GitHub distribution was also silently starving `build_wordlist_freq.py`
@@ -441,11 +476,22 @@ project's engineering language.
   `data/gloss_dictionary/<lang>_glosses.jsonl`. Raw dumps are cached under
   `DICS/` so a later rebuild re-filters instead of re-downloading several
   gigabytes per language.
+- `build_inflections.py` downloads the **English-Wiktionary** Kaikki dump
+  per language (`kaikki.org-dictionary-<Name>.jsonl.gz`, ~54-96 MB gzip,
+  cached in `DICS/` as `<Name>-en.jsonl.gz`) — the English edition, not
+  the own-language one `build_gloss_dictionary.py` uses, because only it
+  tags inflection with a consistent structured vocabulary — extracts every
+  `form-of` sense's grammatical tags, filters to the surface forms in
+  `data/wordlist_<lang>_full.tsv`, and writes
+  `data/inflection/<lang>.jsonl` (committed, plain uncompressed). Read at runtime by
+  `backend/inflection_lookup.py` for the clue prompt's `A=` line. It reads
+  the wordlist, so re-run it after a wordlist rebuild.
 - `data_builder/build_<lang>.sh` (one per fr/en/de/es/it/pt) is a one-shot
-  orchestration wrapper that runs all four pipeline stages for that
+  orchestration wrapper that runs all five pipeline stages for that
   language in dependency order — `build_sentence_corpus.py` ->
   `build_wordlist_freq.py` -> `build_gloss_dictionary.py` ->
-  `compress_reference_corpus.py` — bailing out on the first failure. It
+  `compress_reference_corpus.py` -> `build_inflections.py` — bailing out
+  on the first failure. It
   `cd`s to the repo root, points `PATH`/`LD_LIBRARY_PATH` at this host's
   rootless `~/.local` hunspell build, and is safe to re-run (every stage
   reuses its own on-disk cache: `CORPUS/`, `DICS/`, `data/hunspell_cache/`).
@@ -757,8 +803,16 @@ the current defaults/behavior to know before touching this code.
   parallel-request/continuous-batching support at all — client-side
   concurrency does not speed this up, don't re-attempt it without first
   addressing that server-side limitation.
-- The model is asked for exactly 3 plain lines, one candidate clue per
-  line, nothing else — no header, no delimiter syntax for it to get wrong.
+- The model is asked for exactly 4 lines: an `A=` line first (the target
+  word's part of speech + full inflection — person/number/mood/tense for
+  a verb, number/gender for a noun/adjective), then 3 clue lines
+  `C1=`/`C2=`/`C3=`. `_parse_response()` drops the `A=` line
+  (`_ANALYSIS_LINE_RE`) — it exists only to force the model to analyse
+  the grammar before writing the clues (the one instruction-side change
+  that measurably improved tense/number/gender agreement on the small
+  local model, unlike four earlier prose/example reinforcements). Clue
+  lines are otherwise trusted as-is — the `C1=`/`C2=`/`C3=` labels help
+  the model but are stripped and never required (`_LEADING_MARKER_RE`).
   `_pick_clue()` filters candidates for: length (`MAX_CLUE_WORDS = 20`),
   non-Latin script, containing the target word/accented spelling/any known
   canonical form (`_contains_target_word` — deliberately not a full
@@ -778,10 +832,29 @@ the current defaults/behavior to know before touching this code.
   onto it.
 - Grammatical agreement (person/number/mood/tense/gender matching the
   target word) has no code-level filter — it needs real per-language
-  parsing of the clue text, which isn't attempted. This remains a known,
-  accepted small-model reliability ceiling, most visible on high-frequency
-  irregular verbs (French "être" especially) — prompt-only mitigations
-  (explicit rules, worked examples) help but don't fully solve it.
+  parsing of the clue text, which isn't attempted. Prompt-only
+  mitigation is layered, and the two levers that actually moved agreement
+  on the small local model are: (1) the mandatory `A=` analysis line (the
+  model must state the target's part of speech + full inflection before
+  writing any clue — see the output-format bullet above), and (2)
+  feeding that analysis to it directly, from a pure-local lookup of the
+  exact form (`_build_pos_block` / `backend/inflection_lookup.py` —
+  structured Wiktionary tags, incl. the *person* Hunspell can't give).
+  Together: `HUMERA` 0/8→4/4 future, `IRAS` now second-person, `SERIONS`
+  4/4 first-person-plural conditional (the "être" worst case). On top of
+  those: rule 4 (with two named traps), a per-word grammar reminder
+  appended to the user message right after `Word:`, a compact "GRAMMAR
+  CHECK" block just before "OUTPUT FORMAT", and per-language
+  `rule_bad`/`rule_good` worked examples in `data/<lang>_prompt_config.
+  json` covering wrong-tense, wrong-person, wrong-number and wrong-gender
+  clues. This still remains a known, accepted small-model reliability
+  ceiling — the local table has no row for some forms (a lemma with no
+  Wiktionary form-of entry, or a form it doesn't document), so those
+  fall back to POS-only, and the model still slips on hard cases — so
+  the mitigations
+  raise the ceiling rather than remove it; a larger
+  model (Qwen3.8-27B or a cloud API) both analyses and follows more
+  reliably. Disclosed rather than chased with endless prompt iteration.
 - Grounding: `_build_gloss_block`/`_build_examples_block` append real
   dictionary definitions and real usage sentences to the prompt when
   available, keyed as described in the data-pipeline section above; both
@@ -794,16 +867,43 @@ the current defaults/behavior to know before touching this code.
   en/es/it/pt: drop trailing `s`; German exempt) — so a verb form like
   French "iras" is not grounded with the noun "aller" even though "aller"
   is one of its canonical forms, while "allers" (that noun's plural)
-  still is. Verb/adjective/etc. senses are never affected.
+  still is. Verb/adjective/etc. senses are never affected. Right after
+  the definitions, `_build_pos_block` adds a block giving the exact grid
+  form's part of speech AND full inflection, to feed the `A=` analysis
+  line directly. Primary source: `backend/inflection_lookup.py`'s
+  `describe_form()` — a **pure-local** read of
+  `data/inflection/<lang>.jsonl` (built by `data_builder/build_
+  inflections.py` from the English-Wiktionary Kaikki dump, checked in
+  plain/uncompressed for hand inspection, ~100 MB total for all 6
+  languages, filtered to each wordlist), whose
+  form-of rows carry structured tags → e.g. `verb, third-person singular
+  future (of "humer")`, `verb, second-person singular future (of
+  "aller")` for `iras` (Hunspell can't give the person). No network,
+  lazily loaded + cached per language. Fallback for a form not in the
+  table (a lemma with no Wiktionary form-of entry, e.g. French `JE`): the
+  Hunspell-stem (`hunspell -m` cached in CANONIQUE, no binary needed at
+  request time) + gloss-dict POS line (POS only, no inflection). Both
+  apply the same noun filter and easy-mode `name` drop as the gloss
+  block; the block is omitted when neither source has anything. (An
+  earlier version did this lookup online via `backend/kaikki_lookup.py`,
+  since removed — the user wanted fully-offline capability.)
 - Every LLM call (success or failure alike) writes its own diagnostic file
   under `LOG_LLM/` (gitignored), named `<timestamp>_<answer>_SUCCES.md` or
   `_ERROR.md`: the full system+user prompt, the raw LLM output, and every
   candidate's verdict (selected / accepted-not-selected / rejected +
   reason).
-- A word that exhausts all 3 retries never falls back to showing the bare
-  answer as its own definition — both `frontend/static/script.js`'s
-  `renderClueLines()` and `backend/svg_export.py`'s `_group_clue_lines()`
-  show a translated "no definition available" placeholder instead.
+- When a word exhausts all 3 retries because every candidate was rejected
+  *solely* for containing the target word (its every clue leaks the word
+  — common for very short function words like French JE), `_generate_one`
+  picks one of those rejected candidates at random and blanks the word
+  out with "_" (`_mask_target_word`: "Je dis la vérité quand je parle" ->
+  "_ dis la vérité quand _ parle", a legitimate fill-in-the-blank clue),
+  at the user's explicit request. It never falls back to the bare answer
+  as its own definition. A word with genuinely zero usable candidates
+  (LLM unreachable, only too-long / wrong-language output) still ends up
+  unclued — `frontend/static/script.js`'s `renderClueLines()` and
+  `backend/svg_export.py`'s `_group_clue_lines()` then show a translated
+  "no definition available" placeholder.
 - `generate()` accepts a `cancel_event`, checked once per word before that
   word's own retry rounds start (see the cancellation mechanism above).
 - **Default local model: Qwen3.5-0.8B** (bf16, unquantized) — chosen

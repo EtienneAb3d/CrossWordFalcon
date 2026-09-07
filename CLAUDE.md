@@ -2865,7 +2865,66 @@ servers:
   explicit request after the round-based log ordering read confusingly: two
   consecutive "round 1/3" lines for two *different* words looked like a retry that
   silently skipped to the next word, when it was really just two different words' own
-  first attempts (see the project-best-practices SKILL). The prompt is split into a `system` message (`_build_system_prompt()` — role,
+  first attempts (see the project-best-practices SKILL).
+
+  **Mask-the-word fallback**, at the user's explicit request ("Quand
+  toutes les tentatives pour produire une définition qui ne contient pas
+  le mot à définir échoue, prendre une définition au hasard, et remplacer
+  le mot par '_'. Exemple : 'Je' ne marche pas"): after the 3 rounds, if
+  no clue ever came back clear of the target word but at least one
+  candidate was rejected *solely* for `_contains_target_word` (it passed
+  the length / non-Latin / wrong-language checks), `_generate_one` picks
+  one of those at random and runs it through `_mask_target_word` —
+  replacing every whole-word occurrence of the answer / accented spelling
+  / a known canonical form (matched exactly the way `_contains_target_
+  word` detects them) with a single `"_"`, keeping all other text and
+  punctuation. For French `JE`, whose every candidate a small model
+  writes tends to be `"Je ... je ..."`, `"Je dis la vérité quand je
+  parle"` becomes `"_ dis la vérité quand _ parle"` — a legitimate
+  fill-in-the-blank clue. `_pick_clue` now returns a third value,
+  `maskable` (the candidates rejected for containment *only*), which
+  `_generate_one` accumulates across all 3 rounds (`maskable_pool`,
+  order-preserving dedup via `dict.fromkeys`). A word with genuinely zero
+  usable candidates (LLM unreachable, or only too-long / wrong-language
+  output) still ends up unclued and hits the `_NO_DEFINITION` /
+  `noDefinition` placeholder downstream, exactly as before. The masked
+  result gets its own `LOG_LLM/<ts>_<answer>_SUCCES.md` record
+  (`outcome`: "fallback: target word masked with '_' in a rejected
+  candidate (...)"). Verified: isolated `_mask_target_word` cases
+  (multiple occurrences, apostrophe boundary `j'humera`, an
+  inflected-but-not-exact `chats` left untouched), `_pick_clue`'s
+  `maskable` correctly excluding a candidate also rejected for length,
+  and the full `_generate_one` path — a forced all-`"Je ..."` response
+  masks to `"_ dis la vérité quand _ parle"`; an LLM-down control stays
+  `None`.
+
+  `_LEADING_MARKER_RE` was broadened again, at the user's explicit
+  request after seeing the small model introduce a candidate with `C1:`
+  (or `C1.`, `C1)`, `C1 -`, `C1 —`, `c2:`, the spelled-out `Clue 2:` /
+  `Candidate 3 -`, a bare `C:`, or — a follow-up request — no separator
+  at all, just `C1 ` / `C1` before the clue text) instead of the
+  asked-for `C1=` — the OUTPUT FORMAT prompt is unchanged (still
+  `C1=`/`C2=`/`C3=`), the parser just tolerates more delimiter/label
+  shapes on the way in. The regex now strips a leading dash/bullet, a
+  numbered `1.`/`1)`/`1:` marker, `c(?:lue|andidate)?\s*[1-3]?\s*[=:.)
+  \-–—]` (with a separator), or `c(?:lue|andidate)?\s*[1-3]` (no
+  separator) — case-insensitive. The no-separator alternative
+  *requires* the digit `1`-`3`, so it can never strip a lone leading
+  `C` from a real clue that happens to start with one (`Ce...`,
+  `C'est...`, `Compagnon...`); "clue"/"candidate" is not a word in any
+  supported clue language either way. `_ANALYSIS_LINE_RE` got the
+  separator treatment too (`[=:.)]` after the `A`/`Analysis` label, not
+  just `[:=]`) but *not* the no-separator variant — dropping a whole
+  line just because it opens with a bare `A ` would be far too
+  aggressive (French `A la...`, English `A word for...`). Verified with
+  isolated `_parse_response` cases: every `C1`/`c2`/`Clue 3`/
+  `Candidate 1`/`C:` prefix, with a separator or none, strips to the
+  bare clue; `C1Il part` (no space at all) strips too; real French
+  clues opening with `Ce`/`Compagnon`/`Célèbre`/`C'est` are left
+  intact; `A:`/`A1.`/`A1)`/`Analyse :` analysis lines drop while `"À la
+  plage : ..."` / `"Avoir de la chance"` do not.
+
+  The prompt is split into a `system` message (`_build_system_prompt()` — role,
   difficulty style, rules, worked examples: everything that's identical on every call)
   and a `user` message (`_build_user_message()` — just this one word's accented
   spelling plus its grounding block), rather than one long combined message; both are
@@ -2899,7 +2958,142 @@ servers:
   mentira") as a worked example after a bare-infinitive clue ("Cacher le vrai" instead
   of future-tense "Cachera le vrai") was reported — this one sampled a clean 6/6
   correctly future-tense, with no regression on a `SERRERAIT`/`ANS` re-test (6/6 and
-  ~half-plural respectively, matching earlier results). No post-filter for this (unlike
+  ~half-plural respectively, matching earlier results).
+
+  The agreement instructions were reinforced again later, at the user's
+  explicit request ("Renforce le prompt... pour qu'elles respectent mieux
+  les nombres, genres et conjugaisons du mot à définir. Exemple :
+  'HUMERA' doit avoir une définition au future."), in four layers rather
+  than another single example: (1) the system prompt's own intro
+  paragraph now states outright that a clue "that only points at the
+  right meaning, in the wrong tense or the wrong number/gender, does NOT
+  fit"; (2) rule 4's trap (a) was expanded from "a generic
+  infinitive-style definition" to also cover a clue whose own verb sits
+  in the plain present, and now spells out that a future / conditional /
+  past / imperfect / subjunctive target requires the clue's *own* main
+  verb in that same tense/mood — with `HUMERA` ("the future of humer")
+  named inline as the illustrative case (the same style as the `ARES`
+  example already hardcoded in the ABSOLUTE RULE prose); (3) a new
+  compact "GRAMMAR CHECK" block sits immediately before "OUTPUT FORMAT"
+  (the highest-recency position, the same placement reasoning as
+  `backend/chatbot.py`'s trailing "SELECTED WORD" block) — three
+  yes/no checks (tense/mood, person/number, noun/adjective
+  number+gender) the model must run against each of C1/C2/C3 before
+  emitting them; (4) `_build_user_message` now appends a per-word
+  reminder right after `Word: {accented}` (the last thing the model
+  reads before answering), restating the tense/number/gender match
+  requirement for this specific form. One new `rule_bad` + one new
+  `rule_good` worked example was added to every language's `data/<lang>_
+  prompt_config.json` — all built around a "smell/sniff" verb for
+  thematic consistency with the reported `HUMERA` case: `HUMERA`/`OLERÁ`/
+  `ANNUSERÀ`/`CHEIRARÁ` (3sg future, fr/es/it/pt), `SMELLED` (simple
+  past, en), `ROCH` (Präteritum, de) — each pairing a present-tense
+  "meaning is right, tense is wrong" bad clue with a correctly-tensed
+  good one.
+
+  Those four instruction-only layers, verified live on this project's own
+  small default model (Qwen3-4B), did NOT move the needle — `HUMERA`
+  still came back present-tense/infinitive-style in 8/8 samples. A fifth
+  layer, added right after at the user's explicit request ("Modifie le
+  prompt pour l'obliger à construire une première ligne de réponse
+  donnant la description du type ... de la flexion du mot à définir (et
+  filtre cette ligne ensuite)"), is what actually worked: the OUTPUT
+  FORMAT block now asks for **4** lines — an `A=` line first, stating the
+  target word's part of speech and full inflection (person + number +
+  mood/tense for a verb; number + gender for a noun/adjective), then the
+  three `C1=`/`C2=`/`C3=` clue lines, each told to match that `A=`
+  analysis. `_parse_response()` drops the `A=` line entirely
+  (`_ANALYSIS_LINE_RE` — matches the asked-for `A=`/`A1=` label plus the
+  likely unlabeled deviations `Analysis:`/`Analyse :`/`Analisi:`/
+  `Análisis:`, and — since a small model swaps the `=` for another
+  punctuation just as it does for the clue lines, see below — any of
+  `= : . )` after the label, so `A:`/`A1.`/`A1)` are caught too), so it
+  never reaches the candidate pool, `_pick_clue`, a
+  `LOG_LLM/` candidate list, or the player — it exists purely to force
+  the model to externalise the grammatical analysis before writing the
+  clues. `max_tokens` needed no change (the fixed `+300` headroom in
+  `REASONING_TOKEN_BUDGET + 300 + 90 * _BATCH_SIZE` easily covers one
+  extra short line). Verified live on Qwen3-4B: `HUMERA` came back
+  correctly future-tense in 6-7 of 8 samples (up from 0/8), the model
+  emitting e.g. `A=verb, third person singular, future` then three
+  future-tense clues; 5 isolated `_parse_response` cases confirmed the
+  `A=`/`A1=`/`Analysis:` line is stripped while a legitimate clue
+  starting with "à" (French "to/at") is not, and that a response with no
+  analysis line at all still keeps every line. The model's own `A=`
+  analysis is not always correct (for `FÉES` it said "feminine singular"
+  where the grid word is plural), so this raises the ceiling rather than
+  removing it — a larger model (Qwen3.8-27B, or a cloud API) both
+  analyses and follows more reliably.
+
+  To feed the model the `A=` line directly, a short `_build_pos_block`
+  block is added to the user message right after the dictionary-
+  definitions block (and its NOTE), at the user's explicit request ("en
+  dessous des définitions, ajoute la liste des typages grammaticaux
+  possibles pour le mot"; then "utilise Kaikki à la volée…"; then, after
+  confirming the online lookup and its offline degradation, "je souhaite
+  pouvoir faire tourner en pur local").
+
+  **Preferred source — a pure-local lookup of the exact form**,
+  `backend/inflection_lookup.py`'s `describe_form(word, language)`: reads
+  `data/inflection/<lang>.jsonl` (built by `data_builder/build_
+  inflections.py`, checked in, plain uncompressed so it can be inspected
+  by hand — ~4–23 MB per language, ~100 MB total, each file well under
+  GitHub's 100MB hard / 50MB soft limits), lazily per language and cached
+  for the process — no network, no per-request I/O after the first lookup
+  for a language. Each line is `{"form": "humera", "analyses":
+  [{"pos": "verb", "tags": "third-person singular future", "lemma":
+  "humer"}, …]}`, sorted by form.
+  `describe_form` renders one line per analysis, e.g. `verb, third-person
+  singular future (of "humer")`, `noun, plural masculine (of "cheval")`,
+  and for `iras` `verb, second-person singular future (of "aller")` —
+  Hunspell alone could never give the *person*, which is exactly what the
+  model kept getting wrong. `_POS_LABEL` maps `adj`→"adjective" etc.;
+  same table as the build script's own tag whitelist/ordering
+  (person→number→gender→tense→mood→non-finite). The table's coverage is
+  the language's own wordlist ∩ Wiktionary form-of entries: fr ~118k
+  forms, de ~121k, es ~179k, it ~165k, pt ~140k, en ~37k.
+
+  **Fallback — Hunspell stem + gloss-dictionary POS** (for a form not in
+  the table: a lemma with no `form-of` entry like French `JE`, or a form
+  Wiktionary doesn't document): `Grammatical type(s) the exact form
+  "humera" can be (Hunspell stem analysis + dictionary): verb.` The
+  stem(s) are `data_builder/build_wordlist_freq.py`'s `hunspell -m`
+  output, cached in the CANONIQUE column that becomes
+  `words[i]["canonical"]`, so no `hunspell` binary is needed at request
+  time; the LibreOffice Hunspell dictionaries carry no part-of-speech
+  field of their own (`hunspell -m` on `fr`/`pt`/… gives only `st:`/`fl:`,
+  verified directly — no `po:`/`is:`/`AM`), so each stem's POS is read
+  from the gloss dictionary (`backend/gloss_lookup.py`).
+
+  Both branches apply the same noun filter as `_build_gloss_block`
+  (`_noun_sense_matches_word` — "iras" is typed `verb`, never `noun`,
+  even though "aller" is one of its canonical forms) and drop a proper-
+  noun (`name`) type in "easy". The whole block is omitted when neither
+  source has anything.
+
+  An earlier version of this block did the same lookup **online**
+  (`backend/kaikki_lookup.py`, since removed) — an HTTP GET per word of
+  Kaikki.org's static per-word JSONL page, with a 4 s timeout, an
+  in-process cache and a 3-consecutive-failure circuit breaker. It
+  worked, but was a runtime network dependency; `build_inflections.py`
+  extracts the exact same data (the per-word page is a slice of the same
+  dump) once at build time instead, filtered to the wordlist, so the app
+  runs fully offline with identical output.
+
+  Verified: `describe_form` returns correct structured analyses purely
+  from the local `.xz` for all 6 languages (`humera`→`verb, third-person
+  singular future`, `iras`→`verb, second-person singular future`,
+  `serions`→`verb, first-person plural conditional`, es `olerá`, it
+  `annuserà`, pt `cheirará`, en `smelled`→`verb, past participle`, de
+  `roch`→preterite, de `häuser`→`noun, plural`; `JE` and a nonsense word
+  → `[]`, falling back). Live `generate()` (Qwen3-4B, medium, fr) with
+  the exact-form analysis present: `HUMERA` 4/4 future, `IRAS` now
+  second-person ("tu accompliras", …) where it used to come back
+  infinitive/third-person, `SERIONS` 4/4 first-person-plural conditional
+  ("Ce que nous ferions si…") — the "être" worst case from this section's
+  own history, now clean.
+
+  No post-filter for this (unlike
   the copy-of-word/non-Latin checks):
   grammatical agreement needs real parsing of the *clue text*, not just the target
   word, which isn't a lightweight, reliable, five-languages-at-once check the way
@@ -2981,9 +3175,11 @@ servers:
   (see `env.sh`) so it can target either the local llama.cpp server (default, see
   `run_llm.sh`) or a cloud API (e.g. Mistral) with no code change. Used only by
   `backend/app.py` — the offline CLI (`crossword_gen.py`) never calls it.
-  `_build_user_message` also grounds the model with real definitions/examples when
-  available
-  (`_build_gloss_block`/`_build_examples_block`, backed by `backend/gloss_lookup.py` and
+  `_build_user_message` also grounds the model with real definitions, a
+  grammatical-analysis line for the exact form (part of speech + full
+  inflection), and real example sentences when available
+  (`_build_gloss_block`/`_build_pos_block`/`_build_examples_block`, backed by
+  `backend/gloss_lookup.py`, `backend/inflection_lookup.py` and
   `backend/example_sentences.py`) — added after the small local model defined French
   `ARE` (the 100 m² land-area unit) as the English verb "to be", confirmed by direct
   testing to be a knowledge gap rather than a prompt-following problem (giving it the
@@ -3536,6 +3732,31 @@ servers:
   rule measurably exists and is followed some of the time, but nothing
   here enforces it against the model's actual answer the way a
   code-level filter would.
+
+  `generate_title()` has since grown past the "single best-effort call"
+  design the paragraphs above describe: it now asks for `_TITLE_COUNT`
+  (3) candidates per call (one per line, `_clean_titles()`), picks one at
+  random, and re-asks the model up to `_TITLE_RETRIES` (3) times whenever
+  a whole response yields no usable candidate at all. Each candidate is
+  rejected — and, if none survive, the attempt re-asked — for any of:
+  wrong language (`_detect_wrong_language`), reusing an exact grid word
+  other than a "mot creux" (`_title_grid_word_reuse`), punctuation
+  beyond space/comma/apostrophe/hyphen (`_title_has_bad_punctuation`),
+  or **more than `MAX_TITLE_WORDS_ACCEPTED` (6) words** (`_title_too_long`
+  — `len(title.split()) > 6`), added at the user's explicit request:
+  "Quand un titre de grille fait plus de 6 mots ou est vide, redemander
+  un autre." (The "vide"/empty half was already covered — an empty
+  candidate cleans down to `""` in `_clean_titles` and is dropped, so a
+  response with only empty candidates already triggers the retry.)
+  `MAX_TITLE_WORDS_ACCEPTED` is deliberately distinct from `MAX_TITLE_
+  WORDS` (3, the number the prompt asks the model to *aim* for) — a
+  too-long title is rejected and re-asked, never truncated (see `MAX_
+  TITLE_WORDS`'s own history above for why clamping was tried and
+  reverted). Still no per-call `LOG_LLM/` record; still returns `""` (a
+  title-less grid) if every attempt fails. Verified: `_title_too_long`
+  isolated cases — 3/6 words pass, 7+ words rejected, a hyphenated
+  "arc-en-ciel" counts as one word, `""` is not "too long" (it's caught
+  earlier as empty).
 
   Separately, `DIFFICULTY_STYLE["easy"]` gained a second sentence, at the
   user's explicit request: "Modifier le prompt de génération des
@@ -5198,6 +5419,24 @@ servers:
   script). Loaded and cached in
   memory per language on first use (lazy, once per process lifetime — same pattern as
   `backend/example_sentences.py` below).
+- `backend/inflection_lookup.py` — `describe_form(word, language)`, a pure-local
+  lookup of an exact inflected form's part of speech + full inflection
+  (person/number/gender/tense/mood). Reads `data/inflection/<lang>.jsonl` (built by
+  `data_builder/build_inflections.py`, checked into the repo — plain uncompressed so it
+  can be inspected/grepped by hand, ~4–23 MB per language, ~100 MB total, each file
+  under GitHub's 100MB hard / 50MB soft limits; same "small enough + load-bearing at
+  runtime, ship it" call as the gloss dictionary above), lazily per language and cached
+  for the process; no network. One JSON object per line, sorted by form:
+  `{"form": "humera", "analyses": [{"pos": "verb", "tags": "third-person singular
+  future", "lemma": "humer"}]}`.
+  Returns `[(pos_code, "verb, third-person singular future (of \"humer\")"), …]` — the
+  shape `backend/clues.py`'s `_build_pos_block` consumes for the LLM prompt's `A=`
+  analysis line. `[]` for a form absent from the table (a lemma with no Wiktionary
+  form-of entry, e.g. French `JE`) — `_build_pos_block` then falls back to the Hunspell
+  stem + `gloss_lookup` part of speech. Replaced an earlier online HTTP version
+  (`backend/kaikki_lookup.py`, removed) at the user's request to be able to run fully
+  offline; the extracted data is the same (Kaikki's per-word page is a slice of the
+  bulk dump `build_inflections.py` processes).
 - `backend/example_sentences.py` — `find_examples_for_words()`, looks up real usage
   sentences in the per-language reference corpus (`build_sentence_corpus.py`'s output).
   Indexes the *entire* language wordlist once per process lifetime, not just the current
@@ -5273,6 +5512,23 @@ servers:
   `build_gloss_dictionary.py` as one atomic pipeline: a corpus-source change can
   ripple all the way to which lemmas this script needs to look up, so all three
   stages get re-run together, not just the first one or two.
+- `data_builder/build_inflections.py` — one-off preprocessing script (added at the
+  user's explicit request "je souhaite pouvoir faire tourner en pur local", replacing
+  the removed online `backend/kaikki_lookup.py`): downloads the **English-Wiktionary**
+  Kaikki dump for a language (`kaikki.org/dictionary/<Name>/kaikki.org-dictionary-
+  <Name>.jsonl.gz` — chosen over the own-language edition `build_gloss_dictionary.py`
+  uses because only the English edition tags inflection with a consistent, structured
+  vocabulary; these dumps are small, ~54–96 MB gzipped, cached under `DICS/` as
+  `<Name>-en.jsonl.gz`), scans every `form-of` sense, keeps only the grammatical tags
+  (person/number/gender/tense/mood, a whitelist kept in sync with
+  `backend/inflection_lookup.py`), and **filters to the surface forms present in
+  `data/wordlist_<lang>_full.tsv`** (the app only ever looks up grid words, which all
+  come from there). Writes `data/inflection/<lang>.jsonl` (checked into the repo, plain
+  uncompressed for hand inspection, ~4–23 MB per language) — one
+  `{"form": ..., "analyses": [{"pos": ..., "tags": ..., "lemma": ...}]}` per line,
+  sorted by form. Run as step 5/5 of each `data_builder/build_<lang>.sh`. Independent of the
+  corpus→wordlist→gloss pipeline's own rule-6 atomicity, except that it reads the
+  wordlist, so a wordlist rebuild should be followed by a re-run of this too.
 - `backend/svg_export.py` — `save_grid_svg()`, called by `backend/app.py` once a grid
   and its clues are both ready: renders a single self-contained SVG (no external
   assets/fonts) — a header (logo, "CrossWordFalcon", `VERSION.txt`'s version, the
@@ -6139,6 +6395,48 @@ servers:
   been 10 more added to the pile — with both servers reporting healthy
   on their new PIDs right away.
 
+  `stop_port()`'s own `lsof` was later scoped from `lsof -ti tcp:"$port"`
+  to `lsof -ti tcp:"$port" -sTCP:LISTEN`, at the user's explicit request
+  after diagnosing why a long `Automation/Populate.py` run had died
+  silently mid-run: a bare `lsof -ti tcp:PORT` returns **every** process
+  with a TCP socket on that port — the listening server *and* any local
+  client with an open connection to it. Populate polls the backend
+  continuously (`GET /api/generate/phase/{job_id}` plus a long-held
+  connection during the generation itself), so on a routine
+  `./run_Falcon.sh` restart to pick up a `backend/clues.py` change, its
+  PID came back in `stop_port 3001`'s `lsof` and `kill_tree` SIGTERM'd
+  it — no traceback, no "Bilan" summary (Populate handles only SIGINT),
+  the log just stopped mid-poll of grid 52/1000. `-sTCP:LISTEN`
+  restricts the match to the server socket only, so a browser, a `curl
+  /api/health`, or Populate mid-request is never collateral. (The
+  earlier grids' `Connection refused`/`phase=gone` log lines were from
+  restarts that happened to fire *between* Populate's polls, killing only
+  the backend; Populate's own retry loop rode those out — only the
+  restart that caught it with a socket actually open killed the process.)
+
+  `run_Populate.sh` (project root) is the dedicated start/stop/restart
+  wrapper for `Automation/Populate.py`, added at the user's explicit
+  request so the bulk populator can be managed without ever touching
+  `run_Falcon.sh` or hand-crafting a `pgrep`/`kill`. Subcommands:
+  `status` (the default when none is given — never starts anything),
+  `start [args…]` (args pass straight through to `Populate.py`; refuses
+  if one is already running), `stop` (SIGINT once for a graceful
+  finish-the-current-grid stop, escalating after `POPULATE_STOP_GRACE`
+  seconds (20) to a second SIGINT — Populate's own "Ctrl-C twice =
+  immediate exit" — then to SIGKILL), `restart [args…]`. It tracks the
+  process by a PID file (`logs/populate.pid`, written on `start`,
+  validated against `/proc/<pid>/cmdline` on read so a recycled PID can't
+  match), falling back to `pgrep -f "python[0-9.]* .*Automation/
+  Populate.py"` for an instance started by hand — a pattern anchored on
+  the interpreter token specifically so it can't match a shell wrapper
+  that merely mentions the script path. `start` sources `env.sh` (or
+  `env_default.sh`) for `CROSSWORDFALCON_BACKEND_URL`, rotates the
+  previous `logs/populate.log` to `.1`, and launches with the same
+  `nohup … < /dev/null & disown` detachment idiom as `run_Falcon.sh`.
+  Populate itself is deliberately *not* run right now (the user is still
+  reviewing clue grammatical agreement) — the script only exists so it
+  can be started/stopped cleanly once that review is done.
+
   Proxies
   both `POST /api/generate` (fast — the backend responds immediately with a `job_id`,
   see above), `GET /api/generate/status/{job_id}` the frontend polls for progress, and
@@ -6816,11 +7114,16 @@ python3 data_builder/build_wordlist_freq.py fr    # counts words, validates, wri
 # for a normal clone: data/gloss_dictionary/*.jsonl is already checked into the repo.
 python3 data_builder/build_gloss_dictionary.py fr
 
-# Or run all four stages for one language in dependency order via its
+# Optional: rebuild a language's inflected-form analysis table (small
+# ~55-95MB one-time download — see data_builder/build_inflections.py). Not
+# needed for a normal clone: data/inflection/*.jsonl is checked into the repo.
+python3 data_builder/build_inflections.py fr
+
+# Or run all five stages for one language in dependency order via its
 # orchestration script (one per fr/en/de/es/it/pt). Long-running (hours);
 # safe to re-run — every stage reuses its own on-disk caches. Points
 # PATH/LD_LIBRARY_PATH at the rootless ~/.local hunspell build on this host.
-data_builder/build_fr.sh  # build_sentence_corpus -> build_wordlist_freq -> build_gloss_dictionary -> compress_reference_corpus
+data_builder/build_fr.sh  # build_sentence_corpus -> build_wordlist_freq -> build_gloss_dictionary -> compress_reference_corpus -> build_inflections
 
 # Refresh the "Actu Croisée" panel data by hand (Install.sh does this once on a
 # fresh clone; backend/app.py's scheduler does it daily at 08:00):

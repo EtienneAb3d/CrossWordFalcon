@@ -1,8 +1,9 @@
 # Comment CrossWordFalcon construit ses dictionnaires
 
-Ce document décrit, en termes simples, comment les quatre scripts à la
-racine du projet — `build_sentence_corpus.py`, `build_wordlist_freq.py`,
-`build_gloss_dictionary.py` et `compress_reference_corpus.py` — fabriquent,
+Ce document décrit, en termes simples, comment les cinq scripts du dossier
+`data_builder/` — `build_sentence_corpus.py`, `build_wordlist_freq.py`,
+`build_gloss_dictionary.py`, `compress_reference_corpus.py` et
+`build_inflections.py` — fabriquent,
 pour une langue donnée (français, anglais, allemand, espagnol, italien ou
 portugais),
 les fichiers que `backend/crossword_gen.py` et `backend/clues.py` utilisent
@@ -18,14 +19,19 @@ ensuite pour générer une grille et ses définitions :
    glosses.jsonl`) ;
 4. une archive compressée de la variante plafonnée du corpus (`data/
    reference_corpus_<lang>.tar.xz`), destinée à être publiée sur GitHub —
-   voir "Étape 4 — Compresser le corpus pour publication" plus bas.
+   voir "Étape 4 — Compresser le corpus pour publication" plus bas ;
+5. une table d'analyse grammaticale des formes fléchies (`data/inflection/
+   <lang>.jsonl`), qui indique pour chaque mot exact sa nature (nom,
+   verbe, adjectif…) et sa flexion complète (personne, nombre, genre,
+   temps, mode) — voir "Étape 5" plus bas.
 
 Les trois premières étapes s'enchaînent dans cet ordre — chacune consomme la
 sortie de la précédente — mais sont indépendantes d'une langue à l'autre :
 rien n'impose de traiter les six langues dans un ordre particulier. La
-quatrième étape (compression) ne dépend que de la sortie de la première ;
-elle peut être lancée dès que celle-ci existe, sans attendre les étapes 2
-et 3.
+quatrième étape (compression) ne dépend que de la sortie de la première, et
+la cinquième (formes fléchies) que de la liste de mots produite par la
+deuxième ; l'une comme l'autre peut être lancée dès que sa dépendance
+existe.
 
 ## Étape 1 — Construire le corpus de phrases
 
@@ -351,6 +357,59 @@ jamais besoin de reconstruire quoi que ce soit pour utiliser l'application
 telle quelle ; seule une reconstruction volontaire du dictionnaire d'une
 langue exige de relancer l'étape 1 en entier.
 
+## Étape 5 — Construire la table d'analyse des formes fléchies
+
+(`build_inflections.py`)
+
+Cette étape produit `data/inflection/<lang>.jsonl` — un fichier texte
+brut (non compressé, pour pouvoir être relu et filtré à la main, et qui
+tient largement dans les limites de taille de GitHub), une ligne JSON par
+forme, triée par forme :
+
+    {"form": "humera", "analyses": [
+        {"pos": "verb", "tags": "third-person singular future", "lemma": "humer"}]}
+
+— qui permet à `backend/clues.py` d'indiquer au modèle de langage, dans le
+prompt de rédaction d'une définition, la nature **et** la flexion exacte du
+mot à définir (par exemple pour `humera` : *verbe, troisième personne du
+singulier, futur, de « humer »* ; pour `iras` : *deuxième personne*, ce que
+Hunspell seul ne sait pas donner).
+
+### La source : le dump Wiktionary anglais
+
+Kaikki.org publie, en plus des éditions par langue utilisées à l'étape 3
+pour les définitions, un dump complet de l'**édition anglaise** de
+Wiktionary pour chaque langue (`build_inflections.py`, `DUMP_NAME`). C'est
+cette édition qui est utilisée ici, et non l'édition dans la langue même :
+seule l'édition anglaise étiquette la flexion de façon structurée et
+uniforme (`["form-of", "future", "singular", "third-person"]`), là où les
+autres laissent le plus souvent le détail en prose. Ces dumps sont petits
+(~55 à 95 Mo compressés, contre plusieurs Go pour les éditions natives de
+l'étape 3) et sont mis en cache sous `DICS/` comme tous les autres
+téléchargements bruts de ce pipeline (`build_inflections.py`,
+`_download_dump`).
+
+### Extraction et filtrage
+
+Le script parcourt le dump, ne garde que les sens de type `form-of`
+(formes fléchies d'un lemme), n'en retient que les étiquettes grammaticales
+d'une liste blanche (personne, nombre, genre, temps, mode — dans cet ordre ;
+`build_inflections.py`, `_TAG_GROUPS`), et **filtre le résultat aux seules
+formes de surface présentes dans `data/wordlist_<lang>_full.tsv`** : l'appli
+ne consulte jamais que des mots de grille, qui viennent tous de ce fichier
+(`build_inflections.py`, `_wordlist_forms`). Cela ramène chaque table à
+4 à 23 Mo par langue, suivie par git comme le dictionnaire de définitions.
+
+### Utilisation
+
+`data/inflection/<lang>.jsonl` est lu directement et mis en cache par langue au premier accès
+(`backend/inflection_lookup.py`, `_load`). Aucun accès réseau au moment de
+générer une grille : tout est purement local. Une forme absente de la table
+(un lemme sans entrée `form-of` dans Wiktionary, par exemple `JE`) fait
+retomber `backend/clues.py` sur la nature du radical Hunspell croisée avec
+le dictionnaire de définitions — moins précise (nature seule, pas la
+flexion), mais toujours locale elle aussi.
+
 ## Ordre et dépendances entre les étapes
 
 Les trois premières étapes s'enchaînent dans l'ordre décrit ci-dessus,
@@ -363,7 +422,10 @@ les trois étapes sont recalculées ensemble à chaque changement de ce genre,
 jamais seulement la première. La quatrième étape (compression) ne dépend,
 elle, que de la variante plafonnée produite par l'étape 1 — un changement
 purement dans `MAX_SENTENCES_PER_LANGUAGE` ou dans la méthode de
-compression n'exige pas de relancer les étapes 2 et 3.
+compression n'exige pas de relancer les étapes 2 et 3. La cinquième étape
+(formes fléchies) ne dépend que de `data/wordlist_<lang>_full.tsv` produit
+par l'étape 2 : il faut la relancer après une reconstruction de la liste de
+mots, mais pas après un simple changement de règle de compression.
 
 ## Résumé en une phrase
 
@@ -373,8 +435,10 @@ complète et plafonnée), en compte les mots de la variante complète pour en
 tirer une liste triée par fréquence — corrigée par la forme canonique de
 chaque mot et par la détection des noms propres probables — puis va
 chercher, pour chaque forme canonique de cette liste, une vraie définition
-dans Wiktionary, et compresse enfin la variante plafonnée du corpus pour
-publication ; le générateur de grille (`backend/crossword_gen.py`), le
-rédacteur de définitions (`backend/clues.py`) et la recherche d'exemples
-d'usage (`backend/example_sentences.py`) n'utilisent ensuite plus que ces
-fichiers, jamais les sources brutes elles-mêmes.
+dans Wiktionary, compresse la variante plafonnée du corpus pour publication,
+et extrait enfin de Wiktionary une table locale donnant la nature et la
+flexion exacte de chaque forme de la liste ; le générateur de grille
+(`backend/crossword_gen.py`), le rédacteur de définitions
+(`backend/clues.py`) et la recherche d'exemples d'usage
+(`backend/example_sentences.py`) n'utilisent ensuite plus que ces fichiers,
+jamais les sources brutes elles-mêmes.

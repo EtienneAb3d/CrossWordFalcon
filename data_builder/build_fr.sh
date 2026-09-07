@@ -16,18 +16,21 @@ LANG_CODE=fr
 
 step() { echo; echo "=== $(date '+%F %T')  $*"; }
 
-step "1/4  build_sentence_corpus $LANG_CODE"
+step "1/5  build_sentence_corpus $LANG_CODE"
 $PY data_builder/build_sentence_corpus.py "$LANG_CODE" || { echo "FAILED at build_sentence_corpus"; exit 1; }
 
-step "2/4  build_wordlist_freq $LANG_CODE"
+step "2/5  build_wordlist_freq $LANG_CODE"
 $PY data_builder/build_wordlist_freq.py "$LANG_CODE" || { echo "FAILED at build_wordlist_freq"; exit 1; }
 
-step "3/4  build_gloss_dictionary $LANG_CODE"
+step "3/5  build_gloss_dictionary $LANG_CODE"
 $PY data_builder/build_gloss_dictionary.py "$LANG_CODE" || { echo "FAILED at build_gloss_dictionary"; exit 1; }
 
-step "4/4  compress_reference_corpus $LANG_CODE"
+step "4/5  compress_reference_corpus $LANG_CODE"
 $PY data_builder/compress_reference_corpus.py "$LANG_CODE" || { echo "FAILED at compress_reference_corpus"; exit 1; }
+
+step "5/5  build_inflections $LANG_CODE"
+$PY data_builder/build_inflections.py "$LANG_CODE" || { echo "FAILED at build_inflections"; exit 1; }
 
 step "DONE — French data pipeline complete"
 ls -la data/wordlist_fr_full.tsv data/gloss_dictionary/fr_glosses.jsonl \
-       data/reference_corpus_fr.tar.xz data/reference_corpus/fr_sentences.txt 2>&1
+       data/reference_corpus_fr.tar.xz data/reference_corpus/fr_sentences.txt data/inflection/fr.jsonl 2>&1

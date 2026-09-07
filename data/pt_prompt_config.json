@@ -32,7 +32,8 @@
     "For DERRUBARÁ — third person singular FUTURE of \"derrubar\" (to knock down), \"ele/ela derrubará\" — answering \"Arrasaria... não, derrubará-o no chão com um golpe seco\": the visible self-correction (\"arrasaria... não\") is exactly what must never appear in a clue — decide on the final answer entirely before writing anything down, and write only \"Derrubá-lo-á no chão com um golpe seco\", never the discarded first attempt too.",
     "For RI — THIRD person singular PRESENT of \"rir\" (to laugh), \"ele/ela ri\" — answering \"O que fazes quando uma piada te agrada\": wrong person — \"tu\" (second person, implied by \"fazes\"/\"te\") instead of \"ele/ela\" (third person), even though the meaning itself is right — the clue must itself be framed for the correct subject, e.g. \"O que faz quando uma piada lhe agrada.\"",
     "For CORUJAS — PLURAL of \"coruja\" (owl) — answering \"corujas - aves de rapina noturnas\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would. Write only the definition itself, with nothing labeling it, e.g. \"Aves de rapina noturnas.\"",
-    "For SECO — MASCULINE singular adjective (\"dry\") — answering \"Diz-se de uma erva privada de humidade\": \"erva\" is feminine, so this clue's own gender doesn't match masculine SECO — the same trap as CANSADO/NOVA above, but note it's just as easy to get wrong with an ordinary, unremarkable noun like \"erva\" as with an obviously gendered one — the clue's subject noun must itself be masculine to fit, e.g. \"Diz-se de um solo privado de humidade.\""
+    "For SECO — MASCULINE singular adjective (\"dry\") — answering \"Diz-se de uma erva privada de humidade\": \"erva\" is feminine, so this clue's own gender doesn't match masculine SECO — the same trap as CANSADO/NOVA above, but note it's just as easy to get wrong with an ordinary, unremarkable noun like \"erva\" as with an obviously gendered one — the clue's subject noun must itself be masculine to fit, e.g. \"Diz-se de um solo privado de humidade.\"",
+    "For CHEIRARÁ — third person singular FUTURE of \"cheirar\" (to smell), \"ele/ela cheirará\" — answering \"Percebe um aroma com o nariz\" (present tense): the meaning is right but the clue's verb is present, not future — it must be in the future to match, e.g. \"Sentirá o aroma do prato antes de o provar.\""
   ],
   "rule_good": [
     "For FADAS, \"Personagens mágicas dos contos.\" (in the correct plural form, per rule 4).",
@@ -55,6 +56,7 @@
     "NOVOS (masculino plural) : Diz-se de vários aparelhos acabados de sair para venda",
     "VELHAS (feminino plural) : Diz-se de várias pedras desgastadas pelo tempo",
     "CAVALOS (masculino plural) : O que se encontra, em grande número, numa coudelaria",
-    "TRABALHOS (masculino plural) : O que ocupa vários operários numa obra"
+    "TRABALHOS (masculino plural) : O que ocupa vários operários numa obra",
+    "CHEIRARÁ (ele/ela, futuro) : O que fará com o ar do campo ao sair do carro"
   ]
 }

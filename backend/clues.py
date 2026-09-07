@@ -64,6 +64,7 @@ from pathlib import Path
 import httpx
 
 from .crossword_gen import GenerationCancelled, GenerationPaused
+from . import inflection_lookup
 from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
 
@@ -135,6 +136,16 @@ MAX_CLUE_WORDS = 20
 # into the meaningless "La clé du"). Kept only as the number named in the
 # system prompt's own rule text.
 MAX_TITLE_WORDS = 3
+
+# Hard upper bound on how many words a title may actually have to be
+# accepted — distinct from MAX_TITLE_WORDS (3), which is only the number
+# the prompt asks the model to aim for. At the user's explicit request:
+# "Quand un titre de grille fait plus de 6 mots ou est vide, redemander
+# un autre." A candidate with more than this many words is rejected and
+# generate_title re-asks — exactly like a grid-word-reuse or
+# bad-punctuation hit, never by truncating it (see MAX_TITLE_WORDS's own
+# comment on why clamping a too-long title was tried and reverted).
+MAX_TITLE_WORDS_ACCEPTED = 6
 
 # generate_title asks the model for this many distinct candidate titles
 # (one per line) and picks one at random — same "generate N, pick one"
@@ -306,6 +317,14 @@ def _title_has_bad_punctuation(title):
     )
 
 
+def _title_too_long(title):
+    """True if `title` has more than MAX_TITLE_WORDS_ACCEPTED (6)
+    whitespace-separated words. generate_title rejects such a candidate
+    and re-asks the model, at the user's explicit request ("plus de 6
+    mots ... redemander un autre") — never by truncating it."""
+    return len(title.split()) > MAX_TITLE_WORDS_ACCEPTED
+
+
 # Even a modest batch (5-6 words) was unreliable on the small local model —
 # it would produce good clues for the first couple of words then degrade
 # into empty/off-topic/malformed lines for the rest of the same response.
@@ -444,18 +463,48 @@ def _load_prompt_config(language):
 def _bullets(items):
     return "\n".join(f"- {item}" for item in items)
 
-# A "1. "/"2)"/"- " marker (or an em/en-dash variant of the same thing —
-# "— " and "– ", both real, observed introductory-dash styles distinct
-# from a plain hyphen), or a "C1="/"C2="/"C3=" label (the OUTPUT FORMAT
-# block in _build_system_prompt() asks for one per line, to help a small
-# model understand the expected shape — this strips it if the model
-# echoes it back, without ever requiring/parsing for it: a line missing
-# its label, or in the wrong order, is still trusted just the same).
-# Left on an individual line — the only structural cleanup
-# _parse_response still does, now that there's no header/delimiter
-# syntax left to validate — everything else in a non-empty line is
-# trusted as-is.
-_LEADING_MARKER_RE = re.compile(r"^\s*(?:[-–—*•]|\d+[.)]|[Cc][123]\s*=)\s*")
+# A "1. "/"2)"/"3: "/"- " marker (or an em/en-dash variant of the same
+# thing — "— " and "– ", both real, observed introductory-dash styles
+# distinct from a plain hyphen), or a "C1="/"C2:"/"C3." label (the OUTPUT
+# FORMAT block in _build_system_prompt() asks for "C1="/"C2="/"C3=" one
+# per line, to help a small model understand the expected shape — but the
+# model routinely reaches for a near-miss separator instead: "C1:", "C1.",
+# "C1)", "C1 -", spells the label out as "Clue 2:" / "Candidate 3 -", or
+# drops the separator entirely and just writes "C1 " / "C1" before the
+# clue. This strips any of those if the model echoes one back, without
+# ever requiring/parsing for it: a line missing its label, or in the wrong
+# order, is still trusted just the same. The "c(lue|andidate)?" part can
+# only ever match a leaked English template label — "clue"/"candidate" is
+# not a word in any of the 5 supported clue languages. The no-separator
+# alternative *requires* the digit ("C1".."C3"), so it can never strip a
+# lone leading "C" from a real clue that just happens to start with one
+# ("Ce...", "C'est...", "Compagnon..."). Left on an individual line — the
+# only structural cleanup _parse_response still does, now that there's no
+# header/delimiter syntax left to validate — everything else in a
+# non-empty line is trusted as-is.
+_LEADING_MARKER_RE = re.compile(
+    r"^\s*(?:"
+    r"[-–—*•]"
+    r"|\d+\s*[.):]"
+    r"|c(?:lue|andidate)?\s*[1-3]?\s*[=:.)\-–—]"
+    r"|c(?:lue|andidate)?\s*[1-3]"
+    r")\s*",
+    re.IGNORECASE,
+)
+
+# The "A=" analysis line the OUTPUT FORMAT block now asks for as the
+# response's first line — the model's own statement of the target word's
+# grammatical type/inflection (part of speech, person/number/mood/tense
+# or number/gender), added at the user's explicit request to force the
+# model to analyse the grammar before writing the clues. It is a scratch
+# step, never a clue: _parse_response() drops every line matching this,
+# so it can't leak into the candidate pool or reach the player. Matches
+# the asked-for "A="/"A1=" label plus a near-miss separator ("A:", "A1.",
+# "A1)") and the most likely unlabeled deviations a small model might slip
+# into instead ("Analysis:", "Analyse :", "Analisi:", "Análisis:", ...).
+_ANALYSIS_LINE_RE = re.compile(
+    r"^\s*(?:a\s*\d*|anal[iíy]\w*|análi\w*)\s*[=:.)]", re.IGNORECASE
+)
 
 # A leaked "word - " (or "word:"/"word,") label at the very start of a
 # candidate — the model restating the word it's defining as if labeling
@@ -541,6 +590,26 @@ def _normalize(word):
 # for an inflected grid word when its lemma plausibly is that grid word or
 # its plural — see _noun_sense_matches_word.
 _NOUN_POS = {"noun", "name"}
+
+# Human-readable label for each Kaikki/Wiktionary part-of-speech code, used
+# by _build_pos_block. Anything not listed is passed through verbatim.
+_POS_LABELS = {
+    "noun": "noun",
+    "name": "proper noun",
+    "verb": "verb",
+    "adj": "adjective",
+    "adv": "adverb",
+    "num": "numeral",
+    "pron": "pronoun",
+    "det": "determiner",
+    "article": "article",
+    "prep": "preposition",
+    "postp": "postposition",
+    "conj": "conjunction",
+    "intj": "interjection",
+    "particle": "particle",
+    "phrase": "phrase",
+}
 
 # Languages a plural-normalization rule is defined for below. German
 # plurals are far too irregular for a simple rule, so a German noun sense
@@ -799,6 +868,25 @@ def _contains_target_word(candidate, answer, accented, canonical=()):
     return bool(targets & tokens)
 
 
+def _mask_target_word(candidate, answer, accented, canonical=()):
+    """Replaces every whole-word occurrence of the target word (its
+    bare/accented spelling or a known canonical form, matched exactly the
+    way `_contains_target_word` detects them) with a single "_", keeping
+    all other text, spacing and punctuation intact. Used only as a
+    last-resort fallback in `_generate_one`: when every candidate across
+    all 3 retry rounds was rejected *solely* for containing the target
+    word, one is picked at random and masked rather than leaving the word
+    with no clue at all — e.g. for JE, "Je dis la vérité quand je parle"
+    becomes "_ dis la vérité quand _ parle", a legitimate fill-in-the-
+    blank clue. At the user's explicit request."""
+    targets = {_normalize(answer), _normalize(accented)}
+    targets.update(_normalize(c) for c in canonical)
+    return _WORD_TOKEN_RE.sub(
+        lambda m: "_" if _normalize(m.group(0)) in targets else m.group(0),
+        candidate,
+    )
+
+
 class ClueGenerationError(RuntimeError):
     """Raised when the LLM call fails or returns an unusable response."""
 
@@ -1024,6 +1112,12 @@ class LLMClueGenerator:
         answer, accented, canonical = entry
         clue = None
         errors = []
+        # Candidates rejected across all rounds *solely* for containing the
+        # target word — used for the mask-the-word fallback below when no
+        # clean clue is ever produced (e.g. JE, whose every candidate the
+        # small model writes starts with "Je ...").
+        maskable_pool = []
+        last_content = None
         for attempt in range(3):
             if cancel_event is not None and cancel_event.is_set():
                 break
@@ -1037,6 +1131,7 @@ class LLMClueGenerator:
                     answer, accented, attempt + 1,
                     system_prompt, user_message, max_tokens, timeout,
                 )
+                last_content = content
                 candidates = self._parse_response(content)
                 if not candidates:
                     outcome = "model gave no candidate lines at all"
@@ -1046,9 +1141,10 @@ class LLMClueGenerator:
                         attempt + 1, answer, accented,
                     )
                 else:
-                    picked, candidate_details = self._pick_clue(
+                    picked, candidate_details, maskable = self._pick_clue(
                         candidates, answer, accented, canonical, language, attempt + 1,
                     )
+                    maskable_pool.extend(maskable)
                     if picked:
                         clue = picked
                         outcome = f"selected: {picked!r}"
@@ -1088,6 +1184,31 @@ class LLMClueGenerator:
             )
             if clue is not None:
                 break
+
+        # Fallback, at the user's explicit request: if no candidate ever
+        # came back clear of the target word, but at least one was rejected
+        # *only* for containing it, take one at random and blank the word
+        # out with "_" rather than leaving this word with no clue at all
+        # ("Je dis la vérité quand je parle" -> "_ dis la vérité quand _
+        # parle"). A word with genuinely zero usable candidates (LLM
+        # unreachable, only too-long / wrong-language output, ...) still
+        # ends up with no clue, handled downstream as before.
+        if clue is None and maskable_pool:
+            base = random.choice(list(dict.fromkeys(maskable_pool)))
+            clue = _mask_target_word(base, answer, accented, canonical)
+            logger.warning(
+                "clue: %r (%r) — no clue clear of the target word after 3 "
+                "rounds; masking it in a rejected candidate: %r -> %r",
+                answer, accented, base, clue,
+            )
+            self._write_call_log(
+                answer, accented, language, difficulty, 3,
+                system_prompt, user_message, last_content, None,
+                f"fallback: target word masked with '_' in a rejected "
+                f"candidate ({base!r})",
+                [(clue, "selected (target word masked, fallback)")],
+                success=True,
+            )
         return answer, clue, errors
 
     def generate_title(self, word_entries, language="fr", timeout=DEFAULT_TIMEOUT,
@@ -1104,9 +1225,11 @@ class LLMClueGenerator:
         (frontend/static/script.js's displayFinalGrid). Re-asks the model
         up to _TITLE_RETRIES times, but ONLY when a whole response yields
         nothing usable at all (empty reply, only header/lead-in lines,
-        every candidate wrong-language, or the HTTP call failing) — at the
-        user's request "Si le titre est vide, demander une nouvelle
-        génération"; a normal run still makes exactly one call. There is
+        every candidate wrong-language, over MAX_TITLE_WORDS_ACCEPTED (6)
+        words, bad punctuation, reusing a grid word, or the HTTP call
+        failing) — at the user's request "Quand un titre de grille fait
+        plus de 6 mots ou est vide, redemander un autre"; a normal run
+        still makes exactly one call. There is
         no per-call LOG_LLM/ record (unlike generate()): a title is a
         purely cosmetic addition. If every attempt fails, returns ""
         rather than raising; the caller treats that exactly like a
@@ -1315,6 +1438,13 @@ class LLMClueGenerator:
             # obey reliably.
             clean = []
             for t in kept:
+                if _title_too_long(t):
+                    logger.info(
+                        "title generation attempt %d/%d: rejecting %r "
+                        "(more than %d words)",
+                        attempt + 1, _TITLE_RETRIES, t, MAX_TITLE_WORDS_ACCEPTED,
+                    )
+                    continue
                 if _title_has_bad_punctuation(t):
                     logger.info(
                         "title generation attempt %d/%d: rejecting %r "
@@ -1342,7 +1472,7 @@ class LLMClueGenerator:
                 return title
             logger.info(
                 "title generation attempt %d/%d: no usable candidate "
-                "(empty / wrong-language / bad punctuation / all reuse a grid word), retrying",
+                "(empty / wrong-language / too long / bad punctuation / all reuse a grid word), retrying",
                 attempt + 1, _TITLE_RETRIES,
             )
         logger.info(
@@ -1479,6 +1609,89 @@ class LLMClueGenerator:
             "express, even though it is printed above."
         )
 
+    @staticmethod
+    def _build_pos_block(entry, language, difficulty):
+        """A short block, right after the dictionary definitions, stating
+        the grammatical type(s) the EXACT grid form can be — to back the
+        OUTPUT FORMAT's own "A=" analysis line, at the user's explicit
+        request.
+
+        Preferred source: a **pure-local** lookup of the exact form,
+        `backend/inflection_lookup.py`, which reads
+        `data/inflection/<lang>.jsonl` (built by `data_builder/
+        build_inflections.py` from the English-Wiktionary Kaikki dump,
+        all 6 languages, filtered to the wordlist; plain uncompressed
+        JSON-lines, sorted by form, so it can be inspected by hand).
+        It gives part of
+        speech AND full inflection (person/number/gender/tense/mood),
+        e.g. for "humera": `verb, third-person singular future (of
+        "humer")`, and for "iras" the *second* person — which Hunspell
+        alone can't give. No network, no per-request I/O after the first
+        lookup for a language.
+
+        Fallback, when the exact form isn't in the table (a lemma with no
+        `form-of` entry, or a form Wiktionary doesn't document — e.g.
+        many German inflections): the Hunspell stem's part(s) of speech
+        from the gloss dictionary — POS only, no inflection. The stem(s)
+        come from `hunspell -m` run at wordlist-build time
+        (`data_builder/build_wordlist_freq.py`) and cached in the
+        CANONIQUE column that becomes `words[i]["canonical"]` — the
+        LibreOffice Hunspell dictionaries carry no part-of-speech field
+        of their own, so each stem's POS is read from
+        `backend/gloss_lookup.py`.
+
+        Either way, a noun/proper-noun type is filtered the same as
+        `_build_gloss_block`: `_noun_sense_matches_word` so "iras" (a verb
+        form of "aller") is typed "verb", never "noun"; and in "easy" a
+        proper-noun ("name") type is dropped. Returns "" when nothing
+        reliable can be said.
+        """
+        _, accented, canonical = entry
+        drop_name = difficulty == "easy"
+
+        analyses = inflection_lookup.describe_form(accented, language)
+        if analyses:
+            descs = [
+                text for pos, text in analyses
+                if not (drop_name and pos == "name")
+            ]
+            if descs:
+                lines = "\n".join(f"- {d}" for d in descs)
+                return (
+                    f'Grammatical analysis of the exact form "{accented}" '
+                    f"(Wiktionary):\n{lines}\n"
+                    "Base your A= line on this, and match each clue's own "
+                    "grammar to it (a verb's person, number and mood/tense; "
+                    "a noun's or adjective's number and gender)."
+                )
+
+        glosses_by_lemma = find_glosses_for_canonicals(canonical, language)
+        types = []
+        for lemma in canonical:
+            for sense in glosses_by_lemma.get(lemma, []):
+                pos = sense.get("pos")
+                if not pos:
+                    continue
+                if drop_name and pos == "name":
+                    continue
+                if pos in _NOUN_POS and not _noun_sense_matches_word(
+                    lemma, accented, language
+                ):
+                    continue
+                label = _POS_LABELS.get(pos, pos)
+                if label not in types:
+                    types.append(label)
+        if not types:
+            return ""
+        return (
+            f'Grammatical type(s) the exact form "{accented}" can be '
+            f'(Hunspell stem analysis + dictionary): {", ".join(types)}.\n'
+            "Use this to fix the part of speech in your A= line; you must "
+            "still read the precise inflection off the written form itself "
+            "(for a verb: person, number, mood/tense; for a noun or "
+            "adjective: number and gender)."
+        )
+
     def _build_system_prompt(self, difficulty, language):
         """All of the crossword-clue-writing instructions that don't depend
         on the specific word — role, difficulty style, rules, a clearly
@@ -1492,21 +1705,29 @@ class LLMClueGenerator:
         every call — not done, since rebuilding a string is cheap relative
         to the LLM call it precedes.
 
-        The output-format instructions ask for exactly 3 lines, each
-        labeled "C1="/"C2="/"C3=" — a concrete template, to help a small
-        model understand the shape of the expected answer, but never the
-        *target word* itself for the model to echo back, unlike an
-        earlier "word: clue 1; clue 2; clue 3" format that needed the
-        target word repeated as a header before any of the response could
-        be trusted (a real, observed failure mode: the model would
-        sometimes echo the format template's own literal placeholder text
-        instead of filling it in correctly). `_parse_response()` strips a
-        leading "C1="/"C2="/"C3=" label if the model echoes it back
-        (`_LEADING_MARKER_RE`), but never requires or parses for it — a
-        line missing its label, or out of order, is still trusted just
-        the same. See `_parse_response()` and the project-best-practices
-        SKILL for the two incidents that motivated dropping the
-        structured single-line format entirely.
+        The output-format instructions ask for exactly 4 lines: an "A="
+        analysis line, then three clue lines labeled "C1="/"C2="/"C3=".
+        The "A=" line forces the model to first state the target word's
+        grammatical type and inflection (part of speech; person/number/
+        mood/tense for a verb; number/gender for a noun or adjective)
+        before writing any clue — an externalised analysis step, at the
+        user's explicit request, to make the model get the grammar right
+        in the clues that follow. `_parse_response()` drops that line
+        (`_ANALYSIS_LINE_RE`) so it never reaches a candidate or the
+        player. The "C1="/"C2="/"C3=" labels are a concrete template to
+        help a small model understand the shape of the expected answer,
+        but never the *target word* itself for the model to echo back,
+        unlike an earlier "word: clue 1; clue 2; clue 3" format that
+        needed the target word repeated as a header before any of the
+        response could be trusted (a real, observed failure mode: the
+        model would sometimes echo the format template's own literal
+        placeholder text instead of filling it in correctly).
+        `_parse_response()` strips a leading "C1="/"C2="/"C3=" label if
+        the model echoes it back (`_LEADING_MARKER_RE`), but never
+        requires or parses for it — a clue line missing its label, or out
+        of order, is still trusted just the same. See `_parse_response()`
+        and the project-best-practices SKILL for the two incidents that
+        motivated dropping the structured single-line format entirely.
 
         Every concrete word/clue example (and the subject-pronoun list
         rule 4 names) comes from PROMPT_CONFIG_DIR/<language>_prompt_
@@ -1524,8 +1745,12 @@ class LLMClueGenerator:
             f"{style_line}\n\n"
             "The user message will give you a single word to write a clue "
             "for, in its correctly accented, inflected written form (right "
-            "gender, number, and conjugation) — use that to write "
-            "grammatically accurate clues. It may also include real "
+            "gender, number, and conjugation). Your clues must MATCH that "
+            "exact form: whatever tense, mood, person, number and gender "
+            "the word carries, the wording of each clue must carry the "
+            "same features in its own grammar — a clue that only points at "
+            "the right meaning, in the wrong tense or the wrong "
+            "number/gender, does NOT fit. It may also include real "
             "dictionary definitions and/or real example sentences for that "
             "word.\n\n"
             "ABSOLUTE RULE — THE DICTIONARY DEFINITION IS THE ONLY SOURCE "
@@ -1586,9 +1811,16 @@ class LLMClueGenerator:
             "gender) and confirm your clue matches that exactly, not just "
             "a same-meaning idea in a different form. Two specific traps: "
             "(a) a generic dictionary-style definition of the bare action "
-            "or state (e.g. \"the act of doing X\") describes the "
-            "infinitive, not a specific conjugated form — rephrase it so "
-            "it is unmistakably tied to that exact person/tense instead; "
+            "or state (e.g. \"the act of doing X\"), or one whose own verb "
+            "sits in the plain present, describes the infinitive or the "
+            "present — not a specific conjugated form. If the target word "
+            "is a future, conditional, past, imperfect or subjunctive "
+            "form, the main verb of your clue MUST be in that same "
+            "tense/mood: a present-tense clue for a future-tense word is "
+            "wrong even when the meaning is exactly right (a word like "
+            "\"HUMERA\", the future of \"humer\", needs a clue whose own "
+            "verb is future too). Rephrase the clue so it is unmistakably "
+            "tied to that exact person AND tense/mood; "
             "(b) if your clue names a person or thing to carry the word's "
             "adjective/participle — a person noun like \"a house\"/\"a "
             "runner\", or just as easily an ordinary, unremarkable one "
@@ -1638,31 +1870,80 @@ class LLMClueGenerator:
             "grammatical label):\n"
             f"{_bullets(config['rule_good'])}\n\n"
             "=== END OF EXAMPLES ===\n\n"
-            "OUTPUT FORMAT — respond with exactly these 3 lines and "
+            "GRAMMAR CHECK — before you output C1, C2 and C3, work out the "
+            "target word's exact grammatical form, then check EACH "
+            "candidate against it:\n"
+            "- Tense/mood: if the target is a future, conditional, past, "
+            "imperfect or subjunctive form (not the plain present or the "
+            "infinitive), the main verb of your clue must be in that SAME "
+            "tense/mood.\n"
+            "- Person and number of a verb: your clue must be framed for "
+            "the same subject as the target (I / you / he-she / we / "
+            "you-plural / they).\n"
+            "- Noun or adjective: match singular vs. plural AND gender — "
+            "any noun your clue names to carry the meaning must itself "
+            "have the target's number and gender.\n"
+            "Rewrite any candidate whose own grammar does not match before "
+            "you output it. A right meaning in the wrong grammatical form "
+            "is a wrong answer here.\n\n"
+            "OUTPUT FORMAT — respond with exactly these 4 lines and "
             "nothing else:\n"
+            "A=the target word's grammatical type and inflection: its "
+            "part of speech (noun, verb, adjective, adverb, ...) and then, "
+            "for a verb, its person + number + mood/tense; for a noun or "
+            "adjective, its number + gender. Example: for a word that is "
+            "the third-person-singular future of a verb, "
+            "\"A=verb, third person singular, future\".\n"
             "C1=short sentence (even a single word) indirectly defining "
-            "the target word without giving it away\n"
+            "the target word without giving it away, its own grammar "
+            "matching the A= line above\n"
             "C2=short sentence (even a single word) indirectly defining "
-            "the target word without giving it away\n"
+            "the target word without giving it away, its own grammar "
+            "matching the A= line above\n"
             "C3=short sentence (even a single word) indirectly defining "
-            "the target word without giving it away\n\n"
+            "the target word without giving it away, its own grammar "
+            "matching the A= line above\n\n"
+            "The A= line is an analysis step to force you to nail the "
+            "grammar before writing the clues — it is discarded and never "
+            "shown to anyone, so it does not need to read like a clue. "
+            "C1, C2 and C3 are the actual clues.\n"
             "No JSON, no markdown, no blank lines, no repeating the word "
-            "itself anywhere, and no extra commentary before, between, or "
-            "after these 3 lines."
+            "itself anywhere in A/C1/C2/C3, and no extra commentary "
+            "before, between, or after these 4 lines."
         )
 
     def _build_user_message(self, entry, language, difficulty):
         """The one thing that varies per call: the word itself, plus its
-        grounding block (real dictionary definitions/example sentences,
-        when available) — sent as the `user` message, paired with the
-        fixed `system` message from `_build_system_prompt()`. `difficulty`
-        only reaches the gloss block, which drops proper-noun senses in
-        "easy" (see `_build_gloss_block`)."""
+        grounding block (real dictionary definitions, a Hunspell-derived
+        grammatical-type line, and example sentences, when available) —
+        sent as the `user` message, paired with the fixed `system`
+        message from `_build_system_prompt()`. `difficulty` reaches the
+        gloss block and the pos block, both of which drop proper-noun
+        senses in "easy" (see `_build_gloss_block`/`_build_pos_block`)."""
         _, accented, _ = entry
-        parts = [f"Word: {accented}"]
+        # A per-word grammatical-agreement reminder, right in the user
+        # message (the last thing the model reads before answering — the
+        # highest-recency position), reinforcing the system prompt's
+        # rule 4 / GRAMMAR CHECK: small local models routinely get the
+        # meaning right but the tense/number/gender wrong (a future-tense
+        # verb clued in the present, a plural clued as singular, etc.).
+        parts = [
+            f"Word: {accented}\n"
+            "Each of your 3 clues must be phrased so its OWN grammar — "
+            "tense, mood, person, number, gender — matches this exact "
+            "written form, not merely its meaning. If this word is a "
+            "future / conditional / past / imperfect / subjunctive verb "
+            "form, the verbs in your clue must be in that same tense/mood."
+        ]
         gloss_block = self._build_gloss_block(entry, language, difficulty)
         if gloss_block:
             parts.append(gloss_block)
+        # Right after the definitions, at the user's explicit request:
+        # the grammatical type(s) the exact form can be (Hunspell stem +
+        # dictionary POS) — backs the OUTPUT FORMAT's own A= analysis line.
+        pos_block = self._build_pos_block(entry, language, difficulty)
+        if pos_block:
+            parts.append(pos_block)
         examples_block = self._build_examples_block(entry, language, difficulty)
         if examples_block:
             parts.append(examples_block)
@@ -1794,11 +2075,19 @@ class LLMClueGenerator:
         purely to help the model, never required here: a line missing
         it, or with a different one, is trusted just the same —
         everything else is used as-is, no delimiter syntax to get right.
+
+        The one line that IS dropped rather than trusted: the "A="
+        grammatical-analysis line the OUTPUT FORMAT block now asks for
+        first (`_ANALYSIS_LINE_RE`). It exists only to force the model to
+        analyse the target word's inflection before writing the clues; it
+        is never a clue and never shown to anyone.
+
         Returns a list of candidate strings (empty if the model's response
         had no non-empty lines at all)."""
         return [
             cleaned
             for line in content.splitlines()
+            if not _ANALYSIS_LINE_RE.match(line.replace("\xa0", " "))
             if (cleaned := _LEADING_MARKER_RE.sub("", line.replace("\xa0", " ")).strip())
         ]
 
@@ -1833,18 +2122,24 @@ class LLMClueGenerator:
         definition" label gets that label stripped instead, salvaging
         what's usually a perfectly good definition rather than burning a
         whole retry round on a mechanically fixable formatting slip.
-        Returns `(chosen, details)`: `chosen` is the selected clue text,
-        or None if every candidate was rejected (which `generate()` reads
-        as still needing a clue and retries); `details` is `[(candidate,
-        verdict), ...]` for every candidate in order — `verdict` is
-        `"selected"`, `"accepted (not selected)"` (a candidate that
-        passed every check but wasn't the one randomly chosen), or
-        `"rejected: <reason(s)>"` — passed straight through to
+        Returns `(chosen, details, maskable)`: `chosen` is the selected
+        clue text, or None if every candidate was rejected (which
+        `generate()` reads as still needing a clue and retries); `details`
+        is `[(candidate, verdict), ...]` for every candidate in order —
+        `verdict` is `"selected"`, `"accepted (not selected)"` (a
+        candidate that passed every check but wasn't the one randomly
+        chosen), or `"rejected: <reason(s)>"` — passed straight through to
         `_write_call_log()` so its own diagnostic file can show the full
         list of what was proposed and rejected, not just the final pick,
-        at the user's explicit request."""
+        at the user's explicit request. `maskable` is the subset of
+        candidates rejected *solely* for containing the target word (they
+        passed length / script / language) — `_generate_one` keeps these
+        across all 3 rounds so that, if no clean clue ever comes, it can
+        mask the word in one of them rather than give up (see
+        `_mask_target_word`)."""
         details = []
         accepted_indices = []
+        maskable = []
         for c in candidates:
             if c:
                 stripped = _strip_leading_word_label(c, answer, accented, canonical)
@@ -1856,6 +2151,7 @@ class LLMClueGenerator:
                     )
                     c = stripped
             reasons = []
+            contains_only = False
             if not c:
                 reasons.append("empty")
             else:
@@ -1869,17 +2165,20 @@ class LLMClueGenerator:
                     reasons.append(f"looks like {wrong_lang} instead of {language}")
                 if _contains_target_word(c, answer, accented, canonical):
                     reasons.append("contains the target word (copy/same-family/embedded)")
+                    contains_only = len(reasons) == 1
             if reasons:
                 logger.info(
                     "clue round %d/3: %r (%r) — candidate rejected (%s): %r",
                     round_number, answer, accented, "; ".join(reasons), c,
                 )
                 details.append((c, "rejected: " + "; ".join(reasons)))
+                if contains_only:
+                    maskable.append(c)
             else:
                 accepted_indices.append(len(details))
                 details.append((c, "accepted (not selected)"))
         if not accepted_indices:
-            return None, details
+            return None, details, maskable
         chosen_index = random.choice(accepted_indices)
         chosen = details[chosen_index][0]
         logger.info(
@@ -1887,4 +2186,4 @@ class LLMClueGenerator:
             round_number, answer, accented, chosen,
         )
         details[chosen_index] = (chosen, "selected")
-        return chosen, details
+        return chosen, details, maskable

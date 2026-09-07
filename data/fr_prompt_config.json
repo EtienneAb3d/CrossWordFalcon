@@ -33,7 +33,8 @@
     "For RIT — THIRD person singular PRESENT of \"rire\" (to laugh), \"il/elle rit\" — answering \"Ce que tu fais quand une blague te fait plaisir\": wrong person — \"tu\" (second person) instead of \"il/elle\" (third person), even though the meaning itself is right — the clue must itself be framed for the correct subject, e.g. \"Ce qu'il fait quand une blague lui fait plaisir.\"",
     "For SEC — MASCULINE singular adjective (\"dry\") — answering \"Se dit d'une herbe privée d'humidité\": \"herbe\" is feminine, so this clue's own gender doesn't match masculine SEC — the same trap as TENU/LÉGALE above, but note it's just as easy to get wrong with an ordinary, unremarkable noun like \"herbe\" as with an obviously gendered one — the clue's subject noun must itself be masculine to fit, e.g. \"Se dit d'un sol privé d'humidité.\"",
     "For SLIPS — PLURAL of \"slip\" (underwear/briefs) — answering \"slips - sous-vêtement féminin\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would — and \"sous-vêtement\" is singular besides, not matching plural SLIPS. Write only the definition itself, with nothing labeling it, e.g. \"Sous-vêtements féminins.\"",
-    "For CHUS — first person singular PASSÉ SIMPLE of \"choir\" (to fall), \"je chus\" — given the dictionary line 'choir (verb): Tomber.', answering \"Un ensemble de voix qui s'unissent pour chanter\": that is a completely invented meaning, confused with \"chœur\" (a choir/singing group), which appears NOWHERE in the definitions given — the clue must be about FALLING, in the past, by \"je\", e.g. \"Ce que je fis en glissant sur le verglas.\""
+    "For CHUS — first person singular PASSÉ SIMPLE of \"choir\" (to fall), \"je chus\" — given the dictionary line 'choir (verb): Tomber.', answering \"Un ensemble de voix qui s'unissent pour chanter\": that is a completely invented meaning, confused with \"chœur\" (a choir/singing group), which appears NOWHERE in the definitions given — the clue must be about FALLING, in the past, by \"je\", e.g. \"Ce que je fis en glissant sur le verglas.\"",
+    "For HUMERA — third person singular FUTURE of \"humer\" (to breathe in / sniff), \"il/elle humera\" — answering \"Respire profondément une odeur agréable\" (present tense): the meaning is right but the clue's own verb is present, not future — it must itself be in the future to match, e.g. \"Respirera longuement le parfum du plat avant d'y goûter.\""
   ],
   "rule_good": [
     "For FEES, \"Personnages magiques des contes.\" (in the correct plural form, per rule 4).",
@@ -57,6 +58,7 @@
     "NOUVEAUX (masculin pluriel irrégulier) : Se dit de plusieurs appareils tout juste sortis en magasin",
     "VIEILLES (féminin pluriel irrégulier) : Se dit de plusieurs pierres usées par le temps",
     "CHEVAUX (masculin pluriel irrégulier) : Ce que l'on trouve, en nombre, dans un haras",
-    "TRAVAUX (masculin pluriel irrégulier) : Ce qui occupe plusieurs ouvriers sur un chantier"
+    "TRAVAUX (masculin pluriel irrégulier) : Ce qui occupe plusieurs ouvriers sur un chantier",
+    "HUMERA (il/elle, futur) : Ce qu'il fera de l'air marin en descendant du train"
   ]
 }

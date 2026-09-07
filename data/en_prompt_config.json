@@ -28,7 +28,8 @@
     "For SOWED — simple PAST of \"sow\" (to plant seeds) — answering \"The act of scattering seeds into the earth\" (a generic infinitive-style definition, no tense of its own): the clue itself must carry past-tense framing to match, e.g. \"What a farmer did to every furrow last spring.\"",
     "For FELLED — simple PAST of \"fell\" (to cut down) — answering \"She would chop it down... wait, no, she felled it with one clean blow\": the visible self-correction (\"would chop it down... wait, no\") is exactly what must never appear in a clue — decide on the final answer entirely before writing anything down, and write only \"She felled it with one clean blow\", never the discarded first attempt too.",
     "For LAUGHS — third person singular PRESENT of \"laugh\", \"he/she laughs\" — answering \"What you do when a joke pleases you\": wrong person — \"you\" (second person) instead of \"he/she\" (third person), even though the meaning itself is right — the clue must itself be framed for the correct subject, e.g. \"What she does when a joke pleases her.\"",
-    "For OWLS — PLURAL of \"owl\" — answering \"owls - nocturnal birds of prey\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would. Write only the definition itself, with nothing labeling it, e.g. \"Nocturnal birds of prey.\""
+    "For OWLS — PLURAL of \"owl\" — answering \"owls - nocturnal birds of prey\": labeling the answer with a dash before the actual definition still gives the word away, exactly like writing it anywhere else in the clue would. Write only the definition itself, with nothing labeling it, e.g. \"Nocturnal birds of prey.\"",
+    "For SMELLED — simple PAST of \"smell\" — answering \"Detects an odour with the nose\" (present tense): the meaning is right but the clue's own verb is present, not past — it must itself be past to match, e.g. \"Caught the scent of rain before it started.\""
   ],
   "rule_good": [
     "For FAIRIES, \"Magical beings from folk tales.\" (in the correct plural form, per rule 4).",
@@ -51,6 +52,7 @@
     "FEET (plural, irregular: foot → feet) : What shoes are meant to protect, both of them",
     "WOMEN (plural, irregular: woman → women) : Attendees at a conference held specifically for female entrepreneurs",
     "WAS (I/he/she/it, past) : One traveler's state, right after the long journey",
-    "WERE (we/you/they, past) : Several travelers' state, right after the long journey"
+    "WERE (we/you/they, past) : Several travelers' state, right after the long journey",
+    "SMELLED (simple past) : Caught a whiff of something burning in the kitchen"
   ]
 }
