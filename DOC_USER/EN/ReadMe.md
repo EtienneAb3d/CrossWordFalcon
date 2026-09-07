@@ -31,8 +31,24 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   languages (French, English, German, Spanish, Italian, Portuguese) the grid's own
   words and clues are written in. Also switches every label/message on
   the page to that same language.
-- **Largeur / Width** and **Hauteur / Height** (`#width`/`#height`) — the
-  grid's own dimensions in cells, from 5 to 30 in each direction.
+- **Largeur / Width** (`#width`) — the grid's own width in cells, from 5
+  to 30.
+- **Bilingue / Bilingual** (`#bilingual-language`) — the language of the
+  grid's *vertical* (down) words; the horizontal (across) words always
+  stay in the main **Langue** field above. Changing **Langue** always
+  resets this field to match it, so a genuinely bilingual grid — two
+  different languages, one for across words and one for down words —
+  needs this field set to a *different* value each time, right after
+  picking **Langue**. Left equal to **Langue** (the default), the grid is
+  an ordinary, single-language one. On a bilingual grid, every clue is
+  written in that specific word's own language (`frontend/static/
+  script.js`, `buildChatUiContext`; `backend/clues.py`, `LLMClueGenerator.
+  generate`), the **Dictionnaire / Dictionary** panel's own language
+  selector (see below) follows whichever word is currently hovered or
+  clicked, and David FALCON gives a hint or answer for one particular word
+  in that word's own language too (see "David FALCON" below).
+- **Hauteur / Height** (`#height`) — the grid's own height in cells, from
+  5 to 30.
 - **Difficulté / Difficulty** (`#difficulty`) — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary and never place a
   word that looks like it could be a proper noun (a person's or place's
@@ -138,6 +154,17 @@ The list shows at most 20 rows per page (`backend/app.py`,
 "Page X/Y" indicator (`#library-position`) shows the current position.
 Reopening the button always starts back at page 1.
 
+A language filter (`#library-language-filter`, right after "Toutes les
+langues / All languages") narrows the list to one language, or to
+**Bilingue / Bilingual** — every grid whose down words are in a different
+language from its across words (`backend/grid_store.py`, `save_grid_
+json`'s own `bilingual` field). A bilingual grid's own row shows both
+language codes side by side in its language column (e.g. "Français
+(fr/en)"), and it only ever shows up under "Bilingue" or "Toutes les
+langues" — picking one specific language (e.g. "Français" alone) hides
+every bilingual grid, even one whose across words happen to be in that
+exact language (`backend/app.py`, `_library_page`).
+
 ## While a grid is generating
 
 A dedicated panel (`#attempt-preview`, `frontend/static/script.js`,
@@ -216,7 +243,12 @@ grid is loaded — every one of its words with their starting position,
 direction, clue, and answer. David FALCON always replies in the
 interface's current language, and only ever answers questions about
 using this app or about the grid currently on screen — for anything
-else, it politely suggests looking elsewhere instead.
+else, it politely suggests looking elsewhere instead. The one exception
+is a bilingual grid (see the **Bilingue / Bilingual** field above): when
+David FALCON gives a hint or the answer for one particular grid word, it
+writes that hint/answer itself in *that word's own* language — which can
+differ between an across word and a down word — while everything else in
+the same reply still stays in the interface's own language.
 
 ## How a grid is actually built (a summary of the generation algorithm)
 
@@ -228,6 +260,13 @@ exists so a curious player can understand *why* a generation sometimes
 takes a while, why the preview panel shows several grids at once, or why
 the "Continuer" button exists, without needing to read that longer
 technical document.
+
+On a bilingual grid (see the **Bilingue / Bilingual** field above), every
+stage described below works exactly the same way, with one addition:
+whenever a word is needed for a horizontal slot, only the primary
+language's own dictionary is ever consulted; for a vertical slot, only
+the bilingual field's own dictionary is — the two are never mixed within
+one grid.
 
 **Placing the black cells.** The generator starts from a completely
 white grid and adds black cells one at a time, entirely independently —

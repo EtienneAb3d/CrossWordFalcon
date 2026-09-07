@@ -127,6 +127,23 @@ SGLANG_MODEL_OVERRIDE_ARGS="${SGLANG_MODEL_OVERRIDE_ARGS:-}"
 # architecture transformers' GGUF tokenizer converter already supports.
 SGLANG_TOKENIZER_PATH="${SGLANG_TOKENIZER_PATH:-}"
 
+# Empty by default — see this variable's own fuller explanation further
+# below, right where it's actually used (--reasoning-parser). Needed here
+# too, like every other optional SGLANG_* variable above: `set -u` (see
+# the top of this script) makes a bare `[ -n "$SGLANG_REASONING_PARSER" ]`
+# crash with "unbound variable" the moment this variable isn't exported
+# by env.sh/env_default.sh at all, rather than the intended "treat it as
+# empty" — found live ("run_sglang.sh: line 202: SGLANG_REASONING_PARSER:
+# unbound variable") when this declaration was missing.
+SGLANG_REASONING_PARSER="${SGLANG_REASONING_PARSER:-}"
+
+# Empty by default — see this variable's own fuller explanation further
+# below, right where it's actually used (--mem-fraction-static). Same
+# `set -u` reasoning as SGLANG_REASONING_PARSER just above — this
+# declaration was missing for the same reason and would fail the same
+# way once actually reached with the variable unset.
+SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-}"
+
 if [ ! -d .venv-sglang ]; then
     echo "Error: .venv-sglang not found — SGLang isn't installed. See CLAUDE.md's"
     echo "run_sglang.sh entry for the install steps (Python 3.12 venv + editable"

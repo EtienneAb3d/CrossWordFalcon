@@ -88,24 +88,44 @@ def _slugify_title(title):
     return slug[:MAX_SLUG_LENGTH].strip("_") or "grille"
 
 
-def save_grid_json(result, language, difficulty, mode, title):
-    """Writes the grid to GRID_STORE/<language>/<id>.json and returns the
-    new record's own id (its filename stem, without the .json extension)
-    — best-effort, like svg_export.py's own saves: a write failure here
-    should never break an otherwise-successful generation, so the one
-    caller (backend/app.py) wraps this in its own try/except, exactly
-    like it already does for save_grid_svg/save_grid_png."""
+def save_grid_json(result, language, difficulty, mode, title, bilingual=None):
+    """Writes the grid to GRID_STORE/<language>/<id>.json — or, for a
+    genuinely bilingual grid, GRID_STORE/bilingual/<id>.json instead — and
+    returns the new record's own id (its filename stem, without the .json
+    extension) — best-effort, like svg_export.py's own saves: a write
+    failure here should never break an otherwise-successful generation,
+    so the one caller (backend/app.py) wraps this in its own try/except,
+    exactly like it already does for save_grid_svg/save_grid_png.
+
+    `bilingual` (`None` by default — every pre-existing caller, and every
+    ordinary monolingual grid, unaffected) is the grid's own second
+    language (its vertical words' language — see crossword_gen.py's
+    `generate_grid`'s own `bilingual_language`), at the user's explicit
+    request: "les grilles sont sauvegardées avec la configuration des
+    deux langues 'language' et 'bilingual'. Les grilles bilingues vont
+    dans le STORE bilingual." A grid is only ever treated as genuinely
+    bilingual when `bilingual` is both given AND different from
+    `language` — the record's own `language` field always stays the
+    grid's primary (horizontal-words) language either way, matching
+    every other field crossword_gen.py already returns; only the
+    directory it's filed under, and the extra `bilingual` field itself,
+    change. `list_grids`/`_iter_stored_grids` below need no change to
+    find these: `GRID_STORE_DIR.glob("*/*.json")` already walks every
+    language subdirectory, "bilingual" included, since it's just one
+    more folder name to that glob."""
+    is_bilingual = bool(bilingual) and bilingual != language
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     slug = _slugify_title(title)
     code = f"{secrets.randbelow(10_000):04d}"
     grid_id = f"{timestamp}_{slug}_{code}"
-    directory = GRID_STORE_DIR / language
+    directory = GRID_STORE_DIR / ("bilingual" if is_bilingual else language)
     directory.mkdir(parents=True, exist_ok=True)
     record = {
         **result,
         "id": grid_id,
         "title": title,
         "language": language,
+        "bilingual": bilingual if is_bilingual else None,
         "difficulty": difficulty,
         "mode": mode,
         "created_at": datetime.now().isoformat(),
@@ -136,6 +156,13 @@ def _iter_stored_grids():
             "id": record.get("id", path.stem),
             "created_at": record.get("created_at"),
             "language": record.get("language"),
+            # The grid's own second (vertical-words) language — see
+            # save_grid_json's own docstring — `None`/absent for every
+            # ordinary, monolingual grid. Lets GET /api/library's own
+            # `language_filter=="bilingual"` (backend/app.py) pick out
+            # exactly these entries without needing a directory-name
+            # convention of its own.
+            "bilingual": record.get("bilingual"),
             "difficulty": record.get("difficulty"),
             "title": record.get("title"),
             "width": record.get("width"),

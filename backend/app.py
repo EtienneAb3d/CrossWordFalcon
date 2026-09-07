@@ -285,6 +285,26 @@ _BACKGROUND_TASKS = set()
 
 class GenerateRequest(BaseModel):
     language: str = Field(default="fr", description="fr, en, de, es ou it")
+    # `None` par défaut (une grille ordinaire, monolingue), à la demande
+    # explicite de l'utilisateur : "Ajouter la possibilité de générer des
+    # grille bilingue... toutes les étapes utilisent la première langue
+    # pour les mots horizontaux, et la seconde langue pour les mots
+    # verticaux." L'interface web force ce champ à la même valeur que
+    # `language` dès que celui-ci change (voir frontend/static/script.js),
+    # mais le joueur peut ensuite le régler sur une langue différente pour
+    # obtenir une vraie grille bilingue — `None`, ou une valeur identique
+    # à `language`, dégradent tous deux proprement en génération
+    # monolingue ordinaire (voir crossword_gen.generate_grid's propre
+    # `bilingual_wordlist_path`), donc Automation/Populate.py (qui
+    # n'envoie jamais ce champ) continue de générer des grilles purement
+    # monolingues sans aucun changement de son côté.
+    bilingual_language: Optional[str] = Field(
+        default=None,
+        description=(
+            "Langue des mots verticaux pour une grille bilingue (fr, en, de, es, "
+            "it ou pt) ; None ou identique à `language` = grille monolingue ordinaire"
+        ),
+    )
     # Pas de borne haute, à la demande explicite de l'utilisateur (le
     # plafond précédent, 25, a été retiré) — seule une borne basse reste,
     # une grille plus petite que ça n'a plus vraiment de sens comme mots
@@ -580,12 +600,31 @@ def _library_page(preferred_language, page, seen_filter, seen_ids, language_filt
     une liste vide, pas une erreur."""
     if seen_filter not in _LIBRARY_SEEN_FILTERS:
         seen_filter = "all"
+    # "bilingual" (voir GRID_STORE/bilingual/, backend/grid_store.py's
+    # save_grid_json) n'est jamais une vraie clé de WORDLISTS — filtré
+    # séparément, sur le champ `bilingual` de chaque grille plutôt que sur
+    # son `language` (qui reste toujours sa langue primaire), à la
+    # demande explicite de l'utilisateur : "ajouter Bilingue dans le
+    # sélecteur de langue de la Bibliothèque."
+    only_bilingual = language_filter == "bilingual"
     only_language = language_filter if language_filter in WORDLISTS else None
     seen = set(seen_ids or ())
     rows = []
     for g in list_grids(preferred_language):
-        if only_language is not None and g.get("language") != only_language:
-            continue
+        if only_bilingual:
+            if not g.get("bilingual"):
+                continue
+        elif only_language is not None:
+            # Une langue précise (jamais "all"/"bilingual" — only_language
+            # n'est posé que pour une vraie clé de WORDLISTS) exclut aussi
+            # les grilles bilingues dont `language` correspond, à la
+            # demande explicite de l'utilisateur : "quand une seule langue
+            # est sélectionnée, ne pas afficher les grilles bilingues" —
+            # une grille bilingue ne se montre alors que via le filtre
+            # "Bilingue" lui-même, jamais mélangée dans la liste d'une
+            # seule langue même si celle-ci est sa langue primaire.
+            if g.get("language") != only_language or g.get("bilingual"):
+                continue
         is_seen = g.get("id") in seen
         if seen_filter == "unseen" and is_seen:
             continue
@@ -812,7 +851,7 @@ def _load_gloss_raw_lines(language):
     return lines
 
 
-def _build_word_verification_table(words, language):
+def _build_word_verification_table(words, language, bilingual_language=None):
     """Diagnostic table built right before clue generation starts (see
     _run_generate_job's own `progress("clues", ...)` call), at the user's
     explicit request: one row per grid word, sorted top-to-bottom then
@@ -854,12 +893,28 @@ def _build_word_verification_table(words, language):
     `w["direction"]` (see crossword_gen.py's `build_word_entries`) so the
     frontend can prefix each coordinate with H/V (frontend/static/
     script.js's `renderWordTable()`)."""
-    wordlist_lines = _load_wordlist_raw_lines(language)
-    gloss_lines = _load_gloss_raw_lines(language)
+    # Sur une grille bilingue, `bilingual_language` désigne la langue des
+    # mots verticaux (voir crossword_gen.generate_grid's own `bilingual_
+    # language`) — chaque mot est donc vérifié contre LE DICTIONNAIRE DE
+    # SA PROPRE LANGUE (`w.get("language", language)`, déjà posé par
+    # generate_grid sur chaque entrée), jamais toujours le même. Les deux
+    # paires {wordlist,gloss}_lines sont préchargées une seule fois
+    # chacune (jamais reconstruites par mot) ; `wordlist_lines`/
+    # `gloss_lines` restent les noms utilisés plus bas pour la langue
+    # primaire, avec un second jeu chargé seulement si une grille bilingue
+    # est effectivement en jeu.
+    wordlist_lines_by_lang = {language: _load_wordlist_raw_lines(language)}
+    gloss_lines_by_lang = {language: _load_gloss_raw_lines(language)}
+    if bilingual_language and bilingual_language != language:
+        wordlist_lines_by_lang[bilingual_language] = _load_wordlist_raw_lines(bilingual_language)
+        gloss_lines_by_lang[bilingual_language] = _load_gloss_raw_lines(bilingual_language)
 
     rows = []
     for w in sorted(words, key=lambda w: (w["row"], w["col"], w["direction"])):
         answer = w["answer"]
+        word_lang = w.get("language", language)
+        wordlist_lines = wordlist_lines_by_lang.get(word_lang, wordlist_lines_by_lang[language])
+        gloss_lines = gloss_lines_by_lang.get(word_lang, gloss_lines_by_lang[language])
         wordlist_line = wordlist_lines.get(answer)
         in_wordlist = wordlist_line is not None
         matched_gloss_lines = []
@@ -1032,10 +1087,11 @@ async def _run_generate_job(job_id, req, resume_state=None):
 
     try:
         logger.info(
-            "[%s] starting generation: language=%s width=%s height=%s difficulty=%s "
-            "force_letters_percent=%s black_enrichment_percent=%s mode=%s",
-            short_id, req.language, req.width, req.height, req.difficulty,
-            req.force_letters_percent, req.black_enrichment_percent, req.mode,
+            "[%s] starting generation: language=%s bilingual_language=%s width=%s "
+            "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
+            "mode=%s",
+            short_id, req.language, req.bilingual_language, req.width, req.height,
+            req.difficulty, req.force_letters_percent, req.black_enrichment_percent, req.mode,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
         # QUEUE's own module-level docstring: at most one grid search runs
@@ -1082,6 +1138,11 @@ async def _run_generate_job(job_id, req, resume_state=None):
                         difficulty=req.difficulty,
                         seed=req.seed,
                         wordlist_path=str(WORDLISTS[req.language]),
+                        bilingual_wordlist_path=(
+                            str(WORDLISTS[req.bilingual_language])
+                            if req.bilingual_language and req.bilingual_language != req.language
+                            else None
+                        ),
                         on_progress=progress,
                         force_letters_fraction=req.force_letters_percent / 100,
                         black_enrichment_fraction=req.black_enrichment_percent / 100,
@@ -1165,7 +1226,8 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # even though the result is needed before clue_generator.generate
         # can start right after.
         word_table = await asyncio.to_thread(
-            _build_word_verification_table, result["words"], req.language
+            _build_word_verification_table, result["words"], req.language,
+            result.get("bilingual_language"),
         )
         progress(
             "clues", current=0, total=len(result["words"]),
@@ -1209,7 +1271,18 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # jump backward every time this job resumes after a pause.
         CLUES_QUEUE.append(task)
         try:
-            remaining_entries = [(w["answer"], w["accented"], w["canonical"]) for w in result["words"]]
+            # 4e élément (langue) au lieu de 3, à la demande explicite de
+            # l'utilisateur pour une grille bilingue : chaque mot porte
+            # déjà sa propre langue (crossword_gen.generate_grid's own
+            # per-word `language`, selon sa direction) — LLMClueGenerator.
+            # generate() résout cette langue par mot (repli sur `req.
+            # language`, l'argument positionnel ci-dessous, pour un mot
+            # qui n'en porterait pas) plutôt qu'une seule langue pour tout
+            # l'appel comme avant cette fonctionnalité.
+            remaining_entries = [
+                (w["answer"], w["accented"], w["canonical"], w.get("language"))
+                for w in result["words"]
+            ]
             accumulated_clues = {}
             clues_compute_s = 0.0
             while True:
@@ -1287,7 +1360,8 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # the player is actually waiting on.
         try:
             grid_id = await asyncio.to_thread(
-                save_grid_json, result, req.language, req.difficulty, req.mode, title
+                save_grid_json, result, req.language, req.difficulty, req.mode, title,
+                result.get("bilingual_language"),
             )
             logger.info("[%s] saved to library: %s", short_id, grid_id)
             # L'identifiant du fichier GRID_STORE de cette grille, pour que
@@ -1346,6 +1420,27 @@ def _validate_generate_request(req):
             detail=f"le dictionnaire pour {req.language!r} n'est pas encore "
                    "construit sur ce serveur — réessayez plus tard.",
         )
+    # `bilingual_language` (voir GenerateRequest) subit exactement les
+    # mêmes vérifications que `language` ci-dessus — mais seulement quand
+    # une vraie grille bilingue est demandée (une valeur fournie ET
+    # différente de `language`) ; `None` ou une valeur identique dégrade
+    # déjà proprement en génération monolingue et n'a donc besoin d'aucune
+    # validation supplémentaire.
+    if req.bilingual_language is not None and req.bilingual_language != req.language:
+        if req.bilingual_language not in WORDLISTS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"langue bilingue inconnue : {req.bilingual_language!r} "
+                    f"(attendu : {sorted(WORDLISTS)})"
+                ),
+            )
+        if not WORDLISTS[req.bilingual_language].exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"le dictionnaire pour {req.bilingual_language!r} n'est pas "
+                       "encore construit sur ce serveur — réessayez plus tard.",
+            )
     if req.difficulty not in DIFFICULTY_PRESETS:
         raise HTTPException(
             status_code=400,

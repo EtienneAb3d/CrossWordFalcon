@@ -95,6 +95,13 @@ def _build_request(args):
     height = args.height if args.height is not None else random.randint(MIN_SIZE, MAX_SIZE)
     return {
         "language": _pick(args.language, LANGUAGES),
+        # `bilingual_language` (GenerateRequest, backend/app.py) est
+        # délibérément omis ici, à la demande explicite de l'utilisateur
+        # ("Populate.py ne doit pas générer de grille bilingue pour le
+        # moment") — son absence dégrade déjà proprement en génération
+        # monolingue ordinaire (voir crossword_gen.generate_grid's own
+        # `bilingual_wordlist_path`), donc rien de plus à faire ici pour
+        # obtenir ce comportement.
         "difficulty": _pick(args.difficulty, DIFFICULTIES),
         # Toujours le mode "medium", à la demande explicite de
         # l'utilisateur ("Populate ne doit utiliser que le mode MOYEN") —

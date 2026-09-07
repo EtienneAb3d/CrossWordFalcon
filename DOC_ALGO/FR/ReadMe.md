@@ -7,6 +7,28 @@ mots, puis simplifier la grille — que ce soit une tentative bloquée qu'on
 récupère avant de continuer, ou une grille déjà réussie qu'on rend encore plus
 dense en retirant le plus de cases noires possible.
 
+## Grilles bilingues
+
+Une grille peut utiliser deux langues à la fois : les mots horizontaux dans
+une première langue, les mots verticaux dans une seconde (`backend/
+crossword_gen.py`, `generate_grid`'s own `bilingual_wordlist_path`
+parameter). Les trois étapes ci-dessous fonctionnent alors exactement de la
+même façon, sauf pour un point unique : chaque fois qu'un emplacement a
+besoin d'un mot candidat, c'est le dictionnaire de sa propre direction
+(horizontal ou vertical) qui est consulté, jamais l'autre — deux
+dictionnaires complets et indépendants, un par langue, plutôt qu'un seul
+dictionnaire mélangeant les deux (`backend/crossword_gen.py`, `DualIndex`/
+`DualSet`). Sur une grille ordinaire (une seule langue), les deux
+dictionnaires sont en réalité le même objet, donc rien ne change par
+rapport à une génération monolingue.
+
+Chaque mot du résultat final porte sa propre langue (`backend/
+crossword_gen.py`, `generate_grid`'s own per-word `language` field) — celle
+de la grille pour un mot horizontal, la seconde langue pour un mot
+vertical. C'est cette information qui permet ensuite à `backend/clues.py`
+d'écrire chaque définition dans la bonne langue, et au ChatBot (`backend/
+chatbot.py`) de donner un indice dans la langue du mot concerné.
+
 ## Étape 1 — Placer les cases noires
 
 On part d'une grille entièrement blanche de `width` colonnes sur `height`

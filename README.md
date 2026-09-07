@@ -106,6 +106,13 @@ On the page:
 1. Choose a **language** (the interface itself switches to that language
    too), a **width**, a **height** (15×10 by default), and a **difficulty
    level** ("Easy" uses everyday vocabulary, "Hard" allows rarer words).
+   For a bilingual grid — its across (horizontal) words in one language,
+   its down (vertical) words in a different one — set the **"Bilingue" /
+   "Bilingual"** field, right next to width and height, to a different
+   language than the one you just chose; leaving it the same gives an
+   ordinary, single-language grid. On a bilingual grid, definitions,
+   dictionary lookups, and David FALCON's own hints all follow the
+   language of the specific word they're about.
 2. Click **"Generate grid"** (the button's own label follows your chosen
    language). A full grid with all its definitions can take anywhere from
    a few seconds to a couple of minutes, depending on its size — the
@@ -151,7 +158,9 @@ Two buttons above the grid help you check your progress:
 
 The **"Library"** button (always visible, top right of the form) opens a
 list of every grid you've ever generated on this server — its language,
-date, title, difficulty, and size, 20 per page, most recent first.
+date, title, difficulty, and size, 20 per page, most recent first. A
+language filter lets you narrow the list to one language, or to
+**"Bilingue" / "Bilingual"** for every grid made of two languages.
 Click a row to load that grid straight into the player, exactly as if it
 had just finished generating.
 

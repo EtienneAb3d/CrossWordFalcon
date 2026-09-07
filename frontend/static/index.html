@@ -54,6 +54,26 @@
         <input type="number" id="width" name="width" min="5" max="30" step="1" value="15" required>
       </label>
 
+      <!-- Grille bilingue, à la demande explicite de l'utilisateur : "entre
+           les configuration Largeur et Hauteur, ajouter un second sélecteur
+           de langue 'Bilingue'." Mêmes options que #language ci-dessus —
+           script.js force ce sélecteur à la même valeur que #language à
+           chaque changement de celui-ci (donc "fr" au chargement, comme
+           #language), le joueur peut ensuite le régler sur une langue
+           différente pour une vraie grille bilingue (mots verticaux dans
+           cette seconde langue, voir crossword_gen.generate_grid). -->
+      <label for="bilingual-language">
+        <span data-i18n="bilingualLanguageLabel">Bilingue</span>
+        <select id="bilingual-language" name="bilingual_language">
+          <option value="fr" selected>Français</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="it">Italiano</option>
+          <option value="pt">Português</option>
+        </select>
+      </label>
+
       <label for="height">
         <span data-i18n="heightLabel">Hauteur</span>
         <input type="number" id="height" name="height" min="5" max="30" step="1" value="10" required>
@@ -156,6 +176,13 @@
         <p id="library-label" data-i18n="libraryLabel"></p>
         <select id="library-language-filter" data-i18n-aria="libraryLanguageFilterLabel">
           <option value="all" data-i18n="libraryLanguageFilterAll">Toutes les langues</option>
+          <!-- Grilles bilingues (GRID_STORE/bilingual/, voir backend/
+               grid_store.py), à la demande explicite de l'utilisateur —
+               placée juste après "Toutes les langues" (position explicitement
+               demandée) — ne matche aucune clé de WORDLISTS, filtré
+               séparément côté Back (backend/app.py's _library_page) sur le
+               champ `bilingual` de chaque grille plutôt que sur sa langue. -->
+          <option value="bilingual" data-i18n="libraryLanguageFilterBilingual">Bilingue</option>
           <option value="fr">Français</option>
           <option value="en">English</option>
           <option value="de">Deutsch</option>
@@ -273,7 +300,23 @@
         </div>
         <div id="grid-column">
           <div id="grid"></div>
-          <p id="hover-definition"></p>
+          <!-- Sélecteur de sens dupliqué du clavier virtuel, à droite de
+               la zone de définition permanente (jamais masquée par le
+               bouton "définitions", contrairement à #clues/#down-clues-
+               section) — à la demande explicite de l'utilisateur.
+               Mêmes boutons .toggle-btn, même comportement (voir
+               script.js's setActiveDirection()) — les deux exemplaires
+               restent en permanence synchronisés l'un avec l'autre, avec
+               SHIFT/CAPSLOCK, et avec le survol de la grille. -->
+          <div id="hover-definition-row">
+            <p id="hover-definition"></p>
+            <div id="clues-direction-row">
+              <button type="button" id="clues-direction-across-btn" class="toggle-btn active"
+                      data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
+              <button type="button" id="clues-direction-down-btn" class="toggle-btn"
+                      data-i18n-aria="virtualKeyboardDownBtn">↓</button>
+            </div>
+          </div>
         </div>
       </div>
       <div id="down-clues-section">

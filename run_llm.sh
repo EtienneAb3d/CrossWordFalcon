@@ -166,14 +166,23 @@ echo "Starting LLM server: model=$MODEL_PATH, port=$LLM_PORT"
 # keeps running after the launching shell/terminal closes, not just across a
 # background `&` (nohup alone only ignores SIGHUP, it doesn't detach from
 # the shell's job table).
-# n_ctx bumped from 4096 (Qwen3.5, thinking off) to 8192: DeepSeek-R1-Distill
-# reasons through a `<think>` block before every answer (see
-# backend/clues.py's REASONING_TOKEN_BUDGET/_strip_reasoning), so the prompt
-# plus that reasoning plus the actual answer needs more room to fit.
+# n_ctx bumped from 4096 (Qwen3.5, thinking off) to 8192 (DeepSeek-R1-Distill
+# reasons through a `<think>` block before every answer, see
+# backend/clues.py's REASONING_TOKEN_BUDGET/_strip_reasoning) then to 32768:
+# 8192 turned out too small for backend/chatbot.py's own David FALCON chat
+# feature, reproduced live — DOC_USER/EN/ReadMe.md alone is already ~6200
+# tokens, and a real grid's word list on top of it can easily push the
+# system prompt past 8192, at which point llama_cpp.server raises
+# "Requested tokens (N) exceed context window of 8192" *inside* its own
+# streaming generator, after already sending a 200 OK — the client sees a
+# silently empty SSE stream, not an HTTP error (see backend/chatbot.py's
+# own defensive fix for the same incident). The model itself
+# (n_ctx_train, confirmed live in logs/llm.log) supports far more than
+# either value, so this is purely a `--n_ctx` choice, not a model limit.
 nohup python3 -m llama_cpp.server \
     --model "$MODEL_PATH" \
     --host "$LLM_HOST" --port "$LLM_PORT" \
-    --n_ctx 8192 --n_gpu_layers "$N_GPU_LAYERS" \
+    --n_ctx 32768 --n_gpu_layers "$N_GPU_LAYERS" \
     --chat_template_kwargs "$CHAT_TEMPLATE_KWARGS" \
     < /dev/null > "$LLM_LOG" 2>&1 &
 LLM_PID=$!

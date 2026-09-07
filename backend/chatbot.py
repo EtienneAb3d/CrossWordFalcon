@@ -132,13 +132,26 @@ def _format_words_block(words):
     mot (réponse)." `words` is the frontend's own `puzzle.words` shape
     (row/col are 0-based internally — shown 1-based here, matching what
     the player actually sees on screen, since header row/column numbers
-    in the grid are 1-based too)."""
+    in the grid are 1-based too).
+
+    Each line also carries `language=` — `w.get("language")`, already set
+    per word by crossword_gen.generate_grid (its own `language` for an
+    ordinary grid, or, on a bilingual grid, the word's own direction-based
+    language — see that function's docstring) — at the user's explicit
+    request: "répond dans la langue du mot quand une aide est demandée
+    pour remplir la grille (langue différente suivant si c'est horizontal
+    ou vertical)." On an ordinary, monolingual grid every word shares the
+    exact same `language` value, so this is a no-op for the system
+    prompt's own per-word-language rule below (see _build_system_prompt);
+    it only ever matters once two different values actually appear here,
+    i.e. a genuinely bilingual grid."""
     lines = []
     for w in words:
         direction = "Down" if w.get("direction") == "down" else "Across"
         lines.append(
             f"- ({w.get('row', 0) + 1}, {w.get('col', 0) + 1}) {direction}: "
-            f"clue={w.get('clue') or '(none yet)'!r}, answer={w.get('answer', '')!r}"
+            f"clue={w.get('clue') or '(none yet)'!r}, answer={w.get('answer', '')!r}, "
+            f"language={w.get('language') or '?'!r}"
         )
     return "\n".join(lines)
 
@@ -381,6 +394,19 @@ class ChatBot:
             "though many examples in these rules happen to be written in French — those "
             "French snippets illustrate FORMAT and WORDING STYLE only, never the language "
             f"to answer in. If {language_name} is not French, do NOT reply in French.\n"
+            "   EXCEPTION to rule 2, for a BILINGUAL grid only: each word in the word list "
+            "below carries its own 'language=' field. On an ordinary grid every word shares "
+            "the same language as the interface, so this exception never actually changes "
+            "anything there. But on a bilingual grid, the across (horizontal) words and the "
+            "down (vertical) words can be written in two DIFFERENT languages — when your "
+            "reply is specifically about helping with ONE particular grid word (a HINT under "
+            "rule 4a-d, or the ANSWER under rule 4e), write the hint/definition/answer "
+            f"CONTENT itself in THAT WORD's own 'language=' field, not necessarily {language_name}. "
+            "Everything else in the same reply — the short preamble naming which word it is "
+            f"(rule 4b), and any other sentence not about that one word — still stays in {language_name} "
+            "as usual. State plainly, in the preamble, which language you are switching to "
+            "when it differs from the interface language, so the player is never confused by "
+            "the sudden change.\n"
             "3. You must ONLY answer questions about using this interface, or about solving/"
             "understanding the crossword grid currently on screen. For ANY other question "
             "(general knowledge, other software, personal questions, anything unrelated to "
@@ -577,6 +603,7 @@ class ChatBot:
         messages.extend(history)
         messages.append({"role": "user", "content": message})
         buffer = ""
+        yielded_anything = False
         reasoning_state = {
             "none": "disabled",
             "close_only": "in_reasoning",
@@ -630,6 +657,7 @@ class ChatBot:
                         if reasoning_state == "disabled":
                             # CHATBOT_THINK_FILTER=none — no tag search at
                             # all, stream every chunk immediately.
+                            yielded_anything = True
                             yield delta
                             continue
                         buffer += delta
@@ -662,10 +690,30 @@ class ChatBot:
                                         to_flush = buffer[:len(buffer) - hold] if hold else buffer
                                         buffer = buffer[len(buffer) - hold:] if hold else ""
                                         if to_flush:
+                                            yielded_anything = True
                                             yield to_flush
         except httpx.HTTPError as e:
             logger.warning("chat stream failed (%s, model=%r): %s", self.base_url, self.model, e)
             raise ChatError(f"Le serveur de langage est indisponible ({e}).") from e
+        if not yielded_anything:
+            # A real, reproduced incident: llama_cpp.server can send a 200
+            # OK, start an SSE stream, then raise "Requested tokens (N)
+            # exceed context window of ..." *inside* its own streaming
+            # generator (a real prompt-too-long case — a grid's own word
+            # list pushed the system prompt past --n_ctx, see run_llm.sh) —
+            # the client sees a silently empty stream, not an HTTP error,
+            # since the failure happens after the response headers (and
+            # their 200 status) are already sent. Without this check the
+            # player would just see a blank reply with no explanation
+            # (confirmed live: LOG_CHAT recorded an empty answer in well
+            # under a second, no error at all). Anything else that could
+            # leave a stream with zero real content (an unresponsive
+            # model, an unexpected response shape) is covered by the same
+            # check, not just this one specific cause.
+            raise ChatError(
+                "Le serveur de langage n'a renvoyé aucun contenu "
+                "(le contexte de la conversation est peut-être trop long)."
+            )
 
 
 class ChatError(RuntimeError):

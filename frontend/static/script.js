@@ -46,6 +46,7 @@ function renderHoverDefinitionPlaceholder() {
 
 const form = document.getElementById("generate-form");
 const languageSelect = document.getElementById("language");
+const bilingualLanguageSelect = document.getElementById("bilingual-language");
 const button = document.getElementById("generate-btn");
 const status = document.getElementById("status");
 const result = document.getElementById("result");
@@ -56,6 +57,12 @@ const generationTimesNextBtn = document.getElementById("generation-times-next-bt
 const generationTimesPosition = document.getElementById("generation-times-position");
 const gridEl = document.getElementById("grid");
 const hoverDefinition = document.getElementById("hover-definition");
+// The flex row wrapping #hover-definition and its own duplicated
+// direction-selector buttons (see #hover-definition-row's own comment
+// in style.css) — the JS-measured-width workaround below now targets
+// this wrapper, not #hover-definition alone, so the whole row (text
+// plus buttons) matches #grid's own rendered width.
+const hoverDefinitionRow = document.getElementById("hover-definition-row");
 const cluesAcross = document.getElementById("clues-across");
 const cluesDown = document.getElementById("clues-down");
 const solutionBtn = document.getElementById("solution-btn");
@@ -106,6 +113,13 @@ const virtualKeyboardToggleBtn = document.getElementById("virtual-keyboard-toggl
 const virtualKeyboardRows = document.getElementById("virtual-keyboard-rows");
 const virtualKeyboardAcrossBtn = document.getElementById("virtual-keyboard-across-btn");
 const virtualKeyboardDownBtn = document.getElementById("virtual-keyboard-down-btn");
+// Duplicate of the same pair, next to "Verticalement" under the grid, at
+// the user's explicit request: "Duplique le sélecteur de sens du clavier
+// virtuel pour le mettre à droite des définitions sous la grille." Both
+// pairs drive and reflect the exact same activeDirection state (see
+// below) — clicking either pair's own buttons keeps all 4 in sync.
+const cluesDirectionAcrossBtn = document.getElementById("clues-direction-across-btn");
+const cluesDirectionDownBtn = document.getElementById("clues-direction-down-btn");
 const rssLanguageFilter = document.getElementById("rss-language-filter");
 const rssList = document.getElementById("rss-list");
 const rssDetail = document.getElementById("rss-detail");
@@ -476,6 +490,24 @@ let hoveredGridCell = null; // { row, col } while the mouse is over a grid cell,
 // labels, precisely so it doesn't conflate the two.
 let hoveredWord = null;
 
+// The single, shared "which direction is currently active" state, at the
+// user's explicit request: the virtual keyboard's own direction buttons
+// ("un clavier virtuel... plus une flèche vers le bas pour configurer le
+// sens vertical... et une flèche vers la droite pour configurer le sens
+// horizontalement") were duplicated next to "Verticalement" under the
+// grid, and both pairs, plus Shift/CapsLock, now drive and reflect this
+// one variable — a persistent mode (CAPS-LOCK-like, not SHIFT-held: a
+// clicked button can't really be "held down") rather than a per-key
+// state, exactly like the virtual keyboard's own original design. Grid
+// hover (see the mouseenter listener in renderGrid()) reads this
+// directly too, rather than the live modifier state of the mouseenter
+// event alone, so hovering the grid always respects whichever direction
+// the player last chose — by clicking a button or via Shift/CapsLock —
+// rather than the mouse-move event's own momentary key state overriding
+// it: "La sélection dans la grille (mouse over) doit s'adapter aux
+// sélecteurs de sens."
+let activeDirection = "across";
+
 // Finds every cell of the white-cell run through (row, col) in `direction`
 // ("across"/"down") by scanning the pattern outward until a black cell or
 // the grid edge — not a lookup against puzzle.words — so it works for any
@@ -517,6 +549,27 @@ function clearHighlights() {
 // user's explicit request for a fixed 3-line panel under the grid, so a
 // player can read the currently-hovered word's definition without the
 // full across/down clue lists in view at the same time.
+// Fait suivre le sélecteur de langue du panneau "Dictionnaire" à la
+// langue du mot survolé/sélectionné dans la grille à jouer, à la demande
+// explicite de l'utilisateur : "le sélecteur de langue du dictionnaire
+// doit s'adapter automatiquement à la langue suivant le sens de
+// sélection de la grille." Utilise les langues réellement enregistrées
+// sur la grille elle-même (`puzzle.language`/`puzzle.bilingual_language`
+// — voir backend/crossword_gen.py's generate_grid), pas les sélecteurs
+// du formulaire de génération : le joueur a pu les changer après avoir
+// généré/chargé cette grille précise, donc seule la grille elle-même
+// sait dans quelle(s) langue(s) elle a réellement été écrite. Sans effet
+// sur une grille monolingue ordinaire (`puzzle.bilingual_language` alors
+// `null`/absent) : `direction === "down"` retombe simplement sur la même
+// langue primaire que "across".
+function updateDictionaryLanguageForDirection(direction) {
+  if (!puzzle) return;
+  const lang = (direction === "down" && puzzle.bilingual_language)
+    ? puzzle.bilingual_language
+    : (puzzle.language || languageSelect.value);
+  if (lang) dictionaryLanguage.value = lang;
+}
+
 function highlightWordAt(row, col, direction) {
   clearHighlights();
   if (!puzzle || !isWhite(row, col)) return;
@@ -527,6 +580,7 @@ function highlightWordAt(row, col, direction) {
   }
   const start = cells[0];
   hoveredWord = { row: start.row, col: start.col, direction };
+  updateDictionaryLanguageForDirection(direction);
   const selector = `.clue-segment[data-row="${start.row}"][data-col="${start.col}"][data-direction="${direction}"]`;
   const segment = document.querySelector(selector);
   if (segment) {
@@ -544,16 +598,35 @@ function hoverDirectionFromEvent(event) {
   return event.getModifierState("Shift") || event.getModifierState("CapsLock") ? "down" : "across";
 }
 
-// Shift/CapsLock can be toggled while the mouse sits still over the same
-// cell — re-evaluate the hover direction on every key change too, not just
-// on mouseenter, so the highlighted word switches live rather than only on
-// the next mouse movement.
+// Updates activeDirection and every one of its 4 buttons (both the
+// virtual keyboard's own pair and its duplicate next to "Verticalement",
+// see their shared declaration above) at once, at the user's explicit
+// request that both button pairs stay in sync with each other and with
+// Shift/CapsLock. Also refreshes the currently-hovered word's own
+// highlight, if the mouse is over the grid right now, so switching
+// direction (by button or by Shift/CapsLock) is reflected immediately
+// rather than only on the next mouse movement.
+function setActiveDirection(direction) {
+  activeDirection = direction;
+  virtualKeyboardAcrossBtn.classList.toggle("active", direction === "across");
+  virtualKeyboardDownBtn.classList.toggle("active", direction === "down");
+  cluesDirectionAcrossBtn.classList.toggle("active", direction === "across");
+  cluesDirectionDownBtn.classList.toggle("active", direction === "down");
+  if (hoveredGridCell) highlightWordAt(hoveredGridCell.row, hoveredGridCell.col, direction);
+}
+
+// Shift/CapsLock can be toggled at any time, mouse over the grid or not —
+// re-evaluate activeDirection on every key change (not gated on a cell
+// being hovered, unlike the earlier version of this listener:
+// setActiveDirection() itself already handles refreshing the hover
+// highlight when there is one) so both button pairs stay in sync with
+// the physical modifier key too, per the user's explicit request.
 document.addEventListener("keydown", updateHoverForModifierKey);
 document.addEventListener("keyup", updateHoverForModifierKey);
 
 function updateHoverForModifierKey(event) {
-  if (!hoveredGridCell || (event.key !== "Shift" && event.key !== "CapsLock")) return;
-  highlightWordAt(hoveredGridCell.row, hoveredGridCell.col, hoverDirectionFromEvent(event));
+  if (event.key !== "Shift" && event.key !== "CapsLock") return;
+  setActiveDirection(hoverDirectionFromEvent(event));
 }
 
 function setStatus(message, isError) {
@@ -1252,9 +1325,14 @@ function renderGrid() {
       // solution shown, checking) — it's a passive reading aid, not tied
       // to the click-to-select input flow above.
       cellElements.set(`${r},${c}`, cell);
-      cell.addEventListener("mouseenter", (event) => {
+      cell.addEventListener("mouseenter", () => {
         hoveredGridCell = { row: r, col: c };
-        highlightWordAt(r, c, hoverDirectionFromEvent(event));
+        // Reads the shared activeDirection state rather than this event's
+        // own live modifier keys, at the user's explicit request — hover
+        // must respect whichever direction was last chosen (button click
+        // or Shift/CapsLock), not be silently overridden by whatever the
+        // mouse's own modifier state happens to be at this exact moment.
+        highlightWordAt(r, c, activeDirection);
       });
       cell.addEventListener("mouseleave", () => {
         hoveredGridCell = null;
@@ -1264,8 +1342,8 @@ function renderGrid() {
     }
   }
 
-  // #hover-definition's CSS width: 100% (stretching to #grid-column's own
-  // auto-computed width) turned out not to be enough to make long
+  // #hover-definition-row's CSS width: 100% (stretching to #grid-column's
+  // own auto-computed width) turned out not to be enough to make long
   // definitions wrap, even with min-width: 0 on the panel itself — reported
   // live by the user, the box still grew to fit unwrapped text. Root cause:
   // #grid-column is *itself* a flex item (of #board, flex-shrink: 0) with
@@ -1274,14 +1352,17 @@ function renderGrid() {
   // any child-level min-width: 0 gets a chance to matter — a compounding
   // version of the same flexbox gotcha across two nested containers, not
   // fixed by patching only the inner one. Sidesteps the whole
-  // auto-sizing/stretch ambiguity by setting #hover-definition's width
+  // auto-sizing/stretch ambiguity by setting #hover-definition-row's width
   // explicitly, in pixels, to #grid's own actual rendered width — read
   // *after* every cell above has been appended, so offsetWidth reflects
   // the grid's final layout, not a partial one. Guaranteed correct
   // regardless of any flex/grid intrinsic-sizing subtlety, since it's an
   // explicit measured value rather than something left for the browser to
-  // infer from content.
-  hoverDefinition.style.width = `${gridEl.offsetWidth}px`;
+  // infer from content. Set on the row (not #hover-definition directly)
+  // now that the direction-selector buttons sit next to it in that same
+  // row — #hover-definition itself still shrinks correctly within it via
+  // its own flex: 1 1 auto/min-width: 0 (see style.css).
+  hoverDefinitionRow.style.width = `${gridEl.offsetWidth}px`;
 }
 
 // Format habituel des mots croisés : les définitions horizontales sont
@@ -1381,20 +1462,12 @@ document.addEventListener("keydown", handleKeydown);
 // virtuel ne contenant que les 26 lettres de l'alphabet en majuscules
 // dans l'ordre naturel sur 2 lignes, plus une flèche vers le bas pour
 // configurer le sens vertical... et une flèche vers la droite pour
-// configurer le sens horizontalement." `virtualKeyboardDirection` est un
-// mode persistant (façon CAPS LOCK, pas SHIFT maintenu — un bouton
-// cliqué ne peut pas vraiment être "maintenu") plutôt qu'un état par
-// touche : reste actif jusqu'à ce que l'autre bouton de direction soit
-// cliqué, exactement comme handleKeydown()'s propre distinction
-// Shift/CapsLock (isUpper) décide déjà du sens pour une frappe physique,
-// mais fixé une fois pour toutes ici plutôt que réévalué à chaque lettre.
-let virtualKeyboardDirection = "across";
-
-function setVirtualKeyboardDirection(direction) {
-  virtualKeyboardDirection = direction;
-  virtualKeyboardAcrossBtn.classList.toggle("active", direction === "across");
-  virtualKeyboardDownBtn.classList.toggle("active", direction === "down");
-}
+// configurer le sens horizontalement." Its own direction buttons drive
+// the shared `activeDirection`/`setActiveDirection()` (declared earlier,
+// alongside the hover state it's now unified with) rather than a
+// dedicated variable of their own — see that declaration's own comment
+// for the full "un mode persistant... plutôt qu'un état par touche"
+// reasoning, unchanged from this feature's own original design.
 
 function insertAtCursor(input, text) {
   // Insère `text` à la position du curseur (en remplaçant la sélection
@@ -1433,8 +1506,8 @@ function typeVirtualLetter(letter) {
   userLetters[selected.row][selected.col] = letter;
   // moveSelection() attend "right" pour horizontal, n'importe quelle
   // autre valeur pour vertical (voir sa propre définition) — pas les
-  // mêmes libellés que virtualKeyboardDirection ("across"/"down").
-  moveSelection(virtualKeyboardDirection === "across" ? "right" : "down");
+  // mêmes libellés qu'activeDirection ("across"/"down").
+  moveSelection(activeDirection === "across" ? "right" : "down");
   renderGrid();
 }
 
@@ -1468,11 +1541,17 @@ buildVirtualKeyboard();
 // Comme les touches lettres : un clic sur une flèche de sens ne doit pas
 // retirer le focus du champ de recherche du dictionnaire (les flèches
 // n'ont aucun effet sur la saisie dictionnaire, mais un clic accidentel
-// ne doit pas casser la frappe en cours).
+// ne doit pas casser la frappe en cours). Les deux paires de boutons
+// (clavier virtuel + doublon sous "Verticalement") pilotent le même
+// setActiveDirection() partagé.
 virtualKeyboardAcrossBtn.addEventListener("mousedown", (e) => e.preventDefault());
 virtualKeyboardDownBtn.addEventListener("mousedown", (e) => e.preventDefault());
-virtualKeyboardAcrossBtn.addEventListener("click", () => setVirtualKeyboardDirection("across"));
-virtualKeyboardDownBtn.addEventListener("click", () => setVirtualKeyboardDirection("down"));
+virtualKeyboardAcrossBtn.addEventListener("click", () => setActiveDirection("across"));
+virtualKeyboardDownBtn.addEventListener("click", () => setActiveDirection("down"));
+cluesDirectionAcrossBtn.addEventListener("mousedown", (e) => e.preventDefault());
+cluesDirectionDownBtn.addEventListener("mousedown", (e) => e.preventDefault());
+cluesDirectionAcrossBtn.addEventListener("click", () => setActiveDirection("across"));
+cluesDirectionDownBtn.addEventListener("click", () => setActiveDirection("down"));
 // La grille (ou tout autre contenu en bas de page) était masquée par le
 // clavier virtuel déplié, sans aucun moyen de défiler plus bas pour la
 // faire remonter au-dessus — rapporté directement par l'utilisateur.
@@ -1496,6 +1575,16 @@ virtualKeyboardToggleBtn.addEventListener("click", () => {
 
 languageSelect.addEventListener("change", () => {
   uiLanguage = languageSelect.value;
+  // Grille bilingue, à la demande explicite de l'utilisateur : "le
+  // premier sélecteur de langue configure la langue de l'interface, et
+  // force le second sélecteur de langue à prendre la même valeur." Un
+  // simple changement de la langue de l'interface annule donc toujours
+  // un choix bilingue déjà fait sur ce sélecteur — le joueur doit
+  // reconfigurer "Bilingue" sur une langue différente à chaque fois
+  // qu'il souhaite réellement une grille bilingue, jamais que ce
+  // sélecteur reste figé sur une ancienne valeur devenue incohérente
+  // avec la nouvelle langue principale.
+  bilingualLanguageSelect.value = uiLanguage;
   applyTranslations();
   // attemptPreviewStats is a parameterized string (see i18n.js), rendered
   // directly inside renderAttemptPreview() rather than through the generic
@@ -1540,6 +1629,7 @@ languageSelect.addEventListener("change", () => {
 });
 
 applyTranslations();
+bilingualLanguageSelect.value = uiLanguage;
 
 // Raised from 700ms to 2000ms at the user's explicit request, after a
 // reported sporadic 502 on /api/generate/status with no corresponding trace
@@ -2096,6 +2186,15 @@ async function renderLibraryList() {
     const languageTd = document.createElement("td");
     const languageOption = languageSelect.querySelector(`option[value="${entry.language}"]`);
     languageTd.textContent = languageOption ? languageOption.textContent : (entry.language || "");
+    // Grille bilingue (voir backend/grid_store.py's own `bilingual`
+    // field), à la demande explicite de l'utilisateur : montre les deux
+    // codes langue ("fr/en") à la suite du nom déjà affiché ci-dessus,
+    // plutôt qu'un second, éventuellement long, libellé en toutes
+    // lettres — reste lisible même quand les deux langues partagent une
+    // ligne étroite du tableau.
+    if (entry.bilingual) {
+      languageTd.textContent += ` (${entry.language}/${entry.bilingual})`;
+    }
     const dateTd = document.createElement("td");
     dateTd.textContent = entry.created_at ? new Date(entry.created_at).toLocaleString(uiLanguage) : "";
     const titleTd = document.createElement("td");
@@ -2476,6 +2575,14 @@ function buildChatUiContext() {
     words: puzzle
       ? puzzle.words.map((w) => ({
           row: w.row, col: w.col, direction: w.direction, clue: w.clue, answer: w.answer,
+          // Langue réellement utilisée pour CE mot (voir backend/
+          // crossword_gen.py's generate_grid, chaque mot porte son propre
+          // `language` selon sa direction sur une grille bilingue) — à la
+          // demande explicite de l'utilisateur, pour que David FALCON
+          // réponde dans la langue du mot quand une aide de remplissage
+          // est demandée. Identique pour tous les mots sur une grille
+          // ordinaire, donc sans effet dans ce cas.
+          language: w.language,
         }))
       : [],
   };
@@ -2676,6 +2783,13 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const language = languageSelect.value;
+  // Grille bilingue, à la demande explicite de l'utilisateur : omis
+  // (`undefined`, donc absent du JSON envoyé) quand le sélecteur
+  // "Bilingue" est resté identique à la langue principale — c'est le
+  // Back (GenerateRequest.bilingual_language) qui traite déjà `None`/une
+  // valeur identique comme "grille monolingue ordinaire" de toute façon,
+  // mais autant ne pas envoyer un champ sans effet réel.
+  const bilingualLanguage = bilingualLanguageSelect.value;
   const width = Number(widthInput.value);
   const height = Number(heightInput.value);
   const difficulty = document.getElementById("difficulty").value;
@@ -2691,6 +2805,7 @@ form.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           language, width, height, difficulty, mode,
+          bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
           force_letters_percent: forceLettersPercent,
         }),

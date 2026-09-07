@@ -364,17 +364,49 @@ button:disabled {
   margin-top: 1rem;
 }
 
-/* Wraps #grid and #hover-definition so the definition panel sits directly
-   below the grid specifically (not the whole #board row, which also
-   includes the #clues sidebar) — a plain flex column, no explicit width:
-   #grid sizes itself from its own grid-template-columns, and
-   #hover-definition's width: 100% below then stretches to match it via
-   the column's default align-items: stretch. */
+/* Wraps #grid and #hover-definition-row so the definition panel (plus its
+   own direction-selector, see below) sits directly below the grid
+   specifically (not the whole #board row, which also includes the
+   #clues sidebar) — a plain flex column, no explicit width: #grid sizes
+   itself from its own grid-template-columns, and #hover-definition-row's
+   width: 100% below then stretches to match it via the column's default
+   align-items: stretch. */
 #grid-column {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
   flex-shrink: 0;
+}
+
+/* Duplicate of the virtual keyboard's own across/down direction buttons,
+   at the user's explicit request: placed to the right of the *permanent*
+   hover-definition panel (#hover-definition, never hidden by the
+   "définitions" toggle, unlike #clues/#down-clues-section) rather than
+   next to the collapsible "Verticalement" heading, where an earlier
+   version of this feature had wrongly put it. #hover-definition itself
+   flexes/shrinks within this row (flex: 1 1 auto; min-width: 0, same
+   reasoning as its own comment below) while the button pair keeps its
+   own natural size (flex: 0 0 auto) — width: 100% moved here from
+   #hover-definition, and script.js's own JS-measured-width workaround
+   (see #hover-definition's comment) now targets this row instead, so the
+   whole row — text plus buttons — matches #grid's own rendered width,
+   not just the text panel alone. */
+#hover-definition-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+#clues-direction-row {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.25rem;
+}
+
+#clues-direction-row .toggle-btn {
+  font-size: 1rem;
+  padding: 0.15rem 0.6rem;
 }
 
 #grid {
@@ -397,21 +429,23 @@ button:disabled {
    predictable height. overflow-y: auto rather than clipping, so an
    unusually long definition can still be read by scrolling within the
    fixed window instead of being cut off outright.
-   min-width: 0 is load-bearing, not decoration: #grid-column sizes itself
-   from its children's natural width (see the comment above it), and a
-   block element's natural/max-content width for that computation is how
-   wide its text would be laid out on a *single unwrapped line* — without
-   overriding the flex/grid default of min-width: auto, a long definition
-   made the whole box (and #grid-column with it) stretch wide enough to
-   fit the text on one line instead of wrapping within the fixed 3-line
-   height, exactly the bug reported live. min-width: 0 lets this element
-   shrink below that unwrapped width, so normal text wrapping actually
+   min-width: 0 is load-bearing, not decoration: this element is a flex
+   item of #hover-definition-row (which sizes itself from #grid-column,
+   see the comments above both), and a block element's natural/max-
+   content width for that computation is how wide its text would be laid
+   out on a *single unwrapped line* — without overriding the flex
+   default of min-width: auto, a long definition made the whole row (and
+   #grid-column with it) stretch wide enough to fit the text on one line
+   instead of wrapping within the fixed 3-line height, exactly the bug
+   reported live. min-width: 0 lets this element shrink below that
+   unwrapped width — down to whatever #hover-definition-row's own flex:
+   0 0 auto button pair leaves it — so normal text wrapping actually
    takes effect at the width #grid already dictates. overflow-wrap:
    break-word is defensive, for the rare case of one single "word" (e.g.
    a run-on LLM artifact) wider than the box on its own. */
 #hover-definition {
   margin: 0;
-  width: 100%;
+  flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: break-word;
   height: 4.5rem;

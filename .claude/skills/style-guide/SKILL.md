@@ -2027,3 +2027,94 @@ English (see `project-best-practices`).
   `#library-table` cell has its own opaque background either (only a
   row's hover/focus state does, `var(--selected)`), so the panel's text
   still reads cleanly against the page's own light background/watermark.
+
+- The virtual keyboard's own across/down direction buttons are duplicated
+  next to the *permanent* hover-definition panel under the grid
+  (`#hover-definition`, never hidden by the "définitions" toggle button,
+  unlike `#clues`/`#down-clues-section`), at the user's explicit request:
+  "Duplique le sélecteur de sens du clavier virtuel pour le mettre à
+  droite des définitions sous la grille." A first version placed the
+  duplicate next to the "Verticalement" heading instead
+  (`#down-clues-header`) — corrected immediately at the user's own
+  follow-up: "Il ne faut pas mettre le sélecteur de sens sur les
+  définitions masquables, mais à droite de la zone de définition
+  permanente en dessous de la grille" — "Verticalement" is part of the
+  *collapsible* clue lists (`applyDefinitionsVisibility()` hides
+  `#clues`/`#down-clues-section` together), so a selector living there
+  would disappear right when the player hides the definitions, not stay
+  available the way the permanent hover panel does.
+
+  `#grid-column` (`#grid` + the definition area) now wraps `#hover-
+  definition` and the new `#clues-direction-row` in a shared
+  `#hover-definition-row` flex row instead of `#hover-definition` sitting
+  there directly — `#hover-definition` itself becomes `flex: 1 1 auto`
+  (was `width: 100%`) so it grows to fill the row and still shrinks
+  correctly for text wrapping (`min-width: 0`, unchanged reasoning — see
+  its own comment), while `#clues-direction-row` stays `flex: 0 0 auto`
+  at its own natural size. `script.js`'s own JS-measured-width workaround
+  (see `#hover-definition`'s comment — CSS `width: 100%` alone was never
+  enough to force wrapping, a real bug fixed earlier this project) now
+  sets `#hover-definition-row`'s own width to `#grid`'s rendered width,
+  not `#hover-definition`'s directly, so the *whole* row — text plus
+  buttons — matches the grid, not just the text panel alone. A plain flex
+  *row* (`#clues-direction-row`) rather than the virtual keyboard's own
+  flex *column* (`#virtual-keyboard-direction-col`) — that one sits
+  beside two stacked rows of letter keys and needs to stretch to their
+  combined height; this duplicate sits on a single line, vertically
+  centered (`align-items: center`) against the taller (4.5rem, 3-line)
+  definition box next to it. Both buttons reuse the exact same
+  `.toggle-btn`/`.active` look as the original pair (and every other
+  bi-stable control on this page — Solution/Vérification) rather than a
+  second visual language for the same across/down distinction; sized a
+  touch smaller (`font-size: 1rem; padding: 0.15rem 0.6rem`) than the
+  taller keyboard buttons. `#down-clues-section h2` (the "Verticalement"
+  heading) is back to its own plain margin, matching `#clues h2` again —
+  no wrapper needed there once the buttons moved elsewhere.
+
+  Both button pairs — plus Shift/CapsLock, plus hovering the grid itself
+  — now drive and read from one single shared state
+  (`script.js`'s `activeDirection`/`setActiveDirection()`, replacing the
+  virtual keyboard's own previously self-contained
+  `virtualKeyboardDirection`/`setVirtualKeyboardDirection()`), at the
+  user's own explicit follow-up requests: "Ces sélecteurs doivent
+  s'adapter à la commande de sens SHIFT/CAPSLOCK" and "La sélection dans
+  la grille (mouse over) doit s'adapter aux sélecteurs de sens
+  (actuellement, si on choisit Vertical via le bouton du clavier
+  virtuel, le sens reste horizontal)." Before this, grid hover read a
+  mouseenter event's own live Shift/CapsLock modifier state directly
+  (`hoverDirectionFromEvent(event)`), completely independently of
+  whatever the virtual keyboard's own buttons said — clicking "↓" there
+  had no effect on hovering the grid at all, exactly the reported gap.
+  `setActiveDirection(direction)` now toggles all 4 buttons at once and,
+  if a grid cell is currently hovered, immediately re-highlights it in
+  the new direction — called from all 4 buttons' own click handlers and
+  from the (now un-gated, no longer requiring a cell to already be
+  hovered) Shift/CapsLock keydown/keyup listener; the grid's own
+  mouseenter listener reads `activeDirection` directly instead of the
+  mouse event's own modifier state. A clue segment's own hover
+  (`highlightWordAt(w.row, w.col, w.direction)`, unchanged) is
+  deliberately unaffected — a specific clue line always represents one
+  fixed, known word/direction of its own, never something to be
+  reinterpreted by whichever direction happens to be "active" elsewhere.
+  Both button pairs reuse the same `virtualKeyboardAcrossBtn`/
+  `virtualKeyboardDownBtn` i18n aria-label keys (no new translation keys
+  needed — `applyTranslations()` walks every `[data-i18n-aria]` element
+  in the DOM, not a fixed list of ids). Both the original feature and the
+  placement correction were verified the same way, structurally — a real
+  JS syntax check (`esprima`, temporarily installed and removed again
+  afterward), a CSS brace-balance check, and an HTML div/section
+  tag-balance check all passed each time — and the real served
+  `index.html`/`style.css`/`script.js` were fetched directly from the
+  running frontend server (no restart needed for a pure static-file
+  change — see `frontend/server.py`'s blanket `Cache-Control: no-store`
+  middleware, already confirmed elsewhere this session to serve edits
+  immediately) and confirmed to contain the new markup/rules/functions —
+  after the correction, specifically confirmed `#hover-definition-row`
+  wraps the panel and buttons together, `#down-clues-section` is back to
+  a plain, un-wrapped `<h2>`, and `hoverDefinitionRow` (not
+  `hoverDefinition`) is what `script.js` now measures/sets the width of.
+  **Not yet visually confirmed in an actual browser** — this session's
+  environment still has no `chromium-cli`/`node`/Python `playwright` —
+  verified structurally and via the real served files instead, the same
+  limitation and workaround already noted throughout this project's UI
+  work.

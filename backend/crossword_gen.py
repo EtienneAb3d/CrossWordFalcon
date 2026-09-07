@@ -628,7 +628,7 @@ def _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_let
         length = len(cells)
         if length < 2:
             continue
-        if available_lengths is not None and length not in available_lengths:
+        if available_lengths is not None and length not in available_lengths.for_cells(cells):
             return True
         if locked_letters:
             locked_count = sum(1 for cell in cells if cell in locked_letters)
@@ -935,8 +935,12 @@ def _slot_candidates(index, length, cells, known_letters):
     Renvoie `idx["words"]` (le lexique entier de cette longueur, une liste)
     si aucune case de cet emplacement n'est encore connue ; un ensemble
     vide si l'index n'a aucun mot de cette longueur, ou si les lettres
-    connues ne correspondent à aucun mot réel."""
-    idx = index.get(length)
+    connues ne correspondent à aucun mot réel. `index` est un DualIndex
+    (voir sa docstring) — résolu ici même, par la direction de `cells`,
+    pour une grille bilingue (mots horizontaux/verticaux dans deux
+    dictionnaires distincts) ; toujours le même dictionnaire des deux
+    côtés pour une grille monolingue, donc sans effet dans ce cas."""
+    idx = index.for_cells(cells).get(length)
     if idx is None:
         return ()
     constraints = {}
@@ -1076,7 +1080,7 @@ def _slot_with_insufficient_candidates(grid, rows, cols, available_lengths, inde
         if skip and tuple(slot) in skip:
             continue
         length = len(slot)
-        if length not in available_lengths:
+        if length not in available_lengths.for_cells(slot):
             return slot
         if locked_letters:
             locked_count = sum(1 for cell in slot if cell in locked_letters)
@@ -1285,7 +1289,7 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
         if slot is None:
             break
         length = len(slot)
-        is_length_problem = length not in available_lengths
+        is_length_problem = length not in available_lengths.for_cells(slot)
 
         slot_set = set(slot)
         footprint = None
@@ -1720,6 +1724,79 @@ def extract_slots(grid, rows, cols):
             else:
                 r += 1
     return slots
+
+
+def slot_direction(cells):
+    """"across" if a slot's own cells run along a single row (its first two
+    cells share a row), "down" if they run along a single column — the
+    same convention build_word_entries already computes locally elsewhere
+    in this file. Only the first two cells need comparing: every slot is a
+    straight horizontal or vertical run, never diagonal, so this never
+    needs the whole list."""
+    return "across" if cells[0][0] == cells[1][0] else "down"
+
+
+class DualIndex:
+    """Wraps two independently-built word indices (see build_index below)
+    — one for the grid's "across" words, one for its "down" words — so
+    every consumer of a plain `index[length]`-shaped lookup (Filler.
+    _domain, _slot_candidates, sample_letter_biases, minimize_black_
+    squares, ...) can resolve the right one for a given slot without
+    itself needing to know whether this is a monolingual or a bilingual
+    generation. `for_cells`/`for_direction` are the only two ways this
+    object is ever read — every existing function that used to do
+    `index[length]` directly now does `index.for_cells(cells)[length]`
+    (or `.for_direction(direction)[length]`) instead, resolving `cells`'s
+    own direction with `slot_direction` above.
+
+    For an ordinary, monolingual generation, `across` and `down` are the
+    exact same index object (never built twice) — every lookup stays
+    byte-for-byte identical to the single-index behavior this file always
+    had, at the cost of one extra attribute check per lookup (negligible
+    next to the dict/set work `_domain`/`_slot_candidates` already do).
+    Only a genuinely bilingual generation (`generate_grid`'s own
+    `bilingual_wordlist_path`, see its docstring) ever builds two
+    distinct index dicts and wraps them here — added at the user's
+    explicit request: "toutes les étapes utilisent la première langue
+    pour les mots horizontaux, et la seconde langue pour les mots
+    verticaux." Picklable like the plain dict it replaces (both attributes
+    are themselves picklable), so it crosses the `ProcessPoolExecutor`
+    worker-process boundary via `_init_worker`'s own `initargs` exactly
+    like the single index dict always did — for the monolingual case,
+    pickling preserves the shared `across is down` identity, so this
+    never doubles the data actually sent to a worker."""
+    __slots__ = ("across", "down")
+
+    def __init__(self, across, down):
+        self.across = across
+        self.down = down
+
+    def for_direction(self, direction):
+        return self.across if direction == "across" else self.down
+
+    def for_cells(self, cells):
+        return self.for_direction(slot_direction(cells))
+
+
+class DualSet:
+    """Same idea as DualIndex, but for a plain set of "available" slot
+    lengths (see PREFILL_MIN_WORD_COUNT/available_lengths below) rather
+    than a full word index — a given length can be well-covered by one
+    language's dictionary and not the other's, so "is this length
+    available" must also be resolved per direction for a bilingual grid.
+    `across`/`down` are the same set object for a monolingual grid,
+    exactly like DualIndex."""
+    __slots__ = ("across", "down")
+
+    def __init__(self, across, down):
+        self.across = across
+        self.down = down
+
+    def for_direction(self, direction):
+        return self.across if direction == "across" else self.down
+
+    def for_cells(self, cells):
+        return self.for_direction(slot_direction(cells))
 
 
 # ---------- Index du lexique : mots par (longueur, position, lettre) ----------
@@ -2319,7 +2396,12 @@ class Filler:
         croisée."""
         cells = self.slots[i]
         length = len(cells)
-        idx = self.index.get(length)
+        # self.index is a DualIndex (see its own docstring) — resolved
+        # here by this slot's own direction, so an across slot only ever
+        # draws from language A's dictionary and a down slot from
+        # language B's, on a bilingual grid; the same single dictionary
+        # both ways on an ordinary monolingual one.
+        idx = self.index.for_cells(cells).get(length)
         if idx is None:
             return ()
         constraints = {}
@@ -3318,7 +3400,7 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     letter_scores = defaultdict(Counter)
     for slot_idx, cells in enumerate(slots):
         length = len(cells)
-        idx = index.get(length)
+        idx = index.for_cells(cells).get(length)
         if not idx or not idx["words"]:
             continue
         # Restreint le lexique tiré aux mots réellement compatibles avec les
@@ -3799,8 +3881,21 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
     supplémentaire à écrire ici, un `try_fill` renvoyant `None` pour cette
     raison est déjà traité exactement comme n'importe quel autre échec de
     remplissage par la boucle ci-dessous (case noire restaurée, aucune
-    autre case retentée à sa place dans cette même passe)."""
-    word_sets = {length: set(data["words"]) for length, data in index.items()}
+    autre case retentée à sa place dans cette même passe).
+
+    `index` est un DualIndex (voir sa docstring) : `word_sets` est donc
+    lui aussi construit par direction (`word_sets.for_direction("across"/
+    "down")[length]`) plutôt qu'un seul dict `{length: set}` — sur une
+    grille bilingue, un mot valide côté horizontal (langue A) n'a aucune
+    raison d'exister dans le dictionnaire vertical (langue B), et
+    inversement, donc la validation ci-dessous doit vérifier chaque mot
+    contre le dictionnaire de SA PROPRE direction, jamais l'autre. Même
+    dictionnaire des deux côtés (donc même comportement qu'avant cette
+    fonctionnalité) sur une grille monolingue."""
+    word_sets = DualSet(
+        across={length: set(data["words"]) for length, data in index.across.items()},
+        down={length: set(data["words"]) for length, data in index.down.items()},
+    )
     slots, assignment = result
     improved = True
     while improved:
@@ -3824,8 +3919,8 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                 if new_result is not None:
                     new_slots, new_assignment = new_result
                     if all(
-                        w is not None and w in word_sets.get(len(w), ())
-                        for w in new_assignment
+                        w is not None and w in word_sets.for_cells(new_slots[i]).get(len(w), ())
+                        for i, w in enumerate(new_assignment)
                     ):
                         slots, assignment = new_slots, new_assignment
                         improved = True
@@ -4070,7 +4165,7 @@ def _noise_slot_cells(grid, rows, cols, index, locked_letters):
             playable_by_slot.append(None)
             continue
         candidates = _slot_candidates(index, length, slot, locked_letters)
-        freq_map = index.get(length, {}).get("freq", {})
+        freq_map = index.for_cells(slot).get(length, {}).get("freq", {})
         playable_by_slot.append([
             w for w in candidates
             if w not in used_words and freq_map.get(w, 0.0) >= NOISE_FREQUENCY_THRESHOLD
@@ -6082,10 +6177,22 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     négligeable : `_worker_index` n'a qu'une poignée de longueurs
     distinctes)."""
     rng = random.Random(seed)
-    available_lengths = {
-        length for length, data in _worker_index.items()
-        if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
-    }
+    # `_worker_index` is a DualIndex (see generate_grid's own
+    # `bilingual_wordlist_path` docstring) — computed per direction so a
+    # length can be "available" for the across dictionary (language A)
+    # without necessarily being available for the down one (language B),
+    # and vice versa; the exact same set both ways on an ordinary
+    # monolingual generation.
+    available_lengths = DualSet(
+        across={
+            length for length, data in _worker_index.across.items()
+            if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
+        },
+        down={
+            length for length, data in _worker_index.down.items()
+            if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
+        },
+    )
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
                          black_enrichment_fraction=black_enrichment_fraction)
@@ -6413,12 +6520,41 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    wordlist_path="data/wordlist_fr_full.tsv", on_progress=None,
                    force_letters_fraction=0.0, cancel_event=None,
                    black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
-                   deadline_checks=None, resume_state=None, should_pause=None):
+                   deadline_checks=None, resume_state=None, should_pause=None,
+                   bilingual_wordlist_path=None):
     """Génère une grille remplie de bout en bout (motif + CSP + minimisation).
     `width` est le nombre de colonnes (horizontal), `height` le nombre de lignes
     (vertical). Retourne un dict {width, height, pattern, solution, words,
-    word_count, black_count, black_ratio}, ou None si aucune grille remplissable
-    n'a été trouvée en `attempts` essais.
+    word_count, black_count, black_ratio, language, bilingual_language}, ou
+    None si aucune grille remplissable n'a été trouvée en `attempts` essais.
+
+    `bilingual_wordlist_path` (`None` par défaut — aucun effet pour tout
+    appelant existant, notamment le CLI et toute grille "normale"), à la
+    demande explicite de l'utilisateur ("Ajouter la possibilité de générer
+    des grille bilingues... toutes les étapes utilisent la première
+    langue pour les mots horizontaux, et la seconde langue pour les mots
+    verticaux") : un second chemin de dictionnaire, dans le même format
+    que `wordlist_path`. Quand il est fourni et diffère réellement de
+    `wordlist_path` (un même chemin, ou `None`, dégénère proprement en
+    génération monolingue ordinaire — aucun second `load_wordlist`/
+    `build_index` n'est même appelé dans ce cas), un second lexique est
+    chargé pour cette langue et le solveur CSP (voir `DualIndex`/`DualSet`
+    ci-dessus, `Filler._domain`) tire chaque mot horizontal ("across") du
+    premier dictionnaire et chaque mot vertical ("down") du second — les
+    deux langues ne sont donc jamais mélangées au sein d'un même
+    emplacement. Chaque entrée de `result["words"]` porte alors son propre
+    `language` (le code de la langue réellement utilisée pour CE mot
+    précis, selon sa direction) en plus de `accented`/`canonical` déjà
+    résolus dans cette même langue — consommé par `backend/clues.py`
+    (chaque mot obtient sa définition dans sa propre langue, voir
+    `LLMClueGenerator.generate`) et par le ChatBot (`backend/chatbot.py`,
+    pour donner un indice dans la bonne langue selon le mot concerné).
+    Le quota de noms propres (`MAX_PROPER_NOUNS`) et le quota de mots sans
+    entrée de définitions (`MAX_NON_GLOSS_WORDS`) restent un seul quota
+    partagé pour la grille entière (l'union des deux ensembles de mots
+    "à risque", un par langue) plutôt que dédoublés par direction — une
+    simplification délibérée : les deux quotas bornent déjà un nombre
+    total de mots sur toute la grille, pas une proportion par direction.
 
     `should_pause` (`None` par défaut — aucun effet pour tout appelant
     existant, notamment le CLI), à la demande explicite de l'utilisateur —
@@ -6528,6 +6664,28 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         # strictement que "easy".
         exclude_proper_nouns=(difficulty == "easy"),
     )
+    language = _lang_from_path(wordlist_path) or "fr"
+
+    # Grille bilingue (voir la docstring de `bilingual_wordlist_path` plus
+    # haut) : un second lexique n'est chargé que si `bilingual_wordlist_
+    # path` est réellement fourni ET différent de `wordlist_path` — `None`
+    # ou un chemin identique dégrade proprement en génération monolingue
+    # ordinaire, sans second `load_wordlist` ni second `build_index`
+    # (`by_length_down`/`accents_down`/`canonicals_down`/`frequencies_down`
+    # aliasent alors simplement les valeurs déjà chargées ci-dessus).
+    bilingual_active = bool(bilingual_wordlist_path) and bilingual_wordlist_path != wordlist_path
+    if bilingual_active:
+        by_length_down, accents_down, canonicals_down, frequencies_down = load_wordlist(
+            bilingual_wordlist_path, mw, require_gloss=(difficulty == "easy"),
+            exclude_proper_nouns=(difficulty == "easy"),
+        )
+        bilingual_language = _lang_from_path(bilingual_wordlist_path) or bilingual_wordlist_path
+    else:
+        by_length_down, accents_down, canonicals_down, frequencies_down = (
+            by_length, accents, canonicals, frequencies
+        )
+        bilingual_language = None
+
     # Quota de noms propres pour cette génération (voir MAX_PROPER_NOUNS) et
     # l'ensemble des mots (forme grille) réellement considérés comme des
     # noms propres pour cette langue — même signal, calculé au même endroit,
@@ -6536,14 +6694,23 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # Toujours calculé, même pour "easy" : `by_length`/`accents` n'y
     # contiennent alors déjà plus aucun nom propre (exclu ci-dessus), donc
     # cet ensemble ressort naturellement vide et ce quota (0) n'a
-    # simplement jamais l'occasion de s'appliquer.
+    # simplement jamais l'occasion de s'appliquer. Sur une grille
+    # bilingue, l'union des noms propres des deux langues (voir la
+    # docstring de `bilingual_wordlist_path`) — un seul quota partagé pour
+    # toute la grille, pas un quota par direction.
     max_proper_nouns = MAX_PROPER_NOUNS.get(difficulty, MAX_PROPER_NOUNS["hard"])
-    _proper_noun_lang = _lang_from_path(wordlist_path)
-    proper_noun_words = (
-        {w for w, acc in accents.items() if acc[:1].isupper()}
-        if _proper_noun_lang not in PROPER_NOUN_EXCLUDED_LANGS
-        else set()
-    )
+
+    def _proper_noun_words_for(path, accents_map):
+        lang = _lang_from_path(path)
+        if lang in PROPER_NOUN_EXCLUDED_LANGS:
+            return set()
+        return {w for w, acc in accents_map.items() if acc[:1].isupper()}
+
+    proper_noun_words = _proper_noun_words_for(wordlist_path, accents)
+    if bilingual_active:
+        proper_noun_words = proper_noun_words | _proper_noun_words_for(
+            bilingual_wordlist_path, accents_down
+        )
     # Quota de mots absents du dictionnaire de définitions pour cette
     # génération (voir MAX_NON_GLOSS_WORDS) et l'ensemble des mots (forme
     # grille) réellement sans entrée gloss pour cette langue — même signal
@@ -6551,17 +6718,33 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # quota jamais déclenché) si la langue ne peut pas être déduite du
     # chemin, si le dictionnaire n'est pas construit, ou pour "easy" (où
     # `require_gloss=True` a déjà retiré ces mots du lexique en amont).
+    # Union des deux langues sur une grille bilingue, même principe que
+    # `proper_noun_words` ci-dessus.
     max_non_gloss = MAX_NON_GLOSS_WORDS.get(difficulty, MAX_NON_GLOSS_WORDS["hard"])
-    non_gloss_words = set()
-    _gloss_lang = _lang_from_path(wordlist_path)
-    if _gloss_lang:
-        _has_any_gloss, _has_gloss_dictionary = _try_import_gloss_lookup()
-        if _has_any_gloss and _has_gloss_dictionary and _has_gloss_dictionary(_gloss_lang):
-            non_gloss_words = {
-                w for w in accents
-                if not _has_any_gloss([accents[w], *canonicals.get(w, [])], _gloss_lang)
-            }
-    index = build_index(by_length, frequencies)
+
+    def _non_gloss_words_for(path, accents_map, canonicals_map):
+        lang = _lang_from_path(path)
+        if not lang:
+            return set()
+        has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
+        if not (has_any_gloss and has_gloss_dictionary and has_gloss_dictionary(lang)):
+            return set()
+        return {
+            w for w in accents_map
+            if not has_any_gloss([accents_map[w], *canonicals_map.get(w, [])], lang)
+        }
+
+    non_gloss_words = _non_gloss_words_for(wordlist_path, accents, canonicals)
+    if bilingual_active:
+        non_gloss_words = non_gloss_words | _non_gloss_words_for(
+            bilingual_wordlist_path, accents_down, canonicals_down
+        )
+    # `index` est désormais un DualIndex (voir sa docstring) — le même
+    # dictionnaire des deux côtés (across/down) sur une grille
+    # monolingue, deux dictionnaires distincts sur une grille bilingue.
+    index_across = build_index(by_length, frequencies)
+    index_down = build_index(by_length_down, frequencies_down) if bilingual_active else index_across
+    index = DualIndex(index_across, index_down)
     # Précalculé une seule fois (pas par palier) — mêmes longueurs pour
     # toute la génération, `index` ne change jamais. Reproduit exactement
     # le calcul propre à chaque worker dans `_pattern_attempt` (voir sa
@@ -6569,10 +6752,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # uniquement par l'aperçu "cases noires posées" précoce ci-dessous,
     # jamais par la recherche CSP elle-même (qui reste toujours calculée
     # dans les processus workers, avec leur propre `_worker_index`).
-    available_lengths_preview = {
-        length for length, data in index.items()
-        if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
-    }
+    available_lengths_preview = DualSet(
+        across={
+            length for length, data in index.across.items()
+            if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
+        },
+        down={
+            length for length, data in index.down.items()
+            if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
+        },
+    )
     # Logged once per request, not per attempt: the CSP's failure mode
     # (below) can't be told apart from a genuinely empty word list for
     # some length without this — a `require_gloss`/`max_words` combination
@@ -6580,7 +6769,11 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # a way that looks identical in the per-attempt log to ordinary bad
     # luck unless this baseline is on record too.
     progress("wordlist_loaded", word_count=sum(len(w) for w in by_length.values()),
-             length_counts=dict(sorted((length, len(words)) for length, words in by_length.items())))
+             length_counts=dict(sorted((length, len(words)) for length, words in by_length.items())),
+             bilingual_language=bilingual_language,
+             bilingual_word_count=(
+                 sum(len(w) for w in by_length_down.values()) if bilingual_active else None
+             ))
 
     rows, cols = height, width
     # Même résolution que `try_fill`'s propre `None`-fallback (largeur ×
@@ -8471,9 +8664,25 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     )
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)
+    # Sur une grille bilingue, chaque mot vertical ("down") reçoit sa
+    # propre orthographe accentuée/racine(s) canonique(s) DANS LA SECONDE
+    # LANGUE plutôt que dans la première, et porte désormais son propre
+    # `language` — le code de la langue réellement utilisée pour CE mot
+    # précis (voir la docstring de `bilingual_wordlist_path`) — consommé
+    # par backend/clues.py (une définition par mot dans sa propre langue)
+    # et backend/chatbot.py (un indice dans la bonne langue selon le mot).
+    # Sur une grille monolingue (`bilingual_active` faux), chaque mot
+    # reçoit `language` tout de même — toujours la même valeur — sans
+    # aucun changement au reste du comportement.
     for w in words:
-        w["accented"] = accents.get(w["answer"], w["answer"])
-        w["canonical"] = canonicals.get(w["answer"], [w["accented"]])
+        if bilingual_active and w["direction"] == "down":
+            w["accented"] = accents_down.get(w["answer"], w["answer"])
+            w["canonical"] = canonicals_down.get(w["answer"], [w["accented"]])
+            w["language"] = bilingual_language
+        else:
+            w["accented"] = accents.get(w["answer"], w["answer"])
+            w["canonical"] = canonicals.get(w["answer"], [w["accented"]])
+            w["language"] = language
     progress("grid_ready", word_count=len(slots), black_count=n_black)
     return {
         "width": cols,
@@ -8485,6 +8694,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         "black_count": n_black,
         "black_ratio": n_black / (rows * cols),
         "winning_process_number": winning_process_number,
+        # Langue primaire (mots horizontaux) et langue de la grille
+        # bilingue (mots verticaux, `None` pour une grille monolingue
+        # ordinaire) — à la demande explicite de l'utilisateur, pour que
+        # backend/app.py/backend/grid_store.py puissent enregistrer les
+        # deux sans avoir à les redériver de `wordlist_path` eux-mêmes.
+        "language": language,
+        "bilingual_language": bilingual_language,
     }
 
 

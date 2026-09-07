@@ -786,6 +786,21 @@ class LLMClueGenerator:
         for extra grounding. Returns {ANSWER: clue}, written in `language`
         (fr/en/de/es/it), in the style matching `difficulty` (easy/medium/hard).
 
+        Each entry MAY instead be a 4-tuple `(answer, accented, canonical,
+        entry_language)` — `None`/absent `entry_language` falls back to
+        `language`, the exact pre-existing single-language behavior for
+        every caller before this — at the user's explicit request for
+        bilingual grids ("toutes les étapes utilisent la première langue
+        pour les mots horizontaux, et la seconde langue pour les mots
+        verticaux"): backend/app.py now sends each word's own `language`
+        (crossword_gen.generate_grid's own per-word field, set from the
+        word's direction — see its docstring), so a clue is written in
+        THAT word's own language rather than always the request's single
+        `language`. The system prompt (see `_build_system_prompt`) is
+        rebuilt once per distinct language actually in use (cached below),
+        never once per word — cheap either way, since `_BATCH_SIZE=1`
+        already means one independent HTTP call per word regardless.
+
         Words are generated in parallel, CLUE_BATCH_PARALLELISM at a time
         (one LLM request per word, `_BATCH_SIZE=1`, but many in flight at
         once so SGLang's continuous batching decodes them together — see
@@ -825,10 +840,18 @@ class LLMClueGenerator:
         merge the partial result immediately and, whenever this job's
         turn comes back around, resume by calling `generate()` again with
         only `remaining_entries`, never losing the words already done."""
-        entries = list({
-            (answer.upper(), accented, tuple(canonical))
-            for answer, accented, canonical in word_entries
-        })
+        def _normalize_entry(e):
+            # Accepts both the pre-existing 3-tuple (answer, accented,
+            # canonical) and the new 4-tuple with an explicit per-word
+            # language — see this method's own docstring.
+            if len(e) == 4:
+                answer, accented, canonical, entry_language = e
+            else:
+                answer, accented, canonical = e
+                entry_language = None
+            return (answer.upper(), accented, tuple(canonical), entry_language or language)
+
+        entries = list({_normalize_entry(e) for e in word_entries})
         if not entries:
             return {}
         total = len(entries)
@@ -836,10 +859,17 @@ class LLMClueGenerator:
         clues = {}
         errors = []
         max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * _BATCH_SIZE
-        # Identical for every word of this call (only difficulty+language
-        # feed it, and both are fixed here) — built once rather than
-        # rebuilt inside the per-word loop as it used to be.
-        system_prompt = self._build_system_prompt(difficulty, language)
+        # Built once per distinct language actually in use across this
+        # call's own entries (almost always just `language` itself, the
+        # single-language case unchanged from before this feature) —
+        # never rebuilt inside the per-word loop, and never more than
+        # once per language even on a bilingual grid.
+        system_prompts = {}
+
+        def _system_prompt_for(lang):
+            if lang not in system_prompts:
+                system_prompts[lang] = self._build_system_prompt(difficulty, lang)
+            return system_prompts[lang]
 
         # User messages are built here, up front and sequentially, on
         # purpose: the gloss / example-sentence lookups they trigger
@@ -847,7 +877,13 @@ class LLMClueGenerator:
         # example_sentences.py) that aren't safe for concurrent first
         # access — the worker threads below only ever do the HTTP call
         # plus parsing / filtering / logging.
-        prepared = [(entry, self._build_user_message(entry, language, difficulty)) for entry in entries]
+        prepared = [
+            (
+                (answer, accented, canonical), entry_language,
+                self._build_user_message((answer, accented, canonical), entry_language, difficulty),
+            )
+            for answer, accented, canonical, entry_language in entries
+        ]
 
         # All words dispatched at once to a rolling pool of
         # CLUE_BATCH_PARALLELISM worker threads (see that constant): a
@@ -879,11 +915,11 @@ class LLMClueGenerator:
         try:
             futures = [
                 executor.submit(
-                    self._generate_one, entry, user_message, system_prompt,
-                    max_tokens, timeout, language, difficulty,
+                    self._generate_one, entry, user_message, _system_prompt_for(entry_language),
+                    max_tokens, timeout, entry_language, difficulty,
                     cancel_event, should_pause,
                 )
-                for entry, user_message in prepared
+                for entry, entry_language, user_message in prepared
             ]
             for future in as_completed(futures):
                 answer, clue, word_errors = future.result()

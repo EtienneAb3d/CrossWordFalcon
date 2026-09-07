@@ -3870,6 +3870,89 @@ servers:
   request half of the rule remained fully reliable throughout every test
   (4/4 each time), so this rewrite is a clear, unambiguous net
   improvement even though hint-leaking isn't fully eliminated.
+
+  **A real, severe bug was found and fixed**, reported directly by the
+  user: "Le Bot ne semble pas arriver à appeler le LLM," then, once the
+  actual failure pattern was pinned down: "Il semblerait que le Bot ne
+  répond pas uniquement quand on est sur une grille. Sur la page
+  d'accueil, ça fonctionne. logs/backend.log semble bien montrer une
+  réponse, mais ne doit pas la transmettre correctement au Front."
+  Root-caused live, in stages, rather than guessed at: a synthetic
+  reproduction payload (`ui_context.puzzle_loaded=true`, a real
+  `words` list, matching the shape of a real grid's own live UI state
+  sent by the frontend) deterministically produced a `POST /api/chat`
+  response of exactly `data: [DONE]\n\n` — zero `delta` events — while
+  `logs/backend.log` showed a real, complete, coherent LLM response
+  had genuinely been generated for that exact request, confirming the
+  loss happened somewhere between the LLM call succeeding and the
+  reply reaching the client.
+
+  Traced to `run_llm.sh`'s own local LLM server, not to `reply_stream()`
+  itself: a direct request against `logs/llm.log` (`llama_cpp.server`'s
+  own log, not the backend's) showed the true failure —
+  `ValueError: Requested tokens (9874) exceed context window of 8192`
+  raised *inside* `llama_cpp.llama.py`'s own `_create_completion`
+  generator, well after the HTTP response's 200 OK status and headers
+  had already been sent (confirmed directly: `curl -i` against the LLM
+  server's own port showed `HTTP/1.1 200 OK` with `openai-processing-
+  ms: 0` and a completely empty body — no error status the client-side
+  `httpx` call could ever have caught). `--n_ctx 8192` (see `run_llm.sh`)
+  was never enough headroom for this feature specifically:
+  `DOC_USER/EN/ReadMe.md` alone — embedded in full in every system
+  prompt (`_load_doc_user`) — is already ~6200 tokens on its own
+  (measured directly, `len(text)/4`), leaving almost no room for the
+  persona/rules text, a real grid's own word list, conversation
+  history, the user's message, and `MAX_TOKENS` (1024) reserved for the
+  reply — meaning essentially *any* real grid, not just an unusually
+  large synthetic one, was at serious risk of tipping the whole request
+  over `--n_ctx`'s limit the moment a puzzle was loaded, exactly
+  matching "uniquement quand on est sur une grille." The model itself
+  (`n_ctx_train`, confirmed directly in `logs/llm.log` at startup) supports
+  far more than either value — this was purely an `--n_ctx` choice, not
+  a model limitation.
+
+  Fixed two ways, at the root and defensively. `run_llm.sh`'s `--n_ctx`
+  was raised from 8192 to 32768 — comfortably covers `DOC_USER` plus a
+  full grid's word list plus history plus the reply budget, with
+  substantial margin left over, while staying well under the model's own
+  much larger native capacity. Separately, `ChatBot.reply_stream()` gained
+  a `yielded_anything` flag, set `True` at both of the function's two real
+  `yield` points (`CHATBOT_THINK_FILTER=none`'s direct pass-through, and
+  the pending/clear branch's own flush) — if the stream ends (the `async
+  with client.stream(...)` block exits normally) without ever having
+  yielded anything, `reply_stream()` now raises `ChatError` with a clear
+  message ("le contexte de la conversation est peut-être trop long")
+  instead of silently completing as if it had produced a real, empty
+  reply. This is a permanent safety net, not a one-off patch tied to this
+  specific incident: `POST /api/chat`'s own `event_stream()` already turns
+  any `ChatError` into a visible `data: {"error": ...}` SSE event and logs
+  it to `LOG_CHAT/` as a genuine failure (`*(échec : ...)*`) rather than an
+  unexplained blank reply — so even a future context overflow (a much
+  larger grid, a longer conversation history) will surface clearly instead
+  of silently vanishing the same way again.
+
+  Verified in stages, methodically, since a silent-failure bug like this
+  is easy to think fixed without actually confirming it end to end.
+  First, the exact real `llama_cpp.server`-produced failure (a stream that
+  ends with zero content after a 200 OK) was reproduced in isolation, with
+  `httpx.AsyncClient` monkeypatched to a fake client yielding no lines at
+  all — confirmed `reply_stream()` now raises `ChatError` with the
+  expected message, rather than completing silently. Then, live, against
+  the real running stack: both the LLM server (`./run_llm.sh`) and the
+  backend/frontend (`./run_Falcon.sh`) were restarted to pick up both
+  fixes, and the *exact* synthetic reproduction payload that had
+  previously produced 0 deltas on every one of 4+ prior attempts was
+  re-sent 4 more times (3× directly against the backend's own port, 1×
+  through the frontend proxy) — all 4 now streamed a real, coherent French
+  reply, 0/4 empty. The same conversation's own `LOG_CHAT/` file shows the
+  before/after directly: 6 consecutive empty replies (`*temps total :
+  0.03s*`, no content) immediately followed, after the restart, by 6 real,
+  correctly-answered replies with genuine LLM timing (3.5-19s). A
+  deliberately oversized follow-up payload (padded well past what
+  triggered the original 8192-token failure) still completed successfully
+  under the new 32768 limit, confirming the raised `n_ctx` genuinely
+  covers a realistic worst case, not just the original reproduction's own
+  specific size.
 - `scrapper/fetch_rss_feeds.py` (moved from the project root into the
   `scrapper/` package — a real `scrapper/__init__.py` — at the user's
   explicit request, together with `fetch_grid_links.py`; the dictionary
@@ -5190,10 +5273,15 @@ servers:
   has no such flag at all — its own chat template never references `enable_thinking`,
   so passing it is silently ignored either way; it always reasons through a `<think>`
   block before answering (see `backend/clues.py`'s `_strip_reasoning`/`REASONING_TOKEN_
-  BUDGET` below) — `--n_ctx` is kept at 8192 (bumped from an original 4096) so either
-  model's prompt + reasoning (when applicable) + answer has room to fit; this is a
-  shared setting, not swapped per model, since it's a safe/sufficient value for all
-  three GGUFs this project has actually run against. This is the only local LLM
+  BUDGET` below) — `--n_ctx` is now 32768 (bumped from an original 4096, then to 8192
+  so either model's prompt + reasoning (when applicable) + answer has room to fit,
+  then to 32768 once `backend/chatbot.py`'s own David FALCON chat feature — whose
+  system prompt embeds the whole of `DOC_USER/EN/ReadMe.md`, ~6200 tokens on its own,
+  plus a real grid's full word list — was found live to exceed 8192 for essentially
+  any loaded grid, see `backend/chatbot.py`'s own entry for the full incident) so
+  either model's prompt + reasoning (when applicable) + answer has room to fit; this
+  is a shared setting, not swapped per model, since it's a safe/sufficient value for
+  all three GGUFs this project has actually run against. This is the only local LLM
   backend in the repo — see `LLM_BASE_URL` in `env.sh` to point at a cloud API (e.g.
   Mistral) instead. GPU is used by default whenever the detection above finds one
   (Metal/CUDA); `LLAMA_FORCE_CPU` (`env.sh`/`env_default.sh`, unset by default — any
@@ -5680,6 +5768,80 @@ servers:
   has not been run in this session — a real first-time install on a
   clean machine of either kind would be the natural next verification
   step, not yet performed.
+
+  **This whole "re-detect and silently re-apply the best option, every
+  run, no questions" design was itself later replaced with a real,
+  interactive question-and-answer flow**, at the user's explicit request
+  — the entire "reconfigure la machine, donc installer la meilleure
+  option" behavior described above is what this redesign supersedes, not
+  something layered on top of it. `Install.sh` still detects the same
+  hardware the same way (`uname -s`/`uname -m` for Apple Silicon;
+  `nvidia-smi -L` plus `--query-gpu=name,memory.total` for a real NVIDIA
+  GPU, its name/VRAM shown to the user directly) — but instead of picking
+  an engine/model on its own, it now prints a numbered menu of every
+  option that actually makes sense on *this* machine, each with its own
+  plain-language trade-offs (measured speed, VRAM, clue quality, and any
+  real known risk — e.g. that SGLang's CUDA GGUF path is version-
+  sensitive and only actually verified for a plain "Qwen3-*" model, never
+  the hybrid-architecture Qwen3.5/Qwen3.8 GGUFs, which crash it outright;
+  or that two SGLang/MLX servers must never run at once, a real OOM
+  already observed on Apple Silicon — see this same entry's own history
+  above), and asks the user to pick one (`read -rp`, a sensible default
+  pre-filled so pressing Enter alone is enough, input revalidated with a
+  clear fallback message on anything out of range). Picking the
+  `llama.cpp` option opens a second, equally explained sub-menu naming
+  all five supported model sizes (0.8B through 27B, the same ones
+  `env.sh`/`env_default.sh` already document); picking SGLang still
+  drives the exact same `install_sglang()`/`configure_sglang_cuda()`/
+  `configure_sglang_mlx()` steps already described above (SGLang is
+  installed once, real hardware paths, always falls back to llama.cpp on
+  a failed install); a Mistral cloud-API option and a literal "ne rien
+  changer" (leave `env.sh` exactly as it already is) option round out the
+  menu. Running any non-"keep" choice still stops whatever LLM server is
+  currently listening on `LLM_PORT` before finishing, exactly as before.
+
+  The env.sh marker itself was renamed in the same redesign, from `# BEGIN
+  SGLANG AUTOCONFIG (gere par Install.sh...)` / `# END SGLANG AUTOCONFIG`
+  to the engine-neutral `# BEGIN LLM AUTOCONFIG (gere par Install.sh...)`
+  / `# END LLM AUTOCONFIG` (a plain llama.cpp choice needed a home in this
+  same auto-managed block too, not just an SGLang one) — `Install.sh`
+  strips *both* the new marker and the old, legacy one on every run
+  (`SGLANG_MARKER_BEGIN_LEGACY`/`_END_LEGACY`), so a machine still
+  carrying the pre-redesign block from an earlier `Install.sh` version
+  gets migrated to the new marker automatically the next time it runs,
+  with no manual cleanup needed.
+
+  Genuinely non-interactive stdin (CI, `curl ... | bash`, or any other
+  context with no real terminal attached — checked via `[ ! -t 0 ]`) is
+  the one case that still never asks anything: it silently applies a safe
+  llama.cpp default (Qwen3.5-4B if a GPU or Apple Silicon was detected,
+  Qwen3.5-0.8B otherwise) and prints a note that re-running `./Install.sh`
+  from a real terminal is what unlocks the SGLang options and the full
+  model choice. This is a deliberate, disclosed exception to "always ask"
+  — not a leftover of the old silent-auto-apply design — since there is
+  no user present to answer a question in that context at all.
+
+  **Reported directly by the user later, as a genuine question rather
+  than a bug**: "Dans les dernières modifs, Install.sh était censé faire
+  des propositions à l'utilisateur en fonction de la config machine, et
+  lui laisser le choix de la config. Ce n'est pas le cas ?" — prompted by
+  an unrelated, separate session (see `run_sglang.sh`'s own entry above
+  for the `SGLANG_REASONING_PARSER`/`SGLANG_MEM_FRACTION_STATIC` unbound-
+  variable fix) that had explained a manual `env.sh` edit by describing
+  the *old*, pre-redesign "Install.sh silently re-applies SGLang on every
+  run" behavior — based on this very entry's own text as it stood before
+  this redesign was ever documented here, not on actually reading the
+  current script. Investigated directly rather than assumed either way:
+  confirmed live, by reading `Install.sh` itself and its own `git log`
+  (last touched the day before this question, already fully committed,
+  no pending diff), that the interactive menu described in this entry is
+  real, current, and already the sole behavior for any terminal-attached
+  run — the earlier explanation given to the user in that unrelated
+  session was simply wrong, sourced from this file's own stale text
+  rather than the actual code, and corrected directly once found. This
+  whole addendum is the fix for that gap: the redesign existed in the
+  code with zero trace of it anywhere in this file until this entry was
+  written.
 - `frontend/server.py` — **middleware** FastAPI server: serves the static UI
   (`frontend/static/index.html`, `script.js`, `style.css`) and proxies `/api/*` to the
   backend (via `httpx`, base URL from `CROSSWORDFALCON_BACKEND_URL`, default
@@ -6007,6 +6169,233 @@ picks among `data/wordlist_{fr,en,de,es,it,pt}_full.tsv` per the request's `lang
 `backend/app.py`'s `WORDLISTS`). There is no plain-text fallback list checked into the
 repo; `load_wordlist` still accepts a free-text format as a fallback parser, but no file
 of that kind ships here.
+
+- **Bilingual grids** — the web UI can now generate a grid whose across
+  (horizontal) words are in one language and whose down (vertical) words
+  are in a second, different language, at the user's explicit request:
+  "toutes les étapes utilisent la première langue pour les mots
+  horizontaux, et la seconde langue pour les mots verticaux." Cuts across
+  every layer of the app (solver, storage, clue generation, ChatBot,
+  frontend), documented here as one entry rather than fragmented across
+  each file's own section, given the size of the change.
+
+  `backend/crossword_gen.py` is where the actual word-selection split
+  happens. A new `slot_direction(cells)` helper ("across" if a slot's own
+  cells share a row, "down" otherwise — the same convention `build_word_
+  entries` already computed locally) and two small wrapper classes,
+  `DualIndex`/`DualSet`, let every existing consumer of a plain
+  `index[length]`-shaped lookup resolve the *right* dictionary for a given
+  slot without needing to know in advance whether this is a monolingual or
+  bilingual generation. Verified directly, by grep, before writing a
+  single line of this: across the whole file, only 3 functions actually do
+  a raw `index[length]`/`index.get(length)` lookup (`_slot_candidates`,
+  `Filler._domain`, `sample_letter_biases`) and 2 more do `index.items()`
+  to build `available_lengths`/`word_sets`-shaped structures (`_pattern_
+  attempt`'s own `available_lengths`, `minimize_black_squares`'s own
+  `word_sets`) — every other function that receives `index` as a parameter
+  (`try_fill`, `_force_single_candidate_slots`, `_close_implied_slots`,
+  `_low_candidate_slot_cells`, `_noise_slot_cells`, `_optimize_before_
+  cleanup`, `_plug_isolated_cells`, `_clean_continue_candidate`,
+  `_cleaned_playable_score`, `_shorten_impossible_zones`, `_find_shorter_
+  word_for_zone`, `_impossible_indices`, `_invalid_fully_known_indices`,
+  `_new_crossing_impossibility`, `_clean_blocked_slots`, `_pattern_
+  continue`, `_init_worker`, `ProcessPoolExecutor`'s own `initargs`) only
+  ever forwards it opaquely to one of those 5 — so wrapping `index` in a
+  `DualIndex` (and `available_lengths` in a `DualSet`) and fixing exactly
+  those 5 call sites (plus `_new_black_cell_breaks_locked_slot`'s own
+  `available_lengths` check, and `_prefill_unfillable_slots`/`_slot_with_
+  insufficient_candidates`'s own two `length not in available_lengths`
+  checks) was enough to make the *entire* solver bilingual-aware with no
+  change needed to any of those ~18 pass-through functions' own bodies.
+  For an ordinary monolingual grid, `DualIndex.across`/`.down` (and
+  `DualSet.across`/`.down`) are literally the same object — `for_cells`/
+  `for_direction` always resolve to the identical dictionary either way,
+  so behavior is byte-for-byte unchanged from before this feature, at the
+  cost of one extra attribute check per lookup (negligible next to the
+  dict/set work `_domain`/`_slot_candidates` already do).
+
+  `generate_grid()` gained a new `bilingual_wordlist_path=None` parameter
+  (mirroring `wordlist_path`, `None` by default — no effect for any
+  pre-existing caller, including the CLI, which has no bilingual concept
+  at all). `None`, or a value identical to `wordlist_path`, degrades
+  cleanly to plain monolingual generation — no second `load_wordlist`/
+  `build_index` call is even made in that case. When a genuinely different
+  second path is given, a second wordlist is loaded and indexed
+  (`by_length_down`/`accents_down`/`canonicals_down`/`frequencies_down`/
+  `index_down`), `MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`'s own quota word
+  sets become the *union* of both languages' own sets (one shared quota for
+  the whole grid, not a quota per direction — these already bound a total
+  count across the grid, not a per-direction proportion), and every word
+  in the returned `result["words"]` list gets its own `language` field
+  (the primary language for an across word, the bilingual language for a
+  down one) alongside its own `accented`/`canonical` resolved in *that*
+  language's own dictionary — never the primary one for a down word on a
+  bilingual grid. `result` itself also gains top-level `language`/
+  `bilingual_language` fields (the latter `None` for an ordinary grid).
+  Verified live with a real, hand-built two-word French/"language B"
+  fixture (word crossing constraints designed so the CSP fill only
+  succeeds if across words come from one dictionary and down words from
+  the other) — confirmed the solver genuinely never mixes the two; then
+  verified again with the real, full-scale French and English wordlists
+  on a 9×9 grid (`difficulty="easy"`) — a real, playable French-across/
+  English-down bilingual grid generated end to end, every accented French
+  across word and every English down word correctly spelled and
+  attributed to its own language. A real monolingual run on the standard
+  benchmark shape (9×9, French, Flash-scale `deadline_checks`) confirmed
+  no regression to the ordinary case.
+
+  `backend/app.py`'s `GenerateRequest` gained `bilingual_language:
+  Optional[str] = None` (validated the same way as `language` — a known
+  `WORDLISTS` key, and its dictionary must actually be built on this
+  server — but only when it's genuinely given and different from
+  `language`, matching `generate_grid`'s own degrade-to-monolingual rule).
+  `_run_generate_job` threads it into `generate_grid(bilingual_wordlist_
+  path=...)`, into each clue's own `remaining_entries` tuple (now 4
+  elements — `(answer, accented, canonical, language)` — see below), into
+  `_build_word_verification_table(words, language, bilingual_language)`
+  (each word checked against *its own* language's real wordlist/gloss
+  files, not always the primary one), and into `save_grid_json(...,
+  bilingual=result.get("bilingual_language"))`. `save_grid_svg` is
+  deliberately left untouched — a bilingual grid's own SVG header still
+  names only its primary language, a disclosed, accepted simplification
+  rather than a bug. `_library_page`'s own language filter gained a
+  `language_filter == "bilingual"` branch (checked ahead of the ordinary
+  `WORDLISTS`-membership check, since "bilingual" is never a real
+  `WORDLISTS` key) — filters on each stored grid's own `bilingual` field
+  rather than its `language` field, which always stays that grid's
+  primary language regardless of where it's filed.
+
+  `backend/grid_store.py`'s `save_grid_json` gained a `bilingual=None`
+  parameter, at the user's explicit request: "les grilles sont
+  sauvegardées avec la configuration des deux langues 'language' et
+  'bilingual'. Les grilles bilingues vont dans le STORE bilingual." A
+  grid is only ever treated as genuinely bilingual when `bilingual` is
+  both given and different from `language`; in that case the record is
+  written under `GRID_STORE/bilingual/<id>.json` instead of `GRID_STORE/
+  <language>/<id>.json`, and its own JSON record carries `"bilingual":
+  bilingual` (`None` otherwise) alongside the unchanged `"language"`
+  field. `list_grids`/`_iter_stored_grids` needed no change to *find*
+  these — `GRID_STORE_DIR.glob("*/*.json")` already walks every language
+  subdirectory, "bilingual" included — only `_iter_stored_grids` needed to
+  also yield the new `bilingual` field. Verified live: a real write/list/
+  filter/get round-trip (including the degenerate `bilingual == language`
+  case, which correctly stores under the plain language folder with
+  `bilingual: None`) all behaved as designed.
+
+  `backend/clues.py`'s `LLMClueGenerator.generate()` now accepts each
+  `word_entries` item as either the pre-existing 3-tuple `(answer,
+  accented, canonical)` or a new 4-tuple `(answer, accented, canonical,
+  entry_language)` — `None`/absent `entry_language` falls back to the
+  call's own single `language` argument, the exact pre-existing behavior
+  for every caller before this feature. The system prompt (`_build_
+  system_prompt(difficulty, language)`) is now built once **per distinct
+  language actually in use** across the call's own entries (a small
+  cache keyed by language), not once for the whole call — cheap either
+  way, since `_BATCH_SIZE=1` already means one independent HTTP call per
+  word regardless of how many languages are involved. Verified with a
+  monkeypatched `_generate_one` (no real LLM call): a mixed French/English
+  word list correctly dispatched each word with its own resolved
+  language, and the system prompt was built exactly once per language
+  (never per word).
+
+  `backend/chatbot.py`'s `_format_words_block(words)` now includes each
+  word's own `language=` field in the per-word line shown to the LLM
+  (identical for every word on an ordinary grid, so a no-op there; two
+  different values on a bilingual grid). `ChatBot._build_system_prompt`
+  gained an explicit exception to its own rule 2 (always reply in the
+  interface language): when the reply is specifically about helping with
+  one particular grid word (a hint under rule 4a-d, or the answer under
+  rule 4e), the hint/definition/answer *content* itself is written in
+  THAT word's own `language=` field rather than necessarily the interface
+  language — everything else in the same reply (the short preamble naming
+  which word it is, per rule 4b) stays in the interface language as
+  usual, at the user's explicit request: "répond dans la langue du mot
+  quand une aide est demandée pour remplir la grille (langue différente
+  suivant si c'est horizontal ou vertical)." A prompt-only instruction,
+  consistent with this whole file's own established pattern of trusting
+  the LLM with a clearly-stated rule rather than a code-level enforcement
+  mechanism — its real-world reliability on this project's small default
+  local model was not separately re-measured beyond confirming the prompt
+  text itself builds correctly and mentions the right fields.
+
+  On the web UI: a new "Bilingue" selector (`#bilingual-language`, same 6
+  language options as `#language`) sits between the Largeur and Hauteur
+  fields in the generation form, at the user's own explicit, literal
+  placement request. `#language`'s own "change" handler now also forces
+  `#bilingual-language`'s value to match — the user's own explicit
+  framing ("le premier sélecteur de langue configure la langue de
+  l'interface, et force le second sélecteur de langue à prendre la même
+  valeur") — so a genuinely bilingual grid requires the player to
+  reconfigure "Bilingue" again after every interface-language change, by
+  design, rather than a stale mismatched value silently surviving one.
+  The generate-form submit handler sends `bilingual_language` only when
+  it actually differs from `language` (`undefined` otherwise, dropped by
+  `JSON.stringify`) — matching the backend's own degrade-to-monolingual
+  rule exactly, so nothing changes for an ordinary, non-bilingual
+  submission. `#library-language-filter` gained a "Bilingue" option
+  (`value="bilingual"`), placed right after "Toutes les langues" — at the
+  user's own explicit follow-up request for that exact position, moved
+  there from its original spot at the very end of the list — and the
+  library table's own "Langue" column appends `(fr/en)`-style language
+  pair text for a grid whose own `bilingual` field is set. `_library_page`
+  (`backend/app.py`) excludes a bilingual grid from a *single*-language
+  filter result too, at the user's own further explicit follow-up
+  request ("quand une seule langue est sélectionnée, ne pas afficher les
+  grilles bilingues") — selecting "fr" alone no longer surfaces a grid
+  whose own `language` happens to be "fr" but which is also bilingual
+  (`bilingual` set); only the dedicated "Bilingue" filter (or "Toutes les
+  langues") ever shows it. Verified live against real, on-disk library
+  data (a genuine bilingual French/English grid already saved from an
+  earlier check this session): selecting "fr" correctly excludes it while
+  still returning every ordinary French grid; selecting "bilingual"
+  returns exactly that one grid; selecting "all" returns everything.
+  `#dictionary-language` (the "Dictionnaire"
+  panel's own language selector) now follows whichever word is hovered/
+  clicked in the grid rather than only ever the interface language: a new
+  `updateDictionaryLanguageForDirection(direction)`, called from
+  `highlightWordAt()` (the function that already resolves hover/clue
+  highlighting to one specific word+direction), reads the *puzzle's own*
+  `language`/`bilingual_language` fields (not the generation form's
+  current selector values, which the player may have since changed) and
+  sets `#dictionary-language` to whichever of the two actually applies to
+  that word's own direction — at the user's explicit request: "le
+  sélecteur de langue du dictionnaire doit s'adapté automatiquement à la
+  langue suivant le sens de sélection de la grille." `buildChatUiContext()`
+  now also forwards each word's own `language` field to the ChatBot (see
+  `backend/chatbot.py`'s entry above). All new UI strings
+  (`bilingualLanguageLabel`, `libraryLanguageFilterBilingual`) were added
+  to `frontend/static/i18n.js` in all 6 supported UI languages (fr/en/de/
+  es/it/pt). Verified: real JS syntax check (`esprima`, installed and
+  removed again afterward) confirmed `script.js`/`i18n.js` still parse
+  correctly; an HTML tag-balance check confirmed `index.html` still
+  parses correctly after the new `<label>`/`<select>`/`<option>`
+  additions. **Not yet visually confirmed in an actual browser** — this
+  session's environment has no `chromium-cli`/`node`/Python `playwright`
+  available, the same tooling limitation already noted throughout this
+  project's UI work — verified structurally (syntax/tag-balance checks,
+  and by reading the real data reaching the frontend correctly via the
+  backend-side tests above) rather than by watching it render live.
+
+  `Automation/Populate.py` deliberately never sets `bilingual_language` at
+  all, at the user's explicit request ("Populate.py ne doit pas générer
+  de grille bilingue pour le moment") — its own omission already degrades
+  to plain monolingual generation via the backend's own default, so no
+  further guard was needed beyond a comment recording the decision.
+
+  **Known, disclosed simplifications, not yet addressed**: `backend/
+  svg_export.py`'s exported grid header still names only the grid's
+  primary language, never the bilingual one; the "no definition
+  available"/word-verification/low-candidate/noise-cell diagnostic
+  overlays are all bilingual-aware for free (they funnel through the same
+  now-direction-aware primitives the solver itself uses), but were not
+  separately, exhaustively re-verified end to end on a real bilingual
+  generation the way the core solver and storage layers were. Given the
+  size of this change, verification leaned on targeted, real (non-mocked
+  where practical) checks of each layer in isolation rather than this
+  project's usual multi-seed, multi-run benchmark comparison — a fuller
+  pass, especially a real bilingual generation exercised all the way
+  through actual LLM clue generation against a running local model,
+  has not been performed this session.
 
 ## Commands
 
