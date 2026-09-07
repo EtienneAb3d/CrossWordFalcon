@@ -206,6 +206,12 @@ project's engineering language.
 
 ### Architecture
 
+- **Licensed under MIT.** A `LICENSE` file (standard MIT text, verbatim so
+  GitHub's license detection recognises it, `Copyright (c) 2026 Étienne
+  Monneret`) sits at the repo root, and `README.md` carries a "## License"
+  section pointing at it. If the copyright year/holder or the license
+  itself ever changes, update the `LICENSE` file, that README section, and
+  any SPDX identifier in project metadata together.
 - The project is called **CrossWordFalcon** (a former rename target;
   renaming the root folder again requires rebuilding `.venv` from scratch,
   since venv scripts hardcode absolute paths in their shebangs).

@@ -187,3 +187,11 @@ button in its title bar to collapse or reopen it.
 
 A technical document, for developers who want to understand or modify how
 the app works internally, will be added separately.
+
+## License
+
+CrossWordFalcon is released under the MIT License — a permissive license
+that lets you use, copy, modify, and redistribute the software freely, for
+any purpose, as long as the copyright notice and the license text are kept
+in copies. The software is provided "as is", without warranty of any kind.
+See the [LICENSE](LICENSE) file for the full text.
