@@ -108,6 +108,16 @@ when relevant.
   script.js`, `toggleDefinitions`) — shows or hides the across/down clue
   lists below the grid. Hidden by default on a freshly generated or
   freshly loaded grid.
+- **Recalculer / Recompute** (`#recompute-btn`, `frontend/static/
+  script.js`, `recomputeBtn` click handler, `POST /api/recompute`) —
+  appears next to "Définitions" whenever a grid is on screen in play
+  mode. Rewrites every clue for the current grid from scratch, keeping
+  the grid layout and answers exactly as they are, and shows the result
+  in place of the current grid. The grid it started from is never
+  changed: the recomputed grid is saved as a separate library entry
+  whose title gets a version marker — the first recompute of "Graines"
+  is titled **"Graines (V2)"**, recomputing that gives **"(V3)"**, and
+  so on.
 - **Bibliothèque / Library** (`#library-btn`) — always visible; opens or
   closes the library panel (see "Library" below).
 
@@ -166,6 +176,15 @@ langues" — picking one specific language (e.g. "Français" alone) hides
 every bilingual grid, even one whose across words happen to be in that
 exact language (`backend/app.py`, `_library_page`).
 
+A level filter (`#library-difficulty-filter`, in the panel's top-right
+row alongside the other filters) narrows the list to one difficulty —
+**Tous les niveaux / All levels** (the default), **Facile / Easy**,
+**Moyenne / Medium**, or **Difficile / Hard**. Unlike the language
+filter, it does not follow the interface language; it stays on "Tous les
+niveaux" until changed. Filtering happens on the server before
+pagination, so the page count reflects only the matching grids
+(`backend/app.py`, `_library_page`).
+
 ## While a grid is generating
 
 A dedicated panel (`#attempt-preview`, `frontend/static/script.js`,
@@ -196,8 +215,11 @@ Once generation completes, the search-progress panel disappears and
 `displayFinalGrid`):
 
 - **Grid title** (`#grid-title`) — a short, LLM-generated title for the
-  puzzle, based on its own words (`backend/clues.py`, `generate_title`).
-  Shown only when one was successfully generated.
+  puzzle, based on its own words (`backend/clues.py`, `generate_title`),
+  followed by the grid's difficulty as a full phrase ("Difficulté :
+  Moyenne", translated to the interface language,
+  `frontend/static/script.js`, `renderGridDifficulty`). The whole line
+  is shown whenever there is a title or a difficulty to display.
 - **Stats line** (`#stats`) — the finished grid's own black-cell
   percentage, fill percentage, and unplayable-cell percentage.
 - **Generation times** (`#generation-times`) — how long grid generation,
@@ -221,7 +243,7 @@ Once generation completes, the search-progress panel disappears and
   without moving.
   Hovering a cell (or a clue line, see below) outlines every cell of that
   same word (`wordCellsAt`) and shows that word's own clue in a fixed
-  3-line panel underneath the grid (`#hover-definition`). When nothing is
+  5-line panel underneath the grid (`#hover-definition`). When nothing is
   hovered, that panel shows the clue of the currently selected (clicked)
   word instead — the word running through the selected cell in the
   current Across/Down direction (`renderHoverDefinitionForSelection`) —

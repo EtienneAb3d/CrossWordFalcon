@@ -126,7 +126,8 @@ On the page:
    definitions).
 3. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
-   ready to be filled in. Clues follow the usual crossword format:
+   ready to be filled in. Above it, a short generated title for the puzzle
+   is shown, with the grid's difficulty next to it ("Difficulty: Medium"). Clues follow the usual crossword format:
    horizontal ("Horizontalement") clues appear to the left of the grid,
    grouped one line per row; vertical ("Verticalement") clues appear
    below, grouped one line per column, spanning the full width in two
@@ -154,15 +155,24 @@ Two buttons above the grid help you check your progress:
   turn green, wrong ones turn red; click it again to return to the plain
   grid.
 
+There is also a **Definitions** button that shows or hides the clue
+lists, and a **Recompute** button that rewrites all the clues for the
+grid you're looking at (the layout and answers stay the same). The
+recomputed grid replaces the one on screen and is saved as a new entry
+in the Library, with a version marker added to its title ("Graines"
+becomes "Graines (V2)", recomputing again gives "(V3)", and so on) —
+the grid you started from is left untouched.
+
 ### Library
 
 The **"Library"** button (always visible, top right of the form) opens a
 list of every grid you've ever generated on this server — its language,
 date, title, difficulty, and size, 20 per page, most recent first. A
 language filter lets you narrow the list to one language, or to
-**"Bilingue" / "Bilingual"** for every grid made of two languages.
-Click a row to load that grid straight into the player, exactly as if it
-had just finished generating.
+**"Bilingue" / "Bilingual"** for every grid made of two languages, and a
+level filter narrows it to Easy, Medium, or Hard grids (**"All levels"**
+by default). Click a row to load that grid straight into the player,
+exactly as if it had just finished generating.
 
 If two people generate grids around the same time, each generation
 waits its turn in one of two short queues (one for building the grid

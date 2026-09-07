@@ -787,7 +787,14 @@ the current defaults/behavior to know before touching this code.
   available, keyed as described in the data-pipeline section above; both
   sections are omitted when nothing is found, and the model is told to
   treat multiple genuine senses as an opportunity for variety across its 3
-  candidates rather than collapsing to one.
+  candidates rather than collapsing to one. A **noun** gloss sense
+  (`pos` in `{"noun", "name"}`) is dropped from the prompt unless its
+  lemma is the grid word or its plural (`_noun_sense_matches_word` /
+  `_singularize` — French: `aux`→`al`, else drop trailing `s`/`x`;
+  en/es/it/pt: drop trailing `s`; German exempt) — so a verb form like
+  French "iras" is not grounded with the noun "aller" even though "aller"
+  is one of its canonical forms, while "allers" (that noun's plural)
+  still is. Verb/adjective/etc. senses are never affected.
 - Every LLM call (success or failure alike) writes its own diagnostic file
   under `LOG_LLM/` (gitignored), named `<timestamp>_<answer>_SUCCES.md` or
   `_ERROR.md`: the full system+user prompt, the raw LLM output, and every

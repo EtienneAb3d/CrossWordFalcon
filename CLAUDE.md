@@ -2401,6 +2401,25 @@ servers:
   same way a grid with no title at all would be. Logged
   (`logger.info("[%s] title: %r", ...)`) regardless of outcome.
 
+  `_run_generate_job` also sets `result["difficulty"] = req.difficulty`
+  on the finished job result (right after the two internal-phase
+  durations are computed), at the user's explicit request — the web UI
+  shows the level to the right of the grid title on the playable grid,
+  as a full phrase ("Difficulté : Moyenne" — a per-language
+  `gridDifficulty(level)` i18n function wrapping the existing
+  `difficultyEasy`/`difficultyMedium`/`difficultyHard` strings, not a
+  bare gendered adjective, which reads oddly without context; see
+  `frontend/static/script.js`'s `renderGridDifficulty()` and the
+  `style-guide` SKILL). A
+  library record and a recompute result already carry `difficulty`
+  (`backend/grid_store.py`'s stored record; `_run_recompute_job`'s
+  `result` is rebuilt from that record), so this only needed adding for
+  a freshly-generated grid, whose live job result previously carried no
+  difficulty field at all. Harmless where it also flows into
+  `save_grid_json(result, ..., req.difficulty, ...)` — that call's own
+  explicit `difficulty` argument overrides the spread `**result` key
+  with the identical value.
+
   **Bibliothèque** (a persistent library of every past grid, browsable
   from the web UI — see `frontend/static/script.js`'s "Bibliothèque"
   button), at the user's explicit request: "Génère un fichier JSON dans
@@ -2486,6 +2505,33 @@ servers:
   correctly; a real `GET /api/library?page=1` through the actual running
   API confirmed the new `total`/`page`/`page_size` fields are present and
   correct against the real (small, 3-4 grid) library on disk.
+
+  The library list also carries `POST /api/library` (`LibraryListRequest`,
+  `library_list_filtered`) — the shape the frontend actually uses, since
+  the body can carry `seen_ids` (potentially thousands of GRID_STORE ids
+  this browser has already viewed, well past what a query string holds).
+  Alongside `preferred_language`/`page` it takes `language_filter` ("all",
+  a `WORDLISTS` code, or "bilingual"), `seen_filter` ("all"/"unseen"/
+  "seen"), and `difficulty_filter` ("all", or "easy"/"medium"/"hard" —
+  added at the user's explicit request for a "Tous les niveaux" (default)
+  / Facile / Moyenne / Difficile selector top-right of the Bibliothèque
+  panel). `_library_page` applies all three filters (difficulty first,
+  then language/bilingual, then seen) *before* pagination, so `total`/the
+  page count reflect the filtered list; an unrecognized `difficulty_
+  filter` value falls through to "all" (`_LIBRARY_DIFFICULTY_FILTERS`).
+  The plain `GET /api/library` (`library_list`) keeps working with no
+  filters at all. `frontend/static/script.js`'s `renderLibraryList()`
+  sends `libraryDifficultyFilter.value`; the `#library-difficulty-filter`
+  `<select>` (`frontend/static/index.html`, in `#library-header`) reuses
+  the existing `difficultyEasy`/`difficultyMedium`/`difficultyHard` i18n
+  keys for its easy/medium/hard `<option>` labels plus a new
+  `libraryDifficultyFilterAll`/`libraryDifficultyFilterLabel` pair (all 6
+  languages). Unlike the language filter, it does not follow the UI
+  language — it stays on "Tous les niveaux" until the player changes it.
+  Verified live: `POST /api/library` with `difficulty_filter` "all"/
+  "easy"/"hard" against the real on-disk library returned 87 / 43 / 26
+  grids respectively, each page holding only rows of the requested level;
+  an unknown value and the plain GET route both returned the full 87.
 
   **Two single-concurrency queues** now gate the two heaviest phases of
   every generation, at the user's explicit request: "La génération étant
@@ -2645,6 +2691,61 @@ servers:
   not just its individual pieces in isolation. No leftover
   `multiprocessing` worker processes beyond the ordinary
   `resource_tracker` helper were found after any of these checks.
+
+  A **"Recalculer" button** was added to the play-mode action row (right
+  after "Définitions"), at the user's explicit request: "Sur une grille
+  en mode jeu, ajouter un bouton Recalculer à droite de Définitions
+  permettant de recalculer les définitions. Ne pas remplacer la grille
+  sauvegardée, mais créer une copie identique avec la mention '(new
+  clues)' dans le titre. Remplacer la grille affichée par la nouvelle."
+  ("(recalculée)" first, then "(new clues)", then — final — a bumped
+  version marker: "Au lieu de '(new clues)', indiquer '(V2)', puis
+  '(V3)', etc".) A new `RecomputeRequest` (just `grid_id`) and `POST
+  /api/recompute` (202 + `{job_id}`, matching `POST /api/generate`'s own
+  shape) start a background `_run_recompute_job(job_id, grid_id)` that
+  reloads the stored record via `grid_store.get_grid(grid_id)`, rebuilds
+  the `generate_grid()`-shaped payload underneath it (dropping only the
+  library-only `id`/`created_at`/`bilingual` keys `save_grid_json` had
+  added), and re-runs **only** clue generation — never the grid search —
+  through the *same* `CLUES_QUEUE` (+ `_wait_in_queue`/`_make_should_
+  pause`/`GenerationPaused` loop) the normal pipeline uses, so a
+  recompute waits its turn behind any job currently writing clues. The
+  title's own `"(Vn)"` marker is **bumped** by `_next_version_title`
+  (`_VERSION_SUFFIX_RE`, `\s*\(V(\d+)\)\s*$`): the un-suffixed original
+  is treated as V1, so `"Graines"` → `"Graines (V2)"`, `"Graines (V2)"`
+  → `"Graines (V3)"`, and an empty title → `"(V2)"` — never regenerated,
+  `generate_title` is not called at all. `save_grid_json` then writes a
+  **brand new**
+  library record (new id, new `created_at`); the original stays
+  untouched. SVG/PNG are re-saved too, same best-effort try/except as the
+  generate job. The finished `result` is stored on `job["result"]` in
+  the same shape `displayFinalGrid()` already renders, and the job lives
+  in the same `JOBS` registry, so the frontend polls it via the existing
+  `GET /api/generate/status/{job_id}` and `pollJob()` with no change.
+  `GenerationTask.req` became `Optional` (it was only ever a
+  queue-identity token, never read back) so `_run_recompute_job` can
+  build one with `req=None`. `frontend/server.py` gained the matching
+  `proxy_recompute` route (per the every-endpoint-needs-a-proxy rule).
+  `frontend/static/script.js`'s `recomputeBtn` click handler POSTs
+  `{grid_id: puzzle.id}`, calls `hideAttemptPreview()` (wiping any stale
+  preview history), then `pollJob()` → `displayFinalGrid(newGrid)`;
+  `displayFinalGrid()` shows/enables the button, `runGeneration()`'s
+  start hides it. Deliberately *not* routed through `runGeneration()` —
+  none of the generation-specific UI (stop/continue buttons, preview
+  reveal toggle) applies. New i18n keys `recomputeBtn`/`statusRecomputing`
+  /`statusRecomputed` in all 6 languages. Verified live end to end
+  through the running servers: recomputing the stored `Graines` grid (24
+  words, French) produced a new `GRID_STORE/fr/<id>_graines_v2_<code>
+  .json` titled `"Graines (V2)"` with all 24 clues rewritten (visibly
+  different text), the original `Graines` record byte-identical
+  on disk, the new grid reloadable via `GET /api/library/{new_id}` with
+  full `pattern`/`solution`/`words`, and the finished `result` carrying
+  the original's `generation_duration_seconds`/`optimization_duration_
+  seconds` (unchanged — the layout wasn't recomputed) alongside a fresh
+  `clues_duration_seconds`. Not visually confirmed in a browser (same
+  tooling limitation noted throughout this project's UI work) — verified
+  structurally (`esprima` JS syntax check, `py_compile`) and via the real
+  HTTP/job-polling path.
 - `backend/system_info.py` — `get_system_info(llm_model)`, best-effort *local
   machine* hardware detection for that info badge: `nvidia-smi --query-gpu=name,
   memory.total` for a discrete NVIDIA GPU's exact name and dedicated VRAM if present,
@@ -2893,6 +2994,43 @@ servers:
   sentence lookup is by the exact inflected form instead, since Wiktionary is indexed by
   lemma but real usage sentences are not. Both sections are omitted entirely when
   nothing is found for a word — not every word has dictionary or corpus coverage.
+
+  Because gloss lookup is by canonical/root form, a lemma's entry can carry senses the
+  *exact grid word* cannot actually express — at the user's explicit request, both
+  `_build_gloss_block`'s own trailing NOTE and the system prompt's ABSOLUTE RULE now
+  spell this out, with the concrete example the user gave: English `ARES` is looked up
+  under root `are`, whose Wiktionary entry covers both `are` = a 100 m² area unit
+  (`ARES` = its valid plural, correct) *and* `are` = a present-tense form of "be" — but
+  `ARES`, with the `-s`, can never be a form of "be". The model is told to check every
+  listed sense against the given word's own part of speech / number / person-tense
+  (rule 4's existing "EXACT inflected form" check) and silently drop any sense the exact
+  word can't carry, even though it is printed in the dictionary section. `backend/
+  chatbot.py`'s rule 4 got the same caveat as a new sub-point (`c-bis`) for David
+  FALCON's own alternative-definition hints, using the same `ARES`/`are` example.
+
+  On top of that prompt-level caveat, `_build_gloss_block` now also *drops
+  outright* a **noun** gloss sense (`sense["pos"]` in `_NOUN_POS` =
+  `{"noun", "name"}`) whose lemma isn't the grid word itself or its
+  plural, at the user's explicit request — a code-level filter, not left
+  to the model. `_noun_sense_matches_word(lemma, accented, language)`
+  keeps a noun sense only when `accented.lower()` equals `lemma.lower()`
+  or `_singularize(accented.lower(), language)` does. `_singularize` is
+  deliberately simple, per the user's own spec: for French, a trailing
+  `aux` becomes `al` (`chevaux`→`cheval`, `journaux`→`journal`),
+  otherwise a trailing `s`/`x` is dropped (`allers`→`aller`,
+  `cheveux`→`cheveu`); for `en`/`es`/`it`/`pt` a trailing `s` is dropped;
+  German is exempt entirely (`_NOUN_PLURAL_LANGS` excludes it — its
+  plurals are far too irregular for a one-line rule, so a German noun
+  sense is never dropped by this check). Only noun/proper-noun senses are
+  affected — a verb / adjective / adverb sense of the same lemma is
+  always kept. The user's own worked example: `allers` (grid word) keeps
+  the noun sense of `aller` (`allers` is that noun's plural), while `iras`
+  (a verb form of `aller`) drops the noun `aller` — `_singularize("iras",
+  "fr")` is `"ira"`, not `"aller"` — but keeps `aller`'s verb sense.
+  Verified: isolated `_singularize`/`_noun_sense_matches_word` unit checks
+  plus a real-French-gloss-dictionary spot check (`maisons`/`chats`/
+  `chevaux` all keep their noun definition; `allers` keeps noun + verb;
+  `iras` drops noun, keeps verb) — matches the requested behavior exactly.
 
   Three real bad clues reported by hand after the schema/rule work above led to a
   further round of filter/prompt fixes: (1) French `MAMANS` (plural "mums") got

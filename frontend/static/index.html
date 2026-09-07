@@ -130,6 +130,7 @@
         <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
         <button type="button" id="solution-btn" class="toggle-btn" data-i18n="solutionBtn" hidden>Solution</button>
         <button type="button" id="definitions-btn" class="toggle-btn" data-i18n="definitionsBtn" hidden>Définitions</button>
+        <button type="button" id="recompute-btn" data-i18n="recomputeBtn" hidden>Recalculer</button>
         <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
         <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
       </div>
@@ -194,6 +195,15 @@
           <option value="all" data-i18n="librarySeenFilterAll">Toutes les grilles</option>
           <option value="unseen" data-i18n="librarySeenFilterUnseen">Non vues</option>
           <option value="seen" data-i18n="librarySeenFilterSeen">Déjà vues</option>
+        </select>
+        <!-- Filtre de niveau, à la demande explicite de l'utilisateur.
+             "Tous les niveaux" par défaut ; les libellés easy/medium/hard
+             réutilisent les clés difficultyEasy/Medium/Hard existantes. -->
+        <select id="library-difficulty-filter" data-i18n-aria="libraryDifficultyFilterLabel">
+          <option value="all" data-i18n="libraryDifficultyFilterAll">Tous les niveaux</option>
+          <option value="easy" data-i18n="difficultyEasy">Facile</option>
+          <option value="medium" data-i18n="difficultyMedium">Moyenne</option>
+          <option value="hard" data-i18n="difficultyHard">Difficile</option>
         </select>
         <button type="button" id="library-close-btn" class="nav-btn"
                 data-i18n-aria="libraryCloseBtn">✕</button>
@@ -283,7 +293,7 @@
     </section>
 
     <section id="result" hidden>
-      <h2 id="grid-title" hidden></h2>
+      <h2 id="grid-title" hidden><span id="grid-title-text"></span><span id="grid-difficulty" hidden></span></h2>
       <p id="stats"></p>
       <p id="generation-times">
         <span id="generation-times-text"></span>

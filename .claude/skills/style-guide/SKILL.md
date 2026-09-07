@@ -328,7 +328,7 @@ English (see `project-best-practices`).
   hover appearance in a real browser is still unverified and owed, same
   caveat as the info badge.
 
-- added a fixed-height, always-3-lines-tall panel (`#hover-definition`)
+- added a fixed-height, always-5-lines-tall panel (`#hover-definition`)
   directly below the grid, at the user's explicit request: shows the
   definition of whichever word is currently hovered (grid cell or clue
   line — both hover paths already went through the same `highlightWordAt()`
@@ -340,9 +340,9 @@ English (see `project-best-practices`).
   the new panel in a new `#grid-column` flex column, so the panel's
   `width: 100%` stretches to match `#grid`'s own intrinsic width via the
   column's default `align-items: stretch`, rather than the sidebar's
-  width or the row's full remaining space. Height is a fixed `4.5rem`
-  (3 × a `1.5rem` line-height given in rem, not a unitless multiplier, so
-  "3 lines" is an exact, predictable height) rather than auto-growing
+  width or the row's full remaining space. Height is a fixed `7.5rem`
+  (5 × a `1.5rem` line-height given in rem, not a unitless multiplier, so
+  "5 lines" is an exact, predictable height) rather than auto-growing
   with the text, so the layout never shifts as different definitions are
   shown; `overflow-y: auto` lets an unusually long definition still be
   read by scrolling within the fixed window instead of being cut off.
@@ -374,7 +374,7 @@ English (see `project-best-practices`).
 - fixed a real bug in `#hover-definition` above, reported by the user
   from actual use: a long definition stretched the whole box (and
   `#grid-column` with it) wide instead of wrapping within the fixed
-  3-line height. Root cause is the classic flexbox/intrinsic-sizing
+  5-line height. Root cause is the classic flexbox/intrinsic-sizing
   gotcha: `#grid-column` sizes itself from its children's natural width
   (see that entry's own comment), and a block element's natural/max-
   content contribution to that computation is how wide its text would be
@@ -782,7 +782,7 @@ English (see `project-best-practices`).
   own hover direction (see the bidirectional-hover-highlighting entry
   above), so this is documentation catching up to existing behavior, not
   a new feature. No layout change needed: `#hover-definition` is already
-  3 lines tall (`height: 4.5rem`, `line-height: 1.5rem`) with
+  5 lines tall (`height: 7.5rem`, `line-height: 1.5rem`) with
   `overflow-wrap: break-word`, comfortably fitting the now-two-sentence
   placeholder on any realistically-sized grid.
 
@@ -2061,7 +2061,7 @@ English (see `project-best-practices`).
   flex *column* (`#virtual-keyboard-direction-col`) — that one sits
   beside two stacked rows of letter keys and needs to stretch to their
   combined height; this duplicate sits on a single line, vertically
-  centered (`align-items: center`) against the taller (4.5rem, 3-line)
+  centered (`align-items: center`) against the taller (7.5rem, 5-line)
   definition box next to it. Both buttons reuse the exact same
   `.toggle-btn`/`.active` look as the original pair (and every other
   bi-stable control on this page — Solution/Vérification) rather than a
@@ -2145,7 +2145,7 @@ English (see `project-best-practices`).
   throughout this file; verified structurally (a real JS syntax check
   via `esprima`, a CSS brace-balance check) instead.
 
-- `#hover-definition` (the permanent 3-line panel under the grid) now
+- `#hover-definition` (the permanent 5-line panel under the grid) now
   shows the **selected (clicked) word's** own clue when nothing is
   hovered, instead of the idle "help" placeholder, at the user's
   explicit request ("quand il n'y a pas de survol et qu'une case est
@@ -2177,3 +2177,88 @@ English (see `project-best-practices`).
   flipping the `→`/`↓` buttons or Shift/Caps Lock with a cell selected
   updates the definition (and the green band) to the newly-active
   direction's word immediately, not just on the next hover/re-render.
+
+- **"Recalculer" / "Recompute" button** (`#recompute-btn`,
+  `frontend/static/index.html`) — a one-shot action button in the
+  play-mode action row, placed immediately **after "Définitions"**
+  (`#definitions-btn`). Deliberately a **plain button, not a
+  `.toggle-btn`** (unlike Check/Solution/Définitions right before it):
+  it triggers a single operation rather than switching a persistent
+  mode, so it follows the same styling as `#continue-btn`/`#library-btn`
+  (shared accent-blue look, no dedicated CSS, no `.active` state).
+  Shown (`recomputeBtn.hidden = false`, `recomputeBtn.disabled = false`)
+  by `displayFinalGrid()` for any grid on screen in play mode (freshly
+  generated or loaded from the library), hidden again at the start of a
+  fresh generation (`runGeneration()`). While a recompute is running it
+  is `disabled` (and re-enabled in the handler's `finally`, plus by
+  `displayFinalGrid()` on success). No new color token or CSS rule was
+  added. While the recompute job runs, `pollJob()` still drives the
+  attempt-preview panel exactly as during a normal generation's clue
+  phase — the letters-free final grid plus the word-verification table
+  briefly appear above the current grid, then `displayFinalGrid()` hides
+  the panel again once the recomputed grid is swapped in. **Not visually
+  confirmed in an actual browser** — same tooling limitation noted
+  throughout this file; verified with a real end-to-end recompute
+  through the running servers (new library entry created, original
+  untouched, all clues rewritten) plus a JS syntax check via `esprima`.
+
+- **Difficulty label next to the grid title** (`#grid-difficulty`, an
+  inline `<span>` inside the `#grid-title` `<h2>`, right after a new
+  `#grid-title-text` span holding the LLM title), at the user's explicit
+  request: "À droite du titre de la grille à jouer, indiquer le niveau
+  'Facile' / 'Moyen' / 'Difficile'." Shown as a full phrase —
+  "Difficulté : Moyenne" — via a per-language `gridDifficulty(level)`
+  i18n function (French uses the " : " spaced colon, the other languages
+  a plain ": "), not a bare adjective, which reads oddly without context
+  in a gendered language. Styled as a secondary label, not a
+  co-equal part of the heading — smaller (`0.85rem` vs. the `<h2>`'s
+  `1.3rem`), `font-weight: normal`, muted grey (`#777`, a one-off literal
+  matching `#stats`'s own `#555`-family secondary-text treatment — no
+  token existed and it's not a state color), `margin-left: 0.6rem` off
+  the title, `white-space: nowrap` so the phrase never wraps under
+  the title. Text comes from the `difficultyEasy`/`difficultyMedium`/
+  `difficultyHard` i18n keys wrapped in the `gridDifficulty(level)`
+  prefix function (all 6 languages), set by a new
+  `renderGridDifficulty()` reading `puzzle.difficulty` — so it's
+  re-translated on a UI-language switch (called from the `languageSelect`
+  change handler) unlike the LLM title itself, which stays in the grid's
+  own language. `#grid-title` is now shown whenever there's a title **or**
+  a difficulty (previously: only a title) — a grid with a difficulty but
+  no title (title generation failed) still shows the level alone where
+  the heading would be. Backend: `backend/app.py`'s `_run_generate_job`
+  now sets `result["difficulty"] = req.difficulty` (library records and
+  recompute results already carried it). **Not visually confirmed in an
+  actual browser** — same tooling limitation noted throughout this file;
+  verified structurally (JS syntax check via `esprima`, `py_compile`) and
+  end to end via the running API (fresh flash generation → `result.
+  difficulty: "hard"`; library record → `difficulty: "easy"`).
+
+- `#hover-definition` grew from 3 lines to **5 lines** tall (`height:
+  4.5rem` → `7.5rem`, still `5 × line-height: 1.5rem`), at the user's
+  explicit request ("Mettre les définitions en dessous de la grille à
+  jouer sur 5 lignes") — a longer clue now reads without scrolling more
+  often. Nothing else about the panel changed: still a fixed height (no
+  layout shift between clues), still `overflow-y: auto` for a clue longer
+  than 5 lines, still `align-items: center` so the `→`/`↓` buttons beside
+  it stay vertically centered against the now-taller box.
+
+- Library panel gained a third filter `<select>` in `#library-header`
+  (`#library-difficulty-filter`), at the user's explicit request — a
+  level filter: "Tous les niveaux" (default) / Facile / Moyenne /
+  Difficile. Placed among the header's existing right-aligned control
+  cluster (`#library-label` has `margin-right: auto`, so language filter,
+  this new level filter, seen filter and the ✕ button all sit top-right,
+  wrapping on a narrow panel via the header's `flex-wrap: wrap`). No new
+  CSS: the shared `#library-header select` rule (0.8rem, tight padding)
+  already covers it. Its easy/medium/hard `<option>` labels reuse the
+  existing `difficultyEasy`/`difficultyMedium`/`difficultyHard` i18n keys
+  via `data-i18n`; only the "Tous les niveaux" option and the aria-label
+  needed new keys (`libraryDifficultyFilterAll`/`libraryDifficultyFilter
+  Label`, all 6 languages). Unlike the language filter, it is not synced
+  to the interface language — it stays on "Tous les niveaux" until the
+  player changes it. Server-side filtering (`backend/app.py`,
+  `_library_page`, `difficulty_filter`) happens before pagination.
+  Verified structurally + end to end through the real API (`POST /api/
+  library` with `difficulty_filter` all/easy/hard → 87/43/26 rows); not
+  visually confirmed in a browser — same tooling limitation noted
+  throughout this file.

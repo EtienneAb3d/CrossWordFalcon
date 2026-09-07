@@ -311,6 +311,18 @@ button:disabled {
   font-size: 1.3rem;
 }
 
+/* Niveau de difficulté ("Facile" / "Moyen" / "Difficile") affiché à
+   droite du titre de la grille à jouer, à la demande explicite de
+   l'utilisateur — libellé secondaire : plus petit, discret, poids
+   normal, légèrement décalé du titre. */
+#grid-difficulty {
+  margin-left: 0.6rem;
+  font-size: 0.85rem;
+  font-weight: normal;
+  color: #777;
+  white-space: nowrap;
+}
+
 #stats {
   font-size: 0.9rem;
   color: #555;
@@ -424,14 +436,14 @@ button:disabled {
   border: 2px solid var(--border);
 }
 
-/* Fixed-height, always-3-lines-tall panel showing the definition of
+/* Fixed-height, always-5-lines-tall panel showing the definition of
    whichever word is currently hovered (grid cell or clue line — both
    paths go through highlightWordAt()/clearHighlights() in script.js), at
    the user's explicit request: lets a player read the current word's
    definition without needing the full across/down clue lists in view at
    the same time. Height is fixed (not auto-growing with the text) so the
    layout never shifts as different definitions are shown; line-height is
-   given in rem (not a unitless multiplier) so "3 lines" maps to an exact,
+   given in rem (not a unitless multiplier) so "5 lines" maps to an exact,
    predictable height. overflow-y: auto rather than clipping, so an
    unusually long definition can still be read by scrolling within the
    fixed window instead of being cut off outright.
@@ -442,7 +454,7 @@ button:disabled {
    out on a *single unwrapped line* — without overriding the flex
    default of min-width: auto, a long definition made the whole row (and
    #grid-column with it) stretch wide enough to fit the text on one line
-   instead of wrapping within the fixed 3-line height, exactly the bug
+   instead of wrapping within the fixed 5-line height, exactly the bug
    reported live. min-width: 0 lets this element shrink below that
    unwrapped width — down to whatever #hover-definition-row's own flex:
    0 0 auto button pair leaves it — so normal text wrapping actually
@@ -454,7 +466,7 @@ button:disabled {
   flex: 1 1 auto;
   min-width: 0;
   overflow-wrap: break-word;
-  height: 4.5rem;
+  height: 7.5rem;
   padding: 0.5rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -898,7 +910,7 @@ button:disabled {
   font-weight: 600;
 }
 
-/* Les deux sélecteurs en haut de la Bibliothèque (langue, "déjà vues"). */
+/* Les trois sélecteurs en haut de la Bibliothèque (langue, niveau, "déjà vues"). */
 #library-header select {
   font-size: 0.8rem;
   padding: 0.15rem 0.3rem;

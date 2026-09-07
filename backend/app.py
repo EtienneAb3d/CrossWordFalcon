@@ -25,6 +25,7 @@ import json
 import logging
 import multiprocessing
 import os
+import re
 import sys
 import time
 import uuid
@@ -409,6 +410,20 @@ class GenerateRequest(BaseModel):
     )
 
 
+class RecomputeRequest(BaseModel):
+    """Body of POST /api/recompute — the "Recalculer" button on a grid in
+    play mode, at the user's explicit request: "recalculer les définitions.
+    Ne pas remplacer la grille sauvegardée, mais créer une copie identique
+    ... Remplacer la grille affichée par la nouvelle." Only the library id
+    of the currently displayed grid is sent — the backend reloads the full
+    stored record (grid_store.get_grid), re-runs only clue generation on
+    its words (never the grid search), bumps a "(Vn)" version marker on
+    the title (_next_version_title — "Graines" -> "Graines (V2)" ->
+    "Graines (V3)"; never regenerated), and saves a brand new library
+    record, leaving the original untouched."""
+    grid_id: str
+
+
 @dataclass
 class GenerationTask:
     """Everything the two-stage background pipeline below (GRID_QUEUE,
@@ -421,9 +436,14 @@ class GenerationTask:
     two loose parameters. Equality/identity: job_id is always a fresh
     uuid4 hex (see _new_job), so two distinct tasks can never compare
     equal by accident — safe for the plain `is`/`in`/`list.remove()`
-    checks GRID_QUEUE/CLUES_QUEUE below rely on."""
+    checks GRID_QUEUE/CLUES_QUEUE below rely on.
+
+    `req`/`resume_state` are never actually read back off the task (it is
+    purely a queue-identity token) — `_run_recompute_job` below reuses the
+    same queue plumbing with `req=None`, since a recompute has no
+    GenerateRequest of its own."""
     job_id: str
-    req: GenerateRequest
+    req: Optional[GenerateRequest] = None
     resume_state: Optional[dict] = None
 
 
@@ -590,6 +610,7 @@ def system_info():
 
 
 _LIBRARY_SEEN_FILTERS = ("all", "unseen", "seen")
+_LIBRARY_DIFFICULTY_FILTERS = ("easy", "medium", "hard")
 
 
 class LibraryListRequest(BaseModel):
@@ -608,6 +629,11 @@ class LibraryListRequest(BaseModel):
     # frontend l'initialise à la langue de l'interface (voir
     # #library-language-filter).
     language_filter: str = "all"
+    # Filtre de niveau, à la demande explicite de l'utilisateur : "all"
+    # (défaut, "Tous les niveaux") -> tous ; "easy"/"medium"/"hard" ->
+    # seulement les grilles de ce niveau. Le frontend l'initialise à
+    # "all" et ne le fait pas suivre la langue de l'interface.
+    difficulty_filter: str = "all"
     # "all" (défaut) : liste complète, chaque grille juste annotée seen=…
     # "unseen" : seulement les grilles absentes de seen_ids
     # "seen"   : seulement celles présentes dans seen_ids
@@ -618,13 +644,14 @@ class LibraryListRequest(BaseModel):
     seen_ids: list[str] = Field(default_factory=list, max_length=100_000)
 
 
-def _library_page(preferred_language, page, seen_filter, seen_ids, language_filter="all"):
+def _library_page(preferred_language, page, seen_filter, seen_ids,
+                  language_filter="all", difficulty_filter="all"):
     """Coeur partagé de GET et POST /api/library — la liste (métadonnées
     seulement, jamais la grille entière : voir backend/grid_store.py's
     list_grids) des grilles de GRID_STORE/, triées langue configurée
     d'abord puis anglais puis le reste, plus récente en premier dans
-    chaque groupe, filtrée par `language_filter` puis par `seen_filter`/
-    `seen_ids`, puis paginée par `LIBRARY_PAGE_SIZE` (20).
+    chaque groupe, filtrée par `language_filter`, `difficulty_filter` puis
+    par `seen_filter`/`seen_ids`, puis paginée par `LIBRARY_PAGE_SIZE` (20).
 
     `list_grids()` elle-même reste inchangée (toujours la liste complète
     triée, toutes langues) ; le filtrage par langue ("all" ou un code) et
@@ -646,9 +673,16 @@ def _library_page(preferred_language, page, seen_filter, seen_ids, language_filt
     # sélecteur de langue de la Bibliothèque."
     only_bilingual = language_filter == "bilingual"
     only_language = language_filter if language_filter in WORDLISTS else None
+    # Filtre de niveau (easy/medium/hard) — "all"/toute valeur inconnue
+    # laisse tout passer, à la demande explicite de l'utilisateur.
+    only_difficulty = (
+        difficulty_filter if difficulty_filter in _LIBRARY_DIFFICULTY_FILTERS else None
+    )
     seen = set(seen_ids or ())
     rows = []
     for g in list_grids(preferred_language):
+        if only_difficulty is not None and g.get("difficulty") != only_difficulty:
+            continue
         if only_bilingual:
             if not g.get("bilingual"):
                 continue
@@ -699,7 +733,7 @@ def library_list_filtered(req: LibraryListRequest):
     Front")."""
     return _library_page(
         req.preferred_language, req.page, req.seen_filter, req.seen_ids,
-        req.language_filter,
+        req.language_filter, req.difficulty_filter,
     )
 
 
@@ -1242,6 +1276,13 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # duration — see the pause/resume loop above.
         result["generation_duration_seconds"] = grid_paused_compute_s + (search_done - grid_start)
         result["optimization_duration_seconds"] = optimization_done - search_done
+        # Niveau de difficulté renvoyé sur le result du job, à la demande
+        # explicite de l'utilisateur (affiché à droite du titre de la
+        # grille à jouer, voir frontend/static/script.js). Un
+        # enregistrement GRID_STORE (grille rechargée depuis la
+        # bibliothèque) porte déjà ce champ ; ici on l'ajoute pour une
+        # grille fraîchement générée.
+        result["difficulty"] = req.difficulty
 
         # Aperçu de la grille finale (déjà minimisée), au tout début de la
         # génération des définitions — à la demande explicite de
@@ -1448,6 +1489,190 @@ async def _run_generate_job(job_id, req, resume_state=None):
         logger.exception("[%s] unhandled error during generation", short_id)
 
 
+# Trailing "(Vn)" version marker on a recomputed grid's title, at the
+# user's explicit request ("Au lieu de '(new clues)', indiquer '(V2)',
+# puis '(V3)', etc"). The un-suffixed original grid is treated as V1, so
+# its first recompute is "(V2)"; each further recompute bumps the number.
+_VERSION_SUFFIX_RE = re.compile(r"\s*\(V(\d+)\)\s*$")
+
+
+def _next_version_title(title):
+    """"Graines" -> "Graines (V2)"; "Graines (V2)" -> "Graines (V3)"; an
+    empty title -> "(V2)". See _run_recompute_job below."""
+    title = (title or "").strip()
+    m = _VERSION_SUFFIX_RE.search(title)
+    if m:
+        base = title[: m.start()].rstrip()
+        n = int(m.group(1)) + 1
+    else:
+        base = title
+        n = 2
+    return f"{base} (V{n})".strip()
+
+
+async def _run_recompute_job(job_id, grid_id):
+    """Background job behind POST /api/recompute — the "Recalculer" button
+    (see RecomputeRequest). Reloads the stored grid `grid_id`
+    (grid_store.get_grid), re-runs ONLY clue generation on its words
+    (through the same CLUES_QUEUE the normal pipeline uses, so a recompute
+    waits its turn behind any grid currently having its clues written),
+    then saves a brand new library record whose title carries a bumped
+    "(Vn)" version marker (_next_version_title) — the original record is
+    never touched. The finished
+    `result` is the exact same generate_grid()-shaped dict displayFinalGrid()
+    already knows how to render, so the frontend polls this job via the
+    same GET /api/generate/status/{job_id} and hands the result straight to
+    displayFinalGrid()."""
+    job = JOBS[job_id]
+    short_id = job_id[:8]
+    cancel_event = CANCEL_EVENTS[job_id]
+
+    def progress(step, **data):
+        job["step"] = {"code": step, **data}
+        examples = data.get("examples")
+        if examples:
+            step_without_examples = {
+                k: v for k, v in job["step"].items() if k not in ("examples", "word_table")
+            }
+            entry = {"step": step_without_examples, "examples": examples}
+            if "word_table" in data:
+                entry["word_table"] = data["word_table"]
+            job["examples_history"].append(entry)
+        logger.info("[%s] %s %s", short_id, step, data)
+
+    try:
+        record = await asyncio.to_thread(get_grid, grid_id)
+        if record is None:
+            job["status"] = "error"
+            job["error_code"] = "grid_not_found"
+            job["error"] = "grille introuvable dans la bibliothèque"
+            logger.warning("[%s] recompute: grid %r not found", short_id, grid_id)
+            return
+
+        language = record.get("language") or "fr"
+        bilingual_language = record.get("bilingual_language")
+        difficulty = record.get("difficulty") or "easy"
+        mode = record.get("mode") or "medium"
+
+        # Rebuild the generate_grid()-shaped payload underneath the
+        # library-only metadata save_grid_json added (id/created_at/
+        # bilingual). `title` is popped separately: save_grid_json sets its
+        # own, and the new one is the old one with a bumped "(Vn)" marker.
+        result = {
+            k: v for k, v in record.items()
+            if k not in ("id", "created_at", "bilingual")
+        }
+        original_title = (result.pop("title", "") or "").strip()
+        new_title = _next_version_title(original_title)
+
+        logger.info(
+            "[%s] recompute: grid=%s language=%s bilingual_language=%s difficulty=%s mode=%s words=%d",
+            short_id, grid_id, language, bilingual_language, difficulty, mode,
+            len(result.get("words", [])),
+        )
+
+        task = GenerationTask(job_id=job_id)
+
+        word_table = await asyncio.to_thread(
+            _build_word_verification_table, result["words"], language, bilingual_language,
+        )
+        progress(
+            "clues", current=0, total=len(result["words"]),
+            examples=[{
+                "example_grid": result["solution"],
+                "impossible_cells": [],
+                "forced_cells": [],
+                "locked_cells": [],
+                "process_number": result.get("winning_process_number"),
+                "is_best": True,
+            }],
+            word_table=word_table,
+        )
+
+        CLUES_QUEUE.append(task)
+        try:
+            remaining_entries = [
+                (w["answer"], w["accented"], w["canonical"], w.get("language"))
+                for w in result["words"]
+            ]
+            accumulated_clues = {}
+            clues_compute_s = 0.0
+            while True:
+                await _wait_in_queue(CLUES_QUEUE, task, job, cancel_event, "queued_clues")
+                clues_start = time.monotonic()
+                try:
+                    new_clues = await asyncio.to_thread(
+                        clue_generator.generate,
+                        remaining_entries,
+                        difficulty,
+                        language,
+                        on_progress=lambda current, total: progress(
+                            "clues", current=len(accumulated_clues) + current,
+                            total=len(result["words"]),
+                        ),
+                        cancel_event=cancel_event,
+                        should_pause=_make_should_pause(CLUES_QUEUE, task),
+                    )
+                    accumulated_clues.update(new_clues)
+                    clues_compute_s += time.monotonic() - clues_start
+                    break
+                except GenerationPaused as p:
+                    clues_compute_s += time.monotonic() - clues_start
+                    partial_clues, remaining_entries = p.resume_state
+                    accumulated_clues.update(partial_clues)
+                    logger.info("[%s] recompute clues turn paused, back of the queue", short_id)
+                    CLUES_QUEUE.remove(task)
+                    CLUES_QUEUE.append(task)
+            result["clues_duration_seconds"] = clues_compute_s
+            for w in result["words"]:
+                w["clue"] = accumulated_clues.get(w["answer"], "")
+        finally:
+            if task in CLUES_QUEUE:
+                CLUES_QUEUE.remove(task)
+
+        result["title"] = new_title
+
+        progress("saving")
+        try:
+            svg_path = await asyncio.to_thread(save_grid_svg, result, language, difficulty, mode)
+            logger.info("[%s] recompute saved %s", short_id, svg_path)
+            try:
+                png_path = await asyncio.to_thread(save_grid_png, svg_path)
+                logger.info("[%s] recompute saved %s", short_id, png_path)
+            except OSError as e:
+                logger.warning("[%s] recompute failed to save grid PNG sample: %s", short_id, e)
+        except OSError as e:
+            logger.warning("[%s] recompute failed to save grid SVG: %s", short_id, e)
+
+        try:
+            new_grid_id = await asyncio.to_thread(
+                save_grid_json, result, language, difficulty, mode, new_title,
+                bilingual_language,
+            )
+            logger.info("[%s] recompute saved to library: %s", short_id, new_grid_id)
+            result["id"] = new_grid_id
+        except OSError as e:
+            logger.warning("[%s] recompute failed to save grid to library: %s", short_id, e)
+
+        progress("done")
+        job["status"] = "done"
+        job["result"] = result
+        logger.info("[%s] recompute done", short_id)
+    except GenerationCancelled:
+        job["status"] = "cancelled"
+        logger.info("[%s] recompute cancelled by user", short_id)
+    except ClueGenerationError as e:
+        job["status"] = "error"
+        job["error_code"] = "clue_generation_failed"
+        job["error"] = str(e)
+        logger.warning("[%s] recompute clue generation failed: %s", short_id, e)
+    except Exception:
+        job["status"] = "error"
+        job["error_code"] = "internal_error"
+        job["error"] = "Erreur interne."
+        logger.exception("[%s] unhandled error during recompute", short_id)
+
+
 def _validate_generate_request(req):
     """Shared by POST /api/generate and POST /api/generate/continue/{job_id}
     (see below) — the latter rebuilds a `GenerateRequest` from a previous
@@ -1641,6 +1866,23 @@ async def generate_continue(job_id: str):
     task = asyncio.create_task(
         _run_generate_job(new_job_id, req, resume_state=job["resume_state"])
     )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"job_id": new_job_id}
+
+
+@app.post("/api/recompute", status_code=202)
+async def recompute(req: RecomputeRequest):
+    """"Recalculer" button on a grid in play mode, at the user's explicit
+    request (see RecomputeRequest / _run_recompute_job). Starts a new
+    background job that re-runs only clue generation for the stored grid
+    `req.grid_id` and saves it as a brand new library record whose title
+    carries a bumped "(Vn)" marker — the original stays untouched.
+    Returns a fresh job_id the client polls exactly like a generation job
+    (GET /api/generate/status/{job_id}), then hands the result to
+    displayFinalGrid()."""
+    new_job_id = _new_job()
+    task = asyncio.create_task(_run_recompute_job(new_job_id, req.grid_id))
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return {"job_id": new_job_id}

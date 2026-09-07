@@ -96,6 +96,7 @@ const cluesDown = document.getElementById("clues-down");
 const solutionBtn = document.getElementById("solution-btn");
 const checkBtn = document.getElementById("check-btn");
 const definitionsBtn = document.getElementById("definitions-btn");
+const recomputeBtn = document.getElementById("recompute-btn");
 const stopBtn = document.getElementById("stop-btn");
 const continueBtn = document.getElementById("continue-btn");
 const cluesEl = document.getElementById("clues");
@@ -115,10 +116,13 @@ const attemptPreviewStatus = document.getElementById("attempt-preview-status");
 const wordVerificationWrap = document.getElementById("word-verification-wrap");
 const wordVerificationTbody = document.getElementById("word-verification-tbody");
 const gridTitleEl = document.getElementById("grid-title");
+const gridTitleTextEl = document.getElementById("grid-title-text");
+const gridDifficultyEl = document.getElementById("grid-difficulty");
 const libraryBtn = document.getElementById("library-btn");
 const libraryPanel = document.getElementById("library");
 const libraryCloseBtn = document.getElementById("library-close-btn");
 const libraryLanguageFilter = document.getElementById("library-language-filter");
+const libraryDifficultyFilter = document.getElementById("library-difficulty-filter");
 const librarySeenFilter = document.getElementById("library-seen-filter");
 const libraryTbody = document.getElementById("library-tbody");
 const libraryEmpty = document.getElementById("library-empty");
@@ -574,7 +578,7 @@ function clearHighlights() {
 // own text (reused as-is, "(N) clue text", rather than a fresh
 // puzzle.words lookup — one less place that needs the noDefinition
 // fallback logic already applied once in renderClueLines()) — the
-// user's explicit request for a fixed 3-line panel under the grid, so a
+// user's explicit request for a fixed 5-line panel under the grid, so a
 // player can read the currently-hovered word's definition without the
 // full across/down clue lists in view at the same time.
 // Fait suivre le sélecteur de langue du panneau "Dictionnaire" à la
@@ -1667,6 +1671,9 @@ languageSelect.addEventListener("change", () => {
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
   renderPreviewStatus();
   renderPreviewPosition();
+  // Le libellé du niveau à droite du titre de la grille jouée est traduit
+  // (voir renderGridDifficulty), donc à ré-appliquer au changement de langue.
+  renderGridDifficulty();
   // "David FALCON"'s own welcome bubble, at the user's explicit request
   // — see renderChatWelcome()'s own docstring for why this only ever
   // does anything before the player's first real message.
@@ -2072,6 +2079,29 @@ function markGridSeen(gridId) {
   }
 }
 
+// Niveau de difficulté affiché à droite du titre de la grille à jouer,
+// à la demande explicite de l'utilisateur. Lu depuis `puzzle` :
+// backend/app.py ajoute `difficulty` au result d'une grille fraîchement
+// générée, et l'enregistrement GRID_STORE d'une grille rechargée depuis
+// la bibliothèque le porte déjà. Le libellé est traduit (difficultyEasy/
+// Medium/Hard), donc ré-appelé au changement de langue de l'interface.
+// Une grille sans ce champ (sauvegardée avant cette fonctionnalité)
+// n'affiche simplement rien.
+function renderGridDifficulty() {
+  const key = { easy: "difficultyEasy", medium: "difficultyMedium", hard: "difficultyHard" }[
+    puzzle && puzzle.difficulty
+  ];
+  if (key) {
+    // Préfixé "Difficulté : " (ponctuation par langue) plutôt qu'un
+    // adjectif féminin nu ("Moyenne"), qui sans contexte se lit mal.
+    gridDifficultyEl.textContent = I18N[uiLanguage].gridDifficulty(I18N[uiLanguage][key]);
+    gridDifficultyEl.hidden = false;
+  } else {
+    gridDifficultyEl.textContent = "";
+    gridDifficultyEl.hidden = true;
+  }
+}
+
 // Renders a finished grid's own `result` (backend/crossword_gen.py's
 // generate_grid() return dict, extended by backend/app.py with the three
 // duration fields and, at the user's explicit request, a short LLM-
@@ -2102,8 +2132,14 @@ function displayFinalGrid(gridData) {
   // à jouer." A grid saved before this feature existed (or one whose
   // title generation itself failed, see generate_title's own "" return)
   // simply has no title line shown, rather than an empty heading.
-  gridTitleEl.textContent = gridData.title || "";
-  gridTitleEl.hidden = !gridData.title;
+  gridTitleTextEl.textContent = gridData.title || "";
+  // Niveau de difficulté ("Facile" / "Moyen" / "Difficile") affiché à
+  // droite du titre, à la demande explicite de l'utilisateur. Traduit
+  // selon la langue de l'interface, donc re-rendu aussi au changement de
+  // langue (voir languageSelect's own handler). La difficulté seule
+  // (sans titre) suffit à afficher la ligne #grid-title.
+  renderGridDifficulty();
+  gridTitleEl.hidden = !gridData.title && gridDifficultyEl.hidden;
   // Marque cette grille "déjà vue" — même chemin pour une grille qui vient
   // d'être générée (backend/app.py ajoute `id` au `result`, voir son
   // commentaire) et une grille rechargée depuis la bibliothèque
@@ -2122,6 +2158,13 @@ function displayFinalGrid(gridData) {
   solutionBtn.hidden = false;
   checkBtn.hidden = false;
   definitionsBtn.hidden = false;
+  // "Recalculer" button — recomputes this grid's definitions into a brand
+  // new library copy (title gets a bumped "(Vn)" marker) and swaps it in,
+  // at the user's explicit request. Available for any grid shown in play mode
+  // (freshly generated or loaded from the library alike), since either
+  // way it carries an `id` displayFinalGrid() just marked seen.
+  recomputeBtn.hidden = false;
+  recomputeBtn.disabled = false;
   // Hidden by default on every fresh grid, at the user's explicit
   // request, regardless of whatever the *previous* grid's own toggle
   // state was left at.
@@ -2203,6 +2246,9 @@ async function renderLibraryList() {
           // l'utilisateur : "Par défaut, n'afficher que les grilles dans
           // la langue de l'interface".
           language_filter: libraryLanguageFilter.value,
+          // "all" ou easy/medium/hard — "Tous les niveaux" par défaut, ne
+          // suit pas la langue de l'interface (voir #library-difficulty-filter).
+          difficulty_filter: libraryDifficultyFilter.value,
           seen_filter: librarySeenFilter.value,
           seen_ids: loadSeenGridIds(),
         }),
@@ -2328,14 +2374,19 @@ libraryBtn.addEventListener("click", () => {
 
 libraryCloseBtn.addEventListener("click", hideLibraryPanel);
 
-// Les deux sélecteurs en haut de la Bibliothèque : filtre de langue
-// (toutes / une langue) et filtre "déjà vues" (toutes / non vues / déjà
+// Les trois sélecteurs en haut de la Bibliothèque : filtre de langue
+// (toutes / une langue / bilingue), filtre de niveau (tous les niveaux /
+// easy / medium / hard) et filtre "déjà vues" (toutes / non vues / déjà
 // vues). Chaque changement repart de la page 1 et re-rend la liste. Le
 // filtre de langue vaut par défaut la langue de l'interface et suit ses
-// changements (voir le handler de #language plus bas), à la demande
-// explicite de l'utilisateur.
+// changements (voir le handler de #language plus bas) ; le filtre de
+// niveau reste sur "Tous les niveaux" et ne suit pas la langue.
 libraryLanguageFilter.value = uiLanguage;
 libraryLanguageFilter.addEventListener("change", () => {
+  libraryCurrentPage = 1;
+  renderLibraryList();
+});
+libraryDifficultyFilter.addEventListener("change", () => {
   libraryCurrentPage = 1;
   renderLibraryList();
 });
@@ -2808,6 +2859,7 @@ async function runGeneration(startJob) {
   solutionBtn.hidden = true;
   checkBtn.hidden = true;
   definitionsBtn.hidden = true;
+  recomputeBtn.hidden = true;
   // Shown again in case a *previous* generation's own result already
   // hid it (see below) — the player can still change their mind about
   // seeing preview letters for this new run, right from the start.
@@ -2943,5 +2995,61 @@ stopBtn.addEventListener("click", async () => {
   } catch (err) {
     // Best-effort — if the connection itself is down, pollJob()'s own
     // error handling will surface that on its next poll anyway.
+  }
+});
+
+// "Recalculer" button, at the user's explicit request: re-runs only clue
+// generation for the currently displayed grid, saves it as a brand new
+// library copy whose title gets a bumped "(Vn)" marker ("Graines" ->
+// "Graines (V2)" -> "Graines (V3)"; the original library record is left
+// untouched), and swaps the displayed grid for the new copy. The backend
+// job (POST /api/recompute → _run_recompute_job)
+// reuses the same JOBS registry as a generation, so pollJob() and
+// displayFinalGrid() work unchanged — only the HTTP call that starts the
+// job differs from runGeneration()'s own flow, and none of the
+// generation-specific UI (stop/continue buttons, preview reveal toggle)
+// applies here, so this deliberately does not reuse runGeneration().
+recomputeBtn.addEventListener("click", async () => {
+  if (!puzzle || !puzzle.id || recomputeBtn.disabled || generationInProgress) return;
+  const t = I18N[uiLanguage];
+  const gridId = puzzle.id;
+
+  recomputeBtn.disabled = true;
+  generationInProgress = true;
+  // Wipe any stale attempt-preview history left over from an earlier
+  // generation (displayFinalGrid()/library loads don't clear it), the
+  // same way runGeneration() does at the start of a fresh run — pollJob()
+  // below records the recompute's own "final grid" preview into it.
+  hideAttemptPreview();
+  setStatus(t.statusRecomputing, false);
+
+  try {
+    let response;
+    try {
+      response = await fetchWithTimeout("/api/recompute", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ grid_id: gridId }),
+      }, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      throw new Error(t.errorConnectionLost);
+    }
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+    }
+    currentJobId = data.job_id;
+    const newGrid = await pollJob(data.job_id, t);
+    displayFinalGrid(newGrid);
+    setStatus(t.statusRecomputed, false);
+  } catch (err) {
+    setStatus(err.message, !(err instanceof CancelledError));
+  } finally {
+    currentJobId = null;
+    generationInProgress = false;
+    // displayFinalGrid() re-enables recomputeBtn on the success path; on
+    // an error path the grid stays as it was, so re-enable it here too.
+    recomputeBtn.disabled = false;
+    syncRssPanelVisibility();
   }
 });

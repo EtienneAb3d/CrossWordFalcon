@@ -536,6 +536,53 @@ def _normalize(word):
     )
     return stripped.lower()
 
+# Part-of-speech tags Wiktionary/Kaikki uses for a noun, common or proper.
+# A gloss sense with one of these is only sent to the model as grounding
+# for an inflected grid word when its lemma plausibly is that grid word or
+# its plural — see _noun_sense_matches_word.
+_NOUN_POS = {"noun", "name"}
+
+# Languages a plural-normalization rule is defined for below. German
+# plurals are far too irregular for a simple rule, so a German noun sense
+# is never dropped by this check (kept as-is, the pre-existing behavior).
+_NOUN_PLURAL_LANGS = {"fr", "en", "es", "it", "pt"}
+
+
+def _singularize(word, language):
+    """Best-effort singular of `word`, for comparing an inflected grid
+    word against a noun lemma. French, per the user's spec: a trailing
+    "aux" becomes "al" (cheval/chevaux, journal/journaux); otherwise a
+    trailing "s" or "x" is dropped (allers -> aller, cheveux -> cheveu).
+    The other Latin-script languages: drop a trailing "s" (their regular
+    plural). Deliberately simple — a wrong non-match only makes the caller
+    drop a noun sense it could have kept (safe), never the reverse."""
+    w = word.lower()
+    if language == "fr":
+        if w.endswith("aux"):
+            return w[:-3] + "al"
+        if w.endswith(("s", "x")):
+            return w[:-1]
+        return w
+    if w.endswith("s"):
+        return w[:-1]
+    return w
+
+
+def _noun_sense_matches_word(lemma, accented, language):
+    """True when a noun/proper-noun gloss sense of `lemma` is legitimate
+    grounding for the grid word `accented` — i.e. `accented` is that lemma
+    or its plural. French "iras" (a verb form of "aller") must not be
+    clued via the *noun* "aller" even though "aller" is one of its
+    canonical forms; "allers" (plural of the noun "aller") legitimately
+    can. A language with no plural rule here (German) always matches, so
+    its noun senses are never dropped."""
+    if language not in _NOUN_PLURAL_LANGS:
+        return True
+    lemma_l = lemma.lower()
+    accented_l = accented.lower()
+    return accented_l == lemma_l or _singularize(accented_l, language) == lemma_l
+
+
 # All five supported languages (fr/en/de/es/it) use the Latin alphabet —
 # small local models occasionally drift into a CJK/Cyrillic/Hebrew/etc.
 # fragment mid-clue (seen in testing); reject any candidate that does.
@@ -1370,9 +1417,15 @@ class LLMClueGenerator:
         obscure proper-noun reading — exactly what "easy" must avoid.
         medium/hard keep every sense.
 
+        At every difficulty, a NOUN sense (`pos` in `_NOUN_POS`) is dropped
+        unless its lemma is this grid word or its plural
+        (`_noun_sense_matches_word`): the grid word "iras" has "aller"
+        among its canonical forms but is a verb form, so the noun "aller"
+        must not be sent as a definition; "allers" (the plural of the noun
+        "aller") keeps it. Non-noun senses are never affected by this.
+
         Returns "" when this word has no canonical form with dictionary
-        coverage (or, in "easy", none left once `name` senses are
-        removed)."""
+        coverage (or none left once the filters above remove the rest)."""
         _, accented, canonical = entry
         glosses_by_lemma = find_glosses_for_canonicals(canonical, language)
         drop_name_senses = difficulty == "easy"
@@ -1381,6 +1434,15 @@ class LLMClueGenerator:
             for lemma in canonical
             for sense in glosses_by_lemma.get(lemma, [])
             if not (drop_name_senses and sense.get("pos") == "name")
+            # Drop a NOUN sense whose lemma isn't this grid word or its
+            # plural: "iras" has "aller" among its canonical forms but is a
+            # verb form, so the noun "aller" must not be sent; "allers" (the
+            # noun's plural) legitimately keeps it. Verb/adjective/etc.
+            # senses are unaffected.
+            if not (
+                sense.get("pos") in _NOUN_POS
+                and not _noun_sense_matches_word(lemma, accented, language)
+            )
             for gloss in sense["glosses"]
         ]
         if not word_parts:
@@ -1400,7 +1462,21 @@ class LLMClueGenerator:
             "sense is shown, treat that as a chance to make your 3 "
             "candidates genuinely different by drawing on different "
             "senses, rather than 3 rewordings of one — but each must "
-            "still trace back to a specific line above."
+            "still trace back to a specific line above.\n\n"
+            "NOTE — every line above was found by looking up this word's "
+            "ROOT / canonical form(s), NOT the exact form "
+            f'"{accented}" that goes in the grid. A root\'s entry can '
+            f'therefore list senses that "{accented}" itself cannot '
+            "actually carry. Example: English \"ares\" is looked up under "
+            "its root \"are\", whose entry covers BOTH \"are\" = a unit "
+            "of area (100 m²), of which \"ares\" is the valid plural, AND "
+            "\"are\" = a present-tense form of the verb \"be\" — but "
+            "\"ares\", with the -s, can never be a form of \"be\". Before "
+            f'you build a clue from any sense above, check it is '
+            f'grammatically possible for "{accented}" itself: right part '
+            "of speech, right number for a noun, right person/tense for a "
+            f'verb form. Silently drop any sense "{accented}" cannot '
+            "express, even though it is printed above."
         )
 
     def _build_system_prompt(self, difficulty, language):
@@ -1466,7 +1542,14 @@ class LLMClueGenerator:
             "means the verb 'to fall' — it has nothing to do with an "
             "English 'choir'/a singing group). Inventing a plausible-"
             "sounding meaning that is not in the definitions is the single "
-            "worst mistake you can make here.\n\n"
+            "worst mistake you can make here. One further care: that "
+            "section is looked up by the word's ROOT form, so it can also "
+            "list a sense that only a DIFFERENT inflection of the word "
+            "could carry (e.g. a verb-form sense for a word that is "
+            "plainly a plural noun — English \"ares\" is the plural of "
+            "\"are\" the area unit, never a form of \"be\", even though "
+            "its root \"are\" is one). Drop any such sense, per rule 4 "
+            "and the NOTE at the end of that section.\n\n"
             "Propose exactly 3 different possible crossword clues for that "
             "single word, all matching the difficulty level above.\n\n"
             "Rules:\n"

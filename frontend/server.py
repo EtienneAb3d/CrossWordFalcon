@@ -208,6 +208,25 @@ async def proxy_generate_continue(job_id: str):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/recompute")
+async def proxy_recompute(request: Request):
+    """Relaie le bouton "Recalculer" de l'interface (voir script.js) vers le
+    back — même schéma que proxy_generate : le back répond immédiatement
+    avec un job_id, que le navigateur sonde ensuite via
+    /api/generate/status/{job_id}."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/recompute",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.get("/api/version")
 async def version():
     try:
