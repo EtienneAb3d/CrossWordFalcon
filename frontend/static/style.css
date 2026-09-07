@@ -399,13 +399,18 @@ button:disabled {
   width: 100%;
 }
 
-#clues-direction-row {
+/* Stacked vertically (like the virtual keyboard's own
+   #virtual-keyboard-direction-col) rather than side by side, at the
+   user's explicit request, to give the definition panel next to it a
+   little more width. */
+#clues-direction-col {
   display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
   gap: 0.25rem;
 }
 
-#clues-direction-row .toggle-btn {
+#clues-direction-col .toggle-btn {
   font-size: 1rem;
   padding: 0.15rem 0.6rem;
 }

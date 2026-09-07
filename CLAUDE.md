@@ -6516,6 +6516,29 @@ of that kind ships here.
   cosmetic — unrelated to the chat `active_direction` plumbing above,
   though both are driven by the same `activeDirection` state.
 
+  `#hover-definition` (the fixed 3-line panel under the grid) now shows
+  the **selected (clicked) word's** own clue whenever nothing is hovered,
+  instead of the idle placeholder, at the user's explicit request. New
+  `renderHoverDefinitionForSelection()` (`frontend/static/script.js`)
+  resolves the word through the selected cell in `activeDirection` (same
+  word the `.selected-word` band marks), reuses that word's own
+  `.clue-segment` text (the spans stay in the DOM even while the clue
+  lists are hidden), and falls back to `renderHoverDefinitionPlaceholder()`
+  only when there is no grid / no selection / the solution is shown / the
+  cell has no real word in that direction — it replaces the bare
+  placeholder call at `clearHighlights()`, `renderGrid()`'s reset,
+  `applyTranslations()`, and `setActiveDirection()` (so flipping the
+  `→`/`↓` buttons or Shift/Caps Lock with a cell selected immediately
+  re-points the panel — and the `.selected-word` band — at the other
+  word through that cell). Hover still wins while the mouse is over a
+  word.
+  Separately, the panel's own duplicated `→`/`↓` direction buttons were
+  stacked vertically (`#clues-direction-row` → `#clues-direction-col`,
+  `flex-direction: column`, mirroring `#virtual-keyboard-direction-col`)
+  to give the definition text a bit more width — no JS change (the
+  wrapper is only referenced via its child buttons' ids). See the
+  `style-guide` SKILL for both.
+
   **David FALCON kept giving hints about a word from earlier in the
   conversation instead of the one selected now** — reported with a
   `CHATBOT_DEBUG` trace showing a 3-turn bilingual conversation: turn 1

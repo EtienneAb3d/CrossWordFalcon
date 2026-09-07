@@ -2144,3 +2144,36 @@ English (see `project-best-practices`).
   confirmed in an actual browser** — same tooling limitation noted
   throughout this file; verified structurally (a real JS syntax check
   via `esprima`, a CSS brace-balance check) instead.
+
+- `#hover-definition` (the permanent 3-line panel under the grid) now
+  shows the **selected (clicked) word's** own clue when nothing is
+  hovered, instead of the idle "help" placeholder, at the user's
+  explicit request ("quand il n'y a pas de survol et qu'une case est
+  sélectionnée, la définition doit être celle du mot cliqué, pas un
+  cadre vide avec le help"). New `renderHoverDefinitionForSelection()`
+  (`frontend/static/script.js`) replaces the bare
+  `renderHoverDefinitionPlaceholder()` call at every non-hover site
+  (`clearHighlights()`, `renderGrid()`'s reset, `applyTranslations()`):
+  it resolves the word running through the selected cell in the current
+  fill direction (`activeDirection` — the same word the light-green
+  `.selected-word` band marks) and reuses that word's own
+  `.clue-segment` text, exactly as `highlightWordAt()` does on hover;
+  it falls back to the placeholder only when there is no grid, no
+  selection, the solution is shown, or the selected cell has no real
+  word in that direction. Hover still takes precedence while the mouse
+  is over a word — this only changes the *idle* state.
+
+- The definition panel's own duplicated direction buttons (`→`/`↓`)
+  moved from side-by-side to **stacked vertically**: `#clues-direction-row`
+  renamed to `#clues-direction-col`, `flex-direction: column` added —
+  mirroring the virtual keyboard's own `#virtual-keyboard-direction-col`,
+  at the user's explicit request, to give `#hover-definition` next to it
+  a little more width. No JS change (the wrapper is only ever referenced
+  by its child buttons' own ids, never its own).
+
+- `setActiveDirection()` now also refreshes `#hover-definition` (via
+  `renderHoverDefinitionForSelection()`, only when nothing is hovered)
+  and the `.selected-word` band, at the user's explicit request — so
+  flipping the `→`/`↓` buttons or Shift/Caps Lock with a cell selected
+  updates the definition (and the green band) to the newly-active
+  direction's word immediately, not just on the next hover/re-render.

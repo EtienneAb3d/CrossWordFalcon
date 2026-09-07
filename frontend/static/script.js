@@ -26,10 +26,11 @@ function applyTranslations() {
     if (t[key]) el.setAttribute("title", t[key]);
   });
   renderSystemInfoTooltip();
-  // Only redraws the idle-state placeholder, never a live hover
-  // definition (that's puzzle content, in the grid's own language, not
-  // interface chrome — see highlightWordAt()/clearHighlights() below).
-  if (!hoveredGridCell) renderHoverDefinitionPlaceholder();
+  // Only redraws the idle-state placeholder (or the selected word's own
+  // clue, if a cell is clicked — see renderHoverDefinitionForSelection),
+  // never a live hover definition (that's puzzle content, in the grid's
+  // own language, not interface chrome — see highlightWordAt() below).
+  if (!hoveredGridCell) renderHoverDefinitionForSelection();
   renderRssList();
 }
 
@@ -42,6 +43,33 @@ function applyTranslations() {
 function renderHoverDefinitionPlaceholder() {
   hoverDefinition.textContent = I18N[uiLanguage].hoverDefinitionPlaceholder;
   hoverDefinition.classList.add("placeholder");
+}
+
+// What #hover-definition should show when NOTHING is hovered: at the
+// user's request, the clue of the currently *selected* (clicked) word —
+// the word running through the selected cell in the current fill
+// direction (activeDirection), the same word the light-green band marks
+// — rather than the idle placeholder. Falls back to the placeholder when
+// there is no grid, no selection, the solution is shown, or the selected
+// cell has no real word in that direction. Reuses the matching
+// .clue-segment's own text (those spans stay in the DOM even while the
+// clue lists are hidden), the same source highlightWordAt() uses on hover.
+function renderHoverDefinitionForSelection() {
+  if (puzzle && selected && !showSolution) {
+    const cells = wordCellsAt(selected.row, selected.col, activeDirection);
+    if (cells.length >= 2) {
+      const start = cells[0];
+      const segment = document.querySelector(
+        `.clue-segment[data-row="${start.row}"][data-col="${start.col}"][data-direction="${activeDirection}"]`,
+      );
+      if (segment) {
+        hoverDefinition.textContent = segment.textContent;
+        hoverDefinition.classList.remove("placeholder");
+        return;
+      }
+    }
+  }
+  renderHoverDefinitionPlaceholder();
 }
 
 const form = document.getElementById("generate-form");
@@ -533,7 +561,7 @@ function clearHighlights() {
   document.querySelectorAll(".cell.word-highlight").forEach((el) => el.classList.remove("word-highlight"));
   document.querySelectorAll(".clue-segment.hover-highlight").forEach((el) => el.classList.remove("hover-highlight"));
   hoveredWord = null;
-  renderHoverDefinitionPlaceholder();
+  renderHoverDefinitionForSelection();
 }
 
 // Shared by both hover directions (grid -> clue list and clue list ->
@@ -633,10 +661,12 @@ function hoverDirectionFromEvent(event) {
 // virtual keyboard's own pair and its duplicate next to "Verticalement",
 // see their shared declaration above) at once, at the user's explicit
 // request that both button pairs stay in sync with each other and with
-// Shift/CapsLock. Also refreshes the currently-hovered word's own
-// highlight, if the mouse is over the grid right now, so switching
-// direction (by button or by Shift/CapsLock) is reflected immediately
-// rather than only on the next mouse movement.
+// Shift/CapsLock. Also refreshes, immediately (not only on the next
+// mouse move / re-render), everything that depends on the direction for
+// the cell currently in focus: the hovered word's highlight if the
+// mouse is over the grid, the light-green selected-word band, and — when
+// nothing is hovered but a cell is selected — the definition panel under
+// the grid, so it follows the new direction's word through that cell.
 function setActiveDirection(direction) {
   activeDirection = direction;
   virtualKeyboardAcrossBtn.classList.toggle("active", direction === "across");
@@ -644,6 +674,7 @@ function setActiveDirection(direction) {
   cluesDirectionAcrossBtn.classList.toggle("active", direction === "across");
   cluesDirectionDownBtn.classList.toggle("active", direction === "down");
   if (hoveredGridCell) highlightWordAt(hoveredGridCell.row, hoveredGridCell.col, direction);
+  else renderHoverDefinitionForSelection();
   applySelectedWordHighlight();
 }
 
@@ -1309,7 +1340,7 @@ function renderGrid() {
   // any hover state referring to it) is about to become stale.
   cellElements = new Map();
   hoveredGridCell = null;
-  renderHoverDefinitionPlaceholder();
+  renderHoverDefinitionForSelection();
 
   const corner = document.createElement("div");
   corner.className = "cell header-cell";

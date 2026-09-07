@@ -220,8 +220,17 @@ Once generation completes, the search-progress panel disappears and
   through the same cell. Backspace/Delete clears the selected cell
   without moving.
   Hovering a cell (or a clue line, see below) outlines every cell of that
-  same word (`wordCellsAt`) and, once "Définitions" is on, shows that
-  word's own clue underneath the grid (`#hover-definition`).
+  same word (`wordCellsAt`) and shows that word's own clue in a fixed
+  3-line panel underneath the grid (`#hover-definition`). When nothing is
+  hovered, that panel shows the clue of the currently selected (clicked)
+  word instead — the word running through the selected cell in the
+  current Across/Down direction (`renderHoverDefinitionForSelection`) —
+  and only falls back to a generic help line when no cell is selected.
+  A small `→`/`↓` pair beside the panel switches the Across/Down
+  direction (the same shared state as the virtual keyboard's own arrows,
+  Shift/Caps Lock, and grid hover); switching it with a cell selected
+  immediately updates the panel (and the green word band) to the other
+  word through that cell.
 - **Horizontalement/Verticalement (Across/Down)** clue lists
   (`#clues-across`/`#clues-down`, `renderClueLines`) — every word's own
   clue, grouped by its starting cell number; hidden until "Définitions"
