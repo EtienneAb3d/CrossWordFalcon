@@ -20,6 +20,12 @@
            pseudo" traduit tant qu'aucun pseudo n'est saisi. -->
       <button type="button" id="user-pseudo" data-i18n-aria="userPseudoLabel"
               data-i18n-title="userPseudoLabel" hidden></button>
+      <!-- Compteur "x en ligne" — nombre d'utilisateurs actifs distincts
+           (dédoublonnés par pseudo), rafraîchi toutes les 2s via
+           POST /api/presence. À gauche du badge de version, à la demande
+           explicite de l'utilisateur. Caché jusqu'au premier battement
+           de cœur réussi. -->
+      <span id="online-count" class="badge" hidden></span>
       <span id="version-badge" class="badge" hidden></span>
       <span id="info-badge" class="info-badge" hidden tabindex="0" role="button" data-i18n-aria="infoBadgeLabel">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">

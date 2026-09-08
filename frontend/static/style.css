@@ -1906,3 +1906,12 @@ button:disabled {
 #welcome-accept-btn {
   align-self: flex-end;
 }
+
+/* Compteur "x en ligne" — même pilule neutre que #version-badge (class
+   "badge"), juste teinté en vert : convention quasi universelle pour
+   "en ligne / live", et ça distingue les deux pilules côte à côte.
+   Réutilise --correct-fg (déjà un vert foncé du thème), pas de nouveau
+   token. */
+#online-count {
+  color: var(--correct-fg);
+}

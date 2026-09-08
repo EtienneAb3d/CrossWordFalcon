@@ -6809,6 +6809,97 @@ servers:
   throughout this file. The backend half (`app.py`/`grid_store.py`) needs
   a `./run_Falcon.sh` restart to take effect.
 
+- **"x en ligne" presence counter** (`#online-count` in `#page-header`,
+  `frontend/static/script.js`'s `pingPresence`/`renderOnlineCount`,
+  `backend/app.py`'s `POST /api/presence`), at the user's explicit
+  request: "afficher le nombre de sessions utilisateur actives 'x en
+  ligne'... Mettre à jour ce compteur toutes les 2s... Considérer un
+  utilisateur comme non actif quand il n'y a pas eu de rafraîchissement
+  de son compteur depuis plus de 60 secondes." + "Ne compter que les
+  utilisateurs uniques en dédoublonnant par rapport aux pseudo." Every
+  open tab POSTs `/api/presence` every `PRESENCE_INTERVAL_MS` (2s) with
+  `{session_id, pseudo}` — `session_id` a stable per-page-load id
+  (`crypto.randomUUID()`, same fallback as `newChatSessionId`, but a
+  *separate* id so a chat reset doesn't change the online identity),
+  `pseudo` the current `userPseudo` (`""` until the welcome overlay is
+  accepted). The heartbeat's own fetch timeout (`PRESENCE_TIMEOUT_MS`,
+  4s) is deliberately short so a slow ping can't outlive its interval; a
+  failed/`!ok` ping is swallowed (the badge keeps its last value, the
+  next ping self-corrects). `POST /api/presence` (`PresenceRequest`:
+  `session_id` 1-200 chars, `pseudo` optional) updates `_PRESENCE`
+  (`{session_id: {last_seen: time.monotonic(), pseudo}}` — a plain module
+  dict, fine since the back end is single-process), prunes every entry
+  older than `PRESENCE_TTL_S` (60s) on every call, hard-caps at
+  `MAX_PRESENCE_ENTRIES` (5000, dropping oldest) against abuse, then
+  returns `{"count": N}` where N is the number of distinct keys — a
+  non-empty `pseudo` de-duplicates (two tabs of the same person → one),
+  a still-pseudo-less session counts once under `"\x00" + session_id`.
+  `frontend/server.py` gained the matching `proxy_presence` route (rule
+  15). `#online-count` is a `.badge`-styled pill placed just before
+  `#version-badge`, tinted `--correct-fg` green ("online" convention),
+  `hidden` until the first successful heartbeat; `renderOnlineCount()`
+  (called from `applyTranslations()`) re-localises "x en ligne" / "x
+  online" (`i18n.js`'s `onlineCount(n)`, all 6 languages) on a UI
+  language change from `lastOnlineCount`. The polling is started once at
+  the very end of `script.js` (immediate call + `setInterval`), after
+  every helper/const it needs is defined. Verified: `py_compile` on
+  `app.py`/`frontend/server.py`; a `TestClient` exercise of
+  `/api/presence` confirming the pseudo de-dup (s1+s2 "Alice" → 1, +s3
+  "Bob" → 2, +two pseudo-less sessions → 4), the 60s expiry (s3 ages out
+  → back to 3), and a 422 on an empty `session_id`; `esprima` on
+  `script.js`/`i18n.js`; a CSS brace-balance check. **Not yet visually
+  confirmed in a browser.** Needs a `./run_Falcon.sh` restart (new
+  backend endpoint + new frontend proxy route) — until then `pingPresence`
+  just gets a 405 and the badge stays hidden.
+
+  **Daily online-visitor log** (`LOG_USERS/`), at the user's explicit
+  request: "le Back doit générer un fichier par jour dans le dossier
+  LOG_USERS, avec consigné dans ce fichier une nouvelle ligne avec la
+  date et l'heure d'un changement dans le nombre des visiteurs, le nombre
+  de visiteurs, puis la liste des pseudos actifs après changement de ce
+  nombre." One `LOG_USERS/<YYYY-MM-DD>.log` file per day (project root,
+  gitignored — a generated log, same convention as `LOG_LLM/`/`LOG_CHAT/`,
+  created lazily on first write via `mkdir(parents=True, exist_ok=True)`),
+  one appended line per genuine change of the **distinct-visitor count**
+  (never one per change of pseudo composition at a constant count — the
+  request says "un changement dans le *nombre*"), formatted
+  `YYYY-MM-DD HH:MM:SS | <count> | <pseudo1, pseudo2, ...>` (an `—` in the
+  last field when the count is 0). Each pseudo-less session is listed as
+  `(anonyme)`, one per session, so the list length always equals the
+  count. The heartbeat/purge/cap logic (previously inline in `presence()`)
+  is factored into `_presence_snapshot(record=None)` — under a new module-
+  level `_PRESENCE_LOCK` (a `threading.Lock`): `POST /api/presence` runs
+  in Starlette's own threadpool (a plain `def` route) and the new
+  `_presence_sweep_scheduler` coroutine runs on the event loop, so both
+  can now recompute the count concurrently — without the lock, one's purge
+  loop could raise mid-iteration while the other mutates `_PRESENCE`, and
+  both could observe the same transition and each append a line.
+  `_presence_snapshot` returns `(count, pseudos, changed)` and updates the
+  module-level `_last_logged_presence_count` marker *inside* the lock the
+  moment it reports `changed=True`, so exactly one caller ever sees a
+  given transition; the disk write (`_write_users_log`, best-effort, a
+  failure only `logger.warning`ed, never raised — same convention as every
+  other file write in this project) always happens outside the lock.
+  `_last_logged_presence_count` starts `None`, so the first heartbeat
+  after a server launch/restart logs the current count — which
+  deliberately also marks a restart in the timeline. `_presence_sweep_
+  scheduler` (registered alongside `_rss_daily_scheduler` in the single
+  `@app.on_event("startup")` hook) recomputes every `PRESENCE_SWEEP_
+  INTERVAL_S` (10s) purely to catch a *drop* in the count once heartbeats
+  stop entirely (everyone left) — without it, the purge only ever runs
+  inside `POST /api/presence`, so the transition to 0 would never be
+  logged until the next visitor connected; its own disk write goes through
+  `asyncio.to_thread` so it never blocks the event loop. No frontend or
+  proxy change (the `/api/presence` route/shape/response are unchanged —
+  still `{"count": N}`). Verified: an isolated exercise of `_presence_
+  snapshot`/`_write_users_log` (anonymous→named at constant count writes
+  no line; a genuine +1 and the sweep's drop-to-0 each write one;
+  `(anonyme)` entries match the count) and a real end-to-end pass through
+  the actual `POST /api/presence` route via `TestClient` (3 lines written
+  for `1 → 2 → (unchanged, skipped) → 3`, `Zoé`/`marc` sorted case-
+  insensitively, anonymous session shown as `(anonyme)`); `py_compile` on
+  `backend/app.py`.
+
 `data/wordlist_fr_full.tsv` is the CLI's default dictionary (`--wordlist`); the backend
 picks among `data/wordlist_{fr,en,de,es,it,pt}_full.tsv` per the request's `language` (see
 `backend/app.py`'s `WORDLISTS`). There is no plain-text fallback list checked into the

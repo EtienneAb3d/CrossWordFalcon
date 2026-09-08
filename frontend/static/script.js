@@ -32,6 +32,9 @@ function applyTranslations() {
   // own language, not interface chrome — see highlightWordAt() below).
   if (!hoveredGridCell) renderHoverDefinitionForSelection();
   renderRssList();
+  // "x en ligne" — texte paramétré (voir i18n.js), à ré-appliquer au
+  // changement de langue à partir de la dernière valeur connue.
+  renderOnlineCount();
 }
 
 // Idle state for #hover-definition (see the style-guide SKILL) — shown
@@ -107,6 +110,7 @@ const continueBtn = document.getElementById("continue-btn");
 const cluesEl = document.getElementById("clues");
 const downCluesSection = document.getElementById("down-clues-section");
 const versionBadge = document.getElementById("version-badge");
+const onlineCountEl = document.getElementById("online-count");
 const infoBadge = document.getElementById("info-badge");
 const infoTooltip = document.getElementById("info-tooltip");
 const attemptPreview = document.getElementById("attempt-preview");
@@ -1665,6 +1669,47 @@ let userPseudo = "";
 // throw); the standalone renderChatWelcome() call near its own
 // definition handles the initial render regardless.
 let uiBootstrapped = false;
+
+// --- "x en ligne" presence counter -----------------------------------
+// At the user's explicit request: show, left of the version badge, how
+// many distinct active users there are (de-duplicated by pseudo — two
+// tabs of the same person count once), refreshed every 2s; a user is
+// dropped after 60s without a heartbeat (enforced server-side, see
+// backend/app.py's POST /api/presence).
+const PRESENCE_INTERVAL_MS = 2000;
+const PRESENCE_TIMEOUT_MS = 4000; // short: a heartbeat must not outlive its own interval
+const presenceSessionId = (window.crypto && window.crypto.randomUUID)
+  ? window.crypto.randomUUID()
+  : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+// Last count received; kept so renderOnlineCount() can re-localise the
+// "x en ligne" text on a language change without waiting for the next
+// heartbeat. `null` = no successful heartbeat yet (badge stays hidden).
+let lastOnlineCount = null;
+
+function renderOnlineCount() {
+  if (lastOnlineCount === null) return;
+  onlineCountEl.textContent = I18N[uiLanguage].onlineCount(lastOnlineCount);
+  onlineCountEl.hidden = false;
+}
+
+async function pingPresence() {
+  try {
+    const response = await fetchWithTimeout("/api/presence", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ session_id: presenceSessionId, pseudo: userPseudo || "" }),
+    }, PRESENCE_TIMEOUT_MS);
+    if (!response.ok) return;
+    const data = await response.json();
+    if (typeof data.count === "number") {
+      lastOnlineCount = data.count;
+      renderOnlineCount();
+    }
+  } catch (err) {
+    // Transient failure — keep showing the last known count; the next
+    // heartbeat (2s later) self-corrects.
+  }
+}
 
 // Applies `lang` everywhere: the interface's own text, both language
 // selectors (#language and the welcome overlay's own #welcome-language,
@@ -3267,3 +3312,9 @@ recomputeBtn.addEventListener("click", async () => {
     syncRssPanelVisibility();
   }
 });
+
+// Démarre le battement de cœur "x en ligne" — un appel immédiat puis
+// toutes les PRESENCE_INTERVAL_MS (2s). Placé en toute fin de fichier
+// pour que fetchWithTimeout et toutes les constantes soient définies.
+pingPresence();
+setInterval(pingPresence, PRESENCE_INTERVAL_MS);

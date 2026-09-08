@@ -27,6 +27,7 @@ import multiprocessing
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -276,6 +277,10 @@ async def _rss_daily_scheduler():
 @app.on_event("startup")
 async def _start_rss_scheduler():
     asyncio.create_task(_rss_daily_scheduler())
+    # Balayage périodique de la présence : capte une baisse d'effectif
+    # (LOG_USERS/) même quand plus aucun battement n'arrive — voir
+    # _presence_sweep_scheduler.
+    asyncio.create_task(_presence_sweep_scheduler())
 
 # In-memory job store: job_id -> {status, step, result, error}. A single
 # uvicorn process (no --workers, see run_Falcon.sh) is all this app ever
@@ -296,6 +301,59 @@ LIBRARY_PAGE_SIZE = 20
 # every path that accepts one — a longer value is silently trimmed, never
 # rejected, so a stray extra character can't block a generation.
 MAX_PSEUDO_LENGTH = 15
+
+# "x en ligne" counter, at the user's explicit request. Each open web-UI
+# tab POSTs /api/presence every 2s with its own session id + current
+# pseudo; a session is "active" while its last ping is under
+# PRESENCE_TTL_S old. The count is de-duplicated by pseudo (two tabs of
+# the same person = one user, at the user's explicit follow-up request);
+# a still-pseudo-less session (welcome overlay not accepted yet) counts
+# as its own anonymous unit, keyed by session id. `_PRESENCE` is a plain
+# module dict — fine, since the back end always runs single-process (no
+# --workers, see above) — pruned of stale entries on every request and
+# hard-capped so an abusive client can't grow it without bound.
+PRESENCE_TTL_S = 60
+MAX_PRESENCE_ENTRIES = 5000
+_PRESENCE = {}  # session_id -> {"last_seen": monotonic float, "pseudo": str}
+
+# Journal du nombre de visiteurs en ligne, à la demande explicite de
+# l'utilisateur : "le Back doit générer un fichier par jour dans le dossier
+# LOG_USERS, avec consigné dans ce fichier une nouvelle ligne avec la date
+# et l'heure d'un changement dans le nombre des visiteurs, le nombre de
+# visiteurs, puis la liste des pseudos actifs après changement de ce
+# nombre." Un fichier `LOG_USERS/<AAAA-MM-JJ>.log` par jour (racine du
+# projet, gitignoré — artefact généré, même convention que LOG_LLM/,
+# LOG_CHAT/), une ligne ajoutée uniquement quand le *nombre* d'utilisateurs
+# distincts change (jamais quand seule la composition des pseudos change à
+# effectif constant — c'est bien "un changement dans le nombre" qui est
+# demandé). Écriture best-effort : un échec est seulement journalisé,
+# jamais laissé casser un battement de présence.
+USERS_LOG_DIR = _PROJECT_ROOT / "LOG_USERS"
+
+# Un `threading.Lock` protège maintenant `_PRESENCE` et
+# `_last_logged_presence_count` : `POST /api/presence` (fonction `def`
+# synchrone, exécutée dans le pool de threads de Starlette) et le balayage
+# périodique `_presence_sweep_scheduler` (coroutine sur la boucle
+# d'événements) peuvent tous deux recalculer l'effectif — sans verrou, la
+# purge des sessions expirées d'un côté pourrait lever pendant une écriture
+# de l'autre, et deux appelants pourraient voir simultanément « l'effectif
+# a changé » et écrire une ligne en double. Le verrou ne couvre que le
+# recalcul en mémoire ; l'écriture disque se fait toujours en dehors.
+_PRESENCE_LOCK = threading.Lock()
+
+# Dernier effectif distinct consigné dans LOG_USERS (None au démarrage, si
+# bien que le tout premier battement après lancement/redémarrage du serveur
+# consigne une ligne — ce qui marque aussi un redémarrage dans la
+# chronologie).
+_last_logged_presence_count = None
+
+# Le balayage périodique existe pour capter une *baisse* d'effectif quand
+# les battements s'arrêtent (tout le monde a quitté) : sans lui, la purge
+# ne tourne que dans `POST /api/presence`, donc le passage à 0 ne serait
+# jamais consigné avant qu'un nouveau visiteur ne se connecte. 10s est
+# assez fin devant PRESENCE_TTL_S (60s) et coûte quasiment rien (itération
+# d'un dict d'au plus MAX_PRESENCE_ENTRIES entrées).
+PRESENCE_SWEEP_INTERVAL_S = 10
 
 # job_id -> multiprocessing.Event, kept *separate* from JOBS itself, at the
 # user's explicit request (bouton "Stop") — neither a threading.Event nor a
@@ -567,6 +625,123 @@ def _make_should_pause(queue, task):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+class PresenceRequest(BaseModel):
+    """Corps de POST /api/presence — battement de cœur d'un onglet de
+    l'interface web (toutes les 2s). `session_id` : identifiant opaque
+    stable pour ce chargement de page ; `pseudo` : pseudo courant de
+    l'utilisateur (vide tant que le panneau d'accueil n'est pas validé).
+    Bornés défensivement — ce sont des chaînes fournies par le client,
+    utilisées uniquement comme clés en mémoire, jamais sur disque."""
+    session_id: str = Field(..., min_length=1, max_length=200)
+    pseudo: Optional[str] = None
+
+
+def _presence_snapshot(record=None):
+    """Sous `_PRESENCE_LOCK` : enregistre éventuellement un battement
+    (`record` = `(session_id, entry)`), purge les sessions expirées,
+    applique le plafond anti-abus, puis renvoie
+    `(count, pseudos, changed)` :
+
+    - `count`  : nombre d'utilisateurs actifs distincts — dédoublonné par
+      pseudo (deux onglets d'une même personne = un utilisateur), une
+      session encore sans pseudo comptant pour elle-même ;
+    - `pseudos`: la liste à consigner — les pseudos distincts triés
+      (insensible à la casse), suivis d'un `(anonyme)` par session encore
+      sans pseudo, de sorte que `len(pseudos) == count` ;
+    - `changed`: `True` si et seulement si `count` diffère du dernier
+      effectif consigné dans LOG_USERS — et, dans ce cas, met à jour ce
+      marqueur ici même (sous le verrou), de sorte qu'un seul appelant
+      voit jamais une transition donnée et écrit une seule ligne.
+
+    Le verrou ne couvre que ce recalcul en mémoire ; l'appelant fait
+    l'écriture disque (`_write_users_log`) en dehors."""
+    global _last_logged_presence_count
+    with _PRESENCE_LOCK:
+        now = time.monotonic()
+        if record is not None:
+            sid, entry = record
+            _PRESENCE[sid] = entry
+        # Purge des sessions expirées — garde le dict borné à « ce qui a
+        # émis un battement dans les PRESENCE_TTL_S (60s) dernières
+        # secondes ».
+        for sid in [s for s, e in _PRESENCE.items()
+                    if now - e["last_seen"] > PRESENCE_TTL_S]:
+            del _PRESENCE[sid]
+        # Filet de sécurité contre un client abusif : si malgré la purge
+        # le dict dépasse le plafond, on retire les plus anciens.
+        if len(_PRESENCE) > MAX_PRESENCE_ENTRIES:
+            for sid, _ in sorted(_PRESENCE.items(),
+                                 key=lambda kv: kv[1]["last_seen"])[
+                : len(_PRESENCE) - MAX_PRESENCE_ENTRIES
+            ]:
+                del _PRESENCE[sid]
+        named = set()
+        anonymous = 0
+        for entry in _PRESENCE.values():
+            if entry["pseudo"]:
+                named.add(entry["pseudo"])
+            else:
+                anonymous += 1
+        count = len(named) + anonymous
+        pseudos = sorted(named, key=str.lower) + ["(anonyme)"] * anonymous
+        changed = count != _last_logged_presence_count
+        if changed:
+            _last_logged_presence_count = count
+        return count, pseudos, changed
+
+
+def _write_users_log(count, pseudos):
+    """Ajoute une ligne à `LOG_USERS/<AAAA-MM-JJ>.log` :
+    `AAAA-MM-JJ HH:MM:SS | <count> | <pseudo1, pseudo2, ...>`. Best-effort
+    — un échec est seulement journalisé, jamais laissé remonter (même
+    convention que toute autre écriture de journal de ce projet)."""
+    try:
+        USERS_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.datetime.now()
+        path = USERS_LOG_DIR / f"{now:%Y-%m-%d}.log"
+        line = (f"{now:%Y-%m-%d %H:%M:%S} | {count} | "
+                f"{', '.join(pseudos) if pseudos else '—'}\n")
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError as exc:
+        logger.warning("echec d'ecriture du journal LOG_USERS: %s", exc)
+
+
+@app.post("/api/presence")
+def presence(req: PresenceRequest):
+    """Enregistre/rafraîchit ce battement de cœur et renvoie
+    `{"count": N}` où N est le nombre d'utilisateurs actifs distincts (voir
+    `_presence_snapshot`). Consigne une ligne dans LOG_USERS/ si ce nombre
+    a changé. À la demande explicite de l'utilisateur."""
+    record = (req.session_id, {
+        "last_seen": time.monotonic(),
+        "pseudo": (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH],
+    })
+    count, pseudos, changed = _presence_snapshot(record)
+    if changed:
+        _write_users_log(count, pseudos)
+    return {"count": count}
+
+
+async def _presence_sweep_scheduler():
+    """Tourne en tâche de fond pour toute la durée du processus : toutes
+    les PRESENCE_SWEEP_INTERVAL_S (10s), recalcule l'effectif de présence
+    et consigne une ligne dans LOG_USERS/ s'il a baissé parce que des
+    battements se sont arrêtés (tout le monde a quitté). Sans ce balayage,
+    la purge ne tourne que dans `POST /api/presence`, donc le passage à 0
+    ne serait jamais consigné avant qu'un nouveau visiteur ne se connecte.
+    Ne lève jamais vers l'appelant — toute erreur est seulement
+    journalisée, jamais laissée interrompre la boucle."""
+    while True:
+        await asyncio.sleep(PRESENCE_SWEEP_INTERVAL_S)
+        try:
+            count, pseudos, changed = _presence_snapshot()
+            if changed:
+                await asyncio.to_thread(_write_users_log, count, pseudos)
+        except Exception:
+            logger.exception("presence: echec du balayage periodique")
 
 
 @app.get("/api/rss")

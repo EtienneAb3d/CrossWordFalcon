@@ -39,8 +39,13 @@ does not reappear).
   the title and the right-hand badges (`#user-pseudo`). While no pseudo
   is set it shows a "set a nickname" label instead. Clicking it reopens
   the welcome panel to change the pseudo or the language.
-- A small pill next to the title (`#version-badge`) shows the app's
-  current version (`GET /api/version`).
+- A small green pill on the right (`#online-count`) shows how many
+  distinct people are using the app right now — "x en ligne / x online".
+  It refreshes every 2 seconds (`POST /api/presence`); tabs sharing the
+  same pseudo count as one person, and someone is dropped from the count
+  60 seconds after their last refresh.
+- A small pill next to it (`#version-badge`) shows the app's current
+  version (`GET /api/version`).
 - An "i" icon next to it (`#info-badge`) reveals a tooltip on hover or
   keyboard focus (`frontend/static/script.js`, `renderSystemInfoTooltip`),
   showing which LLM model writes the clues, whether it runs on CPU or

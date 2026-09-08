@@ -13,6 +13,7 @@ env.sh
 /GRID_STORE/
 /LOG_LLM/
 /LOG_CHAT/
+/LOG_USERS/
 /RSS/
 /SCRAPP/
 *.log

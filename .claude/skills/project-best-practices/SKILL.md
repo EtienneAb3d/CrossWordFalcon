@@ -284,12 +284,15 @@ project's engineering language.
   stateless proxy + static-file server (a fresh `httpx.AsyncClient` per
   request, no cross-request state, no `@app.on_event` scheduler). The
   **back server always runs single-process — never pass `--workers` to
-  `backend.app`**: its `JOBS`/`CANCEL_EVENTS`/`_BACKGROUND_TASKS` dicts,
-  the `GRID_QUEUE`/`CLUES_QUEUE` single-concurrency queues, and the
-  `_rss_daily_scheduler` (`@app.on_event("startup")`) all live in one
-  process's memory and cannot be shared across workers — a job created by
+  `backend.app`**: its `JOBS`/`CANCEL_EVENTS`/`_BACKGROUND_TASKS`/
+  `_PRESENCE` dict, the `GRID_QUEUE`/`CLUES_QUEUE` single-concurrency
+  queues, and the two `@app.on_event("startup")` background tasks
+  (`_rss_daily_scheduler`, `_presence_sweep_scheduler`) all
+  live in one process's memory and cannot be shared across workers — a job created by
   one worker 404s when polled via another, the queues stop bounding
-  CPU/GPU load, and the RSS fetch runs N times a day. Making the back
+  CPU/GPU load, the RSS fetch runs N times a day, and each worker sees
+  (and logs to `LOG_USERS/`) only its own share of the presence
+  heartbeats. Making the back
   multi-worker would require a shared job store (Redis/SQLite) + a
   cross-process queue/semaphore + restricting the scheduler to one
   worker; not done, and the back (fully async, CPU delegated to
@@ -400,7 +403,11 @@ project's engineering language.
 - Gitignored, generated/regenerable directories that must never be
   committed directly: `CORPUS/` (raw per-source sentence cache), `DICS/`
   (raw Wiktionary/Kaikki dumps), `GRID_SVG/`, `GRID_PNG/`, `LOG_LLM/`,
-  `models/` (LLM GGUF weights, auto-downloaded by `run_llm.sh`), `data/
+  `LOG_CHAT/`, `LOG_USERS/` (one daily `LOG_USERS/<YYYY-MM-DD>.log` per
+  day: one line — `date time | count | active pseudo list` — appended by
+  `backend/app.py` each time the distinct online-visitor count changes,
+  created lazily on first write), `models/` (LLM GGUF weights,
+  auto-downloaded by `run_llm.sh`), `data/
   hunspell_cache/`, and `data/reference_corpus/` (both the full and the
   capped sentence corpus — see the next bullet — the full one alone can be
   multiple GB of raw text). If one of these ever shows as staged/committed

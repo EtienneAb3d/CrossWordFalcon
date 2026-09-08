@@ -2333,3 +2333,15 @@ English (see `project-best-practices`).
   limitation noted throughout this file; verified structurally (CSS
   brace balance, HTML tag balance, `esprima` on the JS) and via the
   running server already serving the updated files.
+
+- **`#online-count`** ("x en ligne" / "x online" — count of distinct
+  active users, refreshed every 2s), at the user's explicit request. A
+  `.badge`-styled pill (same neutral pill shape as `#version-badge`)
+  placed immediately **before** `#version-badge` in `#page-header`, so it
+  sits left of the version. Distinguished from the version pill only by
+  `color: var(--correct-fg)` (the theme's existing dark green — no new
+  token) since green is the near-universal "online / live" convention and
+  it keeps the two adjacent pills from reading as one. `hidden` until the
+  first successful `/api/presence` heartbeat; no `[hidden]` override
+  needed (`.badge` sets no `display`). **Not visually confirmed in a
+  browser** — same tooling limitation noted throughout this file.
