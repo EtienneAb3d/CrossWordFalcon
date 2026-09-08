@@ -657,7 +657,9 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
     triée, toutes langues) ; le filtrage par langue ("all" ou un code) et
     "déjà vue / pas encore vue" et la pagination sont des préoccupations
     de cette route. `preferred_language` pilote seulement l'ordre de tri,
-    pas le filtrage. Les filtrages se font AVANT la pagination pour que
+    pas le filtrage. Exception : avec `language_filter=="all"`, le
+    regroupement par langue de list_grids() est annulé et la liste
+    repasse en ordre purement chronologique inverse. Les filtrages se font AVANT la pagination pour que
     `total`/le nombre de pages reflètent la liste réellement montrée.
     Chaque grille renvoyée porte en plus `seen` (bool) pour que le
     frontend puisse la griser sans re-consulter son propre stockage.
@@ -703,6 +705,14 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         if seen_filter == "seen" and not is_seen:
             continue
         rows.append({**g, "seen": is_seen})
+    # "Toutes les langues" (ni "bilingual", ni une vraie clé de WORDLISTS) :
+    # ordre purement chronologique inverse, sans le regroupement par langue
+    # que list_grids() applique pour la vue par défaut — à la demande
+    # explicite de l'utilisateur. Un filtre sur une langue précise rend ce
+    # regroupement inopérant de toute façon (toutes les lignes partagent la
+    # même langue), donc on ne re-trie que dans le cas "all".
+    if not only_bilingual and only_language is None:
+        rows.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     page = max(1, page)
     start = (page - 1) * LIBRARY_PAGE_SIZE
     return {

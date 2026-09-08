@@ -2262,3 +2262,27 @@ English (see `project-best-practices`).
   library` with `difficulty_filter` all/easy/hard → 87/43/26 rows); not
   visually confirmed in a browser — same tooling limitation noted
   throughout this file.
+
+- **Localhost-only generation options + dimension snap-back**
+  (`frontend/static/script.js`, `clampDimensionInputs` /
+  `restrictUltraModeToLocalhost` / `isLocalhostOrigin`), at the user's
+  explicit request across three exchanges. **No CSS added by any of it**
+  — the controls look and behave exactly as before, only their numeric
+  bounds / the Ultra option's enabled state change:
+  - **Largeur / Width** (`#width`) and **Hauteur / Height** (`#height`):
+    on **every** origin, a committed value below 5 (`MIN_DIMENSION`) is
+    forced back to 5 on `blur`/`change` (an empty field is left alone,
+    still being edited). Off localhost, a value above 20
+    (`REMOTE_MAX_DIMENSION`) is forced back to 20 the same way, and the
+    inputs' own `max` attribute is lowered from 30 to 20 so native
+    validation blocks a larger value on submit too. On `localhost` the
+    `max="30"` markup is untouched.
+  - The **Ultra** `<option>` on `#mode` is `disabled` off localhost. **A
+    disabled `<option>` is greyed out and unselectable by the browser's
+    own native rendering**, which is exactly what "en grisé non
+    cliquable" asks for; a custom rule would only risk diverging from the
+    platform's own disabled-control convention. A leftover `"ultra"`
+    value falls back to `"medium"`.
+  Frontend-only: `backend/app.py` still accepts `mode="ultra"` and
+  `width`/`height` from 5 to 30 from a direct API call — the restrictions
+  are the web UI's alone.

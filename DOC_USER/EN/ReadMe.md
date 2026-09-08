@@ -32,7 +32,10 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   words and clues are written in. Also switches every label/message on
   the page to that same language.
 - **Largeur / Width** (`#width`) — the grid's own width in cells, from 5
-  to 30.
+  to 30 when the page is opened on the local machine, from 5 to 20 when
+  it is opened from another machine on the network. A value outside the
+  allowed range is snapped back to the nearest bound as soon as the
+  field loses focus (`frontend/static/script.js`, `clampDimensionInputs`).
 - **Bilingue / Bilingual** (`#bilingual-language`) — the language of the
   grid's *vertical* (down) words; the horizontal (across) words always
   stay in the main **Langue** field above. Changing **Langue** always
@@ -49,7 +52,9 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   word/direction is currently selected in the grid (see "David FALCON"
   below).
 - **Hauteur / Height** (`#height`) — the grid's own height in cells, from
-  5 to 30.
+  5 to 30 on the local machine, from 5 to 20 from another machine on the
+  network; same out-of-range snap-back on blur as **Largeur / Width**
+  above (`frontend/static/script.js`, `clampDimensionInputs`).
 - **Difficulté / Difficulty** (`#difficulty`) — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary and never place a
   word that looks like it could be a proper noun (a person's or place's
@@ -66,7 +71,10 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   before giving up and trying again: Flash (fastest, least thorough),
   Turbo, Rapide/Fast, Moyen/Medium (the default), Ultra (slowest, most
   thorough). A harder grid (a larger size, a stricter black rate) may
-  need a slower mode to succeed at all.
+  need a slower mode to succeed at all. **Ultra** is only selectable when
+  the page is opened on the local machine; from another machine on the
+  network its option is greyed out and unavailable
+  (`frontend/static/script.js`, `restrictUltraModeToLocalhost`).
 - **Générer la grille / Generate** (`#generate-btn`) — starts generation
   with the settings above. While a generation is running, this and every
   field above stay usable for the *next* generation, but see "While a
@@ -154,7 +162,11 @@ script.js`, `renderLibraryList`). Lists every grid ever saved on this
 server (`backend/grid_store.py`, `GET /api/library`), one row per grid:
 its language, creation date, title, difficulty, and size — sorted with
 the interface's current language first, then English, then everything
-else, most recent first within each group. Clicking a row (or pressing
+else, most recent first within each group. The one exception is the
+"Toutes les langues / All languages" filter, which drops that
+language grouping entirely and orders the whole list purely by
+creation date, most recent first (`backend/app.py`, `_library_page`).
+Clicking a row (or pressing
 Enter/Space on it) loads that grid straight into the player
 (`loadLibraryGrid`), exactly as if it had just finished generating — the
 same "Vérification"/"Solution" buttons become available.

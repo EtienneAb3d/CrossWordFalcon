@@ -2338,6 +2338,38 @@ servers:
   "cancelled"` on a follow-up poll) rather than left to run to completion
   needlessly before the servers were restarted with the actual fix.
 
+  That 30-cell ceiling only fully applies when the page is opened on the
+  local machine, at the user's explicit request across three exchanges:
+  "N'autoriser les grilles de dimensions supérieures à 20 qu'en
+  localhost, sinon, limiter la largeur et la hauteur à 20 max.", then
+  "Si l'utilisateur essaye de rentrer une valeur supérieure à 20 (sauf
+  localhost) pour la hauteur ou la largeur forcer la valeur à 20 quand le
+  focus quitte le champ de saisie.", then "Quand l'utilisateur essaye
+  d'entrer une valeur largeur/hauteur inférieure à 5, forcer la valeur à
+  5 quand le focus quitte le champ de saisie." All frontend-only (the
+  API's own `Field(ge=5, le=30)` is unchanged, and a hand-crafted `POST
+  /api/generate` from a LAN client can still ask for up to 30):
+  `frontend/static/script.js` has a shared `isLocalhostOrigin()` helper
+  (`window.location.hostname` against `localhost`, `*.localhost`,
+  `127.0.0.1`, `::1`, `[::1]`) and two IIFEs run once at load. (1)
+  `clampDimensionInputs()` runs on *every* origin: it attaches `blur` +
+  `change` listeners on `#width`/`#height` that snap a committed value
+  back into range — always up to `MIN_DIMENSION` (5) if below it, and,
+  only when not on localhost, down to `REMOTE_MAX_DIMENSION` (20) if above
+  it (an empty field is left alone, still being edited). Off localhost it
+  also lowers the two inputs' own `max` attribute from 30 to 20 so the
+  browser's native validation blocks a larger value on submit too. (2)
+  `restrictUltraModeToLocalhost()` runs only off localhost: it disables
+  the "Ultra" `<option>` on `#mode` (greyed out and unselectable by the
+  browser's native rendering — no dedicated CSS) and resets a leftover
+  `"ultra"` value to `"medium"`. The form's own submit handler
+  additionally does `Math.min(Number(input.value), isLocalhostOrigin() ?
+  Infinity : 20)` as a last-line-of-defense upper clamp before building
+  the request body (the lower bound relies on native `min="5"` +
+  `required` validation blocking the submit). `backend/app.py`'s
+  `BUDGET_MODES` still accepts `"ultra"` from a direct API call — the
+  Ultra restriction is purely the web UI's.
+
   Three generation-phase durations are now measured and returned on the
   job's `result`, at the user's explicit request: "Durées affichées en
   haut de la grille finale à jour... 'grille générée en XhXmnXs'...
@@ -2519,6 +2551,16 @@ servers:
   then language/bilingual, then seen) *before* pagination, so `total`/the
   page count reflect the filtered list; an unrecognized `difficulty_
   filter` value falls through to "all" (`_LIBRARY_DIFFICULTY_FILTERS`).
+  When `language_filter == "all"` (neither "bilingual" nor a real
+  `WORDLISTS` code), `_library_page` re-sorts the collected rows purely
+  by `created_at` descending before paginating — `list_grids()` always
+  groups by language (`preferred_language`, then `en`, then the rest),
+  which is the wanted order for the default per-language view but not
+  for "Toutes les langues", where a bilingual grid or an English grid
+  could otherwise appear above a more recent grid in another language.
+  A specific-language filter makes the grouping a no-op anyway (every
+  row shares the same language), so only the "all" case needs the
+  extra sort.
   The plain `GET /api/library` (`library_list`) keeps working with no
   filters at all. `frontend/static/script.js`'s `renderLibraryList()`
   sends `libraryDifficultyFilter.value`; the `#library-difficulty-filter`

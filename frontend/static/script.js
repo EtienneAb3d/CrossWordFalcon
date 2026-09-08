@@ -1708,6 +1708,64 @@ languageSelect.addEventListener("change", () => {
 applyTranslations();
 bilingualLanguageSelect.value = uiLanguage;
 
+// Whether the page is being served from the local machine itself. Some
+// generation options are only offered on localhost, because on a LAN
+// address (run_Falcon.sh binds the frontend to 0.0.0.0) a remote visitor
+// could otherwise tie up the single backend process for a very long
+// time.
+function isLocalhostOrigin() {
+  const host = window.location.hostname;
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
+}
+
+const MIN_DIMENSION = 5;
+const REMOTE_MAX_DIMENSION = 20;
+
+// Width/height are forced back into range whenever the field loses focus
+// (or the entry is committed): never below MIN_DIMENSION (5), on every
+// origin; and — off localhost only — never above REMOTE_MAX_DIMENSION
+// (20), where the <input max> attribute is also lowered from 30 to 20 so
+// the browser's own native validation blocks a larger value on submit
+// too. An empty field is left alone (still being edited; `required` +
+// `min` already block a submit).
+(function clampDimensionInputs() {
+  const max = isLocalhostOrigin() ? Infinity : REMOTE_MAX_DIMENSION;
+  if (max !== Infinity) {
+    widthInput.max = String(max);
+    heightInput.max = String(max);
+  }
+  for (const input of [widthInput, heightInput]) {
+    const clamp = () => {
+      const n = Number(input.value);
+      if (input.value === "" || Number.isNaN(n)) return;
+      if (n < MIN_DIMENSION) input.value = String(MIN_DIMENSION);
+      else if (n > max) input.value = String(max);
+    };
+    input.addEventListener("blur", clamp);
+    input.addEventListener("change", clamp);
+    clamp();
+  }
+})();
+
+// "Ultra" mode (5,000,000 checks per attempt — see backend/app.py's
+// BUDGET_MODES) is only offered on localhost: off it, its <option> is
+// disabled — greyed out and non-selectable by the browser's own native
+// rendering, no extra CSS needed — and a leftover "ultra" value falls
+// back to "medium".
+(function restrictUltraModeToLocalhost() {
+  if (isLocalhostOrigin()) return;
+  const modeSelect = document.getElementById("mode");
+  const ultraOption = modeSelect.querySelector('option[value="ultra"]');
+  if (ultraOption) ultraOption.disabled = true;
+  if (modeSelect.value === "ultra") modeSelect.value = "medium";
+})();
+
 // Raised from 700ms to 2000ms at the user's explicit request, after a
 // reported sporadic 502 on /api/generate/status with no corresponding trace
 // at all in the backend's own log (see frontend/server.py's PROXY_TIMEOUT_S
@@ -2918,8 +2976,13 @@ form.addEventListener("submit", async (event) => {
   // valeur identique comme "grille monolingue ordinaire" de toute façon,
   // mais autant ne pas envoyer un champ sans effet réel.
   const bilingualLanguage = bilingualLanguageSelect.value;
-  const width = Number(widthInput.value);
-  const height = Number(heightInput.value);
+  // Off localhost, width/height are capped at REMOTE_MAX_DIMENSION (see
+  // restrictOptionsToLocalhost above) — clamp here too, as a last line
+  // of defense in case a value slipped past the input's own max/change
+  // handler.
+  const dimCap = isLocalhostOrigin() ? Infinity : REMOTE_MAX_DIMENSION;
+  const width = Math.min(Number(widthInput.value), dimCap);
+  const height = Math.min(Number(heightInput.value), dimCap);
   const difficulty = document.getElementById("difficulty").value;
   const mode = document.getElementById("mode").value;
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
