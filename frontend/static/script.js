@@ -75,6 +75,11 @@ function renderHoverDefinitionForSelection() {
 const form = document.getElementById("generate-form");
 const languageSelect = document.getElementById("language");
 const bilingualLanguageSelect = document.getElementById("bilingual-language");
+const welcomeOverlay = document.getElementById("welcome-overlay");
+const welcomeForm = document.getElementById("welcome-form");
+const welcomeLanguageSelect = document.getElementById("welcome-language");
+const welcomePseudoInput = document.getElementById("welcome-pseudo");
+const userPseudoBtn = document.getElementById("user-pseudo");
 const button = document.getElementById("generate-btn");
 const status = document.getElementById("status");
 const result = document.getElementById("result");
@@ -1647,8 +1652,32 @@ virtualKeyboardToggleBtn.addEventListener("click", () => {
   );
 });
 
-languageSelect.addEventListener("change", () => {
-  uiLanguage = languageSelect.value;
+const SUPPORTED_UI_LANGS = ["fr", "en", "de", "es", "it", "pt"];
+// Pseudo (nickname) chosen in the welcome overlay (see below); "" when
+// none is set. Persisted in the cwf-prefs cookie, mirrored into every
+// grid this browser generates (POST /api/generate `pseudo`) and into the
+// "Mes grilles" library filter.
+let userPseudo = "";
+// `false` until the initUserPrefs() IIFE below has run once — used to
+// skip, on that very first setUiLanguage() call, the few re-renders that
+// touch state declared later in this file (renderChatWelcome reads
+// `chatUserHasSpoken`, a `let` further down — accessing it now would
+// throw); the standalone renderChatWelcome() call near its own
+// definition handles the initial render regardless.
+let uiBootstrapped = false;
+
+// Applies `lang` everywhere: the interface's own text, both language
+// selectors (#language and the welcome overlay's own #welcome-language,
+// kept in sync — "deux sélecteurs de langue" per the user's request),
+// the bilingual/RSS/library/dictionary language selectors that follow
+// the interface language, and every parameterized string that isn't a
+// plain [data-i18n] node. Used both by the two selectors' own "change"
+// handlers and once at startup.
+function setUiLanguage(lang) {
+  if (SUPPORTED_UI_LANGS.indexOf(lang) === -1) lang = "fr";
+  uiLanguage = lang;
+  languageSelect.value = lang;
+  welcomeLanguageSelect.value = lang;
   // Grille bilingue, à la demande explicite de l'utilisateur : "le
   // premier sélecteur de langue configure la langue de l'interface, et
   // force le second sélecteur de langue à prendre la même valeur." Un
@@ -1658,7 +1687,7 @@ languageSelect.addEventListener("change", () => {
   // qu'il souhaite réellement une grille bilingue, jamais que ce
   // sélecteur reste figé sur une ancienne valeur devenue incohérente
   // avec la nouvelle langue principale.
-  bilingualLanguageSelect.value = uiLanguage;
+  bilingualLanguageSelect.value = lang;
   applyTranslations();
   // attemptPreviewStats is a parameterized string (see i18n.js), rendered
   // directly inside renderAttemptPreview() rather than through the generic
@@ -1674,10 +1703,15 @@ languageSelect.addEventListener("change", () => {
   // Le libellé du niveau à droite du titre de la grille jouée est traduit
   // (voir renderGridDifficulty), donc à ré-appliquer au changement de langue.
   renderGridDifficulty();
+  // Pseudo de l'en-tête : le libellé "définir un pseudo" (quand aucun
+  // pseudo n'est saisi) est traduit, donc à ré-appliquer.
+  if (!userPseudoBtn.hidden) renderUserPseudo();
   // "David FALCON"'s own welcome bubble, at the user's explicit request
   // — see renderChatWelcome()'s own docstring for why this only ever
-  // does anything before the player's first real message.
-  renderChatWelcome();
+  // does anything before the player's first real message. Skipped on the
+  // bootstrap call (see uiBootstrapped) — the standalone call near
+  // renderChatWelcome()'s definition covers the initial render.
+  if (uiBootstrapped) renderChatWelcome();
   // Le filtre de langue du panneau "Actu Croisée" suit désormais la
   // langue de l'interface à chaque changement, à la demande explicite de
   // l'utilisateur : "Quand l'utilisateur change la langue de
@@ -1688,13 +1722,13 @@ languageSelect.addEventListener("change", () => {
   // — la préférence la plus récente de l'utilisateur prévaut, même
   // schéma de revirement déjà appliqué cette session à la visibilité du
   // panneau lui-même.
-  rssLanguageFilter.value = uiLanguage;
+  rssLanguageFilter.value = lang;
   renderRssList();
   // Le filtre de langue de la Bibliothèque suit lui aussi la langue de
   // l'interface, à la demande explicite de l'utilisateur ("modifiée si la
   // langue de l'interface change"). Si le panneau est ouvert, on le
   // re-rend depuis la page 1.
-  libraryLanguageFilter.value = uiLanguage;
+  libraryLanguageFilter.value = lang;
   if (!libraryPanel.hidden) {
     libraryCurrentPage = 1;
     renderLibraryList();
@@ -1702,11 +1736,117 @@ languageSelect.addEventListener("change", () => {
   // Le sélecteur de langue du dictionnaire suit lui aussi la langue de
   // l'interface (défaut demandé), tant que le joueur n'a rien changé
   // dessus sur ce panneau précisément.
-  dictionaryLanguage.value = uiLanguage;
+  dictionaryLanguage.value = lang;
+}
+
+languageSelect.addEventListener("change", () => setUiLanguage(languageSelect.value));
+welcomeLanguageSelect.addEventListener("change", () => setUiLanguage(welcomeLanguageSelect.value));
+
+// --- Welcome overlay + user pseudo -------------------------------------
+// At the user's explicit request: on the first visit (no cwf-prefs
+// cookie) the browser language is detected and a mandatory overlay form
+// is shown (language selector + optional pseudo + a cookie notice). It
+// can only be dismissed by clicking "Accepter". The user's pseudo is
+// then shown centered in the header and, clicked, reopens this same
+// form. Preferences live in a single functional cookie — no tracking,
+// no advertising — leaving the (potentially large) seen-grids list in
+// localStorage as before.
+const MAX_PSEUDO_LENGTH = 15;
+const PREFS_COOKIE = "cwf-prefs";
+
+function loadPrefs() {
+  try {
+    const m = document.cookie.match(/(?:^|;\s*)cwf-prefs=([^;]*)/);
+    if (!m) return null;
+    const parsed = JSON.parse(decodeURIComponent(m[1]));
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function savePrefs(prefs) {
+  try {
+    const value = encodeURIComponent(JSON.stringify(prefs));
+    // One year, whole site, Lax — a functional preferences cookie.
+    document.cookie = PREFS_COOKIE + "=" + value + "; path=/; max-age=31536000; samesite=lax";
+  } catch (e) {
+    // Cookies disabled entirely — the overlay just reappears next load.
+  }
+}
+
+function detectBrowserLanguage() {
+  const cands = (navigator.languages && navigator.languages.length)
+    ? navigator.languages
+    : [navigator.language || ""];
+  for (const c of cands) {
+    const base = String(c).toLowerCase().split("-")[0];
+    if (SUPPORTED_UI_LANGS.indexOf(base) !== -1) return base;
+  }
+  return "en";
+}
+
+function renderUserPseudo() {
+  const t = I18N[uiLanguage];
+  userPseudoBtn.hidden = false;
+  userPseudoBtn.textContent = userPseudo || t.userPseudoUnset;
+  userPseudoBtn.classList.toggle("user-pseudo-unset", !userPseudo);
+}
+
+function openWelcomeOverlay() {
+  welcomeLanguageSelect.value = uiLanguage;
+  welcomePseudoInput.value = userPseudo;
+  welcomeOverlay.hidden = false;
+  welcomePseudoInput.focus();
+}
+
+welcomeForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const pseudo = welcomePseudoInput.value.trim().slice(0, MAX_PSEUDO_LENGTH);
+  // Le panneau ne se ferme pas si le pseudo est vide, à la demande
+  // explicite de l'utilisateur. `required` bloque déjà un champ
+  // strictement vide côté navigateur (l'événement "submit" ne se
+  // déclenche même pas) ; ceci couvre en plus le cas "que des espaces".
+  if (!pseudo) {
+    welcomePseudoInput.setCustomValidity(I18N[uiLanguage].welcomePseudoRequired);
+    welcomePseudoInput.reportValidity();
+    return;
+  }
+  welcomePseudoInput.setCustomValidity("");
+  userPseudo = pseudo;
+  savePrefs({ accepted: true, lang: uiLanguage, pseudo: userPseudo });
+  renderUserPseudo();
+  welcomeOverlay.hidden = true;
+  // Le pseudo peut avoir changé — si la Bibliothèque est ouverte (et
+  // surtout sur le filtre "Mes grilles"), on la rafraîchit.
+  if (!libraryPanel.hidden) {
+    libraryCurrentPage = 1;
+    renderLibraryList();
+  }
 });
 
-applyTranslations();
-bilingualLanguageSelect.value = uiLanguage;
+// Efface le message de validité personnalisé dès que l'utilisateur
+// retape quelque chose, sinon le champ resterait marqué invalide.
+welcomePseudoInput.addEventListener("input", () => {
+  welcomePseudoInput.setCustomValidity("");
+});
+
+userPseudoBtn.addEventListener("click", openWelcomeOverlay);
+
+(function initUserPrefs() {
+  const prefs = loadPrefs();
+  if (prefs && prefs.accepted) {
+    userPseudo = typeof prefs.pseudo === "string"
+      ? prefs.pseudo.slice(0, MAX_PSEUDO_LENGTH)
+      : "";
+    setUiLanguage(typeof prefs.lang === "string" ? prefs.lang : "fr");
+    renderUserPseudo();
+  } else {
+    setUiLanguage(detectBrowserLanguage());
+    openWelcomeOverlay();
+  }
+  uiBootstrapped = true;
+})();
 
 // Whether the page is being served from the local machine itself. Some
 // generation options are only offered on localhost, because on a LAN
@@ -2307,8 +2447,12 @@ async function renderLibraryList() {
           // "all" ou easy/medium/hard — "Tous les niveaux" par défaut, ne
           // suit pas la langue de l'interface (voir #library-difficulty-filter).
           difficulty_filter: libraryDifficultyFilter.value,
+          // "all"/"unseen"/"seen"/"mine" — "Mes grilles" ("mine") filtre
+          // côté back sur le champ `pseudo` de chaque grille, comparé au
+          // pseudo courant envoyé ci-dessous.
           seen_filter: librarySeenFilter.value,
           seen_ids: loadSeenGridIds(),
+          pseudo: userPseudo,
         }),
       },
       FETCH_TIMEOUT_MS,
@@ -2377,7 +2521,11 @@ async function renderLibraryList() {
     difficultyTd.textContent = difficultyLabels[entry.difficulty] || entry.difficulty || "";
     const sizeTd = document.createElement("td");
     sizeTd.textContent = entry.width && entry.height ? `${entry.width}×${entry.height}` : "";
-    tr.append(languageTd, dateTd, titleTd, difficultyTd, sizeTd);
+    // Dernière colonne : pseudo de l'auteur (champ `pseudo` du JSON de la
+    // grille — voir backend/grid_store.py), vide s'il n'a pas été défini.
+    const authorTd = document.createElement("td");
+    authorTd.textContent = entry.pseudo || "";
+    tr.append(languageTd, dateTd, titleTd, difficultyTd, sizeTd, authorTd);
     tr.addEventListener("click", () => loadLibraryGrid(entry.id));
     tr.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
@@ -2999,6 +3147,9 @@ form.addEventListener("submit", async (event) => {
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
           force_letters_percent: forceLettersPercent,
+          // Pseudo de l'auteur, enregistré dans le JSON de la grille (voir
+          // backend/grid_store.py's save_grid_json) — omis s'il est vide.
+          pseudo: userPseudo || undefined,
         }),
       }, FETCH_TIMEOUT_MS);
     } catch (err) {

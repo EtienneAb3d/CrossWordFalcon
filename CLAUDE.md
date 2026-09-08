@@ -1975,8 +1975,14 @@ servers:
   `generate_grid()`/clue-generation calls via `asyncio.to_thread` so the event loop
   stays free), and immediately returns `{"job_id": ...}` (HTTP 202) — the client then
   polls `GET /api/generate/status/{job_id}` for progress and the eventual result.
-  `JOBS` is a plain in-memory dict (one uvicorn process, no `--workers`, see
-  `run_Falcon.sh` — no locking or external store needed), bounded to `MAX_JOBS` (50)
+  `JOBS` is a plain in-memory dict — the back end always runs as a single
+  uvicorn process, **never with `--workers`** (its `JOBS`/`CANCEL_EVENTS`/
+  `GRID_QUEUE`/`CLUES_QUEUE` state and the `_rss_daily_scheduler` startup
+  task all live in one process's memory and can't be shared across
+  workers; the front/middleware server *does* run `--workers` since it's
+  stateless, see `run_Falcon.sh`'s `CROSSWORDFALCON_FRONTEND_WORKERS` and
+  the `project-best-practices` SKILL) — so no locking or external store is
+  needed here. Bounded to `MAX_JOBS` (50)
   entries so a long-running process doesn't grow it forever; each background task is
   kept in `_BACKGROUND_TASKS` purely so `asyncio.create_task`'s result isn't
   garbage-collected mid-run (a documented asyncio footgun — it only holds a weak
@@ -2544,13 +2550,22 @@ servers:
   this browser has already viewed, well past what a query string holds).
   Alongside `preferred_language`/`page` it takes `language_filter` ("all",
   a `WORDLISTS` code, or "bilingual"), `seen_filter` ("all"/"unseen"/
-  "seen"), and `difficulty_filter` ("all", or "easy"/"medium"/"hard" —
+  "seen"/"mine"), `difficulty_filter` ("all", or "easy"/"medium"/"hard" —
   added at the user's explicit request for a "Tous les niveaux" (default)
   / Facile / Moyenne / Difficile selector top-right of the Bibliothèque
-  panel). `_library_page` applies all three filters (difficulty first,
-  then language/bilingual, then seen) *before* pagination, so `total`/the
-  page count reflect the filtered list; an unrecognized `difficulty_
-  filter` value falls through to "all" (`_LIBRARY_DIFFICULTY_FILTERS`).
+  panel), and `pseudo` (the current user's nickname — only consulted for
+  `seen_filter == "mine"`). `_library_page` applies all filters (difficulty
+  first, then language/bilingual, then seen) *before* pagination, so
+  `total`/the page count reflect the filtered list; an unrecognized
+  `difficulty_filter` value falls through to "all"
+  (`_LIBRARY_DIFFICULTY_FILTERS`), an unrecognized `seen_filter` to "all"
+  (`_LIBRARY_SEEN_FILTERS`, now `("all", "unseen", "seen", "mine")`).
+  `seen_filter == "mine"` — added at the user's explicit request ("ajouter
+  une entrée 'Mes grilles' qui filtre les grilles avec le pseudo de
+  l'utilisateur") — keeps only grids whose own `pseudo` field equals the
+  request's `pseudo` (both `.strip()`ed); a blank request `pseudo` matches
+  nothing, so the "Mes grilles" option is simply empty when no nickname is
+  set.
   When `language_filter == "all"` (neither "bilingual" nor a real
   `WORDLISTS` code), `_library_page` re-sorts the collected rows purely
   by `created_at` descending before paginating — `list_grids()` always
@@ -5452,6 +5467,22 @@ servers:
   all 3 real, pre-existing grids on disk at the time of this change
   (their own ids still hyphen-based) were confirmed to still match `_GRID_
   ID_RE` and still load correctly via `get_grid()`.
+
+  `save_grid_json` gained a `pseudo=None` parameter, at the user's
+  explicit request: "Quand une grille est sauvegardée, si un pseudo est
+  défini, sauvegarder le pseudo dans le JSON de la grille." Whitespace-
+  normalised (`(pseudo or "").strip() or None`) and written as the
+  record's own `pseudo` field — every pre-existing caller, and every grid
+  saved by a user who never set one, keeps `pseudo: None`. `_iter_stored_
+  grids` yields it alongside the other compact metadata so `GET /api/
+  library` can show an author column and offer a "Mes grilles" filter
+  (see `backend/app.py`). `backend/app.py`'s `_run_generate_job` passes
+  `(req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None`; `_run_
+  recompute_job` passes `result.get("pseudo")` (the original author's
+  pseudo, inherited from the reloaded record — a recompute is "same grid,
+  new clues," so it keeps the original author rather than crediting
+  whoever triggered the recompute). No filename change — the pseudo lives
+  only inside the JSON, never in the id/slug.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -6344,6 +6375,14 @@ servers:
   `http://127.0.0.1:3001`) so the browser only ever talks to one origin. `run_Falcon.sh`
   binds it to `0.0.0.0` (LAN-reachable, e.g. from a phone on the same network) — the
   back end stays on `127.0.0.1` only, it's never meant to be reached directly.
+  `run_Falcon.sh` starts it with `uvicorn --workers
+  $CROSSWORDFALCON_FRONTEND_WORKERS` (default 10, from `env.sh`/
+  `env_default.sh`), both the HTTP and, if enabled, the HTTPS instance —
+  safe because this server holds no cross-request state (a fresh
+  `httpx.AsyncClient` per request, no startup scheduler), so independent
+  workers just add connection-accept capacity. The back end is
+  deliberately never given `--workers` (see its own entry above and the
+  `project-best-practices` SKILL).
 
   All three ports this project uses (frontend/middleware, backend, local LLM server)
   are configured in exactly one place, at the user's explicit request:
@@ -6701,6 +6740,74 @@ servers:
   separate concern from the UI's own chrome. Keep this file current whenever any
   UI-visible string changes anywhere in `frontend/static/` — see the
   `project-best-practices` SKILL.
+
+- **Welcome overlay + user pseudo** (`frontend/static/index.html`'s
+  `#welcome-overlay`/`#user-pseudo`, `frontend/static/script.js`), at the
+  user's explicit request. On the first visit — no `cwf-prefs` cookie —
+  `initUserPrefs()` detects the browser language (`detectBrowserLanguage()`,
+  `navigator.languages` → the first of `SUPPORTED_UI_LANGS` matched by its
+  base subtag, else `"en"`) and shows `#welcome-overlay`: a full-screen
+  modal (`role="dialog" aria-modal="true"`, z-index 1000, over the
+  chatbot/keyboard) holding a language `<select>` (preset to the detected
+  language), a **required** pseudo `<input maxlength="15" required>`, a
+  cookie notice (`welcomeCookieNotice` — "functional preferences cookie,
+  no tracking, no advertising"), and an "Accepter" submit button. It is a
+  plain `<div>`, not `<dialog>` — no close button, no backdrop-click
+  handler, no Escape handling — so the *only* way to dismiss it is the
+  submit handler (`welcomeForm`'s "submit"), which refuses to close on an
+  empty pseudo (at the user's explicit request — `required` blocks a
+  strictly-empty field natively, and the handler additionally rejects a
+  whitespace-only value via `setCustomValidity(welcomePseudoRequired)` +
+  `reportValidity()`, cleared again on the next `input`), otherwise trims
+  the pseudo to `MAX_PSEUDO_LENGTH` (15) and writes `cwf-prefs`
+  (`{accepted, lang, pseudo}`, `document.cookie`,
+  `path=/`, one-year `max-age`, `SameSite=Lax` — the potentially-large
+  seen-grids list stays in `localStorage` as before, since a cookie can't
+  hold it), and hides the overlay. A returning visitor with
+  `prefs.accepted` skips the overlay: `setUiLanguage(prefs.lang)` +
+  `renderUserPseudo()`.
+
+  The `languageSelect` "change" handler's whole body was extracted into
+  `setUiLanguage(lang)` (validates against `SUPPORTED_UI_LANGS`, then sets
+  `uiLanguage`, **both** `#language` and `#welcome-language`'s `.value`,
+  the bilingual/RSS/library/dictionary language selectors, and re-renders
+  every parameterized string) — `#language` and `#welcome-language` are
+  the "deux sélecteurs de langue" the user's request refers to, each
+  wired to `setUiLanguage` on "change" and kept in sync, so changing
+  either one reconfigures the whole page live (including the overlay's own
+  `[data-i18n]` nodes). `setUiLanguage` guards its `renderChatWelcome()`
+  call behind a `uiBootstrapped` flag (set true at the end of
+  `initUserPrefs()`): that helper reads `chatUserHasSpoken`, a `let`
+  declared much further down the file, so calling it during the bootstrap
+  `setUiLanguage` would hit the TDZ — the standalone `renderChatWelcome()`
+  near its own definition covers the initial render regardless.
+
+  `#user-pseudo` is a `<button>` in `#page-header`, right after `<h1>` —
+  shown once prefs are accepted, centered between the title and the
+  right-hand badges (both `h1` and `#user-pseudo` carry `margin-right:
+  auto`, so the two auto margins split the free space equally, see the
+  `style-guide` SKILL). Its text is the pseudo, or a translated "set a
+  nickname" label (`userPseudoUnset`, `.user-pseudo-unset` class) while
+  none is set; clicking it calls `openWelcomeOverlay()` to change pseudo/
+  language. `userPseudo` (module-level, `""` when unset) is sent as
+  `pseudo` on every `POST /api/generate` (omitted when empty) and as
+  `pseudo` in the `POST /api/library` body (for the "Mes grilles"
+  filter). `#library-seen-filter` gained a `"mine"` option
+  (`librarySeenFilterMine`) and the library table a last `libraryColAuthor`
+  column showing each row's `entry.pseudo || ""`. Accepting the overlay
+  while the library panel is open re-renders it from page 1 (the pseudo
+  may have changed).
+
+  Verified: `py_compile` on the two backend files; `esprima` on
+  `script.js`/`i18n.js`; an HTML tag-balance and CSS brace-balance check;
+  a direct Python exercise of `save_grid_json`'s `pseudo` round-trip and
+  `_library_page`'s `"mine"` filter (Alice's 2 grids vs. Bob's 1 vs. 0
+  for an empty pseudo) against a temp `GRID_STORE_DIR`; and confirming
+  the running frontend server already serves the updated
+  `index.html`/`script.js`/`i18n.js`/`style.css`. **Not yet visually
+  confirmed in an actual browser** — same tooling limitation noted
+  throughout this file. The backend half (`app.py`/`grid_store.py`) needs
+  a `./run_Falcon.sh` restart to take effect.
 
 `data/wordlist_fr_full.tsv` is the CLI's default dictionary (`--wordlist`); the backend
 picks among `data/wordlist_{fr,en,de,es,it,pt}_full.tsv` per the request's `language` (see

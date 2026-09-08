@@ -2286,3 +2286,50 @@ English (see `project-best-practices`).
   Frontend-only: `backend/app.py` still accepts `mode="ultra"` and
   `width`/`height` from 5 to 30 from a direct API call — the restrictions
   are the web UI's alone.
+
+- **Welcome overlay + header pseudo** (`#welcome-overlay`,
+  `#welcome-form`, `#user-pseudo`), at the user's explicit request — a
+  first-visit modal (language + optional pseudo + cookie notice) that
+  only closes on "Accepter", and the accepted pseudo shown in the header.
+  - `#welcome-overlay`: `position: fixed; inset: 0; z-index: 1000`
+    (above the chatbot/virtual-keyboard, both at z-index 5), a
+    `rgba(31,35,32,0.55)` scrim, flex-centred. **`#welcome-overlay[hidden]
+    { display: none }`** is mandatory — the bare-ID `display: flex` rule
+    (specificity 1-0-0) otherwise beats the browser's `[hidden]` rule
+    (0-1-0), the same specificity trap already hit for `#rss-detail`/
+    `#rss-panel`/`#virtual-keyboard`.
+  - `#welcome-form`: a plain white card (`--white-cell`, `--border`,
+    `border-radius: 0.75rem`, a soft `box-shadow`), `max-width: 26rem`,
+    centered in the viewport by `#welcome-overlay`'s own `justify-content:
+    center`/`align-items: center`. Flex column — and it **must override**
+    the global `form` rule's `align-items: end` / `flex-wrap: wrap` /
+    `margin-bottom: 1rem` (all meant for `#generate-form`): in a column
+    flex, `align-items: end` shoved the whole content (title, fields,
+    button) against the card's right edge, which read as "the panel is
+    right-aligned." `#welcome-form { align-items: stretch; flex-wrap:
+    nowrap; margin: 0 }` fixes it — each `<label>` then fills the width
+    with left-aligned text (`#welcome-form label { text-align: left }`),
+    the title is explicitly centered (`#welcome-form h2 { text-align:
+    center }`), and only "Accepter" (`#welcome-accept-btn`) is pushed
+    right via its own `align-self: flex-end` (it otherwise inherits the
+    shared accent-blue button look, no dedicated rule). `#welcome-form
+    select, #welcome-form input { width: 100% }` overrides the generic
+    `input { width: 6rem }`. The pseudo field is `required` — no styling
+    change, just native validation blocking an empty submit. No dismiss
+    affordance is styled because there is none by design.
+  - `#user-pseudo`: an accent-outlined pill `<button>` (white background,
+    `--accent` border + text) placed right after `<h1>`. Centered between
+    the title and the right-hand badges by giving it `margin-right: auto`
+    *in addition to* `h1`'s existing one — two auto margins on the flex
+    main axis split the free space equally, so the pill lands midway.
+    `max-width: 14rem` + ellipsis for a long-ish pseudo. `.user-pseudo-
+    unset` (shown while no pseudo is set — the "set a nickname" label)
+    drops to the neutral grey/`--border` treatment so it doesn't shout
+    for attention like a real, chosen name would. `#user-pseudo[hidden]
+    { display: none }` for the same specificity reason as above (though
+    it declares no `display` of its own, so this is belt-and-braces
+    rather than load-bearing here).
+  **Not visually confirmed in an actual browser** — same tooling
+  limitation noted throughout this file; verified structurally (CSS
+  brace balance, HTML tag balance, `esprima` on the JS) and via the
+  running server already serving the updated files.

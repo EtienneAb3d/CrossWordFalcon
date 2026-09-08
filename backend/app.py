@@ -291,6 +291,12 @@ MAX_JOBS = 50
 # bibliothèque : 20 lignes affichées max à chaque page."
 LIBRARY_PAGE_SIZE = 20
 
+# Max length of a user's own nickname ("pseudo"), at the user's explicit
+# request ("un pseudo (moins de 15 lettres)"). Enforced defensively on
+# every path that accepts one — a longer value is silently trimmed, never
+# rejected, so a stray extra character can't block a generation.
+MAX_PSEUDO_LENGTH = 15
+
 # job_id -> multiprocessing.Event, kept *separate* from JOBS itself, at the
 # user's explicit request (bouton "Stop") — neither a threading.Event nor a
 # multiprocessing.Event is JSON-serializable, and GET /api/generate/status/
@@ -408,6 +414,15 @@ class GenerateRequest(BaseModel):
         default="medium",
         description=f"Mode de budget de recherche : {sorted(BUDGET_MODES)}",
     )
+    # Pseudo (nickname) de l'utilisateur qui génère la grille, à la
+    # demande explicite de l'utilisateur : "Quand une grille est
+    # sauvegardée, si un pseudo est défini, sauvegarder le pseudo dans le
+    # JSON de la grille." `None`/vide = pas d'auteur enregistré (le
+    # comportement d'avant cette fonctionnalité). Non borné ici par une
+    # contrainte pydantic qui renverrait un 422 : `_run_generate_job` le
+    # nettoie et le tronque à MAX_PSEUDO_LENGTH, pour qu'un caractère en
+    # trop ne bloque jamais une génération.
+    pseudo: Optional[str] = None
 
 
 class RecomputeRequest(BaseModel):
@@ -609,7 +624,7 @@ def system_info():
     return get_system_info(clue_generator.model)
 
 
-_LIBRARY_SEEN_FILTERS = ("all", "unseen", "seen")
+_LIBRARY_SEEN_FILTERS = ("all", "unseen", "seen", "mine")
 _LIBRARY_DIFFICULTY_FILTERS = ("easy", "medium", "hard")
 
 
@@ -637,21 +652,31 @@ class LibraryListRequest(BaseModel):
     # "all" (défaut) : liste complète, chaque grille juste annotée seen=…
     # "unseen" : seulement les grilles absentes de seen_ids
     # "seen"   : seulement celles présentes dans seen_ids
+    # "mine"   : seulement les grilles dont le champ `pseudo` correspond à
+    #            `pseudo` ci-dessous (rien si `pseudo` est vide), à la
+    #            demande explicite de l'utilisateur ("ajouter une entrée
+    #            'Mes grilles'").
     seen_filter: str = "all"
     # Identifiants (champ `id` d'un fichier GRID_STORE) des grilles que ce
     # client a déjà vues. Borné défensivement — un client normal en a au
     # plus quelques milliers ; au-delà c'est du bruit qu'on ignore.
     seen_ids: list[str] = Field(default_factory=list, max_length=100_000)
+    # Pseudo de l'utilisateur courant — utilisé seulement quand
+    # `seen_filter == "mine"`. `None`/vide : le filtre "Mes grilles" ne
+    # renvoie rien.
+    pseudo: Optional[str] = None
 
 
 def _library_page(preferred_language, page, seen_filter, seen_ids,
-                  language_filter="all", difficulty_filter="all"):
+                  language_filter="all", difficulty_filter="all", pseudo=None):
     """Coeur partagé de GET et POST /api/library — la liste (métadonnées
     seulement, jamais la grille entière : voir backend/grid_store.py's
     list_grids) des grilles de GRID_STORE/, triées langue configurée
     d'abord puis anglais puis le reste, plus récente en premier dans
     chaque groupe, filtrée par `language_filter`, `difficulty_filter` puis
-    par `seen_filter`/`seen_ids`, puis paginée par `LIBRARY_PAGE_SIZE` (20).
+    par `seen_filter`/`seen_ids` (ou `seen_filter=="mine"` : seulement les
+    grilles dont `pseudo` correspond au `pseudo` passé), puis paginée par
+    `LIBRARY_PAGE_SIZE` (20).
 
     `list_grids()` elle-même reste inchangée (toujours la liste complète
     triée, toutes langues) ; le filtrage par langue ("all" ou un code) et
@@ -681,6 +706,10 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         difficulty_filter if difficulty_filter in _LIBRARY_DIFFICULTY_FILTERS else None
     )
     seen = set(seen_ids or ())
+    # "Mes grilles" : filtre sur le champ `pseudo` de chaque grille, à la
+    # demande explicite de l'utilisateur. Un `pseudo` vide ne matche
+    # rien (le sélecteur "Mes grilles" est alors sans objet).
+    my_pseudo = (pseudo or "").strip()
     rows = []
     for g in list_grids(preferred_language):
         if only_difficulty is not None and g.get("difficulty") != only_difficulty:
@@ -703,6 +732,10 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         if seen_filter == "unseen" and is_seen:
             continue
         if seen_filter == "seen" and not is_seen:
+            continue
+        if seen_filter == "mine" and (
+            not my_pseudo or (g.get("pseudo") or "").strip() != my_pseudo
+        ):
             continue
         rows.append({**g, "seen": is_seen})
     # "Toutes les langues" (ni "bilingual", ni une vraie clé de WORDLISTS) :
@@ -743,7 +776,7 @@ def library_list_filtered(req: LibraryListRequest):
     Front")."""
     return _library_page(
         req.preferred_language, req.page, req.seen_filter, req.seen_ids,
-        req.language_filter, req.difficulty_filter,
+        req.language_filter, req.difficulty_filter, req.pseudo,
     )
 
 
@@ -1460,11 +1493,12 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # for later browsing is logged, never allowed to fail the request
         # the player is actually waiting on.
         try:
+            pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
             grid_id = await asyncio.to_thread(
                 save_grid_json, result, req.language, req.difficulty, req.mode, title,
-                result.get("bilingual_language"),
+                result.get("bilingual_language"), pseudo,
             )
-            logger.info("[%s] saved to library: %s", short_id, grid_id)
+            logger.info("[%s] saved to library: %s (pseudo=%r)", short_id, grid_id, pseudo)
             # L'identifiant du fichier GRID_STORE de cette grille, pour que
             # le frontend puisse la marquer "déjà vue" (localStorage) dès
             # qu'il l'affiche — à la demande explicite de l'utilisateur
@@ -1655,9 +1689,13 @@ async def _run_recompute_job(job_id, grid_id):
             logger.warning("[%s] recompute failed to save grid SVG: %s", short_id, e)
 
         try:
+            # Un recalcul crée une nouvelle entrée "même grille, autres
+            # définitions" — on conserve le pseudo de l'auteur d'origine
+            # (déjà présent dans `result`, hérité du record rechargé)
+            # plutôt que d'y mettre celui de qui lance le recalcul.
             new_grid_id = await asyncio.to_thread(
                 save_grid_json, result, language, difficulty, mode, new_title,
-                bilingual_language,
+                bilingual_language, result.get("pseudo"),
             )
             logger.info("[%s] recompute saved to library: %s", short_id, new_grid_id)
             result["id"] = new_grid_id

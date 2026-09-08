@@ -24,6 +24,16 @@ fi
 BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
 FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
 
+# Number of uvicorn worker processes for the MIDDLEWARE (front) server
+# only. Safe there: frontend/server.py is a stateless proxy + static-file
+# server (a fresh httpx.AsyncClient per request, no cross-request state,
+# no startup scheduler), so N independent workers just add connection-
+# accept capacity. The BACK end deliberately stays single-process (no
+# --workers): its JOBS/CANCEL_EVENTS/GRID_QUEUE/CLUES_QUEUE state and its
+# _rss_daily_scheduler live in one process's memory and cannot be shared
+# across workers — see backend/app.py's own comment and CLAUDE.md.
+FRONTEND_WORKERS="${CROSSWORDFALCON_FRONTEND_WORKERS:-10}"
+
 # Optional HTTPS front end (see env.sh / env_default.sh). A SECOND uvicorn
 # instance for the same frontend.server:app, terminating TLS itself on a
 # high port (3443 by default — no privileged bind, no Apache), alongside
@@ -127,7 +137,8 @@ echo "Starting middleware on port $FRONTEND_PORT..."
 # not just from this one. The back end ($BACKEND_PORT) stays on 127.0.0.1
 # only — it's an internal implementation detail, browsers only ever talk to
 # the middleware (see CLAUDE.md).
-nohup uvicorn frontend.server:app --host 0.0.0.0 --port "$FRONTEND_PORT" < /dev/null > "$FRONTEND_LOG" 2>&1 &
+nohup uvicorn frontend.server:app --host 0.0.0.0 --port "$FRONTEND_PORT" \
+    --workers "$FRONTEND_WORKERS" < /dev/null > "$FRONTEND_LOG" 2>&1 &
 FRONTEND_PID=$!
 disown "$FRONTEND_PID"
 
@@ -138,6 +149,7 @@ if [ "$HTTPS_ENABLED" -eq 1 ]; then
     # the Let's Encrypt cert. --ssl-certfile is the full chain (leaf +
     # intermediates), --ssl-keyfile the private key.
     nohup uvicorn frontend.server:app --host 0.0.0.0 --port "$FRONTEND_HTTPS_PORT" \
+        --workers "$FRONTEND_WORKERS" \
         --ssl-certfile "$TLS_CERTFILE" --ssl-keyfile "$TLS_KEYFILE" \
         < /dev/null > "$LOG_DIR/frontend-https.log" 2>&1 &
     FRONTEND_HTTPS_PID=$!

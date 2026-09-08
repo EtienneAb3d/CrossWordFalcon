@@ -11,6 +11,15 @@
     <header id="page-header">
       <img src="logo.svg" alt="CrossWordFalcon" id="logo">
       <h1 data-i18n="pageTitle">CrossWordFalcon — générateur de grilles de mots croisés</h1>
+      <!-- Pseudo de l'utilisateur, centré entre le titre et les
+           boutons/icônes à droite (deux `margin-right: auto` sur le
+           header, un sur h1 un ici, qui se partagent l'espace libre) —
+           à la demande explicite de l'utilisateur. Un clic rouvre le
+           panneau d'accueil (#welcome-overlay) pour changer pseudo/langue.
+           Affiché après acceptation ; montre un libellé "définir un
+           pseudo" traduit tant qu'aucun pseudo n'est saisi. -->
+      <button type="button" id="user-pseudo" data-i18n-aria="userPseudoLabel"
+              data-i18n-title="userPseudoLabel" hidden></button>
       <span id="version-badge" class="badge" hidden></span>
       <span id="info-badge" class="info-badge" hidden tabindex="0" role="button" data-i18n-aria="infoBadgeLabel">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
@@ -195,6 +204,12 @@
           <option value="all" data-i18n="librarySeenFilterAll">Toutes les grilles</option>
           <option value="unseen" data-i18n="librarySeenFilterUnseen">Non vues</option>
           <option value="seen" data-i18n="librarySeenFilterSeen">Déjà vues</option>
+          <!-- "Mes grilles" : filtre sur le pseudo de l'utilisateur
+               courant (script.js envoie `pseudo` dans le corps POST,
+               backend/app.py's _library_page filtre sur le champ
+               `pseudo` de chaque grille) — à la demande explicite de
+               l'utilisateur. -->
+          <option value="mine" data-i18n="librarySeenFilterMine">Mes grilles</option>
         </select>
         <!-- Filtre de niveau, à la demande explicite de l'utilisateur.
              "Tous les niveaux" par défaut ; les libellés easy/medium/hard
@@ -217,6 +232,10 @@
               <th data-i18n="libraryColTitle"></th>
               <th data-i18n="libraryColDifficulty"></th>
               <th data-i18n="libraryColSize"></th>
+              <!-- Auteur de la grille (champ `pseudo` du JSON, vide si
+                   non défini) — dernière colonne, à la demande explicite
+                   de l'utilisateur. -->
+              <th data-i18n="libraryColAuthor"></th>
             </tr>
           </thead>
           <tbody id="library-tbody"></tbody>
@@ -411,6 +430,46 @@
                 data-i18n-aria="virtualKeyboardDownBtn">↓</button>
       </div>
     </div>
+  </div>
+
+  <!-- Panneau d'accueil, à la demande explicite de l'utilisateur : au
+       premier affichage (aucun cookie de préférences), on détecte la
+       langue du navigateur et on affiche ce formulaire en overlay. Il ne
+       peut se fermer qu'en cliquant "Accepter" (aucun bouton de
+       fermeture, pas de <dialog> — donc ni ESC ni clic sur le fond ne le
+       ferment). Changer le sélecteur de langue reconfigure tout de suite
+       le formulaire ET la page dans cette langue (les deux sélecteurs de
+       langue, celui-ci et #language, restent synchronisés). Le pseudo est
+       facultatif (moins de 15 lettres). Rouvert plus tard via le bouton
+       #user-pseudo de l'en-tête. -->
+  <div id="welcome-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="welcome-title" hidden>
+    <form id="welcome-form">
+      <h2 id="welcome-title" data-i18n="welcomeTitle">Bienvenue</h2>
+      <label for="welcome-language">
+        <span data-i18n="welcomeLanguageLabel">Langue</span>
+        <select id="welcome-language">
+          <option value="fr">Français</option>
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="es">Español</option>
+          <option value="it">Italiano</option>
+          <option value="pt">Português</option>
+        </select>
+      </label>
+      <label for="welcome-pseudo">
+        <span data-i18n="welcomePseudoLabel">Pseudo</span>
+        <!-- Requis : à la demande explicite de l'utilisateur, le panneau
+             ne se ferme pas tant que le pseudo est vide (validation
+             native `required`, + garde JS contre les espaces seuls). -->
+        <input type="text" id="welcome-pseudo" maxlength="15" required
+               autocomplete="nickname" autocapitalize="off"
+               data-i18n-placeholder="welcomePseudoPlaceholder">
+      </label>
+      <p id="welcome-cookie-notice" data-i18n="welcomeCookieNotice"></p>
+      <button type="submit" id="welcome-accept-btn"
+              data-i18n="welcomeAcceptBtn">Accepter</button>
+    </form>
   </div>
 
   <script src="i18n.js"></script>

@@ -22,6 +22,15 @@ export CROSSWORDFALCON_FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
 export CROSSWORDFALCON_BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
 export LLM_PORT="${LLM_PORT:-3002}"
 
+# Number of uvicorn worker processes for the MIDDLEWARE (front) server,
+# read by run_Falcon.sh. Only the front end takes this — it's a stateless
+# proxy + static-file server, so independent workers just add capacity.
+# The back end deliberately stays single-process (its in-memory job
+# store / queues / RSS scheduler cannot be shared across workers — see
+# backend/app.py). Default 10; set to 1 to go back to a single front
+# process.
+export CROSSWORDFALCON_FRONTEND_WORKERS="${CROSSWORDFALCON_FRONTEND_WORKERS:-10}"
+
 # Derived from CROSSWORDFALCON_BACKEND_PORT just above — change the port
 # there, not here, and this follows automatically. Read by
 # frontend/server.py to know where to proxy /api/* requests.

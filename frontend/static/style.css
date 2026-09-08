@@ -1794,3 +1794,115 @@ button:disabled {
   background: var(--selected);
   outline: none;
 }
+
+/* Pseudo de l'utilisateur dans l'en-tête, centré entre le titre et les
+   boutons/icônes de droite — à la demande explicite de l'utilisateur.
+   h1 garde son `margin-right: auto` ; #user-pseudo en a un aussi : les
+   deux marges auto se partagent également l'espace libre de la rangée
+   flex, ce qui centre le pseudo entre le bord droit du titre et le bord
+   gauche des badges. Bouton cliquable (rouvre #welcome-overlay). */
+#user-pseudo {
+  flex-shrink: 0;
+  margin-right: auto;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: var(--white-cell);
+  color: var(--accent);
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#user-pseudo:hover,
+#user-pseudo:focus-visible {
+  background: var(--selected);
+  outline: none;
+}
+
+/* Tant qu'aucun pseudo n'est saisi, le bouton montre "définir un pseudo"
+   dans un style discret (gris, cadre neutre) plutôt que le style accent. */
+#user-pseudo.user-pseudo-unset {
+  border-color: var(--border);
+  color: #555;
+  font-weight: 500;
+}
+
+#user-pseudo[hidden] {
+  display: none;
+}
+
+/* Panneau d'accueil obligatoire au premier chargement — à la demande
+   explicite de l'utilisateur. Overlay plein écran, au-dessus de tout
+   (chatbot/clavier virtuel sont à z-index 5). Aucun bouton de fermeture :
+   seul "Accepter" (soumission du formulaire) le referme. Règle
+   [hidden] avec une spécificité ID+attribut (1-1-0) pour battre le
+   `display: flex` de l'ID nu (1-0-0) — même piège de spécificité déjà
+   rencontré pour #rss-detail/#rss-panel/#virtual-keyboard. */
+#welcome-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(31, 35, 32, 0.55);
+}
+
+#welcome-overlay[hidden] {
+  display: none;
+}
+
+#welcome-form {
+  width: 100%;
+  max-width: 26rem;
+  display: flex;
+  flex-direction: column;
+  /* Le sélecteur global `form` pose `flex-wrap: wrap`, `align-items: end`
+     et `margin-bottom: 1rem` (pour #generate-form) — ici il faut les
+     annuler : dans une colonne flex, `align-items: end` collerait tout
+     le contenu (titre, champs, bouton) contre le bord droit du panneau.
+     `stretch` laisse chaque <label> occuper toute la largeur, texte
+     aligné à gauche ; seul le bouton Accepter est repoussé à droite via
+     son propre `align-self` ci-dessous. */
+  flex-wrap: nowrap;
+  align-items: stretch;
+  gap: 0.9rem;
+  margin: 0;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--white-cell);
+  color: var(--fg);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+}
+
+#welcome-form h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  text-align: center;
+}
+
+#welcome-form label {
+  text-align: left;
+}
+
+#welcome-form select,
+#welcome-form input {
+  width: 100%;
+}
+
+#welcome-cookie-notice {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #555;
+}
+
+#welcome-accept-btn {
+  align-self: flex-end;
+}

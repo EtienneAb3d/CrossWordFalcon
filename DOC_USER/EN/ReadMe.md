@@ -7,12 +7,38 @@ nothing about how the interface is implemented — see `CLAUDE.md` for that.
 The page has one language selector (`#language`) that drives two things at
 once: the language of the crossword puzzle itself, and the language the
 interface's own labels/messages are shown in
-(`frontend/static/script.js`, the `languageSelect` "change" handler,
-`applyTranslations`) — there is no separate "interface language" setting.
+(`frontend/static/script.js`, `setUiLanguage`, `applyTranslations`) —
+there is no separate "interface language" setting.
+
+## First visit — the welcome panel
+
+The very first time the page is opened (no preferences cookie yet), a
+panel (`#welcome-overlay`) appears over the whole page and can only be
+dismissed by clicking **Accepter / Accept** — no close button, and
+neither the Escape key nor a click on the background closes it. It
+contains:
+
+- A **language** selector, preset to the browser's own language when it
+  is one of the six supported languages, otherwise English. Changing it
+  immediately re-renders both the panel itself and the whole page behind
+  it in that language (this is the "second" language selector — it stays
+  in sync with `#language` in the form).
+- A **pseudo / nickname** field (up to 15 characters). It is required —
+  the panel will not close until it is filled in.
+- A short notice that the site needs a functional preferences cookie to
+  work, and that it uses no tracking cookies and no advertising cookies.
+
+Clicking **Accept** saves the language and pseudo in that one cookie and
+closes the panel. The choice is remembered on later visits (the panel
+does not reappear).
 
 ## Header
 
 - The logo and page title sit at the top left (`#logo`, `h1`).
+- The **pseudo** chosen in the welcome panel is shown centered between
+  the title and the right-hand badges (`#user-pseudo`). While no pseudo
+  is set it shows a "set a nickname" label instead. Clicking it reopens
+  the welcome panel to change the pseudo or the language.
 - A small pill next to the title (`#version-badge`) shows the app's
   current version (`GET /api/version`).
 - An "i" icon next to it (`#info-badge`) reveals a tooltip on hover or
@@ -160,7 +186,8 @@ position appear again partway through an otherwise-long generation.
 Opened with the **Bibliothèque** button (`#library`, `frontend/static/
 script.js`, `renderLibraryList`). Lists every grid ever saved on this
 server (`backend/grid_store.py`, `GET /api/library`), one row per grid:
-its language, creation date, title, difficulty, and size — sorted with
+its language, creation date, title, difficulty, size, and the pseudo of
+whoever generated it (blank if they had set none) — sorted with
 the interface's current language first, then English, then everything
 else, most recent first within each group. The one exception is the
 "Toutes les langues / All languages" filter, which drops that
@@ -196,6 +223,12 @@ filter, it does not follow the interface language; it stays on "Tous les
 niveaux" until changed. Filtering happens on the server before
 pagination, so the page count reflects only the matching grids
 (`backend/app.py`, `_library_page`).
+
+A "seen" filter (`#library-seen-filter`) offers **Toutes les grilles /
+All grids** (the default), **Non vues / Not seen yet**, **Déjà vues /
+Already seen**, and **Mes grilles / My grids** — the last one keeps only
+grids whose author pseudo matches the one currently set (nothing if no
+pseudo is set).
 
 ## While a grid is generating
 

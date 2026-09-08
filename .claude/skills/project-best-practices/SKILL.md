@@ -277,6 +277,24 @@ project's engineering language.
   controls how many parallel pattern/CSP-fill attempts `backend/
   crossword_gen.py` runs per palier; mentioned (commented out, as an
   override example) at the top of `env.sh`/`env_default.sh`.
+- `CROSSWORDFALCON_FRONTEND_WORKERS` (default 10, set in `env.sh`/
+  `env_default.sh`, read by `run_Falcon.sh`) is the uvicorn `--workers`
+  count for the **middleware/front server only** (both the HTTP and, if
+  enabled, the HTTPS instance). Safe there: `frontend/server.py` is a
+  stateless proxy + static-file server (a fresh `httpx.AsyncClient` per
+  request, no cross-request state, no `@app.on_event` scheduler). The
+  **back server always runs single-process — never pass `--workers` to
+  `backend.app`**: its `JOBS`/`CANCEL_EVENTS`/`_BACKGROUND_TASKS` dicts,
+  the `GRID_QUEUE`/`CLUES_QUEUE` single-concurrency queues, and the
+  `_rss_daily_scheduler` (`@app.on_event("startup")`) all live in one
+  process's memory and cannot be shared across workers — a job created by
+  one worker 404s when polled via another, the queues stop bounding
+  CPU/GPU load, and the RSS fetch runs N times a day. Making the back
+  multi-worker would require a shared job store (Redis/SQLite) + a
+  cross-process queue/semaphore + restricting the scheduler to one
+  worker; not done, and the back (fully async, CPU delegated to
+  `ProcessPoolExecutor`) gains essentially nothing from `--workers`
+  anyway.
 - `env.sh` (project root) holds `LLM_BASE_URL`/`LLM_MODEL`/`LLM_API_KEY` and
   is gitignored (real secrets); `env_default.sh` is the checked-in template
   with placeholder credentials only, copied to `env.sh` on a fresh clone.
@@ -355,6 +373,17 @@ project's engineering language.
   `GET /api/generate/status/{job_id}` every `POLL_INTERVAL_MS` (2000ms) and
   its own browser→middleware fetch timeout is kept comfortably above
   `PROXY_TIMEOUT_S` so it never races the proxy's own timeout.
+- Client-side persistence split: the user's own preferences (chosen UI
+  language + pseudo + the "cookies accepted" flag, set through the
+  first-visit `#welcome-overlay`) live in a single functional cookie,
+  `cwf-prefs` (`document.cookie`, one-year `max-age`, `SameSite=Lax`) —
+  small, and framed to the user as a cookie so the consent notice
+  ("no tracking, no advertising cookies") is literally accurate. The
+  potentially-large per-browser "seen grids" id list stays in
+  `localStorage` (`cwf-seen-grids`), since it can hold thousands of ids,
+  well past a cookie's size budget. New client-only state should follow
+  the same rule: a cookie for a tiny consent-relevant preference,
+  `localStorage` for anything that can grow.
 - `backend/app.py`'s `JOBS` is a plain in-memory dict (one uvicorn process,
   no `--workers`), bounded to `MAX_JOBS` (50) entries. `CANCEL_EVENTS`
   (job_id -> event) is a *separate* module-level dict, evicted in lockstep

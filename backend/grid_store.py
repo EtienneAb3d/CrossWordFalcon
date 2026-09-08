@@ -88,7 +88,7 @@ def _slugify_title(title):
     return slug[:MAX_SLUG_LENGTH].strip("_") or "grille"
 
 
-def save_grid_json(result, language, difficulty, mode, title, bilingual=None):
+def save_grid_json(result, language, difficulty, mode, title, bilingual=None, pseudo=None):
     """Writes the grid to GRID_STORE/<language>/<id>.json — or, for a
     genuinely bilingual grid, GRID_STORE/bilingual/<id>.json instead — and
     returns the new record's own id (its filename stem, without the .json
@@ -112,8 +112,18 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None):
     change. `list_grids`/`_iter_stored_grids` below need no change to
     find these: `GRID_STORE_DIR.glob("*/*.json")` already walks every
     language subdirectory, "bilingual" included, since it's just one
-    more folder name to that glob."""
+    more folder name to that glob.
+
+    `pseudo` (`None` by default — every pre-existing caller, and every
+    grid saved by a user who never set one, unaffected) is the nickname
+    of whoever generated the grid, at the user's explicit request:
+    "Quand une grille est sauvegardée, si un pseudo est défini,
+    sauvegarder le pseudo dans le JSON de la grille." Stored verbatim in
+    the record's own `pseudo` field (blank/whitespace normalised to
+    `None`) so the web UI can show an author column and offer a "Mes
+    grilles" filter (see backend/app.py's `_library_page`)."""
     is_bilingual = bool(bilingual) and bilingual != language
+    pseudo = (pseudo or "").strip() or None
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     slug = _slugify_title(title)
     code = f"{secrets.randbelow(10_000):04d}"
@@ -126,6 +136,7 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None):
         "title": title,
         "language": language,
         "bilingual": bilingual if is_bilingual else None,
+        "pseudo": pseudo,
         "difficulty": difficulty,
         "mode": mode,
         "created_at": datetime.now().isoformat(),
@@ -138,9 +149,10 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None):
 
 def _iter_stored_grids():
     """Yields every stored grid's own compact metadata dict ({id,
-    created_at, language, difficulty, title, width, height}) — never the
-    full pattern/solution/words payload, so listing many grids stays
-    cheap even though each individual file can run to several dozen KB.
+    created_at, language, bilingual, pseudo, difficulty, title, width,
+    height}) — never the full pattern/solution/words payload, so listing
+    many grids stays cheap even though each file can run to several
+    dozen KB.
     A file that fails to parse (corrupted, or written by some future,
     incompatible version of save_grid_json) is skipped rather than
     failing the whole listing."""
@@ -163,6 +175,12 @@ def _iter_stored_grids():
             # exactly these entries without needing a directory-name
             # convention of its own.
             "bilingual": record.get("bilingual"),
+            # Nickname of whoever generated the grid (see save_grid_json)
+            # — `None`/absent for a grid saved before this field existed
+            # or by a user who never set a pseudo. Lets GET /api/library
+            # show an author column and offer a "Mes grilles" filter
+            # (backend/app.py's `_library_page`).
+            "pseudo": record.get("pseudo"),
             "difficulty": record.get("difficulty"),
             "title": record.get("title"),
             "width": record.get("width"),
