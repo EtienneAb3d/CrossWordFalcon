@@ -317,7 +317,7 @@ project's engineering language.
        **every** merged word whose score reaches `min_score` — the current
        value of the generation form's "Précision thématique" field,
        forwarded as a query param so the panel reacts to it live (default
-       `THEME_MIN_SCORE` = 0.67 when blank, clamped `[0,1]`) —
+       `THEME_MIN_SCORE` = 0.68 when blank, clamped `[0,1]`) —
        most-similar-first, no count limit and no length filter; a clean
        503 `similar_unavailable` when Qdrant / the embed server is down or
        the collection is unpopulated, so the rest of the UI is
@@ -942,7 +942,7 @@ the current defaults/behavior to know before touching this code.
   collecting **every** word whose own length falls between
   `THEME_LENGTH_MIN` and `THEME_LENGTH_MAX` (2-15) and whose Qdrant
   cosine-similarity score is at least the threshold — `THEME_MIN_SCORE`
-  (0.67) is the *default*, overridable by the "Précision thématique" form
+  (0.68) is the *default*, overridable by the "Précision thématique" form
   field (`GenerateRequest.theme_precision`, a 0-1 float threaded as
   `min_score` through `_compiled_theme_words_by_length`/`_theme_words_by_
   length`/`_iter_scored_words`); the same field's value is also forwarded

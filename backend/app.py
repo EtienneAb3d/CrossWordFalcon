@@ -76,7 +76,7 @@ chatbot = ChatBot()
 # importing this with Qdrant / the embed server down is harmless — the
 # endpoint just returns a clean 503. The Qdrant/embed timeouts stay short
 # (10s each — a per-keyword search pages the ranking only until the score
-# drops below the threshold, fast around THEME_MIN_SCORE = 0.67), but the
+# drops below the threshold, fast around THEME_MIN_SCORE = 0.68), but the
 # added LLM expansion makes the whole call slower than before, so the
 # frontend/proxy timeouts for this route are widened (see
 # SIMILAR_*_TIMEOUT in script.js / frontend/server.py, and
@@ -326,7 +326,7 @@ THEME_LENGTH_SEARCH_PAGE = 1000
 # _compiled_theme_words_by_length / _theme_words_by_length). Le bouton
 # "Thématique" du panneau Dictionnaire, lui, utilise toujours cette
 # constante.
-THEME_MIN_SCORE = 0.67
+THEME_MIN_SCORE = 0.68
 
 # Construction du glossaire de grille UNIQUEMENT (pas le bouton
 # "Thématique" du panneau Dictionnaire), à la demande explicite de
@@ -619,7 +619,7 @@ class GenerateRequest(BaseModel):
     # qu'un mot entre dans le glossaire thématique de CETTE génération —
     # passé comme `min_score` à _compiled_theme_words_by_length /
     # _theme_words_by_length. Par défaut la constante module
-    # THEME_MIN_SCORE (0.67). Sans effet si `theme` est vide.
+    # THEME_MIN_SCORE (0.68). Sans effet si `theme` est vide.
     theme_precision: float = Field(
         default=THEME_MIN_SCORE, ge=0.0, le=1.0,
         description="Seuil de similarité Qdrant minimal du glossaire thématique (0.0 à 1.0)",

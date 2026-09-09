@@ -6577,7 +6577,7 @@ servers:
   frontend so the panel reacts to it live, at the user's explicit request
   ("Dictionnaire / Thématique ... n'est pas sensible à la modification du
   paramètre Précision thématique"); it defaults to `THEME_MIN_SCORE`
-  (`0.67`) when the field is blank / the param is absent, and is clamped
+  (`0.68`) when the field is blank / the param is absent, and is clamped
   to `[0.0, 1.0]` server-side. **No count limit** (the old `limit` param and
   its 1..200 clamp are gone) and **no length filter** (unlike
   `_theme_words_by_length`, whose 2-15 bound is about crossword-slot
@@ -7144,7 +7144,8 @@ servers:
   ("Précision thématique par défaut à 0.66"), then raised to **`0.68`**
   ("Configurer Précision thématique à 0.68"), then to **`0.69`**
   ("Configurer Précision thématique à 0.69"), then to **`0.67`**
-  ("Précision thématique par défaut : 0.67") — `THEME_MIN_SCORE` = `0.67`,
+  ("Précision thématique par défaut : 0.67"), then to **`0.68`**
+  ("Configurer la Précision thématique par défaut à 0.68") — `THEME_MIN_SCORE` = `0.68`,
   the `GenerateRequest.theme_precision` default and `#theme-precision`'s
   `value` track it. (A one-line-plus-html-value change each time; the
   larger the value, the tighter and smaller the per-length glossary —

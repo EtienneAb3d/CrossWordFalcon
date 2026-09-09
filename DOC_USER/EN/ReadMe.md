@@ -108,7 +108,7 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   (`frontend/static/script.js`, `restrictUltraModeToLocalhost`).
 - **Précision thématique / Theme precision** (`#theme-precision`) — the
   minimum closeness a word must have to the theme to enter the theme
-  glossary, a number from 0 to 1 (0.67 by default; use a **point**, not a
+  glossary, a number from 0 to 1 (0.68 by default; use a **point**, not a
   comma, for the decimal — a typed comma is converted automatically).
   Higher means a tighter, more on-topic glossary with fewer words; lower
   means a broader one. It only affects grid generation when the

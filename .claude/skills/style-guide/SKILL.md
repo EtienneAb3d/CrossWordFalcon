@@ -1144,7 +1144,7 @@ English (see `project-best-practices`).
   session.
 
 - `<input type="text" inputmode="decimal" id="theme-precision"
-  pattern="[0-9]*([.,][0-9]+)?" value="0.67">` ("Précision thématique"),
+  pattern="[0-9]*([.,][0-9]+)?" value="0.68">` ("Précision thématique"),
   immediately after `#mode` in `#generate-form`, at the user's explicit
   request ("ajouter un paramètre 'Précision thématique' permettant de
   configurer à la main THEME_MIN_SCORE"). A plain `<label>`+`<input>` pair
@@ -2443,7 +2443,7 @@ English (see `project-best-practices`).
   (the "nearest 50" in the entry above is superseded — the count is
   bounded only by the score threshold), and that threshold is the current
   value of the generation form's "Précision thématique" field
-  (`min_score` query param, default `THEME_MIN_SCORE` = 0.67), so the
+  (`min_score` query param, default `THEME_MIN_SCORE` = 0.68), so the
   panel reacts to it. The button now also runs an LLM keyword-expansion of
   the typed term before the Qdrant searches (mirroring the grid theme
   glossary — see CLAUDE.md), so it can take a few seconds; no visual
