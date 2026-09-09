@@ -907,7 +907,8 @@ class LLMClueGenerator:
         self.api_key = os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
 
     def generate(self, word_entries, difficulty, language="fr", timeout=DEFAULT_TIMEOUT,
-                 on_progress=None, cancel_event=None, should_pause=None):
+                 on_progress=None, cancel_event=None, should_pause=None,
+                 theme_description=None):
         """`word_entries` is an iterable of (answer, accented, canonical)
         triples — `answer` is the grid's bare uppercase form (used as the
         returned dict's key, to match backend/crossword_gen.py's
@@ -974,7 +975,17 @@ class LLMClueGenerator:
         list of `word_entries` not yet attempted — so the caller can
         merge the partial result immediately and, whenever this job's
         turn comes back around, resume by calling `generate()` again with
-        only `remaining_entries`, never losing the words already done."""
+        only `remaining_entries`, never losing the words already done.
+
+        `theme_description` (`None` by default — no effect for any
+        pre-existing caller), at the user's explicit request: for a
+        themed generation, the WHOLE-theme LLM keyword list used to build
+        the theme's Qdrant glossary (see `describe_theme`/backend/
+        app.py) is appended to each per-word `user` message as a strong
+        `THEME` steering directive — see `_build_user_message`'s own
+        docstring. Accuracy stays inviolable: a theme flavour never
+        overrides the dictionary definition or the exact-grammar rule,
+        and is dropped for any clue it would make wrong."""
         def _normalize_entry(e):
             # Accepts both the pre-existing 3-tuple (answer, accented,
             # canonical) and the new 4-tuple with an explicit per-word
@@ -1003,7 +1014,9 @@ class LLMClueGenerator:
 
         def _system_prompt_for(lang):
             if lang not in system_prompts:
-                system_prompts[lang] = self._build_system_prompt(difficulty, lang)
+                system_prompts[lang] = self._build_system_prompt(
+                    difficulty, lang,
+                )
             return system_prompts[lang]
 
         # User messages are built here, up front and sequentially, on
@@ -1015,7 +1028,10 @@ class LLMClueGenerator:
         prepared = [
             (
                 (answer, accented, canonical), entry_language,
-                self._build_user_message((answer, accented, canonical), entry_language, difficulty),
+                self._build_user_message(
+                    (answer, accented, canonical), entry_language, difficulty,
+                    theme_description=theme_description or "",
+                ),
             )
             for answer, accented, canonical, entry_language in entries
         ]
@@ -1052,7 +1068,7 @@ class LLMClueGenerator:
                 executor.submit(
                     self._generate_one, entry, user_message, _system_prompt_for(entry_language),
                     max_tokens, timeout, entry_language, difficulty,
-                    cancel_event, should_pause,
+                    cancel_event, should_pause, theme_description or "",
                 )
                 for entry, entry_language, user_message in prepared
             ]
@@ -1094,7 +1110,8 @@ class LLMClueGenerator:
         return clues
 
     def _generate_one(self, entry, user_message, system_prompt, max_tokens,
-                      timeout, language, difficulty, cancel_event, should_pause):
+                      timeout, language, difficulty, cancel_event, should_pause,
+                      theme_description=""):
         """One word's complete clue-generation work — up to 3 immediate
         retry attempts on the *same* word — run in its own worker thread
         by generate()'s batched-parallel loop. Returns
@@ -1181,6 +1198,7 @@ class LLMClueGenerator:
                 answer, accented, language, difficulty, attempt + 1,
                 system_prompt, user_message, content, error, outcome,
                 candidate_details, success=clue is not None,
+                theme_description=theme_description,
             )
             if clue is not None:
                 break
@@ -1208,11 +1226,12 @@ class LLMClueGenerator:
                 f"candidate ({base!r})",
                 [(clue, "selected (target word masked, fallback)")],
                 success=True,
+                theme_description=theme_description,
             )
         return answer, clue, errors
 
     def generate_title(self, word_entries, language="fr", timeout=DEFAULT_TIMEOUT,
-                        cancel_event=None):
+                        cancel_event=None, theme_description=None):
         """Asks the LLM for _TITLE_COUNT short (see MAX_TITLE_WORDS),
         catchy candidate titles for the whole grid (one per line), from
         the list of every one of its solution words, and returns ONE of
@@ -1242,7 +1261,20 @@ class LLMClueGenerator:
         as generate()'s own accented/inflected choice), deduplicated. Each
         attempt shows the model only a random ~1/3 slice of the words
         (re-drawn per attempt, at the user's request) — the full grid is
-        still what the grid-word-reuse filter checks against."""
+        still what the grid-word-reuse filter checks against.
+
+        `theme_description`, when given (a themed generation's own
+        ~50-word LLM sentence, see `describe_theme`/backend/app.py's
+        `_run_generate_job`), is folded into the system prompt as an
+        inspiration reference, at the user's explicit request: "passer au
+        LLM la phrase ayant servi à construire le glossaire thématique
+        comme référence d'inspiration pour le titre." Framed as optional
+        context, never a requirement — the model is told it may draw on
+        its mood/imagery but must not quote it verbatim, and the
+        pre-existing "never contain a grid word" rule still applies
+        unconditionally on top of it. `None`/empty (an ordinary,
+        non-themed grid) leaves the prompt completely unchanged from
+        before this parameter existed."""
         if cancel_event is not None and cancel_event.is_set():
             raise GenerationCancelled()
         words = sorted({accented for _, accented, _ in word_entries})
@@ -1256,6 +1288,19 @@ class LLMClueGenerator:
         # rejection — the check only ever fires on a content word.
         hollow = _TITLE_HOLLOW_WORDS.get(language, set())
         grid_norm = {_normalize(w) for w in words} - hollow
+        theme_description = " ".join(str(theme_description or "").split())
+        theme_note = (
+            "THEME INSPIRATION — this grid was built around a theme; here "
+            f"is a description of it, for context only: \"{theme_description}\". "
+            "You may let it inform the mood, imagery or setting of your "
+            "titles if that helps, but you are NOT required to reference "
+            "it directly, and it never overrides the rules above — in "
+            "particular, never quote or repeat this description verbatim "
+            "(a title is 1 to "
+            f"{MAX_TITLE_WORDS} words, not a sentence), and a title must "
+            "still never contain a grid word.\n\n"
+            if theme_description else ""
+        )
         # History: first rewritten (after "Titre de mots croisés en
         # français") to carry three concrete worked GOOD examples
         # (words -> title), following this module's usual small-model
@@ -1318,6 +1363,7 @@ class LLMClueGenerator:
             "a sentence and never a definition. (No sample titles are "
             "given on purpose: any example would just get copied. Invent "
             "your own.)\n\n"
+            f"{theme_note}"
             "HOW TO BUILD THEM:\n"
             "1. Read the grid words in the user message. Note the mood, "
             "place, season, time of day, or action they bring to mind.\n"
@@ -1480,6 +1526,233 @@ class LLMClueGenerator:
             _TITLE_RETRIES,
         )
         return ""
+
+    def describe_theme(self, theme_words, language="fr", timeout=DEFAULT_TIMEOUT,
+                       cancel_event=None, temperature=0.7):
+        """Asks the LLM for a short (~30-word) telegraphic
+        description, in `language`, of the shared theme of the words the
+        player typed into the web UI's "Thématique" field. Used by
+        backend/app.py's _run_generate_job: the embedding of THIS text
+        (not of the raw word list) is what the Qdrant nearest-words
+        pre-search runs against, so a terse theme ("cuisine italienne")
+        is first expanded into a dense, keyword-rich semantic query
+        before the nearest-words lookup. Telegraphic and packed with
+        distinct on-topic concepts rather than a fluent sentence, at the
+        user's explicit request — the fewer filler words the embedding
+        has to average over, the sharper the query vector. The model is
+        also asked to deliberately span every part of speech (nouns,
+        verbs, adjectives, adverbs), at the user's explicit request, so
+        the resulting glossary isn't nouns-only.
+
+        A single best-effort call — no retry loop, and no per-call
+        LOG_LLM/ record (like generate_title, this is a convenience, not
+        core puzzle output). Returns "" on any failure (HTTP error,
+        empty/unusable reply); the caller then falls back to embedding
+        the raw theme string itself. Raises GenerationCancelled if
+        `cancel_event` is set.
+
+        `theme_words` is the raw theme string exactly as typed (a short
+        list of words / a phrase); it is passed to the model verbatim.
+        `temperature` defaults to 0.7 (the Dictionary panel's own value);
+        grid-glossary construction passes 0.9 so its repeated calls
+        (`_run_generate_job`'s keyword top-up loop) yield more varied
+        keyword lists."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelled()
+        theme_text = " ".join(str(theme_words).split())
+        if not theme_text:
+            return ""
+        language_name = LANGUAGE_NAMES.get(language, language)
+        system_prompt = (
+            "You are given a few words or short phrases that state the "
+            "intended THEME of a crossword puzzle. Reply with a "
+            f"description, entirely in {language_name}, of about 30 "
+            "words (25 to 35 is fine). Write in a TELEGRAPHIC style: as "
+            "few words as possible, as many distinct on-topic concepts as "
+            "possible, separated by commas. Drop ONLY articles, "
+            "prepositions and connectors (the small grammatical words). "
+            "Deliberately MIX grammatical categories — include on-topic "
+            "NOUNS, VERBS (in the infinitive), ADJECTIVES and ADVERBS, not "
+            "just nouns: the field it belongs to, related concepts, "
+            "typical vocabulary, actions performed, qualities/properties, "
+            "the places, people, objects and activities it evokes. This "
+            "text is used to search a dictionary for words semantically "
+            "close to the theme, so pack it with on-topic terms of every "
+            "part of speech and no filler or meta-commentary.\n\n"
+            "Your ENTIRE reply is that description and nothing "
+            "else: no preamble, no title, no bullet list, no quotes, no "
+            f"note before or after. Write only in {language_name}."
+        )
+        user_message = (
+            f"Theme words: {theme_text}\n"
+            "~30-word telegraphic description:"
+        )
+        try:
+            response = httpx.post(
+                self.base_url,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_message},
+                    ],
+                    "temperature": temperature,
+                    # ~30 words of answer plus headroom; reasoning itself
+                    # is disabled by reasoning_effort:none.
+                    "max_tokens": REASONING_TOKEN_BUDGET + 150,
+                    "reasoning_effort": "none",
+                },
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            content = response.json()["choices"][0]["message"]["content"]
+        except httpx.HTTPError as e:
+            logger.warning(
+                "theme description failed (%s, model=%r): %s",
+                self.base_url, self.model, e,
+            )
+            return ""
+        logger.info("theme description: raw LLM response: %r", content)
+        sentence = " ".join(_strip_reasoning(content).split())
+        if not sentence:
+            return ""
+        # Safety net: the prompt asks for ~30 words; a small model
+        # sometimes keeps going. Cap well above the target so a normal
+        # answer is never truncated.
+        parts = sentence.split()
+        if len(parts) > 70:
+            sentence = " ".join(parts[:70])
+        return sentence
+
+    def generate_definitions(self, text, language="fr", difficulty="medium",
+                             count=10, timeout=90.0):
+        """"Définir" button in the Dictionary panel (frontend/static/
+        script.js, GET /api/dictionary/define): asks the LLM for up to
+        `count` (10 by default) independent definitions of the typed
+        word or expression, one per line — reusing the same grounding
+        (`_build_user_message`: real dictionary definitions, real usage
+        examples, grammatical analysis, all keyed by `text` itself) and
+        the same content filter (`_filter_candidates`) already used for a
+        real grid word's clue, but returning every surviving candidate
+        instead of picking just one.
+
+        Deliberately does NOT reuse `_build_system_prompt()` — that one
+        is tightly tuned around asking for exactly 3 candidates plus a
+        mandatory "A=" grammatical-analysis line for one specific grid
+        word's own exact inflected form (see the project-best-practices
+        SKILL for how much live-tuning history that prompt carries); a
+        free-text dictionary lookup has no single known inflected form to
+        analyse and wants an arbitrary count, so it gets its own compact
+        prompt (`_build_definitions_system_prompt`) instead of forking
+        that one. For the same reason it does NOT reuse
+        `_build_user_message()` either — that one's own opening paragraph
+        ("Each of your 3 clues must be phrased so its OWN grammar...
+        matches this exact written form") is itself worded around the
+        grid-clue prompt's fixed count and single-inflected-form premise,
+        which would actively mismatch this method's own `count` and
+        free-text input; instead this builds a grounding-only user
+        message directly from the same three block builders
+        (`_build_gloss_block`/`_build_pos_block`/`_build_examples_block`)
+        with a plain "Word or expression: ..." header of its own.
+
+        A single best-effort LLM call — no multi-round retry loop like
+        `generate()`'s per-grid-word one (a player can just click
+        "Définir" again), and no per-call `LOG_LLM/` record, matching
+        `generate_title()`/`describe_theme()`'s own convention for this
+        kind of auxiliary, non-puzzle-output call. `timeout` defaults to
+        90s: measured live at ~40s for a real 10-definition call on this
+        project's own small local model (Qwen3-4B) — asking for `count`
+        lines in one response is a meaningfully heavier single call than
+        a grid word's own one-line clue, so this needs real headroom, not
+        the short budget a quick single-word lookup could get away with.
+        `frontend/server.py`'s own proxy route for this endpoint uses a
+        matching, longer timeout (`DEFINE_PROXY_TIMEOUT_S`, mirroring how
+        the chat feature's `CHAT_PROXY_TIMEOUT_S` already departs from
+        the default `PROXY_TIMEOUT_S` for the same reason), and `script.
+        js`'s own fetch timeout for this button is longer still.
+
+        Returns a list of up to `count` definition strings, de-duplicated,
+        in the model's own order (fewer if it wrote less, or if some
+        candidates were filtered out) — never raises for "the model gave
+        a bad or empty answer" (an empty list simply means no definition
+        this time), only `ClueGenerationError` for a genuine connection
+        failure (from `_call`)."""
+        text = " ".join(str(text).split())
+        if not text:
+            return []
+        entry = (text.upper(), text, (text.lower(),))
+        system_prompt = self._build_definitions_system_prompt(difficulty, language, count)
+        parts = [f"Word or expression: {text}"]
+        for block_builder in (self._build_gloss_block, self._build_pos_block,
+                              self._build_examples_block):
+            block = block_builder(entry, language, difficulty)
+            if block:
+                parts.append(block)
+        user_message = "\n\n".join(parts)
+        max_tokens = REASONING_TOKEN_BUDGET + 200 + 40 * count
+        content = self._call(
+            entry[0], text, 1, system_prompt, user_message, max_tokens, timeout,
+            total_rounds=1,
+        )
+        candidates = self._parse_response(content)
+        accepted, _details, _maskable = self._filter_candidates(
+            candidates, entry[0], text, entry[2], language, 1, total_rounds=1,
+        )
+        definitions = []
+        seen = set()
+        for c, _idx in accepted:
+            if c in seen:
+                continue
+            seen.add(c)
+            definitions.append(c)
+            if len(definitions) >= count:
+                break
+        logger.info(
+            "define: %r (%s) -> %d/%d definition(s) kept",
+            text, language, len(definitions), count,
+        )
+        return definitions
+
+    @staticmethod
+    def _build_definitions_system_prompt(difficulty, language, count):
+        """Compact, standalone system prompt for `generate_definitions()`
+        — see that method's own docstring for why this is deliberately
+        NOT a variant of `_build_system_prompt()`. Same difficulty-style
+        line and the same "ground strictly in the given dictionary
+        definitions" rule as the grid-clue prompt, scaled to `count`
+        lines instead of a fixed 3, with no "A=" analysis step (there is
+        no single known inflected form here to analyse)."""
+        style = DIFFICULTY_STYLE.get(difficulty, DIFFICULTY_STYLE["medium"])
+        language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
+        return (
+            f"You are writing dictionary-style crossword definitions in "
+            f"{language_name}, at {difficulty.upper()} difficulty: {style}\n\n"
+            "The user message gives you one word or short expression. "
+            f"Write exactly {count} different short definitions of it — "
+            "each one on its own line, nothing else on that line. It may "
+            "also include real dictionary definitions and/or real "
+            "example sentences for it.\n\n"
+            "ABSOLUTE RULE — if the user message contains a \"Dictionary "
+            "definition(s)\" section, every one of your definitions MUST "
+            "be built from a meaning written there, and from NOTHING "
+            "ELSE; never invent a meaning that is not listed there.\n\n"
+            "Rules:\n"
+            "1. Never include the word/expression itself, or a close "
+            "same-family variant of it, anywhere in a definition.\n"
+            "2. Each definition must be a real, self-contained definition "
+            f"a reader would understand on its own — at most "
+            f"{MAX_CLUE_WORDS} words — never a bare grammatical label and "
+            "never a description of the word's own spelling or letters.\n"
+            f"3. Vary the {count} definitions: different real senses, "
+            "angles, or phrasing when more than one is possible, rather "
+            "than repeating the same one reworded.\n"
+            f"4. Write entirely in {language_name}, every definition, "
+            "from the first word to the last.\n\n"
+            f"OUTPUT FORMAT — exactly {count} lines and nothing else: no "
+            "numbering, no bullets, no labels, no blank lines, and no "
+            "commentary before, between, or after them."
+        )
 
     @staticmethod
     def _build_examples_block(entry, language, difficulty):
@@ -1731,7 +2004,13 @@ class LLMClueGenerator:
 
         Every concrete word/clue example (and the subject-pronoun list
         rule 4 names) comes from PROMPT_CONFIG_DIR/<language>_prompt_
-        config.json, not hardcoded here — see _load_prompt_config."""
+        config.json, not hardcoded here — see _load_prompt_config.
+
+        The theme steering note (for a themed grid) is NOT here — it lives
+        in `_build_user_message()` instead, at the user's explicit request
+        ("déplace la section THEME dans le prompt utilisateur"), so it
+        sits in the highest-recency position, right before the word the
+        model must clue."""
         config = _load_prompt_config(language)
         style = DIFFICULTY_STYLE.get(difficulty, DIFFICULTY_STYLE["medium"])
         language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
@@ -1912,14 +2191,22 @@ class LLMClueGenerator:
             "before, between, or after these 4 lines."
         )
 
-    def _build_user_message(self, entry, language, difficulty):
+    def _build_user_message(self, entry, language, difficulty, theme_description=""):
         """The one thing that varies per call: the word itself, plus its
         grounding block (real dictionary definitions, a Hunspell-derived
         grammatical-type line, and example sentences, when available) —
         sent as the `user` message, paired with the fixed `system`
         message from `_build_system_prompt()`. `difficulty` reaches the
         gloss block and the pos block, both of which drop proper-noun
-        senses in "easy" (see `_build_gloss_block`/`_build_pos_block`)."""
+        senses in "easy" (see `_build_gloss_block`/`_build_pos_block`).
+
+        `theme_description`, when given (a themed generation's WHOLE-theme
+        LLM keyword list — see `_run_generate_job`), is appended as the
+        final `THEME` block, at the user's explicit request ("déplace la
+        section THEME dans le prompt utilisateur"): the user message is
+        the last thing the model reads before answering, the
+        highest-recency position, so a strong per-word theme directive
+        lands harder here than buried in the shared system prompt."""
         _, accented, _ = entry
         # A per-word grammatical-agreement reminder, right in the user
         # message (the last thing the model reads before answering — the
@@ -1947,9 +2234,32 @@ class LLMClueGenerator:
         examples_block = self._build_examples_block(entry, language, difficulty)
         if examples_block:
             parts.append(examples_block)
+        theme_description = " ".join(str(theme_description or "").split())
+        if theme_description:
+            parts.append(
+                "THEME — this grid was built around a theme. Here is that "
+                "theme, as the keyword list produced for it: "
+                f"\"{theme_description}\". STRONGLY steer each of your 3 "
+                "clues toward this theme: whenever THIS word's real "
+                "meaning and its required grammar leave you ANY latitude "
+                "in angle, wording, imagery, chosen example or register, "
+                "deliberately pick the formulation that best evokes this "
+                "theme — its vocabulary, its setting, its people and "
+                "activities — rather than a neutral one. Prefer a synonym, "
+                "an example or a turn of phrase drawn from the theme's "
+                "world. The ONE thing this must never do is make a clue "
+                "wrong: it must still be an accurate clue for THIS EXACT "
+                "word (its real meaning — see the ABSOLUTE RULE), match "
+                "its exact grammar (rule 4), and point at nothing else. "
+                "If a theme-flavoured phrasing would be inaccurate, "
+                "ambiguous, or grammatically mismatched, drop the flavour "
+                "for that clue and stay plain — accuracy always wins that "
+                "trade. Never quote this keyword list verbatim."
+            )
         return "\n\n".join(parts)
 
-    def _call(self, answer, accented, round_number, system_prompt, user_message, max_tokens, timeout):
+    def _call(self, answer, accented, round_number, system_prompt, user_message, max_tokens,
+             timeout, total_rounds=3):
         try:
             response = httpx.post(
                 self.base_url,
@@ -1987,14 +2297,14 @@ class LLMClueGenerator:
         # clue couldn't be fully confirmed from the existing warning-only
         # logging alone.
         logger.info(
-            "clue round %d/3: %r (%r) — raw LLM response: %r",
-            round_number, answer, accented, content,
+            "clue round %d/%d: %r (%r) — raw LLM response: %r",
+            round_number, total_rounds, answer, accented, content,
         )
         return _strip_reasoning(content)
 
     def _write_call_log(self, answer, accented, language, difficulty, round_number,
                          system_prompt, user_message, content, error, outcome,
-                         candidate_details, success):
+                         candidate_details, success, theme_description=""):
         """Writes a self-contained Markdown record of one LLM call — every
         single call `generate()` makes, successes included, not just
         failures (originally this only fired for a word that exhausted
@@ -2040,11 +2350,17 @@ class LLMClueGenerator:
             )
         else:
             candidates_section = "(none — see Error above, or the model gave no parsable candidate lines)"
+        theme_line = (
+            f"- **Theme keywords** (whole-theme LLM list, steers the clue): "
+            f"{' '.join(str(theme_description).split())}\n"
+            if theme_description else ""
+        )
         body = (
             f"# Clue generation call — {answer} ({accented})\n\n"
             f"- **Date**: {datetime.now().isoformat()}\n"
             f"- **Language**: {language}\n"
             f"- **Difficulty**: {difficulty}\n"
+            f"{theme_line}"
             f"- **LLM endpoint**: {self.base_url}\n"
             f"- **Model**: {self.model}\n"
             f"- **Attempt**: {round_number}/3\n"
@@ -2092,62 +2408,70 @@ class LLMClueGenerator:
         ]
 
     @staticmethod
-    def _pick_clue(candidates, answer, accented, canonical, language, round_number):
-        """Picks one of this word's (up to 3) candidate clues at random —
-        favors variety across regenerations of the same word, and keeps
-        the choice out of the LLM's hands as requested. Drops any
-        candidate that isn't actually a clue: longer than `MAX_CLUE_WORDS`
-        words (a real, observed failure mode — the model writing out its
+    def _filter_candidates(candidates, answer, accented, canonical, language,
+                           round_number, total_rounds=3):
+        """The actual "is this candidate a real, usable clue?" filter,
+        extracted out of `_pick_clue` (below) so a caller that wants
+        *every* surviving candidate — not just one randomly chosen pick —
+        can reuse the exact same checks (see `generate_definitions`, the
+        Dictionary panel's "Définir" button, which asks for several
+        definitions at once instead of one clue). Drops any candidate
+        that isn't actually a clue: longer than `MAX_CLUE_WORDS` words (a
+        real, observed failure mode — the model writing out its
         reasoning, several sentences long, instead of a short clue — see
         `MAX_CLUE_WORDS`'s comment), non-Latin-script drift, written in a
-        different language than `language` (see
-        `_detect_wrong_language` — a real, observed failure mode neither
-        of the previous two checks catches, since leaked meta-commentary
-        in another Latin-script language can be short and script-valid,
-        e.g. "All good. Let me also make sure they're short" for a
-        French word), or the word being defined (or a same-family word
-        sharing its canonical form/lemma, e.g. singular "maman" leaking
-        into a clue for plural MAMANS) appearing anywhere in it, whether
-        as the whole clue or embedded in a longer sentence (the prompt
-        forbids this, but small local models sometimes do it anyway —
-        see `_contains_target_word`). Every rejected candidate is logged
-        individually with a qualifier naming which check(s) it failed (a
-        candidate can fail more than one at once — all of them are
-        named, not just the first found), and the one ultimately chosen
-        is logged too — so a deployed instance's log always shows the
-        full fate of every candidate the model proposed, not just the
-        final verdict. Before any of that, each candidate is first run
-        through `_strip_leading_word_label()` — a candidate that would
-        otherwise be rejected purely for opening with a leaked "word -
-        definition" label gets that label stripped instead, salvaging
-        what's usually a perfectly good definition rather than burning a
-        whole retry round on a mechanically fixable formatting slip.
-        Returns `(chosen, details, maskable)`: `chosen` is the selected
-        clue text, or None if every candidate was rejected (which
-        `generate()` reads as still needing a clue and retries); `details`
-        is `[(candidate, verdict), ...]` for every candidate in order —
-        `verdict` is `"selected"`, `"accepted (not selected)"` (a
-        candidate that passed every check but wasn't the one randomly
-        chosen), or `"rejected: <reason(s)>"` — passed straight through to
+        different language than `language` (see `_detect_wrong_language`
+        — a real, observed failure mode neither of the previous two
+        checks catches, since leaked meta-commentary in another Latin-
+        script language can be short and script-valid, e.g. "All good.
+        Let me also make sure they're short" for a French word), or the
+        word being defined (or a same-family word sharing its canonical
+        form/lemma, e.g. singular "maman" leaking into a clue for plural
+        MAMANS) appearing anywhere in it, whether as the whole clue or
+        embedded in a longer sentence (the prompt forbids this, but small
+        local models sometimes do it anyway — see `_contains_target_
+        word`). Every rejected candidate is logged individually with a
+        qualifier naming which check(s) it failed (a candidate can fail
+        more than one at once — all of them are named, not just the
+        first found) — so a deployed instance's log always shows the
+        full fate of every candidate the model proposed. Before any of
+        that, each candidate is first run through
+        `_strip_leading_word_label()` — a candidate that would otherwise
+        be rejected purely for opening with a leaked "word - definition"
+        label gets that label stripped instead, salvaging what's usually
+        a perfectly good definition rather than losing it over a
+        mechanically fixable formatting slip.
+
+        `total_rounds` only affects the "N/M" figure in the log lines
+        (3 for the grid-clue retry loop this was extracted from; a
+        different caller with its own round budget passes its own).
+
+        Returns `(accepted, details, maskable)`: `accepted` is
+        `[(text, details_index), ...]` for every candidate that passed —
+        keeping each one's own index into `details` (rather than just its
+        text) so two textually-identical accepted candidates are never
+        conflated when a caller later marks one of them "selected" in
+        `details`; `details` is `[(candidate, verdict), ...]` for every
+        candidate in order — verdict is `"accepted (not selected)"` or
+        `"rejected: <reason(s)>"` — passed straight through to
         `_write_call_log()` so its own diagnostic file can show the full
-        list of what was proposed and rejected, not just the final pick,
-        at the user's explicit request. `maskable` is the subset of
-        candidates rejected *solely* for containing the target word (they
-        passed length / script / language) — `_generate_one` keeps these
-        across all 3 rounds so that, if no clean clue ever comes, it can
-        mask the word in one of them rather than give up (see
-        `_mask_target_word`)."""
+        list of what was proposed and rejected; `maskable` is the subset
+        rejected *solely* for containing the target word (they passed
+        length/script/language) — `_generate_one` keeps these across all
+        3 rounds so that, if no clean clue ever comes, it can mask the
+        word in one of them rather than give up (see `_mask_target_word`).
+        """
         details = []
-        accepted_indices = []
+        accepted = []
         maskable = []
         for c in candidates:
             if c:
                 stripped = _strip_leading_word_label(c, answer, accented, canonical)
                 if stripped != c:
                     logger.info(
-                        "clue round %d/3: %r (%r) — stripped leaked word-label "
+                        "clue round %d/%d: %r (%r) — stripped leaked word-label "
                         "prefix: %r -> %r",
-                        round_number, answer, accented, c, stripped,
+                        round_number, total_rounds, answer, accented, c, stripped,
                     )
                     c = stripped
             reasons = []
@@ -2168,19 +2492,36 @@ class LLMClueGenerator:
                     contains_only = len(reasons) == 1
             if reasons:
                 logger.info(
-                    "clue round %d/3: %r (%r) — candidate rejected (%s): %r",
-                    round_number, answer, accented, "; ".join(reasons), c,
+                    "clue round %d/%d: %r (%r) — candidate rejected (%s): %r",
+                    round_number, total_rounds, answer, accented,
+                    "; ".join(reasons), c,
                 )
                 details.append((c, "rejected: " + "; ".join(reasons)))
                 if contains_only:
                     maskable.append(c)
             else:
-                accepted_indices.append(len(details))
+                accepted.append((c, len(details)))
                 details.append((c, "accepted (not selected)"))
-        if not accepted_indices:
+        return accepted, details, maskable
+
+    @classmethod
+    def _pick_clue(cls, candidates, answer, accented, canonical, language, round_number):
+        """Picks one of this word's (up to 3) candidate clues at random —
+        favors variety across regenerations of the same word, and keeps
+        the choice out of the LLM's hands as requested. Filtering itself
+        lives in `_filter_candidates` (see its own docstring for every
+        check applied); this method only adds the random pick and the
+        matching log line + `details` update. Returns `(chosen, details,
+        maskable)`: `chosen` is the selected clue text, or None if every
+        candidate was rejected (which `generate()` reads as still needing
+        a clue and retries); `details`/`maskable` are `_filter_candidates`'
+        own, with the chosen entry's own verdict flipped to `"selected"`."""
+        accepted, details, maskable = cls._filter_candidates(
+            candidates, answer, accented, canonical, language, round_number,
+        )
+        if not accepted:
             return None, details, maskable
-        chosen_index = random.choice(accepted_indices)
-        chosen = details[chosen_index][0]
+        chosen, chosen_index = random.choice(accepted)
         logger.info(
             "clue round %d/3: %r (%r) — candidate selected: %r",
             round_number, answer, accented, chosen,

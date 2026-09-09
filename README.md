@@ -201,6 +201,23 @@ you wait. While waiting, you can always browse and play a grid from the
 Library instead — yours will be added there automatically the moment
 it's ready.
 
+### Dictionary
+
+The **"Dictionnaire" / "Dictionary"** button opens a small panel for
+looking words up in the chosen language:
+
+- **"Chercher" / "Search"** lists every word with the same root as what
+  you typed (accents and case don't matter), each with its real
+  definitions.
+- **"Mots similaires" / "Similar words"** lists the 50 words closest in
+  *meaning* to what you typed, most similar first, on one comma-separated
+  line. This one needs two optional extra services running — a local
+  embedding server (`./run_embed.sh`) and the Qdrant vector database
+  (`./Install_qdrant.sh` once, then `./run_qdrant.sh`), with the word
+  index built by `python -m data_builder.qdrant_populate --all`. If any
+  of that isn't set up, the button just shows a short "unavailable"
+  message and everything else keeps working.
+
 ### Chatting with David FALCON
 
 A small chat panel, open by default in the bottom-right corner of the

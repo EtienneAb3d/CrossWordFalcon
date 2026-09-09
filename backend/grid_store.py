@@ -88,7 +88,8 @@ def _slugify_title(title):
     return slug[:MAX_SLUG_LENGTH].strip("_") or "grille"
 
 
-def save_grid_json(result, language, difficulty, mode, title, bilingual=None, pseudo=None):
+def save_grid_json(result, language, difficulty, mode, title, bilingual=None, pseudo=None,
+                   theme=None):
     """Writes the grid to GRID_STORE/<language>/<id>.json — or, for a
     genuinely bilingual grid, GRID_STORE/bilingual/<id>.json instead — and
     returns the new record's own id (its filename stem, without the .json
@@ -124,6 +125,14 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     grilles" filter (see backend/app.py's `_library_page`)."""
     is_bilingual = bool(bilingual) and bilingual != language
     pseudo = (pseudo or "").strip() or None
+    # Thématique saisie par l'utilisateur (liste de mots), à la demande
+    # explicite : "Lors de la sauvegarde de la grille, enregistrer les
+    # mots de la thématique si il y en a." Stockée telle quelle (la
+    # chaîne saisie, pas les ~5000 mots présélectionnés par la
+    # pré-recherche Qdrant) dans le champ `theme` du record ;
+    # blanc/espaces -> None. Affichée dans la colonne "Thématique" de la
+    # Bibliothèque (voir _iter_stored_grids et frontend/static/script.js).
+    theme = (theme or "").strip() or None
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     slug = _slugify_title(title)
     code = f"{secrets.randbelow(10_000):04d}"
@@ -137,6 +146,7 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
         "language": language,
         "bilingual": bilingual if is_bilingual else None,
         "pseudo": pseudo,
+        "theme": theme,
         "difficulty": difficulty,
         "mode": mode,
         "created_at": datetime.now().isoformat(),
@@ -149,8 +159,8 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
 
 def _iter_stored_grids():
     """Yields every stored grid's own compact metadata dict ({id,
-    created_at, language, bilingual, pseudo, difficulty, title, width,
-    height}) — never the full pattern/solution/words payload, so listing
+    created_at, language, bilingual, pseudo, theme, difficulty, title,
+    width, height}) — never the full pattern/solution/words payload, so listing
     many grids stays cheap even though each file can run to several
     dozen KB.
     A file that fails to parse (corrupted, or written by some future,
@@ -181,6 +191,11 @@ def _iter_stored_grids():
             # show an author column and offer a "Mes grilles" filter
             # (backend/app.py's `_library_page`).
             "pseudo": record.get("pseudo"),
+            # Thématique saisie à la génération (voir save_grid_json) —
+            # `None`/absent pour une grille sans thématique ou d'avant ce
+            # champ. Affichée dans la colonne "Thématique" de la
+            # Bibliothèque (frontend/static/script.js, renderLibraryList).
+            "theme": record.get("theme"),
             "difficulty": record.get("difficulty"),
             "title": record.get("title"),
             "width": record.get("width"),

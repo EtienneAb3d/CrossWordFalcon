@@ -6,6 +6,7 @@ env.sh
 /models/
 /data/hunspell_cache/
 /data/reference_corpus/
+/data/qdrant/
 /CORPUS/
 /DICS/
 /GRID_SVG/
@@ -14,6 +15,7 @@ env.sh
 /LOG_LLM/
 /LOG_CHAT/
 /LOG_USERS/
+/LOG_THEME/
 /RSS/
 /SCRAPP/
 *.log

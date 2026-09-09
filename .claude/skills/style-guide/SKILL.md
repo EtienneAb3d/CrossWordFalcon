@@ -1143,6 +1143,29 @@ English (see `project-best-practices`).
   an actual browser** — same tooling limitation as other UI work this
   session.
 
+- `<input type="text" inputmode="decimal" id="theme-precision"
+  pattern="[0-9]*([.,][0-9]+)?" value="0.67">` ("Précision thématique"),
+  immediately after `#mode` in `#generate-form`, at the user's explicit
+  request ("ajouter un paramètre 'Précision thématique' permettant de
+  configurer à la main THEME_MIN_SCORE"). A plain `<label>`+`<input>` pair
+  with **no** `%` suffix (unlike "Taux noir"/"Graines" — this is a 0-1
+  similarity score, not a percentage) and no `.input-with-suffix` wrapper,
+  styled by the existing shared form rules. **`type="text"`, not
+  `type="number"`**, at the user's explicit follow-up request ("forcer
+  l'usage du point comme séparateur des décimales et non la virgule") — a
+  locale-aware number input can accept/display a comma, confusing without
+  a visible locale hint. A shared `readThemePrecision()` helper
+  (`script.js`) normalizes `,`→`.`, `Number()`s, clamps `[0,1]` (blank →
+  `undefined`); a `blur` listener rewrites the field with the normalized
+  value. Sets `GenerateRequest.theme_precision` (the per-generation
+  theme-glossary score threshold — see CLAUDE.md) **and** is forwarded to
+  the Dictionary panel's "Thématique" button (`GET /api/similar_words`'s
+  `min_score` param) so that lookup reacts to it too. `themePrecisionLabel`
+  /`themePrecisionTitle` translated in all 6 i18n blocks. Verified: JS/
+  i18n syntax-checked (`esprima`); real API calls confirmed both the
+  generation path and `GET /api/similar_words` react to the value (see
+  CLAUDE.md). **Not yet visually confirmed in an actual browser.**
+
 - A "Continuer" button (`#continue-btn`) was added next to `#stop-btn`, at
   the user's explicit request: when a generation exhausts every one of its
   `attempts` (200 by default) without finding a fillable grid, this button
@@ -1711,13 +1734,35 @@ English (see `project-best-practices`).
   request: "ça charge la grille pour la jouer (exactement comme en fin de
   process, avec les boutons 'Vérification' et 'Solution' visibles)."
 
+  The table's last two columns are link cells, at the user's explicit
+  request: **"Lien"** — a shareable `<a target="_blank">` to
+  `SHARE_BASE_URL + "?grid=<id>"` (`SHARE_BASE_URL` = the public
+  `https://falcon.cubaix.com/`) that reloads the grid on open — and
+  **"PDF"** — an `<a download>` to the relative `/api/library/<id>/pdf`
+  (a printable, answer-free sheet: empty grid + clues + title, plus a
+  "jouer en ligne (avec solution)" footer link). The "Lien" `<a>` carries
+  `class="library-link"`: accent-coloured (`var(--accent)`), underlined,
+  `white-space: nowrap`, and keeps that colour even on a greyed
+  `.library-grid-seen` row (an explicit second selector overrides the
+  row's `color`). The "PDF" `<a>` carries `class="library-link
+  library-pdf-link"` and, instead of text, a small inline-SVG **PDF
+  icon** — a red (`#dc2626`) "PDF" badge on a white document (no external
+  icon font/library, same convention as the header `#info-badge`'s
+  circled-i) — with `libraryPdfText` ("Télécharger le PDF" / "Download
+  PDF" / …) as its `aria-label`/`title`; `.library-pdf-link` is
+  `inline-flex`, **not** underlined, its `.pdf-icon` `display: block`.
+  Both links `stopPropagation` on click/keydown so they don't also
+  trigger the row's own load-into-player behaviour (the "Lien" opens a
+  new tab, the "PDF" downloads).
+
   **Not yet visually confirmed in an actual browser** — same tooling
   limitation noted throughout this file; verified structurally (a real
   JS syntax check via `esprima`, an HTML tag-balance check, a CSS
   brace-balance check) and functionally through the real running API end
   to end (real generations saved to and correctly listed/sorted from
-  `GRID_STORE/`, see CLAUDE.md for the full trail) rather than by
-  looking at the rendered page.
+  `GRID_STORE/`; the PDF route returning a real `%PDF-1.7` document
+  through both the backend and the proxy, see CLAUDE.md for the full
+  trail) rather than by looking at the rendered page.
 
 - Library pagination (`#library-pagination`, 20 rows/page, at the user's
   explicit request), styled as a small `.nav-btn`-pair-plus-position row
@@ -2345,3 +2390,186 @@ English (see `project-best-practices`).
   first successful `/api/presence` heartbeat; no `[hidden]` override
   needed (`.badge` sets no `display`). **Not visually confirmed in a
   browser** — same tooling limitation noted throughout this file.
+
+- **"Mots similaires" button** in the Dictionary panel
+  (`#dictionary-similar-btn`, `frontend/static/index.html`), at the
+  user's explicit request: nearest 50 words in Qdrant to the typed
+  expression, listed most-similar-first on one comma-separated line.
+  A **plain `<button type="button">`** with no dedicated CSS — it
+  inherits the shared accent-blue button look, the same as
+  `#dictionary-search-btn` right before it (also a plain button, no
+  class), so the two read as a pair of primary search actions;
+  `#dictionary-clear-btn` keeps its subdued `.nav-btn` treatment as the
+  odd one out, unchanged. `type="button"` (not `submit`) so it never
+  triggers the form's own dictionary lookup. Its result block reuses the
+  existing `.dictionary-result` card (stacked, newest-first, cleared by
+  "Effacer" together with the normal dictionary results) with an `<h3>`
+  heading ("Mots similaires à « … »") and a single new
+  `.dictionary-similar-line` paragraph — `font-size: 0.9rem;
+  line-height: 1.5`, no `white-space` override, so the 50 comma-separated
+  words wrap naturally within the panel width (never a horizontal
+  scroll — "en une ligne" means one logical comma-separated string, not
+  one physical unwrapped line). An empty result reuses the existing
+  `.dictionary-empty` italic-grey style; a failure (Qdrant/embed server
+  down, or the `words` collection not yet populated) shows the same
+  `.dictionary-empty` style with a new `dictionarySimilarError` string.
+  Three new i18n keys (`dictionarySimilarBtn`/`dictionarySimilarHeading`/
+  `dictionarySimilarError`) in all 6 languages. **Not visually confirmed
+  in a browser** — same tooling limitation noted throughout this file;
+  verified structurally (JS syntax check via `esprima`, CSS brace
+  balance) and end to end against the running servers (`GET /api/similar_
+  words` returns real words once the collection has points; a clean 503/
+  empty result while it is still being populated).
+
+  The button's own displayed label (`dictionarySimilarBtn`) was later
+  renamed from "Mots similaires" to **"Thématique"** (per-language
+  equivalents matching this project's own existing `themeLabel` wording:
+  en "Theme", de "Thema", es/pt "Temática", it "Tematica"), at the
+  user's explicit request: "renommer le bouton 'Mots similaires' par
+  'Thématique'." Deliberately scoped to just the button — the result
+  heading (`dictionarySimilarHeading`, "Mots similaires à « … »") and the
+  error message (`dictionarySimilarError`) were left unchanged, matching
+  the literal, narrow wording of the request rather than assuming the
+  rename should cascade to every related string. The element id
+  (`#dictionary-similar-btn`) and every internal identifier are
+  unchanged — only the displayed text.
+
+  The result line (`.dictionary-similar-line`) now shows each word with
+  its **Qdrant similarity score in parentheses**, 2 decimals — e.g.
+  `CHAT (0.89), CHATS (0.84), …` — at the user's explicit request; `GET
+  /api/similar_words` returns `words` as `[{word, score}, …]` and
+  `renderSimilarWordsResult` maps each to `` `${word} (${score.toFixed(2)})` ``
+  before the comma-join. Also: there is **no fixed word count** any more
+  (the "nearest 50" in the entry above is superseded — the count is
+  bounded only by the score threshold), and that threshold is the current
+  value of the generation form's "Précision thématique" field
+  (`min_score` query param, default `THEME_MIN_SCORE` = 0.67), so the
+  panel reacts to it. The button now also runs an LLM keyword-expansion of
+  the typed term before the Qdrant searches (mirroring the grid theme
+  glossary — see CLAUDE.md), so it can take a few seconds; no visual
+  change, but the button stays `disabled` for the duration as before.
+
+- **"Qdrant (admin)" panel** (`#qdrant-admin-btn` + `#qdrant-admin`
+  section, `frontend/static/`), at the user's explicit request — a
+  localhost-only maintenance view of the vector database. The button
+  lives in `#form-actions` but ships `hidden`; `script.js`'s
+  `showQdrantAdminOnLocalhost()` un-hides it only when
+  `isLocalhostOrigin()` is true (same helper already gating Ultra mode /
+  the 30-cell dimension limit). `frontend/server.py`'s `_require_localhost()`
+  is the real backstop: the `/api/qdrant/admin*` proxy routes return 403
+  `localhost_only` for any non-loopback client IP **or** non-loopback
+  `Host` header (so a reverse-proxied public domain is rejected even
+  though the middleware binds 0.0.0.0). The panel itself is the same
+  transparent bordered card as `#dictionary`/`#library`, in the same
+  central toggling group (added to `syncRssPanelVisibility()`'s
+  condition). `#qdrant-admin` sets no `display` of its own, so plain
+  `hidden` works with no `#qdrant-admin[hidden]` specificity override
+  needed (unlike `#rss-panel`/`#rss-detail`/`#virtual-keyboard`, which
+  do). Body content (`#qdrant-admin-body`): a monospace endpoint line, a
+  key/value `.qdrant-admin-stats` grid (`display: grid` +
+  `grid-template-columns: max-content 1fr`, rows are `display: contents`
+  so each cell participates directly in the grid; the key cell is grey),
+  a per-language `.qdrant-admin-table` (styled like `#library-table`,
+  each row with a `.nav-btn` "Vider"/"Clear" button, `disabled` when that
+  language holds 0 points), a "Recréer la collection" `.nav-btn`, an
+  `<a target="_blank" rel="noopener noreferrer">` to Qdrant's own
+  `/dashboard`, and a monospace `.qdrant-admin-hint` (`user-select: all`)
+  showing the populate command. Both actions go through `window.confirm()`
+  first (destructive: recreate wipes every language, delete-tenant wipes
+  one). Reuses `.nav-btn` and `.table-scroll` throughout — no new button
+  style, no new color token. ~26 new i18n keys × 6 languages. **Not
+  visually confirmed in a browser** — same tooling limitation noted
+  throughout this file; verified structurally (CSS brace balance, HTML
+  section balance, `esprima` on the JS — `??` had to become `||` for that
+  aging parser, same as the numeric-separator note elsewhere) and end to
+  end against the running stack (`GET /api/qdrant/admin` returns the real
+  collection state in ~0.1s; the localhost gate 403s a spoofed `Host`).
+
+- **"Thématique" / "Theme" field** (`#theme-field` label + `#theme`
+  text input), at the user's explicit request — an optional free-text
+  word list placed **inside `#form-actions`, immediately before
+  `#generate-btn`** ("à côté de Générer la grille"). Unlike every other
+  generation-form field (`label` is `flex-direction: column`, control
+  under its text), `#theme-field` overrides to `flex-direction: row`
+  (label text then input on one line) so it stays compact on the
+  buttons' row, and its input widens to `14rem` (from the shared
+  `input { width: 6rem }`) to fit a short phrase. No new color/token —
+  it's a plain text input, styled by the shared `input` rule otherwise.
+  Empty = ordinary generation; filled = the backend runs a Qdrant
+  pre-search and the words it finds are preferred by the solver (see
+  CLAUDE.md / `project-best-practices`).
+- **Library "Thématique" column** — a new `<th data-i18n=
+  "libraryColTheme">` in `#library-table`, inserted **after the Title
+  column** (order: Language, Date, Title, Theme, Difficulty, Size,
+  Author). `renderLibraryList()` fills the matching `<td>` with the
+  grid's stored `theme` string (empty for a grid generated without a
+  theme). No new CSS — a plain text cell like the others; the
+  pre-existing `#library-table` rules cover it. `libraryColTheme` added
+  to `i18n.js` in all 6 languages (fr/pt "Thématique"/"Temática", en
+  "Theme", de "Thema", es "Temática", it "Tematica").
+
+- **"Définir" button** (`#dictionary-define-btn`), a third action in the
+  Dictionary panel's form, at the user's explicit request: asks the LLM
+  for up to 10 independent definitions of the typed expression (see
+  CLAUDE.md, `LLMClueGenerator.generate_definitions`), one per line.
+  Plain `<button type="button">`, no dedicated CSS — same shared
+  accent-blue look as "Chercher"/"Mots similaires" right before it, so
+  the three read as a row of equally-weighted actions; "Effacer" keeps
+  its own subdued `.nav-btn` treatment as the one non-search action.
+  Its result reuses the existing `.dictionary-result` stacking card
+  (heading + body, newest-first, cleared together with the other two
+  kinds of result) — the body is a new `.dictionary-define-list`
+  (`display: flex; flex-direction: column; gap: 0.3rem`) of
+  `.dictionary-define-line` paragraphs, **one definition per line**
+  (`margin: 0`, matching this project's own "each line is its own
+  paragraph" convention) — deliberately a different visual shape from
+  "Mots similaires"'s own `.dictionary-similar-line` (one single
+  comma-separated line, `line-height: 1.5`, no list wrapper at all): the
+  user's request explicitly distinguished the two ("Affiche une
+  définition par ligne" vs. the earlier "en une ligne, séparés par des
+  virgules"). Its own fetch timeout (`DEFINE_FETCH_TIMEOUT_MS`, 110s) is
+  far longer than every other button in this panel — a real, measured
+  ~40s round trip for 10 definitions in one LLM call — mirroring the
+  chat feature's own longer `CHAT_FETCH_TIMEOUT_MS`/`CHAT_PROXY_
+  TIMEOUT_S` pair for the identical reason (a single, comparatively
+  heavy LLM call, not a quick status check). **Not visually confirmed in
+  a browser** — same tooling limitation noted throughout this file;
+  verified structurally (JS syntax check via `esprima`, CSS/HTML balance)
+  and end to end against the real running stack and local LLM server —
+  a real call returned exactly 10 well-formed definitions in ~39s
+  through the backend, and correctly filtered out a candidate that
+  leaked the target word.
+
+- Added `#library-refresh-btn` to `#library-header`, right before
+  `#library-close-btn`, at the user's explicit request: "avant le bouton
+  de fermeture (croix), ajouter un bouton icône Actualiser." Reuses the
+  existing `.nav-btn` class with no new CSS — plain icon glyph "↻" (not
+  a text label), matching the icon-only convention already established
+  for `#library-close-btn` ("✕")/the attempt-preview nav buttons rather
+  than `#qdrant-admin-refresh-btn`'s own earlier text-label convention
+  ("Rafraîchir") — both `.nav-btn`, so purely a content choice, no visual
+  divergence. Click handler just re-renders the current page/filters
+  (`renderLibraryList()`), deliberately *not* resetting `libraryCurrentPage`
+  to 1 the way changing a filter does — a plain refresh of what's already
+  on screen, not a reset to the first page.
+
+- A `.theme` highlight marks, in the attempt-preview grids, the cells of
+  every word that comes from the themed-generation glossary (at the user's
+  explicit request). Unlike every other attempt-preview overlay
+  (`.forced`/`.locked` borders, `.impossible`/`.noise`/`.low-candidates`
+  background fills), this one is a **text colour**: `.attempt-preview-grid
+  .cell.white.theme` sets `color: var(--theme-fg)` (`#ff00fb`, a bright
+  magenta — its own token; several values were tried on the user's
+  successive requests: dark green "pas assez visible" → dark purple →
+  light purple → very light green "trop clair" → this magenta, chosen to
+  contrast sharply with the black letters around it rather than to be
+  maximally readable on the white cell) plus `font-weight: 800` (extra-bold, at
+  the user's explicit request — clearly heavier than the `500`-weight
+  base of every other preview cell) so a theme word stands out at the
+  preview's small 0.6rem size. A colour rather than a fill/border because
+  it composes cleanly with any of the other overlays that can land on the
+  same cell. `renderAttemptPreview()` applies it in the same final overlay
+  pass as the others, reading a new `theme_cells` field (`|| []`, a no-op
+  for a non-themed generation, whose examples simply lack the key).
+  Backend side: `backend/crossword_gen.py`'s `_theme_word_cells`/`_theme_cells_
+  from_preview_state` populate `theme_cells` on every preview example dict.

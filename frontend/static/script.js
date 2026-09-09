@@ -129,6 +129,7 @@ const gridTitleTextEl = document.getElementById("grid-title-text");
 const gridDifficultyEl = document.getElementById("grid-difficulty");
 const libraryBtn = document.getElementById("library-btn");
 const libraryPanel = document.getElementById("library");
+const libraryRefreshBtn = document.getElementById("library-refresh-btn");
 const libraryCloseBtn = document.getElementById("library-close-btn");
 const libraryLanguageFilter = document.getElementById("library-language-filter");
 const libraryDifficultyFilter = document.getElementById("library-difficulty-filter");
@@ -144,10 +145,17 @@ const dictionaryPanel = document.getElementById("dictionary");
 const dictionaryForm = document.getElementById("dictionary-form");
 const dictionaryInput = document.getElementById("dictionary-input");
 const dictionarySearchBtn = document.getElementById("dictionary-search-btn");
+const dictionarySimilarBtn = document.getElementById("dictionary-similar-btn");
+const dictionaryDefineBtn = document.getElementById("dictionary-define-btn");
 const dictionaryResults = document.getElementById("dictionary-results");
 const dictionaryClearBtn = document.getElementById("dictionary-clear-btn");
 const dictionaryCloseBtn = document.getElementById("dictionary-close-btn");
 const dictionaryLanguage = document.getElementById("dictionary-language");
+const qdrantAdminBtn = document.getElementById("qdrant-admin-btn");
+const qdrantAdminPanel = document.getElementById("qdrant-admin");
+const qdrantAdminBody = document.getElementById("qdrant-admin-body");
+const qdrantAdminRefreshBtn = document.getElementById("qdrant-admin-refresh-btn");
+const qdrantAdminCloseBtn = document.getElementById("qdrant-admin-close-btn");
 const rssPanel = document.getElementById("rss-panel");
 const virtualKeyboardEl = document.getElementById("virtual-keyboard");
 const virtualKeyboardToggleBtn = document.getElementById("virtual-keyboard-toggle-btn");
@@ -479,7 +487,8 @@ let generationInProgress = false;
 
 function syncRssPanelVisibility() {
   rssPanel.hidden = generationInProgress
-    || !(libraryPanel.hidden && dictionaryPanel.hidden && attemptPreview.hidden && result.hidden);
+    || !(libraryPanel.hidden && dictionaryPanel.hidden && qdrantAdminPanel.hidden
+         && attemptPreview.hidden && result.hidden);
 }
 // Etat initial explicite plutôt que de compter sur une simple coïncidence
 // entre l'état `hidden` par défaut de index.html et cette règle.
@@ -761,10 +770,17 @@ function setStatus(message, isError) {
 // cells bordering a still-entirely-empty slot, protected from removal
 // during that step's own optimization pass. `cellElementsByCoord` (below)
 // registers every cell, black or white, precisely so a locked *black*
-// cell can be found by this overlay too — the other three overlays
-// (.forced/.low-candidates/.noise) never receive a black-cell coordinate
-// from any current backend caller, but finding one harmlessly no-ops
-// since their own CSS rules stay scoped to `.white`.
+// cell can be found by this overlay too — the other overlays
+// (.forced/.low-candidates/.noise/.theme) never receive a black-cell
+// coordinate from any current backend caller, but finding one harmlessly
+// no-ops since their own CSS rules stay scoped to `.white`.
+// Each `theme_cells` (crossword_gen.py's `_theme_word_cells`, possibly
+// empty — always empty for a non-themed generation) is likewise an array
+// of [row, col] pairs, the cells of every slot whose assigned word comes
+// from the themed-generation glossary (generate_grid's `priority_words`) —
+// their letter is coloured bright magenta + bold (--theme-fg, see
+// style.css's .cell.white.theme), at the user's explicit request, so the
+// theme words stand out sharply against the black letters in the preview.
 // Applied in a dedicated final pass per mini-grid, *after* every cell of
 // that mini-grid already exists in the DOM (see the loop below) — at the
 // user's own explicit follow-up request, so the overlay is unambiguously
@@ -808,6 +824,7 @@ function renderAttemptPreview(examples) {
     locked_cells: lockedCells,
     low_candidate_cells: lowCandidateCells,
     noise_cells: noiseCells,
+    theme_cells: themeCells,
     process_number: processNumber,
     is_best: isBest,
   } of examples) {
@@ -898,6 +915,18 @@ function renderAttemptPreview(examples) {
     for (const [r, c] of noiseCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("noise");
+    }
+    // Lettres vertes pour les mots issus du glossaire thématique, à la
+    // demande explicite de l'utilisateur : "Dans les grilles aperçus,
+    // indiquer en lettres vertes les mots issus du glossaire thématique."
+    // Toujours vide pour une génération non thématique (voir backend/
+    // crossword_gen.py's `_theme_word_cells`), donc `|| []` = no-op partout
+    // ailleurs, comme les recouvrements ci-dessus. Une couleur de texte,
+    // qui se compose proprement avec les fonds .impossible/.noise/
+    // .low-candidates et les bordures .forced/.locked déjà en place.
+    for (const [r, c] of themeCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("theme");
     }
     const totalCells = height * width;
     const blackPercent = Math.round((100 * blackCount) / totalCells);
@@ -1782,6 +1811,9 @@ function setUiLanguage(lang) {
   // l'interface (défaut demandé), tant que le joueur n'a rien changé
   // dessus sur ce panneau précisément.
   dictionaryLanguage.value = lang;
+  // Le panneau d'admin Qdrant (localhost) : ses libellés sont posés à la
+  // construction, donc on le re-rend s'il est ouvert.
+  if (!qdrantAdminPanel.hidden) loadQdrantAdmin();
 }
 
 languageSelect.addEventListener("change", () => setUiLanguage(languageSelect.value));
@@ -2018,6 +2050,19 @@ const FETCH_TIMEOUT_MS = 35000;
 // FETCH_TIMEOUT_MS itself vs. PROXY_TIMEOUT_S.
 const CHAT_FETCH_TIMEOUT_MS = 160000;
 
+// "Définir" (GET /api/dictionary/define) makes one real LLM round-trip
+// asking for up to 10 definitions at once — measured live at ~40s on this
+// project's own small local model, well past FETCH_TIMEOUT_MS. Set above
+// frontend/server.py's own DEFINE_PROXY_TIMEOUT_S (100s), same reasoning.
+const DEFINE_FETCH_TIMEOUT_MS = 110000;
+
+// "Thématique" (GET /api/similar_words) now also makes one LLM round-trip
+// (describe_theme, expanding the typed term into keywords) before the
+// per-keyword Qdrant searches, so it is no longer "quick or 503". Set
+// above frontend/server.py's own SIMILAR_PROXY_TIMEOUT_S (60s), same
+// "above the callee's timeout" reasoning as the others.
+const SIMILAR_FETCH_TIMEOUT_MS = 70000;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2077,6 +2122,9 @@ function describeStep(t, step) {
   switch (step.code) {
     case "starting":
       message = t.statusStarting;
+      break;
+    case "theme":
+      message = t.statusTheme;
       break;
     case "queued_grid":
       message = t.statusQueuedGrid(step.position, step.queue_length);
@@ -2438,6 +2486,14 @@ let libraryCurrentPage = 1;
 // button's native `disabled` attribute to prevent an out-of-range click).
 let libraryTotalPages = 1;
 
+// Base publique pour les liens partageables de la Bibliothèque, à la
+// demande explicite de l'utilisateur ("URL de base https://falcon.cubaix.com/").
+// Le lien de chaque ligne est SHARE_BASE_URL + "?grid=<id>" ; ouvert dans
+// un nouvel onglet, il recharge la grille pour la jouer (voir
+// maybeLoadGridFromUrl() en fin de fichier, qui lit ?grid= quel que soit
+// l'hôte — le lien du tableau, lui, pointe toujours vers ce domaine public).
+const SHARE_BASE_URL = "https://falcon.cubaix.com/";
+
 // "Bibliothèque" button (permanent, unlike every other button in
 // #generate-form — see index.html), at the user's explicit request:
 // lists every grid saved under GRID_STORE/ (backend/grid_store.py), the
@@ -2562,6 +2618,12 @@ async function renderLibraryList() {
     dateTd.textContent = entry.created_at ? new Date(entry.created_at).toLocaleString(uiLanguage) : "";
     const titleTd = document.createElement("td");
     titleTd.textContent = entry.title || "";
+    // Colonne "Thématique" : la liste de mots saisie à la génération
+    // (champ `theme` du JSON de la grille — voir backend/grid_store.py),
+    // vide quand la grille n'a pas de thématique. À la demande explicite
+    // de l'utilisateur.
+    const themeTd = document.createElement("td");
+    themeTd.textContent = entry.theme || "";
     const difficultyTd = document.createElement("td");
     difficultyTd.textContent = difficultyLabels[entry.difficulty] || entry.difficulty || "";
     const sizeTd = document.createElement("td");
@@ -2571,7 +2633,57 @@ async function renderLibraryList() {
     // (générée sans pseudo défini) est attribuée à "Falcon Auto Bot".
     const authorTd = document.createElement("td");
     authorTd.textContent = entry.pseudo || t.libraryAuthorBot;
-    tr.append(languageTd, dateTd, titleTd, difficultyTd, sizeTd, authorTd);
+    // Dernière colonne : lien partageable vers la grille, à la demande
+    // explicite de l'utilisateur. Ouvre SHARE_BASE_URL + "?grid=<id>" dans
+    // un nouvel onglet (le domaine public, indépendamment de l'hôte
+    // courant). stopPropagation pour ne pas déclencher aussi le
+    // loadLibraryGrid() du clic sur la ligne (qui, lui, charge dans
+    // l'onglet courant).
+    const linkTd = document.createElement("td");
+    const link = document.createElement("a");
+    link.href = `${SHARE_BASE_URL}?grid=${encodeURIComponent(entry.id)}`;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = t.libraryLinkText;
+    link.className = "library-link";
+    link.addEventListener("click", (event) => event.stopPropagation());
+    link.addEventListener("keydown", (event) => event.stopPropagation());
+    linkTd.appendChild(link);
+    // Dernière colonne : téléchargement PDF imprimable (grille vide +
+    // définitions + titre, sans réponses — voir GET /api/library/<id>/pdf),
+    // à la demande explicite de l'utilisateur. URL relative : passe par le
+    // proxy du front sur l'hôte courant (local ou public). `download` +
+    // stopPropagation, comme le lien "Jouer" ci-dessus.
+    const pdfTd = document.createElement("td");
+    const pdfLink = document.createElement("a");
+    pdfLink.href = `/api/library/${encodeURIComponent(entry.id)}/pdf`;
+    pdfLink.setAttribute("download", "");
+    pdfLink.rel = "noopener";
+    // Icône PDF plutôt que le mot "Télécharger", à la demande explicite de
+    // l'utilisateur. Badge rouge "PDF" sur une page — dessiné en SVG inline
+    // (ce projet n'utilise aucune police/lib d'icônes externe, cf. le badge
+    // "i" de l'en-tête). Le libellé accessible reste `libraryPdfText`
+    // (aria-label + title).
+    pdfLink.className = "library-link library-pdf-link";
+    pdfLink.setAttribute("aria-label", t.libraryPdfText);
+    pdfLink.title = t.libraryPdfText;
+    pdfLink.innerHTML =
+      '<svg class="pdf-icon" viewBox="0 0 24 24" width="20" height="20" ' +
+      'aria-hidden="true" focusable="false">' +
+      '<path d="M7 2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" ' +
+      'fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
+      '<path d="M14 2v5h5" fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
+      '<rect x="3.5" y="12" width="17" height="8" rx="1.5" fill="#dc2626"/>' +
+      '<text x="12" y="18.2" font-size="5.4" font-weight="700" ' +
+      'text-anchor="middle" fill="#ffffff" font-family="sans-serif">PDF</text>' +
+      "</svg>";
+    pdfLink.addEventListener("click", (event) => event.stopPropagation());
+    pdfLink.addEventListener("keydown", (event) => event.stopPropagation());
+    pdfTd.appendChild(pdfLink);
+    tr.append(
+      languageTd, dateTd, titleTd, themeTd, difficultyTd, sizeTd, authorTd,
+      linkTd, pdfTd,
+    );
     tr.addEventListener("click", () => loadLibraryGrid(entry.id));
     tr.addEventListener("keydown", (event) => {
       if (event.key === "Enter" || event.key === " ") {
@@ -2625,6 +2737,15 @@ libraryBtn.addEventListener("click", () => {
 });
 
 libraryCloseBtn.addEventListener("click", hideLibraryPanel);
+
+// Bouton "Actualiser", à la demande explicite de l'utilisateur : re-rend
+// la page courante avec les filtres actuels, sans revenir à la page 1
+// (contrairement aux changements de filtre ci-dessous) — sert juste à
+// revoir l'état le plus récent (une grille nouvellement ajoutée, un statut
+// "vue" mis à jour par un autre onglet, etc.) sans perdre sa place.
+libraryRefreshBtn.addEventListener("click", () => {
+  renderLibraryList();
+});
 
 // Les trois sélecteurs en haut de la Bibliothèque : filtre de langue
 // (toutes / une langue / bilingue), filtre de niveau (tous les niveaux /
@@ -2790,6 +2911,370 @@ dictionaryForm.addEventListener("submit", async (event) => {
     dictionarySearchBtn.disabled = false;
   }
 });
+
+// "Mots similaires" : les 50 mots les plus proches de l'expression saisie
+// dans la collection Qdrant "words" (tenant = langue du panneau), triés du
+// plus similaire au moins similaire, affichés sur une seule ligne séparés
+// par des virgules. Empilé en haut comme les résultats du dictionnaire.
+// Voir GET /api/similar_words (backend/app.py) + backend/qdrant_store.py.
+function renderSimilarWordsResult(query, words) {
+  const t = I18N[uiLanguage];
+  const block = document.createElement("div");
+  block.className = "dictionary-result";
+
+  const heading = document.createElement("h3");
+  heading.textContent = `${t.dictionarySimilarHeading} « ${query} »`;
+  block.appendChild(heading);
+
+  if (!words || !words.length) {
+    const empty = document.createElement("p");
+    empty.className = "dictionary-empty";
+    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
+    block.appendChild(empty);
+  } else {
+    const line = document.createElement("p");
+    line.className = "dictionary-similar-line";
+    // Chaque entrée est {word, score} — on affiche le score Qdrant entre
+    // parenthèses avec 2 décimales à côté du mot, à la demande explicite
+    // de l'utilisateur.
+    line.textContent = words
+      .map((x) => {
+        const s = typeof x.score === "number" ? ` (${x.score.toFixed(2)})` : "";
+        return `${x.word}${s}`;
+      })
+      .join(", ");
+    block.appendChild(line);
+  }
+  dictionaryResults.prepend(block);
+}
+
+// #theme-precision est un <input type="text"> (voir index.html) : on lit
+// sa valeur en FORÇANT le point comme séparateur décimal (une virgule
+// saisie est normalisée en point, à la demande explicite de
+// l'utilisateur — un séparateur virgule est source de confusion), bornée
+// à [0, 1]. Renvoie undefined si le champ est vide (le back applique
+// alors THEME_MIN_SCORE). Partagé par la génération de grille ET le
+// bouton "Thématique" du panneau Dictionnaire.
+function readThemePrecision() {
+  const el = document.getElementById("theme-precision");
+  if (!el) return undefined;
+  const raw = el.value.trim().replace(",", ".");
+  if (raw === "") return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(1, Math.max(0, n));
+}
+
+// Au blur, réécrit le champ avec la valeur normalisée (point, bornée [0,1])
+// — un "0,7" saisi devient visiblement "0.7", un "1.5" devient "1".
+(() => {
+  const el = document.getElementById("theme-precision");
+  if (!el) return;
+  el.addEventListener("blur", () => {
+    const v = readThemePrecision();
+    if (v !== undefined) el.value = String(v);
+  });
+})();
+
+dictionarySimilarBtn.addEventListener("click", async () => {
+  const query = dictionaryInput.value.trim();
+  if (!query) return;
+  const t = I18N[uiLanguage];
+  dictionarySimilarBtn.disabled = true;
+  try {
+    // Le bouton "Thématique" du Dictionnaire réutilise le seuil du champ
+    // "Précision thématique" du formulaire de génération (min_score), à la
+    // demande explicite de l'utilisateur — omis si le champ est vide.
+    const prec = readThemePrecision();
+    let url = `/api/similar_words?q=${encodeURIComponent(query)}`
+      + `&lang=${encodeURIComponent(dictionaryLanguage.value)}`;
+    if (prec !== undefined) url += `&min_score=${prec}`;
+    // Timeout élargi : le back fait une expansion LLM du terme avant les
+    // recherches Qdrant (voir SIMILAR_FETCH_TIMEOUT_MS).
+    const response = await fetchWithTimeout(url, {}, SIMILAR_FETCH_TIMEOUT_MS);
+    if (!response.ok) throw new Error(t.dictionarySimilarError);
+    const data = await response.json();
+    renderSimilarWordsResult(query, (data && data.words) || []);
+    dictionaryInput.select();
+  } catch (err) {
+    const line = document.createElement("p");
+    line.className = "dictionary-empty";
+    line.textContent = t.dictionarySimilarError;
+    dictionaryResults.prepend(line);
+  } finally {
+    dictionarySimilarBtn.disabled = false;
+  }
+});
+
+// "Définir" : jusqu'à 10 définitions indépendantes de l'expression saisie,
+// générées par le LLM comme pour un mot de grille (voir backend/clues.py,
+// LLMClueGenerator.generate_definitions), une par ligne. Un seul appel
+// best-effort côté back (pas de relance comme en génération de grille) —
+// re-cliquer suffit à retenter. Voir DEFINE_FETCH_TIMEOUT_MS ci-dessus
+// pour pourquoi ce bouton utilise un délai bien plus long que les deux
+// autres boutons de ce même formulaire.
+function renderDefineResult(query, definitions) {
+  const t = I18N[uiLanguage];
+  const block = document.createElement("div");
+  block.className = "dictionary-result";
+
+  const heading = document.createElement("h3");
+  heading.textContent = `${t.dictionaryDefineHeading} « ${query} »`;
+  block.appendChild(heading);
+
+  if (!definitions || !definitions.length) {
+    const empty = document.createElement("p");
+    empty.className = "dictionary-empty";
+    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
+    block.appendChild(empty);
+  } else {
+    const list = document.createElement("div");
+    list.className = "dictionary-define-list";
+    for (const definition of definitions) {
+      const line = document.createElement("p");
+      line.className = "dictionary-define-line";
+      line.textContent = definition;
+      list.appendChild(line);
+    }
+    block.appendChild(list);
+  }
+  dictionaryResults.prepend(block);
+}
+
+dictionaryDefineBtn.addEventListener("click", async () => {
+  const query = dictionaryInput.value.trim();
+  if (!query) return;
+  const t = I18N[uiLanguage];
+  dictionaryDefineBtn.disabled = true;
+  try {
+    const response = await fetchWithTimeout(
+      `/api/dictionary/define?q=${encodeURIComponent(query)}`
+      + `&lang=${encodeURIComponent(dictionaryLanguage.value)}`,
+      {}, DEFINE_FETCH_TIMEOUT_MS,
+    );
+    if (!response.ok) throw new Error(t.dictionaryDefineError);
+    const data = await response.json();
+    renderDefineResult(query, (data && data.definitions) || []);
+    dictionaryInput.select();
+  } catch (err) {
+    const line = document.createElement("p");
+    line.className = "dictionary-empty";
+    line.textContent = t.dictionaryDefineError;
+    dictionaryResults.prepend(line);
+  } finally {
+    dictionaryDefineBtn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// "Qdrant (admin)" panel — a localhost-only maintenance view of the vector
+// database (state + two quick actions + a link to Qdrant's own dashboard).
+// The button stays hidden unless the page is served from this machine
+// (showQdrantAdminOnLocalhost below); frontend/server.py also rejects
+// /api/qdrant/admin/* for any non-loopback client/Host. Same toggling
+// group as #library / #dictionary / #attempt-preview / #result.
+// ---------------------------------------------------------------------------
+function hideQdrantAdminPanel() {
+  qdrantAdminPanel.hidden = true;
+  syncRssPanelVisibility();
+}
+
+(function showQdrantAdminOnLocalhost() {
+  if (isLocalhostOrigin()) qdrantAdminBtn.hidden = false;
+})();
+
+function qdrantAdminPara(text, cls) {
+  const p = document.createElement("p");
+  if (cls) p.className = cls;
+  p.textContent = text;
+  return p;
+}
+
+function qdrantAdminCount(n) {
+  return typeof n === "number" ? n.toLocaleString(uiLanguage) : "—";
+}
+
+function qdrantAdminRecreateButton() {
+  const t = I18N[uiLanguage];
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "nav-btn";
+  b.textContent = t.qdrantAdminRecreateBtn;
+  b.addEventListener("click", qdrantAdminRecreate);
+  return b;
+}
+
+function qdrantAdminAppendExtras(data) {
+  const t = I18N[uiLanguage];
+  const a = document.createElement("a");
+  a.href = data.dashboard_url;
+  a.target = "_blank";
+  a.rel = "noopener noreferrer";
+  a.className = "qdrant-admin-dashboard-link";
+  a.textContent = t.qdrantAdminDashboardLink;
+  qdrantAdminBody.appendChild(a);
+  qdrantAdminBody.appendChild(
+    qdrantAdminPara(t.qdrantAdminPopulateHint, "qdrant-admin-hint"),
+  );
+}
+
+// Builds the panel body from GET /api/qdrant/admin. Pure DOM (textContent
+// only); the one bit of dynamic markup is the dashboard <a>, whose href is
+// the server-provided base_url + "/dashboard".
+function renderQdrantAdmin(data) {
+  const t = I18N[uiLanguage];
+  qdrantAdminBody.replaceChildren();
+  qdrantAdminBody.appendChild(
+    qdrantAdminPara(`${data.base_url} · ${data.collection}`, "qdrant-admin-endpoint"),
+  );
+
+  if (!data.reachable) {
+    qdrantAdminBody.appendChild(
+      qdrantAdminPara(t.qdrantAdminUnreachable, "qdrant-admin-empty"),
+    );
+    return;
+  }
+  if (!data.exists) {
+    qdrantAdminBody.appendChild(
+      qdrantAdminPara(t.qdrantAdminNoCollection, "qdrant-admin-empty"),
+    );
+    qdrantAdminBody.appendChild(qdrantAdminRecreateButton());
+    qdrantAdminAppendExtras(data);
+    return;
+  }
+
+  const v = data.vector || {};
+  const stats = document.createElement("div");
+  stats.className = "qdrant-admin-stats";
+  const rows = [
+    [t.qdrantAdminStatVector,
+     `${v.size || "—"} · ${v.distance || "—"} · `
+     + `${v.on_disk ? t.qdrantAdminOnDisk : t.qdrantAdminInMemory}`],
+    [t.qdrantAdminStatStatus,
+     `${data.status || "—"}`
+     + `${data.optimizer_status ? " / " + data.optimizer_status : ""}`],
+    [t.qdrantAdminStatPoints, qdrantAdminCount(data.points_count)],
+    [t.qdrantAdminStatIndexed, qdrantAdminCount(data.indexed_vectors_count)],
+    [t.qdrantAdminStatSegments, qdrantAdminCount(data.segments_count)],
+    [t.qdrantAdminStatTenantIndex,
+     data.tenant_index ? t.qdrantAdminYes : t.qdrantAdminNo],
+  ];
+  for (const [k, val] of rows) {
+    const row = document.createElement("div");
+    const kEl = document.createElement("span");
+    kEl.textContent = k;
+    const vEl = document.createElement("span");
+    vEl.textContent = val;
+    row.append(kEl, vEl);
+    stats.appendChild(row);
+  }
+  qdrantAdminBody.appendChild(stats);
+
+  const wrap = document.createElement("div");
+  wrap.className = "table-scroll";
+  const table = document.createElement("table");
+  table.className = "qdrant-admin-table";
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  for (const h of [t.qdrantAdminColLang, t.qdrantAdminColCount, ""]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    htr.appendChild(th);
+  }
+  thead.appendChild(htr);
+  table.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  const langs = data.languages || {};
+  for (const code of Object.keys(langs)) {
+    const tr = document.createElement("tr");
+    const c1 = document.createElement("td");
+    c1.textContent = code;
+    const c2 = document.createElement("td");
+    c2.textContent = qdrantAdminCount(langs[code]);
+    const c3 = document.createElement("td");
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "nav-btn";
+    del.textContent = t.qdrantAdminDeleteTenantBtn;
+    del.disabled = !langs[code];
+    del.addEventListener("click", () => qdrantAdminDeleteTenant(code));
+    c3.appendChild(del);
+    tr.append(c1, c2, c3);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  qdrantAdminBody.appendChild(wrap);
+
+  const actions = document.createElement("div");
+  actions.className = "qdrant-admin-actions";
+  actions.appendChild(qdrantAdminRecreateButton());
+  qdrantAdminBody.appendChild(actions);
+
+  qdrantAdminAppendExtras(data);
+}
+
+async function loadQdrantAdmin() {
+  const t = I18N[uiLanguage];
+  qdrantAdminBody.replaceChildren(
+    qdrantAdminPara(t.qdrantAdminLoading, "qdrant-admin-empty"),
+  );
+  try {
+    const response = await fetchWithTimeout("/api/qdrant/admin", {}, FETCH_TIMEOUT_MS);
+    if (!response.ok) throw new Error();
+    renderQdrantAdmin(await response.json());
+  } catch (err) {
+    qdrantAdminBody.replaceChildren(
+      qdrantAdminPara(t.qdrantAdminActionError, "qdrant-admin-empty"),
+    );
+  }
+}
+
+async function qdrantAdminRecreate() {
+  const t = I18N[uiLanguage];
+  if (!window.confirm(t.qdrantAdminRecreateConfirm)) return;
+  try {
+    const response = await fetchWithTimeout(
+      "/api/qdrant/admin/recreate", { method: "POST" }, FETCH_TIMEOUT_MS,
+    );
+    if (!response.ok) throw new Error();
+  } catch (err) {
+    window.alert(t.qdrantAdminActionError);
+  }
+  loadQdrantAdmin();
+}
+
+async function qdrantAdminDeleteTenant(lang) {
+  const t = I18N[uiLanguage];
+  if (!window.confirm(t.qdrantAdminDeleteTenantConfirm(lang))) return;
+  try {
+    const response = await fetchWithTimeout(
+      "/api/qdrant/admin/delete-tenant",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lang }),
+      },
+      FETCH_TIMEOUT_MS,
+    );
+    if (!response.ok) throw new Error();
+  } catch (err) {
+    window.alert(t.qdrantAdminActionError);
+  }
+  loadQdrantAdmin();
+}
+
+qdrantAdminBtn.addEventListener("click", () => {
+  if (qdrantAdminPanel.hidden) {
+    qdrantAdminPanel.hidden = false;
+    syncRssPanelVisibility();
+    loadQdrantAdmin();
+  } else {
+    hideQdrantAdminPanel();
+  }
+});
+qdrantAdminRefreshBtn.addEventListener("click", loadQdrantAdmin);
+qdrantAdminCloseBtn.addEventListener("click", hideQdrantAdminPanel);
 
 // "David FALCON" chat widget, at the user's explicit request: "En bas à
 // droite de l'interface, ajoute un ChatBot (ouvert par défaut) avec
@@ -3181,6 +3666,13 @@ form.addEventListener("submit", async (event) => {
   const mode = document.getElementById("mode").value;
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
   const forceLettersPercent = Number(document.getElementById("force-letters").value);
+  // Thématique optionnelle (liste de mots) — omise si vide.
+  const theme = document.getElementById("theme").value.trim();
+  // "Précision thématique" : seuil de similarité Qdrant minimal du
+  // glossaire thématique (voir backend/app.py's THEME_MIN_SCORE). Point
+  // forcé comme séparateur décimal, borné [0,1] ; undefined si vide -> le
+  // back applique sa valeur par défaut.
+  const themePrecision = readThemePrecision();
 
   await runGeneration(async (t) => {
     let response;
@@ -3193,6 +3685,13 @@ form.addEventListener("submit", async (event) => {
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
           force_letters_percent: forceLettersPercent,
+          // Thématique : liste de mots orientant sémantiquement la grille
+          // (pré-recherche Qdrant côté back — voir backend/app.py's
+          // THEME_PRESEARCH_LIMIT). Omise si vide.
+          theme: theme || undefined,
+          // Seuil de similarité du glossaire thématique (voir
+          // backend/app.py's THEME_MIN_SCORE) — omis si le champ est vide.
+          theme_precision: themePrecision,
           // Pseudo de l'auteur, enregistré dans le JSON de la grille (voir
           // backend/grid_store.py's save_grid_json) — omis s'il est vide.
           pseudo: userPseudo || undefined,
@@ -3313,6 +3812,25 @@ recomputeBtn.addEventListener("click", async () => {
     syncRssPanelVisibility();
   }
 });
+
+// Lien partageable de la Bibliothèque : si l'URL porte "?grid=<id>" (voir
+// SHARE_BASE_URL / la colonne "Lien" du tableau), charger cette grille
+// pour la jouer dès l'ouverture de la page. Lit le paramètre quel que
+// soit l'hôte (le lien du tableau vise le domaine public, mais un
+// "?grid=" collé sur http://127.0.0.1:3000/ marche tout autant).
+// loadLibraryGrid() gère seul l'erreur (id inconnu -> #status).
+function maybeLoadGridFromUrl() {
+  let gridId = null;
+  try {
+    gridId = new URLSearchParams(window.location.search).get("grid");
+  } catch (err) {
+    gridId = null;
+  }
+  if (gridId) {
+    loadLibraryGrid(gridId.trim());
+  }
+}
+maybeLoadGridFromUrl();
 
 // Démarre le battement de cœur "x en ligne" — un appel immédiat puis
 // toutes les PRESENCE_INTERVAL_MS (2s). Placé en toute fin de fichier

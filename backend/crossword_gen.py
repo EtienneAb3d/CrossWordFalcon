@@ -1785,18 +1785,42 @@ class DualSet:
     language's dictionary and not the other's, so "is this length
     available" must also be resolved per direction for a bilingual grid.
     `across`/`down` are the same set object for a monolingual grid,
-    exactly like DualIndex."""
+    exactly like DualIndex.
+
+    Also used to carry a bilingual grid's per-language theme glossary
+    (`generate_grid`'s `priority_words`/`bilingual_priority_words`): the
+    `__bool__` below lets `if priority_words:` / `if not priority_words:`
+    guards keep working whether `priority_words` is a plain frozenset
+    (monolingual) or a DualSet (bilingual)."""
     __slots__ = ("across", "down")
 
     def __init__(self, across, down):
         self.across = across
         self.down = down
 
+    def __bool__(self):
+        return bool(self.across or self.down)
+
     def for_direction(self, direction):
         return self.across if direction == "across" else self.down
 
     def for_cells(self, cells):
         return self.for_direction(slot_direction(cells))
+
+
+def _priority_words_for(priority_words, cells):
+    """La frozenset de mots thématiques prioritaires applicable à la
+    direction de l'emplacement `cells` — voir `generate_grid`'s
+    `priority_words`. Sur une grille bilingue, `priority_words` est un
+    DualSet (un glossaire par langue, à la demande explicite de
+    l'utilisateur : "Quand une grille est bilingue, il faut générer un
+    glossaire thématique par langue") ; sinon une frozenset unique (ou
+    vide/`None`). Renvoie toujours une frozenset."""
+    if not priority_words:
+        return frozenset()
+    if isinstance(priority_words, DualSet):
+        return priority_words.for_cells(cells)
+    return priority_words
 
 
 # ---------- Index du lexique : mots par (longueur, position, lettre) ----------
@@ -2183,10 +2207,21 @@ SLOT_SELECTION_REFINE_FRACTION = 1 / 2
 class Filler:
     def __init__(self, slots, index, rng, forced_letters=None, letter_scores=None,
                  excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
-                 attempt_done_event=None, on_new_best=None, locked_letters=None):
+                 attempt_done_event=None, on_new_best=None, locked_letters=None,
+                 priority_words=None):
         self.slots = slots
         self.index = index
         self.rng = rng
+        # Présélection thématique (voir generate_grid's `priority_words`) :
+        # dans _backtrack, les candidats d'un emplacement qui appartiennent
+        # au glossaire de SA PROPRE direction (`_priority_words_for`) sont
+        # essayés AVANT tout autre mot du dictionnaire — un mot hors
+        # thématique n'est donc tenté sur un emplacement que lorsque le
+        # backtracking a épuisé, sans solution, tous les mots thématiques
+        # qui y tenaient. Frozenset unique sur une grille monolingue,
+        # DualSet (un glossaire par langue) sur une grille bilingue ; vide
+        # = aucune thématique, aucun changement d'ordre.
+        self.priority_words = priority_words or frozenset()
         # Signal partagé entre les tentatives parallèles d'un même batch,
         # voir sa propre définition (`_worker_batch_abandoned_event`) —
         # positionné par n'importe laquelle dès qu'elle s'abandonne
@@ -2809,6 +2844,16 @@ class Filler:
         #    non remplis a plus de chances d'être choisie que l'autre, ce
         #    qui tend naturellement à alterner/équilibrer les deux au fil du
         #    remplissage sans figer un ordre strict ;
+        # 1bis. **Grille thématique uniquement, à la demande explicite de
+        #    l'utilisateur, prioritaire sur tous les niveaux suivants** :
+        #    s'il existe dans la catégorie tirée au moins un emplacement où
+        #    un mot du glossaire thématique (`self.priority_words`, non
+        #    encore utilisé) tient encore compte tenu des lettres connues,
+        #    le choix se restreint à ces emplacements. On commence donc par
+        #    remplir les zones thématiquement réalisables (et on y pose un
+        #    mot thématique en priorité, voir le tri des candidats plus
+        #    bas). Sans thématique, ou si aucun emplacement de la catégorie
+        #    n'accepte de mot thématique, ce niveau ne change rien ;
         # 2. **Nouveau, à la demande explicite de l'utilisateur, prioritaire
         #    sur le critère de domaine ci-dessous** : parmi les emplacements
         #    de la catégorie tirée, s'il en existe au moins un dont le
@@ -2928,6 +2973,32 @@ class Filler:
             )[0]
         else:
             direction_pool = free_across or free_down
+        # Nouveau niveau prioritaire, à la demande explicite de
+        # l'utilisateur : pour une grille thématique, commencer par
+        # restreindre le choix aux emplacements où au moins un mot du
+        # glossaire thématique (`self.priority_words`) tient encore,
+        # compte tenu des lettres déjà connues et des mots déjà posés
+        # ailleurs — le remplissage privilégie ainsi les zones
+        # thématiquement réalisables (et y place un mot thématique en
+        # priorité, voir le tri des candidats plus bas). Sauté s'il n'y a
+        # aucune thématique, ou si aucun emplacement du pool de direction
+        # n'accepte de mot thématique (rien à restreindre).
+        if self.priority_words:
+            # `direction_pool` est d'une seule direction (across ou down),
+            # donc le glossaire applicable (le même pour tous ses
+            # emplacements) se résout une fois — frozenset unique sur une
+            # grille monolingue, glossaire de la langue de cette direction
+            # sur une grille bilingue (voir `_priority_words_for`).
+            _pw = _priority_words_for(self.priority_words, self.slots[direction_pool[0]])
+            theme_placeable = [
+                i for i in direction_pool
+                if any(
+                    w not in self.used_words
+                    for w in _pw.intersection(domains[i])
+                )
+            ]
+            if theme_placeable:
+                direction_pool = theme_placeable
         few_candidates = [i for i in direction_pool if len(domains[i]) < PREFILL_MIN_WORD_COUNT]
         selection_pool = few_candidates if few_candidates else direction_pool
         # Nouveau niveau, à la demande explicite de l'utilisateur : parmi
@@ -3042,6 +3113,20 @@ class Filler:
                 idx = self.rng.randrange(take)
                 reordered.append(remaining.pop(idx))
             cands = reordered
+        if self.priority_words:
+            # Présélection thématique : on stabilise l'ordre déjà obtenu
+            # ci-dessus en deux blocs — d'abord les candidats thématiques,
+            # puis les autres — pour que `for w in cands:` tente tous les
+            # mots de la thématique tenant sur cet emplacement avant de
+            # descendre vers un mot ordinaire du dictionnaire. Le
+            # backtracking fait le reste : un mot hors thématique n'est
+            # atteint que si aucun mot thématique n'a mené à une solution
+            # ici (ni plus bas). Sauté si tous — ou aucun — des candidats
+            # sont thématiques (rien à réordonner).
+            _pw = _priority_words_for(self.priority_words, self.slots[best_i])
+            pri = [w for w in cands if w in _pw]
+            if pri and len(pri) != len(cands):
+                cands = pri + [w for w in cands if w not in _pw]
         for w in cands:
             # Compter cette tentative de pose immédiatement, qu'elle mène ou
             # non à une descente récursive plus loin — à la demande
@@ -3465,7 +3550,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
              attempt_done_event=None, locked_letters=None, best_state_queue=None,
              attempt_id=None, proper_noun_words=None, max_proper_nouns=None,
-             non_gloss_words=None, max_non_gloss=None):
+             non_gloss_words=None, max_non_gloss=None, priority_words=None):
     """`non_gloss_words`/`max_non_gloss` (both `None` by default — every
     pre-existing caller unaffected) work exactly like `proper_noun_words`/
     `max_proper_nouns` below, but count words absent from the definition
@@ -3690,7 +3775,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler = Filler(slots, index, rng, forced_letters=forced_letters, letter_scores=letter_scores,
                      excluded_slots=excluded_slots, cancel_event=cancel_event,
                      batch_abandoned_event=batch_abandoned_event,
-                     attempt_done_event=attempt_done_event, locked_letters=locked_letters)
+                     attempt_done_event=attempt_done_event, locked_letters=locked_letters,
+                     priority_words=priority_words)
     if best_state_queue is not None:
         # Assigné après construction, pas passé à Filler(...) directement
         # ci-dessus : la fermeture ci-dessous a besoin de `filler` lui-même
@@ -3726,6 +3812,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "impossible_slots": filler.impossible_zone_slots(),
                 "forced_cells": forced_cells,
                 "locked_cells": locked_cells,
+                "theme_cells": _theme_word_cells(slots, best_assignment, priority_words),
                 "checks": filler.checks,
                 "reason": "best_state_snapshot",
                 # `attempt_id` est ce qui permet à `generate_grid` de
@@ -3813,6 +3900,9 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             diagnostics["assignment"] = list(filler.best_assignment)
             diagnostics["impossible_slots"] = filler.impossible_zone_slots()
             diagnostics["locked_cells"] = locked_cells
+            diagnostics["theme_cells"] = _theme_word_cells(
+                slots, filler.best_assignment, priority_words
+            )
             diagnostics["attempt_id"] = attempt_id
     if truly_complete:
         return slots, filler.assignment
@@ -3823,7 +3913,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
 
 def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks=6_000,
                             cancel_event=None, proper_noun_words=None, max_proper_nouns=None,
-                            non_gloss_words=None, max_non_gloss=None):
+                            non_gloss_words=None, max_non_gloss=None, priority_words=None):
     """Retire itérativement des cases noires une par une (indépendamment,
     sans les apparier avec une case miroir — cohérent avec make_pattern,
     qui ne pose plus les cases noires par paires symétriques) tant que la
@@ -3915,7 +4005,8 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                                        proper_noun_words=proper_noun_words,
                                        max_proper_nouns=max_proper_nouns,
                                        non_gloss_words=non_gloss_words,
-                                       max_non_gloss=max_non_gloss)
+                                       max_non_gloss=max_non_gloss,
+                                       priority_words=priority_words)
                 if new_result is not None:
                     new_slots, new_assignment = new_result
                     if all(
@@ -4060,6 +4151,50 @@ def build_partial_letters_grid(grid, slots, assignment, forced_letters=None, loc
                 r, c = cell
                 letters[r][c] = letter
     return letters, (sorted(forced_letters) if forced_letters else []), len(covered)
+
+
+def _theme_word_cells(slots, assignment, priority_words):
+    """Cases de tout emplacement dont le mot assigné appartient à
+    `priority_words` (le glossaire de la génération thématique, voir
+    `generate_grid`'s `priority_words`) — à la demande explicite de
+    l'utilisateur : "Dans les grilles aperçus, indiquer en lettres vertes
+    les mots issus du glossaire thématique." Liste vide s'il n'y a pas de
+    thématique (`priority_words` vide/`None`) ou si aucun mot assigné n'y
+    figure. `assignment` peut contenir des `None` (emplacement non
+    atteint) — simplement ignorés. Sur une grille bilingue `priority_
+    words` est un DualSet (un glossaire par langue) : chaque mot est
+    testé contre le glossaire de SA PROPRE direction (voir
+    `_priority_words_for`)."""
+    if not priority_words:
+        return []
+    out = set()
+    for cells, word in zip(slots, assignment):
+        if word is not None and word in _priority_words_for(priority_words, cells):
+            out.update((r, c) for (r, c) in cells)
+    return sorted(out)
+
+
+def _theme_cells_from_preview_state(seed_grid, rows, cols, locked_letters,
+                                     preseed_assignment, priority_words):
+    """`_theme_word_cells` pour un aperçu de DÉBUT de cycle
+    (`_cycle_start_preview`), où l'état de reprise est soit une liste de
+    mots par emplacement (`preseed_assignment`), soit une simple carte
+    `{case: lettre}` (`locked_letters`) plutôt qu'un vrai couple
+    `(slots, assignment)`. Pour la carte, un emplacement n'est considéré
+    porteur d'un mot que si TOUTES ses cases y figurent."""
+    if not priority_words or seed_grid is None:
+        return []
+    slots = extract_slots(seed_grid, rows, cols)
+    if preseed_assignment is not None:
+        return _theme_word_cells(slots, preseed_assignment, priority_words)
+    if locked_letters:
+        assignment = [
+            "".join(locked_letters[c] for c in cells)
+            if all(c in locked_letters for c in cells) else None
+            for cells in slots
+        ]
+        return _theme_word_cells(slots, assignment, priority_words)
+    return []
 
 
 def _low_candidate_slot_cells(grid, rows, cols, index, locked_letters):
@@ -4589,6 +4724,224 @@ def _find_shorter_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slot
     return None
 
 
+def _known_slot_boundary_cells(new_grid, rows, cols, cur_slots, known):
+    """Cases noires qui bornent, ou sont prises en sandwich par, un
+    emplacement déjà entièrement déterminé par `known` — jamais à
+    supprimer/déplacer, sous peine de casser un mot déjà acquis. Réutilise
+    le même double critère déjà établi et longuement affiné pour
+    `_build_retry_seed`'s propre étape 3 (voir sa docstring pour
+    l'historique complet des versions essayées) : (1) elle borne
+    directement un emplacement entièrement connu — immédiatement avant sa
+    première case ou après sa dernière, dans le sens propre de cet
+    emplacement ; (2) elle a une lettre connue des DEUX côtés à la fois
+    d'un même axe (haut ET bas, ou gauche ET droite, jamais besoin des deux
+    axes ensemble) — la supprimer fusionnerait deux emplacements distincts
+    en un seul qui peut ne correspondre à aucun mot réel, perturbant les
+    deux côtés à la fois. Utilisée par `_find_longer_word_for_zone`/
+    `_lengthen_impossible_zones` pour décider quelle case noire bordant une
+    zone impossible peut être supprimée/déplacée sans risque — la même
+    notion de "borne un mot déjà posé" que `_build_retry_seed`, juste
+    recalculée ici à partir de `cur_slots`/`known` (l'état d'un tour de la
+    boucle de nettoyage) plutôt que d'un `assignment` global."""
+    protected = set()
+    for cells in cur_slots:
+        if not all(c in known for c in cells):
+            continue
+        direction = "across" if len(cells) > 1 and cells[1][0] == cells[0][0] else "down"
+        dr, dc = (0, 1) if direction == "across" else (1, 0)
+        (r0, c0), (r1, c1) = cells[0], cells[-1]
+        for br, bc in ((r0 - dr, c0 - dc), (r1 + dr, c1 + dc)):
+            if 0 <= br < rows and 0 <= bc < cols:
+                protected.add((br, bc))
+
+    def _direction_has_known_letter(r, c, dr, dc):
+        rr, cc = r + dr, c + dc
+        while 0 <= rr < rows and 0 <= cc < cols and new_grid[rr][cc] == WHITE:
+            if (rr, cc) in known:
+                return True
+            rr += dr
+            cc += dc
+        return False
+
+    for r in range(rows):
+        for c in range(cols):
+            if new_grid[r][c] != BLACK:
+                continue
+            vertical_both = _direction_has_known_letter(r, c, -1, 0) and \
+                _direction_has_known_letter(r, c, 1, 0)
+            horizontal_both = _direction_has_known_letter(r, c, 0, -1) and \
+                _direction_has_known_letter(r, c, 0, 1)
+            if vertical_both or horizontal_both:
+                protected.add((r, c))
+    return protected
+
+
+def _new_boundary_crossing_impossible(grid, rows, cols, boundary, letter, own_dr, own_dc,
+                                       known, index):
+    """Comme `_new_crossing_impossibility`, mais pour la case `boundary`
+    elle-même — jusqu'ici noire, donc absente de `cell_to_slots` (calculé
+    sur l'ancien motif, où cette case n'appartenait à aucun emplacement).
+    La rendre blanche peut faire naître, dans le sens PERPENDICULAIRE à
+    `own_dr`/`own_dc` (le sens propre de la zone qu'on allonge), un tout
+    nouvel emplacement croisant que `_new_crossing_impossibility` ne peut
+    pas voir — ce contrôle recalcule ce parcours perpendiculaire directement
+    (la suite de cases blanches consécutives de part et d'autre de
+    `boundary`, jusqu'à une case noire ou le bord), exactement le même
+    principe que `_new_crossing_impossibility`, appliqué à cette unique
+    case qui lui échappe. Renvoie `False` si l'emplacement perpendiculaire
+    ainsi trouvé compte moins de 2 cases (pas un vrai emplacement) ou était
+    déjà sans candidat AVANT même l'ajout de `letter` (donc pas une
+    dégradation NOUVELLE causée par ce placement précis)."""
+    perp_dr, perp_dc = own_dc, own_dr
+    br, bc = boundary
+    cells = [boundary]
+    rr, cc = br - perp_dr, bc - perp_dc
+    while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] == WHITE:
+        cells.insert(0, (rr, cc))
+        rr -= perp_dr
+        cc -= perp_dc
+    rr, cc = br + perp_dr, bc + perp_dc
+    while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] == WHITE:
+        cells.append((rr, cc))
+        rr += perp_dr
+        cc += perp_dc
+    if len(cells) < 2:
+        return False
+    known_before = {c: known[c] for c in cells if c in known and c != boundary}
+    if not _slot_candidates(index, len(cells), cells, known_before):
+        return False
+    known_after = dict(known_before)
+    known_after[boundary] = letter
+    return not _slot_candidates(index, len(cells), cells, known_after)
+
+
+def _find_longer_word_for_zone(grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
+                                protected, index, known, used_words, rng):
+    """Pour UN emplacement réputé impossible (`cells`, d'indice `own_idx`
+    dans `cur_slots`), à la demande explicite de l'utilisateur : "si un
+    emplacement ne trouve pas de mot... mais qu'au moins une des cases
+    noires limitant la zone peut être supprimée ou déplacée (parce qu'il y
+    a de la place avant ou après, et que cette case noire n'est pas une
+    limite d'un mot déjà posé), tester des longueurs différentes en
+    supprimant ou déplaçant la case noire." Le complément exact de
+    `_find_shorter_word_for_zone` (qui RACCOURCIT la zone en ajoutant une
+    case noire à l'intérieur) : celle-ci l'ALLONGE en repoussant l'une de
+    ses DEUX cases noires bordantes existantes (tête ou fin, jamais les
+    deux à la fois dans un même appel) — soit en la déplaçant de quelques
+    cases plus loin (une nouvelle case noire plus loin dans la même
+    direction), soit en la supprimant purement et simplement quand
+    l'obstacle naturel suivant (une autre case noire, ou le bord de la
+    grille) suffit déjà à borner la zone allongée.
+
+    Une case bordante n'est même candidate que si (1) elle est
+    effectivement noire et dans la grille — sinon la zone touche déjà le
+    bord de ce côté, rien à repousser — et (2) elle ne figure pas dans
+    `protected` (voir `_known_slot_boundary_cells`) — une case qui borne
+    déjà un mot différent, réellement posé, ne doit jamais être touchée.
+    Au-delà, la place disponible de ce côté (la suite de cases blanches
+    consécutives immédiatement après cette case bordante, jusqu'à la
+    prochaine case noire ou le bord) détermine combien de longueurs
+    différentes sont essayées : allonger de 1 case (la case bordante
+    elle-même rejoint la zone, une nouvelle case noire est posée juste
+    après), de 2, ..., jusqu'à absorber la totalité de la place disponible
+    (aucune nouvelle case noire posée du tout, l'obstacle suivant borne
+    déjà la zone allongée).
+
+    Une case noire candidate à ce déplacement n'est jamais posée sur une
+    case déjà connue (`known`) — la noircir détruirait le mot croisant qui
+    la fixe déjà — et doit elle-même rester structurellement valide
+    (`is_structurally_valid(min_interior_free=1)`, le même invariant
+    absolu utilisé partout ailleurs dans ce fichier pour l'ajout d'une
+    case noire) ; aucun contrôle de ce genre n'est nécessaire quand
+    l'obstacle suivant est déjà en place (rien de nouveau n'est ajouté —
+    et RETIRER une case noire ne peut jamais violer cet invariant, qui ne
+    concerne que les ajouts).
+
+    Rassemble d'abord tous les candidats valables — les deux côtés, toutes
+    les longueurs d'allongement possibles, tous les mots réels qui y
+    correspondent compte tenu des lettres déjà connues sur la zone
+    allongée — puis tire au hasard dans cet ensemble complet. Pour chaque
+    candidat ainsi tiré, vérifie qu'il ne crée pas de nouvelle situation
+    impossible : `_new_crossing_impossibility` pour les cases qui
+    appartenaient déjà à un emplacement avant cet allongement, et
+    `_new_boundary_crossing_impossible` pour la case bordante elle-même
+    (jusque-là noire, donc absente de `cell_to_slots`) — un nouvel
+    emplacement perpendiculaire peut naître exactement à cet endroit une
+    fois cette case rendue blanche. Renvoie `(mot, cases_du_mot,
+    ancienne_case_bordante, nouvelle_case_bordante_ou_None)` du premier
+    candidat qui passe tous ces contrôles, ou `None` si aucun côté/
+    longueur ne convient."""
+    length = len(cells)
+    direction = "across" if length > 1 and cells[1][0] == cells[0][0] else "down"
+    dr, dc = (0, 1) if direction == "across" else (1, 0)
+    (r0, c0), (r1, c1) = cells[0], cells[-1]
+
+    options = []
+    for side, boundary, extend_dr, extend_dc in (
+        ("head", (r0 - dr, c0 - dc), -dr, -dc),
+        ("tail", (r1 + dr, c1 + dc), dr, dc),
+    ):
+        br, bc = boundary
+        if not (0 <= br < rows and 0 <= bc < cols):
+            continue
+        if grid[br][bc] != BLACK or boundary in protected:
+            continue
+        avail = []
+        rr, cc = br + extend_dr, bc + extend_dc
+        while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] == WHITE:
+            avail.append((rr, cc))
+            rr += extend_dr
+            cc += extend_dc
+        if not avail:
+            continue
+        for k in range(len(avail) + 1):
+            new_boundary = avail[k] if k < len(avail) else None
+            if new_boundary is not None:
+                if new_boundary in known:
+                    continue
+                # Valider l'état RÉEL une fois ce candidat appliqué — l'ancienne
+                # case bordante redevient blanche EN MÊME TEMPS que la nouvelle
+                # devient noire, jamais l'une sans l'autre : les tester l'une
+                # sans l'autre (par ex. la nouvelle case noire posée alors que
+                # l'ancienne est encore noire elle aussi) évaluerait un état
+                # hypothétique qui ne sera jamais réellement validé — bug
+                # trouvé en direct : les deux cases noires adjacentes coupaient
+                # alors la grille en deux composantes déconnectées, un faux
+                # échec de connexité qui n'existe pas dans l'état vraiment visé.
+                nb_r, nb_c = new_boundary
+                grid[br][bc] = WHITE
+                grid[nb_r][nb_c] = BLACK
+                valid = is_structurally_valid(grid, rows, cols, min_interior_free=1)
+                grid[br][bc] = BLACK
+                grid[nb_r][nb_c] = WHITE
+                if not valid:
+                    continue
+            absorbed = avail[:k]
+            if side == "head":
+                new_cells = list(reversed(absorbed)) + [boundary] + list(cells)
+            else:
+                new_cells = list(cells) + [boundary] + list(absorbed)
+            new_length = len(new_cells)
+            sub_known = {c: known[c] for c in new_cells if c in known}
+            candidates = [
+                w for w in _slot_candidates(index, new_length, new_cells, sub_known)
+                if w not in used_words
+            ]
+            for w in candidates:
+                options.append((w, tuple(new_cells), boundary, new_boundary))
+    rng.shuffle(options)
+    for word, new_cells, old_boundary, new_boundary in options:
+        if _new_crossing_impossibility(cur_slots, cell_to_slots, own_idx, new_cells, word, known, index):
+            continue
+        boundary_idx = new_cells.index(old_boundary)
+        if _new_boundary_crossing_impossible(
+            grid, rows, cols, old_boundary, word[boundary_idx], dr, dc, known, index
+        ):
+            continue
+        return word, list(new_cells), old_boundary, new_boundary
+    return None
+
+
 def _sort_examples_by_process(examples):
     """Trie une liste d'exemples d'aperçu (voir generate_grid's propres
     listes `examples=[...]`) par numéro de process croissant (1..N), à la
@@ -4992,6 +5345,117 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
             for c, ch in zip(sub, word):
                 known[c] = ch
             new_grid[boundary[0]][boundary[1]] = BLACK
+            progressed = True
+            changed = True
+        if not progressed:
+            break
+        cur_slots = extract_slots(new_grid, rows, cols)
+        remaining_idx = _impossible_indices(cur_slots, index, known)
+        remaining_cells = [tuple(cur_slots[j]) for j in remaining_idx]
+
+    if not changed:
+        return grid, slots, assignment, impossible_slots
+
+    final_slots = extract_slots(new_grid, rows, cols)
+    invalid_full = set(_invalid_fully_known_indices(final_slots, index, known))
+    final_assignment = [
+        "".join(known[c] for c in cells)
+        if all(c in known for c in cells) and j not in invalid_full else None
+        for j, cells in enumerate(final_slots)
+    ]
+    final_impossible = sorted(set(_impossible_indices(final_slots, index, known)) | invalid_full)
+    return new_grid, final_slots, final_assignment, final_impossible
+
+
+def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
+                                index, rng):
+    """Nouvelle étape, complément exact de `_shorten_impossible_zones`
+    ci-dessus, à la demande explicite de l'utilisateur : "si un
+    emplacement ne trouve pas de mot dans le glossaire thématique (ou le
+    glossaire normal si ce n'est pas une grille thématique, donc
+    emplacement devenu impossible), mais qu'au moins une des cases noires
+    limitant la zone peut être supprimée ou déplacée..., tester des
+    longueurs différentes en supprimant ou déplaçant la case noire."
+    L'"impossible" utilisé ici est le même critère générique déjà établi
+    pour `_shorten_impossible_zones` (`_impossible_indices` — aucun mot
+    réel, quelle qu'en soit la source, ne correspond aux lettres déjà
+    connues) : la génération thématique ne restreint jamais la notion
+    d'"impossible" elle-même au seul glossaire thématique — `priority_
+    words` n'est qu'une préférence d'ordre d'essai pendant le remplissage
+    CSP (voir `Filler._backtrack`), jamais une restriction du dictionnaire
+    réellement interrogé ici, exactement comme pour `_find_shorter_word_
+    for_zone` qui n'a elle non plus jamais eu connaissance du thème.
+
+    Appelée, dans `_clean_continue_candidate`, juste APRÈS `_shorten_
+    impossible_zones` — sur ce qui reste encore impossible une fois le
+    raccourcissement déjà tenté — plutôt qu'avant ou à sa place : un choix
+    d'ordre délibéré mais non explicitement demandé, le moins risqué des
+    deux (ne touche jamais au mécanisme de raccourcissement déjà établi et
+    vérifié, n'agit qu'en complément sur ce qu'il n'a pas pu résoudre).
+    Réservée à la reprise "telle quelle", jamais au nettoyage complet — le
+    même principe déjà établi pour `_shorten_impossible_zones` elle-même
+    (voir sa propre docstring) : un nettoyage complet régénère de toute
+    façon un motif entièrement neuf via `make_pattern`, qui peut déjà
+    allonger/raccourcir n'importe quelle zone par construction.
+
+    Même structure de boucle par tours que `_shorten_impossible_zones` —
+    `remaining_cells` identifie chaque emplacement encore à traiter par
+    ses propres cases (jamais par indice numérique, qui se périmerait dès
+    qu'une case noire ajoutée ailleurs décale l'ordre des emplacements),
+    et `cur_slots`/`cell_to_slots`/`known`/`used_words` sont recalculés à
+    neuf avant CHAQUE emplacement traité — pas seulement une fois par
+    tour — pour que l'examen d'un emplacement tienne toujours compte de ce
+    que l'emplacement précédent vient tout juste de poser. `_known_slot_
+    boundary_cells` (voir sa propre docstring) est également recalculé à
+    chaque emplacement traité, puisque le motif change sous ses pieds au
+    fil de la boucle.
+
+    Renvoie `(grid, slots, assignment, impossible_slots)` inchangés, par
+    référence, si aucun allongement n'a jamais pu être appliqué (le cas
+    courant), sinon un nouveau quadruplet motif/emplacements/mots/
+    emplacements-encore-impossibles reflétant l'état après cette étape,
+    exactement le même contrat de retour que `_shorten_impossible_zones`."""
+    known = {}
+    for i, word in enumerate(assignment):
+        if word is None:
+            continue
+        for cell, ch in zip(slots[i], word):
+            known[cell] = ch
+
+    new_grid = [row[:] for row in grid]
+    changed = False
+    remaining_cells = [tuple(slots[i]) for i in impossible_slots]
+
+    while remaining_cells:
+        progressed = False
+        for cells_tuple in remaining_cells:
+            cur_slots = extract_slots(new_grid, rows, cols)
+            try:
+                own_idx = cur_slots.index(list(cells_tuple))
+            except ValueError:
+                continue
+            cells = cur_slots[own_idx]
+            cell_to_slots = defaultdict(list)
+            for i, s in enumerate(cur_slots):
+                for c in s:
+                    cell_to_slots[c].append(i)
+            used_words = {
+                "".join(known[c] for c in s) for s in cur_slots
+                if all(c in known for c in s)
+            }
+            protected = _known_slot_boundary_cells(new_grid, rows, cols, cur_slots, known)
+            result = _find_longer_word_for_zone(
+                new_grid, rows, cols, cells, cur_slots, cell_to_slots, own_idx,
+                protected, index, known, used_words, rng,
+            )
+            if result is None:
+                continue
+            word, new_cells, old_boundary, new_boundary = result
+            for c, ch in zip(new_cells, word):
+                known[c] = ch
+            new_grid[old_boundary[0]][old_boundary[1]] = WHITE
+            if new_boundary is not None:
+                new_grid[new_boundary[0]][new_boundary[1]] = BLACK
             progressed = True
             changed = True
         if not progressed:
@@ -5810,17 +6274,23 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # (un mot plus court en tête/fin de zone, borné par une case noire) avant
 # tout retrait de mot classique — jamais lors du nettoyage complet (voir sa
 # propre docstring), seulement ici, pour cette même raison déjà établie pour
-# `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY`. Son motif/liste d'emplacements
-# encore impossibles éventuellement mis à jour (`cand_grid`/`cand_impossible`)
-# remplacent alors `cand_diag["assignment"]`/`cand_diag["impossible_slots"]`
-# pour le reste de cette fonction — un no-op complet (mêmes objets, mêmes
-# indices) tant qu'aucun mot plus court n'a pu être placé.
+# `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY`. `_lengthen_impossible_zones`
+# (juste après elle, même fichier) tente ensuite, sur ce qui reste encore
+# impossible, l'opération inverse — allonger la zone en repoussant/
+# supprimant l'une de ses cases noires bordantes existantes plutôt qu'en
+# ajouter une nouvelle à l'intérieur — à la demande explicite de
+# l'utilisateur (voir sa propre docstring pour le détail complet). Le
+# motif/liste d'emplacements encore impossibles éventuellement mis à jour
+# par ces deux étapes (`cand_grid`/`cand_impossible`) remplacent alors
+# `cand_diag["assignment"]`/`cand_diag["impossible_slots"]` pour le reste
+# de cette fonction — un no-op complet (mêmes objets, mêmes indices) tant
+# qu'aucune des deux n'a rien pu changer.
 def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
     """Nettoie une seule tentative échouée d'un palier "reprise telle
     quelle" (voir `_continue_seed_pool`) — retire ce qui croise un
     emplacement impossible (`_clean_blocked_slots`), après avoir d'abord
-    tenté de raccourcir ces mêmes emplacements (`_shorten_impossible_
-    zones`).
+    tenté de raccourcir (`_shorten_impossible_zones`) puis d'allonger
+    (`_lengthen_impossible_zones`) ces mêmes emplacements.
 
     Quand `_clean_blocked_slots` a, en plus, posé une nouvelle case noire
     (son alternative à 1/10 — `new_black_cells`), le motif change de
@@ -5841,6 +6311,9 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
     cand_grid, cand_slots, cand_assignment, cand_impossible = _shorten_impossible_zones(
         cand_grid, rows, cols, cand_slots, cand_diag["assignment"],
         cand_diag["impossible_slots"], index, rng,
+    )
+    cand_grid, cand_slots, cand_assignment, cand_impossible = _lengthen_impossible_zones(
+        cand_grid, rows, cols, cand_slots, cand_assignment, cand_impossible, index, rng,
     )
     cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
         cand_slots, cand_assignment, cand_impossible,
@@ -5891,6 +6364,13 @@ def _continue_seed_pool(sorted_candidates):
 # une seule fois par worker via l'initializer du pool, plutôt que repicklé à
 # chaque tâche soumise — il ne change jamais pendant un generate_grid().
 _worker_index = None
+# Ensemble (frozenset de MOTs nus, en majuscules) des mots à privilégier —
+# la présélection thématique issue de la pré-recherche Qdrant (voir
+# generate_grid's `priority_words` et backend/app.py). Vide/`None` = aucune
+# thématique, comportement inchangé. Passé une seule fois par worker via
+# l'initializer du pool comme `_worker_index` (il peut contenir plusieurs
+# milliers de mots et ne change jamais pendant un generate_grid()).
+_worker_priority_words = None
 # Bouton "Stop" (voir CANCEL_CHECK_INTERVAL/Filler.__init__), à la demande
 # explicite de l'utilisateur — comme `_worker_index` juste au-dessus, passé
 # une seule fois par worker via l'initializer du pool plutôt qu'en argument
@@ -6095,12 +6575,14 @@ def _warmup_worker():
 
 def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_done_event=None,
                   best_state_queue=None, warmup_barrier=None, proper_noun_words=None,
-                  max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None):
+                  max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
+                  priority_words=None):
     global _worker_index, _worker_cancel_event, _worker_batch_abandoned_event, \
         _worker_attempt_done_event, _worker_best_state_queue, _worker_warmup_barrier, \
         _worker_proper_noun_words, _worker_max_proper_nouns, \
-        _worker_non_gloss_words, _worker_max_non_gloss
+        _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words
     _worker_index = index
+    _worker_priority_words = priority_words
     _worker_cancel_event = cancel_event
     _worker_batch_abandoned_event = batch_abandoned_event
     _worker_attempt_done_event = attempt_done_event
@@ -6300,7 +6782,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                        proper_noun_words=_worker_proper_noun_words,
                        max_proper_nouns=_worker_max_proper_nouns,
                        non_gloss_words=_worker_non_gloss_words,
-                       max_non_gloss=_worker_max_non_gloss)
+                       max_non_gloss=_worker_max_non_gloss,
+                       priority_words=_worker_priority_words)
     return grid, result, diag
 
 
@@ -6458,7 +6941,8 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        proper_noun_words=_worker_proper_noun_words,
                        max_proper_nouns=_worker_max_proper_nouns,
                        non_gloss_words=_worker_non_gloss_words,
-                       max_non_gloss=_worker_max_non_gloss)
+                       max_non_gloss=_worker_max_non_gloss,
+                       priority_words=_worker_priority_words)
     return seed_grid, result, diag
 
 
@@ -6521,8 +7005,32 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    force_letters_fraction=0.0, cancel_event=None,
                    black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
                    deadline_checks=None, resume_state=None, should_pause=None,
-                   bilingual_wordlist_path=None):
+                   bilingual_wordlist_path=None, priority_words=None,
+                   bilingual_priority_words=None):
     """Génère une grille remplie de bout en bout (motif + CSP + minimisation).
+
+    `priority_words` (`None`/vide par défaut — aucun effet pour tout
+    appelant existant, notamment le CLI), à la demande explicite de
+    l'utilisateur : la présélection thématique. Un itérable de mots (nus
+    ou accentués — normalisés ici en MOTs majuscules sans accent, comme la
+    colonne MOT du lexique) issus d'une pré-recherche vectorielle Qdrant
+    des ~5000 mots les plus proches d'une thématique saisie (voir
+    backend/app.py). Le lexique complet reste chargé (indispensable pour
+    le repli) ; c'est le solveur CSP qui, pour chaque emplacement, essaie
+    d'abord tous ses candidats présents dans `priority_words` et ne
+    descend vers un mot ordinaire du dictionnaire que lorsque le
+    backtracking a épuisé sans solution les mots thématiques qui y
+    tenaient (voir `Filler._backtrack`).
+
+    `bilingual_priority_words` (`None` par défaut) : sur une grille
+    bilingue, le glossaire thématique de la langue des mots VERTICAUX, à
+    la demande explicite de l'utilisateur ("Quand une grille est
+    bilingue, il faut générer un glossaire thématique par langue").
+    `priority_words` sert alors aux mots horizontaux (langue A),
+    `bilingual_priority_words` aux verticaux (langue B) ; les deux sont
+    enveloppés dans un `DualSet` résolu par direction (`_priority_words_
+    for`), exactement comme `index`/`available_lengths`. Ignoré sur une
+    grille monolingue (`priority_words` reste une simple frozenset).
     `width` est le nombre de colonnes (horizontal), `height` le nombre de lignes
     (vertical). Retourne un dict {width, height, pattern, solution, words,
     word_count, black_count, black_ratio, language, bilingual_language}, ou
@@ -6745,6 +7253,39 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     index_across = build_index(by_length, frequencies)
     index_down = build_index(by_length_down, frequencies_down) if bilingual_active else index_across
     index = DualIndex(index_across, index_down)
+
+    # Présélection thématique (voir la docstring / `priority_words`). Les
+    # mots arrivent déjà sous forme MOT (majuscules, sans accent — le
+    # `word` du payload Qdrant, identique à la colonne MOT du lexique et
+    # aux clés de `index`) ; on se contente de mettre en majuscules et de
+    # restreindre aux mots effectivement présents dans le lexique chargé
+    # (un mot d'une langue/graphie absente de ce lexique ne servirait à
+    # rien comme priorité). `frozenset` vide s'il n'y a aucune thématique
+    # ou aucune correspondance — `Filler._backtrack` ne change alors rien.
+    # Sur une grille bilingue, un glossaire par langue (à la demande
+    # explicite de l'utilisateur : "Quand une grille est bilingue, il
+    # faut générer un glossaire thématique par langue") — `priority_
+    # words` pour les mots horizontaux (langue A), `bilingual_priority_
+    # words` pour les verticaux (langue B) — enveloppés dans un DualSet,
+    # exactement comme `index`/`available_lengths`. Sur une grille
+    # monolingue, `priority_words` reste une simple frozenset (comportement
+    # inchangé, `bilingual_priority_words` ignoré).
+    if priority_words or bilingual_priority_words:
+        _known_across = set(accents)
+        across_pw = frozenset(
+            u for w in (priority_words or ()) if (u := str(w).upper()) in _known_across
+        )
+        if bilingual_active:
+            _known_down = set(accents_down)
+            down_pw = frozenset(
+                u for w in (bilingual_priority_words or ())
+                if (u := str(w).upper()) in _known_down
+            )
+            priority_words = DualSet(across_pw, down_pw)
+        else:
+            priority_words = across_pw
+    else:
+        priority_words = frozenset()
     # Précalculé une seule fois (pas par palier) — mêmes longueurs pour
     # toute la génération, `index` ne change jamais. Reproduit exactement
     # le calcul propre à chaque worker dans `_pattern_attempt` (voir sa
@@ -7090,7 +7631,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   warmup_barrier, proper_noun_words, max_proper_nouns,
-                  non_gloss_words, max_non_gloss)
+                  non_gloss_words, max_non_gloss, priority_words)
     ) as executor:
         # Pré-chauffage du pool : force tous les workers à finir leur
         # démarrage réel avant le tout premier palier (voir le docstring de
@@ -7194,6 +7735,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         "impossible_cells": [],
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
+                        "theme_cells": _theme_cells_from_preview_state(
+                            pool_grid, rows, cols, None, pool_preseed, priority_words
+                        ),
                         "low_candidate_cells": [],
                         "noise_cells": [],
                         "process_number": continue_pool_lineage[pool_idx % len(continue_pool_lineage)],
@@ -7253,6 +7797,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         "impossible_cells": [],
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
+                        "theme_cells": _theme_cells_from_preview_state(
+                            pool_grid, rows, cols, pool_locked, None, priority_words
+                        ),
                         "low_candidate_cells": low_candidate_cells,
                         "noise_cells": noise_cells,
                         "process_number": (
@@ -7446,6 +7993,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             "impossible_cells": [],
                             "forced_cells": [],
                             "locked_cells": early_pattern_locked,
+                            # Tout premier palier : rien n'est encore verrouillé
+                            # ni assigné, donc aucun mot thématique à signaler.
+                            "theme_cells": [],
                             "process_number": dispatch_lineage[i],
                             # Aucune comparaison n'a encore eu lieu à ce
                             # stade (tout premier palier, chaque tentative
@@ -7518,6 +8068,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             "impossible_cells": [],
                             "forced_cells": [],
                             "locked_cells": early_pattern_locked,
+                            "theme_cells": _theme_cells_from_preview_state(
+                                early_pattern, rows, cols, pool_locked, None, priority_words
+                            ),
                             "process_number": pool_lineage[p % len(pool_lineage)],
                             # `pool[0]` (jamais un doublon — le premier
                             # examiné, `seen_pool_patterns` encore vide à ce
@@ -7806,16 +8359,40 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     for g, r, d in successes:
                         cand_slots, cand_assignment = r
                         trial_grid = [row[:] for row in g]
-                        opt_grid, opt_slots, _opt_assignment = minimize_black_squares(
+                        opt_grid, opt_slots, opt_assignment = minimize_black_squares(
                             trial_grid, (cand_slots, cand_assignment), rows, cols,
                             index, rng, cancel_event=cancel_event,
                             proper_noun_words=proper_noun_words,
                             max_proper_nouns=max_proper_nouns,
                             non_gloss_words=non_gloss_words,
                             max_non_gloss=max_non_gloss,
+                            priority_words=priority_words,
                         )
                         opt_black = sum(row.count(BLACK) for row in opt_grid)
-                        opt_score = sum(len(slot) ** 2 for slot in opt_slots)
+                        # Tie-break, at the user's explicit request: "au
+                        # lieu d'évaluer la grille avec les mots les plus
+                        # longs sur tous les mots, évaluer uniquement sur
+                        # les mots du glossaire thématique" — for a
+                        # themed generation (priority_words non-empty),
+                        # the sum-of-squares score now only counts a
+                        # placed word that's actually a member of the
+                        # theme glossary, rather than every slot
+                        # regardless of content — so the candidate that
+                        # ends up surfacing more/longer theme words wins
+                        # the tie-break, not merely the one with the
+                        # longest words overall. An ordinary, non-themed
+                        # generation (priority_words empty) is completely
+                        # unaffected: opt_score still sums every slot's
+                        # own length, exactly as before this change.
+                        if priority_words:
+                            opt_score = sum(
+                                len(w) ** 2
+                                for w, slot in zip(opt_assignment, opt_slots)
+                                if w is not None
+                                and w in _priority_words_for(priority_words, slot)
+                            )
+                        else:
+                            opt_score = sum(len(slot) ** 2 for slot in opt_slots)
                         scored.append((opt_black, -opt_score, g, r, d))
                     _, _, best, best_result, best_diag = min(scored, key=lambda t: (t[0], t[1]))
                 break
@@ -8068,6 +8645,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     "impossible_cells": d["impossible_cells"],
                     "forced_cells": d["forced_cells"],
                     "locked_cells": d.get("locked_cells", []),
+                    "theme_cells": d.get("theme_cells", []),
                     "process_number": d.get("process_number"),
                     # `display_pairs[0]` est TOUJOURS le vainqueur réel
                     # (voir son propre commentaire plus haut) — marqué ici,
@@ -8278,6 +8856,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # pourquoi aucune case noire verrouillée n'apparaissait
                     # jamais dans cet aperçu.
                     "locked_cells": d.get("locked_cells", []),
+                    # `theme_cells` : jamais recalculé par `_optimize_before_
+                    # cleanup` (pas de sondage/recomposition de mots pendant
+                    # cette étape) — `cand_diag` (l'état d'avant, issu de
+                    # `try_fill`) porte la valeur pertinente, même choix que
+                    # `forced_cells` juste au-dessus.
+                    "theme_cells": cand_diag.get("theme_cells", []),
                     "process_number": d.get("process_number"),
                     # `failed_pairs[0]` (index 0, avant tout tri par process
                     # ci-dessous) est le vainqueur réel de ce palier — voir
@@ -8653,6 +9237,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             "impossible_cells": [],
             "forced_cells": [],
             "locked_cells": [],
+            "theme_cells": _theme_word_cells(best_slots, best_assignment, priority_words),
             "process_number": winning_process_number,
             "is_best": True,
         }],
@@ -8661,6 +9246,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         best, best_result, rows, cols, index, rng, cancel_event=cancel_event,
         proper_noun_words=proper_noun_words, max_proper_nouns=max_proper_nouns,
         non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
+        priority_words=priority_words,
     )
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)

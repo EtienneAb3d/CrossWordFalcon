@@ -132,11 +132,40 @@
         </select>
       </label>
 
+      <!-- Seuil de similarité Qdrant minimal du glossaire thématique pour
+           CETTE génération (voir backend/app.py's THEME_MIN_SCORE /
+           GenerateRequest.theme_precision) — sans effet si "Thématique"
+           est vide. Saisie libre, à la demande explicite de
+           l'utilisateur ("configurer à la main"). -->
+      <label for="theme-precision">
+        <span data-i18n="themePrecisionLabel">Précision thématique</span>
+        <!-- type="text" (pas "number") pour maîtriser le séparateur
+             décimal : le point est forcé (une virgule saisie est
+             normalisée en point par script.js, à la demande explicite de
+             l'utilisateur) — un input "number" localisé accepterait/
+             afficherait une virgule, source de confusion. -->
+        <input type="text" id="theme-precision" name="theme_precision"
+               inputmode="decimal" autocomplete="off" spellcheck="false"
+               pattern="[0-9]*([.,][0-9]+)?" value="0.67"
+               data-i18n-title="themePrecisionTitle">
+      </label>
+
       <!-- Boutons d'action sur leur propre ligne, sous les combos d'options,
            à la demande explicite de l'utilisateur — #form-actions prend
            toute la largeur (flex-basis: 100%) donc passe à la ligne
            suivante dans le flex-wrap du formulaire. -->
       <div id="form-actions">
+        <!-- Thématique optionnelle (liste de mots) — à côté de "Générer la
+             grille", à la demande explicite de l'utilisateur. Non vide ->
+             pré-recherche Qdrant des 5000 mots les plus proches, priorisés
+             par le solveur (voir backend/app.py's THEME_PRESEARCH_LIMIT et
+             crossword_gen.py's priority_words). -->
+        <label id="theme-field" for="theme">
+          <span data-i18n="themeLabel">Thématique</span>
+          <input type="text" id="theme" name="theme" autocomplete="off"
+                 data-i18n-placeholder="themePlaceholder"
+                 data-i18n-title="themeTitle" />
+        </label>
         <button type="submit" id="generate-btn" data-i18n="generateBtn">Générer la grille</button>
         <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
                 data-i18n="attemptPreviewRevealBtn">Voir</button>
@@ -148,6 +177,12 @@
         <button type="button" id="recompute-btn" data-i18n="recomputeBtn" hidden>Recalculer</button>
         <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
         <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
+        <!-- Panneau d'administration Qdrant : rendu visible uniquement quand
+             la page est ouverte en localhost (script.js,
+             showQdrantAdminOnLocalhost) ; le proxy (frontend/server.py,
+             _require_localhost) refuse aussi les routes /api/qdrant/admin/*
+             pour tout client/Host non-loopback. -->
+        <button type="button" id="qdrant-admin-btn" data-i18n="qdrantAdminBtn" hidden>Qdrant (admin)</button>
       </div>
     </form>
 
@@ -226,6 +261,8 @@
           <option value="medium" data-i18n="difficultyMedium">Moyenne</option>
           <option value="hard" data-i18n="difficultyHard">Difficile</option>
         </select>
+        <button type="button" id="library-refresh-btn" class="nav-btn"
+                data-i18n-aria="libraryRefreshBtn">↻</button>
         <button type="button" id="library-close-btn" class="nav-btn"
                 data-i18n-aria="libraryCloseBtn">✕</button>
       </div>
@@ -236,12 +273,21 @@
               <th data-i18n="libraryColLanguage"></th>
               <th data-i18n="libraryColDate"></th>
               <th data-i18n="libraryColTitle"></th>
+              <!-- Thématique saisie à la génération (champ `theme` du JSON,
+                   vide si aucune) — à la demande explicite de l'utilisateur. -->
+              <th data-i18n="libraryColTheme"></th>
               <th data-i18n="libraryColDifficulty"></th>
               <th data-i18n="libraryColSize"></th>
               <!-- Auteur de la grille (champ `pseudo` du JSON, vide si
-                   non défini) — dernière colonne, à la demande explicite
-                   de l'utilisateur. -->
+                   non défini) — à la demande explicite de l'utilisateur. -->
               <th data-i18n="libraryColAuthor"></th>
+              <!-- Lien partageable vers la grille (SHARE_BASE_URL + ?grid=<id>)
+                   — à la demande explicite de l'utilisateur. -->
+              <th data-i18n="libraryColLink"></th>
+              <!-- Téléchargement PDF imprimable (grille vide + définitions +
+                   titre, sans réponses) — dernière colonne, à la demande
+                   explicite de l'utilisateur. -->
+              <th data-i18n="libraryColPdf"></th>
             </tr>
           </thead>
           <tbody id="library-tbody"></tbody>
@@ -276,6 +322,14 @@
                  data-i18n-placeholder="dictionaryInputPlaceholder">
           <button type="submit" id="dictionary-search-btn"
                   data-i18n="dictionarySearchBtn">Chercher</button>
+          <button type="button" id="dictionary-similar-btn"
+                  data-i18n="dictionarySimilarBtn">Thématique</button>
+          <!-- Demande au LLM jusqu'à 10 définitions indépendantes de
+               l'expression saisie (comme pour un mot de grille — voir
+               backend/clues.py, LLMClueGenerator.generate_definitions),
+               à la demande explicite de l'utilisateur. -->
+          <button type="button" id="dictionary-define-btn"
+                  data-i18n="dictionaryDefineBtn">Définir</button>
           <button type="button" id="dictionary-clear-btn" class="nav-btn"
                   data-i18n="dictionaryClearBtn">Effacer</button>
         </form>
@@ -283,6 +337,23 @@
                 data-i18n-aria="dictionaryCloseBtn">✕</button>
       </div>
       <div id="dictionary-results"></div>
+    </section>
+
+    <!-- Panneau "Qdrant (admin)" : état lecture seule de la base vectorielle
+         + deux actions rapides (recréer la collection, vider une langue) +
+         lien vers le tableau de bord natif de Qdrant. Bouton masqué hors
+         localhost (script.js) ; routes proxy refusées hors loopback
+         (frontend/server.py). Même groupe basculant que #library /
+         #dictionary / #attempt-preview / #result. -->
+    <section id="qdrant-admin" hidden>
+      <div id="qdrant-admin-header">
+        <p id="qdrant-admin-label" data-i18n="qdrantAdminTitle">Qdrant — administration</p>
+        <button type="button" id="qdrant-admin-refresh-btn" class="nav-btn"
+                data-i18n="qdrantAdminRefreshBtn">Rafraîchir</button>
+        <button type="button" id="qdrant-admin-close-btn" class="nav-btn"
+                data-i18n-aria="qdrantAdminCloseBtn">✕</button>
+      </div>
+      <div id="qdrant-admin-body"></div>
     </section>
 
     <section id="attempt-preview" hidden>

@@ -160,6 +160,20 @@ _BLACK_RATIO_LABELS = {
     "pt": "{p}% preto",
 }
 
+# Base publique pour le lien "jouer en ligne" imprimé en pied du PDF
+# (render_puzzle_svg). Doit rester alignée sur SHARE_BASE_URL dans
+# frontend/static/script.js (la colonne "Lien" de la Bibliothèque).
+PLAY_ONLINE_BASE_URL = "https://falcon.cubaix.com/"
+
+_PLAY_ONLINE_LABELS = {
+    "fr": "Jouer en ligne (avec solution) : {url}",
+    "en": "Play online (with solution): {url}",
+    "de": "Online spielen (mit Lösung): {url}",
+    "es": "Jugar en línea (con solución): {url}",
+    "it": "Gioca online (con soluzione): {url}",
+    "pt": "Jogar online (com solução): {url}",
+}
+
 
 def _format_duration(seconds):
     """Mirrors frontend/static/script.js's formatDuration exactly (same
@@ -522,6 +536,144 @@ def render_grid_svg(result, language, difficulty=None, mode=None):
         f"{watermark_svg}"
         f"{body}</svg>"
     )
+
+
+def render_puzzle_svg(result, language, title="", difficulty=None):
+    """Like render_grid_svg but for a *printable, answer-free* puzzle, at
+    the user's explicit request ("un lien permettant de télécharger la
+    grille en PDF (sans les réponses, seulement la grille vide, les
+    définitions, et le titre de la grille)") — used by GET /api/library/
+    {grid_id}/pdf. Same layout (empty grid + across sidebar + 2-column
+    down clues) minus the "=== Solution ===" grid at the bottom, plus the
+    grid's own `title` in the header. No mode/durations line: irrelevant
+    on a puzzle sheet.
+
+    `result` is a grid_store record (or a generate_grid() result): it
+    needs `pattern`, `words` (each with `clue`/`row`/`col`/`direction`/
+    `answer`), `width`, `height`."""
+    words = result["words"]
+    across_heading, down_heading, _solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
+    across_lines = _group_clue_lines(words, "across", "row", language)
+    down_lines = _group_clue_lines(words, "down", "col", language)
+
+    grid_width_px = CELL_SIZE + result["width"] * CELL_SIZE
+    sidebar_width = grid_width_px
+    canvas_width = max(
+        2 * grid_width_px + GRID_SIDEBAR_GAP + 2 * MARGIN, MIN_CANVAS_WIDTH
+    )
+    parts = []
+    y = MARGIN
+
+    # Header: logo + software name, then the grid's own title (bold), then
+    # a small grey identity line (version / date / language / difficulty).
+    logo_x, logo_y = MARGIN, y
+    parts.append(
+        f'<image x="{logo_x}" y="{logo_y}" width="{HEADER_LOGO_SIZE}" height="{HEADER_LOGO_SIZE}" '
+        f'href="{_logo_data_uri()}"/>'
+    )
+    text_x = logo_x + HEADER_LOGO_SIZE + 12
+    version = _VERSION_PATH.read_text(encoding="utf-8").strip()
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    language_name = _NATIVE_LANGUAGE_NAMES.get(language, language)
+    difficulty_label, difficulty_names = _DIFFICULTY_LABELS.get(language, _DIFFICULTY_LABELS["en"])
+    difficulty_name = difficulty_names.get(difficulty, difficulty or "")
+    parts.append(
+        f'<text x="{text_x}" y="{logo_y + 20}" font-size="18" font-family="sans-serif" '
+        f'font-weight="bold">CrossWordFalcon</text>'
+    )
+    if title:
+        parts.append(
+            f'<text x="{text_x}" y="{logo_y + 40}" font-size="15" font-family="sans-serif" '
+            f'font-weight="bold" fill="#111827">{escape(title)}</text>'
+        )
+    parts.append(
+        f'<text x="{text_x}" y="{logo_y + 58}" font-size="12" font-family="sans-serif" '
+        f'fill="#4b5563">v{escape(version)} — {escape(date_str)} — {escape(language_name)} — '
+        f'{escape(difficulty_label)} : {escape(difficulty_name)}</text>'
+    )
+    y += max(HEADER_LOGO_SIZE, 58) + 12
+
+    # Row: across clues sidebar (left) + empty grid (right), side by side.
+    parts.append(_heading_svg(MARGIN, y, across_heading))
+    across_lines_svg, across_lines_height = _clue_lines_svg(
+        MARGIN, sidebar_width, y + 22, across_lines
+    )
+    parts.append(across_lines_svg)
+    sidebar_height = 22 + across_lines_height
+
+    grid_x0 = MARGIN + sidebar_width + GRID_SIDEBAR_GAP
+    empty_grid_svg, grid_height, _ = _grid_svg(result["pattern"], None, words, y, x_offset=grid_x0)
+    parts.append(empty_grid_svg)
+
+    y += max(sidebar_height, grid_height) + 24
+
+    # Down clues span the full width in 2 columns.
+    parts.append(_heading_svg(MARGIN, y, down_heading))
+    y += 22
+    half = (len(down_lines) + 1) // 2
+    down_col_width = (canvas_width - 2 * MARGIN - DOWN_COLUMN_GAP) / 2
+    left_svg, left_height = _clue_lines_svg(MARGIN, down_col_width, y, down_lines[:half])
+    right_x = MARGIN + down_col_width + DOWN_COLUMN_GAP
+    right_svg, right_height = _clue_lines_svg(right_x, down_col_width, y, down_lines[half:])
+    parts.append(left_svg)
+    parts.append(right_svg)
+    y += max(left_height, right_height) + MARGIN
+
+    # Footer: link to play this grid online (with its solution), at the
+    # user's explicit request — only when the record carries an id (a
+    # grid_store record; a bare generate_grid() result has none).
+    grid_id = result.get("id")
+    if grid_id:
+        play_url = f"{PLAY_ONLINE_BASE_URL}?grid={grid_id}"
+        play_template = _PLAY_ONLINE_LABELS.get(language, _PLAY_ONLINE_LABELS["en"])
+        y += 6
+        parts.append(
+            f'<line x1="{MARGIN}" y1="{y}" x2="{canvas_width - MARGIN}" y2="{y}" '
+            f'stroke="#d1d5db"/>'
+        )
+        y += 16
+        parts.append(
+            f'<text x="{MARGIN}" y="{y}" font-size="11" font-family="sans-serif" '
+            f'fill="#4b5563">{escape(play_template.format(url=play_url))}</text>'
+        )
+        y += MARGIN
+
+    body = "".join(parts)
+    watermark_size = canvas_width * 0.9
+    watermark_x = (canvas_width - watermark_size) / 2
+    watermark_y = (y - watermark_size) / 2
+    watermark_svg = (
+        f'<image x="{watermark_x:.1f}" y="{watermark_y:.1f}" '
+        f'width="{watermark_size:.1f}" height="{watermark_size:.1f}" '
+        f'href="{_logo_data_uri()}" opacity="0.1"/>'
+    )
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{y}" '
+        f'viewBox="0 0 {canvas_width} {y}">'
+        f'<rect x="0" y="0" width="{canvas_width}" height="{y}" fill="#ffffff"/>'
+        f"{watermark_svg}"
+        f"{body}</svg>"
+    )
+
+
+def svg_to_pdf_bytes(svg_str):
+    """Renders an SVG string to PDF bytes via `rsvg-convert -f pdf` (stdin
+    -> stdout), no temp file. Same `rsvg-convert`/librsvg dependency as
+    save_grid_png. Raises OSError if the tool is missing or fails."""
+    try:
+        proc = subprocess.run(
+            ["rsvg-convert", "-f", "pdf"],
+            input=svg_str.encode("utf-8"),
+            check=True, capture_output=True,
+        )
+    except FileNotFoundError as e:
+        raise OSError(
+            "`rsvg-convert` not found (install it with `brew install "
+            "librsvg` or `apt-get install librsvg2-bin`)"
+        ) from e
+    except subprocess.CalledProcessError as e:
+        raise OSError(f"rsvg-convert failed: {e.stderr.decode(errors='replace')}") from e
+    return proc.stdout
 
 
 def save_grid_svg(result, language, difficulty=None, mode=None, grid_svg_dir=GRID_SVG_DIR):

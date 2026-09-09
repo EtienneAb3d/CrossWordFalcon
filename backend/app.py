@@ -35,18 +35,25 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .chatbot import ChatBot, ChatError
 from .clues import ClueGenerationError, LLMClueGenerator
 from .dictionary_lookup import search as dictionary_search_impl
+from .embedder import Embedder, EmbedderError
+from .qdrant_store import QdrantStore, QdrantStoreError
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     generate_grid,
 )
-from .grid_store import get_grid, list_grids, save_grid_json
-from .svg_export import save_grid_png, save_grid_svg
+from .grid_store import _slugify_title, get_grid, list_grids, save_grid_json
+from .svg_export import (
+    render_puzzle_svg,
+    save_grid_png,
+    save_grid_svg,
+    svg_to_pdf_bytes,
+)
 from .system_info import get_system_info
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -54,6 +61,33 @@ logger = logging.getLogger("crosswordfalcon")
 
 clue_generator = LLMClueGenerator()
 chatbot = ChatBot()
+
+# "Thématique" button in the Dictionary panel (see frontend/static/
+# script.js and GET /api/similar_words): mirrors themed-grid glossary
+# construction — the typed expression is first expanded by the LLM
+# (`describe_theme`) into a keyword list, split into individual keywords,
+# and EACH keyword runs its own Qdrant nearest-words search; the results
+# are merged (best score per word). Every word kept has a similarity
+# >= the `min_score` query param — the current value of the form's
+# "Précision thématique" field, so the panel reacts to it live
+# (THEME_MIN_SCORE is only the fallback when the field is blank) —
+# restricted to the panel's language tenant, most-similar-first. Both
+# Qdrant/embed clients are lazy (no HTTP connection until first use), so
+# importing this with Qdrant / the embed server down is harmless — the
+# endpoint just returns a clean 503. The Qdrant/embed timeouts stay short
+# (10s each — a per-keyword search pages the ranking only until the score
+# drops below the threshold, fast around THEME_MIN_SCORE = 0.67), but the
+# added LLM expansion makes the whole call slower than before, so the
+# frontend/proxy timeouts for this route are widened (see
+# SIMILAR_*_TIMEOUT in script.js / frontend/server.py, and
+# _SIMILAR_DESCRIBE_TIMEOUT_S below).
+_SIMILAR_TIMEOUT_S = 10.0
+# Timeout for the describe_theme LLM expansion inside _similar_words_impl
+# — generous (the local model can be slow) but far below describe_theme's
+# own 300s default, which would let a stuck call hang the panel.
+_SIMILAR_DESCRIBE_TIMEOUT_S = 45.0
+_similar_qdrant = QdrantStore(timeout=_SIMILAR_TIMEOUT_S)
+_similar_embedder = Embedder(timeout=_SIMILAR_TIMEOUT_S)
 
 # Les scripts de récupération vivent dans le paquet `scrapper/` à la racine
 # du projet (déplacés là à la demande explicite de l'utilisateur, avec
@@ -86,6 +120,21 @@ RSS_FETCH_HOUR = 8
 # source, la même convention que LOG_LLM/ (backend/clues.py) pour les
 # journaux d'appels LLM des définitions.
 CHAT_LOG_DIR = _PROJECT_ROOT / "LOG_CHAT"
+
+# Journal de la pré-recherche thématique (voir THEME_LENGTH_MIN/MAX/
+# THEME_MIN_SCORE et _run_generate_job) : un fichier
+# `LOG_THEME/<timestamp>_<short_id>.log` par génération thématique, le
+# nom préfixé par un timestamp complet (comme pour LOG_LLM/), à la
+# demande explicite de l'utilisateur ("Montre la réponse LLM en première
+# ligne du fichier de sortie" ; "Préfixer les sauvegarde dans LOG_THEME
+# avec un timestamp, comme pour LOG_LLM"). Première ligne = la phrase
+# ~50 mots produite par le LLM (ou le thème brut si l'appel LLM a
+# échoué), puis le thème saisi et le glossaire complet des mots
+# présélectionnés par Qdrant, un mot par ligne. Best-effort : un échec
+# d'écriture est journalisé mais n'interrompt jamais la génération.
+# Racine du projet, gitignored — un journal généré, pas du contenu source, la même
+# convention que LOG_CHAT/ / LOG_USERS/ / LOG_LLM/.
+THEME_LOG_DIR = _PROJECT_ROOT / "LOG_THEME"
 
 # "chat debug" option (CHATBOT_DEBUG in env.sh/env_default.sh) — when on,
 # _append_chat_log also writes the COMPLETE prompt actually sent to the
@@ -220,6 +269,80 @@ BUDGET_MODES = {
     "medium": 500_000,
     "ultra": 5_000_000,
 }
+
+# Champ "Thématique" optionnel du formulaire de génération, à la demande
+# explicite de l'utilisateur : si la liste de mots de la thématique est
+# non vide, une pré-recherche vectorielle Qdrant construit un glossaire de
+# mots proches de la thématique, que le solveur CSP tente alors en
+# priorité pour chaque emplacement (voir crossword_gen.py's
+# `generate_grid`'s `priority_words` / `Filler._backtrack`). Best-effort :
+# si Qdrant ou le serveur d'embeddings est indisponible, ou si la
+# collection n'a pas encore été alimentée pour cette langue, la
+# génération se poursuit simplement sans thématique.
+#
+# La description LLM du thème (describe_theme) est une liste télégraphique
+# d'environ 30 mots-clefs séparés par des virgules. On ne l'embed PAS
+# telle quelle : elle est découpée en mots-clefs individuels
+# (_split_keywords), et CHAQUE mot-clef fait sa propre recherche Qdrant du
+# plus-proche-voisin — _compiled_theme_words_by_length fusionne ensuite
+# tous les résultats (meilleur score par mot). Une recherche par mot-clef
+# unique donne un vecteur de requête bien plus net qu'un seul embedding
+# moyenné sur ~30 mots. Chaque recherche est faite PAR LONGUEUR
+# (THEME_LENGTH_MIN..THEME_LENGTH_MAX lettres) — plutôt qu'un simple top-N
+# global (l'ancien THEME_PRESEARCH_LIMIT), qui pouvait laisser une
+# longueur d'emplacement entière sans aucun mot thématique si les voisins
+# les plus proches se trouvaient surtout à d'autres longueurs. Il n'y a
+# aucun plafond par longueur (voir THEME_MIN_SCORE plus bas) : TOUS les
+# mots dont le score dépasse ce seuil sont pris. Voir
+# _theme_words_by_length.
+THEME_LENGTH_MIN = 2
+THEME_LENGTH_MAX = 15
+# Taille de chaque page Qdrant lue en itérant (voir _theme_words_by_length) :
+# assez grande pour amortir l'aller-retour réseau, assez petite pour
+# s'arrêter tôt une fois le seuil de score franchi.
+THEME_LENGTH_SEARCH_PAGE = 1000
+# Il n'y a AUCUN plafond de profondeur / de nombre de mots renvoyés, à la
+# demande explicite de l'utilisateur : "Ne pas limiter le nombre de mots
+# renvoyés par le dictionnaire Thématique. Faire confiance au seuil."
+# _theme_words_by_length pagine jusqu'à ce que le score passe sous
+# THEME_MIN_SCORE (arrêt garanti et rapide vu que les résultats Qdrant
+# sont classés par score décroissant) ou que le tenant soit épuisé.
+# Seuil de score Qdrant COMMUN (similarité cosinus — les vecteurs sont
+# normalisés, voir backend/embedder.py) : la variable unique qui gouverne
+# À LA FOIS la construction du glossaire par longueur (_theme_words_by_
+# length) ET chacune des recherches thématiques par mot-clef qui
+# l'appellent (_compiled_theme_words_by_length). À la demande explicite de
+# l'utilisateur : "lister tous les mots avec un seuil identique à la
+# construction du glossaire (nommer la variable commune)". Les résultats
+# Qdrant étant déjà classés par score décroissant, dès qu'un score sous ce
+# seuil est rencontré, tous les suivants (dans la page courante ET dans
+# toute page ultérieure) le sont aussi — _theme_words_by_length arrête
+# donc complètement d'itérer, pas seulement d'accepter, dès ce point.
+#
+# C'est la VALEUR PAR DÉFAUT : le champ "Précision thématique" du
+# formulaire de génération (à la suite de "Mode", à la demande explicite
+# de l'utilisateur) permet de la régler à la main pour une génération
+# donnée (GenerateRequest.theme_precision -> paramètre `min_score` de
+# _compiled_theme_words_by_length / _theme_words_by_length). Le bouton
+# "Thématique" du panneau Dictionnaire, lui, utilise toujours cette
+# constante.
+THEME_MIN_SCORE = 0.67
+
+# Construction du glossaire de grille UNIQUEMENT (pas le bouton
+# "Thématique" du panneau Dictionnaire), à la demande explicite de
+# l'utilisateur : "augmenter la température du LLM à 0.9, itérer au plus
+# 3 fois pour essayer d'obtenir 300 mots à chercher dans Qdrant." Après
+# le premier passage (thème entier + un appel par mot pour un thème
+# multi-mots), si l'ensemble dédoublonné des mots-clefs à chercher compte
+# moins de THEME_MIN_KEYWORDS entrées, _run_generate_job relance
+# describe_theme (avec THEME_KEYWORD_LLM_TEMPERATURE = 0.9 pour maximiser
+# la variété) jusqu'à THEME_KEYWORD_LLM_MAX_LOOPS fois de plus, en
+# s'arrêtant dès qu'un appel n'apporte aucun mot-clef nouveau. La
+# température 0.9 est aussi utilisée pour le premier passage. Objectif
+# indicatif, pas une garantie.
+THEME_MIN_KEYWORDS = 300
+THEME_KEYWORD_LLM_MAX_LOOPS = 3
+THEME_KEYWORD_LLM_TEMPERATURE = 0.9
 
 app = FastAPI(title="CrossWordFalcon API", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -481,6 +604,26 @@ class GenerateRequest(BaseModel):
     # nettoie et le tronque à MAX_PSEUDO_LENGTH, pour qu'un caractère en
     # trop ne bloque jamais une génération.
     pseudo: Optional[str] = None
+    # Thématique optionnelle : une liste de mots (texte libre) donnant une
+    # orientation sémantique à la grille, à la demande explicite de
+    # l'utilisateur. Non vide -> `_run_generate_job` fait une pré-recherche
+    # Qdrant par mot-clef, par longueur (voir THEME_LENGTH_MIN/MAX/
+    # THEME_MIN_SCORE), et passe le glossaire obtenu à
+    # generate_grid(priority_words=...). `None`/vide = grille ordinaire,
+    # aucune pré-recherche. Non borné par une contrainte pydantic (comme
+    # `pseudo`) : nettoyé dans _run_generate_job.
+    theme: Optional[str] = None
+    # Champ "Précision thématique" du formulaire (à la suite de "Mode"), à
+    # la demande explicite de l'utilisateur : "permettant de configurer à
+    # la main THEME_MIN_SCORE". Seuil de similarité Qdrant minimal pour
+    # qu'un mot entre dans le glossaire thématique de CETTE génération —
+    # passé comme `min_score` à _compiled_theme_words_by_length /
+    # _theme_words_by_length. Par défaut la constante module
+    # THEME_MIN_SCORE (0.67). Sans effet si `theme` est vide.
+    theme_precision: float = Field(
+        default=THEME_MIN_SCORE, ge=0.0, le=1.0,
+        description="Seuil de similarité Qdrant minimal du glossaire thématique (0.0 à 1.0)",
+    )
 
 
 class RecomputeRequest(BaseModel):
@@ -707,6 +850,79 @@ def _write_users_log(count, pseudos):
             fh.write(line)
     except OSError as exc:
         logger.warning("echec d'ecriture du journal LOG_USERS: %s", exc)
+
+
+def _write_theme_log(short_id, theme, description, words,
+                     keyword_lists=None, searched_keywords=None, min_score=None):
+    """Écrit `LOG_THEME/<timestamp>_<short_id>.log`, le nom préfixé par un
+    timestamp complet (`%Y%m%d-%H%M%S-%f`) comme pour `LOG_LLM/`
+    (`backend/clues.py`, `_write_call_log`) — à la demande explicite de
+    l'utilisateur ("Préfixer les sauvegarde dans LOG_THEME avec un
+    timestamp, comme pour LOG_LLM") — plutôt que la simple date utilisée
+    jusque-là, pour que les fichiers se trient chronologiquement à la
+    seconde/microseconde près, cohérent avec les autres journaux de ce
+    projet. À la demande explicite de l'utilisateur, la PREMIÈRE ligne du
+    fichier est la phrase produite par le LLM pour décrire la thématique
+    (`description`) — ou le thème brut si l'appel LLM a échoué ; suivent
+    le thème saisi, le nombre de mots présélectionnés et un échantillon.
+    Best-effort — un échec est seulement journalisé. À la demande
+    explicite de l'utilisateur ("Lister le glossaire produit dans le
+    LOG_THEME (un mot par ligne)"), le glossaire complet des mots
+    présélectionnés par Qdrant est listé intégralement, un mot par ligne,
+    à la suite de l'en-tête.
+
+    `words` : liste de couples `(mot, score)`, déjà triée par longueur de
+    mot croissante par l'appelant (`_theme_words_by_length`) — à la demande
+    explicite de l'utilisateur ("continuer à les lister par taille de mots
+    croissante"). Le score de similarité Qdrant (cosinus, plus haut = plus
+    proche de la thématique) est affiché à côté de chaque mot, à la demande
+    explicite de l'utilisateur ("afficher les scores de chaque mot produit
+    par Qdrant"), et — à la demande explicite de l'utilisateur ("en
+    indiquant le nombre de lettres en plus du score") — le nombre de
+    lettres du mot est affiché entre les deux, chaque champ séparé par une
+    tabulation pour rester facile à parser/aligner.
+
+    `keyword_lists` : les listes de mots-clefs produites par le LLM, sous
+    la forme `[(label_ou_None, [mot_clef, ...]), ...]` — `None` pour la
+    liste du thème entier, le mot du thème pour chacune des listes par mot
+    (voir le bloc thématique de `_run_generate_job`). `searched_keywords` :
+    l'ensemble à plat, dédoublonné, des mots-clefs qui ont réellement fait
+    une recherche Qdrant (voir `_split_keywords` /
+    `_compiled_theme_words_by_length`). `min_score` : le seuil de score
+    Qdrant utilisé pour cette génération (champ "Précision thématique",
+    GenerateRequest.theme_precision). Tous journalisés dans l'en-tête pour
+    garder la trace de ce qui a été compilé."""
+    try:
+        THEME_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        now = datetime.datetime.now()
+        timestamp = now.strftime("%Y%m%d-%H%M%S-%f")
+        path = THEME_LOG_DIR / f"{timestamp}_{short_id}.log"
+        with path.open("w", encoding="utf-8") as fh:
+            fh.write((description or theme).strip() + "\n")
+            fh.write(f"\n# generated {now:%Y-%m-%d %H:%M:%S}\n")
+            fh.write(f"# theme (as typed): {theme}\n")
+            if min_score is not None:
+                fh.write(f"# score threshold (theme_precision): {min_score}\n")
+            if keyword_lists:
+                fh.write(f"# {len(keyword_lists)} keyword list(s) from the LLM:\n")
+                for label, kws in keyword_lists:
+                    tag = "(whole theme)" if label is None else label
+                    fh.write(f"#   [{tag}] {', '.join(kws)}\n")
+            if searched_keywords:
+                fh.write(
+                    f"# {len(searched_keywords)} distinct keywords searched in Qdrant: "
+                    f"{', '.join(searched_keywords)}\n"
+                )
+            fh.write(f"# preselected words: {len(words)}\n")
+            if words:
+                fh.write("\n")
+                fh.write("\n".join(
+                    f"{w}\t{len(w)}\t{score:.4f}" if score is not None
+                    else f"{w}\t{len(w)}"
+                    for w, score in words
+                ) + "\n")
+    except OSError as exc:
+        logger.warning("echec d'ecriture du journal LOG_THEME: %s", exc)
 
 
 @app.post("/api/presence")
@@ -969,6 +1185,33 @@ def library_get(grid_id: str):
     return record
 
 
+@app.get("/api/library/{grid_id}/pdf")
+async def library_get_pdf(grid_id: str):
+    """Télécharge une grille de la bibliothèque en PDF imprimable — grille
+    VIDE, définitions et titre uniquement, jamais les réponses — à la
+    demande explicite de l'utilisateur. Rendu SVG (render_puzzle_svg) puis
+    converti en PDF via `rsvg-convert -f pdf` (svg_to_pdf_bytes)."""
+    record = get_grid(grid_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    title = (record.get("title") or "").strip()
+    try:
+        svg = render_puzzle_svg(
+            record, record.get("language", "fr"), title, record.get("difficulty")
+        )
+        pdf_bytes = await asyncio.to_thread(svg_to_pdf_bytes, svg)
+    except OSError as exc:
+        # `rsvg-convert` manquant ou en échec — même famille de dépendance
+        # que la génération PNG (voir svg_export.save_grid_png).
+        raise HTTPException(status_code=503, detail=str(exc))
+    slug = _slugify_title(title) if title else "grille"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{slug}.pdf"'},
+    )
+
+
 @app.get("/api/dictionary")
 async def dictionary_search(q: str, lang: str = "fr"):
     """Recherche de dictionnaire pour le panneau "Dictionnaire" de
@@ -982,6 +1225,420 @@ async def dictionary_search(q: str, lang: str = "fr"):
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
     return await asyncio.to_thread(dictionary_search_impl, q, lang)
+
+
+# Difficulty used for the "Définir" button below — the Dictionary panel
+# has no difficulty selector of its own (unlike the grid-generation form),
+# so this is fixed rather than exposed as a new UI control; "medium"
+# matches the grid's own default difficulty style (reworded, a little
+# indirect, still fair — see backend/clues.py's DIFFICULTY_STYLE).
+DEFINE_DIFFICULTY = "medium"
+DEFINE_COUNT = 10
+
+
+@app.get("/api/dictionary/define")
+async def dictionary_define(q: str, lang: str = "fr"):
+    """"Définir" bouton du panneau Dictionnaire (voir frontend/static/
+    script.js) : demande au LLM jusqu'à DEFINE_COUNT (10) définitions
+    indépendantes de l'expression saisie, comme pour un mot de grille
+    (backend/clues.py, LLMClueGenerator.generate_definitions — même
+    ancrage réel dictionnaire/exemples, même filtre de contenu — mais un
+    seul appel best-effort, sans la boucle de relance par mot d'une
+    génération de grille). Un ClueGenerationError (LLM injoignable)
+    devient un 503 propre ; le reste de l'UI n'est pas affecté."""
+    if lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
+    text = q.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="expression vide")
+    try:
+        definitions = await asyncio.to_thread(
+            clue_generator.generate_definitions, text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT,
+        )
+    except ClueGenerationError as exc:
+        logger.warning("dictionary_define unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "define_unavailable", "message": str(exc)},
+        )
+    return {"query": text, "lang": lang, "definitions": definitions}
+
+
+def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
+    """Yield `(word, score)` from the `lang` tenant of the Qdrant "words"
+    collection, most-similar-first, stopping the moment a hit's score
+    drops below `min_score` (Qdrant hits are score-descending, so nothing
+    later could ever qualify) or the tenant is exhausted. Pages
+    THEME_LENGTH_SEARCH_PAGE points at a time via `QdrantStore.search`'s
+    `offset` — no depth cap and no count cap, the score threshold is the
+    SOLE gate. De-duplicates words across pages. This is the one place the
+    threshold + pagination logic lives: both the themed grid glossary
+    (`_theme_words_by_length`, whose caller may pass a per-generation
+    `min_score` from GenerateRequest.theme_precision) and the Dictionary
+    panel's "Thématique" button (`_similar_words_impl`, always the default
+    THEME_MIN_SCORE) consume it, so they can never disagree on how the
+    cutoff is applied."""
+    seen: set[str] = set()
+    offset = 0
+    while True:
+        hits = _similar_qdrant.search(
+            vec, lang=lang, limit=THEME_LENGTH_SEARCH_PAGE, offset=offset,
+        )
+        if not hits:
+            return
+        for hit in hits:
+            score = hit.get("score")
+            if score is not None and score < min_score:
+                return
+            word = (hit.get("payload") or {}).get("word")
+            if word and word not in seen:
+                seen.add(word)
+                yield word, score
+        offset += len(hits)
+        if len(hits) < THEME_LENGTH_SEARCH_PAGE:
+            return  # tenant exhausted
+
+
+def _compiled_similar_words(keywords: list[str], lang: str,
+                            min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+    """Comme `_compiled_theme_words_by_length` mais pour le panneau
+    Dictionnaire : lance une recherche Qdrant du plus-proche-voisin pour
+    CHAQUE mot-clef de `keywords` (embedding + `_iter_scored_words`) et
+    fusionne — chaque mot garde son MEILLEUR score. Deux différences avec
+    la version "glossaire de grille" : (1) aucun filtre de longueur 2-15
+    (une recherche de dictionnaire ne doit pas écarter les mots longs) ;
+    (2) tri par score DÉCROISSANT (l'ordre "plus similaires d'abord" du
+    panneau), pas par longueur. Un mot-clef dont la recherche Qdrant
+    échoue est ignoré ; l'erreur ne se propage que tant qu'aucune
+    recherche n'a abouti (Qdrant/embedder réellement indisponible ->
+    503)."""
+    merged: dict[str, float] = {}
+    any_ok = False
+    for kw in keywords:
+        try:
+            vec = _similar_embedder.embed(kw)
+            pairs = list(_iter_scored_words(vec, lang, min_score))
+        except (QdrantStoreError, EmbedderError):
+            if not any_ok:
+                raise
+            continue
+        any_ok = True
+        for word, score in pairs:
+            if word not in merged:
+                merged[word] = score
+            elif score is not None and (merged[word] is None or score > merged[word]):
+                merged[word] = score
+    return sorted(merged.items(), key=lambda pair: -(pair[1] or 0.0))
+
+
+def _similar_words_impl(query: str, lang: str,
+                        min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+    """Blocking. Applies the themed-grid-glossary principle to the
+    Dictionary panel, at the user's explicit request ("appliquer le même
+    principe que pour la génération du glossaire thématique : demander au
+    LLM de générer des listes de mots dans le thème du mot cherché, avant
+    de compiler les recherches Qdrant"): the typed `query` is first
+    expanded by the LLM (`describe_theme`) into a ~30-word telegraphic
+    keyword list spanning every part of speech, split into individual
+    keywords (`_split_keywords`, case-insensitively de-duplicated), and
+    `_compiled_similar_words` runs one Qdrant nearest-words search per
+    keyword and merges (best score per word). Falls back to the raw
+    `query` as the sole keyword if the LLM call fails or returns nothing
+    (same fallback shape as `_run_generate_job`'s own theme block).
+
+    Every kept `(word, score)` has a similarity >= `min_score` (the
+    "Précision thématique" form field's current value, forwarded as the
+    `min_score` query param; default THEME_MIN_SCORE). No count limit and
+    no length filter (unlike the grid glossary's 2-15 bound). Returned
+    most-similar-first; the score is shown to 2 decimals next to each word
+    in the panel."""
+    desc = ""
+    try:
+        desc = clue_generator.describe_theme(
+            query, lang, timeout=_SIMILAR_DESCRIBE_TIMEOUT_S,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, on retombe sur le mot brut
+        logger.warning(
+            "similar_words: theme expansion failed (%s) — searching the raw query", exc,
+        )
+        desc = ""
+    keywords: list[str] = []
+    seen: set[str] = set()
+    for kw in _split_keywords(desc):
+        k = kw.lower()
+        if k not in seen:
+            seen.add(k)
+            keywords.append(kw)
+    if not keywords:
+        keywords = [query]
+    logger.info(
+        "similar_words: %r -> %d keywords (min_score=%s)", query, len(keywords), min_score,
+    )
+    return _compiled_similar_words(keywords, lang, min_score)
+
+
+def _theme_words_by_length(query: str, lang: str,
+                           min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+    """Blocking: builds the themed-generation glossary (see
+    THEME_LENGTH_MIN/MAX/THEME_MIN_SCORE above) by embedding `query` once,
+    then walking the `lang` tenant's own ranked nearest-neighbor list via
+    `_iter_scored_words` — the shared threshold/pagination helper, which
+    stops the moment a hit's score drops below `min_score` (the
+    per-generation GenerateRequest.theme_precision, defaulting to the
+    THEME_MIN_SCORE constant) or the tenant is exhausted, with no depth
+    cap and no count cap. This
+    function then keeps only the words whose length falls within
+    THEME_LENGTH_MIN..THEME_LENGTH_MAX (`payload.word`'s own length, the
+    bare accent-stripped MOT form crossword slots use) — that length
+    bound is the ONLY thing it adds on top of `_iter_scored_words`; the
+    Dictionary panel's "Thématique" button (`_similar_words_impl`) uses
+    the exact same helper without it.
+
+    Returns a flat list of `(word, score)` pairs, sorted by increasing
+    word length — at the user's explicit request ("continuer à les
+    lister par taille de mots croissante") — with score-descending order
+    preserved within each length (the order each page already returns
+    them in; the sort is stable, so this ordering survives the final
+    re-sort by length untouched). `score` is Qdrant's own cosine-
+    similarity result for that point (higher = closer to the theme),
+    kept alongside the word at the user's explicit request ("afficher
+    les scores de chaque mot produit par Qdrant" in LOG_THEME/, see
+    `_write_theme_log`). The caller (`crossword_gen.py`'s
+    `priority_words`) only ever treats this as an unordered preference
+    set of *words*, so neither the score nor the length-sorted order is
+    a ranking guarantee there — both exist purely for LOG_THEME/'s own
+    readability."""
+    vec = _similar_embedder.embed(query)
+    words = [
+        (word, score)
+        for word, score in _iter_scored_words(vec, lang, min_score)
+        if THEME_LENGTH_MIN <= len(word) <= THEME_LENGTH_MAX
+    ]
+    return sorted(words, key=lambda pair: len(pair[0]))
+
+
+def _split_keywords(text: str) -> list[str]:
+    """Découpe une réponse de `describe_theme` (une liste télégraphique
+    d'environ 30 mots-clefs séparés par des virgules) en mots-clefs
+    individuels — chacun fera ensuite sa propre recherche Qdrant du
+    plus-proche-voisin (voir le bloc thématique de `_run_generate_job` et
+    `_compiled_theme_words_by_length`). Découpe sur les virgules, points-
+    virgules et retours à la ligne ; nettoie chaque morceau ; écarte tout
+    ce qui fait moins de 2 caractères. L'ordre est conservé, aucun
+    dédoublonnage ici (l'appelant met à plat et dédoublonne sur toutes les
+    listes)."""
+    out: list[str] = []
+    for piece in re.split(r"[,;\n]+", text or ""):
+        kw = piece.strip().strip(".").strip()
+        if len(kw) >= 2:
+            out.append(kw)
+    return out
+
+
+# Un "mot" significatif du champ "Thématique" : une suite de lettres (avec
+# apostrophe/tiret internes tolérés — "l'agriculture", "mots-croisés"
+# comptent chacun pour un seul mot), d'au moins 2 lettres.
+_THEME_TOKEN_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
+
+
+def _theme_tokens(theme: str) -> list[str]:
+    """Les mots distincts de la définition thématique saisie par
+    l'utilisateur — dédoublonnés sans tenir compte de la casse (première
+    graphie conservée), au moins 2 lettres chacun. À la demande explicite
+    de l'utilisateur : "Lorsqu'il y a plusieurs mots dans la définition
+    thématique donnée par l'utilisateur, compiler les glossaires
+    thématiques pour chacun des mots" — voir `_compiled_theme_words_by_
+    length` et le bloc thématique de `_run_generate_job`."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for tok in _THEME_TOKEN_RE.findall(theme or ""):
+        if len(tok) < 2:
+            continue
+        key = tok.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tok)
+    return out
+
+
+def _compiled_theme_words_by_length(keywords: list[str], lang: str,
+                                    min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+    """Exécute `_theme_words_by_length` pour CHAQUE mot-clef de `keywords`
+    et fusionne les glossaires obtenus — chaque mot garde le MEILLEUR
+    score (le plus élevé) vu sur l'ensemble des recherches. À la demande
+    explicite de l'utilisateur : "Compiler toutes les recherches dans
+    Qdrant pour tous les mots de ces listes (dédoublonner les mots)."
+    `keywords` est la liste à plat, déjà dédoublonnée, des mots-clefs
+    extraits des listes produites par le LLM (voir `_split_keywords` et le
+    bloc thématique de `_run_generate_job`) : un mot-clef unique est une
+    requête bien plus nette qu'un seul embedding moyenné sur une phrase de
+    ~30 mots. Chaque recherche applique le seuil `min_score` (le champ
+    "Précision thématique" du formulaire — GenerateRequest.theme_precision
+    —, par défaut la constante THEME_MIN_SCORE) via `_theme_words_by_
+    length`.
+
+    Le résultat est re-trié par longueur de mot croissante puis score
+    décroissant — exactement l'ordre que renvoie déjà un appel unique à
+    `_theme_words_by_length` (voir `_write_theme_log`). Un mot-clef dont la
+    recherche Qdrant échoue est ignoré ; l'erreur ne se propage que tant
+    qu'aucune recherche n'a encore abouti (Qdrant/embedder réellement
+    indisponible → la génération se fait alors sans thématique)."""
+    merged: dict[str, float] = {}
+    any_ok = False
+    for kw in keywords:
+        try:
+            pairs = _theme_words_by_length(kw, lang, min_score)
+        except (QdrantStoreError, EmbedderError):
+            if not any_ok:
+                raise
+            continue
+        any_ok = True
+        for word, score in pairs:
+            if word not in merged:
+                merged[word] = score
+            elif score is not None and (merged[word] is None or score > merged[word]):
+                merged[word] = score
+    return sorted(merged.items(), key=lambda pair: (len(pair[0]), -(pair[1] or 0.0)))
+
+
+@app.get("/api/similar_words")
+async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_SCORE):
+    """Bouton "Thématique" du panneau Dictionnaire (voir frontend/static/
+    script.js) : TOUS les mots de la collection Qdrant "words" dont le
+    score de similarité avec l'expression saisie atteint `min_score` —
+    la valeur courante du champ "Précision thématique" du formulaire,
+    transmise par le front, à la demande explicite de l'utilisateur
+    ("Dictionnaire / Thématique ... doit être sensible à la modification
+    du paramètre Précision thématique") ; par défaut la constante
+    THEME_MIN_SCORE quand le champ est vide. Restreints au tenant de la
+    langue du panneau, les plus similaires d'abord. Aucun plafond de
+    nombre : le seuil de score est la seule limite. L'embedding et la
+    recherche vectorielle sont bloquants, d'où asyncio.to_thread. Renvoie
+    un 503 propre (code "similar_unavailable") si Qdrant ou le serveur
+    d'embeddings n'est pas lancé, ou si la collection n'a pas encore été
+    alimentée (python -m data_builder.qdrant_populate --all)."""
+    if lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="expression vide")
+    min_score = max(0.0, min(1.0, min_score))
+    try:
+        scored = await asyncio.to_thread(_similar_words_impl, query, lang, min_score)
+    except (QdrantStoreError, EmbedderError) as exc:
+        logger.warning("similar_words unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "similar_unavailable", "message": str(exc)},
+        )
+    # `words` : un objet {word, score} par entrée (le score Qdrant est
+    # affiché entre parenthèses à côté de chaque mot dans le panneau
+    # Dictionnaire, à la demande explicite de l'utilisateur).
+    words = [{"word": w, "score": s} for w, s in scored]
+    return {"query": query, "lang": lang, "words": words}
+
+
+# ----------------------------------------------------------------------
+# Qdrant admin — the "Qdrant (admin)" panel in the web UI (localhost only:
+# the frontend hides its button off localhost, and frontend/server.py
+# rejects the proxy routes for a non-loopback client / Host). The backend
+# itself only ever sees the proxy as its client, so it does no localhost
+# check of its own — the gate is entirely at the proxy.
+# ----------------------------------------------------------------------
+def _qdrant_admin_impl() -> dict:
+    """Blocking: full read-only state of the Qdrant "words" collection —
+    reachability, vector config, point/index counts, tenant index, and a
+    per-language point count."""
+    store = _similar_qdrant
+    out = {
+        "base_url": store.base_url,
+        "collection": store.collection,
+        "dashboard_url": f"{store.base_url}/dashboard",
+    }
+    if not store.ping():
+        out["reachable"] = False
+        return out
+    out["reachable"] = True
+    if not store.collection_exists():
+        out["exists"] = False
+        return out
+    out["exists"] = True
+    info = store.collection_info()
+    vec = info.get("config", {}).get("params", {}).get("vectors", {}) or {}
+    out["vector"] = {
+        "size": vec.get("size"),
+        "distance": vec.get("distance"),
+        "on_disk": vec.get("on_disk"),
+    }
+    out["status"] = info.get("status")
+    out["optimizer_status"] = info.get("optimizer_status")
+    out["points_count"] = info.get("points_count")
+    out["indexed_vectors_count"] = info.get("indexed_vectors_count")
+    out["segments_count"] = info.get("segments_count")
+    lang_schema = (info.get("payload_schema") or {}).get("lang", {}) or {}
+    out["tenant_index"] = bool(lang_schema) and (
+        (lang_schema.get("params") or {}).get("is_tenant") is True
+        or lang_schema.get("data_type") == "keyword"
+    )
+    counts = {}
+    for code in WORDLISTS:
+        try:
+            counts[code] = store.count(code)
+        except QdrantStoreError:
+            counts[code] = None
+    out["languages"] = counts
+    return out
+
+
+@app.get("/api/qdrant/admin")
+async def qdrant_admin():
+    """État lecture seule de la base vectorielle Qdrant, pour le panneau
+    "Qdrant (admin)" de l'interface (visible uniquement en localhost — cf.
+    frontend/server.py). Renvoie toujours 200 : un Qdrant injoignable ou
+    une collection absente sont indiqués par `reachable`/`exists`."""
+    return await asyncio.to_thread(_qdrant_admin_impl)
+
+
+class QdrantTenantRequest(BaseModel):
+    lang: str
+
+
+@app.post("/api/qdrant/admin/recreate")
+async def qdrant_admin_recreate():
+    """Supprime puis recrée la collection "words" (+ réindexe le tenant
+    `lang`). Rapide, mais destructif : vide toutes les langues.
+    L'alimentation se relance ensuite via
+    `python -m data_builder.qdrant_populate --all`."""
+    try:
+        info = await asyncio.to_thread(
+            lambda: _similar_qdrant.ensure_collection(recreate=True)
+        )
+    except (QdrantStoreError, EmbedderError) as exc:
+        logger.warning("qdrant_admin recreate failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "qdrant_unavailable", "message": str(exc)},
+        )
+    return {"ok": True, "points_count": info.get("points_count", 0)}
+
+
+@app.post("/api/qdrant/admin/delete-tenant")
+async def qdrant_admin_delete_tenant(req: QdrantTenantRequest):
+    """Supprime tous les vecteurs d'une langue (un tenant) de la
+    collection "words". Rapide."""
+    if req.lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {req.lang!r}")
+    try:
+        await asyncio.to_thread(_similar_qdrant.delete_lang, req.lang)
+        remaining = await asyncio.to_thread(_similar_qdrant.count, req.lang)
+    except (QdrantStoreError, EmbedderError) as exc:
+        logger.warning("qdrant_admin delete-tenant failed: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "qdrant_unavailable", "message": str(exc)},
+        )
+    return {"ok": True, "lang": req.lang, "remaining": remaining}
 
 
 class ChatMessage(BaseModel):
@@ -1270,6 +1927,150 @@ def _new_job():
     return job_id
 
 
+async def _build_theme_glossary(theme, language, theme_precision, short_id,
+                                cancel_event, log_tag):
+    """Pré-recherche thématique complète pour UNE langue : expansion LLM en
+    mots-clefs (describe_theme, + une liste par mot du thème + top-ups),
+    puis une recherche Qdrant du plus-proche-voisin par mot-clef dans le
+    tenant de cette langue, puis compilation (_compiled_theme_words_by_
+    length). Renvoie `(priority_words | None, theme_description)`. Appelée
+    une fois pour la langue principale et, sur une grille bilingue, une
+    seconde fois pour la langue des mots verticaux, à la demande explicite
+    de l'utilisateur : "Quand une grille est bilingue, il faut générer un
+    glossaire thématique par langue." `log_tag` distingue les lignes de
+    journal et le nom du fichier LOG_THEME/ des deux appels."""
+    theme_priority_words = None
+    theme_description = ""
+    try:
+        theme_description = await asyncio.to_thread(
+            clue_generator.describe_theme,
+            theme, language, cancel_event=cancel_event,
+            temperature=THEME_KEYWORD_LLM_TEMPERATURE,
+        )
+    except GenerationCancelled:
+        raise
+    except Exception as exc:  # noqa: BLE001 — best-effort, on retombe sur les mots bruts
+        logger.warning(
+            "[%s] theme description failed (%s) — searching the raw theme words instead",
+            log_tag, exc,
+        )
+        theme_description = ""
+    logger.info(
+        "[%s] theme %r -> description %r", log_tag, theme, theme_description,
+    )
+    # À la demande explicite de l'utilisateur : "demander au LLM de
+    # générer des listes de 30 mots clefs séparés par des virgules
+    # ... Compiler toutes les recherches dans Qdrant pour tous les
+    # mots de ces listes (dédoublonner les mots)." La première
+    # liste est toujours celle du thème ENTIER (sa description
+    # LLM) ; s'y ajoute, quand le thème compte plus d'un mot, une
+    # liste par mot — chacune passée elle aussi par describe_theme,
+    # avec repli sur le mot brut si l'appel LLM échoue. Chaque
+    # liste est ensuite découpée en mots-clefs (_split_keywords).
+    keyword_lists: list[tuple[Optional[str], list[str]]] = [
+        (None, _split_keywords(theme_description) or _theme_tokens(theme) or [theme])
+    ]
+    tokens = _theme_tokens(theme)
+    if len(tokens) > 1:
+        for tok in tokens:
+            tok_desc = ""
+            try:
+                tok_desc = await asyncio.to_thread(
+                    clue_generator.describe_theme,
+                    tok, language, cancel_event=cancel_event,
+                    temperature=THEME_KEYWORD_LLM_TEMPERATURE,
+                )
+            except GenerationCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 — best-effort, repli sur le mot brut
+                logger.warning(
+                    "[%s] theme word %r description failed (%s) — searching the bare word",
+                    log_tag, tok, exc,
+                )
+                tok_desc = ""
+            keyword_lists.append((tok, _split_keywords(tok_desc) or [tok]))
+        logger.info(
+            "[%s] theme has %d words -> %d keyword lists",
+            log_tag, len(tokens), len(keyword_lists),
+        )
+    # Met à plat toutes les listes en un seul ensemble de recherche
+    # dédoublonné sans tenir compte de la casse (première graphie
+    # conservée).
+    searched_keywords: list[str] = []
+    _seen_kw: set[str] = set()
+
+    def _add_keywords(kws):
+        added = 0
+        for kw in kws:
+            k = kw.lower()
+            if k not in _seen_kw:
+                _seen_kw.add(k)
+                searched_keywords.append(kw)
+                added += 1
+        return added
+
+    for _label, _kws in keyword_lists:
+        _add_keywords(_kws)
+    # À la demande explicite de l'utilisateur (glossaire de grille
+    # UNIQUEMENT, pas le Dictionnaire) : relancer describe_theme
+    # jusqu'à THEME_KEYWORD_LLM_MAX_LOOPS fois de plus tant qu'on a
+    # moins de THEME_MIN_KEYWORDS mots-clefs distincts à chercher.
+    # Arrêt anticipé dès qu'un appel n'ajoute rien de neuf.
+    for _loop in range(1, THEME_KEYWORD_LLM_MAX_LOOPS + 1):
+        if len(searched_keywords) >= THEME_MIN_KEYWORDS:
+            break
+        _more = ""
+        try:
+            _more = await asyncio.to_thread(
+                clue_generator.describe_theme,
+                theme, language, cancel_event=cancel_event,
+                temperature=THEME_KEYWORD_LLM_TEMPERATURE,
+            )
+        except GenerationCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning(
+                "[%s] theme keyword top-up %d failed (%s)", log_tag, _loop, exc,
+            )
+            break
+        _kw_more = _split_keywords(_more)
+        _added = _add_keywords(_kw_more)
+        keyword_lists.append((f"(top-up {_loop})", _kw_more))
+        logger.info(
+            "[%s] theme keyword top-up %d -> +%d (%d total)",
+            log_tag, _loop, _added, len(searched_keywords),
+        )
+        if _added == 0:
+            break
+    logger.info(
+        "[%s] theme -> %d distinct keywords to search in Qdrant (min_score=%s)",
+        log_tag, len(searched_keywords), theme_precision,
+    )
+    theme_scored_words: list[tuple[str, float]] = []
+    try:
+        theme_scored_words = await asyncio.to_thread(
+            _compiled_theme_words_by_length, searched_keywords, language,
+            theme_precision,
+        )
+        theme_priority_words = [w for w, _score in theme_scored_words]
+        logger.info(
+            "[%s] theme -> %d preselected words",
+            log_tag, len(theme_priority_words),
+        )
+    except (QdrantStoreError, EmbedderError) as exc:
+        logger.warning(
+            "[%s] theme pre-search unavailable (%s) — generating without a theme",
+            log_tag, exc,
+        )
+        theme_priority_words = None
+    await asyncio.to_thread(
+        _write_theme_log, log_tag, theme, theme_description,
+        theme_scored_words, keyword_lists, searched_keywords,
+        theme_precision,
+    )
+    return theme_priority_words, theme_description
+
+
 async def _run_generate_job(job_id, req, resume_state=None):
     job = JOBS[job_id]
     short_id = job_id[:8]
@@ -1391,9 +2192,10 @@ async def _run_generate_job(job_id, req, resume_state=None):
         logger.info(
             "[%s] starting generation: language=%s bilingual_language=%s width=%s "
             "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
-            "mode=%s",
+            "mode=%s theme_precision=%s",
             short_id, req.language, req.bilingual_language, req.width, req.height,
-            req.difficulty, req.force_letters_percent, req.black_enrichment_percent, req.mode,
+            req.difficulty, req.force_letters_percent, req.black_enrichment_percent,
+            req.mode, req.theme_precision,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
         # QUEUE's own module-level docstring: at most one grid search runs
@@ -1417,6 +2219,58 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # compute time (excluding time spent merely queued) so the final
         # `generation_duration_seconds` still reflects the true total
         # work done, not just the last turn's own duration.
+        # Pré-recherche thématique (voir THEME_LENGTH_MIN/MAX/THEME_MIN_
+        # SCORE) : si le champ "Thématique" est non vide, on demande
+        # D'ABORD au LLM une liste télégraphique d'environ 30 mots-clefs
+        # décrivant la thématique (describe_theme) — une liste par mot du
+        # thème quand il en compte plusieurs. Chaque liste est découpée en
+        # mots-clefs individuels (_split_keywords), tous mis à plat et
+        # dédoublonnés ; CHAQUE mot-clef fait alors sa propre recherche
+        # Qdrant du plus-proche-voisin, et _compiled_theme_words_by_length
+        # fusionne tous les résultats (meilleur score par mot) en un
+        # glossaire que generate_grid() tentera en priorité pour chaque
+        # emplacement. La ou les listes de mots-clefs du LLM sont écrites
+        # en tête d'un fichier LOG_THEME/. Best-effort et fait une seule
+        # fois (pas à chaque reprise après une pause de file) : un échec de
+        # l'appel LLM fait simplement retomber sur les mots bruts du
+        # thème ; une indisponibilité de Qdrant/embedder ou une collection
+        # non alimentée pour cette langue n'empêche jamais la génération,
+        # elle se fait alors sans thématique.
+        theme = (req.theme or "").strip()
+        theme_priority_words = None
+        bilingual_theme_priority_words = None
+        # Reste "" si `theme` est vide, ou si describe_theme échoue — lu
+        # plus bas par le seul autre consommateur de cette variable, le
+        # titre de la grille (voir clue_generator.generate_title(...,
+        # theme_description=...) et son propre commentaire), qui doit
+        # rester défini même sans thématique.
+        theme_description = ""
+        if theme:
+            # Étape de statut dédiée, à la demande explicite de
+            # l'utilisateur ("indiquer la phase de génération du
+            # glossaire thématique") : cette phase (appel LLM +
+            # pagination Qdrant par longueur, voir _theme_words_by_
+            # length) peut prendre plusieurs secondes et ne se
+            # signalait par rien de particulier jusque-là — le statut
+            # affiché restait "starting" (ou l'étape précédente, sur une
+            # reprise) tout du long. Un seul événement, sans progression
+            # chiffrée (contrairement à "pattern"/"clues"/etc.) : tout ce
+            # bloc s'exécute d'un bloc, sans sous-étapes à rapporter.
+            progress("theme", theme=theme)
+            theme_priority_words, theme_description = await _build_theme_glossary(
+                theme, req.language, req.theme_precision, short_id, cancel_event,
+                short_id,
+            )
+            # Grille bilingue : un second glossaire pour la langue des mots
+            # verticaux (voir _build_theme_glossary), à la demande explicite
+            # de l'utilisateur. `theme_description` reste celle de la langue
+            # principale (titre + orientation des définitions).
+            if req.bilingual_language and req.bilingual_language != req.language:
+                bilingual_theme_priority_words, _ = await _build_theme_glossary(
+                    theme, req.bilingual_language, req.theme_precision, short_id,
+                    cancel_event, f"{short_id}_{req.bilingual_language}",
+                )
+
         GRID_QUEUE.append(task)
         try:
             grid_resume_state = resume_state
@@ -1452,6 +2306,8 @@ async def _run_generate_job(job_id, req, resume_state=None):
                         deadline_checks=BUDGET_MODES[req.mode],
                         resume_state=grid_resume_state,
                         should_pause=_make_should_pause(GRID_QUEUE, task),
+                        priority_words=theme_priority_words,
+                        bilingual_priority_words=bilingual_theme_priority_words,
                     )
                     break
                 except GenerationPaused as p:
@@ -1501,6 +2357,11 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # bibliothèque) porte déjà ce champ ; ici on l'ajoute pour une
         # grille fraîchement générée.
         result["difficulty"] = req.difficulty
+        # Thématique saisie (chaîne de mots) portée sur le result du job et
+        # enregistrée dans la grille sauvegardée — `None` si le champ était
+        # vide. Voir GenerateRequest.theme / grid_store.save_grid_json /
+        # la colonne "Thématique" de la Bibliothèque.
+        result["theme"] = theme or None
 
         # Aperçu de la grille finale (déjà minimisée), au tout début de la
         # génération des définitions — à la demande explicite de
@@ -1538,6 +2399,19 @@ async def _run_generate_job(job_id, req, resume_state=None):
             _build_word_verification_table, result["words"], req.language,
             result.get("bilingual_language"),
         )
+        # Cases des mots issus du glossaire thématique, à afficher en lettres
+        # vertes dans l'aperçu (voir crossword_gen.py's `_theme_word_cells` /
+        # renderAttemptPreview) — recalculées ici depuis `result["words"]`
+        # (chaque mot porte `answer`/`row`/`col`/`direction`), la génération
+        # `generate_grid` ne renvoyant pas de liste `theme_cells` de haut
+        # niveau. Vide s'il n'y a pas de thématique.
+        _theme_set = set(theme_priority_words or ())
+        theme_cells = sorted({
+            (w["row"] + (dk if w["direction"] != "across" else 0),
+             w["col"] + (dk if w["direction"] == "across" else 0))
+            for w in result["words"] if w["answer"] in _theme_set
+            for dk in range(len(w["answer"]))
+        })
         progress(
             "clues", current=0, total=len(result["words"]),
             examples=[{
@@ -1545,6 +2419,7 @@ async def _run_generate_job(job_id, req, resume_state=None):
                 "impossible_cells": [],
                 "forced_cells": [],
                 "locked_cells": [],
+                "theme_cells": theme_cells,
                 # Numéro du process qui a réellement produit cette grille
                 # gagnante (backend/crossword_gen.py's own `winning_
                 # process_number`, threaded through the result dict — see
@@ -1592,6 +2467,11 @@ async def _run_generate_job(job_id, req, resume_state=None):
                 (w["answer"], w["accented"], w["canonical"], w.get("language"))
                 for w in result["words"]
             ]
+            if theme_description:
+                logger.info(
+                    "[%s] clue generation steered by theme keyword list: %r",
+                    short_id, theme_description,
+                )
             accumulated_clues = {}
             clues_compute_s = 0.0
             while True:
@@ -1608,6 +2488,21 @@ async def _run_generate_job(job_id, req, resume_state=None):
                         ),
                         cancel_event=cancel_event,
                         should_pause=_make_should_pause(CLUES_QUEUE, task),
+                        # Pour une grille thématique, indique au LLM la
+                        # LISTE DE MOTS-CLEFS DU THÈME ENTIER (la sortie de
+                        # describe_theme(theme) — la liste `[(whole
+                        # theme)]`, JAMAIS une liste par mot ni de
+                        # complétion) comme thématique dont il doit très
+                        # fortement s'inspirer pour toutes les définitions,
+                        # à la demande explicite de l'utilisateur : "il est
+                        # important, quand il y a une thématique, que les
+                        # définitions respectent au mieux cette
+                        # thématique." La section THEME est ajoutée au
+                        # message utilisateur de chaque mot (voir
+                        # _build_user_message), pas au prompt système.
+                        # Reste "" pour une grille non thématique (voir
+                        # plus haut) : aucun effet.
+                        theme_description=theme_description,
                     )
                     accumulated_clues.update(new_clues)
                     clues_compute_s += time.monotonic() - clues_start
@@ -1632,12 +2527,18 @@ async def _run_generate_job(job_id, req, resume_state=None):
             # grid (frontend/static/script.js's displayFinalGrid) and saved
             # alongside it below. A failure here never raises (see generate_
             # title) — "" simply means no title line is shown/stored, exactly
-            # like a grid generated before this feature existed.
+            # like a grid generated before this feature existed. For a themed
+            # generation, `theme_description` (set earlier, still "" when
+            # there was no theme / describe_theme failed) is passed through
+            # as an inspiration reference, at the user's explicit request:
+            # "passer au LLM la phrase ayant servi à construire le glossaire
+            # thématique comme référence d'inspiration pour le titre."
             title = await asyncio.to_thread(
                 clue_generator.generate_title,
                 [(w["answer"], w["accented"], w["canonical"]) for w in result["words"]],
                 req.language,
                 cancel_event=cancel_event,
+                theme_description=theme_description,
             )
             result["title"] = title
             logger.info("[%s] title: %r", short_id, title)
@@ -1671,7 +2572,7 @@ async def _run_generate_job(job_id, req, resume_state=None):
             pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
             grid_id = await asyncio.to_thread(
                 save_grid_json, result, req.language, req.difficulty, req.mode, title,
-                result.get("bilingual_language"), pseudo,
+                result.get("bilingual_language"), pseudo, theme or None,
             )
             logger.info("[%s] saved to library: %s (pseudo=%r)", short_id, grid_id, pseudo)
             # L'identifiant du fichier GRID_STORE de cette grille, pour que
@@ -1802,6 +2703,11 @@ async def _run_recompute_job(job_id, grid_id):
                 "impossible_cells": [],
                 "forced_cells": [],
                 "locked_cells": [],
+                # Un recalcul de définitions ne rejoue pas la pré-recherche
+                # thématique (la phrase de thème n'est pas persistée sur la
+                # grille — voir grid_store), donc pas de mot thématique à
+                # signaler ici.
+                "theme_cells": [],
                 "process_number": result.get("winning_process_number"),
                 "is_best": True,
             }],
@@ -1870,7 +2776,7 @@ async def _run_recompute_job(job_id, grid_id):
             # plutôt que d'y mettre celui de qui lance le recalcul.
             new_grid_id = await asyncio.to_thread(
                 save_grid_json, result, language, difficulty, mode, new_title,
-                bilingual_language, result.get("pseudo"),
+                bilingual_language, result.get("pseudo"), result.get("theme"),
             )
             logger.info("[%s] recompute saved to library: %s", short_id, new_grid_id)
             result["id"] = new_grid_id

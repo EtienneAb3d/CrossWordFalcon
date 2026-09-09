@@ -292,6 +292,12 @@ longueurs de mots** (ce score favorise quelques mots longs plutôt que
 beaucoup de mots courts pour le même total de lettres — un mot de 10
 lettres pèse 100 dans ce score, alors que dix mots de 2 lettres, qui
 couvrent pourtant le même nombre de lettres au total, ne pèsent que 40).
+Sur une génération thématique (glossaire non vide, voir plus haut), ce
+départage ne porte que sur les mots effectivement placés qui appartiennent
+au glossaire thématique — jamais sur la totalité des mots de la grille —
+de façon à départager en faveur de la tentative qui fait réellement le
+plus (et le plus longuement) ressortir la thématique, pas simplement
+celle qui a les mots les plus longs en général.
 
 Cette optimisation d'essai est jetée une fois la comparaison faite —
 seule la grille de la tentative gagnante, dans son état d'AVANT
@@ -582,6 +588,15 @@ cette longueur ; la préférence pour les mots les mieux notés ne redevient
 sensible qu'une fois plusieurs cases de l'emplacement déjà fixées par des
 croisements.
 
+Sur une **grille thématique** (glossaire non vide), une dernière étape
+stabilise l'ordre obtenu ci-dessus en deux blocs : d'abord tous les mots
+candidats appartenant au glossaire thématique, puis les autres — pour que
+l'emplacement tente tous ses mots thématiques possibles avant de descendre
+vers un mot ordinaire du dictionnaire. Le backtracking fait le reste : un
+mot hors thématique n'est atteint ici que si aucun mot thématique n'a mené
+à une solution (ni sur cet emplacement, ni plus loin). Étape sautée si
+tous — ou aucun — des candidats sont thématiques (rien à réordonner).
+
 ### Choisir quel emplacement remplir en premier
 
 Pour aller plus vite, le dictionnaire est pré-organisé pour retrouver
@@ -589,8 +604,9 @@ instantanément tous les mots d'une longueur donnée qui ont une lettre
 précise à une position précise — sans cela, il faudrait relire tout le
 dictionnaire à chaque tentative.
 
-À chaque emplacement à choisir, le programme applique une règle à **quatre
-niveaux de priorité** :
+À chaque emplacement à choisir, le programme applique une règle à
+plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
+`Filler._backtrack`) :
 
 1. on tire d'abord la **catégorie** (horizontal ou vertical) : la
    probabilité de choisir l'une ou l'autre est proportionnelle au nombre
@@ -599,7 +615,20 @@ niveaux de priorité** :
    chances d'être tirée que l'autre. Ça fait naturellement alterner/
    équilibrer les deux catégories au fil du remplissage, sans imposer un
    ordre strict (par exemple tout l'horizontal puis tout le vertical) ;
-2. à l'intérieur de la catégorie tirée, on choisit en priorité les
+1bis. **grille thématique uniquement** : s'il existe dans la catégorie
+   tirée au moins un emplacement où un mot du glossaire thématique (non
+   encore posé ailleurs) tient encore compte tenu des lettres déjà
+   connues, le choix se restreint à ces emplacements — on commence donc
+   par remplir les zones thématiquement réalisables, et on y pose un mot
+   thématique en priorité (voir "Classement des mots candidats à
+   l'essai"). Ce niveau est
+   prioritaire sur tous les suivants. Sans thématique, ou si aucun
+   emplacement de la catégorie n'accepte de mot thématique, il ne change
+   rien. Sur une grille bilingue, chaque direction utilise le glossaire
+   thématique de SA PROPRE langue (un glossaire par langue) : un
+   emplacement horizontal est jaugé contre le glossaire de la langue A,
+   un vertical contre celui de la langue B ;
+2. à l'intérieur du groupe retenu au niveau précédent, on choisit en priorité les
    emplacements avec **moins de `PREFILL_MIN_WORD_COUNT` (3) mots
    candidats** — le même seuil que celui du pré-remplissage de l'étape 1.
    But : essayer de résoudre ces emplacements fragiles par un vrai mot
@@ -1039,6 +1068,51 @@ retenue comme mot posé — l'emplacement reste signalé impossible et sera
 traité par la phase de nettoyage habituelle (retrait de mots croisants,
 ou son alternative case noire) comme n'importe quel autre emplacement
 encore bloqué à la fin du cycle.
+
+##### Allongement préalable des emplacements impossibles
+
+Complément exact du raccourcissement ci-dessus (`backend/crossword_gen.py`,
+`_lengthen_impossible_zones` / `_find_longer_word_for_zone`), tenté juste
+après lui sur ce qu'il n'a pas résolu, et lui aussi réservé au chemin de
+reprise "telle quelle". Là où le raccourcissement rétrécit la zone en
+ajoutant une case noire à l'intérieur, l'allongement l'agrandit en
+repoussant vers l'extérieur l'une de ses deux cases noires bordantes
+existantes : soit en la déplaçant de quelques cases plus loin (une
+nouvelle case noire posée plus loin dans la même direction), soit en la
+supprimant purement et simplement quand l'obstacle naturel suivant (une
+autre case noire, ou le bord de la grille) suffit déjà à borner la zone
+allongée.
+
+Une case bordante n'est candidate à ce déplacement que si elle est
+effectivement noire (sinon la zone touche déjà le bord de ce côté), si
+elle ne borne pas déjà un mot différent réellement posé — même double
+critère que la conservation des cases noires du nettoyage complet : une
+case qui borne directement un mot entièrement connu, ou qui a une lettre
+connue des deux côtés d'un même axe —, et s'il y a de la place derrière
+elle (au moins une case blanche avant la prochaine case noire ou le
+bord). Le nombre de cases blanches ainsi disponibles détermine combien de
+longueurs différentes sont essayées : allonger de 1 case, de 2, …, jusqu'à
+absorber toute la place disponible sans poser aucune nouvelle case noire.
+
+Comme pour le raccourcissement, tous les candidats valables sont
+rassemblés (les deux côtés, toutes les longueurs d'allongement, tous les
+mots réels compatibles avec les lettres déjà connues sur la zone
+allongée, en excluant les mots déjà utilisés ailleurs), puis un candidat
+est tiré au hasard. Une nouvelle case noire n'est jamais posée sur une
+case déjà couverte par une lettre confirmée, et doit garder la grille
+structurellement valide (connexité, pas de case blanche orpheline) ;
+supprimer une case noire sans en reposer, à l'inverse, ne peut jamais
+violer cette validité. Avant de retenir un candidat, on vérifie qu'il ne
+crée pas de nouvel emplacement croisant impossible : d'une part pour les
+cases qui appartenaient déjà à un emplacement avant l'allongement, d'autre
+part pour la case bordante elle-même — jusque-là noire, donc absente de
+l'index des croisements — dont le parcours perpendiculaire est recalculé
+directement. Si aucun candidat ne convient, l'emplacement n'est pas touché.
+
+Le motif, les croisements et les cases protégées sont recalculés à neuf
+avant l'examen de chaque emplacement, et la détection des emplacements
+impossibles est relancée après chaque tour, jusqu'à ce qu'aucun
+allongement ne soit plus possible nulle part.
 
 ##### Fréquence des nettoyages complets
 

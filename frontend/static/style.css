@@ -18,6 +18,7 @@
   --low-candidates-bg: #fed7aa;
   --noise-bg: #e9d5ff;
   --best: #16a34a;
+  --theme-fg: #ff00fb;
 }
 
 * {
@@ -213,6 +214,21 @@ form {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+}
+
+/* Champ "Thématique" optionnel, placé à côté du bouton "Générer la grille"
+   dans #form-actions, à la demande explicite de l'utilisateur. Disposé en
+   ligne (libellé + saisie) plutôt qu'en colonne comme les autres `label`,
+   pour rester compact sur la ligne des boutons, et plus large que le
+   `input` par défaut (6rem) pour accueillir une liste de mots. */
+#theme-field {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+#theme-field input {
+  width: 14rem;
 }
 
 label {
@@ -730,6 +746,26 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--locked);
 }
 
+/* Lettres magenta vif pour les cases d'un mot issu du glossaire de la
+   génération thématique — le but est de trancher franchement avec les
+   lettres noires voisines de l'aperçu, plus que d'être lisible sur le
+   fond blanc de la case. Voir backend/crossword_gen.py's
+   `_theme_word_cells` et script.js's renderAttemptPreview(). Une couleur
+   de TEXTE (jamais un fond), pour se composer proprement avec les fonds
+   .impossible/.noise/.low-candidates et les bordures .forced/.locked
+   possibles sur la même case ; `--theme-fg` = #ff00fb (magenta vif), à la
+   demande explicite de l'utilisateur ("Essayer cette couleur : #ff00fb").
+   Historique de la couleur : vert foncé -> "pas assez visible" -> violet
+   foncé -> violet clair -> vert très clair -> "trop clair" -> ce magenta.
+   Poids `800` (extra-gras) à la demande explicite de l'utilisateur
+   ("mettre les mots du glossaire thématique en gras"), nettement plus
+   lourd que le `500` des autres cases. Jamais présent pour une génération
+   non thématique. */
+.attempt-preview-grid .cell.white.theme {
+  color: var(--theme-fg);
+  font-weight: 800;
+}
+
 /* Wraps #attempt-preview-label and the prev/next navigation buttons in one
    row, at the user's explicit request to let the player step back/forward
    through the history of preview states already shown (script.js's
@@ -955,6 +991,29 @@ button:disabled {
   color: #9aa0a6;
 }
 
+/* Liens des deux dernières colonnes (script.js's renderLibraryList) :
+   "Jouer" (partageable, SHARE_BASE_URL) et le téléchargement PDF —
+   teintés accent, garde leur couleur même sur une ligne grisée
+   .library-grid-seen (le lien reste valable, la grille "déjà vue" ou
+   non). */
+#library-table td .library-link,
+#library-table tbody tr.library-grid-seen td .library-link {
+  color: var(--accent);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+
+/* Colonne PDF : une icône SVG inline (badge rouge "PDF"), pas de texte —
+   donc pas de soulignement, et centrée verticalement dans la cellule. */
+#library-table td .library-pdf-link {
+  display: inline-flex;
+  text-decoration: none;
+}
+
+#library-table td .library-pdf-link .pdf-icon {
+  display: block;
+}
+
 #library-empty {
   margin: 0;
   font-size: 0.85rem;
@@ -1044,6 +1103,130 @@ button:disabled {
 
 .dictionary-def-line + .dictionary-def-line {
   margin-top: 0.15rem;
+}
+
+/* "Mots similaires" : les 50 mots les plus proches (Qdrant), du plus
+   similaire au moins similaire, sur une seule ligne logique séparés par
+   des virgules — le texte s'enroule naturellement, pas de scroll. */
+.dictionary-similar-line {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* "Définir" : jusqu'à 10 définitions générées par le LLM, une par ligne
+   (contrairement à "Mots similaires" ci-dessus, qui tient sur une seule
+   ligne logique) — chaque .dictionary-define-line est son propre
+   paragraphe, avec un léger espacement vertical entre elles. */
+.dictionary-define-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.dictionary-define-line {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* Panneau "Qdrant (admin)" (#qdrant-admin-btn's click handler, script.js) —
+   visible uniquement en localhost. Même carte transparente/bordée que
+   #dictionary / #library, membre du même groupe de panneaux centraux
+   basculants. */
+#qdrant-admin {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+#qdrant-admin-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.6rem;
+}
+
+#qdrant-admin-label {
+  margin: 0;
+  margin-right: auto;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+#qdrant-admin-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+
+.qdrant-admin-endpoint {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: #777;
+}
+
+.qdrant-admin-empty {
+  margin: 0;
+  font-style: italic;
+  color: #777;
+}
+
+/* Bloc clé/valeur : deux colonnes, la clé grise à gauche. */
+.qdrant-admin-stats {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.75rem;
+}
+
+.qdrant-admin-stats > div {
+  display: contents;
+}
+
+.qdrant-admin-stats span:first-child {
+  color: #777;
+}
+
+.qdrant-admin-table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+.qdrant-admin-table th,
+.qdrant-admin-table td {
+  padding: 0.25rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.qdrant-admin-table th {
+  color: #777;
+  font-weight: 600;
+}
+
+.qdrant-admin-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.qdrant-admin-dashboard-link {
+  align-self: flex-start;
+  font-size: 0.85rem;
+}
+
+.qdrant-admin-hint {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  color: #777;
+  user-select: all;
 }
 
 /* Panneau "Actu Croisée" (flux RSS + agrégation de grilles, voir

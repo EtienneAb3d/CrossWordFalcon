@@ -332,6 +332,134 @@ servers:
   reference seeds of the standard 15×10 benchmark, against the freshly
   rebuilt French wordlist, confirmed no regression: 0 mismatches between
   placed words and the solution grid, each run.
+
+  `data/wordlist_de_full.tsv` had every row with a MOT column longer than
+  15 letters removed, **German only**, at the user's explicit request:
+  "Le dictionnaire DE est énorme... Filtrer l'allemand à 15 lettres.
+  Seulement l'allemand." Measured before touching anything (never guessed
+  at): German is the clear outlier among the 6 languages — 38.8% of its
+  words (614,200 of 1,584,478) exceed 15 letters (a real, expected
+  consequence of German's compounding morphology), against 0.5-2.1% for
+  en/es/fr/it/pt; a 14-letter alternative was also measured (47.1% for
+  German) before the user settled on 15. Applied as a plain one-off
+  filter — a Python script kept every line whose MOT column length is
+  `<= 15` and rewrote the file in place (970,278 rows kept, matching the
+  estimate exactly) — not a rebuild of the underlying pipeline: the
+  corpus, the frequency computation, and the gloss dictionary are all
+  untouched (rule 6 doesn't apply here — no corpus-source change, only a
+  length-based post-filter on an already-built wordlist), so no other
+  language and no other data file needed touching. A dropped word's own
+  `CANONIQUE`/gloss-dictionary entries become simply unreferenced, not
+  broken — harmless, left as-is.
+
+  "Penser à filtrer les entrées Qdrant retirées" (the same explicit
+  request): `backend/qdrant_store.py` gained `delete_points(ids,
+  wait=True)` (Qdrant's own `points`-field delete request — removes
+  exactly the given point ids, unlike the pre-existing `delete_lang`,
+  which wipes an entire tenant) and `delete_words(lang, words,
+  batch_size=2000, wait=True)` (computes `word_point_id(lang, w)` for
+  each word and chunks into `delete_points` calls, so a large drop list
+  never sends one oversized request). The 614,200 dropped German words'
+  own Qdrant points (already present in the `de` tenant from the earlier,
+  still-in-progress full recompute — see `_compose_embed_text`'s own
+  entry above) were removed this way, in 2000-id batches. Verified live:
+  `count("de")` was 1,584,478 immediately before cleanup and dropped to
+  exactly 970,278 immediately after — precisely `1,584,478 - 614,200`,
+  confirming every dropped word's point was removed and nothing else was
+  touched. Timed at real scale: `wait=True` batches are notably slower
+  than `wait=False` (consistent with the `upsert` timing already measured
+  for `_compose_embed_text`'s own entry) — this one-off cleanup took
+  several tens of minutes for 614,200 ids across 307 batches, run once,
+  not a recurring cost. Because the wordlist file was trimmed *before*
+  the in-progress full recompute (`data_builder/qdrant_populate.py
+  --all`) reached `de` in its own per-language order (`fr, en, de, es,
+  it, pt`), that recompute will read the already-trimmed file once it
+  gets there and simply never re-embed/re-upsert the removed words at
+  all — no follow-up cleanup step needed once it catches up.
+
+  This same concurrency (the full recompute's own steady stream of
+  `upsert` calls running at the same time as the German cleanup's own
+  614,200-id `delete_words` batches) caused a real failure, reported
+  directly by the user from the recompute's own log:
+  `logs/qdrant_populate.log` showed "Qdrant request PUT .../points
+  failed: timed out" right after `fr` finished and partway through `en`
+  — the whole process had exited (confirmed via `ps`), even though Qdrant
+  itself was still healthy and responsive (`ping()` → `True`, a direct
+  `GET /collections/words` → 200) the moment this was checked. A single
+  transient timeout, most likely caused by both jobs hammering Qdrant
+  concurrently, had no retry at all — `QdrantStore._request` raised
+  immediately on any `httpx.HTTPError`, killing the entire multi-hour
+  background job over one blip. Fixed with a small, targeted retry: two
+  new module constants, `QDRANT_REQUEST_RETRIES` (2) and `QDRANT_
+  REQUEST_RETRY_DELAY_S` (1.0, linear backoff — 1s then 2s), and
+  `_request` now catches specifically `httpx.TimeoutException`/
+  `httpx.ConnectError` (never a generic `httpx.HTTPError`, which can also
+  wrap a non-retryable client-side error that would just fail identically
+  again) and retries up to `QDRANT_REQUEST_RETRIES` extra times before
+  raising `QdrantStoreError` — benefits every caller uniformly (`upsert`/
+  `delete_points`/`search`/etc.), not just the populate script. Verified
+  in isolation with a mocked `httpx.Client`: two simulated timeouts
+  followed by a real success correctly returns that success after 3 total
+  calls; a client that always times out correctly raises after exactly
+  `QDRANT_REQUEST_RETRIES + 1` (3) attempts, never looping forever; a
+  non-retryable `httpx.HTTPError` still raises immediately, on the very
+  first call, with zero retries wasted on it. The interrupted recompute
+  was then resumed precisely rather than restarted from scratch — `en`
+  from `--offset 51200` (the log's own last confirmed-flushed progress
+  line), then `de`/`es`/`it`/`pt` from the beginning (none of them had
+  been touched by this run before the crash) — run detached the same way
+  as the original launch.
+
+  `build_wordlist_freq.py` gained a `_has_punctuation_mark(word)` check,
+  at the user's explicit request: "Dans tous les dictionnaires, filtrer
+  les mots qui contiennent des ponctuations (apostrophe, tiret, espaces,
+  etc). Supprimer les mots filtrés de Qdrant. Modifier les scripts de
+  préparation pour ne plus générer ces mots avec ponctuation." The
+  pre-existing `word.isalpha()` filter (right where every corpus
+  candidate is first considered) already rejects real Unicode
+  punctuation — hyphen, comma, quote marks, whitespace all have category
+  `P*`/`Z*`, `isalpha()` is already `False` for every one of them.
+  Measured live before writing any fix, across all 6 wordlists (a
+  precise Python scan, not a guess): the one real gap is Unicode category
+  `Lm` ("modifier letter") — specifically U+02BC MODIFIER LETTER
+  APOSTROPHE — which Unicode classifies as a LETTER, so `isalpha()`
+  wrongly accepts it. The real French corpus uses this exact character
+  for elisions ("l'article", "qu'il", "c'est", ...) instead of a genuine
+  punctuation apostrophe, and `_WORD_RE` (`[^\W\d_]+`) happily tokenized
+  the whole elision as one contiguous "word" — surviving all the way to
+  `MOT` values like `LʼARTICLE`/`QUʼIL`/`CʼEST`, corpus artifacts, never
+  real crossword-usable words. `_has_punctuation_mark` checks every
+  character for whitespace, Unicode category `P*`, or category `Lm` —
+  deliberately checked as an *explicit* category test, not merely
+  "reject anything that isn't `Lu`/`Ll`", so a genuine ligature letter
+  like French `Œ`/`Æ` (category `Lu` — real words: `CŒUR`, `SŒUR`,
+  `ŒIL`, ...) is never mistaken for punctuation. Wired into the same
+  `if not word.isalpha() or len(word) < 2: ...` filter that already
+  existed, as a third `continue` condition.
+
+  Measured precisely across all 6 languages before touching anything:
+  **only French** was affected — 459 of 197,315 words (all containing
+  the U+02BC apostrophe) — every other language's wordlist already had
+  zero non-A-Z characters in its MOT column at all (confirmed directly,
+  character by character, not inferred). Applied as a plain retroactive
+  filter on the already-built file (the same "surgical post-hoc removal,
+  provably equivalent to a full rebuild" reasoning already established
+  for the German 15-letter trim above — the fix only ever *removes* a
+  candidate before it can become a `best[word]` entry, so it can never
+  change any *other* surviving word's own score/canonical-form
+  selection): `data/wordlist_fr_full.tsv` went from 197,315 to 196,856
+  rows. "Supprimer les mots filtrés de Qdrant" (the same explicit
+  request): the 459 dropped words' own Qdrant points (already present in
+  the `fr` tenant — `fr` had already been fully re-embedded with the new
+  gloss-enriched text by the recompute above) were removed the same way
+  as the German cleanup, via `QdrantStore.delete_words`. Verified live:
+  `count("fr")` was 197,315 immediately before cleanup and dropped to
+  exactly 196,856 immediately after — matching `197,315 - 459` precisely.
+  Portuguese's own 3 stray `Μ` (Greek capital Mu, category `Lu` — a real
+  *letter*, not punctuation, almost certainly a mis-transliterated micro
+  sign "µ" in `ΜM`/`ΜG`/`ΜMOL`) was found during this same scan and
+  deliberately left untouched — out of scope for a punctuation-only
+  filter, disclosed rather than silently fixed alongside it.
 - `backend/crossword_gen.py` — the core grid generator library/CLI (all the grid-generation
   business logic lives in `backend/`). `generate_grid()` is the reusable entry point (used
   by both the CLI `main()` and `backend/app.py`); it takes a word list and produces a
@@ -3815,6 +3943,201 @@ servers:
   "arc-en-ciel" counts as one word, `""` is not "too long" (it's caught
   earlier as empty).
 
+  A `describe_theme(theme_words, language="fr", timeout=DEFAULT_TIMEOUT,
+  cancel_event=None)` method was added for themed generation (see
+  `backend/app.py`'s "Themed generation" entry), at the user's explicit
+  request: "demande d'abord au LLM de formuler une phrase de 50 mots
+  décrivant la thématique de ces mots, et embed la réponse LLM." Given
+  the raw theme string the player typed into the "Thématique" field, it
+  asks the LLM for a single richer semantic description — whose
+  *embedding* (not that of the raw word list) then drives the Qdrant
+  per-length glossary pre-search (see `backend/app.py`'s
+  `_theme_words_by_length`). Modeled on `generate_title`'s own
+  single-`httpx.post` pattern (`reasoning_effort: "none"`,
+  `_strip_reasoning`, `temperature: 0.7`) but with **no retry loop and no
+  `LOG_LLM/` record** — a purely additive convenience, like a title.
+  Whitespace-collapses the reply, returns `""` on any HTTP failure or
+  empty reply (the caller then embeds the raw theme string instead);
+  raises `GenerationCancelled` if `cancel_event` is set.
+
+  The target length and style were revised at the user's explicit
+  request: "Réduis la longueur des définitions de thèmes à 15 mots.
+  Précise d'écrire dans un style télégraphique, le moins verbeux
+  possible, avec le plus de concepts décrits." The system prompt now asks
+  for **~15 words** (12-18) in a **telegraphic style** — articles/verbs/
+  connectors dropped, only comma-separated content words (the field,
+  related concepts, typical vocabulary, evoked places/people/objects/
+  activities), as many distinct on-topic concepts as possible — rather
+  than the previous fluent ~50-word sentence, on the reasoning that fewer
+  filler words for the embedding to average over yields a sharper query
+  vector. `max_tokens` dropped to `REASONING_TOKEN_BUDGET + 80`, the
+  runaway safety-net cap from 80 words to 40. Verified live against the
+  local LLM (Qwen3-4B): "animaux de la ferme" → `animaux, bêtes, vaches,
+  chevaux, poules, oies, moutons, porcs, cochons, vaches lait, poussins,
+  œufs, fromage, ferme, agriculture` (16 words); "cuisine italienne" and
+  "vache" likewise came back as dense 16-word comma-separated keyword
+  lists with no articles or filler.
+
+  **The "drop verbs" instruction was reversed**, at the user's explicit
+  request ("demander au LLM de générer des mots dans toutes les
+  catégories grammaticales (nom, verbe, adjectif, etc)"): the prompt now
+  drops ONLY articles/prepositions/connectors and explicitly asks the
+  model to MIX parts of speech — on-topic **nouns, verbs (infinitive),
+  adjectives and adverbs**, not just nouns (actions performed, qualities/
+  properties, alongside the field/concepts/vocabulary/places/people/
+  objects/activities). Docstring updated to note this. Verified live
+  (Qwen3-4B): "jardinage" → `jardinage, cultiver, arroser, semer, tailler,
+  regarder, fleurs, plantes, terre, …` — genuine verbs now appear where
+  the theme supports them; a strongly object-centred theme ("cuisine
+  italienne") still leans noun-heavy, consistent with this small model's
+  documented reliability ceiling on qualitative prompt rules, but the mix
+  is measurably present.
+
+  **The target length was raised from ~15 to ~30 words**, at the user's
+  explicit request ("demander un LLM de générer 30 mots (au lieu de
+  15)") — the prompt now asks for "about 30 words (25 to 35)", `max_
+  tokens` bumped `REASONING_TOKEN_BUDGET + 80` → `+ 150`, the runaway cap
+  `> 40` → `> 70`. Applies to *both* consumers (grid glossary +
+  Dictionary panel). On the small local model the reply still often
+  over-shoots or repeats a block (55 words for "jardinage"), harmless —
+  the downstream flatten de-dups case-insensitively and the 70-word cap
+  never truncates a genuine answer.
+
+  Separately, for the **grid glossary only** (`_run_generate_job`'s theme
+  block, never `_similar_words_impl`), the keyword-gathering loops: after
+  the first pass (whole theme + one call per token for a multi-word
+  theme), if the flat de-duplicated `searched_keywords` set has fewer than
+  `THEME_MIN_KEYWORDS` entries, `describe_theme(theme)` is re-called up to
+  `THEME_KEYWORD_LLM_MAX_LOOPS` more times, stopping early the moment a
+  call adds nothing new (`_added == 0`). Each top-up list is appended to
+  `keyword_lists` (so `LOG_THEME/`'s header shows `[(top-up N)]` lines).
+  Introduced at "boucler les requêtes LLM au plus 5 fois pour obtenir au
+  moins 150 mots", then retuned to **`THEME_MIN_KEYWORDS = 300`,
+  `THEME_KEYWORD_LLM_MAX_LOOPS = 3`, and a dedicated
+  `THEME_KEYWORD_LLM_TEMPERATURE = 0.9`** (up from `describe_theme`'s
+  default 0.7, which the Dictionary panel keeps) at "augmenter la
+  température du LLM à 0.9, itérer au plus 3 fois pour essayer d'obtenir
+  300 mots à chercher dans Qdrant" — the higher temperature is passed to
+  *every* grid-glossary `describe_theme` call (first pass + per-token +
+  top-ups) via a new `temperature` param on the method. It's a
+  best-effort target, not a guarantee: at the earlier settings a real
+  "jardinage" run went 32 → 53 → 75 → 79 → 93 → 98 distinct keywords
+  across 5 loops (small model, lots of overlap).
+
+  `generate_title` gained a `theme_description=None` parameter, at the
+  user's explicit request: "passer au LLM la phrase ayant servi à
+  construire le glossaire thématique comme référence d'inspiration pour
+  le titre." When given (a themed generation's own `describe_theme`
+  sentence — `backend/app.py`'s `_run_generate_job` passes its local
+  `theme_description` variable straight through, `""` for an ordinary,
+  non-themed grid), it's folded into `generate_title`'s system prompt as
+  a new `THEME INSPIRATION` block (spliced in right after the existing
+  "SHAPE of a good title" paragraph and before "HOW TO BUILD THEM:") —
+  framed explicitly as optional context, never a requirement: the model
+  is told it may draw on the description's mood/imagery but must not
+  quote or repeat it verbatim, and every pre-existing rule (in
+  particular "never contain a grid word") still applies unconditionally
+  on top of it. `theme_description=None`/`""` (the default, and every
+  pre-existing caller) leaves the system prompt completely byte-
+  identical to before this parameter existed — verified directly by
+  comparing the two prompts. Verified live: a themed system prompt for a
+  hand-written forest-theme description correctly contained the new
+  `THEME INSPIRATION` block with the exact sentence quoted, while the
+  same call with no `theme_description` produced a prompt with no trace
+  of that block at all.
+
+  The same `theme_description` reference was extended to definition/clue
+  generation itself, at the user's explicit request: "indiquer au LLM la
+  phrase décrivant le thème comme une référence d'inspiration (comme pour
+  le titre)." `generate()` and `_build_system_prompt()` both gained a
+  matching `theme_description=None` parameter — `generate()` passes it
+  straight through to `_system_prompt_for`'s own `_build_system_prompt`
+  call, so it's baked into the (per-language-cached) system prompt once,
+  not rebuilt per word. Scoped far more tightly here than for the title:
+  a clue's own accuracy (the ABSOLUTE RULE — the dictionary definition is
+  the only source of meaning — and rule 4's exact-grammar requirement)
+  is never negotiable the way a title's creative shape is, so the
+  spliced-in `THEME INSPIRATION` block (placed right after rule 8, before
+  `=== EXAMPLES ===`) explicitly states it may only ever influence a
+  genuinely free stylistic choice among options that are all already
+  equally correct and exact — never the meaning, never the grammar —
+  and to be ignored entirely whenever in doubt. `backend/app.py`'s
+  `_run_generate_job` passes its own local `theme_description` variable
+  (already `""` for a non-themed grid, see the "Themed generation" entry
+  above) straight into the `clue_generator.generate(...)` call. The
+  "Recalculer" button's own separate clue-recompute path
+  (`_run_recompute_job`) is deliberately left untouched — the LLM's own
+  theme-description sentence is never persisted on a stored grid record
+  (only in `LOG_THEME/`, see above), so there's nothing to pass there
+  without a fresh `describe_theme` call, out of scope for this request.
+  Verified: isolated `_build_system_prompt` calls confirmed the note is
+  absent for a non-themed prompt and present, correctly worded and
+  correctly placed (before `=== EXAMPLES ===`), for a themed one; a real,
+  non-mocked `generate()` call for French `CHAT` with a hand-written
+  forest-theme description produced a genuine, correct clue ("Félinité")
+  and its own `LOG_LLM/*_SUCCES.md` record confirmed the exact `THEME
+  INSPIRATION` text reached the real system prompt sent to the model.
+
+  **That "context only, ignore when in doubt" note was rewritten into a
+  strong directive**, at the user's explicit request ("il est important,
+  quand il y a une thématique, que les définitions respectent au mieux
+  cette thématique" — the model should "très fortement s'inspirer" of
+  it). The block (renamed `THEME`, no longer `THEME INSPIRATION`) now
+  tells the model to STRONGLY steer every clue toward the theme —
+  whenever the word's meaning and grammar leave *any* latitude in angle/
+  wording/imagery/example/register, deliberately pick the theme-evoking
+  formulation over a neutral one, prefer a synonym/example/turn of phrase
+  from the theme's world. The one hard limit kept inviolable is accuracy:
+  a theme flavour must never make a clue wrong for the exact word,
+  grammatically mismatched, or ambiguous beyond the target — dropped for
+  that one clue when it would ("accuracy always wins that trade").
+  `theme_description` here is specifically the **whole-theme** keyword
+  list — `describe_theme(theme)`'s output, the `[(whole theme)]` list,
+  never a per-token or top-up list (the user's explicit scoping:
+  "uniquement la recherche principale avec tous les mots") —
+  `_run_generate_job` already passed exactly that (its `theme_
+  description` local is never reassigned to a token/top-up value).
+  Verified live: the `THEME` block with the keyword list is in the real
+  system prompt of every themed clue call; a themed "CHAUD" clue came
+  back as "Un repas qui réchauffe le corps et l'esprit" (a culinary
+  angle) rather than a plain "opposite of cold". On a small grid whose
+  placed words happen not to be thematic, and with the small local
+  model, the visible effect stays modest — the documented reliability
+  ceiling on qualitative prompt rules — but the directive is in place.
+
+  **The `THEME` block was then moved out of the system prompt and into
+  the per-word `user` message**, at the user's explicit request ("déplace
+  la section THEME dans le prompt utilisateur"). `_build_system_prompt`
+  lost its `theme_description` parameter entirely (and the `theme_note`
+  splice before `=== EXAMPLES ===`); `generate()`'s `_system_prompt_for`
+  now calls `self._build_system_prompt(difficulty, lang)` with no theme
+  argument. `_build_user_message` (which already received `theme_
+  description` for nothing before) now appends the exact same strong
+  `THEME` block as its final `parts.append(...)`, guarded by `if theme_
+  description:`, right after the example-sentences block — so it sits in
+  the highest-recency position, the last thing the model reads before the
+  word it must clue, rather than buried mid-way through the ~100-line
+  shared system prompt. The block's own wording is otherwise unchanged
+  (STRONGLY steer toward the theme wherever meaning + grammar leave
+  latitude; accuracy inviolable, drop the flavour for any clue it would
+  make wrong; never quote the keyword list verbatim) — only reworded from
+  "every clue" to "each of your 3 clues" / "THIS word" to read naturally
+  as a per-word instruction. The non-themed path is completely unchanged
+  (`theme_description` empty → the block is never appended). Verified
+  live: a themed 6×6 generation's fresh `LOG_LLM/*.md` shows the `THEME
+  —` block inside the `## User message` section (line ~140) with no
+  occurrence anywhere in `## System prompt`.
+
+  **To make the theme list visible in the traces**, at the user's
+  explicit follow-up ("je ne vois pas la liste des mots produite par le
+  LLM thématique dans les dernières traces des définitions"): `_write_
+  call_log` gained a `theme_description` param and writes a `- **Theme
+  keywords** (whole-theme LLM list, steers the clue): …` line in every
+  `LOG_LLM/*.md` header (right after `- **Difficulty**`), so it's
+  readable without scrolling the ~100-line system prompt; and
+  `_run_generate_job` logs `clue generation steered by theme keyword
+  list: …` to `backend.log` once, right before the clue phase.
+
   Separately, `DIFFICULTY_STYLE["easy"]` gained a second sentence, at the
   user's explicit request: "Modifier le prompt de génération des
   définitions pour la difficulté FACILE pour préciser : quand une
@@ -3846,6 +4169,87 @@ servers:
   established pattern of disclosing a small local model's real
   reliability ceiling on qualitative prompt rules rather than overstating
   it.
+
+  **`generate_definitions(text, language="fr", difficulty="medium",
+  count=10, timeout=90.0)`** backs the Dictionary panel's **"Définir"**
+  button (`GET /api/dictionary/define` in `backend/app.py`, `frontend/
+  static/script.js`), at the user's explicit request: "ajoute un bouton
+  'Définir' qui appelle le LLM pour générer 10 définitions (comme lors
+  de la création de la grille). Affiche une définition par ligne."
+  Reuses the same grounding (`_build_gloss_block`/`_build_pos_block`/
+  `_build_examples_block`, keyed by the typed text itself — `entry =
+  (text.upper(), text, (text.lower(),))`, so a real gloss lookup can
+  find it under its own lowercased form as a candidate lemma) and the
+  same content filter as a real grid word's clue, but with its own,
+  separate system prompt (`_build_definitions_system_prompt`) and its
+  own, separate user message — deliberately **not** `_build_system_
+  prompt()`/`_build_user_message()` themselves: those are tightly tuned
+  around asking for exactly 3 candidates plus a mandatory "A="
+  grammatical-analysis line for one specific grid word's own exact
+  inflected form (see this whole section's own tuning history above), a
+  premise that doesn't fit an arbitrary `count` over free-text input —
+  reusing them verbatim would have left the user message's own hardcoded
+  "Each of your 3 clues..." paragraph directly contradicting the new
+  prompt's "exactly `count` lines" instruction. `_build_definitions_
+  system_prompt` keeps the same difficulty-style line and the same
+  "ground strictly in the given dictionary definitions" ABSOLUTE RULE,
+  scaled to `count` lines, with no A= step (no single inflected form to
+  analyse here).
+
+  A single best-effort HTTP call (via the existing `_call`, now with an
+  optional `total_rounds` parameter — default `3`, unchanged for every
+  pre-existing caller, purely so this call's own log lines can correctly
+  read "round 1/1" instead of the grid path's "round 1/3") — no
+  multi-round retry loop like `generate()`'s per-word one (re-clicking
+  "Définir" is the retry), and no per-call `LOG_LLM/` record, matching
+  `generate_title`/`describe_theme`'s own convention for this kind of
+  auxiliary call. `_parse_response()` splits the reply into lines as
+  usual; filtering reuses **`_filter_candidates`**, a new static method
+  extracted from `_pick_clue` (which now just calls it, then randomly
+  picks one of its own `accepted` list — see `_filter_candidates`'s own
+  docstring for the exact checks: length, non-Latin script, wrong
+  language, containing the target word/canonical form, a leaked
+  word-label prefix) — `generate_definitions` keeps *every* accepted
+  candidate (de-duplicated, in the model's own order) instead of picking
+  just one. Never raises for "the model gave a bad/short/empty answer"
+  (returns however many survived, possibly `[]`); only a genuine
+  connection failure raises `ClueGenerationError`, which the endpoint
+  turns into a 503 `define_unavailable`.
+
+  `timeout` defaults to **90s**, not the short budget a quick lookup
+  could get away with — measured live at up to ~40s for a real
+  10-definition call on this project's own small local model (Qwen3-4B):
+  asking for `count` lines in one response is a meaningfully heavier
+  single call than a grid word's own one-line clue. `frontend/server.
+  py`'s matching `DEFINE_PROXY_TIMEOUT_S` (100s) and `script.js`'s
+  `DEFINE_FETCH_TIMEOUT_MS` (110s) are each set above the layer they
+  wrap, the same "each layer's timeout above the one it calls"
+  convention already established for the chat feature's own
+  `CHAT_PROXY_TIMEOUT_S`/`CHAT_FETCH_TIMEOUT_MS`. `backend/app.py`'s
+  `dictionary_define` endpoint fixes `difficulty="medium"` (`DEFINE_
+  DIFFICULTY`) and `count=10` (`DEFINE_COUNT`) — the Dictionary panel has
+  no difficulty selector of its own, unlike the grid-generation form.
+  `frontend/static/script.js`'s `renderDefineResult()` stacks a new
+  `.dictionary-result` block (same convention as "Chercher"/"Mots
+  similaires") with one `.dictionary-define-line` paragraph per
+  definition — "une définition par ligne," per the request, as opposed
+  to "Mots similaires"'s own single comma-separated line.
+
+  Verified live end to end against the real running stack (not
+  mocked): a direct `LLMClueGenerator().generate_definitions("école",
+  language="fr", difficulty="medium", count=10, timeout=60.0)` call
+  against the real local LLM server returned 8 of 10 candidates kept (one
+  correctly rejected for containing "École", matching `_filter_
+  candidates`'s own logged reason) in ~40s; `GET /api/dictionary/define
+  ?q=cahier&lang=fr` through the real running backend returned exactly
+  10 well-formed French definitions in ~39s; through the frontend proxy,
+  `q=professeur` returned 9 in ~6s — confirming the proxy's longer
+  timeout is in effect and that the endpoint tolerates the model
+  under-delivering the exact requested count; `lang=zz` → 400, empty
+  `q` → 400. The served page was fetched directly and confirmed to
+  contain the new button/JS functions/CSS/i18n keys (all 6 languages).
+  **Not yet visually confirmed in an actual browser** — same tooling
+  limitation noted throughout this project's UI work.
 - `backend/chatbot.py` — "David FALCON", the web UI's in-app chat assistant, at the
   user's explicit request: "En bas à droite de l'interface, ajoute un ChatBot (ouvert
   par défaut) avec l'icône de l'application. Le ChatBot utilise le LLM pour répondre
@@ -5483,6 +5887,21 @@ servers:
   new clues," so it keeps the original author rather than crediting
   whoever triggered the recompute). No filename change — the pseudo lives
   only inside the JSON, never in the id/slug.
+
+  `save_grid_json` gained a `theme=None` parameter the same way, at the
+  user's explicit request ("Lors de la sauvegarde de la grille,
+  enregistrer les mots de la thématique si il y en a"): the raw
+  theme-words string the player typed in the new "Thématique" field (see
+  `backend/app.py`'s `GenerateRequest.theme` / `crossword_gen.py`'s
+  `priority_words`), whitespace-normalised to `None`, written as the
+  record's own `theme` field. `_iter_stored_grids` yields it in the
+  compact metadata so the library table can show a "Thématique" column
+  (`frontend/static/script.js`, `renderLibraryList` — a `themeTd` after
+  the title column; `libraryColTheme` in `i18n.js`, all 6 languages).
+  `_run_generate_job` passes `theme or None` and also sets
+  `result["theme"]`; `_run_recompute_job` passes `result.get("theme")`
+  so a recomputed copy keeps the original theme. Only the raw string is
+  stored — never the ~5000 pre-selected words the Qdrant search returned.
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -5599,7 +6018,7 @@ servers:
   come from there). Writes `data/inflection/<lang>.jsonl` (checked into the repo, plain
   uncompressed for hand inspection, ~4–23 MB per language) — one
   `{"form": ..., "analyses": [{"pos": ..., "tags": ..., "lemma": ...}]}` per line,
-  sorted by form. Run as step 5/5 of each `data_builder/build_<lang>.sh`. Independent of the
+  sorted by form. Run as step 5/6 of each `data_builder/build_<lang>.sh` (step 6 feeds the Qdrant word-embedding index). Independent of the
   corpus→wordlist→gloss pipeline's own rule-6 atomicity, except that it reads the
   wordlist, so a wordlist rebuild should be followed by a re-run of this too.
 - `backend/svg_export.py` — `save_grid_svg()`, called by `backend/app.py` once a grid
@@ -5640,7 +6059,37 @@ servers:
   only grows when someone deliberately picks an example and adds it by hand, at the
   user's explicit request.
   Both saves are best-effort (a missing `rsvg-convert`, or any other failure, is logged
-  as a warning by `backend/app.py`, never fails the request). `_group_clue_lines()`
+  as a warning by `backend/app.py`, never fails the request).
+
+  `render_puzzle_svg(result, language, title="", difficulty=None)` +
+  `svg_to_pdf_bytes(svg_str)` — a **printable, answer-free** variant, at
+  the user's explicit request ("un lien permettant de télécharger la
+  grille en PDF (sans les réponses, seulement la grille vide, les
+  définitions, et le titre de la grille)"). Backs `GET /api/library/
+  {grid_id}/pdf` (see `backend/app.py`). `render_puzzle_svg` reuses every
+  helper `render_grid_svg` does (`_group_clue_lines`/`_heading_svg`/
+  `_clue_lines_svg`/`_grid_svg`/`_logo_data_uri`) and the same
+  empty-grid-beside-across-sidebar + 2-column-down-clues layout, but:
+  (1) the header carries the grid's own `title` (bold, its own line
+  between "CrossWordFalcon" and the small grey version/date/language/
+  difficulty identity line) — no mode/durations/black-ratio line, which
+  is meaningless on a puzzle sheet; (2) the `=== Solution ===` grid at
+  the bottom of `render_grid_svg` is omitted entirely, and the one grid
+  drawn is `_grid_svg(..., letters=None, ...)` — blank cells, no answer
+  ever rendered; (3) a footer line, at the user's explicit request
+  ("indiquer le lien pour jouer en ligne avec une mention du type :
+  'jouer en ligne (avec solution) : <URL>'") — a thin rule then a small
+  grey `<text>` reading `_PLAY_ONLINE_LABELS[language]` (all 6 languages,
+  `"Jouer en ligne (avec solution) : {url}"` etc.) with `{url}` =
+  `PLAY_ONLINE_BASE_URL + "?grid=<id>"` (`PLAY_ONLINE_BASE_URL` =
+  `https://falcon.cubaix.com/`, kept aligned with `SHARE_BASE_URL` in
+  `script.js`). Only drawn when `result` carries an `id` (a `grid_store`
+  record — a bare `generate_grid()` result has none). `svg_to_pdf_bytes`
+  pipes the SVG string through
+  `rsvg-convert -f pdf` (stdin→stdout, no temp file) — the same
+  `rsvg-convert`/librsvg dependency as `save_grid_png`, raising `OSError`
+  if the tool is missing or fails (the endpoint turns that into a 503).
+  `_group_clue_lines()`
   takes the grid's `language` and shows a translated "no definition available"
   placeholder (`_NO_DEFINITION`) for any word whose clue is missing — never the bare
   answer. That used to be the fallback (a word with no clue displayed as its own
@@ -5825,6 +6274,989 @@ servers:
   printed, the actual server process launched with `--n_gpu_layers 0` (checked via
   `ps`), and it served a real request correctly — then restarted normally (unset)
   and confirmed the process went back to `--n_gpu_layers -1`.
+- `run_embed.sh` + `backend/embedder.py` — a local, **CPU-only multilingual
+  text-embedding** stack, at the user's explicit request ("Trouver un petit
+  embedder multilangue capable de tourner en CPU, l'installer et créer un
+  script de lancement. Créer une classe Back permettant d'envoyer une chaîne
+  de caractères et récupérer l'embedding. Tester le script sur 1000
+  embeddings pour évaluer le temps de traitement."). Same server/client
+  split as `run_llm.sh` + `LLMClueGenerator`: `run_embed.sh` launches
+  `llama_cpp.server` (already a dependency via `requirements-llama.txt` — no
+  new package) in `--embedding true` mode on `EMBED_PORT` (3003), and
+  `backend/embedder.py`'s `Embedder` class is the HTTP client
+  (`POST {EMBED_BASE_URL}/embeddings`, OpenAI-compatible).
+
+  **Model: BAAI/bge-m3, `bge-m3-Q4_K_M.gguf` from `gpustack/bge-m3-GGUF`**
+  (~418 MB, 567M params, 1024-dim, CLS pooling, 100+ languages incl. all 6
+  CrossWordFalcon languages). It's the smallest genuinely
+  state-of-the-art multilingual embedder — "petit" in the sense that
+  matters here (small enough to run comfortably on CPU, quantized to a
+  ~400 MB file), not a sub-200M toy. `multilingual-e5-small` (118M,
+  384-dim) was tried first as the genuinely-tiny option but **every GGUF
+  conversion of it found on HuggingFace fails to load** in this project's
+  `llama-cpp-python` 0.3.35: the popular `cstr/multilingual-e5-small-GGUF`
+  build errors with `bert model needs to define token type count` (an
+  older conversion missing `tokenizer.ggml.token_type_count` metadata that
+  current llama.cpp requires); other community repos are similarly stale
+  or 404. `gpustack/bge-m3-GGUF` is a current, complete conversion
+  (GPUStack ship their own llama.cpp-based server, so their GGUFs track
+  upstream) — it loads cleanly, metadata intact (`bert.pooling_type = 2`
+  i.e. CLS, `token_type_count = 1`). Every knob is overridable in `env.sh`
+  (`EMBED_GGUF_REPO`/`EMBED_GGUF_FILE`/`EMBED_MODEL`/`EMBED_BASE_URL`/
+  `EMBED_API_KEY`) — repoint `EMBED_BASE_URL` at any other
+  OpenAI-compatible `/v1` endpoint to swap providers with no code change.
+
+  `run_embed.sh` defaults to **CPU-only**: unless `EMBED_N_GPU_LAYERS` is
+  a positive value it passes `--n_gpu_layers 0` and sets
+  `CUDA_VISIBLE_DEVICES=""` in the server's environment, so it never
+  competes with the clue-generation LLM (or SGLang) for the GPU — the
+  whole point of the request was a CPU embedder. This also sidesteps a
+  real failure mode observed live on this project's own dev box:
+  `llama-cpp-python` here is a CUDA build (for `run_llm.sh`), and loading
+  a model without hiding the GPU made `Llama(...)` hang for minutes while
+  the RTX 3060 was busy serving SGLang — forcing CPU made load drop to
+  ~1.6 s. `EMBED_N_GPU_LAYERS` (env.sh, default `0` in `env_default.sh`;
+  `99` = offload every layer) opts into GPU. bge-m3 needs only ~0.4 GB
+  VRAM, so it **can share the card with the LLM** — but SGLang, left
+  alone, sizes its static KV pool as a fraction of *total* GPU memory
+  (`SGLANG_MEM_FRACTION_STATIC`, default 0.78) and effectively grabs the
+  whole 12 GB card. To make them cohabit on this project's dev box
+  (RTX 3060), `env.sh` sets `EMBED_N_GPU_LAYERS=99` **and** overrides
+  `SGLANG_MEM_FRACTION_STATIC=0.60` (outside the Install.sh SGLANG
+  AUTOCONFIG block, so a re-run of Install.sh doesn't wipe it — env.sh is
+  sourced top-to-bottom, last export wins). Measured split with both up:
+  SGLang ~8.6 GB (2.56 GB weights + 4.1 GB KV pool for 29,745 tokens +
+  CUDA graphs), embedder ~0.34 GB, ~2.8 GB free. The remaining KV pool is
+  still far more than a 4B model doing one-word-per-call clue generation
+  and short chats ever uses. `run_llm.sh` on the llama.cpp engine shares
+  VRAM more gracefully and needs no such tuning. Otherwise `run_embed.sh`
+  mirrors `run_llm.sh`'s conventions: stop-existing-server-on-port
+  (`lsof -sTCP:LISTEN` only, per the project rule), download the GGUF on
+  first run, `nohup … & disown`, log to `logs/embed.log`.
+
+  `Embedder` holds one keep-alive `httpx.Client` (reuse the instance
+  across many calls; it's a context manager and also closes on `__del__`).
+  `embed(text) -> list[float]` is the "send a string, get its vector"
+  path; `embed_batch(texts) -> list[list[float]]` sends the whole list as
+  one request's `input` array (markedly faster when several strings are
+  ready at once). Vectors are L2-normalized by default, so a plain dot
+  product between two results is their cosine similarity. `dimension` is
+  probed once and cached. A connection failure raises `EmbedderError`
+  (mirroring `ClueGenerationError`) with a "is the embed server running?"
+  hint. `python -m backend.embedder --text "..."` prints one vector's
+  dim/norm/preview; `python -m backend.embedder --benchmark 1000`
+  (`--batch 16` to also time batched requests) is the requested timing
+  harness — warm-up call excluded, then N single-string requests timed
+  individually (mean, p50, p95, max, embeddings/s), then the batched pass,
+  then a cross-lingual sanity assertion (`cos(FR,EN same meaning) >
+  cos(FR, unrelated)`).
+
+  Verified live: `Embedder().embed("bonjour le monde")` through the real
+  running server returned a 1024-dim, unit-norm vector; the cross-lingual
+  check passed (same meaning across FR/EN scores well above unrelated
+  text). **Benchmark (`--benchmark 1000 --batch 16`, all runs on this
+  project's dev box, RTX 3060 / 16 physical cores):**
+
+  | | 1 string/request | 16 strings/request |
+  |---|---|---|
+  | **CPU** (`EMBED_N_GPU_LAYERS=0`), machine loaded (SGLang + ~18 stray `uvicorn backend.app` workers, load avg ~20) | 141 s → mean **141 ms** (7/s), p50 **41 ms**, p95 71 ms, max 6.1 s | 151 s → mean 151 ms (7/s) — no gain |
+  | **GPU** (`EMBED_N_GPU_LAYERS=99`), LLM stopped, load avg ~5 | 8.1 s → mean **8.1 ms** (**124/s**), p50 7.5 ms, p95 11 ms, max 57 ms | 2.2 s → mean **2.1 ms** (**465/s**) |
+
+  Takeaways: (a) **GPU is ~5-15× faster per embedding** (p50 7.5 ms vs
+  41 ms) and, unlike CPU, **scales with batching** (465/s batched vs
+  124/s single — the GPU runs the `input` array in parallel; CPU runs it
+  serially, so `embed_batch()` only saves HTTP round-trips there); (b) on
+  CPU the mean is ~3.5× the p50 because a few multi-second outliers (the
+  loaded machine) drag it up — the p50 is the representative
+  per-embedding cost. bge-m3 uses ~380 MiB VRAM. The two runs are not a
+  perfectly controlled comparison (CPU run was under heavy unrelated
+  load, GPU run after `Automation/Populate.py` and the LLM server were
+  both stopped) but the order-of-magnitude gap is real. Cross-lingual
+  sanity passed both times: cos(FR,EN same meaning) ≈ +0.90 vs
+  cos(FR, unrelated) ≈ +0.48.
+- `backend/qdrant_store.py` — `QdrantStore`, a thin HTTP client (plain
+  `httpx`, no `qdrant-client` SDK — same "swap env vars, no code change"
+  design as `backend/embedder.py`/`backend/clues.py`, and no new package
+  in `requirements.txt`) for one Qdrant collection holding word
+  embeddings. **One collection (`words`), one tenant per language**: every
+  point carries a `lang` payload field (`fr`/`en`/`de`/`es`/`it`/`pt`),
+  and `ensure_collection()` registers `lang` as a *tenant* keyword
+  payload index (`{"type": "keyword", "is_tenant": true}`, endpoint `PUT
+  /collections/{c}/index`) so Qdrant co-locates each language's vectors
+  on disk and a language-filtered search stays fast across all six
+  languages — a per-language query is a normal `POST
+  /collections/{c}/points/search` with `filter.must[].key = "lang"`,
+  never a separate collection per language. Vector dimension is **not
+  hardcoded**: `_resolve_dimension()` uses an explicit arg if given, else
+  `QDRANT_VECTOR_SIZE` from the env, else probes the live embedder
+  (`backend.embedder.Embedder().dimension` — BAAI/bge-m3 → 1024).
+  Collection is created with **RAM-resident** vectors by default
+  (`QDRANT_ON_DISK`, `"0"`; opt in with `"1"`/`"true"`/`"yes"`/`"on"`
+  only on SSD-backed storage — on-disk HNSW does a disk seek at every
+  graph hop, which on a spinning HDD makes each search tens of seconds
+  and hits Qdrant's own 60s operation timeout, especially while a
+  populate run is also writing; the full six-language word set is only a
+  few GB of vectors, fine in RAM on any real host — `on_disk_payload`
+  follows the same flag, so the tiny per-word payload stays in RAM too
+  when vectors do) and `distance: Cosine` (`QDRANT_DISTANCE`; `Embedder` L2-normalizes, so Cosine/Dot
+  are equivalent). Config: `QDRANT_URL` (or `QDRANT_HOST`
+  `127.0.0.1` + `QDRANT_PORT` `6333`), `QDRANT_COLLECTION` (`words`),
+  `QDRANT_API_KEY` (sent as the `api-key` header when non-empty, for
+  Qdrant Cloud). Point ids are deterministic — `word_point_id(lang,
+  word)` is `uuid5` of `"<lang>:<word>"` — so a re-run of the populator
+  updates each word in place rather than duplicating it. Methods:
+  `ping()`, `collection_exists()`, `ensure_collection(dimension=None,
+  distance=None, on_disk=None, recreate=False)` (idempotent — creates
+  the collection if missing and always (re)asserts the tenant index),
+  `ensure_tenant_index()`, `collection_info()`, `drop_collection()`,
+  `count(lang=None)`, `upsert(points, wait=True)`, `delete_points(ids,
+  wait=True)` (removes exactly the given point ids — Qdrant's own
+  `points`-field delete request, as opposed to `delete_lang`'s `filter`-
+  based whole-tenant wipe), `delete_words(lang, words, batch_size=2000,
+  wait=True)` (computes `word_point_id(lang, w)` per word and chunks into
+  `delete_points` calls — the common "given a list of words to drop"
+  case, e.g. cleaning up a wordlist trim, see the `data_builder/build_
+  wordlist_freq.py` entry above), `upsert_words(lang,
+  rows, embedder=None, batch_size=64, on_progress=None)` (embeds the
+  compiled text `_compose_embed_text` builds for each word — see its own
+  entry just below — via `Embedder.embed_batch`, payload `{lang, word,
+  accented, canonical?, frequency?}` (the payload itself never carries
+  the compiled/gloss-enriched text, only the word's own plain fields);
+  a one-batch lookahead sends every batch with `wait=false`
+  except the final one, so a `count()` right after is accurate without
+  paying the wait per batch), `delete_lang(lang)`, `search(vector,
+  lang=None, limit=10, with_payload=True, offset=None)`, `search_text(
+  text, lang=None, limit=10, embedder=None)`. `search`'s `offset`
+  (Qdrant's own search-request field) was added at the user's explicit
+  request for themed generation's per-length glossary (see `backend/
+  app.py`'s `_theme_words_by_length`) — it pages deeper into the *same*
+  ranked nearest-neighbor ordering across several calls instead of
+  re-searching from the top with a bigger `limit` each time; `None`/`0`
+  (the default) is unchanged, plain-unpaged behavior. CLI:
+  `python -m backend.qdrant_store --init`
+  (`--recreate` to drop first), `--info` (config + per-language counts),
+  `--search "TEXT" --lang fr`. `run_qdrant.sh`'s `do_start` now delegates
+  its collection creation to `python -m backend.qdrant_store --init`
+  (with `QDRANT_VECTOR_SIZE` exported so the child skips the embed-server
+  probe) when `.venv/bin/python` + this module are present, falling back
+  to the bare `curl PUT` create otherwise — so the two never disagree on
+  the collection's shape. Verified: `py_compile`; live import/instantiate
+  with Qdrant down (`ping()` → `False`, no crash); a full wire-format
+  end-to-end run against a mock Qdrant REST server using the **real**
+  bge-m3 embed server — `ensure_collection()` probed `size=1024`,
+  emitted `distance=Cosine`/`on_disk=true` and the exact tenant-index
+  body; `upsert_words` sent real 1024-dim vectors, the expected payload
+  shape, `wait=false` on the non-final batch and `wait=true` on the last;
+  `count("fr")`/`count("en")` filtered by tenant; `search_text(...,
+  lang="fr")` filtered by tenant; a second identical `upsert_words` left
+  the point count unchanged (idempotent). Since then, verified against a
+  **real** Qdrant container (v1.19.1, started outside this session):
+  `ensure_collection()` created the collection with `size=1024`,
+  `distance=Cosine`, `on_disk=true`, and the `lang` tenant keyword index
+  (`is_tenant: true` confirmed via `GET /collections/words`); a real
+  `data_builder.qdrant_populate` run against it upserts and searches
+  correctly (see below). Consumed by the running app through
+  `backend/app.py`'s `GET /api/similar_words` (below).
+
+  A module-level `_compose_embed_text(word, accented, canonical, lang)`
+  was added much later, at the user's explicit request, to get a more
+  semantically relevant base: "calculer les embeddings sur une
+  compilation du mot (forme fléchie accentuée, suivie des définitions
+  trouvées dans le glossaire de la langue." Previously `_flush` embedded
+  the bare accented/inflected spelling alone — a vector that conflates
+  "looks similar" (shared letters/morphology) with "means similar",
+  which is what a real theme/word-similarity search actually wants.
+  `_compose_embed_text` reuses `backend/gloss_lookup.py`'s
+  `find_glosses_for_canonicals` (the same source `backend/clues.py`
+  grounds clue-writing with) against the word's own `;`-separated
+  `canonical` column, flattens every found gloss across every candidate
+  lemma, caps the total at a new `EMBED_TEXT_MAX_GLOSSES` (3, module
+  constant — applied to the combined list, not per lemma, so a highly
+  ambiguous word with several canonical forms doesn't dwarf the word
+  itself), and appends them after the word (`"word. gloss1. gloss2.
+  gloss3."`). Falls back to the bare word — the exact pre-existing
+  behavior — whenever there's no canonical form at all, or none of them
+  have gloss coverage (a large fraction of real words: proper nouns,
+  rare inflections, a language with no gloss dictionary built). `_flush`
+  now builds `texts` via this function instead of a bare `(accented or
+  word)` list comprehension; the Qdrant *payload* itself is completely
+  unaffected — still just `{lang, word, accented, canonical?,
+  frequency?}`, never the compiled/gloss-enriched text, which only ever
+  exists transiently as the embedder's own input. Verified: a direct
+  call against the real French gloss dictionary confirmed `CHAT` compiles
+  to `"chat. Mammifère carnivore félin de taille moyenne... Individu mâle
+  de cet animal.. Félin."` (3 glosses, the cap engaging), an ambiguous
+  word with 2 canonical forms (`SUIS` → `être;suivre`) correctly draws
+  its 3 glosses from the first-listed lemma before the cap is reached
+  (`être`'s own glosses, never reaching `suivre`'s), a word with no
+  canonical form at all falls back to the bare word untouched, and a
+  canonical form with no dictionary entry (a made-up lemma) does too.
+
+  "Recalculer la base Qdrant pour toutes les langues" (the same explicit
+  request) meant re-running `data_builder/qdrant_populate.py --all`
+  against every language's full wordlist — safe and non-destructive
+  thanks to the collection's own deterministic point ids (`word_point_id`,
+  `uuid5` of `lang:word`): re-upserting the same word just overwrites its
+  vector/payload in place, no `--recreate`/tenant-wipe needed. A stale
+  full-population run from *before* this exact change (`fr`/`en`/`de`/
+  `es`/`it` already fully written with the old, bare-word-only text; `pt`
+  still in progress) was found still running in the background from
+  earlier in this same session — stopped (`SIGTERM`, confirmed gone)
+  before starting a fresh one, since every one of its already-completed
+  languages would otherwise have been left with stale, pre-change vectors
+  indefinitely. The new run (`nohup ... & disown`, `logs/qdrant_populate.
+  log`/`.pid`, the same detached-process convention `run_Populate.sh`
+  already established for `Automation/Populate.py`) covers all 6
+  languages from scratch. Measured live, on this exact machine, once the
+  gloss dictionary is warm: ~57-63 words/s (`--batch 64` vs. `--batch
+  256`, only a marginal difference — the embed server itself is the
+  bottleneck, shared with the concurrently-running SGLang LLM server on
+  the same GPU) — markedly slower than the old bare-word run's own
+  150-330/s, since every word now also pays a gloss-dictionary lookup and
+  embeds a longer compiled text. At this rate the full ~2.7M-word,
+  6-language recompute is realistically a many-hours run (double digits),
+  not the ~2h the original, bare-word population took — disclosed
+  honestly to the user rather than understated, and left running
+  detached in the background rather than blocking on it.
+
+  **The gloss enrichment was then removed entirely**, at the user's
+  explicit request: "Les embeddings ne sont pas assez précis. Ne plus
+  générer des embeddings à partir des définitions. Utiliser uniquement
+  des chaînes composées du mot fléchi, de sa version majuscule sans
+  accent, et sa forme canonique." `_compose_embed_text(word, accented,
+  canonical)` (the `lang` param dropped along with the gloss lookup) now
+  space-joins just three kinds of string — the accented/inflected
+  spelling, the bare accent-stripped uppercase MOT form, and each
+  `;`-separated canonical form/lemma — with exact duplicates removed (a
+  lemma identical to the accented spelling), though the accented and the
+  uppercase forms are both kept even when they differ only in case,
+  since the request names all three explicitly. `EMBED_TEXT_MAX_GLOSSES`
+  and the `from .gloss_lookup import find_glosses_for_canonicals` import
+  are gone from `qdrant_store.py` (still used by `backend/clues.py` for
+  clue grounding, so `backend/gloss_lookup.py` itself stays). Examples:
+  `CHAT`/`chat`/`chat` → `"chat CHAT"`, `SUIS`/`suis`/`être;suivre` →
+  `"suis SUIS être suivre"`, `CHEVAUX`/`chevaux`/`cheval` → `"chevaux
+  CHEVAUX cheval"`, a word with no canonical form → `"<accented>
+  <MOT>"`. The whole 6-language collection was re-populated once more
+  from scratch with this shorter text (`qdrant_populate --all --batch
+  128`, detached — the previous gloss-based run, still mid-`it`, was
+  killed first); measured markedly faster than the gloss run (~150-200
+  words/s vs. ~85-115), since each word now embeds only a handful of
+  tokens and pays no gloss-dictionary lookup. The payload is unchanged
+  (`{lang, word, accented, canonical?, frequency?}`), so `--recreate`
+  was not needed — deterministic point ids overwrite each vector in
+  place and the collection stays queryable throughout the run.
+- `GET /api/similar_words?q=<expr>&lang=<code>&min_score=<float>`
+  (`backend/app.py`) — backs the Dictionary panel's **"Thématique"**
+  button (`#dictionary-similar-btn`, see `frontend/static/script.js`).
+  Module-scope singletons `_similar_qdrant = QdrantStore()` /
+  `_similar_embedder = Embedder()` (both lazy — no connection at import,
+  so importing with Qdrant/the embed server down is harmless).
+  `_similar_words_impl` now mirrors the themed-grid-glossary pipeline, at
+  the user's explicit request ("appliquer le même principe que pour la
+  génération du glossaire thématique : demander au LLM de générer des
+  listes de mots dans le thème du mot cherché, avant de compiler les
+  recherches Qdrant"): it first calls `clue_generator.describe_theme(q,
+  lang, timeout=_SIMILAR_DESCRIBE_TIMEOUT_S)` (45s) — **a single call, no
+  loop** (the grid glossary's own ≥300-keyword top-up loop is explicitly
+  *not* applied here, at the user's explicit request) — to expand the
+  typed term into a ~30-word telegraphic keyword list spanning every part
+  of speech, splits it with `_split_keywords` (case-insensitively
+  de-duplicated), and `_compiled_similar_words` runs one Qdrant
+  nearest-words search per keyword (`_iter_scored_words`) and merges them,
+  keeping each word's **best** score. Falls back to the raw `q` as the
+  sole keyword if the LLM call fails/returns nothing (same fallback shape
+  as `_run_generate_job`'s own theme block). Returns **every** merged
+  `(word, score)` whose score reaches `min_score`. `_compiled_similar_
+  words` differs from the grid glossary's `_compiled_theme_words_by_
+  length` in two ways: no 2-15 length filter (a dictionary lookup must not
+  drop long words), and sorted by **score descending** (the panel's
+  most-similar-first order) rather than by length. **`min_score` is a
+  query param** — the current value of the
+  generation form's "Précision thématique" field, forwarded by the
+  frontend so the panel reacts to it live, at the user's explicit request
+  ("Dictionnaire / Thématique ... n'est pas sensible à la modification du
+  paramètre Précision thématique"); it defaults to `THEME_MIN_SCORE`
+  (`0.67`) when the field is blank / the param is absent, and is clamped
+  to `[0.0, 1.0]` server-side. **No count limit** (the old `limit` param and
+  its 1..200 clamp are gone) and **no length filter** (unlike
+  `_theme_words_by_length`, whose 2-15 bound is about crossword-slot
+  usability). The threshold + pagination logic is a single shared helper,
+  `_iter_scored_words(vec, lang, min_score=THEME_MIN_SCORE)` — a generator
+  that pages the tenant `THEME_LENGTH_SEARCH_PAGE` at a time, de-dups
+  across pages, and stops the instant a hit's score drops below
+  `min_score` (Qdrant hits are score-descending) or the tenant is
+  exhausted — consumed by *both* `_similar_words_impl` (bare words, score
+  order) and `_theme_words_by_length` (adds only the 2-15 length filter,
+  then sorts by length), so the two can never disagree on how the cutoff
+  is applied. Runs in `asyncio.to_thread`. Returns `{"query", "lang",
+  "words": [{"word": ..., "score": ...}, ...]}` in score order (most
+  similar first) — the Qdrant cosine score is kept on each entry and shown
+  in parentheses to 2 decimals next to the word in the panel
+  (`renderSimilarWordsResult`, `x.score.toFixed(2)`), at the user's
+  explicit request ("à côté de chaque mot, afficher le score Qdrant entre
+  parenthèse avec 2 chiffres après la virgule"). `lang` validated against
+  `WORDLISTS` (400); empty `q` → 400; a non-numeric `min_score` → 422
+  (FastAPI float coercion — the UI never sends one). `QdrantStoreError`
+  /`EmbedderError` → **503** `{"code": "similar_unavailable", ...}`.
+  Because of the added LLM expansion the call is no longer "quick or
+  503": `frontend/server.py`'s `proxy_similar_words` timeout went from the
+  generic `PROXY_TIMEOUT_S` (30s) to a dedicated `SIMILAR_PROXY_TIMEOUT_S`
+  (60s), and `script.js`'s handler from `FETCH_TIMEOUT_MS` (35s) to
+  `SIMILAR_FETCH_TIMEOUT_MS` (70s) — same "each layer above the one it
+  calls" convention as the "Définir" button's own timeouts. Verified
+  live: `q=chat` → LLM gave 12 keywords, merged search → 2,047 words in
+  2.1s (`MIMER (0.92), RIRE (0.91), … CHAT (0.89), …` — the model read
+  the lone word as "chat"=conversation); `q=montagne` → 16 keywords →
+  1,225 words in 2.6s (`PENTE, SOMMET, GLACIER, SKI, ALTITUDE, NEIGE…`);
+  `q=cuisine italienne` → 15 keywords → 515 words in 5.6s (`BASILIC,
+  PIZZAIOLO, FROMAGE, TOMATE, PATES…` — vs. **1** word with the old
+  whole-phrase embedding, the exact "phrase embedded whole = weak match"
+  problem this fixes); all sorted by score descending; `min_score=0.64`
+  applied; identical through the frontend proxy.
+- **Themed generation** (`GenerateRequest.theme`, optional free-text word
+  list; `THEME_PRESEARCH_LIMIT = 5000`), at the user's explicit request:
+  "un champ de saisie (optionnel) permettant de donner une thématique via
+  une liste de mots... effectuer une pré-recherche Qdrant pour lister les
+  5000 mots les plus proches de cette thématique. Choisir ces mots en
+  priorité, et ne prendre un autre mot du dictionnaire que lorsqu'il n'y
+  a pas de solution pour un emplacement avec les mots présélectionné."
+  `_run_generate_job`, once per job (before the grid queue wait, not
+  re-done on a pause/resume): first asks the LLM
+  (`LLMClueGenerator.describe_theme`, see `backend/clues.py`) for a
+  short **~15-word telegraphic** description of the theme of the typed
+  words (originally a fluent ~50-word sentence — "demande d'abord au LLM
+  de formuler une phrase de 50 mots décrivant la thématique de ces mots,
+  et embed la réponse LLM" — shortened and made keyword-dense at the
+  user's later explicit request, "Réduis la longueur des définitions de
+  thèmes à 15 mots... style télégraphique, le moins verbeux possible,
+  avec le plus de concepts décrits") — then embeds that text + runs the
+  Qdrant tenant search and passes the returned words as
+  `generate_grid(priority_words=...)`. `describe_theme` is a single
+  best-effort call (no retry, no `LOG_LLM/` record); if it fails, the
+  raw theme string is embedded instead. The LLM sentence (or the raw
+  theme on failure) is written as the **first line** of a per-job
+  `LOG_THEME/<timestamp>_<short_id>.log` file (`_write_theme_log`,
+  `THEME_LOG_DIR`, gitignored, the timestamp in the same `%Y%m%d-%H%M%S-
+  %f` precision as `LOG_LLM/`'s own `_write_call_log`, at the user's
+  explicit request "comme pour LOG_LLM") — "Montre la réponse LLM en
+  première ligne du fichier de sortie" — followed by the typed theme, the
+  count, and the **entire** glossary of preselected words, one per line
+  (at the user's explicit request, "Lister le glossaire produit dans le
+  LOG_THEME (un mot par ligne)" — replacing an earlier 50-word comma-
+  joined sample) — each line word-tab-score, `_theme_words_by_length`'s
+  own `(word, score)` pairs (Qdrant's own cosine-similarity result,
+  `%.4f`), at the user's later explicit request ("afficher les scores de
+  chaque mot produit par Qdrant"); `theme_priority_words` (what actually
+  reaches `generate_grid(priority_words=...)`) stays a plain list of
+  words, unaffected — the score is purely a `LOG_THEME/` diagnostic, the
+  CSP solver's own preference set never needed it. Best-effort throughout:
+  a `QdrantStoreError`/
+  `EmbedderError` (Qdrant/embed server down, collection not populated for
+  that language) is logged and generation proceeds with
+  `priority_words=None` — no theme, no failure. The typed theme string is
+  put on `result["theme"]` and saved (see `save_grid_json`'s `theme`
+  param above); the LLM description is not stored on the grid record,
+  only in `LOG_THEME/`. In `crossword_gen.py`, `generate_grid` gained a `priority_words`
+  parameter (`None`/empty = no-op for the CLI and every other caller):
+  it normalizes the words to bare uppercase MOT form, intersects them
+  with the loaded lexicon (`set(accents)`), and threads the resulting
+  `frozenset` through the pool `initializer` (`_init_worker` /
+  `_worker_priority_words` — like `_worker_index`, since it can be several
+  thousand words and never changes during a call) into `_pattern_attempt`/
+  `_pattern_continue`'s `try_fill` calls and into `minimize_black_squares`.
+  `Filler.__init__` gained `priority_words`; `Filler._backtrack`, right
+  before the `for w in cands:` loop (after all the existing letter-score
+  ordering), stably partitions the slot's candidate list into
+  priority-members-first then the rest — so backtracking tries every
+  theme word that fits a slot before ever descending to a non-theme
+  dictionary word there, and only reaches a non-theme word when no
+  combination of theme words completes that slot. Skipped when a slot's
+  domain is entirely or not-at-all theme words (nothing to reorder).
+
+  **Per-language theme glossary on a bilingual grid**, at the user's
+  explicit request ("Quand une grille est bilingue, il faut générer un
+  glossaire thématique par langue"): `generate_grid` gained a
+  `bilingual_priority_words` parameter — the theme glossary of the
+  language of the *down* words, alongside `priority_words` for the
+  *across* words. When both are given on a bilingual grid, they're
+  wrapped in a `DualSet` (the same across/down wrapper already used for
+  `index`/`available_lengths`), and every consumer resolves the frozenset
+  for a slot's own direction via a new module helper
+  `_priority_words_for(priority_words, cells)` — `Filler._backtrack`'s
+  slot-priority tier and candidate reordering, `_theme_word_cells` (the
+  preview magenta highlight), and the multi-success `opt_score`
+  tie-break. `DualSet` gained `__bool__` so the `if priority_words:`
+  guards keep working whether it's a plain frozenset (monolingual — path
+  byte-for-byte unchanged) or a `DualSet` (bilingual). `backend/app.py`'s
+  theme pre-search block was factored into `_build_theme_glossary(theme,
+  language, theme_precision, short_id, cancel_event, log_tag)` (the full
+  LLM keyword expansion + per-keyword Qdrant search + compile, returning
+  `(priority_words | None, theme_description)`), called once for
+  `req.language` and, when `req.bilingual_language` differs, a second
+  time for it — each writing its own `LOG_THEME/<ts>_<short_id>[_<lang>]
+  .log`; `theme_description` (grid title + clue steering) stays the
+  primary language's. Verified live: a bilingual `fr`-across/`en`-down
+  themed generation produced two glossaries (fr: 3728 words from French
+  keywords; en: 2744 from an English keyword list `describe_theme`
+  wrote for the `en` call), and the standard 15×10 non-themed benchmark
+  (seeds 2/7, Flash) still passed with 0 mismatches / 0 empty white
+  cells — the monolingual/non-themed path is unaffected (`priority_
+  words` stays a plain frozenset). Verified live: `_similar_words_impl(
+  "animaux de la ferme : vache cochon poule cheval mouton", "fr", 5000)`
+  → 5000 words, top hits `COCHONS/VACHES/ANIMAUX/.../VACHE/CHEVAL`; a real
+  9×9 easy themed job through the API completed, stored `theme` in its
+  `GRID_STORE/fr/*.json` record, and `POST /api/library` returned that
+  `theme` in the compact metadata (older grids: `None`). Isolated
+  `try_fill` tests confirm a priority word is chosen 50/50 when it fits
+  and the search falls back to the full dictionary when the priority set
+  has no fitting word. The *visible* share of themed words in a finished
+  grid depends heavily on grid size and difficulty: on a small dense grid
+  at "easy" (66% lexicon), short slots (3-5 letters) often have too few
+  theme words to stay consistent across crossings and fall back — the
+  mechanism is a genuine per-slot preference with fallback, not a hard
+  restriction, exactly as requested.
+
+  **The theme preference was extended from "which word to try first" to
+  "which slot to fill first"**, at the user's explicit request: "Lors de
+  la construction d'un grille avec une thématique, commencer par choisir
+  en priorité les emplacements où il est possible de placer un mot du
+  dictionnaire thématique (et placer en priorité un mot du dictionnaire
+  thématique)." The second half (place a theme word first *within* a
+  slot) was already the behaviour above; this adds a new, top-priority
+  tier to `Filler._backtrack`'s own slot-selection rule, inserted right
+  after the across/down category draw and *before* every existing tier
+  (the `< PREFILL_MIN_WORD_COUNT` fragile-slot filter, the non-blank
+  filter, the geometric window, etc.): when `self.priority_words` is
+  non-empty, `direction_pool` is restricted to the slots whose current
+  domain still contains at least one theme word not already placed
+  elsewhere (`any(w not in self.used_words for w in self.priority_words.
+  intersection(domains[i]))` — `domains[i]` is already computed at the
+  top of `_backtrack` for the forward-check, so no extra domain
+  computation). A soft filter like every other tier: it only restricts
+  when at least one such slot exists, and is a complete no-op for a
+  non-themed generation (`priority_words` empty). Verified: the standard
+  15×10 benchmark, non-themed, Flash mode — seed 2 (50.1s, 60 words) and
+  seed 7 (97.4s, 61 words), both 0 mismatches / 0 empty white cells,
+  confirming zero regression to the ordinary path; a real 9×9 easy themed
+  job through the running API still generates and places theme words.
+
+  `THEME_PRESEARCH_LIMIT` was later lowered from 5000 to **1000**, at the
+  user's explicit request: "Lors de la génération de la grille
+  thématique, limiter le pré-dictionnaire thématique à 1000 mots." A
+  one-line constant change — `_similar_words_impl` itself has no cap of
+  its own (its `limit` parameter is passed straight to `QdrantStore.
+  search_text`; the 1..200 clamp documented above only applies to the
+  `GET /api/similar_words` endpoint, never to this internal call), so the
+  smaller value takes effect directly. Verified live: a real themed job
+  through the API logged `theme -> 1000 preselected words` instead of
+  5000, and its `LOG_THEME/` file's own word list shrank to match.
+
+  The flat top-N search (`_similar_words_impl`, `THEME_PRESEARCH_LIMIT`)
+  was replaced outright by a **per-length** glossary build, at the
+  user's explicit request: "itérer sur la base Qdrant pour obtenir 200
+  mots de 3 lettres, 200 mots de 4 lettres, etc, jusqu'à des mots de 10
+  lettres." A flat nearest-N list can legitimately leave an entire slot
+  length with zero themed candidates if the theme's own nearest
+  neighbors happen to cluster at other lengths — a real risk given
+  `Filler._backtrack`'s per-slot preference only ever helps a length that
+  actually has priority words for it.
+
+  `THEME_PRESEARCH_LIMIT` was deleted; `THEME_LENGTH_MIN`/`THEME_LENGTH_
+  MAX` (3/10) and `THEME_WORDS_PER_LENGTH` (200) replace it. A new
+  `_theme_words_by_length(query, lang)` embeds the theme description
+  once, then pages through the tenant's own ranked nearest-neighbor list
+  via a new `offset` parameter on `QdrantStore.search()` (Qdrant's own
+  search-request field, reads the next page of the *same* ranking rather
+  than re-searching from the top with an ever-larger `limit`) —
+  `THEME_LENGTH_SEARCH_PAGE` (1000) points per page — bucketing
+  `payload["word"]` (the bare MOT form) by its own length as it goes,
+  keeping the first `THEME_WORDS_PER_LENGTH` words found for each length
+  from `THEME_LENGTH_MIN` to `THEME_LENGTH_MAX`. Stops as soon as every
+  bucket is full, or the tenant itself is exhausted (a page shorter than
+  `THEME_LENGTH_SEARCH_PAGE`), or `THEME_LENGTH_SEARCH_MAX_OFFSET`
+  (20,000) points have been scanned without filling every bucket — a
+  safety cap against a very small tenant or an unusually narrow theme,
+  so a poorly-covered length can never turn this into an unbounded scan.
+  Returns a flat list grouped by length (shortest first) purely for the
+  `LOG_THEME/` glossary's own readability — `crossword_gen.py`'s
+  `priority_words` only ever treats it as an unordered set. `_run_
+  generate_job`'s theme block calls this instead of `_similar_words_impl`
+  (which remains unchanged, still used by the unrelated "Mots similaires"
+  panel, `GET /api/similar_words`). Verified live: a real themed job
+  ("montagne randonnée alpinisme", fr) through the API logged the
+  per-length page count and produced a `LOG_THEME/` glossary spanning
+  lengths 3-10, each bucket capped at 200 words.
+
+  A dedicated live-status step was added right after, at the user's
+  explicit request: "Dans le statut de traitement montré à l'utilisateur,
+  indiquer la phase de génération du glossaire thématique." Until then,
+  the whole theme block (the `describe_theme` LLM call plus `_theme_
+  words_by_length`'s own up-to-20 sequential Qdrant pages, several
+  seconds combined) ran before `job["step"]` was ever touched — a client
+  polling `GET /api/generate/status/{job_id}` during that window still
+  saw the job's previous step (`"starting"`, or an earlier step on a
+  resumed run), with nothing indicating this specific phase was under
+  way. `_run_generate_job` now calls the existing `progress("theme",
+  theme=theme)` closure right at the top of `if theme:`, before
+  `describe_theme` even runs — a single, no-arguments-to-format status
+  event (unlike `"pattern"`/`"clues"`/etc., this block has no internal
+  sub-steps to report progress against, it either runs quickly or not at
+  all). `frontend/static/script.js`'s `describeStep()` gained a matching
+  `"theme"` case (`t.statusTheme`, a plain string, no formatting needed);
+  `frontend/static/i18n.js` gained the `statusTheme` key in all 6
+  languages, right next to `statusStarting`. Verified: a real JS syntax
+  check (`esprima`, temporarily installed and removed again afterward)
+  confirmed `script.js`/`i18n.js` still parse correctly; a real themed
+  job through the actual running API, polled during its first couple of
+  seconds via `GET /api/generate/status/{job_id}`, showed `step.code ==
+  "theme"` before the grid-queue wait ever started, confirming the event
+  fires and is visible to a real poller, not just reachable in code.
+
+  `THEME_WORDS_PER_LENGTH` was later raised from 200 to **400**, at the
+  user's explicit request: "Augmenter la génération du glossaire
+  thématique à 400 mots par longueur (si 400 mots existent pour chaque
+  longueur)" — the parenthetical matching `_theme_words_by_length`'s own
+  pre-existing, unchanged behavior exactly: a length is still capped by
+  `THEME_LENGTH_SEARCH_MAX_OFFSET` (20,000 points scanned) if the tenant
+  genuinely doesn't have 400 words of that length near the theme, same
+  as it was already capped at 200 for a sparse length before this
+  change. A one-line constant change; no other part of the mechanism
+  (the per-length pagination via `QdrantStore.search`'s `offset`, the
+  length range 3-10, the stop conditions) was touched. Verified live: a
+  real themed job ("musique guitare piano", fr) through the API produced
+  a `LOG_THEME/` glossary where every well-covered length (5 and up)
+  reached exactly 400 words, confirming the higher target is honored
+  end to end, not just accepted by the constant.
+
+  Raised again, from 400 to **1000**, at the user's explicit request:
+  "Augmenter à 1000 mots par longueur." Still a one-line constant change,
+  but this time the pre-existing `THEME_LENGTH_SEARCH_MAX_OFFSET`
+  (20,000 points scanned) safety cap actually engages for more than just
+  the sparsest lengths: the same real themed job ("musique guitare
+  piano", fr), re-run at this new target, reached the full 1000 words
+  only for lengths 7-10 — lengths 3-6 stopped short (67/253/507/855
+  respectively) once the scan cap was hit, up from only lengths 3-4
+  being cap-limited at the 400 target. Disclosed rather than treated as
+  a bug: this is the documented, deliberate trade-off of a fixed scan
+  depth against an ever-higher per-length target, not a new limitation —
+  a length genuinely has 1000 words *somewhere* in the tenant, but not
+  necessarily within the first 20,000 points nearest the theme vector.
+  `THEME_LENGTH_SEARCH_MAX_OFFSET` itself was left untouched, since
+  raising it wasn't part of this request.
+
+  Lowered back down, from 1000 to **600**, at the user's explicit
+  request: "Redescendre à 600 mots par longueur." Same one-line constant
+  change as every prior adjustment to this value; verified live the same
+  way, on the same real French wordlist ("musique guitare piano" theme):
+  lengths 6-10 reached the full 600-word target, lengths 3-5 stopped
+  short of it once the scan cap was hit (69/236/487 respectively — the
+  same shape as the earlier 400-target measurement, just at a
+  proportionally higher per-length ceiling).
+
+  The whole mechanism was substantially reworked once more, at the
+  user's explicit request, in a single combined change: "prendre jusqu'à
+  1000 mots par longeurs, aller de 2 à 15 lettres, limiter à une distance
+  Qdrant de 0.54." Three simultaneous parameter changes —
+  `THEME_WORDS_PER_LENGTH` 600 → **1000**; `THEME_LENGTH_MIN`/`THEME_
+  LENGTH_MAX` 3-10 → **2-15**, matching this project's own real slot-
+  length range far more closely (a crossword can legitimately have a
+  2-letter slot, see `crossword_gen.py`'s own `extract_slots` threshold,
+  or one considerably longer than 10); and a genuinely new mechanism, a
+  minimum Qdrant similarity score, `THEME_MIN_SCORE = 0.54` — a word
+  Qdrant ranks below this cosine-similarity threshold to the theme
+  description is never collected at all, even if its own length bucket
+  still has room. Implemented in `_theme_words_by_length` by checking
+  each hit's own `score` *before* processing it: since Qdrant always
+  returns a language-filtered search's hits ranked by score descending,
+  the very first hit found under `THEME_MIN_SCORE` means every hit after
+  it — in the current page and in any further page — is under threshold
+  too, so the function stops paging entirely at that point (`below_
+  threshold` flag breaking both the inner `for` and the outer `while`),
+  not merely skipping the one under-threshold word and continuing to
+  page for no further gain. Verified live: a real call (the same "musique
+  guitare piano"-style forest theme used throughout this whole
+  mechanism's history) returned 9,562 words across lengths 2-15, every
+  kept score `>= 0.54` (measured min 0.5408, confirming the threshold is
+  applied precisely, not loosely), zero duplicates, with the well-covered
+  middle lengths (7-13) each reaching the full 1000-word target while the
+  shortest (2-4) and longest (14-15) lengths — genuinely less represented
+  near this theme's own semantic neighborhood — stopped short once the
+  score threshold (not the length-bucket cap) was reached.
+
+  `THEME_WORDS_PER_LENGTH` (the per-length cap itself) was removed
+  outright, at the user's explicit request: "prendre tous les mots dont
+  le score est supérieur au seuil." `THEME_MIN_SCORE` already stops the
+  whole search the instant a hit's score drops below threshold (Qdrant's
+  own results are score-descending, so nothing past that point could
+  ever qualify) — the per-length bucket cap was, by this point, purely an
+  *additional* ceiling on top of that, one this request removes: every
+  word scoring at or above `THEME_MIN_SCORE`, of a length within
+  `THEME_LENGTH_MIN..THEME_LENGTH_MAX`, is now collected regardless of how
+  many others of the same length already qualified. `_theme_words_by_
+  length`'s own `buckets` dict (one list per length, each capped at
+  `THEME_WORDS_PER_LENGTH`) was replaced by a single flat `words` list,
+  deduplicated the same way as before (`seen`, a plain `set[str]`); the
+  loop's own termination conditions collapsed from four (score threshold,
+  every bucket full, tenant exhausted, `THEME_LENGTH_SEARCH_MAX_OFFSET`
+  reached) to three, dropping only "every bucket full" — the length range
+  itself (`THEME_LENGTH_MIN`/`THEME_LENGTH_MAX`) is unchanged and still
+  filters which words are kept, just no longer via a per-length container.
+
+  At the same user's explicit request ("Dans LOG_THEME continuer à les
+  lister par taille de mots croissante, en indiquant le nombre de lettres
+  en plus du score"), the function's own return value is now explicitly
+  `sorted(words, key=lambda pair: len(pair[0]))` — a stable sort, so the
+  score-descending order each Qdrant page already returns survives intact
+  *within* each length group (previously this ordering fell out for free
+  from iterating the buckets dict in length order; now it's an explicit,
+  final sort over the flat list). `_write_theme_log`'s own per-word line
+  format gained a middle column for the word's own letter count
+  (`f"{w}\t{len(w)}\t{score:.4f}"`, tab-separated exactly like the
+  pre-existing word/score columns, so the file stays trivially parseable/
+  alignable) — `len(w)` needs no separate computation or storage, since
+  it's already implicit in which word is being written.
+
+  Verified live, end to end, not just in isolation: a direct, real call
+  to `_theme_words_by_length` (a farm-animals theme, French) returned
+  1,320 words in 0.25s, every score `>= 0.54` (min observed 0.54001266),
+  strictly non-decreasing lengths across the whole list, and — checked
+  directly — the length-8 subgroup (231 words) came back in strictly
+  non-increasing score order, confirming the stable sort preserves the
+  per-length ranking exactly as documented. A real generation submitted
+  through the actual running API (7×6, French, Flash mode, theme "animaux
+  de la ferme") completed successfully and produced a real `LOG_THEME/`
+  file: 7,842 preselected words (well past the old 1000-per-length cap on
+  several individual lengths — 1283/1247/1135 words at lengths 8/9/10
+  alone, each already exceeding what the removed cap would ever have
+  allowed), every line correctly `WORD<TAB>LENGTH<TAB>SCORE`, sorted from
+  the shortest word (a 2-letter "HO") up through the longest (several
+  15-letter entries), every score in the file `>= 0.54`.
+
+  **Reported live, on that exact grid, as a likely bug**: "La dernière
+  grille générée ne semble contenir aucun mot du glossaire thématique...
+  Il devait au moins réussir à placer quelques mots." Investigated before
+  touching any code: the grid in question turned out to be the 7×6
+  Flash-mode verification grid from the entry above (not a normal-size
+  generation), and it genuinely wasn't empty of theme words — 3 of its 17
+  placed words (`DOTS`/`ROUTES`/`PIS`) are real glossary members, just not
+  ones that read as obviously thematic to a human at a glance.
+
+  A controlled A/B (`generate_grid()` called directly, same seed/grid,
+  once with `priority_words` set to the real glossary intersected with
+  the loaded lexicon and once with it empty) confirmed the mechanism
+  itself is genuinely working, not merely coincidental: seed 1 → 3/17 vs
+  0/16 theme words; seed 2 → 4/14 vs 0/16; seed 3 → 5/18 vs 2/16 — a
+  clear, repeatable uplift. Every stage of the pipeline was re-confirmed
+  to actually thread `priority_words` through: `Filler._backtrack`'s
+  own per-slot "theme candidates first" reordering, `minimize_black_
+  squares`'s own `try_fill` calls during optimization (so a black-cell
+  removal never silently discards a themed word's own preference), and
+  the multi-success tie-break's theme-only `opt_score` (a secondary
+  criterion, only ever consulted once several successful attempts are
+  already tied on black-cell count).
+
+  Root cause of the modest count, not a bug: at short slot lengths (2-7
+  letters, what a small 7×6 grid is almost entirely made of), the theme
+  glossary's own density in the loaded "easy" lexicon is low — 0.75% at
+  2 letters, 5-7% at 3-7 letters (measured directly against `data/
+  wordlist_fr_full.tsv`'s easy-difficulty subset) — so relatively few
+  slots ever have a theme-word candidate to prefer in the first place,
+  even though every one that does gets it tried first. A larger grid
+  gives noticeably better, more visibly thematic results: the same
+  theme/mechanism on a real 15×10 grid placed 6/52 theme words, several
+  unambiguously on-topic (`FERMIER`, `ELEVAGE`, `SERF`).
+
+  Reported to the user with these numbers via `AskUserQuestion` (three
+  options: leave the mechanism as a local, non-guaranteed preference;
+  strengthen it into something that also biases black-cell placement
+  toward theme-word-friendly shapes, a deeper and riskier change in this
+  exact solver's own long regression history; or investigate further,
+  e.g. the LLM description sentence's own relevance, or "easy"'s own
+  31%-of-the-glossary loss to `require_gloss`/frequency filtering) — the
+  user chose to leave it unchanged, on the strength of the 15×10 result
+  above and the recognition that the reported grid was an artificially
+  small/fast test case, not a representative one. No code change made.
+
+  **The theme glossary is now compiled per word when the theme has more
+  than one**, at the user's explicit request: "Lorsqu'il y a plusieurs
+  mots dans la définition thématique donnée par l'utilisateur, compiler
+  les glossaires thématiques pour chacun des mots." Two new helpers in
+  `backend/app.py`: `_theme_tokens(theme)` splits the typed theme field
+  into its distinct significant words (`_THEME_TOKEN_RE` — letter runs
+  with internal apostrophe/hyphen allowed, so `l'agriculture`/
+  `mots-croisés` each count once; case-insensitive dedup keeping the first
+  spelling; words under 2 letters dropped), and `_compiled_theme_words_
+  by_length(queries, lang)` runs `_theme_words_by_length` once per query
+  and merges the glossaries, keeping each word's *highest* score across
+  queries, then re-sorts by increasing length then descending score (the
+  exact order a single call already returns). `_run_generate_job`'s theme
+  block now builds a query list: always the whole-theme description
+  sentence first (`describe_theme` on the full theme, as before — still
+  the value embedded for `theme_description`, still what `generate_title`/
+  `generate`'s theme-inspiration hint use), then, when the theme has more
+  than one word, one query per word — each word also passed through
+  `describe_theme` for its own semantic-expansion sentence, falling back
+  to the bare word if that LLM call fails. Error handling matches the
+  pre-existing single-query behavior: a `QdrantStoreError`/`EmbedderError`
+  on the *first* (whole-theme) query still propagates (generation
+  proceeds with no theme); the same on any *later* per-word query is
+  swallowed (the whole-theme glossary already covers the theme). A
+  single-word theme is completely unaffected — `_theme_tokens` returns
+  one token, `len(tokens) > 1` is false, so only the whole-theme query
+  runs, byte-for-byte as before. `_write_theme_log` gained a
+  `token_queries` parameter: when more than one glossary was compiled,
+  the header now records `# compiled from N glossaries:` followed by one
+  line per query (`[(whole theme)]` / `[word]` + the query text) so the
+  `LOG_THEME/` file keeps a full trace of what was merged; line 1 stays
+  the whole-theme description sentence, unchanged.
+
+  Verified: isolated tests of `_theme_tokens` (multi-word split,
+  case-insensitive dedup, apostrophe/hyphen tokens kept whole, sub-2-
+  letter words dropped, empty/single-word inputs) and `_compiled_theme_
+  words_by_length` (max-score merge across 3 fake glossaries, result a
+  strict superset re-sorted by length then score; first-query error
+  propagates, later-query error skipped). A direct call against the live
+  Qdrant/embedder (theme "vache cochon poule cheval mouton"): the single
+  whole-theme query returned 92 words, compiling the whole theme + 5 bare
+  words returned 408 — a strict superset (0 words lost), 316 new. A real
+  generation through the running API (7×6, French, Flash, theme "vache
+  cochon poule") produced a `LOG_THEME/` file whose header correctly
+  listed all 4 compiled glossaries (whole theme + 3 per-word, each with
+  its own `describe_theme` sentence) and **13,296** preselected words —
+  far more than the ~7,842 a single-query "animaux de la ferme" glossary
+  yielded — every score `>= 0.54`, sorted by increasing length. A
+  non-themed generation and a single-word check confirmed no regression.
+
+  **The theme pre-search was then changed from one embedding per
+  description sentence to one Qdrant search per individual keyword**, at
+  the user's explicit request: "demander au LLM de générer des listes de
+  15 mots clefs séparés par des virgules (ce qu'il fait déjà sensiblement
+  avec le prompt actuel). Compiler toutes les recherches dans Qdrant pour
+  tous les mots de ces listes (dédoublonner les mots)." `describe_theme`
+  already returns a ~15-word telegraphic comma-separated keyword list —
+  previously each such list (the whole theme's, plus one per token for a
+  multi-word theme) was embedded whole, as one averaged vector, and got
+  one Qdrant search. Now a new `_split_keywords(text)` splits each list on
+  commas/semicolons/newlines into individual keywords (trimmed, <2-char
+  pieces dropped, order kept, no dedup — the caller flattens), every
+  keyword from every list is flattened into one case-insensitively
+  de-duplicated search set (`searched_keywords`, first spelling kept), and
+  `_compiled_theme_words_by_length` (its param renamed `queries`→`keywords`,
+  body otherwise unchanged — still one `_theme_words_by_length` call per
+  entry, still max-score merge) runs a Qdrant nearest-words search per
+  keyword and merges. A single sharp keyword is a far more precise query
+  vector than one 15-word averaged embedding — the same "embeddings pas
+  assez précis" reasoning that drove the earlier gloss-text removal from
+  `_compose_embed_text`. The full-sentence search is gone entirely: only
+  the split keywords are searched. `theme_description` (the whole list) is
+  still produced and still fed to `generate_title`/`generate`'s
+  theme-inspiration hint, unchanged. Fallbacks: `_split_keywords(theme_
+  description) or _theme_tokens(theme) or [theme]` for the whole-theme
+  list, `_split_keywords(tok_desc) or [tok]` per token — so an LLM failure
+  degrades to searching the player's own typed words.
+
+  **Part 2 — the common threshold.** `THEME_MIN_SCORE = 0.54` is now
+  documented and used as the single shared constant governing *both* the
+  per-length glossary iteration inside `_theme_words_by_length` *and* every
+  per-keyword search that calls it — at the user's explicit request:
+  "lister tous les mots avec un seuil identique à la construction du
+  glossaire (nommer la variable commune, qui doit être actuellement à
+  0.54)." No second literal, no rename (it was already the sole threshold
+  constant); its comment block was rewritten to state the shared role
+  explicitly. **Raised to `0.7` right after**, at the user's explicit
+  request ("Fixer THEME_MIN_SCORE à 0.7") — a tighter closeness cutoff, so
+  each keyword's glossary keeps only its genuinely near neighbors (the
+  same 15-keyword farm-animals list dropped from 32,303 words at 0.54 to
+  384 at 0.7). **Then lowered to `0.6`**, at the user's explicit request
+  ("Abaisser THEME_MIN_SCORE à 0.6") — a middle ground, once 0.7 proved
+  too strict for a broad/short Dictionary-panel query (`q=cuisine
+  italienne` had returned only 1 word at 0.7).
+
+  **The threshold became a per-generation form field, default raised to
+  `0.65`**, at the user's explicit request: "En haut de l'interface, à la
+  suite de 'Mode', ajouter un paramètre 'Précision thématique' permettant
+  de configurer à la main THEME_MIN_SCORE. Configurer THEME_MIN_SCORE par
+  défaut à 0.65." `GenerateRequest.theme_precision: float = Field(default=
+  THEME_MIN_SCORE, ge=0.0, le=1.0)` — its default is the module constant
+  itself (now `0.65`), so the two never drift. Threaded as a new
+  `min_score` parameter (default `THEME_MIN_SCORE`) through
+  `_compiled_theme_words_by_length` → `_theme_words_by_length` →
+  `_iter_scored_words`, replacing the direct `THEME_MIN_SCORE` reference
+  in the pagination stop-check; `_run_generate_job` passes
+  `req.theme_precision`. Logged (`theme_precision=` in the start line,
+  `min_score=` in the keyword-search line) and written to the `LOG_THEME/`
+  header (`# score threshold (theme_precision): 0.75`).
+  `/api/generate/continue` round-trips it for free via `job["request"] =
+  req.model_dump()`. New `themePrecisionLabel`/`themePrecisionTitle` i18n
+  keys in all 6 languages.
+
+  **The Dictionary panel's "Thématique" button now uses the same field**,
+  at the user's explicit follow-up request ("Dictionnaire / Thématique ...
+  n'est pas sensible à la modification du paramètre Précision
+  thématique"): `_similar_words_impl` gained the same `min_score`
+  parameter, `GET /api/similar_words` a `min_score` query param, and the
+  frontend `dictionarySimilarBtn` handler forwards `readThemePrecision()`
+  (omitted when blank → server default). So the one form field drives both
+  the grid glossary and the panel lookup.
+
+  **The `#theme-precision` input is `type="text"`, not `type="number"`**,
+  at the user's explicit follow-up request ("forcer l'usage du point comme
+  séparateur des décimales ... et non la virgule"): a locale-aware
+  `type="number"` can accept/display a comma, which is confusing without a
+  visible locale indicator. It's `<input type="text" inputmode="decimal"
+  pattern="[0-9]*([.,][0-9]+)?" value="0.65">` right after `#mode`; a
+  shared `readThemePrecision()` helper (`frontend/static/script.js`, used
+  by both the generate-form submit and the Dictionary handler)
+  `.replace(",", ".")`-normalizes, `Number()`s, and clamps to `[0, 1]`
+  (returning `undefined` for a blank field); a `blur` listener rewrites
+  the field with the normalized value (`0,7` → `0.7`, `1.5` → `1`).
+
+  Verified: isolated `GenerateRequest` construction (0.8 accepted, 1.5 /
+  -0.1 rejected with 422, default 0.65, `model_dump` round-trip); a real
+  themed generation through the running API with `theme_precision=0.75` —
+  `backend.log` shows `theme_precision=0.75` / `min_score=0.75`, the
+  `LOG_THEME/` header shows `# score threshold (theme_precision): 0.75`,
+  the compiled glossary for "vache cochon poule" shrank to ~155 words;
+  `GET /api/similar_words?q=instrument de musique` returned 34,902 / 256 /
+  37 / 1 / 0 words at `min_score` 0.5 / 0.6 / 0.65 / 0.75 / 0.85 (the panel
+  genuinely reacts), no param → 0.65, `min_score=1.9` clamped to 0 words.
+
+  **Default lowered to `0.63` and the Qdrant score shown next to each
+  Dictionary result**, at the user's explicit request ("afficher le score
+  Qdrant entre parenthèse avec 2 chiffres après la virgule" +
+  "Configurer la Précision par défaut à 0.63"). `THEME_MIN_SCORE = 0.63`
+  (the `GenerateRequest.theme_precision` default and `#theme-precision`'s
+  `value` track it); `_similar_words_impl` now returns `list[(word,
+  score)]` and `GET /api/similar_words` returns `words` as `[{"word",
+  "score"}, ...]`; `renderSimilarWordsResult` renders `WORD (0.87)` per
+  entry (`x.score.toFixed(2)`, comma-joined). Verified: `q=chat` at the
+  default 0.63 → 248 words, `CHAT (0.89), CHATS (0.84), …`, min score
+  0.6302.
+
+  **The Dictionary panel's "Thématique" button was then given the full
+  LLM-keyword-expansion pipeline**, and the default nudged `0.63` → `0.64`
+  — see the `GET /api/similar_words` entry above for both (the request:
+  "appliquer le même principe que pour la génération du glossaire
+  thématique" + "Configurer la Précision thématique par défaut à 0.64").
+  The default was raised once more, `0.64` → **`0.7`** ("Fixer la
+  précision thématique par défaut à 0.7"), then lowered to **`0.66`**
+  ("Précision thématique par défaut à 0.66"), then raised to **`0.68`**
+  ("Configurer Précision thématique à 0.68"), then to **`0.69`**
+  ("Configurer Précision thématique à 0.69"), then to **`0.67`**
+  ("Précision thématique par défaut : 0.67") — `THEME_MIN_SCORE` = `0.67`,
+  the `GenerateRequest.theme_precision` default and `#theme-precision`'s
+  `value` track it. (A one-line-plus-html-value change each time; the
+  larger the value, the tighter and smaller the per-length glossary —
+  fewer preselected words, all closer to the theme, at the cost of fewer
+  themed words the CSP fill can actually place.)
+
+  **The pagination-depth cap was then removed entirely**, at the user's
+  explicit request: "Ne pas limiter le nombre de mots renvoyés par le
+  dictionnaire Thématique. Faire confiance au seuil." `THEME_LENGTH_
+  SEARCH_MAX_OFFSET` (20,000) and its `if offset >= ...: break` in
+  `_theme_words_by_length` are gone — the loop now stops only on the score
+  dropping below `THEME_MIN_SCORE` (its guaranteed, and at 0.7 near-
+  immediate, stop, since Qdrant hits are score-descending) or the tenant
+  being exhausted (`len(hits) < THEME_LENGTH_SEARCH_PAGE`). No infinite-
+  loop risk: an offset past the tenant size returns a short/empty page.
+  The 2-15 length range (`THEME_LENGTH_MIN`/`MAX`, the user's own earlier
+  explicit choice) is untouched — it's a slot-usability filter, not a
+  count throttle. `_compiled_theme_words_by_length`'s error handling changed
+  from "raise if the *first* query fails" to "raise only while *no*
+  keyword search has succeeded yet" (`any_ok` flag) — so one transient
+  keyword timeout mid-list no longer aborts the whole theme, while genuine
+  Qdrant/embedder unavailability still cleanly falls back to a
+  theme-less generation. `_write_theme_log`'s `token_queries` param became
+  `keyword_lists` (`[(label|None, [keyword, ...]), ...]`) plus a new
+  `searched_keywords` param; the header now writes `# N keyword list(s)
+  from the LLM:` (one line per source, comma-joined) then `# M distinct
+  keywords searched in Qdrant: ...`.
+
+  Verified: isolated `_split_keywords` (comma/semicolon/newline split,
+  trailing-period strip, <2-char drop, empty input); a real
+  `_compiled_theme_words_by_length` call against the live `fr` tenant
+  (freshly repopulated with the word-forms-only embed text) for a
+  15-keyword farm-animals list — 32,303 distinct words in 3.9s, every
+  score `>= 0.54` (min 0.5400001), sorted `(len asc, score desc)`, no
+  per-length cap. A real themed generation through the running API (7×6,
+  French, Flash, theme "vache cochon poule") produced a `LOG_THEME/` file
+  with the new header shape: 4 keyword lists (whole theme + 3 per-word),
+  37 distinct keywords searched (the small local model repeated "viande"
+  ~7× in one list — `_split_keywords` kept the pieces, the flat dedup
+  collapsed them), 55,634 preselected words, `WORD<TAB>LEN<TAB>SCORE`
+  sorted by increasing length. The generation itself completed normally
+  (`theme` step visible for ~7 polls, then `pattern_generated`→`clues`).
+- **Qdrant admin — `GET /api/qdrant/admin`, `POST /api/qdrant/admin/
+  recreate`, `POST /api/qdrant/admin/delete-tenant`** (`backend/app.py`),
+  backing the localhost-only "Qdrant (admin)" panel (see `frontend/
+  static/script.js`, `renderQdrantAdmin`). `_qdrant_admin_impl()` (via
+  `asyncio.to_thread`, reusing the `_similar_qdrant` singleton — 10s
+  timeout) returns a flat dict: `base_url`/`collection`/`dashboard_url`,
+  `reachable` (false if `ping()` fails — still HTTP 200), `exists`
+  (false if the collection is missing — still 200), and when present
+  `vector` (`size`/`distance`/`on_disk`), `status`/`optimizer_status`,
+  `points_count`/`indexed_vectors_count`/`segments_count`, `tenant_index`
+  (bool, from the `lang` entry of `payload_schema`), and `languages`
+  (`{code: count}` for every `WORDLISTS` key, `None` if that count
+  errored). `recreate` calls `_similar_qdrant.ensure_collection(recreate=
+  True)` (drops + recreates + re-asserts the tenant index; **destructive**
+  — wipes every language); `delete-tenant` (`QdrantTenantRequest.lang`,
+  validated against `WORDLISTS` → 400) calls `delete_lang(lang)` and
+  returns the remaining count. Both raise **503** `qdrant_unavailable`
+  on `QdrantStoreError`/`EmbedderError`. The backend does **no** localhost
+  check of its own — it only ever sees the proxy as its client; the gate
+  is entirely `frontend/server.py`'s `_require_localhost(request)` (403
+  `localhost_only` unless the client IP is loopback **and** the `Host`
+  header hostname is `127.0.0.1`/`::1`/`localhost`/`*.localhost` — this
+  middleware binds 0.0.0.0, so a LAN client shows its real IP, and a
+  reverse-proxied public domain is caught by the Host check even if the
+  peer IP looks local). `frontend/server.py` has all three matching
+  `proxy_qdrant_admin*` routes (rule 15), each calling `_require_localhost`
+  first. Verified live against the running stack: `GET /api/qdrant/admin`
+  returned the real collection state (dim 1024, per-language counts,
+  tenant_index true) in ~0.1s through the proxy; a spoofed `Host:
+  falcon.cubaix.com` header → 403 on both the GET and the destructive
+  `delete-tenant` POST (blocked before reaching the backend); `Host:
+  localhost:3000` → 200; `delete-tenant` with an unknown lang → 400.
+  `recreate` was **not** exercised live (destructive, and a full
+  `qdrant_populate --all` was running against the collection at the time).
+- `data_builder/qdrant_populate.py` — `WordEmbeddingIndexer`, the class
+  that fills the `words` collection from `data/wordlist_<lang>_full.tsv`.
+  `iter_rows(lang, limit=None, offset=0)` parses the TSV
+  (`MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`, defensive: pads short
+  rows, tolerates a non-numeric frequency, keeps the `;`-separated
+  `CANONIQUE` verbatim) and yields `(word, accented, frequency,
+  canonical)`; `index_language(lang, limit=None, offset=0,
+  recreate=False)` calls `store.ensure_collection()` (idempotent),
+  optionally `store.delete_lang(lang)` first, then `store.upsert_words`
+  with a progress print every `log_every` (5000) words and a final
+  per-tenant `count()`; `index_all()` loops the six `LANGUAGES`, skipping
+  a language whose wordlist file is absent. Reuses
+  `backend.embedder.Embedder` and `backend.qdrant_store.QdrantStore`
+  directly (a `sys.path` bootstrap at the top inserts the repo root, so
+  it works both as `python -m data_builder.qdrant_populate` and as a
+  plain script). CLI: positional `LANG…`, `--all`, `--init-only`,
+  `--limit N` (testing), `--offset N` (resume an interrupted run —
+  deterministic point ids make this safe), `--batch N` (default 64),
+  `--recreate`. Prereqs: `./run_qdrant.sh` + `./run_embed.sh` up; a
+  down Qdrant is reported cleanly (`ping()` fails → exit 1, "start it
+  with ./run_qdrant.sh"). German is by far the largest at ~1.58M words
+  (vs. ~83k–302k for the others), ~2.70M total across the six — expect
+  the full run to be long and the `on_disk` vector config to matter
+  there. Verified: `py_compile`; live `iter_rows("fr", limit=4)` /
+  `offset=3` against the real TSV (correct parsing, offset, `est;être`
+  canonical preserved); CLI error paths (unknown language → argparse
+  exit 2, no args → help, Qdrant down → exit 1). Run **end to end
+  against a real Qdrant**: a `fr --limit 5` smoke test upserted the 5
+  points and `GET /api/similar_words?q=article défini&lang=fr` then
+  returned them in score order; the full `--all` run was launched
+  detached (`nohup … & disown`, pid in `logs/qdrant_populate.pid`, log
+  `logs/qdrant_populate.log`) and sustained ~390 words/s against the
+  local CPU embed server (≈2 h for all six languages at that rate).
+  Re-run to resume/refresh: `python -m data_builder.qdrant_populate
+  --all` (deterministic ids overwrite in place; add `--offset N` per
+  language to skip already-done rows and avoid re-embedding them).
 - `run_sglang.sh` — alternative local LLM launcher, at the user's explicit
   request: "Installer SGLang (avec un venv spécifique) et le configurer
   comme le moteur par défaut avec ce modèle unsloth/Qwen3.8-27B-GGUF par
@@ -6676,7 +8108,12 @@ servers:
   query_params`) and `GET /api/library/{grid_id}`. Verified live through
   the real running proxy (port 3000, not just the back end's own port
   3001): both routes returned the same data as calling the back end
-  directly.
+  directly. A third, `GET /api/library/{grid_id}/pdf`
+  (`proxy_library_get_pdf`), was added later for the library table's PDF
+  download column — the one **binary** passthrough here: it relays
+  `resp.content` as `application/pdf` with the backend's own
+  `Content-Disposition`, rather than `resp.json()` like every other
+  route, and forwards a JSON error body verbatim on a non-200.
 - **Virtual on-screen keyboard** (`frontend/static/index.html`/`style.css`/
   `script.js`), at the user's explicit request: "En bas à gauche de
   l'interface, au même niveau que le ChatBot, ajouter un bouton
@@ -6814,6 +8251,55 @@ servers:
   confirmed in an actual browser** — same tooling limitation noted
   throughout this file. The backend half (`app.py`/`grid_store.py`) needs
   a `./run_Falcon.sh` restart to take effect.
+
+  **Two more library-table columns, both at the end**, at the user's
+  explicit request. (1) **"Lien"** (`libraryColLink`, link text
+  `libraryLinkText` = "Jouer"/"Play"/…): a shareable `<a>` to
+  `SHARE_BASE_URL + "?grid=<id>"` — `SHARE_BASE_URL` is the hardcoded
+  public base `https://falcon.cubaix.com/` ("URL de base"), `target=
+  "_blank"`. On page load, `maybeLoadGridFromUrl()` (end of `script.js`)
+  reads `?grid=` from `window.location.search` on *any* host (the table
+  link points at the public domain, but a `?grid=` pasted onto
+  `http://127.0.0.1:3000/` works too) and calls the existing
+  `loadLibraryGrid(gridId)` — no new backend endpoint, it reuses
+  `GET /api/library/{grid_id}`; a bad id just surfaces `loadLibraryGrid`'s
+  own error in `#status`. The frontend's `StaticFiles(html=True)` mount
+  serves `index.html` for `/?grid=…` (query string ignored). (2)
+  **"PDF"** (`libraryColPdf`): an `<a download>` to the *relative*
+  `/api/library/<id>/pdf` (current origin's proxy, local or public) — a
+  new `GET /api/library/{grid_id}/pdf` backend endpoint (`library_get_
+  pdf`) loads the record via `get_grid`, renders `render_puzzle_svg`
+  (empty grid + clues + title + a "jouer en ligne (avec solution)"
+  footer link, **no answers** — see `backend/svg_export.py`), pipes it
+  through `svg_to_pdf_bytes` (`rsvg-convert -f pdf`) in a thread, and
+  returns `Response(media_type="application/pdf", Content-Disposition:
+  attachment; filename="<slugified title>.pdf")` — 404 for an unknown
+  id, 503 if `rsvg-convert` is missing/fails. The PDF cell shows a small
+  inline-SVG **PDF icon** (a red "PDF" badge on a document — no external
+  icon font, same convention as the header info badge) rather than the
+  word "Télécharger", at the user's explicit request; `libraryPdfText`
+  ("Télécharger le PDF"/"Download PDF"/…) becomes the `<a>`'s
+  `aria-label`/`title`. The "Lien" `<a>` gets `class="library-link"`
+  (accent-coloured, underlined); the PDF `<a>` gets `class="library-link
+  library-pdf-link"` (accent-coloured, **not** underlined, icon centred —
+  see the `style-guide` SKILL). Both `stopPropagation` on click/keydown
+  so they don't also fire the row's own `loadLibraryGrid`. `frontend/server.py`
+  gained `proxy_library_get_pdf` (per the every-endpoint-needs-a-proxy
+  rule) — a **binary passthrough** (returns `resp.content` as
+  `application/pdf` with the backend's `Content-Disposition`, unlike every
+  other proxy route here which does `resp.json()`), relaying a JSON error
+  body verbatim on a non-200. Verified live end to end: `GET /api/
+  library/<id>/pdf` through both the backend (3001) and the proxy (3000)
+  returned a real `%PDF-1.7` document with the right headers; a direct
+  `render_puzzle_svg` check confirmed the grid's title is in the SVG, the
+  "Solution" heading is absent, and there are **zero** single-letter
+  `<text>` nodes (no answer rendered anywhere); `pdftotext` on the real
+  PDF confirmed the footer line `"Jouer en ligne (avec solution) :
+  https://falcon.cubaix.com/?grid=<id>"` is present; an unknown id
+  returned 404; `esprima`/`py_compile`/CSS-brace/HTML-`<th>`-count checks
+  all passed (9 `<th>` in `#library-table`'s head, 9 `<td>` appended per
+  row). **Not yet visually confirmed in a real browser** — same tooling
+  limitation noted throughout this file.
 
 - **"x en ligne" presence counter** (`#online-count` in `#page-header`,
   `frontend/static/script.js`'s `pingPresence`/`renderOnlineCount`,
@@ -7365,11 +8851,13 @@ python3 data_builder/build_gloss_dictionary.py fr
 # needed for a normal clone: data/inflection/*.jsonl is checked into the repo.
 python3 data_builder/build_inflections.py fr
 
-# Or run all five stages for one language in dependency order via its
+# Or run all six stages for one language in dependency order via its
 # orchestration script (one per fr/en/de/es/it/pt). Long-running (hours);
 # safe to re-run — every stage reuses its own on-disk caches. Points
 # PATH/LD_LIBRARY_PATH at the rootless ~/.local hunspell build on this host.
-data_builder/build_fr.sh  # build_sentence_corpus -> build_wordlist_freq -> build_gloss_dictionary -> compress_reference_corpus -> build_inflections
+# Step 6 (qdrant_populate) is best-effort: needs ./run_qdrant.sh +
+# ./run_embed.sh running, only warns if skipped.
+data_builder/build_fr.sh  # build_sentence_corpus -> build_wordlist_freq -> build_gloss_dictionary -> compress_reference_corpus -> build_inflections -> qdrant_populate --recreate
 
 # Refresh the "Actu Croisée" panel data by hand (Install.sh does this once on a
 # fresh clone; backend/app.py's scheduler does it daily at 08:00):
@@ -8598,6 +10086,29 @@ There is no test suite, linter, or build step in this repo.
    of the standard 15×10 benchmark confirmed no regression: 0 mismatches, 0
    empty white cells each — seed 2 in 112.9s, 58 words, 31 black cells;
    seed 7 in 157.2s, 56 words, 27 black cells.
+
+   **This tie-break score was made theme-aware much later in this
+   project's history**, at the user's explicit request: "Quand on génère
+   une grille thématique, au lieu d'évaluer la grille avec les mots les
+   plus longs sur tous les mots, évaluer uniquement sur les mots du
+   glossaire thématique" — see `backend/app.py`'s "Themed generation"
+   entry for `priority_words`/`_theme_words_by_length`. Previously, the
+   tie-break (`opt_score`) summed `len(slot) ** 2` for *every* slot of the
+   trial-optimized grid regardless of which word ended up there — for a
+   themed generation this meant the tie-break could favor a candidate
+   with more/longer words overall even if none of them were actually
+   theme words, defeating the whole point of breaking a tie between two
+   otherwise-equal candidates when a theme is active. `opt_grid, opt_
+   slots, opt_assignment = minimize_black_squares(...)` now keeps the
+   trial's own `assignment` too (previously discarded as `_opt_
+   assignment`, its one and only use being this exact scoring line): when
+   `priority_words` is non-empty, `opt_score` sums `len(w) ** 2` only for
+   a placed word `w` that's actually a member of `priority_words`,
+   skipping every other slot entirely; when `priority_words` is empty (no
+   theme), `opt_score` is completely unchanged — still every slot's own
+   length, exactly as before this change. A candidate that surfaces more/
+   longer theme words now wins the tie-break over one with merely longer
+   words in general.
 
    **`PARALLEL_ATTEMPTS`'s own default was changed from a fixed 10 to this
    machine's own CPU count**, much later in this project's history, at the
@@ -17335,3 +18846,165 @@ again afterward) and a CSS brace-balance check confirmed `script.js`/
 `i18n.js`/`style.css` still parse correctly after the change. **Not yet
 visually confirmed in an actual browser** — same tooling limitation
 already noted throughout this project's UI work.
+
+**A new "lengthen an impossible zone" step was added, the exact
+complement of `_shorten_impossible_zones`**, at the user's explicit
+request: "si un emplacement ne trouve pas de mot dans le glossaire
+thématique (ou le glossaire normal si ce n'est pas une grille
+thématique, donc emplacement devenu impossible), mais qu'au moins une
+des cases noires limitant la zone peut être supprimée ou déplacée (parce
+qu'il y a de la place avant ou après, et que cette case noire n'est pas
+une limite d'un mot déjà posé), tester des longueurs différentes en
+supprimant ou déplaçant la case noire." Where `_shorten_impossible_
+zones` SHRINKS an impossible zone by adding a new black cell *inside* it,
+this new `_lengthen_impossible_zones` GROWS it by pushing one of its two
+*existing* bounding black cells outward — moving it a few cells further
+along (a new black cell placed further out) or removing it outright when
+the next natural obstacle (another black cell, or the grid edge) already
+bounds the extended zone.
+
+The "impossible" criterion is the same generic one already used for
+shortening (`_impossible_indices` — no real dictionary word, whatever
+its source, fits the letters already known): a themed generation never
+restricts the notion of "impossible" itself to the theme glossary —
+`priority_words` is only a soft preference during the CSP fill
+(`Filler._backtrack` — both which slot to fill first and which word to
+try first there), never a restriction on the dictionary this repair
+step actually queries, exactly like `_find_shorter_word_for_zone` which
+has never been theme-aware either. Two new module-level helpers,
+both placed right after `_find_shorter_word_for_zone`:
+
+- `_known_slot_boundary_cells(new_grid, rows, cols, cur_slots, known)` —
+  the set of black cells that bound (or are sandwiched by) an
+  already-fully-known word, and so must never be touched. Reuses the exact
+  same double criterion already established and heavily tuned for
+  `_build_retry_seed`'s own step 3 (direct boundary of a confirmed word in
+  its own direction; OR a known letter on *both* sides of one axis at
+  once — removing it would merge two distinct words into one that may
+  spell nothing real), just recomputed from `cur_slots`/`known` (a
+  cleanup-round's state) rather than a global `assignment`. This is
+  precisely the "n'est pas une limite d'un mot déjà posé" condition the
+  request names.
+- `_new_boundary_crossing_impossible(...)` — the counterpart of
+  `_new_crossing_impossibility` for the previously-black boundary cell
+  itself, which `cell_to_slots` (built on the old pattern) has no entry
+  for. Un-blackening it can create a brand-new perpendicular crossing slot
+  right there; this recomputes that perpendicular run directly and rejects
+  a candidate whose letter would make it newly impossible (a run already
+  impossible *before* the letter, or shorter than 2 cells, is never
+  counted — same "newly caused, not pre-existing" rule as
+  `_new_crossing_impossibility`).
+
+`_find_longer_word_for_zone` collects every valid `(word, extended cells,
+old boundary, new boundary)` across both sides and every achievable
+extension length, shuffles, and returns the first that survives both
+crossing checks. `_lengthen_impossible_zones` wraps it in the exact same
+round-loop skeleton as `_shorten_impossible_zones` (each still-impossible
+zone tracked by its own cell-tuple, never a stale slot index;
+`cur_slots`/`cell_to_slots`/`known`/`used_words`/`protected` all
+recomputed fresh before *every* zone processed; same
+`_invalid_fully_known_indices` final safety net; same
+`(grid, slots, assignment, impossible_slots)` return contract, unchanged
+by reference when nothing could be lengthened). Wired into
+`_clean_continue_candidate` immediately *after* `_shorten_impossible_
+zones` — operating only on what shortening couldn't resolve. Order
+(shorten first, then lengthen) is a deliberate but not-explicitly-
+requested implementation choice: the least risky of the two, since it
+never touches the already-verified shortening path and only adds this new
+step as a fallback. Scoped to "reprise telle quelle" only, never full
+nettoyage — the same reasoning already established for
+`_shorten_impossible_zones` (a full nettoyage regenerates a fresh pattern
+via `make_pattern` anyway).
+
+**A real bug was found and fixed during isolated testing**: the
+structural-validity check for a candidate that places a *new* black cell
+originally left the *old* boundary cell still black at the same time —
+evaluating a hypothetical grid state that is never actually committed
+(both cells black), which on a narrow grid spuriously disconnected the
+white region and rejected every candidate. Fixed to toggle *both* cells
+to their true post-commit state (old boundary → white, new boundary →
+black) for the check, then revert both. The full-removal case (no new
+black cell) needs no structural check at all — removing a black cell can
+only ever merge/grow the white region, never disconnect it or orphan a
+cell.
+
+Verified: 7 isolated tests against small hand-built 2-/3-row grids and
+tiny controlled dictionaries — basic tail extension places a real
+lengthened word and moves the boundary; head-side extension does the
+same mirrored; a boundary that bounds an already-placed word is left
+completely untouched; a zone with no room (another black cell
+immediately beyond) is untouched; the full-removal path spans a zone all
+the way to the grid edge with no black cell left behind; a candidate
+whose letter would make a new perpendicular crossing impossible is
+rejected, and a control with a compatible vertical dictionary confirms
+it is then accepted; `_known_slot_boundary_cells` protects exactly the
+right cell and nothing when there are no known letters. A live spy on a
+real `generate_grid()` run (15×10, seed 2, Flash mode) confirmed the new
+step genuinely engages — called 208 times across the run, 395 impossible
+zones offered, 4 calls that actually lengthened a zone and placed a real
+word — while the generation still completed correctly. Full end-to-end
+regression on both seeds of the standard 15×10 benchmark (Flash mode): 0
+mismatches, 0 empty white cells each — seed 2 in 66.2s / 58 words / 28
+black, seed 7 in 47.8s / 58 words / 32 black; a 9×9 `difficulty="hard"`
+run (seed 3, full French dictionary) also succeeded cleanly (0
+mismatches, 0 empty white cells).
+
+**Theme-glossary words are now shown in green letters in every preview
+grid**, at the user's explicit request: "Dans les grilles aperçus,
+indiquer en lettres vertes les mots issus du glossaire thématique." A new
+`_theme_word_cells(slots, assignment, priority_words)` helper returns the
+cells of every slot whose assigned word is in `priority_words` (the
+themed-generation glossary — see `generate_grid`'s own `priority_words`;
+empty list for a non-themed generation, so this is a complete no-op
+there), and a companion `_theme_cells_from_preview_state(...)` does the
+same for a cycle-start preview where the resume shape is a per-slot word
+list (`preseed_assignment`) or a `{cell: letter}` map (`locked_letters`)
+rather than a real `(slots, assignment)` pair. A new `theme_cells` field
+(list of `[row, col]`) is added to every preview example dict at every
+site that builds one: `try_fill`'s failed-attempt `diagnostics`,
+`_publish_new_best`'s queued best-state snapshots, `generate_grid`'s
+`pattern`/`pattern_generated` cycle-start previews (per pool entry),
+`pre_cleanup_optimized` (from the pre-optimization diag, same "not
+recomputed, close enough" convention as `forced_cells` right beside it),
+and the `minimizing` preview; `backend/app.py` computes it for the
+`clues`-step preview directly from `result["words"]` (each carries
+`answer`/`row`/`col`/`direction`) against the theme priority set — a
+recompute job passes `[]` (the theme sentence is never persisted on a
+stored grid, so its glossary can't be re-derived). `frontend/static/
+script.js`'s `renderAttemptPreview()` destructures `theme_cells`
+(`|| []`, no-op everywhere else) and adds a `.theme` class to those
+cells; `style.css` gets a new `--theme-fg` token and a
+`.attempt-preview-grid .cell.white.theme` rule setting `color` +
+`font-weight: 800` (extra-bold, at the user's explicit request "mettre
+les mots du glossaire thématique en gras" — clearly heavier than the
+`500`-weight base of every other preview cell; a text colour, which
+composes cleanly with the `.impossible`/`.noise`/`.low-candidates`
+background fills and the `.forced`/`.locked` borders that can land on the
+same cell). `--theme-fg` went through several values on the user's own
+successive requests — `#15803d` (dark green, "pas assez visible") →
+dark purple → `#a855f7` (light purple) → `#86efac` (green-300, very
+light green, "trop clair") → its current value **`#ff00fb`** (bright
+magenta, at the user's explicit request "Essayer cette couleur :
+#ff00fb") — chosen to stand out sharply against the black letters around
+it rather than to be maximally readable on the white cell.
+
+Verified: isolated tests of `_theme_word_cells` (correct cells, empty for
+no theme / no matching word) and `_theme_cells_from_preview_state` (both
+the preseed-list and locked-map shapes, an incomplete locked slot
+correctly yielding no word, a `None` grid yielding `[]`). A real
+`generate_grid()` run (15×10, seed 2, Flash, the known-good farm-animals
+glossary — 15/52 theme words placed) with an `on_progress` hook
+confirmed `theme_cells` is present on 100% of example dicts (no shape
+regression), non-empty across every relevant step
+(`pattern_attempt_failed`, `pre_cleanup_optimized`, `pattern`,
+`pattern_generated`, `minimizing`), and every reported cell carries a
+real letter in the solution (0 with no letter). The `backend/app.py`
+`clues`-preview formula was checked to match exactly the cells of the
+finished grid's own placed theme words (40/40). A run with a glossary
+that happened to place 0 theme words correctly reported empty
+`theme_cells` everywhere. Standard 15×10 benchmark, both seeds, Flash,
+no theme: 0 mismatches, 0 empty white cells (27.7s/50.6s). A real JS
+syntax check (`esprima`, installed and removed again afterward) and a
+CSS brace-balance check both passed. **Not visually confirmed in a
+browser** — the usual tooling limitation — verified structurally and via
+the real backend data reaching the frontend correctly.

@@ -15,10 +15,11 @@ Usage :
 import json
 import os
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -41,6 +42,32 @@ BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:30
 # strictement supérieur pour ne jamais expirer côté navigateur avant ce
 # délai-ci côté proxy.
 PROXY_TIMEOUT_S = 30.0
+
+# Loopback names accepted by _require_localhost() below. This middleware
+# server binds 0.0.0.0 (run_Falcon.sh, LAN-reachable), so `request.client.
+# host` genuinely is the real peer IP for a direct connection — a LAN
+# client shows its 192.168.x.x / etc. address, not a loopback one. The
+# extra Host-header check catches the reverse-proxy case (e.g. Apache
+# forwarding a public domain to 127.0.0.1:3443, where the peer IP alone
+# would look local): a request whose Host is a real domain is rejected
+# even if it reaches us over loopback.
+_LOOPBACK_CLIENT_IPS = {"127.0.0.1", "::1"}
+_LOOPBACK_HOSTNAMES = {"127.0.0.1", "::1", "localhost"}
+
+
+def _require_localhost(request: Request) -> None:
+    """Raise 403 unless the request genuinely comes from this machine:
+    a loopback peer IP AND a loopback Host header. Used to gate the
+    Qdrant-admin routes, which are a localhost-only maintenance tool."""
+    client_ip = request.client.host if request.client else ""
+    hostname = (urlsplit("//" + request.headers.get("host", "")).hostname
+                or "").lower()
+    ok = client_ip in _LOOPBACK_CLIENT_IPS and (
+        hostname in _LOOPBACK_HOSTNAMES or hostname.endswith(".localhost")
+    )
+    if not ok:
+        raise HTTPException(status_code=403, detail={"code": "localhost_only"})
+
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -320,6 +347,32 @@ async def proxy_library_get(grid_id: str):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/library/{grid_id}/pdf")
+async def proxy_library_get_pdf(grid_id: str):
+    """Relaie le téléchargement PDF d'une grille de la bibliothèque (grille
+    vide + définitions + titre, sans réponses — voir backend/app.py's
+    library_get_pdf). Passe-plat binaire : renvoie les octets PDF tels
+    quels avec le Content-Disposition du back ; un échec du back (JSON)
+    est relayé en JSON."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/pdf")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    if resp.status_code != 200:
+        try:
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+        except ValueError:
+            return Response(status_code=resp.status_code, content=resp.content)
+    headers = {}
+    disposition = resp.headers.get("content-disposition")
+    if disposition:
+        headers["Content-Disposition"] = disposition
+    return Response(
+        content=resp.content, media_type="application/pdf", headers=headers
+    )
+
+
 @app.get("/api/dictionary")
 async def proxy_dictionary(request: Request):
     """Relaie le bouton "Dictionnaire" de l'interface (voir script.js) vers
@@ -328,6 +381,92 @@ async def proxy_dictionary(request: Request):
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/dictionary", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+# "Définir" (backend/clues.py's LLMClueGenerator.generate_definitions) makes
+# one real LLM round-trip asking for up to 10 definitions at once — a
+# meaningfully heavier single call than a quick status check, measured live
+# at ~40s on this project's own small local model. PROXY_TIMEOUT_S (30s)
+# alone would abort before it can finish; same "set above the callee's own
+# timeout" reasoning already used for CHAT_PROXY_TIMEOUT_S vs. PROXY_
+# TIMEOUT_S, here set above generate_definitions()'s own 90s default.
+DEFINE_PROXY_TIMEOUT_S = 100.0
+
+
+@app.get("/api/dictionary/define")
+async def proxy_dictionary_define(request: Request):
+    """Relaie le bouton "Définir" du panneau Dictionnaire (voir script.js)
+    vers le back — query string (`q`, `lang`) transmise telle quelle,
+    même schéma que proxy_dictionary, mais avec DEFINE_PROXY_TIMEOUT_S
+    (voir sa propre note) au lieu de PROXY_TIMEOUT_S."""
+    try:
+        async with httpx.AsyncClient(timeout=DEFINE_PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/dictionary/define", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+SIMILAR_PROXY_TIMEOUT_S = 60.0
+
+
+@app.get("/api/similar_words")
+async def proxy_similar_words(request: Request):
+    """Relaie le bouton "Thématique" du panneau Dictionnaire (voir
+    script.js) vers le back — query string (`q`, `lang`, `min_score`)
+    transmise telle quelle. Timeout élargi (SIMILAR_PROXY_TIMEOUT_S) :
+    le back fait maintenant une expansion LLM du terme avant les
+    recherches Qdrant (voir _similar_words_impl), donc l'appel n'est plus
+    "rapide ou 503" comme avant — même schéma que proxy_define."""
+    try:
+        async with httpx.AsyncClient(timeout=SIMILAR_PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/similar_words", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+# --- Qdrant admin panel (localhost only) --------------------------------
+# _require_localhost() rejects any non-loopback client / Host BEFORE the
+# request reaches the back, so the admin panel is unreachable from the LAN
+# or via a reverse-proxied public domain even though this server binds
+# 0.0.0.0. The frontend also hides the panel's button off localhost.
+@app.get("/api/qdrant/admin")
+async def proxy_qdrant_admin(request: Request):
+    _require_localhost(request)
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/qdrant/admin")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/qdrant/admin/recreate")
+async def proxy_qdrant_admin_recreate(request: Request):
+    _require_localhost(request)
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(f"{BACKEND_URL}/api/qdrant/admin/recreate")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/qdrant/admin/delete-tenant")
+async def proxy_qdrant_admin_delete_tenant(request: Request):
+    _require_localhost(request)
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/qdrant/admin/delete-tenant",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
     return JSONResponse(status_code=resp.status_code, content=resp.json())

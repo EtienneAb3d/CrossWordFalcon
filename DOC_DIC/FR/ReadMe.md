@@ -427,6 +427,17 @@ compression n'exige pas de relancer les étapes 2 et 3. La cinquième étape
 par l'étape 2 : il faut la relancer après une reconstruction de la liste de
 mots, mais pas après un simple changement de règle de compression.
 
+Les scripts `data_builder/build_<lang>.sh` (un par langue) enchaînent ces
+cinq étapes puis, en sixième et dernière étape, alimentent la base
+vectorielle Qdrant à partir de `data/wordlist_<lang>_full.tsv`
+(`python -m data_builder.qdrant_populate <lang> --recreate` — voir la
+classe `WordEmbeddingIndexer`). Cette sixième étape n'est pas
+essentielle au dictionnaire lui-même : elle ne sert qu'à la recherche de
+« mots similaires » de l'interface, exige que Qdrant (`./run_qdrant.sh`)
+et le serveur d'embeddings (`./run_embed.sh`) tournent, et se contente
+d'un avertissement si ce n'est pas le cas — les fichiers des étapes 1 à 5
+restent le vrai produit du pipeline.
+
 ## Résumé en une phrase
 
 CrossWordFalcon fabrique, pour chaque langue, un corpus de phrases réelles

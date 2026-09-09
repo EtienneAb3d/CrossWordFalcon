@@ -256,14 +256,15 @@ project's engineering language.
 ### Ports and environment variables
 
 - **Ports live in the 300x range**: frontend/middleware 3000, backend 3001,
-  local LLM server 3002 — moved off the original 800x range after
+  local LLM server 3002, local embedding server 3003 (`EMBED_PORT`, see
+  `run_embed.sh`) — moved off the original 800x range after
   diagnosing a real collision: a VS Code helper process was also listening
   on `127.0.0.1:8000`, silently shadowing the real frontend server for any
   client connecting via `127.0.0.1` specifically. Do not move these back
   into the 800x range.
-- All three ports are declared once, at the top of `env.sh`/`env_default.sh`,
+- The core ports are declared once, at the top of `env.sh`/`env_default.sh`,
   as `export VAR="${VAR:-default}"` (`CROSSWORDFALCON_FRONTEND_PORT`,
-  `CROSSWORDFALCON_BACKEND_PORT`, `LLM_PORT`) so a value already set in the
+  `CROSSWORDFALCON_BACKEND_PORT`, `LLM_PORT`, `EMBED_PORT`) so a value already set in the
   calling shell's environment survives sourcing. `CROSSWORDFALCON_BACKEND_URL`
   and every `LLM_BASE_URL` line are *derived* from these two port variables
   via shell interpolation, never a separately hardcoded literal — changing a
@@ -303,6 +304,93 @@ project's engineering language.
   with placeholder credentials only, copied to `env.sh` on a fresh clone.
   `run_Falcon.sh` sources `env.sh` (or `env_default.sh` if absent) before
   starting the backend.
+- **Qdrant vector database (optional)** — a local vector store for word
+  embeddings, standalone infra mirroring how SGLang has its own separate
+  install path (not part of the base `Install.sh`/`run_Falcon.sh` flow).
+  The running app uses it in two places:
+    1. the Dictionary panel's "Thématique" button (`GET /api/similar_
+       words` → `_similar_words_impl`, restricted to the language tenant)
+       — mirrors themed-grid glossary construction: `describe_theme`
+       expands the typed term into a keyword list, then `_compiled_
+       similar_words` runs one Qdrant nearest-words search per keyword
+       (`_iter_scored_words`) and merges (best score per word). Returns
+       **every** merged word whose score reaches `min_score` — the current
+       value of the generation form's "Précision thématique" field,
+       forwarded as a query param so the panel reacts to it live (default
+       `THEME_MIN_SCORE` = 0.67 when blank, clamped `[0,1]`) —
+       most-similar-first, no count limit and no length filter; a clean
+       503 `similar_unavailable` when Qdrant / the embed server is down or
+       the collection is unpopulated, so the rest of the UI is
+       unaffected). The LLM expansion makes it slower than a plain vector
+       search, so its frontend/proxy timeouts are widened (`SIMILAR_FETCH_
+       TIMEOUT_MS` 70s / `SIMILAR_PROXY_TIMEOUT_S` 60s);
+    2. a **localhost-only "Qdrant (admin)" panel** — `GET /api/qdrant/
+       admin` (read-only state: reachability, vector config, point/index
+       counts, tenant index, per-language counts), `POST /api/qdrant/
+       admin/recreate` (`ensure_collection(recreate=True)`), `POST
+       /api/qdrant/admin/delete-tenant` (`delete_lang`). The gate is
+       entirely at the proxy: `frontend/server.py`'s `_require_localhost()`
+       403s any request whose client IP is not loopback **or** whose
+       `Host` header is not a loopback name (blocks the LAN and the
+       reverse-proxied-public-domain cases alike); `script.js` also keeps
+       the button `hidden` off `isLocalhostOrigin()`. All three routes
+       have matching `frontend/server.py` proxy routes (rule 15).
+  - `Install_qdrant.sh` installs Docker (if missing) and pulls the
+    `qdrant/qdrant` image; `run_qdrant.sh` (`start` [default] / `stop` /
+    `status`) runs the container with `data/qdrant/` bind-mounted as
+    persistent storage, waits for the HTTP API, then creates/asserts the
+    `words` collection — by delegating to `python -m backend.qdrant_store
+    --init` when the venv is present (so the collection's shape has one
+    source of truth), falling back to a bare `curl PUT` create otherwise.
+    Both scripts invoke `docker` directly, or via `sudo docker` if the
+    user isn't in the `docker` group.
+  - `backend/qdrant_store.py` (`QdrantStore`) is the client class — plain
+    `httpx`, no `qdrant-client` SDK, no new `requirements.txt` package,
+    same env-swap design as `backend/embedder.py`. Every request retries
+    a transient timeout/connection error up to `QDRANT_REQUEST_RETRIES`
+    (2) times with a short linear backoff before raising
+    `QdrantStoreError` — a real 4xx/5xx response is never retried. The
+    text actually embedded per word (`upsert_words`/`_compose_embed_
+    text`) is just the word's own forms, space-joined: the accented/
+    inflected spelling, the bare accent-stripped uppercase MOT form, and
+    each candidate canonical form/lemma (no dictionary definitions — an
+    earlier gloss-enriched version was dropped as not precise enough).
+    The Qdrant payload itself never carries this compiled text, only the
+    word's own plain fields. **One collection
+    (`words`), one tenant per language**: every point has a `lang`
+    payload field, registered as a Qdrant *tenant* keyword index
+    (`is_tenant: true`); a per-language search is a filtered search, never
+    a separate collection. The vector **dimension is probed from the live
+    embedder** (`backend/embedder.py`, BAAI/bge-m3 → 1024), unless
+    `QDRANT_VECTOR_SIZE` is set. Vectors are **RAM-resident by default**
+    (`QDRANT_ON_DISK=0`; the six-language set is only a few GB — on-disk
+    HNSW seeks per graph hop and is unusably slow on a spinning HDD, so
+    only set `QDRANT_ON_DISK=1` on SSD storage). Deterministic point ids
+    (`uuid5("<lang>:<word>")`) make the populator idempotent/resumable.
+  - `data_builder/qdrant_populate.py` (`WordEmbeddingIndexer`) fills the
+    collection from `data/wordlist_<lang>_full.tsv` — embeds, via
+    `Embedder` (batched), the compiled text `backend/qdrant_store.py`'s
+    `_compose_embed_text` builds for each word (its accented/inflected
+    spelling, bare uppercase MOT form, and canonical form(s), space-
+    joined), upserts one tenanted point per word. CLI:
+    `python -m data_builder.qdrant_populate {fr|…|
+    --all} [--limit N] [--offset N] [--batch N] [--recreate]`. Needs
+    `./run_qdrant.sh` + `./run_embed.sh` up. A full `--all` recompute is a
+    multi-hour run (measured ~150-200 words/s with the short word-forms
+    text while sharing the GPU with SGLang) — run detached (`nohup ... &
+    disown`, `logs/qdrant_populate.log`/`.pid`, the same convention as
+    `run_Populate.sh`), never blocking on it; deterministic point ids
+    make it safe to interrupt and resume (`--offset`) or simply re-run in
+    full.
+  - Config: `QDRANT_URL` (or `QDRANT_HOST` `127.0.0.1` + `QDRANT_PORT`
+    `6333`; `QDRANT_GRPC_PORT` `6334`), `QDRANT_COLLECTION` (`words`),
+    `QDRANT_DISTANCE` (`Cosine`), `QDRANT_VECTOR_SIZE` (unset → probe;
+    bge-m3 is 1024), `QDRANT_ON_DISK` (`0` = RAM; `1` only on SSD), `QDRANT_API_KEY` (empty;
+    sent as the `api-key` header when set, for Qdrant Cloud),
+    `QDRANT_IMAGE`/`QDRANT_CONTAINER` (for the scripts). Each has the
+    same fallback baked into the scripts and the class; a commented block
+    in `env.sh`/`env_default.sh` documents overrides. `data/qdrant/` is
+    gitignored.
 - `run_llm.sh` carries **no hardcoded default GGUF** — `LLAMA_GGUF_REPO`/
   `LLAMA_GGUF_FILE`/`LLAMA_CHAT_TEMPLATE_KWARGS` are required
   (`${VAR:?...}`-style, erroring clearly if unset), sourced only from
@@ -406,11 +494,19 @@ project's engineering language.
   `LOG_CHAT/`, `LOG_USERS/` (one daily `LOG_USERS/<YYYY-MM-DD>.log` per
   day: one line — `date time | count | active pseudo list` — appended by
   `backend/app.py` each time the distinct online-visitor count changes,
-  created lazily on first write), `models/` (LLM GGUF weights,
+  created lazily on first write), `LOG_THEME/` (one
+  `LOG_THEME/<timestamp>_<short_id>.log` per themed generation, timestamp
+  precision matching `LOG_LLM/`: first line is the LLM's ~15-word
+  comma-separated keyword list, then the typed theme, every keyword list
+  produced, the flat set of keywords actually searched in Qdrant, and the
+  entire preselected-word glossary, one `word<TAB>length<TAB>score` per
+  line (Qdrant's own cosine similarity)),
+  `models/` (LLM GGUF weights,
   auto-downloaded by `run_llm.sh`), `data/
-  hunspell_cache/`, and `data/reference_corpus/` (both the full and the
+  hunspell_cache/`, `data/reference_corpus/` (both the full and the
   capped sentence corpus — see the next bullet — the full one alone can be
-  multiple GB of raw text). If one of these ever shows as staged/committed
+  multiple GB of raw text), and `data/qdrant/` (Qdrant's own on-disk
+  storage, created by `run_qdrant.sh`). If one of these ever shows as staged/committed
   by mistake and hasn't been pushed yet, undo with a plain `git reset
   HEAD~1` (uncommits without touching the working tree) rather than a
   history rewrite.
@@ -523,14 +619,20 @@ project's engineering language.
   `backend/inflection_lookup.py` for the clue prompt's `A=` line. It reads
   the wordlist, so re-run it after a wordlist rebuild.
 - `data_builder/build_<lang>.sh` (one per fr/en/de/es/it/pt) is a one-shot
-  orchestration wrapper that runs all five pipeline stages for that
-  language in dependency order — `build_sentence_corpus.py` ->
-  `build_wordlist_freq.py` -> `build_gloss_dictionary.py` ->
-  `compress_reference_corpus.py` -> `build_inflections.py` — bailing out
-  on the first failure. It
+  orchestration wrapper that runs the pipeline stages for that language in
+  dependency order — `build_sentence_corpus.py` -> `build_wordlist_freq.py`
+  -> `build_gloss_dictionary.py` -> `compress_reference_corpus.py` ->
+  `build_inflections.py` (steps 1-5, each bailing out on the first
+  failure) -> `python -m data_builder.qdrant_populate <lang> --recreate`
+  (step 6/6, **non-fatal**: feeding the Qdrant `words` collection is a
+  downstream nicety, needs `./run_qdrant.sh` + `./run_embed.sh` running,
+  and only warns if skipped/failed — the wordlist/gloss artefacts from
+  steps 1-5 are the real deliverables). It
   `cd`s to the repo root, points `PATH`/`LD_LIBRARY_PATH` at this host's
   rootless `~/.local` hunspell build, and is safe to re-run (every stage
-  reuses its own on-disk cache: `CORPUS/`, `DICS/`, `data/hunspell_cache/`).
+  reuses its own on-disk cache: `CORPUS/`, `DICS/`, `data/hunspell_cache/`;
+  step 6's `--recreate` deliberately re-embeds from the just-rebuilt
+  wordlist rather than reusing anything).
   These scripts live alongside the `build_*.py`/`compress_*.py` stages in
   `data_builder/`, not in `Automation/`.
 - `backend/gloss_lookup.py`/`backend/example_sentences.py` each lazily
@@ -791,6 +893,78 @@ the current defaults/behavior to know before touching this code.
   (random among the top 20 remaining, not a strict rank order) — this
   ranking is always active, independent of whether letter-forcing itself is
   on.
+- **Themed generation** (`generate_grid(priority_words=...)`,
+  `Filler(priority_words=...)`): an optional set of preferred words. When
+  non-empty, `Filler._backtrack` stably partitions each slot's own
+  candidate list — priority members first, the rest after — *after* all
+  the statistical ordering above, so backtracking exhausts every fitting
+  theme word for a slot before descending to a non-theme dictionary word
+  there. A genuine per-slot preference with fallback, never a hard
+  restriction: the full lexicon is still loaded and used wherever no
+  combination of theme words completes a slot. Threaded to the CSP
+  workers through the pool `initializer` (`_worker_priority_words`, like
+  `_worker_index`) and into `minimize_black_squares`. `backend/app.py`'s
+  optional `GenerateRequest.theme` field (free-text word list, new
+  "Thématique" form input) drives it: `_run_generate_job` first asks the
+  LLM (`LLMClueGenerator.describe_theme`) for a ~30-word telegraphic,
+  comma-separated keyword list describing the theme — deliberately mixing
+  parts of speech (nouns, verbs, adjectives, adverbs), at the user's
+  explicit request, so the glossary isn't nouns-only — one list for the
+  whole theme, plus one per word (`_theme_tokens`) when the typed theme
+  has more than one word (each word likewise expanded via `describe_theme`,
+  falling back to the bare word / typed tokens on LLM failure). Every list
+  is split into individual keywords (`_split_keywords`), all keywords are
+  flattened into one case-insensitively de-duplicated search set; if that
+  set has fewer than `THEME_MIN_KEYWORDS` (300) entries,
+  `describe_theme(theme)` is re-called up to `THEME_KEYWORD_LLM_MAX_LOOPS`
+  (3) more times (early-stop when a call adds nothing new) — **grid
+  glossary only**, at the user's explicit request; the Dictionary panel's
+  "Thématique" button never loops. Every grid-glossary `describe_theme`
+  call uses `THEME_KEYWORD_LLM_TEMPERATURE` (0.9, vs. the method's own 0.7
+  default the Dictionary panel keeps) to widen the keyword variety. Then
+  `_compiled_theme_words_by_length` runs a **separate Qdrant nearest-words
+  search per keyword** (`_theme_words_by_length` each), merging every
+  result and keeping each word's highest score across searches. A single
+  sharp keyword is a far more precise query vector than one averaged
+  embedding of a 15-word sentence — the full-sentence embedding is no
+  longer searched at all. `theme_description` (the **whole-theme** keyword
+  list only — never a per-token or top-up list) is still produced and fed
+  to `generate_title` (soft inspiration) and to `generate()` clue writing
+  as a **strong** directive: `_build_system_prompt`'s `THEME` block tells
+  the model to actively steer every clue toward the theme wherever the
+  word's meaning and grammar allow, accuracy still inviolable (a
+  theme-flavoured phrasing is dropped for a clue it would make wrong).
+  The list is echoed in each `LOG_LLM/*.md` header (`- **Theme
+  keywords** …`) and once to `backend.log`. The `LOG_THEME/` header
+  records every keyword list and the flat searched set. `_theme_words_by_length` itself
+  pages through the Qdrant tenant's own
+  ranked nearest-neighbor list (`QdrantStore.search`'s `offset`)
+  collecting **every** word whose own length falls between
+  `THEME_LENGTH_MIN` and `THEME_LENGTH_MAX` (2-15) and whose Qdrant
+  cosine-similarity score is at least the threshold — `THEME_MIN_SCORE`
+  (0.67) is the *default*, overridable by the "Précision thématique" form
+  field (`GenerateRequest.theme_precision`, a 0-1 float threaded as
+  `min_score` through `_compiled_theme_words_by_length`/`_theme_words_by_
+  length`/`_iter_scored_words`); the same field's value is also forwarded
+  to the Dictionary panel's "Thématique" button (`GET /api/similar_words`'s
+  `min_score` query param). No cap
+  on how many words come back or on how deep the pagination goes, only the
+  score threshold and the 2-15 length range bound the result — the scan
+  stops the moment a hit drops below the score threshold (Qdrant's own
+  results are already ranked by score descending, so nothing later could
+  ever qualify either), or once the tenant is exhausted. The returned list is sorted by increasing word
+  length (stable, so score-descending order survives within each
+  length) for `LOG_THEME/`'s own readability — `crossword_gen.py`'s
+  `priority_words` only ever treats it as an unordered set of words.
+  Best-effort — Qdrant/embed-server down or the
+  collection unpopulated for that language → logged, generation
+  proceeds with no theme. The LLM keyword list
+  is written as the first line of a per-job `LOG_THEME/<timestamp>_
+  <short_id>.log` (`THEME_LOG_DIR`, gitignored). The raw theme string is stored on
+  the grid record (`grid_store.save_grid_json`'s `theme` param) and shown
+  in the library's "Thématique" column; the LLM description and the
+  pre-selected words are not stored on the record. On a bilingual grid
+  the theme applies to the main (across) language only.
 - "Graines" (French UI label; internally still `forced_letters`/
   `force_letters_percent` in code — renamed in the UI only, at the user's
   explicit request, from "Lettres forcées"/"Forced letters") are a
@@ -963,6 +1137,43 @@ the current defaults/behavior to know before touching this code.
   the model burns its token budget on a `<think>` block instead of
   answering. Check for the same flag/failure mode before adding any new
   reasoning-capable model.
+
+### Local multilingual embeddings (`backend/embedder.py` / `run_embed.sh`)
+
+- A CPU-only multilingual text-embedding stack, server/client split like
+  the LLM one: `run_embed.sh` launches `llama_cpp.server --embedding` (no
+  new dependency — `llama-cpp-python` is already installed via
+  `requirements-llama.txt`) on `EMBED_PORT` (3003); `backend/embedder.py`'s
+  `Embedder` class is the HTTP client. `Embedder.embed(str) -> list[float]`
+  (L2-normalized), `embed_batch(list[str])` for many at once,
+  `EmbedderError` on connection failure. `python -m backend.embedder
+  --benchmark 1000` is the timing harness.
+- **Model: BAAI/bge-m3, `bge-m3-Q4_K_M.gguf` from `gpustack/bge-m3-GGUF`**
+  (~418 MB, 1024-dim, CLS pooling, 100+ languages). Chosen as the smallest
+  *current, working* multilingual GGUF: `multilingual-e5-small` (118M) is
+  genuinely smaller but every community GGUF conversion of it fails to
+  load in `llama-cpp-python` 0.3.35 (`bert model needs to define token
+  type count` — stale conversions missing required metadata). `gpustack`'s
+  bge-m3 build is current and loads cleanly. All knobs overridable in
+  `env.sh` (`EMBED_MODEL`/`EMBED_GGUF_REPO`/`EMBED_GGUF_FILE`/
+  `EMBED_BASE_URL`/`EMBED_API_KEY`); repoint `EMBED_BASE_URL` at any
+  OpenAI-compatible `/v1` endpoint to swap providers with no code change.
+- `run_embed.sh` is **CPU by default** (`--n_gpu_layers 0` +
+  `CUDA_VISIBLE_DEVICES=""`): the request was for a CPU embedder, and on a
+  machine where `llama-cpp-python` is a CUDA build (for `run_llm.sh`), not
+  hiding the GPU made model load hang for minutes while the GPU was busy
+  with the LLM. `EMBED_N_GPU_LAYERS` (`env_default.sh` default `0`; `99` =
+  all layers) opts into GPU. Measured on bge-m3: **CPU ~40 ms/embedding
+  p50, no batched speed-up; GPU ~8 ms single (~120/s), ~2 ms batched
+  (~465/s)** — GPU is ~5-15× faster and, unlike CPU, scales with
+  batching. bge-m3 needs only ~0.4 GB VRAM so it **can cohabit with the
+  LLM on one 12 GB card**, but SGLang grabs the whole card at its default
+  `SGLANG_MEM_FRACTION_STATIC=0.78` — this project's dev-box `env.sh`
+  overrides it to `0.60` (outside the Install.sh SGLANG AUTOCONFIG block)
+  alongside `EMBED_N_GPU_LAYERS=99`. The llama.cpp LLM engine
+  (`run_llm.sh`) shares VRAM gracefully and needs no such tuning. It is
+  *not* browser-facing — no `frontend/server.py` proxy route (permanent
+  rule 15 only applies to endpoints the web UI calls).
 
 ### Documentation
 

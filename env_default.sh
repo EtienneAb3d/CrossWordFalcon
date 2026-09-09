@@ -21,6 +21,29 @@
 export CROSSWORDFALCON_FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
 export CROSSWORDFALCON_BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
 export LLM_PORT="${LLM_PORT:-3002}"
+export EMBED_PORT="${EMBED_PORT:-3003}"
+
+# Local, CPU-only multilingual text-embedding server (run_embed.sh),
+# consumed by backend/embedder.py's Embedder class. Default model:
+# BAAI/bge-m3 (Q4_K_M GGUF, ~418 MB, 1024-dim, CLS pooling, 100+
+# languages including all 6 CrossWordFalcon languages) served by
+# llama_cpp.server in --embedding mode. EMBED_BASE_URL is derived from
+# EMBED_PORT below — repoint it at any OpenAI-compatible /v1 endpoint to
+# use a different embedding provider, no code change needed.
+export EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
+export EMBED_GGUF_REPO="${EMBED_GGUF_REPO:-gpustack/bge-m3-GGUF}"
+export EMBED_GGUF_FILE="${EMBED_GGUF_FILE:-bge-m3-Q4_K_M.gguf}"
+export EMBED_BASE_URL="${EMBED_BASE_URL:-http://127.0.0.1:${EMBED_PORT}/v1}"
+export EMBED_API_KEY="${EMBED_API_KEY:-EMPTY}"
+# 0 = CPU-only (default). A positive value offloads that many layers to
+# the GPU (99 = all). GPU is ~5-15x faster per embedding on bge-m3 and,
+# unlike CPU, gains a further ~3.5x from batched requests. bge-m3 needs
+# only ~0.4 GB VRAM, so it can share the card with the LLM: to run both
+# on a ~12 GB GPU, ALSO lower SGLang's static pool (set
+# SGLANG_MEM_FRACTION_STATIC to ~0.60 — outside the Install.sh SGLANG
+# AUTOCONFIG block) so it stops grabbing the whole card, or run the LLM
+# on llama.cpp (run_llm.sh), which shares VRAM more gracefully.
+export EMBED_N_GPU_LAYERS="${EMBED_N_GPU_LAYERS:-0}"
 
 # Number of uvicorn worker processes for the MIDDLEWARE (front) server,
 # read by run_Falcon.sh. Only the front end takes this — it's a stateless
@@ -282,3 +305,29 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # hardware path above — no space inside the JSON value, see run_sglang.sh
 # for why.
 # export SGLANG_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
+
+# ============================================================================
+# Qdrant vector database (optional) — Install_qdrant.sh / run_qdrant.sh
+#   client class: backend/qdrant_store.py (QdrantStore)
+#   populate:     python -m data_builder.qdrant_populate --all
+# ============================================================================
+# Local Qdrant running as a Docker container, with persistent storage in
+# data/qdrant/ and one collection ("words") holding word embeddings for
+# every language — one tenant per language (a "lang" payload field indexed
+# with is_tenant=true). Install_qdrant.sh pulls the image; run_qdrant.sh
+# starts the container and (via QdrantStore.ensure_collection) creates the
+# collection + tenant index. Every value below has the same fallback baked
+# into the scripts and the class, so this block is only needed to override
+# one. The vector size is normally probed from the embed model
+# (BAAI/bge-m3 -> 1024); set QDRANT_VECTOR_SIZE to skip that probe.
+# export QDRANT_IMAGE="qdrant/qdrant:latest"
+# export QDRANT_CONTAINER="crosswordfalcon-qdrant"
+# export QDRANT_HOST="127.0.0.1"
+# export QDRANT_PORT="6333"
+# export QDRANT_GRPC_PORT="6334"
+# export QDRANT_COLLECTION="words"
+# export QDRANT_DISTANCE="Cosine"
+# export QDRANT_VECTOR_SIZE="1024"          # bge-m3; unset -> probe the embed server
+# export QDRANT_ON_DISK="1"                 # vectors on disk instead of RAM — SSD storage only (slow on HDD)
+# export QDRANT_URL=""                      # full base URL; overrides HOST/PORT (e.g. Qdrant Cloud)
+# export QDRANT_API_KEY=""                  # sent as the api-key header when non-empty

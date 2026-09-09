@@ -106,6 +106,48 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   the page is opened on the local machine; from another machine on the
   network its option is greyed out and unavailable
   (`frontend/static/script.js`, `restrictUltraModeToLocalhost`).
+- **Précision thématique / Theme precision** (`#theme-precision`) — the
+  minimum closeness a word must have to the theme to enter the theme
+  glossary, a number from 0 to 1 (0.67 by default; use a **point**, not a
+  comma, for the decimal — a typed comma is converted automatically).
+  Higher means a tighter, more on-topic glossary with fewer words; lower
+  means a broader one. It only affects grid generation when the
+  **Thématique** field is filled in, and it also sets the closeness cutoff
+  for the Dictionary panel's **Thématique** button (below).
+- **Thématique / Theme** (`#theme`) — an optional list of words, next to
+  the Generate button. Left empty, the grid is filled from the whole
+  dictionary as usual. Filled in, the language model first writes a
+  short (~30-word) comma-separated list of keywords describing the theme of
+  your words, deliberately mixing word types (nouns, verbs, adjectives,
+  adverbs). The generator then runs a separate vector search for *each
+  keyword* on its own, and merges every result: it looks up every word,
+  from 2 to 15 letters long, that is close enough to that keyword (via the
+  search over the word embeddings — Qdrant must be running and populated
+  for that language, and a word too semantically distant is left out
+  entirely — no limit at all on how many words come back, however many or
+  few a given length ends up with, only the closeness cutoff, the same for
+  every keyword). If
+  you typed more than one word, the model also writes a keyword list for
+  each word on its own, and all the keywords from every list are searched
+  and merged, so a multi-word theme draws on a much wider vocabulary. If
+  that still leaves fewer than about 300 distinct keywords, the model is
+  asked a few more times (up to 3) to widen the list before the searches
+  run. The
+  generator then
+  fills every slot from those words first, only falling back to another
+  dictionary word for a slot when no combination of the pre-selected
+  words can complete it. On a **bilingual** grid a separate theme
+  glossary is built for each language — one for the across words, one for
+  the down words — so both directions are steered toward the theme in
+  their own language. The clues written for the finished grid are also
+  strongly steered toward the theme — the model is told to prefer a
+  theme-flavoured wording wherever it can do so without making a clue
+  inaccurate. If the model or the vector search is unavailable,
+  generation simply proceeds with no theme. The words you
+  typed are saved with the grid and shown in the library's Theme column;
+  every keyword list the model produced, the flat set of keywords actually
+  searched, and the resulting word list are written to a `LOG_THEME/` log
+  file.
 - **Générer la grille / Generate** (`#generate-btn`) — starts generation
   with the settings above. While a generation is running, this and every
   field above stay usable for the *next* generation, but see "While a
@@ -186,12 +228,82 @@ else waiting behind it, briefly steps aside for that next person before
 picking back up right where it left off — you may see your own queue
 position appear again partway through an otherwise-long generation.
 
+## Dictionary
+
+The **Dictionnaire / Dictionary** button (`#dictionary-btn`) opens a panel
+for looking words up. It shares the central area with the Library, the
+generation preview and the finished grid — opening it hides whichever of
+those was showing.
+
+- A language selector (`#dictionary-language`) picks which language's
+  dictionary to search. It starts on the interface language, and while a
+  grid is on screen it follows whichever word you hover or click in the
+  grid (so on a bilingual grid it switches between the two languages as
+  you move around).
+- Type an expression in the field and use one of three buttons:
+  - **Chercher / Search** (`#dictionary-search-btn`) — lists every word
+    sharing the same root as what you typed (accents and case ignored),
+    each with its real definitions, in a table
+    (`frontend/static/script.js`, `renderDictionaryResult`; `GET
+    /api/dictionary`).
+  - **Thématique / Theme** (`#dictionary-similar-btn`,
+    `frontend/static/script.js`, `renderSimilarWordsResult`; `GET
+    /api/similar_words`) — works exactly like the grid's own theme
+    glossary: the language model first expands what you typed into a short
+    keyword list (nouns, verbs, adjectives…), then a separate vector
+    search is run for each keyword and the results are merged. You get
+    *every* word whose *meaning* is close enough to any of those keywords,
+    most similar first, on a single line separated by commas, each with
+    its similarity score in parentheses (e.g. `CHAT (0.89)`, two
+    decimals). "Close enough" is set by the **Précision thématique** field
+    above — there is no limit on how many words come back, only that
+    cutoff — so a broad expression can return many words and a very
+    specific one only a handful. Because the model expands the term first,
+    this can take a few seconds and interprets an ambiguous single word
+    its own way (use **Chercher** for a literal same-root lookup). It uses
+    a separate vector database (Qdrant), the embedding server and the LLM;
+    if any isn't running, or the word index hasn't been built yet, it
+    shows a short "unavailable" message instead.
+  - **Définir / Define** (`#dictionary-define-btn`, `frontend/static/
+    script.js`, `renderDefineResult`; `GET /api/dictionary/define`) —
+    asks the same LLM that writes grid clues to write up to 10
+    independent definitions of what you typed, one per line. This can
+    take up to a minute or so, especially on a small local model. If the
+    LLM is unreachable, it shows a short "unavailable" message instead.
+- **Effacer / Clear** (`#dictionary-clear-btn`) empties the field and all
+  results. Each search (of any of the three kinds) stacks its own result
+  block at the top, newest first, until cleared.
+
+## Qdrant (admin)
+
+A **"Qdrant (admin)"** button appears in the action row **only when the
+page is opened on the machine that runs the app itself** (localhost) —
+never from another computer on the network. It opens a small maintenance
+panel for the vector database behind "Similar words"
+(`frontend/static/script.js`, `renderQdrantAdmin`; `GET /api/qdrant/admin`,
+gated to loopback requests by `frontend/server.py`, `_require_localhost`):
+
+- The current state: whether Qdrant is reachable, the vector size /
+  distance / storage mode, its status, total and indexed point counts,
+  segment count, whether the per-language index is in place, and a count
+  of stored words per language.
+- **"Ouvrir le tableau de bord Qdrant" / "Open the Qdrant dashboard"** —
+  a link to Qdrant's own built-in web console (in a new tab).
+- **"Recréer la collection" / "Recreate the collection"** — drops and
+  rebuilds the collection (asks for confirmation first; this deletes
+  every stored word of every language).
+- **"Vider" / "Clear"** on each language row — deletes just that
+  language's stored words (with confirmation).
+- A reminder of the command that refills the database:
+  `python -m data_builder.qdrant_populate --all`.
+
 ## Library
 
 Opened with the **Bibliothèque** button (`#library`, `frontend/static/
 script.js`, `renderLibraryList`). Lists every grid ever saved on this
 server (`backend/grid_store.py`, `GET /api/library`), one row per grid:
-its language, creation date, title, difficulty, size, and the pseudo of
+its language, creation date, title, the theme words it was generated with
+(if any), difficulty, size, and the pseudo of
 whoever generated it — a grid generated with no pseudo set is credited to
 "Falcon Auto Bot" — sorted with
 the interface's current language first, then English, then everything
@@ -203,6 +315,15 @@ Clicking a row (or pressing
 Enter/Space on it) loads that grid straight into the player
 (`loadLibraryGrid`), exactly as if it had just finished generating — the
 same "Vérification"/"Solution" buttons become available.
+
+The last two columns of each row are links. **Lien / Link** ("Jouer" /
+"Play") is a shareable address — `https://falcon.cubaix.com/?grid=<id>` —
+that opens the site with that grid already loaded into the player; you
+can also paste `?grid=<id>` onto your own local address. **PDF** (a small
+red PDF icon) downloads a printable sheet of the grid: the empty grid,
+its clues and its title only — never the answers — with a footer line
+linking back to play it online, with its solution, at the same shareable
+address.
 
 The list shows at most 20 rows per page (`backend/app.py`,
 `LIBRARY_PAGE_SIZE`); **◀**/**▶** buttons (`#library-pagination`,
@@ -235,6 +356,11 @@ All grids** (the default), **Non vues / Not seen yet**, **Déjà vues /
 Already seen**, and **Mes grilles / My grids** — the last one keeps only
 grids whose author pseudo matches the one currently set (nothing if no
 pseudo is set).
+
+A ↻ button (`#library-refresh-btn`, next to the ✕ close button) re-loads
+the current page with the current filters, without jumping back to page
+1 — useful to pick up a grid someone else just generated, or a "seen"
+status changed elsewhere, without losing your place in the list.
 
 ## While a grid is generating
 
