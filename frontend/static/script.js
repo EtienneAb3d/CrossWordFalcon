@@ -2567,9 +2567,10 @@ async function renderLibraryList() {
     const sizeTd = document.createElement("td");
     sizeTd.textContent = entry.width && entry.height ? `${entry.width}×${entry.height}` : "";
     // Dernière colonne : pseudo de l'auteur (champ `pseudo` du JSON de la
-    // grille — voir backend/grid_store.py), vide s'il n'a pas été défini.
+    // grille — voir backend/grid_store.py). Une grille sans auteur
+    // (générée sans pseudo défini) est attribuée à "Falcon Auto Bot".
     const authorTd = document.createElement("td");
-    authorTd.textContent = entry.pseudo || "";
+    authorTd.textContent = entry.pseudo || t.libraryAuthorBot;
     tr.append(languageTd, dateTd, titleTd, difficultyTd, sizeTd, authorTd);
     tr.addEventListener("click", () => loadLibraryGrid(entry.id));
     tr.addEventListener("keydown", (event) => {

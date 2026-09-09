@@ -192,7 +192,8 @@ Opened with the **Bibliothèque** button (`#library`, `frontend/static/
 script.js`, `renderLibraryList`). Lists every grid ever saved on this
 server (`backend/grid_store.py`, `GET /api/library`), one row per grid:
 its language, creation date, title, difficulty, size, and the pseudo of
-whoever generated it (blank if they had set none) — sorted with
+whoever generated it — a grid generated with no pseudo set is credited to
+"Falcon Auto Bot" — sorted with
 the interface's current language first, then English, then everything
 else, most recent first within each group. The one exception is the
 "Toutes les langues / All languages" filter, which drops that

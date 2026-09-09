@@ -6794,7 +6794,13 @@ servers:
   `pseudo` in the `POST /api/library` body (for the "Mes grilles"
   filter). `#library-seen-filter` gained a `"mine"` option
   (`librarySeenFilterMine`) and the library table a last `libraryColAuthor`
-  column showing each row's `entry.pseudo || ""`. Accepting the overlay
+  column showing each row's `entry.pseudo || t.libraryAuthorBot` — a grid
+  saved with no pseudo (generated before the welcome overlay was accepted,
+  or by `Automation/Populate.py`) is credited to the fixed name
+  `"Falcon Auto Bot"` (`libraryAuthorBot`, identical in all 6 UI
+  languages — a bot proper noun, routed through i18n so a future
+  translator could still adjust it), at the user's explicit request.
+  Accepting the overlay
   while the library panel is open re-renders it from page 1 (the pseudo
   may have changed).
 
