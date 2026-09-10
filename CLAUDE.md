@@ -6741,6 +6741,21 @@ servers:
   confirming zero regression to the ordinary path; a real 9×9 easy themed
   job through the running API still generates and places theme words.
 
+  This tier was later **renumbered and reframed** in the docs/comments
+  only (no code-logic change), at the user's explicit request ("Faire
+  systématiquement 1 puis 1bis (qui devient 2)"): it stops being a
+  special "1bis / top-priority" carve-out and is presented as plain,
+  systematic **step 2** of the slot-selection cascade — applied
+  unconditionally right after the across/down draw, exactly like every
+  other level (each of which is likewise a no-op in its non-applicable
+  case). The code already executed in this order (the theme narrowing
+  has always sat immediately after `direction_pool` is drawn and before
+  the `< PREFILL_MIN_WORD_COUNT` filter), so nothing in `_backtrack`
+  changed — only `DOC_ALGO/FR/ReadMe.md`'s numbered list (1→1, 1bis→2,
+  old 2-6→3-7) and the matching `Filler._backtrack` comment block, with
+  the "prioritaire sur tous les suivants" language dropped. Verified with
+  `py_compile`.
+
   `THEME_PRESEARCH_LIMIT` was later lowered from 5000 to **1000**, at the
   user's explicit request: "Lors de la génération de la grille
   thématique, limiter le pré-dictionnaire thématique à 1000 mots." A

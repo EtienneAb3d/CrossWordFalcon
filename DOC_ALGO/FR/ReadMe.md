@@ -615,20 +615,22 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    chances d'être tirée que l'autre. Ça fait naturellement alterner/
    équilibrer les deux catégories au fil du remplissage, sans imposer un
    ordre strict (par exemple tout l'horizontal puis tout le vertical) ;
-1bis. **grille thématique uniquement** : s'il existe dans la catégorie
-   tirée au moins un emplacement où un mot du glossaire thématique (non
-   encore posé ailleurs) tient encore compte tenu des lettres déjà
-   connues, le choix se restreint à ces emplacements — on commence donc
-   par remplir les zones thématiquement réalisables, et on y pose un mot
-   thématique en priorité (voir "Classement des mots candidats à
-   l'essai"). Ce niveau est
-   prioritaire sur tous les suivants. Sans thématique, ou si aucun
-   emplacement de la catégorie n'accepte de mot thématique, il ne change
-   rien. Sur une grille bilingue, chaque direction utilise le glossaire
-   thématique de SA PROPRE langue (un glossaire par langue) : un
-   emplacement horizontal est jaugé contre le glossaire de la langue A,
-   un vertical contre celui de la langue B ;
-2. à l'intérieur du groupe retenu au niveau précédent, on choisit en priorité les
+2. **grille thématique uniquement** : ce niveau s'applique
+   systématiquement juste après le niveau 1 (comme tous les niveaux
+   suivants), sans priorité particulière sur eux. S'il existe dans la
+   catégorie tirée au niveau 1 au moins un emplacement où un mot du
+   glossaire thématique (non encore posé ailleurs) tient encore compte
+   tenu des lettres déjà connues, le choix se restreint à ces
+   emplacements — on commence donc par remplir les zones thématiquement
+   réalisables, et on y pose un mot thématique en priorité (voir
+   "Classement des mots candidats à l'essai"). Sans thématique, ou si
+   aucun emplacement de la catégorie n'accepte de mot thématique, ce
+   niveau ne change rien : le niveau 3 s'applique alors à la catégorie
+   entière. Sur une grille bilingue, chaque direction utilise le
+   glossaire thématique de SA PROPRE langue (un glossaire par langue) :
+   un emplacement horizontal est jaugé contre le glossaire de la langue
+   A, un vertical contre celui de la langue B ;
+3. à l'intérieur du groupe retenu au niveau précédent, on choisit en priorité les
    emplacements avec **moins de `PREFILL_MIN_WORD_COUNT` (3) mots
    candidats** — le même seuil que celui du pré-remplissage de l'étape 1.
    But : essayer de résoudre ces emplacements fragiles par un vrai mot
@@ -638,7 +640,7 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    aucun emplacement de la catégorie n'est sous ce seuil, ce niveau ne
    change rien : le niveau suivant s'applique alors à la catégorie
    entière ;
-3. parmi les emplacements retenus au niveau précédent, s'il en existe au
+4. parmi les emplacements retenus au niveau précédent, s'il en existe au
    moins un qui a déjà **au moins une case déterminée par une vraie
    lettre** (un vrai mot croisé déjà assigné pendant cette même tentative,
    ou une lettre verrouillée d'un palier précédent — jamais une simple
@@ -648,7 +650,7 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    entamé plutôt que d'en ouvrir un nouveau. Si tous les emplacements
    retenus au niveau précédent sont entièrement vierges, ce niveau ne
    change rien : le niveau suivant s'applique alors au groupe entier ;
-4. parmi les emplacements retenus au niveau précédent, on calcule pour
+5. parmi les emplacements retenus au niveau précédent, on calcule pour
    chacun le score **x + y**, où `(x, y)` sont les coordonnées de la
    première case de l'emplacement (son coin le plus en haut à gauche),
    mesurées par rapport au coin **en haut à gauche** de la grille — la
@@ -667,19 +669,19 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    (`backend/crossword_gen.py`) — une fenêtre qui s'élargit quand ce
    groupe compte encore beaucoup d'emplacements, et se resserre (jusqu'à
    ce plancher de 5) une fois qu'il n'en reste plus beaucoup ;
-5. cette fenêtre de niveau 4 est ensuite **retriée** par nombre de lettres
+6. cette fenêtre de niveau 5 est ensuite **retriée** par nombre de lettres
    déjà posées dans chaque emplacement (le plus de lettres en premier —
-   même distinction fait-acquis/simple-supposition que le niveau 3, une
+   même distinction fait-acquis/simple-supposition que le niveau 4, une
    simple graine statistique ne comptant jamais), puis **réduite** à ses
    `SLOT_SELECTION_REFINE_FRACTION` premiers emplacements (1/2,
    `backend/crossword_gen.py`) — mêlangée d'abord (même raison que le
-   mélange du niveau 4) pour éviter tout biais positionnel à la coupure.
+   mélange du niveau 5) pour éviter tout biais positionnel à la coupure.
    Un plancher de seulement 1 emplacement (pas 5 comme la fenêtre du
-   niveau 4) : la fenêtre de niveau 4 peut déjà être aussi petite que son
+   niveau 5) : la fenêtre de niveau 5 peut déjà être aussi petite que son
    propre plancher de 5, et un plancher de 5 ici annulerait la réduction
    dans ce cas très courant — cette fenêtre réduite ne peut donc jamais
    finir vide ;
-6. cette fenêtre réduite est enfin retriée une dernière fois par un score
+7. cette fenêtre réduite est enfin retriée une dernière fois par un score
    statistique — la somme des carrés des fréquences mesurées (le même
    échantillonnage statistique qui alimente les graines, voir "Les
    graines" plus haut) de la lettre la plus fréquente à chaque case

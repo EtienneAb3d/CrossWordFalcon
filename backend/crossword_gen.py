@@ -2373,7 +2373,7 @@ class Filler:
         self.excluded_slots = excluded_slots if excluded_slots is not None else set()
         # Emplacements qui croisent (partagent au moins une case avec) un
         # emplacement de `excluded_slots` — nouvelle règle de sélection, à
-        # la demande explicite de l'utilisateur, prioritaire sur les 4
+        # la demande explicite de l'utilisateur, prioritaire sur les 7
         # niveaux de `_backtrack` : ne jamais essayer de remplir un tel
         # emplacement. Un mot qui y serait posé serait de toute façon
         # retiré par le prochain nettoyage (`_build_retry_seed`, qui retire
@@ -2476,7 +2476,7 @@ class Filler:
         supposition que _has_known_letter (self.forced_letters, une
         simple graine statistique, ne compte jamais ici) — voir sa propre
         docstring. Utilisée par _backtrack pour retrier la fenêtre de
-        sélection du niveau 4 (le plus de lettres déjà posées en
+        sélection du niveau 5 (le plus de lettres déjà posées en
         premier), à la demande explicite de l'utilisateur."""
         count = 0
         for cell in self.slots[i]:
@@ -2518,7 +2518,7 @@ class Filler:
         ici, même exclusion que _placed_letter_count/_has_known_letter.
 
         Utilisée par _backtrack comme dernier critère de départage du
-        niveau 4 (voir sa propre docstring), à la demande explicite de
+        niveau 5 (voir sa propre docstring), à la demande explicite de
         l'utilisateur : favorise l'emplacement dont la zone offre
         statistiquement le plus d'options de remplissage — c'est-à-dire,
         pour chaque case encore libre, plusieurs mots réels différents s'y
@@ -2833,7 +2833,7 @@ class Filler:
                 return False
             domains[i] = domain
 
-        # Règle de sélection à 4 niveaux, à la demande explicite de
+        # Règle de sélection à 7 niveaux, à la demande explicite de
         # l'utilisateur (le MRV a été retiré — voir le commentaire plus
         # haut, avant la classe Filler, pour pourquoi) :
         # 1. on alterne d'abord horizontal/vertical : on tire la
@@ -2844,17 +2844,21 @@ class Filler:
         #    non remplis a plus de chances d'être choisie que l'autre, ce
         #    qui tend naturellement à alterner/équilibrer les deux au fil du
         #    remplissage sans figer un ordre strict ;
-        # 1bis. **Grille thématique uniquement, à la demande explicite de
-        #    l'utilisateur, prioritaire sur tous les niveaux suivants** :
-        #    s'il existe dans la catégorie tirée au moins un emplacement où
-        #    un mot du glossaire thématique (`self.priority_words`, non
-        #    encore utilisé) tient encore compte tenu des lettres connues,
-        #    le choix se restreint à ces emplacements. On commence donc par
+        # 2. **Grille thématique uniquement, à la demande explicite de
+        #    l'utilisateur** : ce niveau s'applique systématiquement juste
+        #    après le niveau 1, exactement comme tous les niveaux suivants
+        #    — plus de "priorité sur les niveaux suivants", c'est un
+        #    maillon ordinaire de la cascade. S'il existe dans la catégorie
+        #    tirée au niveau 1 au moins un emplacement où un mot du
+        #    glossaire thématique (`self.priority_words`, non encore
+        #    utilisé) tient encore compte tenu des lettres connues, le
+        #    choix se restreint à ces emplacements. On commence donc par
         #    remplir les zones thématiquement réalisables (et on y pose un
         #    mot thématique en priorité, voir le tri des candidats plus
         #    bas). Sans thématique, ou si aucun emplacement de la catégorie
-        #    n'accepte de mot thématique, ce niveau ne change rien ;
-        # 2. **Nouveau, à la demande explicite de l'utilisateur, prioritaire
+        #    n'accepte de mot thématique, ce niveau ne change rien : le
+        #    niveau 3 s'applique alors à la catégorie entière ;
+        # 3. **Nouveau, à la demande explicite de l'utilisateur, prioritaire
         #    sur le critère de domaine ci-dessous** : parmi les emplacements
         #    de la catégorie tirée, s'il en existe au moins un dont le
         #    domaine (`domains[i]`, déjà calculé juste au-dessus) compte
@@ -2872,9 +2876,9 @@ class Filler:
         #    l'utilisateur, qui vise directement le même seuil que le
         #    pré-remplissage plutôt qu'un proxy géométrique. Si aucun
         #    emplacement de la catégorie n'est dans ce cas, ce niveau ne
-        #    change rien : le niveau 3 s'applique alors à l'ensemble de la
+        #    change rien : le niveau 4 s'applique alors à l'ensemble de la
         #    catégorie, exactement comme avant l'ajout de ce niveau ;
-        # 3. **Nouveau, à la demande explicite de l'utilisateur** : parmi
+        # 4. **Nouveau, à la demande explicite de l'utilisateur** : parmi
         #    les emplacements du groupe obtenu au niveau précédent, s'il en
         #    existe au moins un qui a déjà au moins une case déterminée par
         #    une vraie lettre (`_has_known_letter` — un mot croisé déjà
@@ -2885,9 +2889,9 @@ class Filler:
         #    partiellement connu — finir un emplacement déjà entamé plutôt
         #    que d'en ouvrir un nouveau. Si tous les emplacements du groupe
         #    sont entièrement vierges, ce niveau ne change rien : le niveau
-        #    4 s'applique alors à l'ensemble du groupe, exactement comme
+        #    5 s'applique alors à l'ensemble du groupe, exactement comme
         #    avant l'ajout de ce niveau ;
-        # 4. les niveaux 2/3/4 précédents (le moins de cases encore
+        # 5. les critères précédents de ce niveau (le moins de cases encore
         #    blanches en priorité, le plus de lettres déjà fixées en
         #    départage, un tirage pondéré par la longueur en dernier
         #    recours) ont été remplacés par une règle unique : parmi les
@@ -2950,16 +2954,16 @@ class Filler:
         #    Cette fenêtre géométrique (`window`) est ensuite retriée deux
         #    fois de plus, chaque fois en la réduisant encore, avant que le
         #    choix final ne se fasse :
-        # 5. par nombre de lettres déjà posées dans chaque emplacement
+        # 6. par nombre de lettres déjà posées dans chaque emplacement
         #    (`_placed_letter_count`, le plus de lettres en premier),
         #    réduite à ses `SLOT_SELECTION_REFINE_FRACTION` premiers
         #    emplacements (voir la docstring de cette constante) ;
-        # 6. par `_slot_letter_frequency_score` (voir sa propre docstring),
+        # 7. par `_slot_letter_frequency_score` (voir sa propre docstring),
         #    le score le plus haut en premier — l'emplacement dont la zone
         #    propose statistiquement le plus d'options de remplissage —
         #    dont le premier devient directement l'emplacement choisi.
         #    Chacune de ces deux réductions remélange sa propre fenêtre
-        #    d'entrée au préalable (même raison que le mélange du niveau 4 :
+        #    d'entrée au préalable (même raison que le mélange du niveau 5 :
         #    `sorted` étant stable, ce mélange est ce qui départage les
         #    emplacements à égalité de score, pas l'ordre hérité du tri
         #    précédent).
@@ -2973,12 +2977,13 @@ class Filler:
             )[0]
         else:
             direction_pool = free_across or free_down
-        # Nouveau niveau prioritaire, à la demande explicite de
-        # l'utilisateur : pour une grille thématique, commencer par
-        # restreindre le choix aux emplacements où au moins un mot du
-        # glossaire thématique (`self.priority_words`) tient encore,
-        # compte tenu des lettres déjà connues et des mots déjà posés
-        # ailleurs — le remplissage privilégie ainsi les zones
+        # Niveau 2 : appliqué systématiquement juste après le tirage de
+        # catégorie (niveau 1), comme tout autre maillon de la cascade —
+        # pas de priorité particulière sur les niveaux suivants. Pour une
+        # grille thématique, on restreint le choix aux emplacements où au
+        # moins un mot du glossaire thématique (`self.priority_words`)
+        # tient encore, compte tenu des lettres déjà connues et des mots
+        # déjà posés ailleurs — le remplissage privilégie ainsi les zones
         # thématiquement réalisables (et y place un mot thématique en
         # priorité, voir le tri des candidats plus bas). Sauté s'il n'y a
         # aucune thématique, ou si aucun emplacement du pool de direction
