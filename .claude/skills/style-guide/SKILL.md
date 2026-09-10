@@ -2434,6 +2434,17 @@ English (see `project-best-practices`).
   (`#dictionary-similar-btn`) and every internal identifier are
   unchanged — only the displayed text.
 
+  **"Synonymes"** (`#dictionary-synonyms-btn`) sits right next to
+  "Thématique" in the same form row — at the user's explicit request for
+  a direct, no-LLM-expansion Qdrant search (see `CLAUDE.md`'s own entry
+  for the backend mechanic). A plain unstyled `<button>`, same accent-
+  blue base style as every other Dictionary-panel action button, no
+  dedicated CSS. Its result reuses the exact same
+  `renderSimilarWordsResult()` rendering (and so the same
+  `.dictionary-similar-line`/score-in-parentheses treatment described
+  just above) as "Thématique" — the two buttons only differ in which
+  backend endpoint they call, never in how the result is displayed.
+
   The result line (`.dictionary-similar-line`) now shows each word with
   its **Qdrant similarity score in parentheses**, 2 decimals — e.g.
   `CHAT (0.89), CHATS (0.84), …` — at the user's explicit request; `GET
@@ -2573,3 +2584,303 @@ English (see `project-best-practices`).
   for a non-themed generation, whose examples simply lack the key).
   Backend side: `backend/crossword_gen.py`'s `_theme_word_cells`/`_theme_cells_
   from_preview_state` populate `theme_cells` on every preview example dict.
+
+- **"Interactif" authoring-mode controls** (`#interactive-controls`,
+  `frontend/static/script.js`), at the user's explicit request — a
+  hands-on word-by-word grid builder. The control strip lives **inside
+  `#result`**, right after `#board`, so it reuses `#grid`/`renderGrid()`
+  wholesale via a synthesized `puzzle` (no separate grid renderer) — no
+  change to `syncRssPanelVisibility()` was needed (it already keys off
+  `result.hidden`). `#interactive-controls` is a centered flex column
+  holding, top to bottom: a centered status/message span
+  (`#interactive-message`, `.error` -> `var(--error)` for "Grille devenue
+  impossible" and the like, plain `#555` otherwise), `#interactive-arrows`
+  (the →/↓ pair, reusing `.toggle-btn`/`.active` and the shared
+  `virtualKeyboardAcrossBtn`/`DownBtn` aria keys, driven by the same
+  `setActiveDirection()` as every other direction control, plus
+  **`#interactive-clean-btn`** ("Nettoyer") right after the ↓ button — at
+  the user's own explicit, literal placement request, "à droite des
+  flèches" — a plain unstyled `<button>` inheriting the shared accent-blue
+  base style, same as every other interactive-mode action button; no
+  dedicated CSS needed, `#interactive-arrows`'s existing `display:flex;
+  gap:0.4rem` already spaces it correctly next to the two toggle
+  buttons), then **`#interactive-clean-deep-btn`** ("Nettoyer (+noires)")
+  right after `#interactive-clean-btn` — at the user's own explicit
+  request for a deeper cleanup pass that also targets black cells
+  themselves (see `CLAUDE.md`'s own "Nettoyer (+noires)" entry for the
+  mechanic), same plain unstyled `<button>` treatment as its sibling,
+  no dedicated CSS — then **`#interactive-verify-btn`** ("Vérifier") —
+  moved into this same row right after it, at the user's own further
+  explicit request ("Mettre le bouton Vérifier à côté du bouton
+  Nettoyer"), out of `#interactive-definition-row` below (which now only
+  holds the definition `<input>` + **Proposer**). Same reasoning as
+  Précédent/Suivant's own move below: no new CSS needed either, the id
+  itself is unchanged so its JS handler/const still resolve the same way
+  regardless of its new DOM position — then
+  `#interactive-definition-row` (the definition `<input>`, flex:1, +
+  **Proposer**; `.interactive-propose-line` is a clickable proposal row
+  calqued on `.dictionary-define-line`, `cursor:pointer`, `:hover`/
+  `:focus-visible` -> `var(--selected)`), then the title row and save
+  button.
+
+  **Précédent/Suivant were moved out of this strip entirely**, at the
+  user's own explicit follow-up request — a first version had them in a
+  full-width `#interactive-nav` row (Précédent left, message centered,
+  Suivant right) sitting right above `#interactive-arrows`, which the
+  user judged as an unwanted second "arrows + definition" block competing
+  with the play-mode one already sitting just below the grid
+  (`#hover-definition-row`). Fixed two ways at once: (1) Précédent/Suivant
+  now live in **`#grid-column` itself**, as plain siblings flanking
+  `#grid` directly (`<button id="interactive-prev-btn">` before `#grid`,
+  `<button id="interactive-next-btn">` after it, both `hidden` by
+  default) — `script.js`'s `enterInteractiveMode()`/`hideInteractivePanel()`
+  toggle their own `hidden` attribute and add/remove a
+  `.interactive-flank` class on `#grid-column`, which switches it from
+  its normal `flex-direction: column` to `row` (`align-items: center`)
+  for this mode. `#grid` keeps its own pre-existing `align-self: flex-
+  start` unconditionally — pinned to the row's top edge either way — so
+  the row's cross-axis size ends up equal to `#grid`'s own height, and
+  the two shorter buttons, using the row's default centered
+  `align-items`, land exactly at `#grid`'s vertical midpoint with no JS
+  measurement needed. Both plain, unstyled `<button>` elements (the
+  shared accent-blue base style, `.interactive-flank-btn` only exists as
+  a hook for the mandatory `[hidden]{display:none}` override — same
+  specificity trap as every other bare-id/bare-class `display` rule in
+  this file). (2) `applyDefinitionsVisibility()` now also hides the
+  play-mode `#hover-definition-row` whenever `interactiveMode` is on
+  (needs its own `#hover-definition-row[hidden]{display:none}` override
+  too, same trap) — so interactive mode shows exactly one "arrows +
+  definition" block, the interactive-specific one (Proposer/Vérifier),
+  never the play-mode one. `renderHoverDefinitionForSelection()`
+  degrades to a no-op placeholder in this mode (the row it would write
+  into is hidden either way).
+
+  **The whole Précédent+Grille+Suivant row is centered**, at the user's
+  later explicit request ("centrer le bloc Précédent+Grille+Suivant") —
+  `#board` (the flex row wrapping `#clues`/`#grid-column`) has no
+  `justify-content` of its own (defaults to flush-left), which read fine
+  in play mode (where `#clues` is a second, real sibling) but left the
+  interactive row pinned to the page's left edge once `#clues` became
+  this mode's only ever-hidden sibling. `#board.interactive-centered {
+  justify-content: center; }`, toggled by `enterInteractiveMode()`/
+  `hideInteractivePanel()` alongside `#grid-column`'s own `.interactive-
+  flank` class — scoped to this one class rather than applied
+  unconditionally, so the ordinary play-mode layout (`#clues` + `#grid-
+  column`, deliberately flush-left) is never touched.
+
+  `#interactive-title-row`/`#interactive-save-btn` are `hidden` until the
+  grid is complete; `#interactive-save-result` uses `var(--correct-fg)`
+  (green) for the success line. Because these two (plus `#interactive-
+  controls`/`#interactive-propose-results` above) set `display` on the
+  bare id, they carry an explicit `[hidden]{display:none}` override
+  (`#interactive-controls[hidden], #interactive-propose-results[hidden],
+  #interactive-title-row[hidden]`) — the same specificity trap already
+  hit for `#rss-panel`/`#rss-detail`/`#virtual-keyboard`.
+- **Selectable black cells in interactive mode** — in `#grid`, a black
+  cell is normally non-interactive, but while `interactiveMode` is on it
+  gets a click handler and, when selected, an accent inset border
+  (`#grid .cell.black.selected { box-shadow: inset 0 0 0 2px
+  var(--accent); }`) since the light-blue `--selected` fill used for
+  white cells would be invisible on black. Play mode is unchanged (the
+  rule only ever matches when the JS adds `.selected` to a `.black` cell,
+  which only happens in interactive mode).
+- **Virtual-keyboard "case noire" key** (`.virtual-keyboard-key.virtual-
+  keyboard-black`, built by `buildVirtualKeyboard()` after the A-Z rows)
+  — a `■` glyph key, dark fill (`#222`) / white text so it reads as
+  distinct from the light letter keys; same effect as the Space bar
+  (toggle the selected cell black), only functional in interactive mode.
+- **"(Création)" library tag** — `renderLibraryList()`'s author cell
+  appends ` (Création)` (`libraryCreationTag`, all 6 languages) after the
+  pseudo/`libraryAuthorBot` name when a row's `interactive` flag is set
+  (a grid built via the authoring mode above). Plain text, no new style.
+
+**Not visually confirmed in an actual browser** — same tooling
+limitation noted throughout this file; verified structurally (CSS
+brace balance, HTML tag balance, `esprima` JS syntax check) and end to
+end through the real running API (interactive start/step/save,
+`(Création)` reaching the library list).
+
+- `#interactive-words-btn` ("Mots") moved to the **start** of
+  `#interactive-arrows`, before the →/↓ direction buttons, at the user's
+  explicit request ("Mettre le bouton Mots à gauche des flèches") —
+  reversing its previous position (after "Vérifier", at the end of the
+  row). Purely a DOM reorder in `index.html`; no CSS/JS change needed —
+  `#interactive-arrows` is a plain flex row with no `order`/positional
+  styling, and every button in it is wired by `id`, not by DOM position.
+
+- Fixed a real bug reported directly by the user: "il y a des flèches de
+  navigation qui proviennent sans doute de l'affichage de prévisualisations
+  en mode automatique... Ces boutons ne doivent pas être affichés en mode
+  interactif." The `#generation-times-prev-btn`/`-next-btn` pair (see the
+  `#generation-times` entry above) were never conditionally hidden
+  anywhere — only ever `.disabled` toggled by `updatePreviewNavButtons()`
+  — so they stayed visibly present (just enabled/disabled per whatever
+  `previewHistory` happened to hold) even while `enterInteractiveMode()`
+  cleared `#generation-times-text`'s own content, leaving orphaned nav
+  arrows above the grid with no associated "Grille générée en..." text —
+  redundant anyway, since interactive mode has its own dedicated
+  Précédent/Suivant buttons flanking the grid for a completely different
+  purpose (undo one edit / place one more word, not step through the
+  automatic search's own preview history). Fixed by explicitly hiding
+  `generationTimesPrevBtn`/`generationTimesNextBtn`/`generationTimes
+  Position` in `enterInteractiveMode()` and restoring them (`.hidden =
+  false`) in `hideInteractivePanel()` — the one function already called
+  both when leaving interactive mode for a normal final grid
+  (`displayFinalGrid()`) and at the very start of every ordinary
+  generation, so no other call site needed touching.
+
+- Added a new `.cell.white.interactive-invalid` highlight, at the user's
+  explicit request ("Le bouton Vérifier doit vérifier toute la grille et
+  mettre en rouge les mots complets qui posent un problème") — see
+  CLAUDE.md's own entry on the rewritten "Vérifier" button and its new
+  `POST /api/interactive/verify` endpoint. Reuses the same `--incorrect-
+  bg`/`--incorrect-fg` pair already used by `.interactive-impossible` and
+  by the real, playable grid's own "Vérification" mode wrong-letter state
+  (permanent rule 2: no new literal color when an existing token already
+  fits) — but, unlike `.interactive-impossible`/`.interactive-low` (which
+  only ever apply to a still-*incomplete* slot, so their own cells can be
+  blank), this one also sets the text colour, since a flagged word is by
+  definition already fully typed. The two never actually coincide on the
+  same cell (impossible/low is about an incomplete slot with no candidate
+  words left; invalid is about a *complete* word that's either not a real
+  dictionary entry or missing its own definition), so their exact cascade
+  order relative to each other doesn't matter in practice — declared
+  right after `.interactive-low`, before `.selected`, matching the same
+  convention already established for the other two diagnostic overlays.
+
+- Added `#interactive-verify-report`, at the user's explicit request:
+  "le bouton Vérifier doit générer un rapport indiquant les problèmes
+  rencontrés sur chaque mot. Un mot par ligne. Affiché en dessous du
+  champ de saisie des définitions." Placed right after `#interactive-
+  definition-row` in source order (before `#interactive-words-results`)
+  — literally "below the definition input field," per the request. A
+  plain `display: flex; flex-direction: column` div holding one
+  `.interactive-verify-report-line` `<p>` per flagged word (never one per
+  *every* word — only the ones "Vérifier" actually found a problem with),
+  built by `script.js`'s `renderInteractiveVerifyReport()`. Same H/V +
+  1-based `(row, col)` prefix convention already established for the
+  word-verification table (`renderWordTable`), for consistency across the
+  app — e.g. `H (3, 4) CHAT : mot absent du dictionnaire`. Deliberately
+  **not styled like** `.interactive-propose-line`/`.interactive-word-item`
+  right below it (no `cursor: pointer`, no hover/focus background) — this
+  is a read-only diagnostic report, not a pick list to click into. Text
+  coloured with `--incorrect-fg` — the same red already used for the
+  matching cells on the grid itself (`.interactive-invalid`, see the entry
+  above) — so the report visually ties back to what's highlighted there.
+  Needs the same `#interactive-verify-report[hidden] { display: none }`
+  override as every other bare-id `display`-declaring element in this
+  panel (the same specificity trap documented repeatedly throughout this
+  file for `#rss-panel`/`#rss-detail`/`#virtual-keyboard`/etc.).
+
+  Populated from a new `interactiveVerifyReport` array (mirrors
+  `interactiveInvalidCells`'s own lifecycle exactly — cleared inside
+  `clearInteractiveDiagnostics()` on any manual edit, so a stale report
+  never survives an edit it no longer describes) rather than rendered
+  directly inline in the click handler, specifically so `renderInteractive
+  Verify Report()` can be called from `renderInteractive()` itself: the
+  "Vérifier" handler already calls `renderInteractive()` once, right after
+  populating the array, to refresh the `.interactive-invalid` cell
+  highlights — reading the state back out inside that same render pass
+  (rather than a plain "set some innerHTML and stop" side effect) means
+  the two can never end up showing an inconsistent pair (grid highlighted
+  one way, report saying another).
+
+  Verified: real end-to-end interactive sessions against the real running
+  API (several words placed via repeated "Suivant" calls, some given a
+  fake local definition, others left undefined) confirmed the exact
+  report content and formatting (`H (3, 1) AME : définition manquante`,
+  etc.) by mirroring `renderInteractiveVerifyReport()`'s own logic in
+  Python against the real `/api/interactive/verify` response — the two
+  words given a definition were correctly excluded, every other filled
+  word correctly listed with the right reason(s). `py_compile`/`esprima`/
+  CSS-brace/HTML-div-balance all clean, and the running frontend confirmed
+  to serve every updated file. **Not yet visually confirmed in an actual
+  browser** — same tooling limitation noted throughout this file.
+
+- Added `#interactive-definitions-btn` ("Définitions") at the end of
+  `#interactive-arrows`, right after `#interactive-verify-btn`, at the
+  user's explicit request ("à droite du bouton Vérifier"). A plain
+  unstyled `<button>` — same shared accent-blue base look as every other
+  interactive-mode action button (Nettoyer, Nettoyer (+noires), Vérifier),
+  no dedicated CSS. `#interactive-arrows` gained `flex-wrap: wrap` (it was
+  a non-wrapping `display: flex; gap: 0.4rem` row) since it now holds 7
+  buttons — Mots, →, ↓, Nettoyer, Nettoyer (+noires), Vérifier,
+  Définitions — which would otherwise overflow a narrow panel. No other
+  visual change; the button's behavior (auto-generate a definition for
+  every filled + valid word without one) is in CLAUDE.md.
+
+- `#interactive-message` now shows "Grille complète et valide."
+  (`interactiveCompleteValid`, all 6 languages) in the plain, non-`.error`
+  style when "Suivant" can place nothing more *and* the grid is full of
+  valid words — instead of the red `.error` "Grille devenue impossible".
+  No CSS change: it reuses the element's existing non-error state (plain
+  `#555`), only the message text and the `isError` flag passed to
+  `setInteractiveMessage()` differ. Behavior/condition detail is in
+  CLAUDE.md.
+
+- Interactive mode has two save controls, side by side in a new
+  `#interactive-save-row` (`display: flex; gap: 0.4rem`), at the user's
+  explicit request. Left: `#interactive-draft-save-btn` ("Sauvegarder",
+  `interactiveSaveBtn` key) — always visible while the panel is up, saves
+  a GRID_WORK draft without publishing. Right: `#interactive-save-btn`
+  ("Publier", `interactivePublishBtn` key) — shown only once the grid is
+  complete, publishes to the Library. Both are plain unstyled `<button>`s
+  (shared accent-blue base look), no dedicated CSS beyond the row wrapper.
+  `#interactive-save-btn`'s label is now a plain static "Publier" (its
+  earlier conditional "Sauvegarder"→"Publier" `textContent` switching in
+  `updateInteractiveFinishState` was removed once the dedicated
+  "Sauvegarder" button existed). The draft save reports its outcome on
+  `#interactive-message` in the plain non-`.error` style
+  (`interactiveDraftSaved` "Brouillon enregistré.", all 6 languages),
+  like the other interactive action buttons.
+
+- **"Créations" panel** (`#interactive-work`, `#interactive-work-btn`),
+  at the user's explicit request — see CLAUDE.md for the full GRID_WORK
+  storage/endpoint design. The button sits right after `#dictionary-btn`
+  in `#form-actions` ("à côté de Dictionnaire," per the request's own
+  literal placement), a plain unstyled `<button>` — same shared
+  accent-blue look as every other primary action button in that row, no
+  new CSS needed for it. The panel itself is `#library`'s own box style
+  duplicated under a new id (`margin: 0.75rem 0; padding: 0.75rem 1rem;
+  border: 1px solid var(--border); border-radius: 8px; background:
+  transparent;`) — this project's own established convention is one such
+  rule per panel id rather than a shared class (`#library`/`#dictionary`/
+  `#qdrant-admin` each already do this), so `#interactive-work` follows
+  the same pattern rather than introducing the first shared "panel" class.
+  Transparent background for the same reason already established for
+  `#library`/`#dictionary`/`#rss-panel`: an opaque background would hide
+  the page-wide watermark logo (`body::before`) underneath it.
+
+  `#interactive-work-table` mirrors `#library-table` exactly (same
+  padding/border/`white-space: nowrap` cell rules, same `color: #777;
+  font-weight: 600` header treatment, same clickable-row convention —
+  `cursor: pointer`, a `--selected` hover/focus tint, `tabindex="0"` +
+  Enter/Space handling for keyboard access). Each row resumes that
+  session on click; its own trailing delete-icon button reuses the
+  existing `.nav-btn` class (the same base look already shared by every
+  other small icon button in this app — ✕/↻/◀/▶ — rather than a bare,
+  unstyled button, which would have inherited the generic `button` rule's
+  white-on-accent-blue look and made the 🗑 glyph unreadable against a
+  transparent cell background) plus one extra rule,
+  `.interactive-work-delete-btn:hover/:focus-visible { background: var
+  (--incorrect-bg); }` — a red hover instead of `.nav-btn`'s own default
+  neutral one, since deleting a creation is the one destructive action in
+  this panel (the same red already used for `#stop-btn`'s own
+  "interrupting action" treatment elsewhere). Its click handler stops
+  propagation so it never also triggers the row's own resume click.
+
+  No pagination (unlike `#library`) — a player's own in-progress
+  creations are expected to stay a small, manageable number, unlike the
+  whole shared library. Filtered server-side by the current pseudo (see
+  CLAUDE.md) rather than showing every user's creations — this app
+  already requires a pseudo before anything else can be used (the
+  mandatory welcome-form field), so this filter is always meaningful,
+  never degrading to "show everyone's" the way an optional pseudo would
+  have forced it to. **Not yet visually confirmed in an actual browser**
+  — same tooling limitation noted throughout this file; verified
+  structurally (CSS brace balance, HTML tag balance, a real JS syntax
+  check via `esprima`) and end to end through the real running API
+  (session start/autosave/list/resume/delete, and a resume-then-continue
+  cycle repeated 3 times confirming the same on-disk file is reused
+  throughout rather than ever accumulating a duplicate — see CLAUDE.md
+  for the full trail).

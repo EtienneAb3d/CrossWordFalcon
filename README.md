@@ -182,6 +182,26 @@ in the Library, with a version marker added to its title ("Graines"
 becomes "Graines (V2)", recomputing again gives "(V3)", and so on) —
 the grid you started from is left untouched.
 
+### Building a grid yourself (Interactive mode)
+
+Pick **"Interactive"** in the **Mode** menu (above "Flash") and click
+"Generate grid". Instead of building the whole grid for you, the app
+gives you a black-cell layout with a single word placed and lets you do
+the rest by hand:
+
+- **"Next"** places one more word for you wherever it fits best;
+  **"Back"** undoes the last change, one step at a time.
+- You can click any cell and type a letter, press **Space** to add or
+  remove a black cell, or **Delete** to clear a cell.
+- Once the grid is full, write a definition for each word (a **"Suggest"**
+  button asks the language model for ideas, **"Definitions"** fills in one
+  automatically for every valid word that still lacks one, and **"Check"**
+  points you at any word still missing one), pick a title, then click
+  **"Publish"** — your creation goes into the Library, shown with your
+  nickname and a "(Création)" tag. A **"Save"** button (left of
+  "Publish", available at any point) keeps a draft in your "Créations"
+  list without publishing it.
+
 ### Library
 
 The **"Library"** button (always visible, top right of the form) opens a

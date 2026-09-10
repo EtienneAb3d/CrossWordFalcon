@@ -393,6 +393,18 @@ button:disabled {
   margin-top: 1rem;
 }
 
+/* "Interactif" mode only (script.js's enterInteractiveMode()/
+   hideInteractivePanel() toggle this class on #board): centers the
+   Précédent+Grille+Suivant row within #board's own full width, at the
+   user's explicit request. #clues is always hidden in this mode (see
+   applyDefinitionsVisibility()), so #grid-column — the row itself — is
+   #board's only visible child here; scoped to this class rather than
+   applied unconditionally so the ordinary play-mode #clues+#grid-column
+   layout (flush left, by design) is never affected. */
+#board.interactive-centered {
+  justify-content: center;
+}
+
 /* Wraps #grid and #hover-definition-row so the definition panel (plus its
    own direction-selector, see below) sits directly below the grid
    specifically (not the whole #board row, which also includes the
@@ -425,6 +437,16 @@ button:disabled {
   align-items: center;
   gap: 0.5rem;
   width: 100%;
+}
+/* Bare-id `display` above beats `[hidden]{display:none}` on specificity
+   (same trap as #interactive-controls/#rss-panel/#rss-detail/
+   #virtual-keyboard, see the style-guide SKILL) — without this override,
+   script.js's applyDefinitionsVisibility() setting `.hidden = true` on
+   this row in "Interactif" mode had no visual effect at all: the row
+   kept rendering as a second arrows+definition block alongside the
+   interactive-specific one, reported directly by the user. */
+#hover-definition-row[hidden] {
+  display: none;
 }
 
 /* Stacked vertically (like the virtual keyboard's own
@@ -1021,6 +1043,83 @@ button:disabled {
   font-style: italic;
 }
 
+/* Panneau "Créations" (#interactive-work-btn's click handler, script.js),
+   à la demande explicite de l'utilisateur — même carte transparente/
+   bordée que #library juste au-dessus, membre du même groupe de panneaux
+   centraux basculants. */
+#interactive-work {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+#interactive-work-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+}
+
+#interactive-work-label {
+  margin: 0;
+  margin-right: auto;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+#interactive-work-table {
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+#interactive-work-table th,
+#interactive-work-table td {
+  padding: 0.3rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+#interactive-work-table th {
+  color: #777;
+  font-weight: 600;
+}
+
+/* Every row (except its own delete-icon cell — see below) resumes that
+   session on click, at the user's explicit request — styled to read as
+   clickable the same way #library-table's own rows already do. */
+#interactive-work-table tbody tr {
+  cursor: pointer;
+}
+
+#interactive-work-table tbody tr:hover,
+#interactive-work-table tbody tr:focus-visible {
+  background: var(--selected);
+  outline: none;
+}
+
+/* Delete-icon button, per row — a plain .nav-btn (same base look as every
+   other small icon button in this app: ✕/↻/◀/▶) with a red hover instead
+   of the neutral --selected one, since this is a destructive action (the
+   same --incorrect-bg red already used for #stop-btn's own "interrupting
+   action" treatment elsewhere). Its click handler stops propagation, so
+   it never also triggers the row's own resume click. */
+.interactive-work-delete-btn:hover,
+.interactive-work-delete-btn:focus-visible {
+  background: var(--incorrect-bg);
+  outline: none;
+}
+
+#interactive-work-empty {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #777;
+  font-style: italic;
+}
+
 /* Panneau "Dictionnaire" (#dictionary-btn's click handler, script.js), à
    la demande explicite de l'utilisateur — même carte transparente/bordée
    que #library juste au-dessus, membre du même groupe de panneaux
@@ -1494,6 +1593,34 @@ button:disabled {
   background: var(--black-cell);
 }
 
+/* "Interactif" mode fill diagnostics — same meaning and colours as the
+   attempt previews: red (--incorrect-bg) for a slot with no candidate
+   word left at all, orange (--low-candidates-bg) for one below the
+   fill-option threshold (script.js's interactiveImpossibleCells /
+   interactiveLowCells, backend's _interactive_fill_diagnostics). Declared
+   BEFORE .selected so the currently-selected cell always keeps its blue
+   fill — the diagnostic still shows on every other cell of the slot. */
+.cell.white.interactive-impossible {
+  background: var(--incorrect-bg);
+}
+.cell.white.interactive-low {
+  background: var(--low-candidates-bg);
+}
+
+/* "Interactif" mode: "Vérifier" flags every COMPLETE word that is either
+   not a real dictionary word or has no definition yet (script.js's
+   interactiveInvalidCells) — same red as .interactive-impossible (both
+   mean "problem here"), but also sets the text colour, since a complete
+   word already shows real letters (unlike .interactive-impossible/.-low,
+   which only ever apply to a still-incomplete slot). The two never
+   actually coincide on the same cell (impossible/low only ever flag an
+   incomplete slot, this only ever flags a complete one), so the exact
+   cascade order here doesn't matter in practice. */
+.cell.white.interactive-invalid {
+  background: var(--incorrect-bg);
+  color: var(--incorrect-fg);
+}
+
 .cell.white.selected {
   background: var(--selected);
 }
@@ -1516,6 +1643,16 @@ button:disabled {
 .cell.white.incorrect {
   background: var(--incorrect-bg);
   color: var(--incorrect-fg);
+}
+
+/* "Interactif" mode: a letter belonging to a word placed automatically
+   from the theme glossary (script.js's interactiveThemeCells) — magenta,
+   extra-bold, the same --theme-fg treatment the attempt-preview grids
+   use for theme words. Text colour only, so it composes cleanly over the
+   .selected blue fill. */
+.cell.white.interactive-theme {
+  color: var(--theme-fg);
+  font-weight: 800;
 }
 
 /* Hover-only word outline (grid <-> clue list, see script.js's
@@ -1558,6 +1695,172 @@ button:disabled {
 
 #down-clues-section {
   margin-top: 2rem;
+}
+
+/* ---- "Interactif" authoring mode controls (see script.js) ---- */
+#interactive-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+  align-items: center;
+}
+/* Bare-id `display` beats [hidden]{display:none} on specificity — see the
+   #rss-panel/#rss-detail/#virtual-keyboard entries in the style-guide
+   SKILL for the same trap. */
+#interactive-controls[hidden],
+#interactive-propose-results[hidden],
+#interactive-words-results[hidden],
+#interactive-verify-report[hidden],
+#interactive-title-row[hidden] {
+  display: none;
+}
+/* "Précédent"/"Suivant" flank #grid on each side, vertically centered
+   against it, at the user's explicit request — moved out of the play-
+   mode-shaped #interactive-nav row (removed) into #grid-column itself
+   (see index.html), right before/after #grid. script.js's
+   enterInteractiveMode()/hideInteractivePanel() add/remove this class on
+   #grid-column and toggle the two buttons' own `hidden` attribute.
+   #grid keeps its own `align-self: flex-start` (see its own rule) —
+   pinned to this row's top edge — so the row's cross-axis size equals
+   #grid's own height, and these two shorter buttons, using the row's
+   default `align-items: center`, land exactly at #grid's own vertical
+   midpoint with no JS measurement needed. */
+#grid-column.interactive-flank {
+  flex-direction: row;
+  align-items: center;
+}
+/* A plain <button> has no `display` of its own in the UA stylesheet
+   strong enough to need overriding — but `.interactive-flank-btn` itself
+   is still an author-origin class selector at the same specificity as
+   the bare `[hidden]{display:none}` UA rule, so it must repeat the same
+   "own [hidden] override" convention already used everywhere else in
+   this file (see the #rss-panel/#rss-detail/#virtual-keyboard entries in
+   the style-guide SKILL) — without this, hiding it via `.hidden = true`
+   in play mode would silently do nothing. */
+.interactive-flank-btn[hidden] {
+  display: none;
+}
+#interactive-message {
+  flex: 1 1 auto;
+  text-align: center;
+  min-height: 1.2em;
+  color: #555;
+}
+#interactive-message.error {
+  color: var(--error);
+}
+#interactive-arrows {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+#interactive-definition-row {
+  display: flex;
+  gap: 0.4rem;
+  width: 100%;
+}
+#interactive-save-row {
+  display: flex;
+  gap: 0.4rem;
+}
+#interactive-definition-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+#interactive-propose-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+}
+.interactive-propose-line {
+  margin: 0;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.9rem;
+}
+.interactive-propose-line:hover,
+.interactive-propose-line:focus-visible {
+  background: var(--selected);
+  outline: none;
+}
+/* "Vérifier" button's detailed, one-line-per-word report (script.js's
+   renderInteractiveVerifyReport()), at the user's explicit request: "un
+   rapport indiquant les problèmes rencontrés sur chaque mot." Plain,
+   non-interactive lines (no cursor/hover state, unlike .interactive-
+   propose-line/.interactive-word-item right below — this is a read-only
+   diagnostic, not a pick list) — coloured with --incorrect-fg (the same
+   red already used for the matching cells on the grid itself, see
+   .interactive-invalid) so the report visually ties back to what's
+   highlighted there. */
+#interactive-verify-report {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
+}
+.interactive-verify-report-line {
+  margin: 0;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.9rem;
+  color: var(--incorrect-fg);
+}
+/* "Mots" button results — a single comma-separated, wrapping line (each
+   word individually clickable), at the user's explicit request: "La
+   liste s'affiche en dessous du champ des définitions (liste séparée par
+   des virgules)." Unlike #interactive-propose-results (one <p> per
+   definition, stacked), every word here is an inline <span> plus a plain
+   ", " text node between them, all inside one wrapping block. */
+#interactive-words-results {
+  width: 100%;
+  line-height: 1.6;
+}
+.interactive-word-item {
+  cursor: pointer;
+  padding: 0.05rem 0.15rem;
+  border-radius: 4px;
+}
+.interactive-word-item:hover,
+.interactive-word-item:focus-visible {
+  background: var(--selected);
+  outline: none;
+}
+/* Theme-glossary words shown first, in the same bright magenta already
+   used everywhere else in this app for a theme-glossary match (see
+   .attempt-preview-grid .cell.white.theme and .cell.white.interactive-
+   theme) — at the user's explicit request ("en premier, les mots du
+   glossaire thématique... en magenta"). A text colour (not a background),
+   consistent with those other two rules. */
+.interactive-word-theme {
+  color: var(--theme-fg);
+  font-weight: 700;
+}
+#interactive-title-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  width: 100%;
+}
+#interactive-title-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+#interactive-save-result {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--correct-fg);
+}
+.virtual-keyboard-key.virtual-keyboard-black {
+  background: #222;
+  color: #fff;
+}
+/* Interactive mode: a selected black cell (editable, unlike play mode)
+   gets an accent inset border, since the light-blue --selected fill used
+   for white cells would be invisible against the black fill. */
+#grid .cell.black.selected {
+  box-shadow: inset 0 0 0 2px var(--accent);
 }
 
 .clue-lines {

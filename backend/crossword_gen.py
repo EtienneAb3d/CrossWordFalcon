@@ -2707,132 +2707,26 @@ class Filler:
             cells.update(self.slots[i])
         return sorted(cells)
 
-    def _backtrack(self, deadline_checks):
-        # `self.checks` n'est plus incrémenté ici (une fois par appel/nœud)
-        # mais une fois par mot candidat réellement essayé, dans la boucle
-        # `for w in cands:` plus bas — voir son propre commentaire pour la
-        # raison (à la demande explicite de l'utilisateur, "pour éviter
-        # d'itérer longtemps sur des cas impossibles"). Ce premier appel
-        # (depuis `Filler.solve()`) démarre donc avec `self.checks` encore à
-        # sa valeur d'entrée (0 pour une recherche neuve) ; les contrôles
-        # ci-dessous restent corrects avec cette valeur telle quelle.
-        if self.abandoned:
-            return False
-        if self.checks > deadline_checks:
-            return False
-        if (
-            self.cancel_event is not None
-            and self.checks % CANCEL_CHECK_INTERVAL == 0
-            and self.cancel_event.is_set()
-        ):
-            raise GenerationCancelled()
-        # Arrêt anticipé de TOUT le batch dès qu'une tentative sœur s'est
-        # elle-même abandonnée (voir _worker_batch_abandoned_event et
-        # UNFILLABLE_ABANDON_FRACTION ci-dessous) — à la demande explicite
-        # de l'utilisateur : ne pas attendre que cette tentative-ci atteigne
-        # elle aussi son propre seuil d'abandon ou son propre budget une
-        # fois qu'une autre a déjà jugé le motif commun sans espoir. Même
-        # fréquence de vérification que les autres signaux ci-dessus/
-        # dessous — un coût réel à ne pas payer à chaque nœud.
-        if (
-            self.batch_abandoned_event is not None
-            and self.checks % UNFILLABLE_ABANDON_CHECK_INTERVAL == 0
-            and self.batch_abandoned_event.is_set()
-        ):
-            self.abandoned = True
-            return False
-        # Early stop as soon as ANOTHER attempt of the same palier already
-        # answered (success or failure), at the user's explicit request
-        # ("interrupt every search as soon as one search finishes (success
-        # or failure) to move on to the next palier") — see
-        # attempt_done_event in generate_grid. Unlike the batch_abandoned_
-        # event checkpoint above, this one applies to both _pattern_attempt
-        # and _pattern_continue (see Filler.__init__'s own docstring for why
-        # the distinction made for batch_abandoned_event doesn't apply
-        # here). Reuses `self.abandoned` as a fast short-circuit (same
-        # mechanism as just above), but also sets
-        # `self.interrupted_by_sibling` so try_fill can distinguish this
-        # specific cause in `diagnostics["reason"]`.
-        if (
-            self.attempt_done_event is not None
-            and self.checks % PALIER_ATTEMPT_DONE_CHECK_INTERVAL == 0
-            and self.attempt_done_event.is_set()
-        ):
-            self.abandoned = True
-            self.interrupted_by_sibling = True
-            return False
-        # Abandon anticipé d'une tentative, à la demande explicite de
-        # l'utilisateur (voir UNFILLABLE_ABANDON_FRACTION ci-dessus) : dès
-        # que plus de 30 % des cases blanches de la grille appartiennent à
-        # un emplacement réputé impossible (au sens de impossible_zone_
-        # cells, calculé sur best_assignment), cette tentative est jugée
-        # sans espoir raisonnable et abandonnée sur-le-champ — inutile de
-        # continuer à essayer d'ajouter des mots ailleurs sur un motif déjà
-        # aussi largement compromis. Vérifié seulement toutes les
-        # UNFILLABLE_ABANDON_CHECK_INTERVAL fois (comme cancel_event
-        # ci-dessus), pas à chaque appel : impossible_zone_cells recalcule
-        # le domaine de chaque emplacement non assigné, un coût réel à ne
-        # pas payer à chaque nœud.
-        if (
-            self._total_white_cells > 0
-            and self.checks % UNFILLABLE_ABANDON_CHECK_INTERVAL == 0
-            and len(self.impossible_zone_cells())
-            > UNFILLABLE_ABANDON_FRACTION * self._total_white_cells
-        ):
-            self.abandoned = True
-            # Signale aux autres tentatives du même batch qu'elles peuvent,
-            # elles aussi, s'arrêter — voir le commentaire de
-            # _worker_batch_abandoned_event et le point de contrôle
-            # correspondant plus haut dans cette même méthode.
-            if self.batch_abandoned_event is not None:
-                self.batch_abandoned_event.set()
-            return False
-        unassigned = [
-            i for i in range(len(self.slots))
-            if self.assignment[i] is None
-            and i not in self.excluded_slots
-            and i not in self._crossing_excluded_slots
-        ]
-        # Compté directement depuis self.assignment (pas dérivé de
-        # `len(self.slots) - len(unassigned)`) : avec `excluded_slots` non
-        # vide, cette dernière formule compterait à tort chaque emplacement
-        # exclu comme "assigné" alors qu'il reste bel et bien à None.
-        assigned_count = sum(1 for a in self.assignment if a is not None)
-        if assigned_count > self.best_assigned_count:
-            self.best_assigned_count = assigned_count
-            self.best_assignment = list(self.assignment)
-            if self.on_new_best is not None:
-                self.on_new_best(self.best_assignment)
-        if not unassigned:
-            return True
+    def _select_target_slot(self, unassigned, domains):
+        """Choisit l'emplacement à remplir ensuite parmi `unassigned` (déjà
+        garanti non vide, chacun avec au moins un candidat réellement
+        disponible — voir le contrôle de domaine juste avant l'appel, dans
+        `_backtrack`), via la cascade à 7 niveaux documentée ci-dessous.
 
-        # On calcule le domaine de chaque emplacement non assigné ici (et on
-        # échoue immédiatement si l'un d'eux est déjà à sec), pour détecter
-        # une branche morte le plus tôt possible — ce domaine sert aussi à
-        # trier les mots candidats de l'emplacement finalement choisi (voir
-        # plus bas), quel que soit le critère qui l'a désigné.
-        #
-        # `_domain` ne tient compte que des contraintes de lettres (croisements
-        # déjà assignés / indices statistiques) — jamais de `self.used_words`.
-        # Un emplacement dont le domaine brut est non vide peut donc, dans une
-        # grille déjà très remplie, n'avoir en réalité PLUS AUCUN candidat
-        # disponible (chacun de ses mots déjà utilisé ailleurs) — un vrai
-        # blocage, identique en pratique à un domaine vide, mais invisible à
-        # ce contrôle sans vérifier aussi `used_words` ici. Bug réel constaté
-        # en direct : une grille de 143 emplacements restait bloquée à
-        # exactement 115 assignés/3 impossibles pendant plus de 180 paliers
-        # consécutifs d'affilée, `checks=1` à chaque fois — l'emplacement qui
-        # bloquait réellement la recherche avait un domaine techniquement non
-        # vide (une quinzaine de candidats), mais chacun d'eux était déjà
-        # utilisé par un autre mot de la grille, donc `impossible_zone_slots`
-        # (voir plus haut, même correctif) ne le remontait jamais non plus.
-        domains = {}
-        for i in unassigned:
-            domain = self._domain(i)
-            if all(w in self.used_words for w in domain):
-                return False
-            domains[i] = domain
-
+        Factorisée hors de `_backtrack` pour être réutilisée telle quelle
+        par `interactive_place_word` (mode "Interactif" du web UI), à la
+        demande explicite de l'utilisateur — un doublon manuel de cette
+        logique y avait été écrit à la main (un simple MRV : le domaine le
+        plus petit, puis un emplacement déjà partiellement connu, puis au
+        hasard), sans le seuil de longueur du niveau 3 (qui exclut les
+        emplacements de 2-3 lettres) ni le score géométrique du niveau 5
+        (qui privilégie le coin en haut à gauche) — ce qui faisait démarrer
+        le remplissage interactif par des emplacements de 2 lettres
+        dispersés dans la grille au lieu de suivre les mêmes règles que la
+        génération automatique. Reprend `unassigned`/`domains` en
+        paramètres (plutôt que de les recalculer) car `interactive_place_
+        word` les a déjà construits sous une forme légèrement différente
+        (`viable`, filtrée par `used_words`) pour son propre usage."""
         # Règle de sélection à 7 niveaux, à la demande explicite de
         # l'utilisateur (le MRV a été retiré — voir le commentaire plus
         # haut, avant la classe Filler, pour pourquoi) :
@@ -2860,8 +2754,11 @@ class Filler:
         #    niveau 3 s'applique alors à la catégorie entière ;
         # 3. **Nouveau, à la demande explicite de l'utilisateur, prioritaire
         #    sur le critère de domaine ci-dessous** : parmi les emplacements
-        #    de la catégorie tirée, s'il en existe au moins un dont le
-        #    domaine (`domains[i]`, déjà calculé juste au-dessus) compte
+        #    de la catégorie tirée **de 4 lettres et plus** (à la demande
+        #    explicite de l'utilisateur — un emplacement de 2-3 lettres a
+        #    un vocabulaire naturellement restreint, cette priorité n'y
+        #    apporte rien), s'il en existe au moins un dont le domaine
+        #    (`domains[i]`, déjà calculé juste au-dessus) compte
         #    strictement moins de `PREFILL_MIN_WORD_COUNT` mots candidats —
         #    le même seuil que le pré-remplissage de l'étape 1 utilise pour
         #    décider qu'un emplacement a besoin d'une case noire — le choix
@@ -3004,7 +2901,14 @@ class Filler:
             ]
             if theme_placeable:
                 direction_pool = theme_placeable
-        few_candidates = [i for i in direction_pool if len(domains[i]) < PREFILL_MIN_WORD_COUNT]
+        # Uniquement pour les emplacements de 4 lettres et plus, à la
+        # demande explicite de l'utilisateur : un emplacement de 2-3
+        # lettres a un vocabulaire naturellement restreint, y déclencher
+        # cette priorité "peu de candidats" n'apporte rien d'utile.
+        few_candidates = [
+            i for i in direction_pool
+            if len(self.slots[i]) >= 4 and len(domains[i]) < PREFILL_MIN_WORD_COUNT
+        ]
         selection_pool = few_candidates if few_candidates else direction_pool
         # Nouveau niveau, à la demande explicite de l'utilisateur : parmi
         # le groupe obtenu au niveau précédent, s'il en existe au moins un
@@ -3077,7 +2981,139 @@ class Filler:
         shuffled_refined = list(refined_window)
         self.rng.shuffle(shuffled_refined)
         freq_scores = {i: self._slot_letter_frequency_score(i) for i in refined_window}
-        best_i = sorted(shuffled_refined, key=lambda i: -freq_scores[i])[0]
+        return sorted(shuffled_refined, key=lambda i: -freq_scores[i])[0]
+
+    def _backtrack(self, deadline_checks):
+        # `self.checks` n'est plus incrémenté ici (une fois par appel/nœud)
+        # mais une fois par mot candidat réellement essayé, dans la boucle
+        # `for w in cands:` plus bas — voir son propre commentaire pour la
+        # raison (à la demande explicite de l'utilisateur, "pour éviter
+        # d'itérer longtemps sur des cas impossibles"). Ce premier appel
+        # (depuis `Filler.solve()`) démarre donc avec `self.checks` encore à
+        # sa valeur d'entrée (0 pour une recherche neuve) ; les contrôles
+        # ci-dessous restent corrects avec cette valeur telle quelle.
+        if self.abandoned:
+            return False
+        if self.checks > deadline_checks:
+            return False
+        if (
+            self.cancel_event is not None
+            and self.checks % CANCEL_CHECK_INTERVAL == 0
+            and self.cancel_event.is_set()
+        ):
+            raise GenerationCancelled()
+        # Arrêt anticipé de TOUT le batch dès qu'une tentative sœur s'est
+        # elle-même abandonnée (voir _worker_batch_abandoned_event et
+        # UNFILLABLE_ABANDON_FRACTION ci-dessous) — à la demande explicite
+        # de l'utilisateur : ne pas attendre que cette tentative-ci atteigne
+        # elle aussi son propre seuil d'abandon ou son propre budget une
+        # fois qu'une autre a déjà jugé le motif commun sans espoir. Même
+        # fréquence de vérification que les autres signaux ci-dessus/
+        # dessous — un coût réel à ne pas payer à chaque nœud.
+        if (
+            self.batch_abandoned_event is not None
+            and self.checks % UNFILLABLE_ABANDON_CHECK_INTERVAL == 0
+            and self.batch_abandoned_event.is_set()
+        ):
+            self.abandoned = True
+            return False
+        # Early stop as soon as ANOTHER attempt of the same palier already
+        # answered (success or failure), at the user's explicit request
+        # ("interrupt every search as soon as one search finishes (success
+        # or failure) to move on to the next palier") — see
+        # attempt_done_event in generate_grid. Unlike the batch_abandoned_
+        # event checkpoint above, this one applies to both _pattern_attempt
+        # and _pattern_continue (see Filler.__init__'s own docstring for why
+        # the distinction made for batch_abandoned_event doesn't apply
+        # here). Reuses `self.abandoned` as a fast short-circuit (same
+        # mechanism as just above), but also sets
+        # `self.interrupted_by_sibling` so try_fill can distinguish this
+        # specific cause in `diagnostics["reason"]`.
+        if (
+            self.attempt_done_event is not None
+            and self.checks % PALIER_ATTEMPT_DONE_CHECK_INTERVAL == 0
+            and self.attempt_done_event.is_set()
+        ):
+            self.abandoned = True
+            self.interrupted_by_sibling = True
+            return False
+        # Abandon anticipé d'une tentative, à la demande explicite de
+        # l'utilisateur (voir UNFILLABLE_ABANDON_FRACTION ci-dessus) : dès
+        # que plus de 30 % des cases blanches de la grille appartiennent à
+        # un emplacement réputé impossible (au sens de impossible_zone_
+        # cells, calculé sur best_assignment), cette tentative est jugée
+        # sans espoir raisonnable et abandonnée sur-le-champ — inutile de
+        # continuer à essayer d'ajouter des mots ailleurs sur un motif déjà
+        # aussi largement compromis. Vérifié seulement toutes les
+        # UNFILLABLE_ABANDON_CHECK_INTERVAL fois (comme cancel_event
+        # ci-dessus), pas à chaque appel : impossible_zone_cells recalcule
+        # le domaine de chaque emplacement non assigné, un coût réel à ne
+        # pas payer à chaque nœud.
+        if (
+            self._total_white_cells > 0
+            and self.checks % UNFILLABLE_ABANDON_CHECK_INTERVAL == 0
+            and len(self.impossible_zone_cells())
+            > UNFILLABLE_ABANDON_FRACTION * self._total_white_cells
+        ):
+            self.abandoned = True
+            # Signale aux autres tentatives du même batch qu'elles peuvent,
+            # elles aussi, s'arrêter — voir le commentaire de
+            # _worker_batch_abandoned_event et le point de contrôle
+            # correspondant plus haut dans cette même méthode.
+            if self.batch_abandoned_event is not None:
+                self.batch_abandoned_event.set()
+            return False
+        unassigned = [
+            i for i in range(len(self.slots))
+            if self.assignment[i] is None
+            and i not in self.excluded_slots
+            and i not in self._crossing_excluded_slots
+        ]
+        # Compté directement depuis self.assignment (pas dérivé de
+        # `len(self.slots) - len(unassigned)`) : avec `excluded_slots` non
+        # vide, cette dernière formule compterait à tort chaque emplacement
+        # exclu comme "assigné" alors qu'il reste bel et bien à None.
+        assigned_count = sum(1 for a in self.assignment if a is not None)
+        if assigned_count > self.best_assigned_count:
+            self.best_assigned_count = assigned_count
+            self.best_assignment = list(self.assignment)
+            if self.on_new_best is not None:
+                self.on_new_best(self.best_assignment)
+        if not unassigned:
+            return True
+
+        # On calcule le domaine de chaque emplacement non assigné ici (et on
+        # échoue immédiatement si l'un d'eux est déjà à sec), pour détecter
+        # une branche morte le plus tôt possible — ce domaine sert aussi à
+        # trier les mots candidats de l'emplacement finalement choisi (voir
+        # plus bas), quel que soit le critère qui l'a désigné.
+        #
+        # `_domain` ne tient compte que des contraintes de lettres (croisements
+        # déjà assignés / indices statistiques) — jamais de `self.used_words`.
+        # Un emplacement dont le domaine brut est non vide peut donc, dans une
+        # grille déjà très remplie, n'avoir en réalité PLUS AUCUN candidat
+        # disponible (chacun de ses mots déjà utilisé ailleurs) — un vrai
+        # blocage, identique en pratique à un domaine vide, mais invisible à
+        # ce contrôle sans vérifier aussi `used_words` ici. Bug réel constaté
+        # en direct : une grille de 143 emplacements restait bloquée à
+        # exactement 115 assignés/3 impossibles pendant plus de 180 paliers
+        # consécutifs d'affilée, `checks=1` à chaque fois — l'emplacement qui
+        # bloquait réellement la recherche avait un domaine techniquement non
+        # vide (une quinzaine de candidats), mais chacun d'eux était déjà
+        # utilisé par un autre mot de la grille, donc `impossible_zone_slots`
+        # (voir plus haut, même correctif) ne le remontait jamais non plus.
+        domains = {}
+        for i in unassigned:
+            domain = self._domain(i)
+            if all(w in self.used_words for w in domain):
+                return False
+            domains[i] = domain
+
+        # Sélectionne l'emplacement à remplir ensuite via la cascade à 7
+        # niveaux, factorisée dans _select_target_slot (réutilisée telle
+        # quelle par interactive_place_word — voir sa propre docstring
+        # pour l'historique complet de chaque niveau).
+        best_i = self._select_target_slot(unassigned, domains)
 
         cands = [w for w in domains[best_i] if w not in self.used_words]
         # Toujours mélangé d'abord (avec le RNG seedé de cette tentative,
@@ -4060,6 +4096,432 @@ def build_word_entries(grid, rows, cols, slots, assignment):
             })
     entries.sort(key=lambda e: (e["number"], e["direction"]))
     return entries
+
+
+def _interactive_fill_diagnostics(grid, rows, cols, index):
+    """Pour la grille `grid` (mêmes conventions de cases que
+    `interactive_place_word`), renvoie
+    `(impossible_cells, low_candidate_cells)` — deux listes de `[r, c]`
+    triées, à afficher côté interface en mode "Interactif" comme sur les
+    prévisualisations : rouge pour un emplacement encore ouvert dont plus
+    aucun mot du dictionnaire ne convient (compte tenu des lettres déjà
+    posées et des mots déjà utilisés ailleurs), orange pour un emplacement
+    dont il reste strictement moins de `PREFILL_MIN_WORD_COUNT` options.
+    Un emplacement déjà entièrement rempli EST désormais aussi vérifié —
+    pas pour son nombre d'options (il n'en a plus besoin, ses cases sont
+    déjà fixées), mais pour la validité réelle du mot qui s'y trouve
+    (`_invalid_fully_known_indices`) : un mot inventé peut s'y former sans
+    jamais avoir été explicitement choisi par personne, simplement
+    recomposé tel quel à partir de croisements individuellement corrects
+    mais jamais vérifiés ensemble (même classe de bug que AVALAS/UNT/AMN,
+    voir CLAUDE.md) — en particulier une fois qu'un emplacement
+    initialement signalé impossible (encore partiel) se retrouve
+    entièrement complété par un placement ultérieur : sans ce contrôle,
+    il disparaissait purement et simplement de tout signalement, alors
+    que rien n'a jamais garanti que le mot ainsi complété soit réel.
+    Corrigé à la demande explicite de l'utilisateur, après un rapport en
+    direct : une zone montrée impossible pendant quelques itérations puis
+    "disparue" sans avoir été réellement corrigée, et une autre jamais
+    montrée impossible du tout — les deux cas correspondent à un
+    emplacement entièrement connu que l'ancienne version ne vérifiait
+    jamais. Sans backtracking : construit un
+    `Filler` uniquement comme aide au calcul de domaine, comme
+    `interactive_place_word`."""
+    pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
+    slots = extract_slots(pattern, rows, cols)
+    if not slots:
+        return [], []
+    known = {
+        (r, c): grid[r][c]
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] not in (BLACK, WHITE)
+    }
+    # `letter_scores` n'influence que l'ordre des candidats (jamais leur
+    # nombre), et ce diagnostic ne compte que des tailles de domaine — un
+    # RNG jetable suffit, sans toucher au `rng` de session.
+    scratch_rng = random.Random(0)
+    _, letter_scores = sample_letter_biases(
+        pattern, rows, cols, index, scratch_rng, force_fraction=0.0, known_letters=known,
+    )
+    filler = Filler(
+        slots, index, scratch_rng,
+        letter_scores=letter_scores, locked_letters=known,
+    )
+    for i, cells in enumerate(slots):
+        if all(cell in known for cell in cells):
+            filler.assignment[i] = "".join(known[cell] for cell in cells)
+            filler.used_words.add(filler.assignment[i])
+
+    impossible, low = set(), set()
+    for i, cells in enumerate(slots):
+        if filler.assignment[i] is not None:
+            continue
+        n = len(set(filler._domain(i)) - filler.used_words)
+        if n == 0:
+            impossible.update(cells)
+        elif n < PREFILL_MIN_WORD_COUNT:
+            low.update(cells)
+    for i in _invalid_fully_known_indices(slots, index, known):
+        impossible.update(slots[i])
+    return (
+        sorted([r, c] for (r, c) in impossible),
+        sorted([r, c] for (r, c) in low),
+    )
+
+
+def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
+    """Place EXACTLY ONE additional word into `grid`, honouring every letter
+    already present, with NO backtracking — the single-step primitive behind
+    the web UI's "Interactif" authoring mode (see backend/app.py's
+    `_run_interactive_job` / `POST /api/interactive/step`).
+
+    `grid` is a 2D list where each cell is `"#"` (black), `"."` (empty
+    white) or an uppercase letter (filled white). `extract_slots` already
+    treats any non-`"#"` cell as white, so a grid carrying letters feeds
+    straight into it. `index` is a DualIndex; `priority_words` a
+    frozenset/DualSet (theme glossary) or `None`.
+
+    Returns `{"impossible": True}` when no still-open slot has any viable
+    candidate word, otherwise
+    `{"impossible": False, "grid": <new 2D list, one word written in>,
+      "placed": {"cells": [[r, c], ...], "word": "MOT",
+                 "direction": "across"|"down"}}`.
+
+    Builds a `Filler` purely as a domain/scoring helper — it never calls
+    `Filler.solve` / `_backtrack` / `try_fill`, so none of the fragile CSP
+    search machinery is exercised.
+    """
+    # `extract_slots`/`sample_letter_biases` only treat a cell literally
+    # equal to WHITE (".") as white — a cell carrying a letter would break
+    # a run — so work from a plain black/white pattern derived from `grid`,
+    # with the letters tracked separately as `known`.
+    pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
+    slots = extract_slots(pattern, rows, cols)
+    if not slots:
+        return {"impossible": True}
+    known = {
+        (r, c): grid[r][c]
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] not in (BLACK, WHITE)
+    }
+    _, letter_scores = sample_letter_biases(
+        pattern, rows, cols, index, rng, force_fraction=0.0, known_letters=known,
+    )
+    filler = Filler(
+        slots, index, rng,
+        letter_scores=letter_scores, locked_letters=known,
+        priority_words=priority_words,
+    )
+    # Pré-assigner tout emplacement déjà entièrement rempli : il n'est ni
+    # re-sélectionnable ni compté comme un nouveau placement, et son mot
+    # bloque le doublon ailleurs (`used_words`).
+    for i, cells in enumerate(slots):
+        if all(cell in known for cell in cells):
+            word = "".join(known[cell] for cell in cells)
+            filler.assignment[i] = word
+            filler.used_words.add(word)
+
+    # `domains` garde le domaine BRUT (comme dans _backtrack, jamais filtré
+    # par used_words) — c'est ce que _select_target_slot attend, en
+    # particulier pour son propre seuil "moins de PREFILL_MIN_WORD_COUNT
+    # candidats" (niveau 3), qui compare bien la taille du domaine brut.
+    # `viable` reste la version filtrée (candidats réellement disponibles)
+    # que le tirage du mot, juste après, utilise.
+    domains, viable = {}, {}
+    for i, cells in enumerate(slots):
+        if filler.assignment[i] is not None:
+            continue
+        domain = set(filler._domain(i))
+        cands = domain - filler.used_words
+        if cands:
+            domains[i] = domain
+            viable[i] = cands
+    if not viable:
+        imp, low = _interactive_fill_diagnostics(grid, rows, cols, index)
+        return {"impossible": True, "impossible_cells": imp, "low_candidate_cells": low}
+
+    # Emplacement cible : la même cascade à 7 niveaux que la génération
+    # automatique (voir Filler._select_target_slot), réutilisée telle
+    # quelle plutôt qu'un simple MRV maison — à la demande explicite de
+    # l'utilisateur, après avoir constaté en direct que ce MRV (le domaine
+    # le plus petit d'abord) faisait démarrer le mode Interactif par des
+    # emplacements de 2 lettres dispersés dans la grille, sans respecter
+    # ni le seuil de longueur (niveau 3, ≥4 lettres) ni le front haut-
+    # gauche voulu par le score géométrique (niveau 5) de la génération
+    # automatique.
+    target = filler._select_target_slot(list(viable.keys()), domains)
+    cells = slots[target]
+    cands = viable[target]
+
+    # Mot : d'abord les membres du glossaire thématique applicable, sinon le
+    # reste ; classé par score statistique puis par fréquence du lexique.
+    themed = _priority_words_for(filler.priority_words, cells) & cands
+    pool = themed or cands
+    freq = index.for_cells(cells).get(len(cells), {}).get("freq", {})
+    word = max(pool, key=lambda w: (filler._candidate_score(target, w), freq.get(w, 0.0)))
+
+    new_grid = [row[:] for row in grid]
+    for (r, c), ch in zip(cells, word):
+        new_grid[r][c] = ch
+    # Diagnostics calculés sur la grille APRÈS placement — c'est l'état que
+    # l'utilisateur voit après "Suivant".
+    imp, low = _interactive_fill_diagnostics(new_grid, rows, cols, index)
+    return {
+        "impossible": False,
+        "grid": new_grid,
+        "impossible_cells": imp,
+        "low_candidate_cells": low,
+        "placed": {
+            "cells": [[r, c] for (r, c) in cells],
+            "word": word,
+            "direction": slot_direction(cells),
+            # `from_theme`: le mot posé automatiquement vient-il du glossaire
+            # thématique applicable ? Affiché en magenta côté interface
+            # ("Interactif"), à la demande explicite de l'utilisateur.
+            "from_theme": word in themed,
+        },
+    }
+
+
+# Cap on how many candidate words `interactive_slot_candidates` ever
+# returns for a single slot, at the user's explicit request scope (the
+# "Mots" button in "Interactif" mode) — a short/common slot length can
+# easily have thousands of real dictionary matches, which would be
+# unusable as a single comma-separated line under the definition field.
+# Mirrors `backend/dictionary_lookup.py`'s own `MAX_ROWS` (300) for the
+# same "never flood a UI list" reason, applied to the OTHER (non-theme)
+# words only — every theme-glossary match is always kept in full, since
+# that list is normally small and is exactly what the user asked to see
+# first/highlighted.
+INTERACTIVE_SLOT_CANDIDATES_LIMIT = 300
+
+
+def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=None):
+    """"Mots" button (mode "Interactif"), à la demande explicite de
+    l'utilisateur : "ajouter un bouton Mots qui liste les mots possible
+    pour l'emplacement sélectionné... En premier, les mots du glossaire
+    thématique si il y en a... puis les autres mots... Quand
+    l'utilisateur clique sur un mot, ça le met en place sur l'emplacement
+    sélectionné." `cells` est la liste ordonnée `(row, col)` de
+    l'emplacement sélectionné côté interface (calculée par
+    `selectedInteractiveWord()`, script.js) — jamais recalculée ici à
+    partir de `extract_slots`, pour rester correcte même si l'emplacement
+    est encore partiellement vide (un emplacement pas encore complet n'a
+    pas de slot list index stable de toute façon).
+
+    Renvoie `(theme_words, other_words)`, deux listes triées de mots
+    réels du dictionnaire compatibles avec les lettres déjà posées sur
+    `cells` (même intersection par position que `_slot_candidates`,
+    réutilisée telle quelle) — `theme_words` : les candidats appartenant
+    au glossaire thématique applicable à la direction de `cells`
+    (`_priority_words_for`, comme `interactive_place_word`), toujours
+    complet, jamais tronqué ; `other_words` : le reste, plafonné à
+    `INTERACTIVE_SLOT_CANDIDATES_LIMIT`. Un mot déjà utilisé ailleurs dans
+    la grille (un autre emplacement, entièrement rempli, portant déjà ce
+    mot) est exclu des deux listes — comme `interactive_place_word`, pour
+    ne jamais proposer un doublon."""
+    pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
+    slots = extract_slots(pattern, rows, cols)
+    known = {
+        (r, c): grid[r][c]
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] not in (BLACK, WHITE)
+    }
+    own_cells = set(cells)
+    used_words = {
+        "".join(known[cell] for cell in other_cells)
+        for other_cells in slots
+        if set(other_cells) != own_cells and all(cell in known for cell in other_cells)
+    }
+    candidates = set(_slot_candidates(index, len(cells), cells, known)) - used_words
+    themed = _priority_words_for(priority_words, cells) & candidates
+    other = candidates - themed
+    theme_words = sorted(themed)
+    other_words = sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT]
+    return theme_words, other_words
+
+
+def interactive_clean_impossible_zones(grid, rows, cols, index, rng):
+    """"Nettoyer" button (mode "Interactif") — l'équivalent, pour la grille
+    manuelle, du "nettoyage complet" que `_build_retry_seed` applique
+    automatiquement à chaque palier de la génération automatique (voir
+    CLAUDE.md pour son historique complet). À la demande explicite de
+    l'utilisateur : "ajouter un bouton 'Nettoyer' permettant de déclencher
+    l'opération de nettoyage complet des zones impossibles."
+
+    Réutilise directement `_clean_blocked_slots` (déjà éprouvée par la
+    génération automatique) plutôt que de réimplémenter cette logique une
+    seconde fois : pour chaque emplacement réputé impossible — au sens
+    combiné de `_impossible_indices` (encore ouvert, plus aucun candidat
+    réel) et `_invalid_fully_known_indices` (déjà entièrement rempli, mais
+    la combinaison ne correspond à aucun vrai mot — voir `_interactive_
+    fill_diagnostics`, qui vérifie désormais les deux mêmes cas pour le
+    surlignage rouge) — retire tout mot qui le croise, ou noircit l'une de
+    ses propres cases si le retrait de mots seul ne suffit pas (la même
+    alternative 1/10, et la même "zone strictement sans issue" pour une
+    longueur que le dictionnaire ne couvre pas du tout, que la génération
+    automatique).
+
+    `grid` reste inchangé si aucune zone impossible n'est trouvée — OU si
+    aucune n'a pu être réellement résolue (voir plus bas). Renvoie
+    `{"changed": bool, "grid": <grille mise à jour ou identique>,
+    "cleared_count": <nombre de mots retirés + de cases noircies>}` —
+    `cleared_count` mesure ce qui a RÉELLEMENT changé, pas le nombre de
+    zones simplement "considérées" : un emplacement impossible pour
+    lequel `_clean_blocked_slots` ne retire aucun mot (aucun croisement
+    encore assigné à retirer — voir la limite ci-dessous) ni ne noircit
+    de case (l'alternative 1/10 n'a pas été tirée, ou aucune de ses cases
+    ne reste structurellement valide une fois noircie) ne compte pour
+    rien — un rapport `changed=True` avec un `cleared_count` qui ne
+    reflète aucun changement visible serait trompeur pour l'utilisateur.
+
+    Limite connue, non traitée : un emplacement fixé uniquement par une
+    lettre provenant d'un emplacement croisant *partiellement* rempli (une
+    lettre tapée à la main sans compléter tout le mot) n'est jamais retiré
+    ici — `_clean_blocked_slots` ne retire que des mots déjà entièrement
+    posés (`assignment[j] is not None`) ; un tel cas ne peut être résolu
+    que par l'alternative case noire, si elle s'applique à l'emplacement
+    impossible lui-même."""
+    pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
+    slots = extract_slots(pattern, rows, cols)
+    if not slots:
+        return {"changed": False, "grid": grid, "cleared_count": 0}
+    known = {
+        (r, c): grid[r][c]
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] not in (BLACK, WHITE)
+    }
+    # Un emplacement compte comme "un mot posé" (assignment non-None) dès
+    # que toutes ses cases sont connues — que ce soit via un placement
+    # complet (interactive_place_word) ou via des croisements — jamais
+    # partiellement, mêmes conventions que `_clean_blocked_slots` attend.
+    assignment = [
+        "".join(known[cell] for cell in cells) if all(cell in known for cell in cells) else None
+        for cells in slots
+    ]
+    impossible = sorted(
+        set(_impossible_indices(slots, index, known))
+        | set(_invalid_fully_known_indices(slots, index, known))
+    )
+    if not impossible:
+        return {"changed": False, "grid": grid, "cleared_count": 0}
+
+    cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
+        slots, assignment, impossible, index=index, rng=rng,
+        grid=grid, rows=rows, cols=cols,
+    )
+    # Combien de mots réellement retirés (un emplacement qui avait un mot
+    # avant et n'en a plus après) — la seule autre action possible de
+    # `_clean_blocked_slots` (`new_black_cells`) est déjà comptée à part.
+    removed_words = sum(
+        1 for before, after in zip(assignment, cleaned_assignment)
+        if before is not None and after is None
+    )
+    cleared_count = removed_words + len(new_black_cells)
+    if cleared_count == 0:
+        return {"changed": False, "grid": grid, "cleared_count": 0}
+
+    new_grid = [row[:] for row in grid]
+    for (r, c) in new_black_cells:
+        new_grid[r][c] = BLACK
+    # Toute case autrefois connue mais dont plus aucun emplacement encore
+    # assigné ne la couvre (son propre mot, ou un mot croisant, retiré par
+    # le nettoyage) redevient blanche — sauf si elle vient d'être noircie
+    # juste au-dessus, auquel cas elle le reste.
+    for (r, c) in known:
+        if (r, c) not in confirmed and new_grid[r][c] != BLACK:
+            new_grid[r][c] = WHITE
+    return {"changed": True, "grid": new_grid, "cleared_count": cleared_count}
+
+
+def interactive_minimize_black_cells(grid, rows, cols, index, rng):
+    """"Nettoyer (+noires)" button (mode "Interactif") — la moitié
+    supplémentaire du nettoyage approfondi, à la demande explicite de
+    l'utilisateur : "nettoyage approfondi (nettoyage des cases noires, et
+    pas seulement les emplacements impossibles)." `interactive_clean_
+    impossible_zones` ne touche déjà aux cases noires qu'en passant, comme
+    effet de bord du traitement d'un emplacement impossible spécifique
+    (son alternative 1/10, ou sa "zone strictement sans issue") — cette
+    fonction-ci s'attaque directement aux cases noires elles-mêmes,
+    partout dans la grille, pas seulement celles liées à un emplacement
+    impossible.
+
+    Essaie de retirer, une par une (ordre mélangé — même absence de biais
+    positionnel que partout ailleurs dans ce fichier), chaque case noire
+    de la grille — inspiré de `minimize_black_squares` (utilisée par la
+    génération automatique), mais adapté à une grille manuelle
+    potentiellement encore très incomplète : contrairement à `minimize_
+    black_squares`, qui exige qu'un retrait laisse la grille intégralement
+    re-remplissable (un vrai second passage CSP complet), cette fonction
+    ne demande qu'une garantie plus faible mais suffisante ici — retirer
+    une case ne doit jamais RENDRE LES CHOSES PIRES : la grille doit
+    rester structurellement valide (`is_structurally_valid`, l'invariant
+    absolu de connectivité/case orpheline déjà utilisé partout ailleurs
+    dans ce fichier), et le nombre total d'emplacements réputés
+    impossibles (même critère combiné que `_interactive_fill_
+    diagnostics`/`interactive_clean_impossible_zones` : `_impossible_
+    indices` ∪ `_invalid_fully_known_indices`) ne doit pas AUGMENTER par
+    rapport à l'état courant — un retrait qui fusionnerait deux
+    emplacements déjà remplis en un nouvel emplacement dont la
+    combinaison ne correspond à aucun mot réel est refusé, tout comme un
+    retrait qui casserait la connectivité de la grille.
+
+    Retourne `{"changed": bool, "grid": <grille mise à jour ou identique>,
+    "removed_count": <nombre de cases noires effectivement retirées>}`."""
+    black_cells = [(r, c) for r in range(rows) for c in range(cols) if grid[r][c] == BLACK]
+    if not black_cells:
+        return {"changed": False, "grid": grid, "removed_count": 0}
+
+    def _impossible_count(g):
+        pattern = [["#" if ch == BLACK else "." for ch in row] for row in g]
+        slots = extract_slots(pattern, rows, cols)
+        if not slots:
+            return 0
+        known = {
+            (r, c): g[r][c]
+            for r in range(rows)
+            for c in range(cols)
+            if g[r][c] not in (BLACK, WHITE)
+        }
+        return len(
+            set(_impossible_indices(slots, index, known))
+            | set(_invalid_fully_known_indices(slots, index, known))
+        )
+
+    rng.shuffle(black_cells)
+    working = [row[:] for row in grid]
+    baseline = _impossible_count(working)
+    removed_count = 0
+    for (r, c) in black_cells:
+        working[r][c] = WHITE
+        # `is_structurally_valid` only understands a plain black/white
+        # PATTERN (BLACK/WHITE cells only) — calling it directly on
+        # `working` (which still carries real letters for every
+        # already-filled cell) makes its row/col run-length scan misread
+        # every letter as an obstacle, exactly like a black cell, so it
+        # rejected almost any removal next to already-typed content — a
+        # real bug, reported directly by the user: "Nettoyer (+noires) ne
+        # supprime pas les cases noires isolées." Fixed by converting to
+        # the same pattern-only view `_impossible_count` above already
+        # builds for its own purpose, reused here for the structural check
+        # too.
+        pattern_check = [["#" if ch == BLACK else "." for ch in row] for row in working]
+        if not is_structurally_valid(pattern_check, rows, cols, min_interior_free=1):
+            working[r][c] = BLACK
+            continue
+        new_count = _impossible_count(working)
+        if new_count > baseline:
+            working[r][c] = BLACK
+            continue
+        baseline = new_count
+        removed_count += 1
+    if removed_count == 0:
+        return {"changed": False, "grid": grid, "removed_count": 0}
+    return {"changed": True, "grid": working, "removed_count": removed_count}
 
 
 # ---------- Affichage ----------

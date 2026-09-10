@@ -25,6 +25,7 @@ import json
 import logging
 import multiprocessing
 import os
+import random
 import re
 import sys
 import threading
@@ -45,9 +46,15 @@ from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    generate_grid,
+    PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
+    build_word_entries, extract_slots, generate_grid, _interactive_fill_diagnostics,
+    interactive_clean_impossible_zones, interactive_minimize_black_cells,
+    interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
 )
-from .grid_store import _slugify_title, get_grid, list_grids, save_grid_json
+from .grid_store import (
+    _slugify_title, get_grid, list_grids, save_grid_json,
+    save_grid_work, list_grid_work, get_grid_work, delete_grid_work,
+)
 from .svg_export import (
     render_puzzle_svg,
     save_grid_png,
@@ -502,6 +509,15 @@ PRESENCE_SWEEP_INTERVAL_S = 10
 # outlives its own JOBS entry.
 CANCEL_EVENTS = {}
 
+# Per-job state for the web UI's "Interactif" authoring mode — the built
+# word index (a DualIndex), the theme glossary set, and the per-session
+# RNG. Kept in its OWN dict, out of JOBS itself, for the same reason as
+# CANCEL_EVENTS: none of it is JSON-serializable and GET /api/generate/
+# status/{job_id} returns the JOBS entry directly. Evicted in lockstep
+# with JOBS's MAX_JOBS bound in _new_job(). POST /api/interactive/step
+# reads its `index`/`priority_words`/`rng` back to place one more word.
+INTERACTIVE_SESSIONS = {}
+
 # asyncio.create_task() only holds a weak reference to the task it
 # schedules — without another strong reference kept somewhere, the task can
 # be garbage-collected mid-run (a documented asyncio footgun). This set is
@@ -638,6 +654,116 @@ class RecomputeRequest(BaseModel):
     "Graines (V3)"; never regenerated), and saves a brand new library
     record, leaving the original untouched."""
     grid_id: str
+
+
+class InteractiveStepRequest(BaseModel):
+    """Body of POST /api/interactive/step — the "Suivant" button of the
+    "Interactif" authoring mode. Carries the whole current editable grid
+    (a 2D list, one string per cell: "#" black, "." empty white, or an
+    uppercase letter). The backend places exactly one more word on top of
+    it (no backtracking) and returns the updated grid."""
+    job_id: str
+    grid: list[list[str]]
+
+
+class InteractiveCleanRequest(BaseModel):
+    """Body of POST /api/interactive/clean — the "Nettoyer"/"Nettoyer
+    (+noires)" buttons of the "Interactif" authoring mode. "Nettoyer", at
+    the user's explicit request ("ajouter un bouton 'Nettoyer' permettant
+    de déclencher l'opération de nettoyage complet des zones
+    impossibles"): removes every word crossing an impossible zone (or
+    blackens a cell, same rules as the automatic generator's own
+    "nettoyage complet" — see `interactive_clean_impossible_zones`).
+    `deep=True` ("Nettoyer (+noires)", at the user's own explicit
+    follow-up request — "nettoyage approfondi... nettoyage des cases
+    noires, et pas seulement les emplacements impossibles") additionally
+    runs `interactive_minimize_black_cells` on the result: tries removing
+    every black cell of the grid outright, not just the ones incidentally
+    touched while resolving an impossible zone."""
+    job_id: str
+    grid: list[list[str]]
+    deep: bool = False
+
+
+class InteractiveCandidatesRequest(BaseModel):
+    """Body of POST /api/interactive/candidates — the "Mots" button of the
+    "Interactif" authoring mode, at the user's explicit request: "ajouter
+    un bouton Mots qui liste les mots possible pour l'emplacement
+    sélectionné." `cells` is the selected word's own ordered list of
+    `[row, col]` pairs (already resolved client-side by
+    `selectedInteractiveWord()`, script.js) — never recomputed server-side
+    from `grid` alone, so this works the same way whether that word is
+    already fully typed or still partially empty."""
+    job_id: str
+    grid: list[list[str]]
+    cells: list[list[int]]
+
+
+class InteractiveVerifyRequest(BaseModel):
+    """Body of POST /api/interactive/verify — the "Vérifier" button of the
+    "Interactif" authoring mode, at the user's explicit request: check the
+    WHOLE grid at once (not just the currently selected word, as this
+    button used to) and report every complete word that is not a real
+    dictionary word. `words` is every currently complete (fully filled)
+    slot's own answer string — whether a complete word also has a
+    definition is resolved entirely client-side (interactiveDefs lives
+    only in the browser), so the backend is only ever asked to validate
+    dictionary membership, nothing else."""
+    job_id: str
+    words: list[str]
+
+
+class InteractiveTitleRequest(BaseModel):
+    """Body of POST /api/interactive/title — the "Proposer un titre" button.
+    `words` is a list of `{answer, accented?, canonical?}` for every grid
+    word; the backend asks the LLM for a title (best-effort, "" on
+    failure)."""
+    job_id: str
+    words: list[dict]
+    language: str = "fr"
+
+
+class InteractiveSaveRequest(BaseModel):
+    """Body of POST /api/interactive/save — the "Sauvegarder" button.
+    `grid` is the final editable grid (letters + "#" + "."); `definitions`
+    is `[{row, col, direction, clue}]` keyed by each word's start cell.
+    The backend rebuilds a generate_grid()-shaped result and stores it in
+    the library, tagged `interactive=True` ("(Création)")."""
+    job_id: str
+    grid: list[list[str]]
+    definitions: list[dict]
+    title: str = ""
+    language: str = "fr"
+    difficulty: str = "easy"
+    theme: Optional[str] = None
+    pseudo: Optional[str] = None
+
+
+class InteractiveSaveWorkRequest(BaseModel):
+    """Body of POST /api/interactive/save_work — an internal autosave
+    fired by the frontend after every "Suivant"/"Précédent" click in the
+    "Interactif" mode, at the user's explicit request: "chaque appui sur
+    Suivant/Précédent sauvegarde l'état en cours du process de création
+    dans le dossier GRID_WORK." Unlike InteractiveSaveRequest (the final
+    "Sauvegarder" button, which files a brand-new, permanent GRID_STORE
+    record), this repeatedly OVERWRITES one single GRID_WORK file across
+    a session's whole lifetime — see grid_store.save_grid_work's own
+    docstring. `language`/`difficulty`/`theme` are deliberately absent
+    here: the endpoint reads them back from `JOBS[job_id]["interactive"]`
+    (set once, at session start) instead of trusting the frontend to
+    resend them correctly on every single autosave."""
+    job_id: str
+    grid: list[list[str]]
+    definitions: list[dict] = []
+    title: str = ""
+    pseudo: Optional[str] = None
+
+
+class InteractiveWorkIdRequest(BaseModel):
+    """Body shared by POST /api/interactive/work/delete and POST
+    /api/interactive/resume — both only ever need the target GRID_WORK
+    record's own id."""
+    work_id: str
 
 
 @dataclass
@@ -1331,6 +1457,27 @@ def _compiled_similar_words(keywords: list[str], lang: str,
     return sorted(merged.items(), key=lambda pair: -(pair[1] or 0.0))
 
 
+def _synonyms_impl(query: str, lang: str,
+                    min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+    """Bouton "Synonymes" du panneau Dictionnaire, à la demande explicite
+    de l'utilisateur : "un bouton 'Synonymes' qui lance une recherche
+    Qdrant avec le mot ou l'expression saisie (sans faire appel au LLM
+    pour étendre la recherche, comme le fait Thématique)." Contrairement
+    à `_similar_words_impl` juste en dessous (qui demande d'abord à
+    `describe_theme` une liste d'une trentaine de mots-clefs avant de
+    lancer une recherche Qdrant par mot-clef), cette fonction réutilise
+    directement `_compiled_similar_words` avec la requête brute comme
+    UNIQUE mot-clef — pour une seule entrée, cette fonction se réduit
+    exactement à "embedder la requête telle quelle, chercher dans Qdrant,
+    trier par score décroissant" : aucune expansion, aucun appel LLM,
+    donc aucun risque de dérive thématique (une recherche "chat" reste
+    une recherche du mot "chat" lui-même, jamais élargie à son champ
+    lexical). Même seuil `min_score`/mêmes conventions de tri que
+    `_similar_words_impl`, pour que le panneau puisse réutiliser le même
+    rendu (`renderSimilarWordsResult`) sans distinction."""
+    return _compiled_similar_words([query], lang, min_score)
+
+
 def _similar_words_impl(query: str, lang: str,
                         min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
     """Blocking. Applies the themed-grid-glossary principle to the
@@ -1535,6 +1682,32 @@ async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_S
     # `words` : un objet {word, score} par entrée (le score Qdrant est
     # affiché entre parenthèses à côté de chaque mot dans le panneau
     # Dictionnaire, à la demande explicite de l'utilisateur).
+    words = [{"word": w, "score": s} for w, s in scored]
+    return {"query": query, "lang": lang, "words": words}
+
+
+@app.get("/api/synonyms")
+async def synonyms(q: str, lang: str = "fr", min_score: float = THEME_MIN_SCORE):
+    """Bouton "Synonymes" du panneau Dictionnaire : recherche Qdrant
+    directe sur `q` (embedding brut, aucun appel LLM), contrairement au
+    bouton "Thématique" (`/api/similar_words`) qui étend d'abord la
+    recherche via `describe_theme` — voir `_synonyms_impl`. Même forme de
+    requête/réponse que `/api/similar_words`, réutilisable telle quelle
+    par le même rendu côté frontend."""
+    if lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="expression vide")
+    min_score = max(0.0, min(1.0, min_score))
+    try:
+        scored = await asyncio.to_thread(_synonyms_impl, query, lang, min_score)
+    except (QdrantStoreError, EmbedderError) as exc:
+        logger.warning("synonyms unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "similar_unavailable", "message": str(exc)},
+        )
     words = [{"word": w, "score": s} for w, s in scored]
     return {"query": query, "lang": lang, "words": words}
 
@@ -1900,6 +2073,7 @@ def _new_job():
         oldest = next(iter(JOBS))
         del JOBS[oldest]
         CANCEL_EVENTS.pop(oldest, None)
+        INTERACTIVE_SESSIONS.pop(oldest, None)
     job_id = uuid.uuid4().hex
     JOBS[job_id] = {
         "status": "running", "step": {"code": "starting"}, "result": None,
@@ -1922,6 +2096,10 @@ def _new_job():
         # `resume_state` above instead of a blank grid — set once in
         # _run_generate_job, right before generate_grid() is even called.
         "request": None,
+        # JSON-safe metadata for the "Interactif" authoring mode (language/
+        # difficulty/width/height/theme/theme_description), set once by
+        # _run_interactive_job; None for every ordinary generation job.
+        "interactive": None,
     }
     CANCEL_EVENTS[job_id] = multiprocessing.Event()
     return job_id
@@ -2609,6 +2787,126 @@ async def _run_generate_job(job_id, req, resume_state=None):
         logger.exception("[%s] unhandled error during generation", short_id)
 
 
+async def _load_interactive_index(language, difficulty):
+    """Loads the wordlist/frequency index for one language/difficulty and
+    wraps it as the DualIndex every interactive-mode helper
+    (interactive_place_word, interactive_slot_candidates, _interactive_
+    fill_diagnostics...) expects — interactive mode is always
+    monolingual, so `.across`/`.down` end up the identical object.
+    Shared by `_run_interactive_job` (fresh start) and `_run_interactive_
+    resume_job` (resume), factored out once the latter needed the exact
+    same loading step. Returns `(index, known_words)` — `known_words` is
+    the set of every word actually in this lexicon, used to filter a
+    theme/saved `priority_words` list down to real entries."""
+    by_length, accents, _canon, frequencies = await asyncio.to_thread(
+        load_wordlist,
+        str(WORDLISTS[language]),
+        DIFFICULTY_PRESETS.get(difficulty),
+        require_gloss=(difficulty == "easy"),
+        exclude_proper_nouns=(difficulty == "easy"),
+    )
+    idx = build_index(by_length, frequencies)
+    return DualIndex(idx, idx), set(accents)
+
+
+async def _run_interactive_job(job_id, req):
+    """Background job behind POST /api/interactive/start — the "Interactif"
+    authoring mode. Unlike _run_generate_job it never runs the parallel
+    palier search: it builds the theme glossary (if any), makes ONE black-
+    cell pattern, places ONE first word, and stores the session so
+    POST /api/interactive/step can place further words one at a time.
+    No clue generation, no queue, no library save here — that all happens
+    later, interactively, driven by the web UI."""
+    job = JOBS[job_id]
+    short_id = job_id[:8]
+    cancel_event = CANCEL_EVENTS[job_id]
+    job["request"] = req.model_dump()
+
+    def progress(step, **data):
+        job["step"] = {"code": step, **data}
+
+    try:
+        theme = (req.theme or "").strip()
+        theme_priority_words = None
+        theme_description = ""
+        if theme:
+            progress("theme", theme=theme)
+            theme_priority_words, theme_description = await _build_theme_glossary(
+                theme, req.language, req.theme_precision, short_id, cancel_event,
+                short_id,
+            )
+
+        progress("interactive_building")
+
+        index, known = await _load_interactive_index(req.language, req.difficulty)
+
+        # Same MOT-form normalization generate_grid applies to its own
+        # priority_words: uppercase, keep only words actually in the loaded
+        # lexicon. Always a plain frozenset here (never bilingual).
+        priority_words = frozenset(
+            u for w in (theme_priority_words or ())
+            if (u := str(w).upper()) in known
+        )
+
+        rng = random.Random(req.seed)
+        rows, cols = req.height, req.width
+        available_lengths = DualSet(
+            across={L for L, d in index.across.items() if len(d["words"]) >= PREFILL_MIN_WORD_COUNT},
+            down={L for L, d in index.across.items() if len(d["words"]) >= PREFILL_MIN_WORD_COUNT},
+        )
+        grid = await asyncio.to_thread(
+            make_pattern, rows, cols, 0.0, rng,
+            available_lengths=available_lengths, index=index,
+            black_enrichment_fraction=req.black_enrichment_percent / 100,
+        )
+        placed = await asyncio.to_thread(
+            interactive_place_word, grid, rows, cols, index, rng, priority_words,
+        )
+
+        INTERACTIVE_SESSIONS[job_id] = {
+            "index": index,
+            "priority_words": priority_words,
+            "rng": rng,
+            # The original seed this session started from — kept around
+            # purely so an autosave (POST /api/interactive/save_work) can
+            # persist it for a later POST /api/interactive/resume, at the
+            # user's explicit request: exact rng *continuation* across a
+            # pause is neither preserved nor needed, only a real,
+            # reproducible starting point for the resumed session's own
+            # further Filler/CSP randomness.
+            "seed": req.seed,
+        }
+        job["interactive"] = {
+            "language": req.language,
+            "difficulty": req.difficulty,
+            "width": req.width,
+            "height": req.height,
+            "theme": theme or None,
+            "has_theme": bool(priority_words),
+            "theme_description": theme_description,
+        }
+        result_grid = grid if placed["impossible"] else placed["grid"]
+        job["result"] = {
+            "width": req.width,
+            "height": req.height,
+            "grid": result_grid,
+            "placed": None if placed["impossible"] else placed["placed"],
+            "impossible": placed["impossible"],
+            "has_theme": bool(priority_words),
+            "impossible_cells": placed.get("impossible_cells", []),
+            "low_candidate_cells": placed.get("low_candidate_cells", []),
+        }
+        progress("done")
+        job["status"] = "done"
+    except GenerationCancelled:
+        job["status"] = "cancelled"
+    except Exception:
+        job["status"] = "error"
+        job["error_code"] = "internal_error"
+        job["error"] = "Erreur interne."
+        logger.exception("[%s] unhandled error during interactive start", short_id)
+
+
 # Trailing "(Vn)" version marker on a recomputed grid's title, at the
 # user's explicit request ("Au lieu de '(new clues)', indiquer '(V2)',
 # puis '(V3)', etc"). The un-suffixed original grid is treated as V1, so
@@ -2876,6 +3174,427 @@ def generate_status(job_id: str):
     return job
 
 
+# ---------------------------------------------------------------------------
+# "Interactif" authoring mode — build ONE grid word by word under the
+# user's control, hand-write every clue, propose a title, save as a
+# "(Création)". POST /api/interactive/start reuses the job machinery
+# (polled via GET /api/generate/status, cancelled via POST /api/generate/
+# cancel); the three other routes are plain synchronous calls.
+# ---------------------------------------------------------------------------
+
+@app.post("/api/interactive/start", status_code=202)
+async def interactive_start(req: GenerateRequest):
+    """Kick off an interactive authoring session — theme glossary (if any)
+    + one black-cell pattern + one first placed word — as a background
+    job. `mode` is accepted but ignored (this path never runs the palier
+    search, so BUDGET_MODES doesn't apply); validation is done here rather
+    than via _validate_generate_request."""
+    if req.language not in WORDLISTS or not WORDLISTS[req.language].exists():
+        raise HTTPException(status_code=400, detail="langue inconnue ou dictionnaire absent")
+    if req.difficulty not in DIFFICULTY_PRESETS:
+        raise HTTPException(status_code=400, detail="difficulté inconnue")
+    job_id = _new_job()
+    task = asyncio.create_task(_run_interactive_job(job_id, req))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"job_id": job_id}
+
+
+@app.post("/api/interactive/step")
+async def interactive_step(req: InteractiveStepRequest):
+    """"Suivant" button: place exactly one more word onto the supplied
+    grid (no backtracking), or report the grid impossible if no slot can
+    take a word."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    placed = await asyncio.to_thread(
+        interactive_place_word,
+        [list(row) for row in req.grid], rows, cols,
+        sess["index"], sess["rng"], sess["priority_words"],
+    )
+    if placed["impossible"]:
+        return {"width": cols, "height": rows, "grid": req.grid,
+                "placed": None, "impossible": True,
+                "impossible_cells": placed.get("impossible_cells", []),
+                "low_candidate_cells": placed.get("low_candidate_cells", [])}
+    return {"width": cols, "height": rows, "grid": placed["grid"],
+            "placed": placed["placed"], "impossible": False,
+            "impossible_cells": placed.get("impossible_cells", []),
+            "low_candidate_cells": placed.get("low_candidate_cells", [])}
+
+
+@app.post("/api/interactive/clean")
+async def interactive_clean(req: InteractiveCleanRequest):
+    """"Nettoyer" button: run the automatic generator's own "nettoyage
+    complet" (remove crossing words / blacken a cell) on every zone of
+    the supplied grid currently deemed impossible — see
+    `interactive_clean_impossible_zones`. "Nettoyer (+noires)"
+    (`req.deep`) additionally runs `interactive_minimize_black_cells` on
+    the result — a deeper pass that also tries removing black cells
+    outright, anywhere in the grid, not just the ones incidentally
+    touched while resolving a specific impossible zone."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    result = await asyncio.to_thread(
+        interactive_clean_impossible_zones,
+        [list(row) for row in req.grid], rows, cols,
+        sess["index"], sess["rng"],
+    )
+    grid = result["grid"]
+    removed_black_count = 0
+    if req.deep:
+        black_result = await asyncio.to_thread(
+            interactive_minimize_black_cells, grid, rows, cols, sess["index"], sess["rng"],
+        )
+        if black_result["changed"]:
+            grid = black_result["grid"]
+            removed_black_count = black_result["removed_count"]
+    imp, low = await asyncio.to_thread(
+        _interactive_fill_diagnostics, grid, rows, cols, sess["index"],
+    )
+    return {
+        "width": cols, "height": rows,
+        "grid": grid,
+        "changed": result["changed"] or removed_black_count > 0,
+        "cleared_count": result["cleared_count"],
+        "removed_black_count": removed_black_count,
+        "impossible_cells": imp,
+        "low_candidate_cells": low,
+    }
+
+
+@app.post("/api/interactive/candidates")
+async def interactive_candidates(req: InteractiveCandidatesRequest):
+    """"Mots" button: list every real dictionary word compatible with the
+    letters already posed on the selected slot (`req.cells`), split into
+    the applicable theme-glossary matches (always shown first) and every
+    other match (capped, see `INTERACTIVE_SLOT_CANDIDATES_LIMIT`) — see
+    `interactive_slot_candidates`."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    cells = [tuple(c) for c in req.cells]
+    if len(cells) < 2:
+        raise HTTPException(status_code=400, detail="emplacement invalide")
+    theme_words, other_words = await asyncio.to_thread(
+        interactive_slot_candidates,
+        [list(row) for row in req.grid], rows, cols,
+        sess["index"], cells, sess["priority_words"],
+    )
+    return {"theme_words": theme_words, "other_words": other_words}
+
+
+@app.post("/api/interactive/verify")
+async def interactive_verify(req: InteractiveVerifyRequest):
+    """"Vérifier" button: check every currently complete word of the whole
+    grid against the real dictionary in one pass — a plain, per-length set
+    lookup against the same monolingual index this session's other
+    endpoints already use (interactive mode never builds a bilingual
+    session, so `.across`/`.down` are always the identical index). Returns
+    the subset of `req.words` that aren't real dictionary words; the
+    frontend already knows each complete word's own missing-definition
+    status locally, so that half of the check never needs a round trip at
+    all."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+
+    def _check():
+        idx = sess["index"].across
+        invalid = []
+        seen = set()
+        for word in req.words:
+            if word in seen:
+                continue
+            seen.add(word)
+            entry = idx.get(len(word))
+            if not entry or word not in entry["words"]:
+                invalid.append(word)
+        return invalid
+
+    invalid_words = await asyncio.to_thread(_check)
+    return {"invalid_words": invalid_words}
+
+
+@app.post("/api/interactive/title")
+async def interactive_title(req: InteractiveTitleRequest):
+    """"Proposer un titre" button: one best-effort LLM call for a whole-
+    grid title. Returns "" (never an error) on any failure."""
+    entries = [
+        (w["answer"], w.get("accented") or w["answer"], w.get("canonical") or w["answer"])
+        for w in req.words
+        if w.get("answer")
+    ]
+    meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
+    try:
+        title = await asyncio.to_thread(
+            clue_generator.generate_title, entries, req.language,
+            theme_description=(meta.get("theme_description") or None),
+        )
+    except Exception:
+        logger.exception("interactive title generation failed")
+        title = ""
+    return {"title": title or ""}
+
+
+@app.post("/api/interactive/save")
+async def interactive_save(req: InteractiveSaveRequest):
+    """"Sauvegarder" button: rebuild a generate_grid()-shaped result from
+    the final editable grid + hand-written definitions, save it to the
+    library tagged interactive=True ("(Création)"), best-effort SVG/PNG.
+    Returns the new library id."""
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    bw = [["#" if ch == "#" else "." for ch in row] for row in req.grid]
+    slots = extract_slots(bw, rows, cols)
+    assignment = ["".join(req.grid[r][c] for (r, c) in cells) for cells in slots]
+    words = build_word_entries(bw, rows, cols, slots, assignment)
+    clue_by_key = {
+        (d["row"], d["col"], d["direction"]): (d.get("clue") or "")
+        for d in req.definitions
+    }
+    for w in words:
+        w["clue"] = clue_by_key.get((w["row"], w["col"], w["direction"]), "")
+        w.setdefault("accented", w["answer"])
+        w.setdefault("canonical", w["answer"])
+        w.setdefault("language", req.language)
+    solution = build_letters_grid(rows, cols, slots, assignment)
+    n_black = sum(c == "#" for row in bw for c in row)
+    result = {
+        "width": cols,
+        "height": rows,
+        "pattern": bw,
+        "solution": solution,
+        "words": words,
+        "word_count": len(words),
+        "black_count": n_black,
+        "black_ratio": n_black / (rows * cols) if rows and cols else 0,
+        "language": req.language,
+        "bilingual_language": None,
+        "generation_duration_seconds": 0,
+        "optimization_duration_seconds": 0,
+        "clues_duration_seconds": 0,
+        "difficulty": req.difficulty,
+        "theme": (req.theme or "").strip() or None,
+        "title": req.title,
+    }
+    try:
+        svg_path = await asyncio.to_thread(
+            save_grid_svg, result, req.language, req.difficulty, "interactive",
+        )
+        try:
+            await asyncio.to_thread(save_grid_png, svg_path)
+        except OSError:
+            pass
+    except OSError:
+        logger.warning("interactive save: SVG/PNG export skipped")
+    pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
+    grid_id = await asyncio.to_thread(
+        save_grid_json, result, req.language, req.difficulty, "interactive",
+        req.title, None, pseudo, (req.theme or "").strip() or None, True,
+    )
+    # Also refresh this session's own GRID_WORK snapshot to the final,
+    # published state (at the user's explicit request: "Au moment de
+    # Publier, sauvegarder la dernière version de la grille pour
+    # l'utilisateur.") — best-effort, never fails the publish. The last
+    # autosave was fired by "Suivant"/"Précédent", so it can be missing a
+    # definition typed afterwards or a hand-edited title; this brings the
+    # "Créations" entry up to date with what was actually published. The
+    # published library grid (save_grid_json above) is a separate record
+    # and is never affected by a later "Créations" delete (which only ever
+    # calls delete_grid_work).
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is not None:
+        meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
+        try:
+            await asyncio.to_thread(
+                save_grid_work,
+                req.job_id, req.grid, req.definitions, req.title,
+                meta.get("language", req.language),
+                meta.get("difficulty", req.difficulty),
+                meta.get("theme") or ((req.theme or "").strip() or None),
+                sess["priority_words"], sess.get("seed", 0), pseudo,
+                sess.get("resumed_from"),
+            )
+        except Exception:
+            logger.warning("interactive save: GRID_WORK snapshot skipped", exc_info=True)
+    return {"grid_id": grid_id}
+
+
+# ---------------------------------------------------------------------------
+# GRID_WORK — autosaved, resumable "Interactif" work-in-progress sessions
+# (the "Créations" panel), at the user's explicit request: "chaque appui sur
+# Suivant/Précédent sauvegarde l'état en cours du process de création dans
+# le dossier GRID_WORK... afficher un panneau avec la liste. Il peut cliquer
+# pour relancer sa session interactive où elle s'était arrêtée, cliquer sur
+# un bouton icône pour supprimer la tâche." See backend/grid_store.py's own
+# entry for the storage-side design (one continuously-overwritten file per
+# session, found again by its own job_id suffix).
+# ---------------------------------------------------------------------------
+
+@app.post("/api/interactive/save_work")
+async def interactive_save_work(req: InteractiveSaveWorkRequest):
+    """Autosave fired by the frontend after every "Suivant"/"Précédent"
+    click — see InteractiveSaveWorkRequest. `language`/`difficulty`/
+    `theme` are read back from `JOBS[req.job_id]["interactive"]` (set once
+    at session start/resume) rather than trusted from the request body."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
+    pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
+    work_id = await asyncio.to_thread(
+        save_grid_work,
+        req.job_id, req.grid, req.definitions, req.title,
+        meta.get("language", "fr"), meta.get("difficulty", "easy"), meta.get("theme"),
+        sess["priority_words"], sess.get("seed", 0), pseudo,
+        sess.get("resumed_from"),
+    )
+    return {"work_id": work_id}
+
+
+@app.get("/api/interactive/work")
+async def interactive_work_list(pseudo: str = ""):
+    """"Créations" panel: every saved work-in-progress belonging to
+    `pseudo` (blank = no filter), most recently updated first — see
+    grid_store.list_grid_work."""
+    items = await asyncio.to_thread(list_grid_work, pseudo)
+    return {"items": items}
+
+
+@app.post("/api/interactive/work/delete")
+async def interactive_work_delete(req: InteractiveWorkIdRequest):
+    """"Créations" panel's own delete-icon button: permanently removes one
+    saved work-in-progress file. Never 404s on an already-gone/unknown id
+    — deleting something that isn't there already achieves what the
+    caller wanted, so this just reports whether a file was actually
+    removed."""
+    deleted = await asyncio.to_thread(delete_grid_work, req.work_id)
+    return {"deleted": deleted}
+
+
+@app.post("/api/interactive/resume", status_code=202)
+async def interactive_resume(req: InteractiveWorkIdRequest):
+    """"Créations" panel: relaunch a saved work-in-progress session
+    exactly where it stopped — a brand-new job_id/session (never the
+    original one, long gone), seeded from the saved grid/definitions/
+    title/theme-glossary/seed instead of a fresh, blank pattern — see
+    _run_interactive_resume_job."""
+    record = await asyncio.to_thread(get_grid_work, req.work_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="création introuvable (supprimée ?)")
+    job_id = _new_job()
+    task = asyncio.create_task(_run_interactive_resume_job(job_id, record))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"job_id": job_id}
+
+
+async def _run_interactive_resume_job(job_id, record):
+    """Background job behind POST /api/interactive/resume. Unlike
+    `_run_interactive_job` (fresh start: generates a brand-new pattern,
+    places one first word), this rebuilds the session's own index/
+    priority_words/rng from the saved record and hands the ALREADY-SAVED
+    grid straight back — `priority_words` is reused verbatim (never
+    re-derived by re-running the theme LLM/Qdrant lookup, which is
+    neither deterministic nor cheap), only re-filtered against the
+    freshly reloaded lexicon exactly like a fresh start already does.
+    Fresh diagnostics (`_interactive_fill_diagnostics`) are recomputed on
+    the resumed grid so the impossible/low-candidate highlights are
+    accurate immediately, not stale from whenever it was last saved."""
+    job = JOBS[job_id]
+    short_id = job_id[:8]
+
+    def progress(step, **data):
+        job["step"] = {"code": step, **data}
+
+    try:
+        language = record.get("language", "fr")
+        difficulty = record.get("difficulty", "easy")
+        if language not in WORDLISTS or not WORDLISTS[language].exists():
+            job["status"] = "error"
+            job["error_code"] = "internal_error"
+            job["error"] = "Langue inconnue ou dictionnaire absent."
+            return
+
+        progress("interactive_building")
+        index, known = await _load_interactive_index(language, difficulty)
+        priority_words = frozenset(
+            u for w in (record.get("priority_words") or ())
+            if (u := str(w).upper()) in known
+        )
+        seed = record.get("seed", 0)
+        rng = random.Random(seed)
+        grid = record.get("grid") or []
+        rows = len(grid)
+        cols = len(grid[0]) if grid else 0
+        imp, low = await asyncio.to_thread(_interactive_fill_diagnostics, grid, rows, cols, index)
+
+        INTERACTIVE_SESSIONS[job_id] = {
+            "index": index,
+            "priority_words": priority_words,
+            "rng": rng,
+            "seed": seed,
+            # The GRID_WORK file this session started from — read once by
+            # the very next autosave (POST /api/interactive/save_work) so
+            # it renames/adopts that same file instead of silently
+            # orphaning it while creating a brand-new one under this
+            # session's own fresh job_id (see grid_store.save_grid_work's
+            # own docstring for the full reasoning).
+            "resumed_from": record.get("id"),
+        }
+        job["interactive"] = {
+            "language": language,
+            "difficulty": difficulty,
+            "width": cols,
+            "height": rows,
+            "theme": record.get("theme"),
+            "has_theme": bool(priority_words),
+            "theme_description": None,
+        }
+        job["result"] = {
+            "width": cols,
+            "height": rows,
+            "grid": grid,
+            "placed": None,
+            "impossible": False,
+            "has_theme": bool(priority_words),
+            "impossible_cells": imp,
+            "low_candidate_cells": low,
+            # Only ever set on a resume result (a fresh start's own result
+            # has neither yet) — enterInteractiveMode() uses these two to
+            # restore interactiveDefs/the title input, which a fresh
+            # session never needs to do.
+            "definitions": record.get("definitions") or [],
+            "title": record.get("title") or "",
+        }
+        progress("done")
+        job["status"] = "done"
+    except GenerationCancelled:
+        job["status"] = "cancelled"
+    except Exception:
+        job["status"] = "error"
+        job["error_code"] = "internal_error"
+        job["error"] = "Erreur interne."
+        logger.exception("[%s] unhandled error during interactive resume", short_id)
+
+
 # Les cinq phases exposées par GET /api/generate/phase/{job_id}, à la
 # demande explicite de l'utilisateur ("file d'attente grille, génération
 # de la grille, file d'attente définition, génération des définitions,
@@ -2886,9 +3605,9 @@ def generate_status(job_id: str):
 # est ce job" sans avoir à connaître la dizaine de codes internes
 # (pattern, pattern_attempt_failed, minimizing, pre_cleanup_optimized...).
 _GRID_GENERATION_STEPS = frozenset({
-    "starting", "pattern", "pattern_generated", "pattern_attempt_failed",
-    "pattern_found", "pattern_failed", "pre_cleanup_optimizing",
-    "pre_cleanup_optimized", "minimizing", "grid_ready",
+    "starting", "theme", "interactive_building", "pattern", "pattern_generated",
+    "pattern_attempt_failed", "pattern_found", "pattern_failed",
+    "pre_cleanup_optimizing", "pre_cleanup_optimized", "minimizing", "grid_ready",
 })
 _CLUES_GENERATION_STEPS = frozenset({"clues", "saving"})
 

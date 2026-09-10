@@ -89,7 +89,7 @@ def _slugify_title(title):
 
 
 def save_grid_json(result, language, difficulty, mode, title, bilingual=None, pseudo=None,
-                   theme=None):
+                   theme=None, interactive=False):
     """Writes the grid to GRID_STORE/<language>/<id>.json — or, for a
     genuinely bilingual grid, GRID_STORE/bilingual/<id>.json instead — and
     returns the new record's own id (its filename stem, without the .json
@@ -147,6 +147,12 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
         "bilingual": bilingual if is_bilingual else None,
         "pseudo": pseudo,
         "theme": theme,
+        # True for a grid hand-authored via the web UI's "Interactif" mode
+        # (word-by-word construction + hand-written clues) — stored as
+        # None rather than False so an older record reads identically via
+        # .get(). Shown as a "(Création)" tag next to the author in the
+        # library list.
+        "interactive": bool(interactive) or None,
         "difficulty": difficulty,
         "mode": mode,
         "created_at": datetime.now().isoformat(),
@@ -191,6 +197,11 @@ def _iter_stored_grids():
             # show an author column and offer a "Mes grilles" filter
             # (backend/app.py's `_library_page`).
             "pseudo": record.get("pseudo"),
+            # True for a grid hand-authored via the "Interactif" mode (see
+            # save_grid_json) — drives the "(Création)" tag next to the
+            # author in the library list (frontend/static/script.js,
+            # renderLibraryList). None/absent for every ordinary grid.
+            "interactive": record.get("interactive"),
             # Thématique saisie à la génération (voir save_grid_json) —
             # `None`/absent pour une grille sans thématique ou d'avant ce
             # champ. Affichée dans la colonne "Thématique" de la
@@ -257,3 +268,216 @@ def get_grid(grid_id):
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# GRID_WORK — autosaved, in-progress "Interactif" authoring sessions (project
+# root, gitignored, same convention as GRID_STORE — a generated work-in-
+# progress artifact, not source content), at the user's explicit request:
+# "chaque appui sur Suivant/Précédent sauvegarde l'état en cours du process
+# de création dans le dossier GRID_WORK. Préfixer le fichier avec un
+# timestamp, puis le nom de l'auteur. Quand un utilisateur ouvre l'interface
+# (ou la recharge), si il a des grilles sauvegardées dans GRID_WORK, afficher
+# un panneau avec la liste. Il peut cliquer pour relancer sa session
+# interactive où elle s'était arrêtée, cliquer sur un bouton icône pour
+# supprimer la tâche." See backend/app.py's POST /api/interactive/save_work
+# (autosave), GET /api/interactive/work (the "Créations" panel's own list),
+# POST /api/interactive/work/delete, and POST /api/interactive/resume.
+#
+# Unlike GRID_STORE (one brand-new file per *finished* grid, never touched
+# again), a GRID_WORK file is the single, continuously-updated snapshot of
+# ONE still-in-progress session — every autosave OVERWRITES the same file
+# rather than piling up a new one, found again across the session's whole
+# lifetime by its own stable `job_id` suffix (the one part of the filename
+# that never changes once assigned, unlike the pseudo segment — see
+# save_grid_work's own docstring). This is why the filename shape below has
+# an extra segment (the full job_id) beyond GRID_STORE's own
+# `<timestamp>_<slug>_<4-digit code>` — a random 4-digit code is only ever
+# meant to break a same-second collision for two otherwise-unrelated saves,
+# never to serve as a stable lookup key the way a job_id already, uniquely,
+# does on its own.
+# ---------------------------------------------------------------------------
+
+GRID_WORK_DIR = Path(__file__).resolve().parent.parent / "GRID_WORK"
+
+# Matches exactly the shape save_grid_work() below produces
+# (YYYYMMDD-HHMMSS-ffffff_<pseudo slug>_<32-hex job_id>) — same role as
+# _GRID_ID_RE above: validated before ever being interpolated into a path,
+# so a hand-crafted id can never walk out of GRID_WORK_DIR.
+_WORK_ID_RE = re.compile(r"^\d{8}-\d{6}-\d{6}_[a-z0-9_]+_[0-9a-f]{32}$")
+
+
+def _slugify_pseudo(pseudo):
+    """Same ASCII/underscore slugging as _slugify_title above, applied to a
+    player's own pseudo instead of a grid title — falls back to "anonyme"
+    for an empty/whitespace-only pseudo rather than leaving that segment of
+    the filename blank."""
+    ascii_pseudo = unicodedata.normalize("NFKD", pseudo or "").encode("ascii", "ignore").decode("ascii")
+    slug = _SLUG_RE.sub("_", ascii_pseudo).strip("_").lower()
+    return slug[:MAX_SLUG_LENGTH].strip("_") or "anonyme"
+
+
+def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme,
+                    priority_words, seed, pseudo=None, resumed_from=None):
+    """Autosaves (or updates) the in-progress state of one "Interactif"
+    session. The very first call for a given `job_id` creates
+    `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`; every later call
+    for that same `job_id` finds that exact file again (globbing for its
+    own `_<job_id>.json` suffix — always unique, since `job_id` itself
+    is) and overwrites it in place — the filename's own timestamp/pseudo
+    segments are therefore fixed at first save and never renamed, even if
+    the player's own pseudo changes mid-session (the record's own `pseudo`
+    field, unlike the filename, always reflects the latest value) — only
+    the record's own `updated_at` field, and of course its content, change
+    on a later save.
+
+    `resumed_from` (the OLD work id a resumed session started from — see
+    POST /api/interactive/resume) matters only the very first time this
+    is called for a brand-new `job_id` that came from a resume: without
+    it, that first autosave would find no file for the (fresh) `job_id`
+    and create a genuinely new one, silently orphaning the original
+    file — the exact same in-progress creation would then exist twice,
+    one stale and one live. When given and no file for `job_id` exists
+    yet, this looks for `resumed_from`'s own file instead and RENAMES it
+    to the new `job_id` (keeping its original timestamp/pseudo segments
+    and its own `created_at`) rather than starting fresh — a no-op on
+    every later call for the same session, since by then the file's own
+    name already matches the current `job_id` and the normal lookup above
+    finds it directly.
+
+    Carries everything POST /api/interactive/resume needs to rebuild the
+    session from scratch without redoing any expensive or non-repeatable
+    work: `priority_words` (the already-resolved theme glossary — resuming
+    must never re-run the theme LLM/Qdrant lookup, which is neither
+    deterministic nor cheap) and `seed` (so a resumed session's own
+    Filler/CSP randomness comes from a real, reproducible starting point —
+    the exact rng state at pause time is neither persisted nor needed to
+    be, since nothing about "Suivant" placing a further word depends on
+    continuing the *exact* same random sequence a resumed session would
+    have followed had it never been interrupted). Returns the record's own
+    id (its filename stem)."""
+    pseudo = (pseudo or "").strip() or None
+    existing = list(GRID_WORK_DIR.glob(f"*_{job_id}.json")) if GRID_WORK_DIR.is_dir() else []
+    created_at = None
+    if existing:
+        path = existing[0]
+        work_id = path.stem
+        try:
+            with open(path, encoding="utf-8") as f:
+                created_at = json.load(f).get("created_at")
+        except (OSError, json.JSONDecodeError):
+            created_at = None
+    elif resumed_from and _WORK_ID_RE.match(resumed_from) and (GRID_WORK_DIR / f"{resumed_from}.json").is_file():
+        old_path = GRID_WORK_DIR / f"{resumed_from}.json"
+        try:
+            with open(old_path, encoding="utf-8") as f:
+                created_at = json.load(f).get("created_at")
+        except (OSError, json.JSONDecodeError):
+            created_at = None
+        # Keep the old file's own timestamp/pseudo-slug segments — only the
+        # trailing job_id changes — so the "when was this really started"
+        # information in the filename survives the resume.
+        prefix = resumed_from.rsplit("_", 1)[0]
+        work_id = f"{prefix}_{job_id}"
+        path = GRID_WORK_DIR / f"{work_id}.json"
+        old_path.rename(path)
+    else:
+        GRID_WORK_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        slug = _slugify_pseudo(pseudo)
+        work_id = f"{timestamp}_{slug}_{job_id}"
+        path = GRID_WORK_DIR / f"{work_id}.json"
+    now = datetime.now().isoformat()
+    record = {
+        "id": work_id,
+        "job_id": job_id,
+        "grid": grid,
+        "definitions": definitions,
+        "title": title,
+        "language": language,
+        "difficulty": difficulty,
+        "theme": theme,
+        "priority_words": sorted(priority_words or ()),
+        "seed": seed,
+        "pseudo": pseudo,
+        "created_at": created_at or now,
+        "updated_at": now,
+    }
+    path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return work_id
+
+
+def _iter_stored_grid_work():
+    """Yields every saved work-in-progress's own compact metadata — never
+    the full grid/definitions payload, so listing stays cheap. A file that
+    fails to parse is skipped rather than failing the whole listing (same
+    tolerance as _iter_stored_grids above)."""
+    if not GRID_WORK_DIR.is_dir():
+        return
+    for path in GRID_WORK_DIR.glob("*.json"):
+        try:
+            with open(path, encoding="utf-8") as f:
+                record = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        grid = record.get("grid") or []
+        yield {
+            "id": record.get("id", path.stem),
+            "title": record.get("title"),
+            "language": record.get("language"),
+            "difficulty": record.get("difficulty"),
+            "theme": record.get("theme"),
+            "pseudo": record.get("pseudo"),
+            "created_at": record.get("created_at"),
+            "updated_at": record.get("updated_at"),
+            "width": len(grid[0]) if grid and grid[0] else None,
+            "height": len(grid) if grid else None,
+        }
+
+
+def list_grid_work(pseudo=None):
+    """Every saved work-in-progress's compact metadata, most recently
+    UPDATED first (unlike list_grids' own created_at-based sort — what
+    matters here is which session was touched most recently, not which
+    was started first). `pseudo`, if given (stripped; blank means no
+    filter), keeps only entries whose own saved pseudo matches exactly —
+    the same convention already established for the library's own "Mes
+    grilles" filter (backend/app.py's _library_page) — so a player only
+    ever sees their own in-progress creations, never anyone else's."""
+    pseudo = (pseudo or "").strip()
+    entries = [
+        e for e in _iter_stored_grid_work()
+        if not pseudo or (e.get("pseudo") or "").strip() == pseudo
+    ]
+    entries.sort(key=lambda e: e.get("updated_at") or "", reverse=True)
+    return entries
+
+
+def get_grid_work(work_id):
+    """The full saved record for `work_id` — or None if it doesn't match
+    the expected shape (see _WORK_ID_RE) or no matching file exists."""
+    if not _WORK_ID_RE.match(work_id):
+        return None
+    path = GRID_WORK_DIR / f"{work_id}.json"
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def delete_grid_work(work_id):
+    """Deletes a saved work-in-progress file. Returns True if a file was
+    actually removed, False for a malformed id or one with no matching
+    file — never raises either way, mirroring get_grid_work's own
+    tolerant validation."""
+    if not _WORK_ID_RE.match(work_id):
+        return False
+    path = GRID_WORK_DIR / f"{work_id}.json"
+    try:
+        path.unlink()
+        return True
+    except OSError:
+        return False

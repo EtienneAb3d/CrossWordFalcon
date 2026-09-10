@@ -5902,6 +5902,922 @@ servers:
   `result["theme"]`; `_run_recompute_job` passes `result.get("theme")`
   so a recomputed copy keeps the original theme. Only the raw string is
   stored — never the ~5000 pre-selected words the Qdrant search returned.
+
+  `save_grid_json` gained an `interactive=False` trailing param, at the
+  user's explicit request: a grid hand-authored via the web UI's
+  "Interactif" mode (see the interactive-authoring entry below) is stored
+  with `record["interactive"] = bool(interactive) or None` (`None` rather
+  than `False` so an older record reads identically via `.get`).
+  `_iter_stored_grids` yields it in the compact metadata; `_library_page`
+  passes it straight through (`{**g, "seen": is_seen}`); `frontend/
+  static/script.js`'s `renderLibraryList` appends ` (Création)`
+  (`libraryCreationTag`, all 6 languages) after the author name when it's
+  set.
+
+- **"Interactif" authoring mode** — a `mode="interactive"` value on the
+  web UI's `#mode` selector (listed above "Flash"), at the user's
+  explicit request: instead of the automatic parallel-palier search, the
+  player builds ONE grid word by word, hand-writes every clue, proposes a
+  title, and saves it to the Bibliothèque tagged `(Création)`. The
+  frontend's form-submit handler branches on `mode === "interactive"` to
+  `runInteractive()` (never `/api/generate`).
+
+  Backend (`backend/app.py`): four endpoints plus a non-serializable
+  session dict `INTERACTIVE_SESSIONS = {job_id: {index (DualIndex),
+  priority_words (frozenset), rng}}`, evicted in lockstep with `JOBS`/
+  `CANCEL_EVENTS` in `_new_job()`. `POST /api/interactive/start` (202
+  `{job_id}`) runs `_run_interactive_job` as a background task: reuses
+  `_build_theme_glossary` (if `req.theme`), then `load_wordlist` +
+  `build_index` + `DualIndex(idx, idx)` + `make_pattern(rows, cols, 0.0,
+  rng, available_lengths=DualSet(...), index=..., black_enrichment_
+  fraction=req.black_enrichment_percent/100)` + one `interactive_place_
+  word(...)` call. Stores `job["result"] = {width, height, grid, placed,
+  impossible, has_theme}` and `job["interactive"] = {language, difficulty,
+  width, height, theme, has_theme, theme_description}` (JSON-safe),
+  `job["status"] = "done"`. Does its own validation (`req.language in
+  WORDLISTS` + file exists, `req.difficulty in DIFFICULTY_PRESETS`), never
+  `_validate_generate_request` (which would reject `mode` not in
+  `BUDGET_MODES`). Polled via the existing `GET /api/generate/status/
+  {job_id}`, cancelled via `POST /api/generate/cancel/{job_id}` (the
+  theme-glossary step observes `cancel_event`). `POST /api/interactive/
+  step` (synchronous, `InteractiveStepRequest{job_id, grid}`) reads the
+  session's `index`/`rng`/`priority_words` and calls `interactive_place_
+  word` once, returning `{width, height, grid, placed, impossible}` (grid
+  unchanged if impossible), 404 if the session was evicted. `POST /api/
+  interactive/title` (synchronous) is one best-effort `clue_generator.
+  generate_title` call (`theme_description` from `job["interactive"]`),
+  `""` on any failure. `POST /api/interactive/save` (synchronous,
+  `InteractiveSaveRequest{job_id, grid, definitions:[{row,col,direction,
+  clue}], title, language, difficulty, theme, pseudo}`) rebuilds a
+  `generate_grid()`-shaped `result` from the final grid via
+  `extract_slots`/`build_word_entries`/`build_letters_grid` (matching
+  clues to word entries by start-cell `(row, col, direction)`), duration
+  fields set to `0`, best-effort `save_grid_svg`/`save_grid_png`, then
+  `save_grid_json(..., mode="interactive", pseudo=pseudo, interactive=
+  True)` — returns `{grid_id}`. All four have matching `proxy_interactive_
+  *` routes in `frontend/server.py` (`/title` uses `CHAT_PROXY_TIMEOUT_S`,
+  a blocking LLM call; the others `PROXY_TIMEOUT_S`); "Proposer" reuses
+  the existing `GET /api/dictionary/define`.
+
+  `interactive_place_word(grid, rows, cols, index, rng,
+  priority_words=None)` (`backend/crossword_gen.py`, a new self-contained
+  module function — **no change to `Filler._backtrack`/`make_pattern`/
+  `try_fill`/`generate_grid`**, and it never calls `Filler.solve`/
+  `_backtrack`/`try_fill`) places EXACTLY ONE word with no backtracking:
+  derives a plain `"#"`/`"."` `pattern` from `grid` (since `extract_slots`/
+  `sample_letter_biases` only treat a cell literally equal to `WHITE`
+  (`"."`) as white — a letter cell would break a run, so `grid`'s letters
+  are tracked separately as `known`), `extract_slots(pattern, ...)`,
+  builds a `Filler` purely as a domain/scoring helper (`letter_scores`
+  from `sample_letter_biases(..., force_fraction=0.0)`, `locked_letters=
+  known`, `priority_words`), preseeds every fully-known slot, then among
+  unassigned slots with a non-empty `set(filler._domain(i)) -
+  filler.used_words` picks the most-constrained (MRV, tie-break
+  `_has_known_letter` then `rng`) and, within it, a member of
+  `_priority_words_for(...)` if any fits else the best word by
+  `(filler._candidate_score, freq)`. Returns `{"impossible": True}` when
+  no slot has a viable candidate, else `{"impossible": False, "grid":
+  <copy with the word written in>, "placed": {"cells": [[r,c],...],
+  "word", "direction"}}`.
+
+  **This hand-rolled MRV target-selection was replaced outright**, at the
+  user's explicit question after noticing the actual behavior didn't
+  match either of the main generator's own two established rules:
+  "Pourquoi le mode interactif commence par remplir des emplacements de 2
+  lettres, alors que ces emplacements ne doivent pas être prioritaires, et
+  commence en bas à droite, alors que les règles sont conçues pour
+  commencer en haut à gauche ?" Confirmed live before touching any code,
+  not just reasoned about: a direct trace of several real interactive
+  sessions showed the first several placements were consistently 2-letter
+  words (`OE`, `ET`, `ES`, `ME`...) scattered across the grid with no
+  positional pattern — because `interactive_place_word` never went
+  through `Filler._backtrack`'s own 7-level selection cascade at all
+  (see `Filler._select_target_slot` below) — its own separate, hand-
+  written MRV (`fewest = min(len(c) for c in viable.values())`) has
+  neither that cascade's level-3 length floor (`>= 4` letters, added
+  earlier this same session specifically because a short slot's
+  naturally tiny vocabulary makes "few candidates" a meaningless signal
+  for it) nor its level-5 geometric score (`x + y` from the top-left
+  corner) — a short slot's domain is almost always the smallest in the
+  whole grid (a dictionary has far fewer 2-3 letter words than 5+ letter
+  ones), so plain MRV reliably picked one first, and the final tiebreak
+  among MRV ties was pure `rng.random()`, with no positional bias
+  whatsoever (the "bottom-right" the user described wasn't a coded bias
+  either — the actual live trace showed the very first several
+  placements scattered across the grid, not consistently bottom-right —
+  but the *lack* of a top-left bias, where one was clearly expected, is
+  the real, confirmed defect the report correctly named).
+
+  Fixed by factoring the entire 7-level cascade out of `_backtrack` into
+  a new `Filler._select_target_slot(self, unassigned, domains)` (same
+  body, byte-for-byte, just wrapped as its own method and returning
+  `best_i` instead of falling through into the candidate-word loop right
+  below it) — `_backtrack` now just calls `best_i = self.
+  _select_target_slot(unassigned, domains)` in its place. `interactive_
+  place_word` was rewritten to build the same two structures `_backtrack`
+  already builds — `domains` (the **raw**, `used_words`-unfiltered domain
+  per slot, exactly what the cascade's own level-3 threshold check
+  expects) alongside `viable` (the `used_words`-filtered candidate set the
+  word-picking step still needs) — and calls `filler._select_target_slot
+  (list(viable.keys()), domains)` instead of its own MRV logic, which is
+  now gone entirely. This makes the interactive mode's own placement order
+  genuinely identical in spirit to the automatic generator's: direction
+  alternation, theme-realizability, the ≥4-letter few-candidates
+  priority, prefer-already-started slots, then the top-left geometric
+  front (windowed + shuffled at every stage, same as `_backtrack`), then
+  placed-letter-count, then statistical letter-frequency score — only the
+  final word choice within the chosen slot stays interactive-mode's own
+  (theme-first, then `_candidate_score`/frequency, a single `max` pick
+  rather than backtracking recursion, since this function never explores
+  or undoes a placement).
+
+  Verified live: re-ran the exact same real-session reproduction that
+  first exposed the bug (French wordlist, 3 seeds, 9×9, 10 real
+  placements each) — no more 2-letter words dominating the early steps
+  (mostly 5-9 letter words now, short slots only appearing later once
+  most of the grid is already filled), and the very first few placements
+  of every seed now land at a low `row+col` distance from the top-left
+  corner (0, 1, 2, 3, 4...), growing only as those corner slots get used
+  up — the same geometric front the automatic generator already produces.
+  A full run to natural completion (`difficulty="easy"`, seed 42, 9×9)
+  placed 18 words with no crash before correctly reporting the remaining
+  slots impossible. A full end-to-end `generate_grid()` run on both seeds
+  of the standard 15×10 benchmark (Flash mode) confirmed the refactor
+  itself introduced no regression to the main generator: 0 mismatches, 0
+  empty white cells each (57 words/33 black and 57 words/32 black).
+
+  Frontend (`frontend/static/script.js`): `interactiveMode` gates a
+  leading `if (interactiveMode)` fast-path in `selectCell` (any cell,
+  black included, is selectable), `renderGrid` (black cells get a click
+  handler + `.selected` via a new `#grid .cell.black.selected` accent
+  inset border), `handleKeydown` (→ `handleInteractiveKeydown`:
+  letter types + advances, Space toggles black, Backspace/Delete clears),
+  `typeVirtualLetter` (→ `interactiveTypeLetter`; the new `■` virtual-key,
+  `.virtual-keyboard-black`, calls `interactiveToggleBlack`),
+  `setActiveDirection` (also toggles the two `#interactive-dir-*` buttons,
+  then `renderInteractive()`), `updateHoverForModifierKey` (early return).
+  `interactiveGrid` is a 2D array of `"#"`/`""`/`"A".."Z"`;
+  `syncPuzzleFromInteractive()` feeds `renderGrid` a synthesized `puzzle`/
+  `userLetters`; `interactiveSlots()` is a JS port of `extract_slots` +
+  `build_word_entries` numbering. `interactiveUndoStack` holds full grid
+  snapshots (first pushed on entry, so `length <= 1` disables
+  "Précédent"); every edit and every "Suivant" pushes one.
+  `interactiveDefs` is a `Map` keyed `"startRow,startCol,direction"`.
+  Completeness (every white cell filled AND every slot has a non-empty
+  def) reveals `#interactive-title-row` + `#interactive-save-btn` and
+  auto-calls `proposeInteractiveTitle()` once. The whole
+  `#interactive-controls` block lives inside `#result` (reuses `#grid`);
+  `hideInteractivePanel()` runs at the top of `runGeneration` and in
+  `displayFinalGrid`. ~23 new i18n keys (`modeInteractive`,
+  `interactive*`, `libraryCreationTag`) in all 6 languages;
+  `statusInteractiveBuilding` + a `describeStep` case for the
+  `"interactive_building"` progress step.
+
+  **The layout was reworked twice more, both at the user's explicit
+  request.** First: "afficher les définitions uniquement sous la grille,
+  pas les listes complètes Horizontalement/Verticalement" — `applyDefinitions
+  Visibility()` now also forces `#clues`/`#down-clues-section` hidden
+  whenever `interactiveMode` is on (previously only driven by
+  `showDefinitions`), called from both `enterInteractiveMode`/`hideInteractive
+  Panel` so it's re-applied whichever way this mode is entered/left.
+
+  Second, right after: "il y a deux blocs de flèches et de définitions...
+  ne pas afficher les blocs qui correspondent au mode jeu (juste en
+  dessous de la grille). Ne garder que les blocs spécifiques au mode
+  interactif (avec les boutons Proposer et Vérifier)" — `applyDefinitions
+  Visibility()` now also hides the *play-mode* `#hover-definition-row`
+  (definition text + its own duplicated →/↓ pair) whenever `interactiveMode`
+  is on, leaving only `#interactive-arrows`/`#interactive-definition-row`
+  (Proposer/Vérifier) visible — `renderHoverDefinitionForSelection()`
+  degrades to a plain placeholder no-op in this mode, since the row it
+  would write into is hidden regardless. In the same request, "afficher
+  les boutons Précédent et Suivant de chaque côté de la grille, centrés
+  verticalement par rapport à la grille": both buttons were moved out of
+  `#interactive-controls` (which used to hold a full-width `#interactive-
+  nav` row, Précédent/message/Suivant, now removed) into `#grid-column`
+  itself, as plain siblings flanking `#grid` — `hidden` by default,
+  revealed by `enterInteractiveMode`/`hideInteractivePanel` alongside a
+  new `.interactive-flank` class on `#grid-column` that switches it from
+  its normal column layout to a horizontal row; `#grid`'s own pre-existing
+  `align-self: flex-start` pins it to that row's top edge regardless,
+  which is what makes the two shorter buttons — using the row's own
+  default centered `align-items` — land exactly at the grid's vertical
+  midpoint with no JS measurement needed. See the `style-guide` SKILL for
+  the full layout reasoning (including the mandatory `[hidden]{display:
+  none}` overrides this needed for both the new flank buttons and
+  `#hover-definition-row`, the same specificity trap already documented
+  elsewhere in this file).
+
+  **A real, previously-unnoticed selection bug was found and fixed in the
+  same investigation**, reported directly by the user as two very
+  concrete symptoms: "Pourquoi le mode interactif commence par remplir
+  des emplacements de 2 lettres, alors que ces emplacements ne doivent
+  pas être prioritaires, et commence en bas à droite, alors que les
+  règles sont conçues pour commencer en haut à gauche ?" — see
+  `interactive_place_word`'s own entry above for the full root-cause
+  trail and fix (`Filler._select_target_slot`, factored out of
+  `_backtrack` and reused by both).
+
+  **A real gap in `_interactive_fill_diagnostics`'s own impossible-cell
+  detection was found and fixed right after**, reported directly by the
+  user: "L'interface interactive ne montre pas (en rose) toutes les zones
+  devenues impossibles (l'une a été montrée sur quelques itération, puis
+  a disparu comme zone impossible, l'autre n'a jamais été montrée comme
+  impossible). L'algo doit vérifier à chaque étape... toutes les zones
+  pour détecter les impossibles." Root-caused directly: the function's
+  own loop only ever checked *unassigned* slots (`if filler.assignment[i]
+  is not None: continue`) — a slot already entirely determined, whether
+  by a real placement or purely by its own crossing letters, was never
+  examined at all, exactly the same class of "invented word" gap this
+  project has already found and fixed several times over for the
+  automatic generator (AVALAS/UNT/AMN, see `crossword_gen.py`'s own
+  section above) — a slot correctly flagged impossible while still
+  partial (zero real candidates given its known letters) could then get
+  silently "completed" by a later placement's own crossing letters, at
+  which point it fell out of every check entirely, regardless of whether
+  the resulting word was ever real. This explains both halves of the
+  report at once: a zone shown impossible for a few iterations then
+  "disappearing" (completed into an invented word, no longer checked at
+  all) and a zone never shown impossible in the first place (already
+  fully known by the time its own first diagnostic call ever ran).
+
+  Fixed by adding one more pass over `_invalid_fully_known_indices(slots,
+  index, known)` — an existing, already-proven helper (already used by
+  `_shorten_impossible_zones` for exactly this same class of bug) that
+  flags a fully-known slot whose exact letter combination matches no real
+  dictionary word — folding its result into the same `impossible` set.
+  Verified with a direct, hand-built reproduction: a 1-word dictionary
+  ("CAT" only), a down-slot at `(0,1)` genuinely impossible while partial
+  (no real word starts with 'A' at all) — confirmed already flagged
+  impossible at that point, then confirmed it silently stopped being
+  flagged the instant two more placements completed it to the invalid
+  "AQQ", reproducing the exact reported regression before the fix; the
+  same scenario with the fix applied stays correctly flagged throughout.
+  A real, non-mocked interactive session against the full French wordlist
+  (9×9, 12 real automatic placements) showed no false-positive flood —
+  `impossible`/`low_candidate` counts grow sensibly (0 at first, up to
+  13/7 by the last step) rather than spiking unreasonably, confirming the
+  added check doesn't over-trigger on ordinary, genuinely valid content.
+
+- **"Nettoyer" button** (mode "Interactif"), at the user's explicit
+  request: "ajouter un bouton 'Nettoyer' [à droite des flèches]
+  permettant de déclencher l'opération de nettoyage complet des zones
+  impossibles." A new `interactive_clean_impossible_zones(grid, rows,
+  cols, index, rng)` (`backend/crossword_gen.py`, right after
+  `interactive_place_word`) is the manual-grid equivalent of the
+  automatic generator's own "nettoyage complet" (`_build_retry_seed`,
+  applied every palier — see its own extensive history above) — reuses
+  `_clean_blocked_slots` directly (already proven by the automatic
+  generator) rather than reimplementing the same logic a second time.
+  Computes the impossible-slot set the same combined way `_interactive_
+  fill_diagnostics` now does (`_impossible_indices` ∪ `_invalid_fully_
+  known_indices`), builds an `assignment` list (a word wherever every
+  cell of a slot is already known, `None` otherwise), and hands it to
+  `_clean_blocked_slots` with `index`/`rng`/`grid`/`rows`/`cols` all
+  supplied — enabling that function's full behavior: remove every word
+  crossing an impossible zone, or (1/10 chance, or when a zone has no
+  dictionary coverage at all for its length) blacken one of its own
+  cells instead, exactly like the automatic generator.
+
+  `changed`/`cleared_count` are computed from a genuine *before/after*
+  comparison (words actually removed + cells actually blackened) rather
+  than merely "how many zones were considered" — a first version reported
+  `changed=True`/`cleared_count=len(impossible)` unconditionally whenever
+  at least one impossible zone existed, even when `_clean_blocked_slots`
+  ended up doing nothing at all for it (no crossing word to remove, the
+  black-cell alternative not rolled or rejected by `is_structurally_
+  valid`) — caught live, via the real running API, comparing two
+  successive `/clean` calls on the identical grid: the second reported
+  `changed=True`/`cleared_count=1` with a byte-identical, completely
+  unchanged grid, which would have shown the user a misleading "1
+  emplacement nettoyé" message for a click that visibly did nothing.
+  Fixed by comparing `assignment` before/after `_clean_blocked_slots`
+  (`removed_words`) and adding `len(new_black_cells)`, returning
+  `changed=False` outright whenever that sum is `0`.
+
+  Known, disclosed limitation (never fixed, out of scope for this
+  request): a slot fixed only by a letter from a *partially*-typed
+  crossing slot (the user manually typed some but not all of its
+  letters) is never removed by `_clean_blocked_slots` — it only ever
+  removes a fully-known crossing word — so such a case can only be
+  resolved via the black-cell alternative if it happens to apply to the
+  impossible slot itself.
+
+  `POST /api/interactive/clean` (`backend/app.py`, `InteractiveCleanRequest`
+  — same `{job_id, grid}` shape as `/step`) calls this function via
+  `asyncio.to_thread`, then re-runs `_interactive_fill_diagnostics` on the
+  resulting grid (imported directly into `app.py`, the same "import a
+  private helper across modules" convention already established for
+  `grid_store._slugify_title`) so the response carries fresh `impossible_
+  cells`/`low_candidate_cells` the same way `/step` already does.
+  `frontend/server.py` gained the matching `proxy_interactive_clean`
+  route (per this project's own every-endpoint-needs-a-proxy rule).
+
+  On the web UI: `#interactive-clean-btn` sits inside `#interactive-
+  arrows`, right after the →/↓ pair (literally "à droite des flèches").
+  Its click handler mirrors "Suivant"'s own request/undo/error-handling
+  shape, but — unlike "Suivant" (which only ever touches the cells of
+  the one word just placed) — replaces the *entire* `interactiveGrid`
+  from the response, since cleanup can alter cells anywhere in the grid;
+  `interactiveThemeCells`'s own existing prune-on-render logic (drop any
+  cell that no longer carries a letter) already handles a cleared theme
+  word for free, no new code needed there. A `changed: false` response
+  (nothing to clean) pops the just-pushed undo entry (nothing to undo)
+  and shows `t.interactiveNothingToClean` rather than treating it as an
+  error. New i18n keys in all 6 languages: `interactiveCleanBtn` (button
+  label), `interactiveCleaned(n)` (a generic "N modification(s)
+  effectuée(s)" — deliberately not "N zones débloquées", since
+  `cleared_count` counts concrete actions, which can outnumber or
+  undercount the zones actually involved), `interactiveNothingToClean`.
+
+  Verified live, end to end, through the real running API (not just
+  direct Python calls): a real interactive session (9×9, French, seed 7)
+  was stepped forward until it reached a real, stuck state (27 impossible
+  cells); a first `POST /api/interactive/clean` call reduced it to 5
+  (`changed=true`, `cleared_count=10`); a second call on the resulting
+  grid correctly reported `changed=false`, `cleared_count=0` — a genuine
+  fixed point, not a misleading repeat "success." `py_compile`/`esprima`/
+  HTML tag-balance all clean. **Not yet visually confirmed in an actual
+  browser** — the same tooling limitation noted throughout this project's
+  UI work.
+
+  **Two real bugs found and fixed right after, both reported directly by
+  the user**: "le bouton Proposer (définition) répond systématiquement
+  'Sélectionnez un mot entièrement rempli'." Their own first hypothesis —
+  that the code might be reading the *hovered* (mouse-over) word rather
+  than the *selected* (clicked) one, which can never be active while the
+  mouse is over the Proposer button itself — was a reasonable diagnosis
+  to reach for, but not what was actually happening: `selectedInteractive
+  Word()` was already, correctly, deriving the word from `selected` (the
+  clicked cell) + `activeDirection`, never from hover state. The real bug
+  was a one-line JavaScript quirk in `w.filled`'s own computation:
+  `w.answer.length === cells.length && !w.answer.includes("")`. `String.
+  prototype.includes("")` is **always `true`** in JavaScript for any
+  string, empty or not (the empty search string trivially matches at
+  every position) — so `!w.answer.includes("")` was always `false`,
+  meaning `w.filled` could never be `true` regardless of which word was
+  selected or how completely it was filled in. Fixed by dropping that
+  redundant, always-`false` second condition entirely: `w.answer`
+  (built via `.map(cell => grid[cell] || "").join("")`) already comes
+  back strictly *shorter* than `cells.length` the moment even one cell is
+  still empty — since `.join("")` silently drops each empty-string
+  element rather than keeping a placeholder for it — so the existing
+  length check alone was already the correct, sufficient test; it just
+  needed the broken second clause removed. Verified by porting the exact
+  post-fix logic to Python and confirming it correctly returns `true` for
+  a fully-filled word and `false` for a partially- or completely-empty
+  one (no JS runtime available in this environment to execute the real
+  code directly — the `.includes("")` behavior itself is unambiguous,
+  spec-documented ECMAScript semantics, not something that needed live
+  execution to confirm).
+
+  **The user immediately reported the same class of problem for
+  "Vérifier"** ("Idem pour le bouton Vérifier (qui change en plus la
+  sélection du premier mot en haut à gauche)") — a different bug, not the
+  same `.includes("")` quirk (this button's own `interactiveSlots()`
+  already computes `filled` correctly, per-cell, unrelated to `selected
+  InteractiveWord()`). Root cause here: the click handler searched *every*
+  slot in the grid (`slots.find(...)`) for one missing a saved definition
+  — including slots not yet filled with any letters at all — so on any
+  still-in-progress grid (i.e. almost always, mid-authoring), it reliably
+  matched the very *first* slot in `interactiveSlots()`'s own top-to-
+  bottom/left-to-right scan order, jumping the selection there every
+  single click regardless of what the player actually meant to check.
+  Fixed by restricting the search to `slots.filter((s) => s.filled)`
+  first — a still-incomplete word legitimately has no definition yet and
+  shouldn't be flagged; "Vérifier" now only ever reports a *genuinely
+  filled* word that's missing its definition.
+
+  Separately, at the user's own explicit follow-up request ("Mettre le
+  bouton Vérifier à côté du bouton Nettoyer"), `#interactive-verify-btn`
+  was moved out of `#interactive-definition-row` (which now holds only
+  the definition `<input>` + "Proposer") into `#interactive-arrows`,
+  right after `#interactive-clean-btn` — no CSS or JS change needed
+  beyond the plain HTML relocation, since the button's own `id` (and so
+  its existing `const`/click-handler wiring) is unchanged. See the
+  `style-guide` SKILL for the layout note.
+
+  Verified: `esprima`/HTML tag-balance both clean after all three
+  changes. **Not yet visually confirmed in an actual browser** — the
+  same tooling limitation noted throughout this project's UI work.
+
+  **"Nettoyer (+noires)" button**, right next to "Nettoyer", at the
+  user's explicit request: "un nettoyage approfondi (nettoyage des cases
+  noires, et pas seulement les emplacements impossibles)." A new
+  `interactive_minimize_black_cells(grid, rows, cols, index, rng)`
+  (`backend/crossword_gen.py`, right after `interactive_clean_impossible_
+  zones`) is the second half of this deeper pass: "Nettoyer" only ever
+  touches a black cell incidentally, as a side effect of resolving one
+  specific impossible slot (its own 1/10 alternative, or its "zone sans
+  issue" fallback) — this new function goes after black cells directly,
+  anywhere in the grid, not just ones tied to an impossible zone. Loosely
+  mirrors the automatic generator's own `minimize_black_squares`, but
+  deliberately weaker: that function requires a full, successful CSP
+  re-solve after every candidate removal, which assumes a *complete*
+  grid — an interactive grid is very often still far from one. Instead,
+  each candidate removal (shuffled order, no positional bias) is kept
+  only if it (a) stays structurally valid (`is_structurally_valid(...,
+  min_interior_free=1)`, the same absolute connectivity/no-orphaned-cell
+  floor used throughout this file) and (b) doesn't *increase* the total
+  count of impossible slots (same combined `_impossible_indices` ∪
+  `_invalid_fully_known_indices` criterion as `_interactive_fill_
+  diagnostics`/`interactive_clean_impossible_zones`) — recomputed fresh
+  after each accepted removal, so later removals are judged against the
+  updated baseline, not the original grid.
+
+  **A real, measured design question surfaced live before shipping**: on
+  a completely blank grid (no letters at all), this mechanism removed
+  *every single black cell* of the pre-fill pattern, on every seed tested
+  (7/7) — since nothing is "impossible" yet with zero known letters (any
+  covered length always has some real word), the only remaining brake is
+  the loose structural floor (`min_interior_free=1`), which a typical
+  9×9 pre-fill pattern can fully satisfy down to zero black cells. This
+  silently undoes the very guarantee pre-fill/`PREFILL_MIN_WORD_COUNT`
+  exists for (every slot length having *enough* dictionary coverage) —
+  a real, different concern from "impossible" (zero candidates), tracked
+  separately as the orange "low candidate" highlight. Presented to the
+  user directly, with this exact measurement, via `AskUserQuestion`
+  (protect the `PREFILL_MIN_WORD_COUNT` floor too, vs. keep the looser,
+  purely structural behavior) — **the user chose to keep the current,
+  purely structural behavior**, accepting that this button can strip a
+  blank or lightly-filled grid down to very few black cells, even at the
+  cost of some slot lengths ending up poorly covered by the dictionary
+  until the player fills them in by hand.
+
+  `InteractiveCleanRequest` gained a `deep: bool = False` field; `POST
+  /api/interactive/clean` runs `interactive_clean_impossible_zones` as
+  before, and — only when `req.deep` — additionally runs `interactive_
+  minimize_black_cells` on its result, returning a new `removed_black_
+  count` field alongside the existing `cleared_count`; `changed` is now
+  `true` if *either* pass actually changed something. No new endpoint or
+  proxy route needed — the existing `/api/interactive/clean`/
+  `proxy_interactive_clean` already forward the request body verbatim.
+
+  Frontend: the two buttons' click handlers were unified into one shared
+  `runInteractiveClean(deep)` (both buttons disabled while either request
+  is in flight, so they can never race on the same `interactiveGrid`/undo
+  stack) — `interactiveCleanBtn`/`interactiveCleanDeepBtn` each just call
+  it with their own `deep` value. New i18n keys in all 6 languages:
+  `interactiveCleanDeepBtn` (button label) and `interactiveDeepCleaned(n,
+  m)` (a two-clause message: modifications made, black cells removed) —
+  German/English/Spanish/French built with the same safe suffix-
+  concatenation convention already used for `interactiveCleaned`;
+  Italian/Portuguese built with fully-spelled explicit singular/plural
+  clauses instead (nested template literals), after this same session's
+  own earlier lesson that naive suffix concatenation silently produces
+  wrong grammar for these two languages' irregular plurals (see the
+  `interactiveCleaned` entry above).
+
+  Verified live, end to end, through the real running API: a real
+  interactive session (9×9, French, seed 7, 11 black cells after one
+  placed word) — the plain "Nettoyer" correctly found nothing to do yet
+  (`changed=false`, no impossible zones this early); "Nettoyer (+noires)"
+  on that same grid removed 10 of the 11 black cells (`changed=true`,
+  `removed_black_count=10`), keeping exactly the one needed for
+  structural validity — matching the accepted, disclosed trade-off above,
+  not a bug. `py_compile`/`esprima`/HTML tag-balance all clean, and the
+  running frontend confirmed to serve the new button/wiring. **Not yet
+  visually confirmed in an actual browser** — the same tooling limitation
+  noted throughout this project's UI work.
+
+  **A real bug was found and fixed later**, reported directly by the
+  user: "Nettoyer (+noires) ne supprime pas les cases noires isolées."
+  Root-caused with a direct reproduction (a hand-built grid, and a
+  realistic one built via several real `interactive_place_word` calls)
+  before touching any code, rather than guessed at: `interactive_
+  minimize_black_cells`'s own structural check —
+  `is_structurally_valid(working, rows, cols, min_interior_free=1)` —
+  was called directly on `working`, the *actual editable grid* (real
+  letters for every already-typed cell, `"#"`/`"."` only for black/blank
+  cells) — but `is_structurally_valid` was written for, and only
+  understands, a plain black/white *pattern* (its row/col run-length scan
+  tests `grid[r][c] == WHITE` and treats anything else, black cell or
+  real letter alike, as an obstacle). The moment a candidate black cell
+  sits next to any already-typed letter (the common case in a partially-
+  filled interactive grid), that letter cell got misread as if it were
+  still black, making the freed cell look "isolated on all 4 sides" or
+  its own row/column "too short" — a false rejection, confirmed directly:
+  on a realistic 9×9 grid with 14 originally-isolated black cells (no two
+  touching), **0 of 14** were ever removable before the fix, all falsely
+  failing this same structural check. Fixed by converting `working` to
+  the same pattern-only view (`"#"` for `BLACK`, `"."` for everything
+  else) that `_impossible_count` right above it already builds for its
+  own, separate purpose — reused here for the structural check too, one
+  line changed. Verified: the identical isolated-cell case failed
+  `is_structurally_valid` before the fix and passed after it, in
+  isolation; re-running the realistic 9×9 reproduction after the fix
+  went from `removed_count=0` to `removed_count=4` (out of the 14
+  isolated cells — the other 10 still correctly rejected, for a genuine
+  reason this time: removing them would raise the grid's own impossible-
+  slot count, an unrelated, legitimate check untouched by this fix); a
+  full live end-to-end check through the actual running API (a real
+  interactive session, 9×9, French, several words placed via "Suivant")
+  confirmed a dramatic real-world improvement — 14 black cells before
+  "Nettoyer (+noires)", **3** after (`removed_black_count: 11`), versus 0
+  removed before this fix on a comparably-filled grid.
+
+- **"Vérifier" button rewritten to check the whole grid**, at the user's
+  explicit request: "Le bouton Vérifier doit vérifier toute la grille et
+  mettre en rouge les mots complets qui posent un problème, soit parce
+  qu'ils ne sont pas des mots du dictionnaire, soit parce qu'ils n'ont pas
+  de définition." Supersedes the earlier, narrower design (documented
+  above) that only ever checked the single currently-selected word.
+
+  A new `POST /api/interactive/verify` endpoint (`InteractiveVerifyRequest
+  {job_id, words: list[str]}`) checks a batch of complete-word answer
+  strings against the session's own dictionary in one call — a plain
+  per-length set lookup (`word in idx.get(len(word), {})["words"]`)
+  against `sess["index"].across` (interactive mode never builds a
+  bilingual session, so `.across`/`.down` are always the identical
+  index — no new lookup mechanism needed, just the same one every other
+  interactive endpoint already reads from `INTERACTIVE_SESSIONS`).
+  Deliberately never asked to check for a missing definition — that half
+  of the check needs no round trip at all, since `interactiveDefs`
+  already lives entirely client-side. Returns `{"invalid_words": [...]}`
+  — every input word not found, order-preserving-but-deduplicated
+  internally so a word repeated across several slots is only looked up
+  once. `frontend/server.py` gained the matching `proxy_interactive_
+  verify` route (per this project's own every-endpoint-needs-a-proxy
+  rule).
+
+  `frontend/static/script.js`'s `interactiveVerifyBtn` handler now: builds
+  `interactiveSlots()`, keeps only the `filled` ones; if none, shows a new
+  `interactiveVerifyNoWords` message and returns (no network call at all).
+  Otherwise sends every filled word's own `answer` to the new endpoint in
+  one batch, then — for each filled slot — flags it a "problem" if it has
+  no definition (`interactiveDefs`, checked locally) **or** its answer
+  came back in `invalid_words`; every cell of a flagged slot is added to
+  a new `interactiveInvalidCells` set (mirroring `interactiveImpossible
+  Cells`/`interactiveLowCells`'s own existing shape and staleness rule —
+  folded into `clearInteractiveDiagnostics()`, so any manual edit drops a
+  stale check result exactly like the other two). `renderGrid()` overlays
+  a new `.interactive-invalid` class from this set, right alongside the
+  pre-existing `.interactive-impossible`/`.interactive-low` overlay (see
+  the `style-guide` SKILL for the CSS). The status line reports either
+  `interactiveVerifyOk` (reworded for the new whole-grid scope: "Tous les
+  mots sont valides et définis.") or a new `interactiveVerifyProblems(n)`
+  count, in all 6 languages. `interactiveVerifyMissing` (the old
+  per-word "missing definition" message) was removed outright, its one
+  and only caller gone.
+
+  Verified live, end to end, through the real running API (not just
+  direct Python calls): started a real interactive session (9×9, French,
+  hard difficulty), placed several words via repeated "Suivant" calls,
+  then called the new endpoint with every genuinely filled word plus one
+  deliberately fake word (`"ZZQXW"`) appended — the response correctly
+  flagged `["RHES", "ZZQXW"]` as invalid: the fake word, and — a genuine,
+  unplanned confirmation the check works on real, unscripted data, not
+  just the synthetic case — a real word the automatic filler itself had
+  placed that happens not to be a real French dictionary entry. An
+  unknown `job_id` correctly returned 404 (`"session interactive inconnue
+  (expirée ?)"`), both directly against the backend and through the
+  frontend's own proxy on port 3000. `py_compile`/`esprima`/CSS
+  brace-balance all clean, and the running frontend confirmed to serve
+  every updated file. **Not yet visually confirmed in an actual browser**
+  — same tooling limitation noted throughout this project's UI work.
+
+  **A detailed, per-word report was added right after**, at the user's
+  explicit request: "le bouton Vérifier doit générer un rapport indiquant
+  les problèmes rencontrés sur chaque mot. Un mot par ligne. Affiché en
+  dessous du champ de saisie des définitions." No backend change was
+  needed — the same single `POST /api/interactive/verify` call already
+  used for the highlight already returns every invalid word, so the
+  handler just also builds a new `interactiveVerifyReport` array (one
+  entry per flagged word: `{direction, row, col, answer, reasons}`,
+  `reasons` naming whichever of "mot absent du dictionnaire"/"définition
+  manquante" applies) alongside the existing `interactiveInvalidCells`
+  set — both share the exact same staleness lifecycle (cleared inside
+  `clearInteractiveDiagnostics()` on any manual edit). A new `frontend/
+  static/script.js` function, `renderInteractiveVerifyReport()`, renders
+  one `<p class="interactive-verify-report-line">` per entry into a new
+  `#interactive-verify-report` div (placed right after `#interactive-
+  definition-row` in `index.html`, per the request's own "en dessous du
+  champ de saisie des définitions") — see the `style-guide` SKILL for the
+  full layout/CSS reasoning, including the H/V + 1-based `(row, col)`
+  formatting reused from the existing word-verification table for
+  consistency. Verified live: mirrored the exact rendering logic in
+  Python against a real `/api/interactive/verify` response from a live
+  session (some words given a definition, others not) — the report
+  correctly excluded the defined words and correctly listed every other
+  filled word with its own reason(s), e.g. `H (3, 1) AME : définition
+  manquante`.
+
+  **"Définitions" button** (`#interactive-definitions-btn`,
+  `frontend/static/script.js`), at the user's explicit request: "à droite
+  du bouton Vérifier, ajouter un bouton 'Définitions' qui génère
+  automatiquement les définitions de tous les mots [renseignés] et
+  valides, qui n'ont pas encore de définition." Placed at the end of
+  `#interactive-arrows` (right after `#interactive-verify-btn`), a plain
+  unstyled `<button>` like every other interactive-mode action button —
+  `#interactive-arrows` gained `flex-wrap: wrap` since it now holds 7
+  buttons. The handler builds no new backend endpoint: it reuses the exact
+  two calls the surrounding buttons already make. First it takes every
+  `interactiveSlots()` entry that is `filled` and has no non-empty
+  `interactiveDefs` entry yet; if none, it stops with a new
+  `interactiveDefinitionsNothing` message. Then it runs one batched
+  `POST /api/interactive/verify` (the same call "Vérifier" makes) over the
+  pending words and drops any that came back in `invalid_words` — "et
+  valides" (a 404 surfaces `interactiveSessionLost`; a non-ok/unreachable
+  verify is swallowed and every pending word is kept, best-effort). Then,
+  sequentially, one `GET /api/dictionary/define?q=<word>&lang=<lang>` per
+  remaining word (the same call "Proposer" makes, `DEFINE_FETCH_TIMEOUT_MS`),
+  keeping the first non-empty `definitions[]` entry and storing it in
+  `interactiveDefs` under `interactiveKey(s)`. Progress is shown live
+  (`interactiveDefinitionsWorking(done, total)`); the final message is
+  `interactiveDefinitionsDone(n)` or, if any word failed,
+  `interactiveDefinitionsPartial(done, failed)`. While it runs, the
+  Définitions/Proposer/Vérifier/Nettoyer/Nettoyer(+noires) buttons are all
+  `disabled` (re-enabled in `finally`); the grid is refreshed once at the
+  end via `renderInteractive()` (which also re-runs `updateInteractive
+  FinishState()`, so the title row / Sauvegarder appear if the grid became
+  complete). Deliberately sequential and best-effort: each define call is a
+  real LLM round-trip, potentially slow — a word whose generation fails is
+  left blank, matching the same "unclued word -> placeholder" behavior the
+  rest of the app already has. Five new i18n keys
+  (`interactiveDefinitionsBtn`/`Nothing`/`Working`/`Done`/`Partial`) in all
+  6 languages. `py_compile` not needed (no backend change); `esprima` on
+  `script.js`/`i18n.js` and a CSS brace-balance check both clean; the
+  running frontend confirmed to serve the updated files. **Not yet
+  visually confirmed in an actual browser** — same tooling limitation
+  noted throughout this project's UI work.
+
+  **"Grille complète et valide" instead of "Grille devenue impossible"**,
+  at the user's explicit request: "quand toute la grille est remplie avec
+  uniquement des mots valides, ne pas indiquer 'Grille devenue
+  impossible', mais 'Grille complète et valide'." A `POST /api/interactive/
+  step` returning `impossible: true` only means "no further word can be
+  placed" — a genuine dead end while empty cells remain, but the expected
+  end state once the grid is full. `frontend/static/script.js`'s
+  `interactiveNextBtn` handler, in its `data.impossible` branch, now: if
+  `interactiveGridFilled()` (a small new helper — every white cell carries
+  a letter, factored out of `updateInteractiveFinishState`'s own inline
+  check), runs one `POST /api/interactive/verify` over `interactiveSlots()`
+  and, when `invalid_words` is empty, shows the new
+  `interactiveCompleteValid` message ("Grille complète et valide.", all 6
+  languages) without the error styling; otherwise it falls back to the
+  existing `interactiveImpossible` message (also the fallback if verify is
+  unreachable). `enterInteractiveMode` applies the same rule for a
+  `state.impossible` start/resume result but *synchronously* — a full grid
+  → `interactiveCompleteValid`, not-full → `interactiveImpossible` — with
+  no verify round-trip on entry (the player uses "Vérifier" to confirm
+  validity). `esprima` on `script.js`/`i18n.js` clean; running frontend
+  confirmed to serve the updated files. **Not yet visually confirmed in an
+  actual browser.**
+
+  **Two buttons: "Sauvegarder" (draft) + "Publier" (publish)**, at the
+  user's explicit request across two turns — first "Une fois la grille
+  totalement terminée, et le titre saisi, renommer le bouton
+  'Sauvegarder' en 'Publier'.", then "A gauche de Publier, ajouter un
+  bouton Sauvegarder, qui sauvegarde la grille complète dans GRID_WORK
+  sans la publier." Final design: `#interactive-save-btn` is now
+  permanently labelled **"Publier"** (`data-i18n="interactivePublishBtn"`,
+  new key in all 6 languages — "Publier"/"Publish"/"Veröffentlichen"/
+  "Publicar"/"Pubblica"/"Publicar"), still shown only once the grid is
+  `complete` (every white cell filled + every word defined —
+  `updateInteractiveFinishState`), publishing to the Library via
+  `POST /api/interactive/save`. To its left, in a new
+  `#interactive-save-row` flex wrapper, `#interactive-draft-save-btn`
+  ("Sauvegarder", `data-i18n="interactiveSaveBtn"`) is visible the whole
+  time interactive mode is up: its handler does the same
+  `POST /api/interactive/save_work` call as the autosave but **visibly**
+  (reports `interactiveDraftSaved` "Brouillon enregistré."/etc. via
+  `setInteractiveMessage`, or `interactiveSessionLost`/
+  `interactiveSaveError`/`errorConnectionLost` on failure) and, unlike
+  "Publier", never leaves interactive mode — it just refreshes the
+  session's `GRID_WORK` draft with the whole current grid + definitions +
+  title, no Library record. The earlier turn's conditional
+  `interactiveSaveBtn.textContent` switching (plus its `#interactive-
+  title-input` `input` listener and the `updateInteractiveFinishState()`
+  call inside `proposeInteractiveTitle()`) was removed — with a dedicated
+  "Sauvegarder" button, "Publier" is simply always "Publier".
+  `esprima`/CSS-brace/HTML-balance clean; running frontend confirmed to
+  serve the updated files; verified live that `POST /api/interactive/
+  save_work` from the draft button writes the `GRID_WORK` file and
+  creates no Library entry. **Not yet visually confirmed in an actual
+  browser.**
+
+  **Publishing also refreshes the session's own `GRID_WORK` snapshot**,
+  at the user's explicit request: "Au moment de Publier, sauvegarder la
+  dernière version de la grille pour l'utilisateur." `POST /api/
+  interactive/save` (`backend/app.py`, `interactive_save`), after
+  `save_grid_json` writes the library record, now also calls
+  `save_grid_work(req.job_id, req.grid, req.definitions, req.title, ...)`
+  — best-effort, wrapped in `try/except` + `logger.warning`, never fails
+  the publish, skipped entirely if `INTERACTIVE_SESSIONS.get(req.job_id)`
+  is gone. `language`/`difficulty`/`theme`/`priority_words`/`seed`/
+  `resumed_from` come from `JOBS[job_id]["interactive"]` meta +
+  `INTERACTIVE_SESSIONS[job_id]`, mirroring `interactive_save_work`. The
+  last autosave was fired by "Suivant"/"Précédent", so it can lag a
+  definition typed afterwards or a hand-edited title — this brings the
+  "Créations" entry up to the actually-published state, and the entry
+  stays (it is not deleted on publish). The **published library record is
+  a separate file and is never touched by a later "Créations" delete** —
+  verified (not changed): `POST /api/interactive/work/delete` →
+  `interactive_work_delete` calls only `grid_store.delete_grid_work`,
+  which only `unlink`s `GRID_WORK/<work_id>.json` (guarded by
+  `_WORK_ID_RE`) and never references `GRID_STORE_DIR`/`save_grid_json`/
+  `get_grid`. Verified live end to end: start → autosave (empty title, 0
+  defs) → publish (`grid_id` returned) → the same `GRID_WORK` file's
+  `updated_at`/`title`/`definitions` all refreshed to the published
+  values, file still present, still listed by `GET /api/interactive/
+  work` → `POST /api/interactive/work/delete` removes only the
+  `GRID_WORK` file, `GET /api/library/{grid_id}` still 200 with the full
+  record intact.
+
+- **"Créations" panel — autosaved, resumable "Interactif" work-in-progress
+  sessions**, at the user's explicit request: "chaque appui sur Suivant/
+  Précédent sauvegarde l'état en cours du process de création dans le
+  dossier GRID_WORK. Préfixer le fichier avec un timestamp, puis le nom
+  de l'auteur. Quand un utilisateur ouvre l'interface (ou la recharge), si
+  il a des grilles sauvegardées dans GRID_WORK, afficher un panneau avec
+  la liste. Il peut cliquer pour relancer sa cession interactive où elle
+  s'était arrêtée, cliquer sur un bouton icône pour supprimer la tâche, ou
+  fermer le panneau en le laissant inchangé pour la fois suivante... à
+  côté de Dictionnaire, ajouter un bouton 'Créations' qui ouvre le
+  panneau."
+
+  **Storage** (`backend/grid_store.py`): a new `GRID_WORK/` directory
+  (project root, gitignored — a generated work-in-progress artifact, same
+  convention as `GRID_STORE/`). Unlike `GRID_STORE` (one brand-new file
+  per *finished* grid, never touched again), a `GRID_WORK` file is the
+  single, continuously-updated snapshot of ONE still-in-progress session:
+  `save_grid_work(job_id, grid, definitions, title, language, difficulty,
+  theme, priority_words, seed, pseudo=None, resumed_from=None)` finds the
+  existing file for a given `job_id` by globbing for its own stable
+  `_<job_id>.json` suffix (unique, since `job_id` — a uuid4 hex — already
+  is) and overwrites it in place; only the very first call for a given
+  `job_id` creates `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`
+  (mirroring `save_grid_json`'s own filename shape, but with the full
+  `job_id` as the stable lookup key instead of a random 4-digit
+  collision-breaker, since a job_id already is one). `priority_words`
+  (the already-resolved theme glossary) and `seed` are persisted verbatim
+  specifically so a later resume never needs to re-run the theme LLM/
+  Qdrant lookup (non-deterministic and not cheap) or reconstruct a
+  meaningless "continued" rng state (never needed — see below).
+  `list_grid_work(pseudo=None)` (most-recently-*updated* first, not
+  most-recently-*created* like `list_grids`' own sort — what matters for
+  "resume where I left off" is which session was touched last) and
+  `get_grid_work`/`delete_grid_work` mirror `list_grids`/`get_grid`'s own
+  shape/validation (`_WORK_ID_RE`, checked before ever touching the
+  filesystem with a caller-supplied id).
+
+  **Endpoints** (`backend/app.py`): `POST /api/interactive/save_work`
+  (`InteractiveSaveWorkRequest{job_id, grid, definitions, title, pseudo}`
+  — `language`/`difficulty`/`theme` are read back from `JOBS[job_id]
+  ["interactive"]`, set once at session start/resume, never trusted from
+  the autosave's own request body); `GET /api/interactive/work?pseudo=`
+  (the panel's own list, filtered exactly like the library's existing
+  "Mes grilles" filter — stripped, exact match); `POST /api/interactive/
+  work/delete` (never 404s on an already-gone id — deleting something
+  that isn't there already achieves what the caller wanted); `POST /api/
+  interactive/resume` (`{work_id}`, 202 — a background job exactly like
+  `interactive_start`, polled the same way). `_run_interactive_job`
+  (fresh start) and the new `_run_interactive_resume_job` share a
+  factored-out `_load_interactive_index(language, difficulty)` helper
+  (the `load_wordlist`+`build_index`+`DualIndex` wrapping both already
+  needed) — `_run_interactive_resume_job` rebuilds the session's `index`/
+  `priority_words`/`rng` from the saved record (never re-deriving
+  `priority_words` via the theme pipeline, only re-filtering the saved
+  list against the freshly reloaded lexicon, exactly like a fresh start
+  already does) and hands the ALREADY-SAVED grid straight back — no
+  `make_pattern`/`interactive_place_word` call at all, unlike a fresh
+  start. Fresh `_interactive_fill_diagnostics` are recomputed on the
+  resumed grid so the impossible/low-candidate highlights are accurate
+  immediately rather than stale from whenever it was last saved. The
+  session's own `INTERACTIVE_SESSIONS[job_id]["seed"]` (added to the
+  session dict for both fresh-start and resume alike) exists purely so
+  an autosave can persist a real, reproducible seed for a *later* resume
+  — exact rng *continuation* across a pause is neither preserved nor
+  needed, since nothing about placing one further word depends on
+  continuing the exact random sequence an uninterrupted session would
+  have followed.
+
+  **A real bug was found and fixed before this shipped**, caught by
+  direct live testing rather than assumed away: resuming a session always
+  creates a brand-new `job_id` (a fresh `_new_job()`, never the original,
+  long-since-forgotten one) — so the very *next* autosave under that new
+  `job_id` would find no existing `GRID_WORK` file for it (the lookup is
+  keyed by `job_id` suffix) and silently create a second, brand-new file,
+  permanently orphaning the original one: the same in-progress creation
+  would end up duplicated, one stale copy and one live copy, with no way
+  for the "Créations" panel to tell the difference from two genuinely
+  separate creations. Confirmed directly with a live resume-then-autosave
+  test before fixing anything. Fixed by threading a `resumed_from` value
+  (the OLD work id, stored in `INTERACTIVE_SESSIONS[job_id]["resumed_
+  from"]` at resume time) through to `save_grid_work`: when no file
+  exists yet for the current `job_id` but `resumed_from` is given and its
+  own file still exists, that file is **renamed** to the new `job_id`
+  (keeping its original timestamp/pseudo-slug segments and its own
+  `created_at` — only the trailing job_id segment changes) rather than a
+  fresh file being created — a no-op on every later call for that same
+  session, since by then the file's own name already matches the current
+  `job_id` and the normal lookup finds it directly. Verified live: a
+  resume-then-autosave cycle repeated 3 times in a row confirmed the
+  filename's own timestamp/pseudo prefix never changes across any of the
+  3 rounds, and `GRID_WORK/` always contains exactly one file for that
+  session throughout — no accumulation, no orphan, ever.
+
+  **Frontend** (`frontend/static/`): a new "Créations" button
+  (`#interactive-work-btn`) right next to "Dictionnaire," opening a new
+  `#interactive-work` panel — same boxed/transparent-background look and
+  the same central-panel toggling group as `#library`/`#dictionary` (see
+  the `style-guide` SKILL for the full visual reasoning). `interactive
+  DefinitionsPayload()` (factored out of the existing "Sauvegarder"
+  button's own inline logic, now shared by 3 call sites) builds the
+  `{row, col, direction, clue}` array every save (final or autosave)
+  needs; `autosaveInteractiveWork()` posts it to `/api/interactive/
+  save_work` — best-effort and silent, since a failed autosave must never
+  interrupt the player's own already-completed client-side action (a
+  placement, or an undo) — called after every successful "Suivant"
+  placement (never on an "impossible"/error outcome, where the grid
+  itself never actually changed) and after every "Précédent" click (the
+  one interactive-mode mutation that never otherwise talks to the
+  backend at all, so it needed its own explicit save call). `runInteractive
+  (body, endpoint)` gained an `endpoint` parameter (defaulting to the
+  existing `/api/interactive/start`, so the one pre-existing caller is
+  completely unaffected) so `resumeInteractiveWork(workId)` can reuse its
+  *entire* existing flow (hide play-mode chrome, show "Stop", poll,
+  `enterInteractiveMode(result)`) by pointing it at `/api/interactive/
+  resume` instead, with `{work_id}` as the body. `enterInteractiveMode
+  (state)` now restores `interactiveDefs`/the title input from `state.
+  definitions`/`state.title` when present (only ever set on a *resumed*
+  result — a fresh start's result has neither field, so nothing changes
+  for that path). `checkForSavedInteractiveWork()` — called once the
+  current pseudo is actually known, both from `initUserPrefs()`'s
+  returning-user branch and from the welcome form's own submit handler
+  (a first-time visitor, or a pseudo change) — fetches the list and, if
+  non-empty, shows the panel automatically; closing it (`hideInteractive
+  WorkPanel()`) never touches `GRID_WORK` itself, so the identical check
+  can show it again on the next page load, matching "fermer le panneau
+  en le laissant inchangé pour la fois suivante" precisely. Filtered by
+  the current `userPseudo` throughout (server-side, `_library_page`'s own
+  "Mes grilles" convention) — every player only ever sees their own
+  in-progress creations, never anyone else's, since the pseudo field is
+  mandatory on the welcome form.
+
+  Verified live, end to end, through the real running API (both the
+  direct backend port and the frontend's own proxy on port 3000): a real
+  interactive session started, autosaved twice (confirming the second
+  save overwrites the same file rather than creating a second one),
+  listed (confirming pseudo-filtering correctly returns only the matching
+  pseudo's own entries and nothing for a different one), resumed (grid/
+  title/definitions restored exactly, and the resumed session's own
+  `/api/interactive/step`/`/api/interactive/verify` calls confirmed to
+  work correctly against the rebuilt in-memory session), and deleted
+  (confirmed idempotent — deleting an already-deleted id cleanly reports
+  `deleted: false` rather than erroring). An unknown `work_id` passed to
+  `/api/interactive/resume` correctly returned 404. `py_compile`/`esprima`/
+  CSS-brace/HTML-tag-balance all clean, and the running frontend confirmed
+  to serve every updated file. **Not yet visually confirmed in an actual
+  browser** — same tooling limitation noted throughout this project's UI
+  work.
+
+- **"Synonymes" button** (Dictionary panel, `#dictionary-synonyms-btn`,
+  right next to "Thématique"), at the user's explicit request: "un bouton
+  'Synonymes' qui lance une recherche Qdrant avec le mot ou l'expression
+  saisie (sans faire appel au LLM pour étendre la recherche, comme le
+  fait Thématique)." A new `_synonyms_impl(query, lang, min_score)`
+  (`backend/app.py`, right before `_similar_words_impl`) is a one-line
+  reuse of the already-existing `_compiled_similar_words([query], lang,
+  min_score)` — with a single-element keyword list (the raw query
+  itself, never expanded), that helper already reduces to exactly
+  "embed the query as typed, search Qdrant's nearest neighbors, sort by
+  score" — no LLM round-trip at all, unlike `_similar_words_impl`
+  (which first asks `describe_theme` for a ~30-word keyword list before
+  searching). New `GET /api/synonyms` (same `q`/`lang`/`min_score`
+  request shape and `{query, lang, words: [{word, score}, ...]}`
+  response shape as `/api/similar_words`, so the frontend can reuse the
+  exact same `renderSimilarWordsResult()` rendering with no changes
+  needed there) + matching `proxy_synonyms` route in `frontend/
+  server.py` — using the plain `PROXY_TIMEOUT_S` (30s), not "Thématique"'s
+  own widened `SIMILAR_PROXY_TIMEOUT_S` (60s), since there's no LLM call
+  to wait out here. Frontend: `dictionarySynonymsBtn`'s click handler
+  mirrors `dictionarySimilarBtn`'s own almost exactly (same `readTheme
+  Precision()` reuse for `min_score`), but hits `/api/synonyms` with the
+  plain `FETCH_TIMEOUT_MS` (35s) instead of `SIMILAR_FETCH_TIMEOUT_MS`
+  (70s), for the same reason. New i18n keys in all 6 languages:
+  `dictionarySynonymsBtn` (button label), `dictionarySynonymsError`
+  (reuses the existing `dictionarySimilarHeading` for the result heading
+  itself — "Mots similaires à «query»" already reads correctly for a
+  synonym search too, no separate heading key needed).
+
+  Verified live, end to end, through the real running API (not just
+  direct Python calls): `GET /api/synonyms?q=chat&lang=fr&min_score=0.6`
+  returned 638 real Qdrant matches in **0.106s** (direct backend) —
+  orders of magnitude faster than "Thématique"'s own LLM-expansion path,
+  as expected with no LLM call in the mix — with the top results
+  (`CHAT`/`CHATS`/`TCHAT`/`CHATTE`/`CHATTER`) all directly related to the
+  literal typed word, confirming this is a genuine nearest-neighbor
+  lookup on the raw query rather than an LLM-expanded thematic field
+  (which would have pulled in unrelated animal/pet vocabulary the way
+  "Thématique" deliberately does); the identical request through the
+  frontend proxy returned the same 638 words; an empty query and an
+  unknown language both correctly returned 400. `py_compile`/`esprima`/
+  HTML tag-balance all clean, and the running frontend confirmed to
+  serve the new button/wiring. **Not yet visually confirmed in an actual
+  browser** — the same tooling limitation noted throughout this
+  project's UI work.
+
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most

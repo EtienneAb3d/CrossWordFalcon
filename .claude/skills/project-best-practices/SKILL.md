@@ -252,6 +252,42 @@ project's engineering language.
 - The version badge in the web UI reads `VERSION.txt` (project root)
   through a dedicated endpoint; bump the file per permanent rule 9 and the
   badge picks it up automatically.
+- **"Interactif" authoring mode** (`mode="interactive"` on the web UI's
+  `#mode` selector) is a hand-driven alternative to automatic generation:
+  the player builds one grid word by word ("Suivant" places one word,
+  "Précédent" undoes one step, the grid is fully editable including black
+  cells), hand-writes every clue (with an LLM "Proposer" reusing
+  `GET /api/dictionary/define`, a "Définitions" button that auto-fills one
+  for every filled + valid word still lacking one — reusing
+  `POST /api/interactive/verify` then `GET /api/dictionary/define` per
+  word — and a "Vérifier" check), proposes a title, and either saves a
+  draft to `GRID_WORK` ("Sauvegarder", no publish) or publishes to the
+  Library tagged `(Création)` ("Publier", shown only once the grid is
+  complete). Backend: four endpoints
+  (`POST /api/interactive/start` — a background job polled via
+  `GET /api/generate/status/{job_id}` and cancelled via `POST /api/
+  generate/cancel/{job_id}`; `POST /api/interactive/step` /`/title`
+  /`/save`, all synchronous), each with its own `proxy_interactive_*`
+  route in `frontend/server.py` (rule 15). A non-serializable module dict
+  `INTERACTIVE_SESSIONS` (job_id -> built word index + theme glossary +
+  rng) is evicted in lockstep with `JOBS`/`CANCEL_EVENTS` in `_new_job()`.
+  The single-word placement is `crossword_gen.interactive_place_word()`, a
+  new self-contained module function that never touches `Filler._backtrack`
+  /`make_pattern`/`try_fill`/`generate_grid`. `save_grid_json` gained an
+  `interactive` param -> `record["interactive"]`, surfaced by
+  `_iter_stored_grids` and rendered as the `(Création)` library tag.
+  Publishing (`POST /api/interactive/save`) also best-effort re-writes the
+  session's own `GRID_WORK` draft to the final published state (via
+  `save_grid_work`) so the "Créations" list stays current; the draft is
+  kept, not deleted, on publish. Deleting a "Créations" entry
+  (`POST /api/interactive/work/delete` -> `grid_store.delete_grid_work`)
+  only removes the `GRID_WORK/<id>.json` file and never touches the
+  published `GRID_STORE` library record.
+  **No new Python package and no new install step** — `requirements.txt`/
+  `Install.sh`/`README.md`'s install section are unaffected (README's
+  "Using the app" section does get a short user-facing paragraph, per rule
+  5). `run_llm.sh` must be running for "Proposer" and the title
+  suggestion, exactly as for normal clue generation.
 
 ### Ports and environment variables
 

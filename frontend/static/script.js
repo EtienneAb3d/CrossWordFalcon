@@ -1,4 +1,5 @@
 const BLACK = "#";
+const WHITE = ".";
 
 // I18N (the translation config for every language) lives in its own file,
 // i18n.js, loaded before this one — see index.html.
@@ -58,6 +59,16 @@ function renderHoverDefinitionPlaceholder() {
 // .clue-segment's own text (those spans stay in the DOM even while the
 // clue lists are hidden), the same source highlightWordAt() uses on hover.
 function renderHoverDefinitionForSelection() {
+  // #hover-definition-row (this panel's own wrapper) is hidden entirely
+  // in "Interactif" mode (see applyDefinitionsVisibility) — the play-mode
+  // definition/direction block is not shown there at all, only the
+  // interactive-specific #interactive-definition-input/Proposer/Vérifier
+  // block. Nothing to compute; just keep this element in a sane, idle
+  // state in case it's ever revealed again.
+  if (interactiveMode) {
+    renderHoverDefinitionPlaceholder();
+    return;
+  }
   if (puzzle && selected && !showSolution) {
     const cells = wordCellsAt(selected.row, selected.col, activeDirection);
     if (cells.length >= 2) {
@@ -92,6 +103,8 @@ const generationTimesPrevBtn = document.getElementById("generation-times-prev-bt
 const generationTimesNextBtn = document.getElementById("generation-times-next-btn");
 const generationTimesPosition = document.getElementById("generation-times-position");
 const gridEl = document.getElementById("grid");
+const gridColumn = document.getElementById("grid-column");
+const board = document.getElementById("board");
 const hoverDefinition = document.getElementById("hover-definition");
 // The flex row wrapping #hover-definition and its own duplicated
 // direction-selector buttons (see #hover-definition-row's own comment
@@ -140,12 +153,19 @@ const libraryPagination = document.getElementById("library-pagination");
 const libraryPrevBtn = document.getElementById("library-prev-btn");
 const libraryNextBtn = document.getElementById("library-next-btn");
 const libraryPosition = document.getElementById("library-position");
+const interactiveWorkBtn = document.getElementById("interactive-work-btn");
+const interactiveWorkPanel = document.getElementById("interactive-work");
+const interactiveWorkRefreshBtn = document.getElementById("interactive-work-refresh-btn");
+const interactiveWorkCloseBtn = document.getElementById("interactive-work-close-btn");
+const interactiveWorkTbody = document.getElementById("interactive-work-tbody");
+const interactiveWorkEmpty = document.getElementById("interactive-work-empty");
 const dictionaryBtn = document.getElementById("dictionary-btn");
 const dictionaryPanel = document.getElementById("dictionary");
 const dictionaryForm = document.getElementById("dictionary-form");
 const dictionaryInput = document.getElementById("dictionary-input");
 const dictionarySearchBtn = document.getElementById("dictionary-search-btn");
 const dictionarySimilarBtn = document.getElementById("dictionary-similar-btn");
+const dictionarySynonymsBtn = document.getElementById("dictionary-synonyms-btn");
 const dictionaryDefineBtn = document.getElementById("dictionary-define-btn");
 const dictionaryResults = document.getElementById("dictionary-results");
 const dictionaryClearBtn = document.getElementById("dictionary-clear-btn");
@@ -185,6 +205,31 @@ const chatbotInput = document.getElementById("chatbot-input");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
+
+// "Interactif" authoring mode controls (see the Interactive-mode section
+// further down).
+const interactiveControls = document.getElementById("interactive-controls");
+const interactivePrevBtn = document.getElementById("interactive-prev-btn");
+const interactiveNextBtn = document.getElementById("interactive-next-btn");
+const interactiveMessage = document.getElementById("interactive-message");
+const interactiveDirAcrossBtn = document.getElementById("interactive-dir-across-btn");
+const interactiveDirDownBtn = document.getElementById("interactive-dir-down-btn");
+const interactiveCleanBtn = document.getElementById("interactive-clean-btn");
+const interactiveCleanDeepBtn = document.getElementById("interactive-clean-deep-btn");
+const interactiveDefinitionInput = document.getElementById("interactive-definition-input");
+const interactiveProposeBtn = document.getElementById("interactive-propose-btn");
+const interactiveVerifyBtn = document.getElementById("interactive-verify-btn");
+const interactiveDefinitionsBtn = document.getElementById("interactive-definitions-btn");
+const interactiveWordsBtn = document.getElementById("interactive-words-btn");
+const interactiveWordsResults = document.getElementById("interactive-words-results");
+const interactiveProposeResults = document.getElementById("interactive-propose-results");
+const interactiveVerifyReportEl = document.getElementById("interactive-verify-report");
+const interactiveTitleRow = document.getElementById("interactive-title-row");
+const interactiveTitleInput = document.getElementById("interactive-title-input");
+const interactiveTitleProposeBtn = document.getElementById("interactive-title-propose-btn");
+const interactiveDraftSaveBtn = document.getElementById("interactive-draft-save-btn");
+const interactiveSaveBtn = document.getElementById("interactive-save-btn");
+const interactiveSaveResult = document.getElementById("interactive-save-result");
 
 // "Taux noir" is a free-text integer field (0-100), initialized to a
 // fixed 14% default (see its `value` in index.html) — no client-side
@@ -485,10 +530,16 @@ rssLanguageFilter.addEventListener("change", renderRssList);
 // journal pendant cette fenêtre.
 let generationInProgress = false;
 
+// Declared here (not with the rest of the "Interactif" state block below)
+// because syncRssPanelVisibility() reads it and is called at top level,
+// long before that block — a `let` referenced before its declaration is a
+// temporal-dead-zone ReferenceError that would halt the rest of the script.
+let interactiveMode = false;
+
 function syncRssPanelVisibility() {
-  rssPanel.hidden = generationInProgress
+  rssPanel.hidden = generationInProgress || interactiveMode
     || !(libraryPanel.hidden && dictionaryPanel.hidden && qdrantAdminPanel.hidden
-         && attemptPreview.hidden && result.hidden);
+         && interactiveWorkPanel.hidden && attemptPreview.hidden && result.hidden);
 }
 // Etat initial explicite plutôt que de compter sur une simple coïncidence
 // entre l'état `hidden` par défaut de index.html et cette règle.
@@ -557,6 +608,59 @@ let hoveredWord = null;
 // it: "La sélection dans la grille (mouse over) doit s'adapter aux
 // sélecteurs de sens."
 let activeDirection = "across";
+
+// ---- "Interactif" authoring mode state ----
+// interactiveMode itself is declared earlier (near generationInProgress),
+// because syncRssPanelVisibility() reads it before this point. It gates
+// every fast-path added to selectCell/renderGrid/handleKeydown/
+// typeVirtualLetter/setActiveDirection/updateHoverForModifierKey; when
+// false the normal play-mode code runs unchanged.
+let interactiveJobId = null;
+// [row][col] -> "#" (black) | "" (empty white) | "A".."Z" (filled white).
+let interactiveGrid = [];
+// Deep-copied snapshots of interactiveGrid; the first is pushed on entry
+// so length <= 1 means "nothing left to undo".
+let interactiveUndoStack = [];
+let interactiveHasTheme = false;
+let interactiveLanguage = "fr";
+let interactiveDifficulty = "easy";
+let interactiveTheme = "";
+// "startRow,startCol,direction" -> clue text.
+let interactiveDefs = new Map();
+// "row,col" for every cell of a word placed automatically ("Suivant" /
+// the first word on entry) that came from the theme glossary — shown in
+// magenta letters in renderGrid(), at the user's explicit request.
+// Pruned on every renderInteractive() to cells that still carry a letter,
+// so undo/erase/toggle-black drop the mark naturally.
+let interactiveThemeCells = new Set();
+// "row,col" keys for the backend-computed fill diagnostics of the LAST
+// auto-placement (start / "Suivant") — impossible slots (no candidate word
+// left at all) and slots below the fill-option threshold — shown in
+// renderGrid() the same way the attempt previews do. Snapshots: cleared on
+// any manual edit (they only describe the state the backend last saw).
+let interactiveImpossibleCells = new Set();
+let interactiveLowCells = new Set();
+// "Vérifier" button: cells of every complete word flagged as a problem —
+// either not a real dictionary word (checked server-side, POST /api/
+// interactive/verify) or missing a definition (checked client-side against
+// interactiveDefs) — at the user's explicit request: "vérifier toute la
+// grille et mettre en rouge les mots complets qui posent un problème."
+// Same staleness rule as interactiveImpossibleCells/LowCells above: cleared
+// on any manual edit, since it describes a check run against a past grid
+// state that may no longer be accurate.
+let interactiveInvalidCells = new Set();
+// Same "Vérifier" check as above, but the detailed, one-line-per-word
+// report shown below the definition input, at the user's explicit
+// request: "un rapport indiquant les problèmes rencontrés sur chaque
+// mot." Each entry is `{direction, row, col, answer, reasons}` — only
+// words that actually have a problem are ever included (an empty array
+// means either nothing has been verified yet, or the last check found
+// nothing wrong). Same staleness rule as interactiveInvalidCells: cleared
+// on any manual edit.
+let interactiveVerifyReport = [];
+// Set true once the LLM has been asked for a title, so it isn't re-asked
+// automatically on every completeness re-check.
+let interactiveTitleProposed = false;
 
 // Finds every cell of the white-cell run through (row, col) in `direction`
 // ("across"/"down") by scanning the pattern outward until a black cell or
@@ -695,6 +799,12 @@ function setActiveDirection(direction) {
   virtualKeyboardDownBtn.classList.toggle("active", direction === "down");
   cluesDirectionAcrossBtn.classList.toggle("active", direction === "across");
   cluesDirectionDownBtn.classList.toggle("active", direction === "down");
+  if (interactiveDirAcrossBtn) interactiveDirAcrossBtn.classList.toggle("active", direction === "across");
+  if (interactiveDirDownBtn) interactiveDirDownBtn.classList.toggle("active", direction === "down");
+  if (interactiveMode) {
+    renderInteractive();
+    return;
+  }
   if (hoveredGridCell) highlightWordAt(hoveredGridCell.row, hoveredGridCell.col, direction);
   else renderHoverDefinitionForSelection();
   applySelectedWordHighlight();
@@ -710,6 +820,7 @@ document.addEventListener("keydown", updateHoverForModifierKey);
 document.addEventListener("keyup", updateHoverForModifierKey);
 
 function updateHoverForModifierKey(event) {
+  if (interactiveMode) return;
   if (event.key !== "Shift" && event.key !== "CapsLock") return;
   // Ignore Shift/CapsLock while typing in the chat (or any text field) —
   // otherwise typing a capital there silently changes the grid's active
@@ -1315,6 +1426,13 @@ function isWhite(r, c) {
 }
 
 function selectCell(r, c) {
+  // In interactive authoring mode ANY cell is selectable (black cells
+  // included — the user edits them too); no showSolution/isWhite guard.
+  if (interactiveMode) {
+    selected = { row: r, col: c };
+    renderInteractive();
+    return;
+  }
   if (showSolution || !isWhite(r, c)) return;
   selected = { row: r, col: c };
   renderGrid();
@@ -1349,6 +1467,10 @@ function handleKeydown(event) {
   // just the chat input by id — so any other text field added later is
   // protected the same way, with no need to special-case it here too.
   if (isTextInputFocused()) return;
+  if (interactiveMode) {
+    handleInteractiveKeydown(event);
+    return;
+  }
   if (!puzzle || !selected || showSolution) return;
   const key = event.key;
 
@@ -1404,6 +1526,15 @@ function renderGrid() {
       const cell = document.createElement("div");
       if (pattern[r][c] === BLACK) {
         cell.className = "cell black";
+        // In interactive authoring mode a black cell is editable too:
+        // clickable/selectable, and framed when it is the selected cell.
+        if (interactiveMode) {
+          if (selected && selected.row === r && selected.col === c) {
+            cell.classList.add("selected");
+          }
+          cell.addEventListener("click", () => selectCell(r, c));
+          cellElements.set(`${r},${c}`, cell);
+        }
         gridEl.appendChild(cell);
         continue;
       }
@@ -1419,6 +1550,21 @@ function renderGrid() {
 
       const letter = showSolution ? solution[r][c] : userLetters[r][c];
       cell.appendChild(document.createTextNode(letter || ""));
+
+      // "Interactif" : lettre magenta pour un mot posé automatiquement
+      // issu du glossaire thématique (voir interactiveThemeCells).
+      if (interactiveMode && letter && interactiveThemeCells.has(`${r},${c}`)) {
+        cell.classList.add("interactive-theme");
+      }
+      // "Interactif" : fond rouge/orange pour un emplacement impossible /
+      // en dessous du seuil d'options de remplissage — même sens que sur
+      // les prévisualisations (voir interactiveImpossibleCells/LowCells).
+      if (interactiveMode) {
+        const dk = `${r},${c}`;
+        if (interactiveImpossibleCells.has(dk)) cell.classList.add("interactive-impossible");
+        else if (interactiveLowCells.has(dk)) cell.classList.add("interactive-low");
+        if (interactiveInvalidCells.has(dk)) cell.classList.add("interactive-invalid");
+      }
 
       if (!showSolution && checking && userLetters[r][c]) {
         cell.classList.add(userLetters[r][c] === solution[r][c] ? "correct" : "incorrect");
@@ -1555,8 +1701,19 @@ function toggleChecking() {
 // so a fresh grid always starts with the clue lists hidden regardless of
 // whatever the *previous* grid's own toggle state happened to be.
 function applyDefinitionsVisibility() {
-  cluesEl.hidden = !showDefinitions;
-  downCluesSection.hidden = !showDefinitions;
+  // En mode "Interactif" on n'affiche jamais les listes complètes
+  // Horizontalement/Verticalement, ni le bloc de définition/flèches du
+  // mode jeu juste sous la grille (#hover-definition-row) — à la demande
+  // explicite de l'utilisateur : "il y a deux blocs de flèches et de
+  // définitions... ne pas afficher les blocs qui correspondent au mode
+  // jeu... ne garder que les blocs spécifiques au mode interactif (avec
+  // les boutons Proposer et Vérifier)", c'est-à-dire #interactive-arrows/
+  // #interactive-definition-row dans #interactive-controls, déjà seuls
+  // affichés dans ce mode.
+  const showLists = showDefinitions && !interactiveMode;
+  cluesEl.hidden = !showLists;
+  downCluesSection.hidden = !showLists;
+  hoverDefinitionRow.hidden = interactiveMode;
   definitionsBtn.classList.toggle("active", showDefinitions);
 }
 
@@ -1607,8 +1764,14 @@ function typeVirtualLetter(letter) {
   // `mousedown`/preventDefault posé sur chaque touche (voir
   // buildVirtualKeyboard) : sans lui, le clic sur le bouton retirerait
   // le focus du champ avant même d'arriver ici.
-  if (document.activeElement === dictionaryInput) {
-    insertAtCursor(dictionaryInput, letter.toLowerCase());
+  if (document.activeElement === dictionaryInput
+      || document.activeElement === interactiveDefinitionInput
+      || document.activeElement === interactiveTitleInput) {
+    insertAtCursor(document.activeElement, letter.toLowerCase());
+    return;
+  }
+  if (interactiveMode) {
+    interactiveTypeLetter(letter);
     return;
   }
   // Mêmes gardes que handleKeydown() : une lettre cliquée quand aucune
@@ -1647,6 +1810,20 @@ function buildVirtualKeyboard() {
     }
     virtualKeyboardRows.appendChild(rowEl);
   }
+  // "Case noire" key, at the user's explicit request: same effect as the
+  // Space bar — toggle the selected cell black, only meaningful in
+  // interactive authoring mode.
+  const blackKey = document.createElement("button");
+  blackKey.type = "button";
+  blackKey.className = "virtual-keyboard-key virtual-keyboard-black";
+  blackKey.textContent = "■";
+  blackKey.setAttribute("data-i18n-aria", "interactiveBlackKey");
+  blackKey.setAttribute("aria-label", (I18N[uiLanguage] || {}).interactiveBlackKey || "Case noire");
+  blackKey.addEventListener("mousedown", (e) => e.preventDefault());
+  blackKey.addEventListener("click", () => {
+    if (interactiveMode && selected) interactiveToggleBlack();
+  });
+  virtualKeyboardRows.lastElementChild.appendChild(blackKey);
 }
 
 buildVirtualKeyboard();
@@ -1777,6 +1954,8 @@ function setUiLanguage(lang) {
   // Le libellé du niveau à droite du titre de la grille jouée est traduit
   // (voir renderGridDifficulty), donc à ré-appliquer au changement de langue.
   renderGridDifficulty();
+  // Le panneau du mode "Interactif" porte des libellés/messages traduits.
+  if (interactiveMode) renderInteractive();
   // Pseudo de l'en-tête : le libellé "définir un pseudo" (quand aucun
   // pseudo n'est saisi) est traduit, donc à ré-appliquer.
   if (!userPseudoBtn.hidden) renderUserPseudo();
@@ -1900,6 +2079,10 @@ welcomeForm.addEventListener("submit", (event) => {
     libraryCurrentPage = 1;
     renderLibraryList();
   }
+  // Le pseudo vient d'être connu (première visite) ou peut avoir changé
+  // (pseudo modifié plus tard) — dans les deux cas, on vérifie si ce
+  // pseudo a des créations en cours dans GRID_WORK.
+  checkForSavedInteractiveWork();
 });
 
 // Efface le message de validité personnalisé dès que l'utilisateur
@@ -1918,6 +2101,7 @@ userPseudoBtn.addEventListener("click", openWelcomeOverlay);
       : "";
     setUiLanguage(typeof prefs.lang === "string" ? prefs.lang : "fr");
     renderUserPseudo();
+    checkForSavedInteractiveWork();
   } else {
     setUiLanguage(detectBrowserLanguage());
     openWelcomeOverlay();
@@ -2125,6 +2309,9 @@ function describeStep(t, step) {
       break;
     case "theme":
       message = t.statusTheme;
+      break;
+    case "interactive_building":
+      message = t.statusInteractiveBuilding;
       break;
     case "queued_grid":
       message = t.statusQueuedGrid(step.position, step.queue_length);
@@ -2413,6 +2600,9 @@ function displayFinalGrid(gridData) {
   checkBtn.classList.remove("active");
 
   hideAttemptPreviewPanel();
+  // A normal, playable grid replacing whatever the "Interactif" mode
+  // panel was showing inside #result.
+  hideInteractivePanel();
   // #result (and so #grid, its descendant) must already be visible before
   // renderGrid() runs — see runGeneration()'s own historical note on this
   // exact ordering requirement (renderGrid() measures gridEl.offsetWidth).
@@ -2633,6 +2823,9 @@ async function renderLibraryList() {
     // (générée sans pseudo défini) est attribuée à "Falcon Auto Bot".
     const authorTd = document.createElement("td");
     authorTd.textContent = entry.pseudo || t.libraryAuthorBot;
+    // Grille bâtie via le mode "Interactif" : tag "(Création)" à côté de
+    // l'auteur (voir backend/grid_store.py's save_grid_json's `interactive`).
+    if (entry.interactive) authorTd.textContent += ` ${t.libraryCreationTag}`;
     // Dernière colonne : lien partageable vers la grille, à la demande
     // explicite de l'utilisateur. Ouvre SHARE_BASE_URL + "?grid=<id>" dans
     // un nouvel onglet (le domaine public, indépendamment de l'hôte
@@ -3003,6 +3196,36 @@ dictionarySimilarBtn.addEventListener("click", async () => {
     dictionaryResults.prepend(line);
   } finally {
     dictionarySimilarBtn.disabled = false;
+  }
+});
+
+// "Synonymes" : même rendu que "Thématique" (renderSimilarWordsResult),
+// mais une recherche Qdrant directe sur le mot/l'expression saisi(e),
+// SANS appel au LLM pour étendre la recherche — à la demande explicite
+// de l'utilisateur. Timeout générique (FETCH_TIMEOUT_MS), pas le timeout
+// élargi de "Thématique" : il n'y a ici aucun aller-retour LLM à attendre.
+dictionarySynonymsBtn.addEventListener("click", async () => {
+  const query = dictionaryInput.value.trim();
+  if (!query) return;
+  const t = I18N[uiLanguage];
+  dictionarySynonymsBtn.disabled = true;
+  try {
+    const prec = readThemePrecision();
+    let url = `/api/synonyms?q=${encodeURIComponent(query)}`
+      + `&lang=${encodeURIComponent(dictionaryLanguage.value)}`;
+    if (prec !== undefined) url += `&min_score=${prec}`;
+    const response = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
+    if (!response.ok) throw new Error(t.dictionarySynonymsError);
+    const data = await response.json();
+    renderSimilarWordsResult(query, (data && data.words) || []);
+    dictionaryInput.select();
+  } catch (err) {
+    const line = document.createElement("p");
+    line.className = "dictionary-empty";
+    line.textContent = t.dictionarySynonymsError;
+    dictionaryResults.prepend(line);
+  } finally {
+    dictionarySynonymsBtn.disabled = false;
   }
 });
 
@@ -3577,6 +3800,1318 @@ if (chatbotResetBtn) {
 
 renderChatWelcome();
 
+// ===========================================================================
+// "Interactif" authoring mode — build ONE grid word by word, hand-write
+// every clue, propose a title, save as a "(Création)". Reuses #result /
+// #grid / renderGrid() via a synthesized `puzzle`; every hook into a
+// shared play-mode function (selectCell/renderGrid/handleKeydown/
+// typeVirtualLetter/setActiveDirection/updateHoverForModifierKey) is a
+// leading `if (interactiveMode)` fast-path, so play mode is untouched.
+// ===========================================================================
+
+function interactiveKey(w) {
+  return `${w.startRow},${w.startCol},${w.direction}`;
+}
+
+// True when every white cell of interactiveGrid carries a letter.
+function interactiveGridFilled() {
+  return interactiveGrid.every((row) => row.every((ch) => ch === "#" || ch !== ""));
+}
+
+// Populate the impossible / low-fill-option highlight sets from a backend
+// interactive response (start job result, or a /step response).
+function setInteractiveDiagnostics(data) {
+  interactiveImpossibleCells = new Set((data.impossible_cells || []).map(([r, c]) => `${r},${c}`));
+  interactiveLowCells = new Set((data.low_candidate_cells || []).map(([r, c]) => `${r},${c}`));
+}
+
+// The diagnostics describe the grid the backend last saw; drop them the
+// moment the player edits by hand so a stale highlight is never shown.
+function clearInteractiveDiagnostics() {
+  interactiveImpossibleCells = new Set();
+  interactiveLowCells = new Set();
+  interactiveInvalidCells = new Set();
+  interactiveVerifyReport = [];
+}
+
+function setInteractiveMessage(text, isError) {
+  interactiveMessage.textContent = text || "";
+  interactiveMessage.classList.toggle("error", !!isError);
+}
+
+// Scans interactiveGrid for every white run >= 2 (rows then columns),
+// numbering start cells left-to-right / top-to-bottom (shared between the
+// across and down word starting at the same cell) — mirrors
+// extract_slots + build_word_entries.
+function interactiveSlots() {
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  const isW = (r, c) => interactiveGrid[r][c] !== "#";
+  const slots = [];
+  const addSlot = (cells, direction) => {
+    const first = cells[0];
+    slots.push({
+      cells,
+      direction,
+      startRow: first.row,
+      startCol: first.col,
+      answer: cells.map((p) => interactiveGrid[p.row][p.col] || "").join(""),
+      filled: cells.every((p) => (interactiveGrid[p.row][p.col] || "") !== ""),
+    });
+  };
+  for (let r = 0; r < rows; r++) {
+    let c = 0;
+    while (c < cols) {
+      if (isW(r, c)) {
+        const start = c;
+        while (c < cols && isW(r, c)) c++;
+        if (c - start >= 2) {
+          const cells = [];
+          for (let cc = start; cc < c; cc++) cells.push({ row: r, col: cc });
+          addSlot(cells, "across");
+        }
+      } else {
+        c++;
+      }
+    }
+  }
+  for (let c = 0; c < cols; c++) {
+    let r = 0;
+    while (r < rows) {
+      if (isW(r, c)) {
+        const start = r;
+        while (r < rows && isW(r, c)) r++;
+        if (r - start >= 2) {
+          const cells = [];
+          for (let rr = start; rr < r; rr++) cells.push({ row: rr, col: c });
+          addSlot(cells, "down");
+        }
+      } else {
+        r++;
+      }
+    }
+  }
+  // Number the start cells (row-major), sharing a number between the
+  // across/down word starting at the same cell.
+  const startKeys = [...new Set(slots.map((s) => `${s.startRow},${s.startCol}`))]
+    .sort((a, b) => {
+      const [ar, ac] = a.split(",").map(Number);
+      const [br, bc] = b.split(",").map(Number);
+      return ar - br || ac - bc;
+    });
+  const numberByStart = new Map(startKeys.map((k, i) => [k, i + 1]));
+  for (const s of slots) s.number = numberByStart.get(`${s.startRow},${s.startCol}`);
+  return slots;
+}
+
+// The word running through `selected` in the current activeDirection, as
+// an interactiveSlots()-shaped object, or null (black/isolated cell).
+function selectedInteractiveWord() {
+  if (!selected) return null;
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  const { row, col } = selected;
+  if (interactiveGrid[row][col] === "#") return null;
+  const isW = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols && interactiveGrid[r][c] !== "#";
+  const cells = [];
+  if (activeDirection === "across") {
+    let c = col;
+    while (isW(row, c - 1)) c--;
+    for (; isW(row, c); c++) cells.push({ row, col: c });
+  } else {
+    let r = row;
+    while (isW(r - 1, col)) r--;
+    for (; isW(r, col); r++) cells.push({ row: r, col });
+  }
+  if (cells.length < 2) return null;
+  const first = cells[0];
+  const w = {
+    cells,
+    direction: activeDirection,
+    startRow: first.row,
+    startCol: first.col,
+    answer: cells.map((p) => interactiveGrid[p.row][p.col] || "").join(""),
+  };
+  // `w.answer` is built by `.map(...).join("")`, which silently drops any
+  // empty ("" — not-yet-filled) cell rather than keeping a placeholder for
+  // it — so a word missing even one letter always comes back SHORTER
+  // than `cells.length`, and the length check alone is already the right,
+  // sufficient test. A second check used to also require
+  // `!w.answer.includes("")` — removed: `String.prototype.includes("")`
+  // is ALWAYS `true` for any string in JavaScript (the empty string
+  // trivially matches everywhere), so that condition was always `false`
+  // and `w.filled` could therefore never be `true` at all — the real
+  // cause of "Proposer" always answering "Sélectionnez un mot entièrement
+  // rempli", reported directly by the user, regardless of which word was
+  // actually selected.
+  w.filled = w.answer.length === cells.length;
+  return w;
+}
+
+// Feeds renderGrid() a synthesized puzzle/userLetters from interactiveGrid.
+function syncPuzzleFromInteractive() {
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  puzzle = {
+    width: cols,
+    height: rows,
+    pattern: interactiveGrid.map((row) => row.map((ch) => (ch === "#" ? BLACK : WHITE))),
+    solution: interactiveGrid.map((row) => row.map((ch) => (/[A-Z]/.test(ch) ? ch : "#"))),
+    words: interactiveSlots().map((s) => ({
+      number: s.number,
+      direction: s.direction,
+      row: s.startRow,
+      col: s.startCol,
+      length: s.cells.length,
+      answer: s.answer,
+      clue: interactiveDefs.get(interactiveKey(s)) || "",
+    })),
+    difficulty: interactiveDifficulty,
+    language: interactiveLanguage,
+  };
+  userLetters = interactiveGrid.map((row) => row.map((ch) => (/[A-Z]/.test(ch) ? ch : "")));
+  showSolution = false;
+  checking = false;
+}
+
+function updateInteractiveFinishState() {
+  const slots = interactiveSlots();
+  const everyCellFilled = interactiveGridFilled();
+  const everyDefFilled =
+    slots.length > 0 && slots.every((s) => (interactiveDefs.get(interactiveKey(s)) || "").trim());
+  const complete = everyCellFilled && everyDefFilled;
+  interactiveTitleRow.hidden = !complete;
+  // "Publier" (#interactive-save-btn) only ever shows once the grid is
+  // complete; the always-visible "Sauvegarder" (#interactive-draft-save-btn,
+  // draft to GRID_WORK, no publish) sits to its left.
+  interactiveSaveBtn.hidden = !complete;
+  if (complete && !interactiveTitleProposed && !interactiveTitleInput.value.trim()) {
+    proposeInteractiveTitle();
+  }
+}
+
+// Renders interactiveVerifyReport as one <p> per flagged word, below the
+// definition input, at the user's explicit request: "un rapport indiquant
+// les problèmes rencontrés sur chaque mot. Un mot par ligne." Reads the
+// state rather than being handed it directly, and is never itself
+// responsible for clearing it (clearInteractiveDiagnostics() does that,
+// on any edit) — so calling it from renderInteractive(), including the
+// one renderInteractive() call the "Vérifier" handler itself makes right
+// after populating the report, always shows the current, correct content
+// instead of wiping it out. Same H/V + 1-based (row, col) convention
+// already established for the word-verification table (renderWordTable).
+function renderInteractiveVerifyReport() {
+  interactiveVerifyReportEl.innerHTML = "";
+  if (!interactiveVerifyReport.length) {
+    interactiveVerifyReportEl.hidden = true;
+    return;
+  }
+  for (const entry of interactiveVerifyReport) {
+    const line = document.createElement("p");
+    line.className = "interactive-verify-report-line";
+    const dirPrefix = entry.direction === "across" ? "H" : "V";
+    line.textContent =
+      `${dirPrefix} (${entry.row + 1}, ${entry.col + 1}) ${entry.answer} : ${entry.reasons.join(", ")}`;
+    interactiveVerifyReportEl.appendChild(line);
+  }
+  interactiveVerifyReportEl.hidden = false;
+}
+
+function renderInteractive() {
+  // Drop any theme-word cell that no longer carries a letter (undo, erase,
+  // toggle-to-black) so the magenta mark tracks the real grid content.
+  for (const key of interactiveThemeCells) {
+    const [r, c] = key.split(",").map(Number);
+    if (!/[A-Z]/.test(interactiveGrid[r] && interactiveGrid[r][c])) {
+      interactiveThemeCells.delete(key);
+    }
+  }
+  syncPuzzleFromInteractive();
+  renderGrid();
+  const w = selectedInteractiveWord();
+  interactiveDefinitionInput.value = w ? interactiveDefs.get(interactiveKey(w)) || "" : "";
+  interactiveDefinitionInput.disabled = !w;
+  interactivePrevBtn.disabled = interactiveUndoStack.length <= 1;
+  // The "Mots" candidate list is only ever valid for the exact grid state
+  // it was computed from — any render (selection change, typed letter,
+  // undo, clean, ...) can make it stale, so it's cleared here rather than
+  // left showing outdated candidates; the player just clicks "Mots" again.
+  interactiveWordsResults.hidden = true;
+  interactiveWordsResults.innerHTML = "";
+  renderInteractiveVerifyReport();
+  updateInteractiveFinishState();
+}
+
+// ---- Editing primitives (push undo, then re-render) ----
+function interactivePushUndo() {
+  interactiveUndoStack.push(interactiveGrid.map((row) => row.slice()));
+  if (interactiveUndoStack.length > 500) interactiveUndoStack.shift();
+  // Any grid mutation invalidates the last backend fill diagnostics; the
+  // "Suivant" handler re-populates them from its own response afterwards.
+  clearInteractiveDiagnostics();
+}
+function advanceInteractiveSelection() {
+  if (!selected) return;
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  let { row, col } = selected;
+  while (true) {
+    if (activeDirection === "across") col += 1;
+    else row += 1;
+    if (row >= rows || col >= cols) return;
+    if (interactiveGrid[row][col] !== "#") {
+      selected = { row, col };
+      return;
+    }
+  }
+}
+function interactiveTypeLetter(letter) {
+  if (!interactiveMode || !selected) return;
+  interactivePushUndo();
+  interactiveGrid[selected.row][selected.col] = letter.toUpperCase();
+  advanceInteractiveSelection();
+  setInteractiveMessage("");
+  renderInteractive();
+}
+function interactiveToggleBlack() {
+  if (!interactiveMode || !selected) return;
+  interactivePushUndo();
+  const cur = interactiveGrid[selected.row][selected.col];
+  interactiveGrid[selected.row][selected.col] = cur === "#" ? "" : "#";
+  setInteractiveMessage("");
+  renderInteractive();
+}
+function interactiveErase() {
+  if (!interactiveMode || !selected) return;
+  interactivePushUndo();
+  interactiveGrid[selected.row][selected.col] = "";
+  setInteractiveMessage("");
+  renderInteractive();
+}
+function interactiveUndo() {
+  if (interactiveUndoStack.length <= 1) return;
+  interactiveUndoStack.pop();
+  interactiveGrid = interactiveUndoStack[interactiveUndoStack.length - 1].map((r) => r.slice());
+  clearInteractiveDiagnostics();
+  setInteractiveMessage("");
+  renderInteractive();
+}
+// Arrow keys move the selection one cell (black cells included — every
+// cell is selectable in this mode) from the currently-clicked cell,
+// clamped to the grid, at the user's explicit request.
+function interactiveArrowMove(dr, dc) {
+  if (!selected) return;
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  const row = Math.min(rows - 1, Math.max(0, selected.row + dr));
+  const col = Math.min(cols - 1, Math.max(0, selected.col + dc));
+  if (row === selected.row && col === selected.col) return;
+  selected = { row, col };
+  renderInteractive();
+}
+
+function handleInteractiveKeydown(event) {
+  if (!selected) return;
+  const key = event.key;
+  if (key === "ArrowUp") {
+    event.preventDefault();
+    interactiveArrowMove(-1, 0);
+  } else if (key === "ArrowDown") {
+    event.preventDefault();
+    interactiveArrowMove(1, 0);
+  } else if (key === "ArrowLeft") {
+    event.preventDefault();
+    interactiveArrowMove(0, -1);
+  } else if (key === "ArrowRight") {
+    event.preventDefault();
+    interactiveArrowMove(0, 1);
+  } else if (key.length === 1 && /[a-zA-Z]/.test(key)) {
+    event.preventDefault();
+    interactiveTypeLetter(key);
+  } else if (key === " ") {
+    event.preventDefault();
+    interactiveToggleBlack();
+  } else if (key === "Backspace" || key === "Delete") {
+    event.preventDefault();
+    interactiveErase();
+  }
+}
+
+// ---- Definition proposals (reuses GET /api/dictionary/define) ----
+function renderInteractiveProposals(list) {
+  interactiveProposeResults.innerHTML = "";
+  if (!list || !list.length) {
+    interactiveProposeResults.hidden = true;
+    return;
+  }
+  for (const def of list) {
+    const line = document.createElement("p");
+    line.className = "interactive-propose-line";
+    line.tabIndex = 0;
+    line.textContent = def;
+    const pick = () => {
+      interactiveDefinitionInput.value = def;
+      const w = selectedInteractiveWord();
+      if (w) interactiveDefs.set(interactiveKey(w), def);
+      interactiveProposeResults.hidden = true;
+      interactiveProposeResults.innerHTML = "";
+      updateInteractiveFinishState();
+    };
+    line.addEventListener("click", pick);
+    line.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+    interactiveProposeResults.appendChild(line);
+  }
+  interactiveProposeResults.hidden = false;
+}
+
+// ---- Candidate words for the selected slot (POST /api/interactive/
+// candidates) — "Mots" button, at the user's explicit request: "ajouter
+// un bouton Mots qui liste les mots possible pour l'emplacement
+// sélectionné... En premier, les mots du glossaire thématique... en
+// magenta, puis les autres mots en noir. Quand l'utilisateur clique sur
+// un mot, ça le met en place sur l'emplacement sélectionné." ----
+function renderInteractiveWords(themeWords, otherWords) {
+  interactiveWordsResults.innerHTML = "";
+  const all = [
+    ...(themeWords || []).map((word) => ({ word, theme: true })),
+    ...(otherWords || []).map((word) => ({ word, theme: false })),
+  ];
+  if (!all.length) {
+    interactiveWordsResults.hidden = true;
+    return;
+  }
+  const placeWord = (word) => {
+    const w = selectedInteractiveWord();
+    if (!w || word.length !== w.cells.length) return;
+    interactivePushUndo();
+    for (let i = 0; i < w.cells.length; i++) {
+      const { row, col } = w.cells[i];
+      interactiveGrid[row][col] = word[i];
+    }
+    setInteractiveMessage("");
+    renderInteractive();
+  };
+  all.forEach(({ word, theme }, i) => {
+    const item = document.createElement("span");
+    item.className = theme
+      ? "interactive-word-item interactive-word-theme"
+      : "interactive-word-item";
+    item.tabIndex = 0;
+    item.textContent = word;
+    const pick = () => placeWord(word);
+    item.addEventListener("click", pick);
+    item.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+    interactiveWordsResults.appendChild(item);
+    if (i < all.length - 1) {
+      interactiveWordsResults.appendChild(document.createTextNode(", "));
+    }
+  });
+  interactiveWordsResults.hidden = false;
+}
+
+interactiveWordsBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  const w = selectedInteractiveWord();
+  if (!w) {
+    setInteractiveMessage(t.interactiveWordsNeedsSlot, true);
+    return;
+  }
+  interactiveWordsBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/candidates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: interactiveJobId,
+        grid: wireGrid,
+        cells: w.cells.map((c) => [c.row, c.col]),
+      }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return;
+    }
+    if (!resp.ok) throw new Error(t.interactiveWordsError);
+    const data = await resp.json();
+    const themeWords = (data && data.theme_words) || [];
+    const otherWords = (data && data.other_words) || [];
+    renderInteractiveWords(themeWords, otherWords);
+    if (!themeWords.length && !otherWords.length) {
+      setInteractiveMessage(t.interactiveWordsEmpty, true);
+    }
+  } catch (err) {
+    setInteractiveMessage(t.interactiveWordsError, true);
+  } finally {
+    interactiveWordsBtn.disabled = false;
+  }
+});
+
+async function proposeInteractiveTitle() {
+  interactiveTitleProposed = true;
+  const t = I18N[uiLanguage];
+  const words = interactiveSlots().map((s) => ({ answer: s.answer }));
+  try {
+    const resp = await fetchWithTimeout("/api/interactive/title", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: interactiveJobId, words, language: interactiveLanguage }),
+    }, DEFINE_FETCH_TIMEOUT_MS);
+    const data = await resp.json();
+    if (resp.ok && data.title && !interactiveTitleInput.value.trim()) {
+      interactiveTitleInput.value = data.title;
+    }
+  } catch (err) {
+    setInteractiveMessage(t.interactiveTitleError, true);
+  }
+}
+
+// ---- Mode lifecycle ----
+function enterInteractiveMode(state) {
+  interactiveMode = true;
+  interactiveJobId = currentJobId || interactiveJobId;
+  interactiveGrid = state.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
+  interactiveHasTheme = !!state.has_theme;
+  // A resumed session's own result carries `definitions`/`title` (see
+  // backend/app.py's _run_interactive_resume_job) — a fresh start's never
+  // does (neither field exists yet), so `interactiveDefs` still starts
+  // empty and the title input still starts blank in that case, exactly
+  // as before this feature existed.
+  interactiveDefs = new Map();
+  for (const d of state.definitions || []) {
+    if (d && d.clue) interactiveDefs.set(`${d.row},${d.col},${d.direction}`, d.clue);
+  }
+  interactiveThemeCells = new Set();
+  if (state.placed && state.placed.from_theme && state.placed.cells) {
+    for (const [r, c] of state.placed.cells) interactiveThemeCells.add(`${r},${c}`);
+  }
+  interactiveUndoStack = [];
+  interactivePushUndo();
+  setInteractiveDiagnostics(state); // after pushUndo (which clears them)
+  interactiveTitleProposed = false;
+  interactiveTitleInput.value = state.title || "";
+  interactiveSaveResult.textContent = "";
+  interactiveProposeResults.hidden = true;
+  interactiveProposeResults.innerHTML = "";
+  interactiveTitleRow.hidden = true;
+  interactiveSaveBtn.hidden = true;
+  interactiveDraftSaveBtn.disabled = false;
+
+  selected = null;
+  if (state.placed && state.placed.cells && state.placed.cells.length) {
+    const [r0, c0] = state.placed.cells[0];
+    selected = { row: r0, col: c0 };
+    activeDirection = state.placed.direction || "across";
+  } else {
+    const rows = interactiveGrid.length;
+    const cols = rows ? interactiveGrid[0].length : 0;
+    for (let r = 0; r < rows && !selected; r++) {
+      for (let c = 0; c < cols && !selected; c++) {
+        if (interactiveGrid[r][c] !== "#") selected = { row: r, col: c };
+      }
+    }
+  }
+
+  // Reveal the panel inside #result; hide play-mode-only chrome.
+  result.hidden = false;
+  interactiveControls.hidden = false;
+  solutionBtn.hidden = true;
+  checkBtn.hidden = true;
+  definitionsBtn.hidden = true;
+  recomputeBtn.hidden = true;
+  attemptPreviewRevealBtn.hidden = true;
+  gridTitleEl.hidden = true;
+  stats.textContent = "";
+  generationTimes.textContent = "";
+  // These duplicate the "reprise/recherche" history navigation of the
+  // automatic-generation preview (#attempt-preview) — meaningless here,
+  // where "Précédent"/"Suivant" (below) already do the interactive mode's
+  // own, entirely different job (undo one edit / place one more word).
+  // Reported directly by the user: leftover arrows floating above the
+  // grid with no "Grille générée" text next to them, since this function
+  // already empties that text but never hid the buttons themselves.
+  generationTimesPrevBtn.hidden = true;
+  generationTimesNextBtn.hidden = true;
+  generationTimesPosition.hidden = true;
+  cluesAcross.innerHTML = "";
+  cluesDown.innerHTML = "";
+  applyDefinitionsVisibility(); // hides #clues/#down-clues-section/#hover-definition-row
+  // "Précédent"/"Suivant" flank the grid, vertically centered against it,
+  // at the user's explicit request — moved here (out of the play-mode-
+  // shaped #interactive-nav row) into #grid-column itself, right next to
+  // #grid, which switches to a horizontal flex row for this mode (see
+  // style.css's #grid-column.interactive-flank).
+  gridColumn.classList.add("interactive-flank");
+  // Centers the whole Précédent+Grille+Suivant row within #board's full
+  // width, at the user's explicit request — scoped to interactive mode
+  // only (via this class) so the ordinary play-mode #clues+#grid-column
+  // layout is never affected: #clues is always hidden in this mode (see
+  // applyDefinitionsVisibility above), so #grid-column is #board's only
+  // visible child here, with nothing else for centering it to disturb.
+  board.classList.add("interactive-centered");
+  interactivePrevBtn.hidden = false;
+  interactiveNextBtn.hidden = false;
+  // A full grid reported "impossible" (e.g. a resumed session the player
+  // had already finished) is complete, not a dead end — show the success
+  // message instead. Validity isn't re-checked here (no round trip on
+  // entry); "Vérifier" confirms it on demand.
+  const startImpossible = state.impossible && !interactiveGridFilled();
+  setInteractiveMessage(
+    state.impossible
+      ? (startImpossible ? I18N[uiLanguage].interactiveImpossible : I18N[uiLanguage].interactiveCompleteValid)
+      : "",
+    startImpossible,
+  );
+  syncRssPanelVisibility();
+  setActiveDirection(activeDirection); // syncs the 4 direction buttons + renders
+}
+
+function hideInteractivePanel() {
+  interactiveMode = false;
+  interactiveControls.hidden = true;
+  gridColumn.classList.remove("interactive-flank");
+  board.classList.remove("interactive-centered");
+  interactivePrevBtn.hidden = true;
+  interactiveNextBtn.hidden = true;
+  // Restore the automatic-generation history-navigation controls hidden by
+  // enterInteractiveMode() — harmless even before a real grid exists, since
+  // they were never conditionally hidden outside of interactive mode to
+  // begin with (only ever disabled via updatePreviewNavButtons()).
+  generationTimesPrevBtn.hidden = false;
+  generationTimesNextBtn.hidden = false;
+  generationTimesPosition.hidden = false;
+  applyDefinitionsVisibility(); // restore normal #clues/#hover-definition-row rules
+  syncRssPanelVisibility();
+}
+
+function exitInteractiveMode() {
+  hideInteractivePanel();
+}
+
+// ---- "Créations" panel (GRID_WORK autosaves) ----
+
+// Every complete slot's own definition, as {row, col, direction, clue} —
+// shared by the final "Sauvegarder" button and every autosave below, at
+// the user's explicit request that "Suivant"/"Précédent" persist the same
+// kind of state a final save already would.
+function interactiveDefinitionsPayload() {
+  return interactiveSlots().map((s) => ({
+    row: s.startRow,
+    col: s.startCol,
+    direction: s.direction,
+    clue: interactiveDefs.get(interactiveKey(s)) || "",
+  }));
+}
+
+// Fired after every "Suivant"/"Précédent" click, at the user's explicit
+// request: "chaque appui sur Suivant/Précédent sauvegarde l'état en cours
+// du process de création dans le dossier GRID_WORK." Best-effort and
+// silent — a failure here (network blip, or the in-memory session having
+// since expired) must never interrupt the player's own action, which has
+// already happened client-side regardless of whether this succeeds.
+async function autosaveInteractiveWork() {
+  if (!interactiveMode || !interactiveJobId) return;
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    await fetchWithTimeout("/api/interactive/save_work", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: interactiveJobId,
+        grid: wireGrid,
+        definitions: interactiveDefinitionsPayload(),
+        title: interactiveTitleInput.value.trim(),
+        pseudo: userPseudo || undefined,
+      }),
+    }, FETCH_TIMEOUT_MS);
+  } catch (err) {
+    // Silently ignored — see this function's own comment above.
+  }
+}
+
+function hideInteractiveWorkPanel() {
+  interactiveWorkPanel.hidden = true;
+  syncRssPanelVisibility();
+}
+
+// Relaunches a saved work-in-progress session exactly where it stopped —
+// reuses runInteractive()'s own full flow (hides play-mode chrome, shows
+// "Stop", polls, calls enterInteractiveMode with the result) by pointing
+// it at POST /api/interactive/resume instead of .../start.
+async function resumeInteractiveWork(workId) {
+  await runInteractive({ work_id: workId }, "/api/interactive/resume");
+}
+
+// Deletes one saved work-in-progress file, then refreshes the list — at
+// the user's explicit request: "cliquer sur un bouton icône pour
+// supprimer la tâche." Best-effort: a failure here just leaves the list
+// showing what it already had (no error message — this is a minor
+// housekeeping action, not worth interrupting the player over).
+async function deleteInteractiveWork(workId) {
+  try {
+    await fetchWithTimeout("/api/interactive/work/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ work_id: workId }),
+    }, FETCH_TIMEOUT_MS);
+  } catch (err) {
+    // Best-effort — see this function's own comment above.
+  }
+  renderInteractiveWorkList();
+}
+
+// Renders the current list of saved work-in-progress sessions belonging
+// to the current pseudo (GET /api/interactive/work?pseudo=...  — the web
+// UI always has a pseudo set by the time this can be called, see
+// checkForSavedInteractiveWork(), so every player only ever sees their
+// own in-progress creations). Each row resumes that session on click
+// (or Enter/Space, via tabIndex — same accessible-row convention already
+// established for #library-table's own rows); its own trailing delete
+// button stops propagation so it never also triggers a resume.
+async function renderInteractiveWorkList() {
+  const t = I18N[uiLanguage];
+  interactiveWorkTbody.innerHTML = "";
+  let items = [];
+  try {
+    const resp = await fetchWithTimeout(
+      `/api/interactive/work?pseudo=${encodeURIComponent(userPseudo || "")}`,
+      {}, FETCH_TIMEOUT_MS,
+    );
+    const data = await resp.json();
+    items = (resp.ok && data.items) || [];
+  } catch (err) {
+    items = [];
+  }
+  interactiveWorkEmpty.hidden = items.length > 0;
+  const difficultyKeys = { easy: "difficultyEasy", medium: "difficultyMedium", hard: "difficultyHard" };
+  for (const item of items) {
+    const tr = document.createElement("tr");
+    tr.tabIndex = 0;
+    const resume = () => resumeInteractiveWork(item.id);
+    tr.addEventListener("click", resume);
+    tr.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        resume();
+      }
+    });
+
+    const titleTd = document.createElement("td");
+    titleTd.textContent = item.title || t.interactiveWorkUntitled;
+    tr.appendChild(titleTd);
+
+    const langTd = document.createElement("td");
+    langTd.textContent = item.language || "";
+    tr.appendChild(langTd);
+
+    const diffTd = document.createElement("td");
+    const diffKey = difficultyKeys[item.difficulty];
+    diffTd.textContent = diffKey ? t[diffKey] : (item.difficulty || "");
+    tr.appendChild(diffTd);
+
+    const sizeTd = document.createElement("td");
+    sizeTd.textContent = item.width && item.height ? `${item.width} × ${item.height}` : "";
+    tr.appendChild(sizeTd);
+
+    const updatedTd = document.createElement("td");
+    updatedTd.textContent = item.updated_at
+      ? new Date(item.updated_at).toLocaleString(uiLanguage)
+      : "";
+    tr.appendChild(updatedTd);
+
+    const deleteTd = document.createElement("td");
+    const deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "nav-btn interactive-work-delete-btn";
+    deleteBtn.textContent = "🗑";
+    deleteBtn.title = t.interactiveWorkDeleteBtn;
+    deleteBtn.setAttribute("aria-label", t.interactiveWorkDeleteBtn);
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      deleteInteractiveWork(item.id);
+    });
+    deleteBtn.addEventListener("keydown", (e) => e.stopPropagation());
+    deleteTd.appendChild(deleteBtn);
+    tr.appendChild(deleteTd);
+
+    interactiveWorkTbody.appendChild(tr);
+  }
+}
+
+interactiveWorkBtn.addEventListener("click", () => {
+  if (interactiveWorkPanel.hidden) {
+    interactiveWorkPanel.hidden = false;
+    syncRssPanelVisibility();
+    renderInteractiveWorkList();
+  } else {
+    hideInteractiveWorkPanel();
+  }
+});
+
+interactiveWorkCloseBtn.addEventListener("click", hideInteractiveWorkPanel);
+interactiveWorkRefreshBtn.addEventListener("click", () => {
+  renderInteractiveWorkList();
+});
+
+// "Quand un utilisateur ouvre l'interface (ou la recharge), si il a des
+// grilles sauvegardées dans GRID_WORK, afficher un panneau avec la
+// liste," at the user's explicit request — called once, right after the
+// current pseudo is actually known (see initUserPrefs()'s returning-user
+// branch and the welcome form's own submit handler below), never before:
+// without a pseudo there is no reliable way to know which saved sessions
+// belong to this particular player. "fermer le panneau en le laissant
+// inchangé pour la fois suivante" is already the default behaviour of
+// hideInteractiveWorkPanel() — it never touches GRID_WORK itself, so the
+// exact same check simply runs again, and can show the panel again, on
+// the next page load.
+async function checkForSavedInteractiveWork() {
+  if (!userPseudo) return;
+  try {
+    const resp = await fetchWithTimeout(
+      `/api/interactive/work?pseudo=${encodeURIComponent(userPseudo)}`,
+      {}, FETCH_TIMEOUT_MS,
+    );
+    const data = await resp.json();
+    if (resp.ok && data.items && data.items.length) {
+      interactiveWorkPanel.hidden = false;
+      syncRssPanelVisibility();
+      renderInteractiveWorkList();
+    }
+  } catch (err) {
+    // No saved-work check on a connection failure — the "Créations"
+    // button still lets the player open the panel by hand later.
+  }
+}
+
+// `endpoint` defaults to the fresh-start route; the "Créations" panel's
+// own resume flow calls this same function with `/api/interactive/resume`
+// instead (see resumeInteractiveWork below) — every other bit of UI state
+// handling (hiding play-mode chrome, showing "Stop", polling, entering
+// interactive mode with the result) is identical either way, only the
+// endpoint and the request body itself differ (resume's own body is just
+// `{work_id}` — no `mode` field to merge in, unlike a fresh start's).
+async function runInteractive(body, endpoint = "/api/interactive/start") {
+  const t = I18N[uiLanguage];
+  generationInProgress = true;
+  button.disabled = true;
+  result.hidden = true;
+  solutionBtn.hidden = true;
+  checkBtn.hidden = true;
+  definitionsBtn.hidden = true;
+  recomputeBtn.hidden = true;
+  attemptPreviewRevealBtn.hidden = true;
+  continueBtn.hidden = true;
+  stopBtn.hidden = false;
+  stopBtn.disabled = false;
+  currentJobId = null;
+  setStatus(t.statusGenerating, false);
+  hideAttemptPreview();
+  hideInteractivePanel();
+  hideInteractiveWorkPanel();
+  syncRssPanelVisibility();
+
+  try {
+    let response;
+    try {
+      const payload = endpoint === "/api/interactive/start"
+        ? { ...body, mode: "interactive" }
+        : body;
+      response = await fetchWithTimeout(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      throw new Error(t.errorConnectionLost);
+    }
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+    }
+    currentJobId = data.job_id;
+    interactiveJobId = data.job_id;
+    const startResult = await pollJob(data.job_id, t);
+    enterInteractiveMode(startResult);
+    setStatus(t.statusGenerated, false);
+  } catch (err) {
+    setStatus(err.message, !(err instanceof CancelledError));
+  } finally {
+    button.disabled = false;
+    stopBtn.hidden = true;
+    currentJobId = null;
+    generationInProgress = false;
+    syncRssPanelVisibility();
+  }
+}
+
+// ---- Button / input wiring ----
+interactivePrevBtn.addEventListener("click", async () => {
+  setInteractiveMessage("");
+  interactiveUndo();
+  // Autosave after "Précédent" too, at the user's explicit request — this
+  // is the one interactive-mode mutation that never talks to the backend
+  // on its own (a plain client-side undo), so it needs its own explicit
+  // save call rather than piggybacking on an existing request/response.
+  await autosaveInteractiveWork();
+});
+
+interactiveNextBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  interactiveNextBtn.disabled = true;
+  setInteractiveMessage("");
+  interactivePushUndo();
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/step", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: interactiveJobId, grid: wireGrid }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      interactiveUndoStack.pop();
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return;
+    }
+    const data = await resp.json();
+    if (!resp.ok) {
+      interactiveUndoStack.pop();
+      setInteractiveMessage(describeErrorCode(t, data.detail && data.detail.code, data.detail), true);
+      return;
+    }
+    if (data.impossible) {
+      interactiveUndoStack.pop();
+      // Grid unchanged, but the highlights still describe it — show them.
+      setInteractiveDiagnostics(data);
+      // "Suivant" placing nothing more is only a real dead end while the
+      // grid still has empty cells. If every white cell is filled and
+      // every word is a real dictionary entry, this is success, not
+      // "impossible" — say so instead (at the user's explicit request).
+      let complete = false;
+      if (interactiveGridFilled()) {
+        try {
+          const vresp = await fetchWithTimeout("/api/interactive/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              job_id: interactiveJobId,
+              words: interactiveSlots().map((s) => s.answer),
+            }),
+          }, FETCH_TIMEOUT_MS);
+          if (vresp.ok) {
+            const vdata = await vresp.json();
+            complete = !(vdata.invalid_words || []).length;
+          }
+        } catch (err) {
+          /* verify unreachable — fall back to the "impossible" message */
+        }
+      }
+      setInteractiveMessage(
+        complete ? t.interactiveCompleteValid : t.interactiveImpossible,
+        !complete,
+      );
+      renderInteractive();
+      return;
+    }
+    for (const [r, c] of data.placed.cells) interactiveGrid[r][c] = data.grid[r][c];
+    if (data.placed.from_theme) {
+      for (const [r, c] of data.placed.cells) interactiveThemeCells.add(`${r},${c}`);
+    }
+    setInteractiveDiagnostics(data);
+    selected = { row: data.placed.cells[0][0], col: data.placed.cells[0][1] };
+    activeDirection = data.placed.direction || activeDirection;
+    setActiveDirection(activeDirection);
+    // Autosave after a genuine placement only, at the user's explicit
+    // request — never on "impossible"/an error above, where the grid
+    // itself never actually changed (interactiveUndoStack.pop() already
+    // reverted it), so there is nothing new worth persisting.
+    await autosaveInteractiveWork();
+  } catch (err) {
+    interactiveUndoStack.pop();
+    setInteractiveMessage(t.errorConnectionLost, true);
+  } finally {
+    interactiveNextBtn.disabled = false;
+  }
+});
+
+// "Nettoyer" — full cleanup of every impossible zone (remove crossing
+// words, or blacken a cell), the same "nettoyage complet" the automatic
+// generator applies at each palier — at the user's explicit request.
+// Unlike "Suivant" (which only ever touches the cells of the one word
+// just placed), cleanup can change cells anywhere in the grid, so the
+// whole interactiveGrid is replaced from the response rather than
+// patched cell by cell.
+// Shared by "Nettoyer" and "Nettoyer (+noires)" — same request/undo/error
+// handling either way, only `deep` (sent to the backend) and the
+// resulting status message differ. Both buttons are disabled while
+// either request is in flight, so the two can never overlap and race on
+// the same interactiveGrid/undo stack.
+async function runInteractiveClean(deep) {
+  const t = I18N[uiLanguage];
+  interactiveCleanBtn.disabled = true;
+  interactiveCleanDeepBtn.disabled = true;
+  setInteractiveMessage("");
+  interactivePushUndo();
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/clean", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: interactiveJobId, grid: wireGrid, deep }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      interactiveUndoStack.pop();
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return;
+    }
+    const data = await resp.json();
+    if (!resp.ok) {
+      interactiveUndoStack.pop();
+      setInteractiveMessage(describeErrorCode(t, data.detail && data.detail.code, data.detail), true);
+      return;
+    }
+    if (!data.changed) {
+      // Nothing to undo — this click made no change at all.
+      interactiveUndoStack.pop();
+      setInteractiveMessage(t.interactiveNothingToClean, false);
+      return;
+    }
+    interactiveGrid = data.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
+    setInteractiveDiagnostics(data);
+    setInteractiveMessage(
+      deep ? t.interactiveDeepCleaned(data.cleared_count, data.removed_black_count || 0)
+           : t.interactiveCleaned(data.cleared_count),
+      false,
+    );
+    renderInteractive();
+  } catch (err) {
+    interactiveUndoStack.pop();
+    setInteractiveMessage(t.errorConnectionLost, true);
+  } finally {
+    interactiveCleanBtn.disabled = false;
+    interactiveCleanDeepBtn.disabled = false;
+  }
+}
+
+interactiveCleanBtn.addEventListener("click", () => runInteractiveClean(false));
+interactiveCleanDeepBtn.addEventListener("click", () => runInteractiveClean(true));
+
+interactiveDirAcrossBtn.addEventListener("mousedown", (e) => e.preventDefault());
+interactiveDirDownBtn.addEventListener("mousedown", (e) => e.preventDefault());
+interactiveDirAcrossBtn.addEventListener("click", () => setActiveDirection("across"));
+interactiveDirDownBtn.addEventListener("click", () => setActiveDirection("down"));
+
+interactiveDefinitionInput.addEventListener("input", () => {
+  const w = selectedInteractiveWord();
+  if (!w) return;
+  const v = interactiveDefinitionInput.value.trim();
+  if (v) interactiveDefs.set(interactiveKey(w), v);
+  else interactiveDefs.delete(interactiveKey(w));
+  updateInteractiveFinishState();
+});
+
+interactiveProposeBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  const w = selectedInteractiveWord();
+  if (!w || !w.filled) {
+    setInteractiveMessage(t.interactiveProposeNeedsWord, true);
+    return;
+  }
+  interactiveProposeBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const resp = await fetchWithTimeout(
+      `/api/dictionary/define?q=${encodeURIComponent(w.answer)}`
+        + `&lang=${encodeURIComponent(interactiveLanguage)}`,
+      {}, DEFINE_FETCH_TIMEOUT_MS,
+    );
+    if (!resp.ok) throw new Error(t.interactiveProposeError);
+    const data = await resp.json();
+    const list = (data && data.definitions) || [];
+    renderInteractiveProposals(list);
+    // A successful call can still come back with zero usable definitions
+    // — the LLM sometimes phrases every candidate as "<word> is a ..."
+    // ("Chat est un..."), which the shared containment filter correctly
+    // rejects for repeating the target word as its own subject (see
+    // backend/clues.py's rule 1) — every candidate can be rejected this
+    // way at once, purely by chance of phrasing, confirmed live in
+    // backend.log. Without this, the button silently did nothing at all
+    // in that case (renderInteractiveProposals([]) just leaves the
+    // results block hidden), which is exactly the "tourne, mais
+    // n'affiche pas de résultat" reported directly by the user — it was
+    // never actually stuck, just silently empty.
+    if (!list.length) setInteractiveMessage(t.interactiveProposeEmpty, true);
+  } catch (err) {
+    setInteractiveMessage(t.interactiveProposeError, true);
+  } finally {
+    interactiveProposeBtn.disabled = false;
+  }
+});
+
+// Checks the WHOLE grid at once, at the user's explicit request: "vérifier
+// toute la grille et mettre en rouge les mots complets qui posent un
+// problème, soit parce qu'ils ne sont pas des mots du dictionnaire, soit
+// parce qu'ils n'ont pas de définition." Supersedes an earlier version that
+// only ever looked at the currently selected word (see the two prior bug
+// reports this project's own history already documents for that narrower
+// design). Dictionary membership is checked server-side, in one batched
+// call (POST /api/interactive/verify) — the missing-definition half needs
+// no round trip at all, since interactiveDefs already lives client-side.
+interactiveVerifyBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  const filled = interactiveSlots().filter((s) => s.filled);
+  if (!filled.length) {
+    interactiveInvalidCells = new Set();
+    interactiveVerifyReport = [];
+    renderInteractive();
+    setInteractiveMessage(t.interactiveVerifyNoWords, true);
+    return;
+  }
+  interactiveVerifyBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const resp = await fetchWithTimeout("/api/interactive/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: interactiveJobId,
+        words: filled.map((s) => s.answer),
+      }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return;
+    }
+    const data = await resp.json();
+    if (!resp.ok) {
+      setInteractiveMessage(describeErrorCode(t, data.detail && data.detail.code, data.detail), true);
+      return;
+    }
+    const invalidWords = new Set(data.invalid_words || []);
+    const invalidCells = new Set();
+    const report = [];
+    let problemCount = 0;
+    for (const s of filled) {
+      const hasDef = !!(interactiveDefs.get(interactiveKey(s)) || "").trim();
+      const isInvalidWord = invalidWords.has(s.answer);
+      if (!hasDef || isInvalidWord) {
+        problemCount++;
+        for (const { row, col } of s.cells) invalidCells.add(`${row},${col}`);
+        const reasons = [];
+        if (isInvalidWord) reasons.push(t.interactiveVerifyReasonInvalid);
+        if (!hasDef) reasons.push(t.interactiveVerifyReasonMissingDef);
+        report.push({
+          direction: s.direction,
+          row: s.startRow,
+          col: s.startCol,
+          answer: s.answer,
+          reasons,
+        });
+      }
+    }
+    interactiveInvalidCells = invalidCells;
+    interactiveVerifyReport = report;
+    renderInteractive();
+    setInteractiveMessage(
+      problemCount ? t.interactiveVerifyProblems(problemCount) : t.interactiveVerifyOk,
+      !!problemCount,
+    );
+  } catch (err) {
+    setInteractiveMessage(t.errorConnectionLost, true);
+  } finally {
+    interactiveVerifyBtn.disabled = false;
+  }
+});
+
+// "Définitions" : génère automatiquement une définition pour chaque mot
+// entièrement rempli et valide qui n'en a pas encore, à la demande
+// explicite de l'utilisateur. Réutilise POST /api/interactive/verify (pour
+// écarter les mots absents du dictionnaire — "et valides") puis, mot par
+// mot, GET /api/dictionary/define (comme "Proposer"), en gardant la
+// première définition proposée. Séquentiel : chaque appel est un vrai
+// aller-retour LLM, potentiellement lent — la progression est affichée et
+// le traitement est au mieux (un mot dont la génération échoue est
+// simplement laissé sans définition).
+interactiveDefinitionsBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  const filled = interactiveSlots().filter((s) => s.filled);
+  const pending = filled.filter(
+    (s) => !(interactiveDefs.get(interactiveKey(s)) || "").trim(),
+  );
+  if (!pending.length) {
+    setInteractiveMessage(t.interactiveDefinitionsNothing, false);
+    return;
+  }
+  const busyBtns = [
+    interactiveDefinitionsBtn,
+    interactiveProposeBtn,
+    interactiveVerifyBtn,
+    interactiveCleanBtn,
+    interactiveCleanDeepBtn,
+  ];
+  for (const b of busyBtns) b.disabled = true;
+  setInteractiveMessage(t.interactiveDefinitionsWorking(0, pending.length));
+  try {
+    // Keep only words that really exist in the dictionary — the same
+    // batched check as "Vérifier". If it can't be reached, fall through
+    // and try to define every pending word anyway (best-effort).
+    let targets = pending;
+    try {
+      const resp = await fetchWithTimeout("/api/interactive/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: interactiveJobId,
+          words: pending.map((s) => s.answer),
+        }),
+      }, FETCH_TIMEOUT_MS);
+      if (resp.status === 404) {
+        setInteractiveMessage(t.interactiveSessionLost, true);
+        return;
+      }
+      if (resp.ok) {
+        const data = await resp.json();
+        const invalid = new Set(data.invalid_words || []);
+        targets = pending.filter((s) => !invalid.has(s.answer));
+      }
+    } catch (err) {
+      /* verify unreachable — proceed with every pending word */
+    }
+    if (!targets.length) {
+      setInteractiveMessage(t.interactiveDefinitionsNothing, false);
+      return;
+    }
+    let done = 0;
+    let failed = 0;
+    for (const s of targets) {
+      setInteractiveMessage(t.interactiveDefinitionsWorking(done, targets.length));
+      try {
+        const resp = await fetchWithTimeout(
+          `/api/dictionary/define?q=${encodeURIComponent(s.answer)}`
+            + `&lang=${encodeURIComponent(interactiveLanguage)}`,
+          {}, DEFINE_FETCH_TIMEOUT_MS,
+        );
+        const data = resp.ok ? await resp.json() : null;
+        const first = ((data && data.definitions) || [])
+          .map((d) => (d || "").trim())
+          .find(Boolean);
+        if (first) {
+          interactiveDefs.set(interactiveKey(s), first);
+          done++;
+        } else {
+          failed++;
+        }
+      } catch (err) {
+        failed++;
+      }
+    }
+    renderInteractive();
+    setInteractiveMessage(
+      failed
+        ? t.interactiveDefinitionsPartial(done, failed)
+        : t.interactiveDefinitionsDone(done),
+      failed > 0 && done === 0,
+    );
+  } finally {
+    for (const b of busyBtns) b.disabled = false;
+  }
+});
+
+interactiveTitleProposeBtn.addEventListener("click", () => {
+  interactiveTitleProposed = false;
+  interactiveTitleInput.value = "";
+  proposeInteractiveTitle();
+});
+
+// "Sauvegarder" — writes the whole current grid + definitions + title to
+// GRID_WORK (the "Créations" draft) WITHOUT publishing to the Library, at
+// the user's explicit request. Same POST /api/interactive/save_work call
+// as the autosave, but visible: it reports success/failure (the autosave
+// is deliberately silent) and, unlike "Publier", never leaves interactive
+// mode.
+interactiveDraftSaveBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  if (!interactiveMode || !interactiveJobId) return;
+  interactiveDraftSaveBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/save_work", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: interactiveJobId,
+        grid: wireGrid,
+        definitions: interactiveDefinitionsPayload(),
+        title: interactiveTitleInput.value.trim(),
+        pseudo: userPseudo || undefined,
+      }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return;
+    }
+    setInteractiveMessage(resp.ok ? t.interactiveDraftSaved : t.interactiveSaveError, !resp.ok);
+  } catch (err) {
+    setInteractiveMessage(t.errorConnectionLost, true);
+  } finally {
+    interactiveDraftSaveBtn.disabled = false;
+  }
+});
+
+interactiveSaveBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  interactiveSaveBtn.disabled = true;
+  interactiveSaveResult.textContent = "";
+  try {
+    const slots = interactiveSlots();
+    const definitions = slots.map((s) => ({
+      row: s.startRow,
+      col: s.startCol,
+      direction: s.direction,
+      clue: interactiveDefs.get(interactiveKey(s)) || "",
+    }));
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: interactiveJobId,
+        grid: wireGrid,
+        definitions,
+        title: interactiveTitleInput.value.trim(),
+        language: interactiveLanguage,
+        difficulty: interactiveDifficulty,
+        theme: interactiveTheme || undefined,
+        pseudo: userPseudo || undefined,
+      }),
+    }, FETCH_TIMEOUT_MS);
+    const data = await resp.json();
+    if (resp.ok && data.grid_id) {
+      markGridSeen(data.grid_id);
+      interactiveSaveResult.textContent = t.interactiveSaved;
+      setStatus(t.interactiveSaved, false);
+      exitInteractiveMode();
+    } else {
+      setInteractiveMessage(t.interactiveSaveError, true);
+    }
+  } catch (err) {
+    setInteractiveMessage(t.interactiveSaveError, true);
+  } finally {
+    interactiveSaveBtn.disabled = false;
+  }
+});
+
 // Shared by the form's own submit handler and continueBtn's click handler
 // (both further below) — at the user's explicit request: "Continuer"
 // relaunches a fresh job from a failed one's own resume state, but from
@@ -3611,6 +5146,7 @@ async function runGeneration(startJob) {
   currentJobId = null;
   setStatus(t.statusGenerating, false);
   hideAttemptPreview();
+  hideInteractivePanel();
 
   try {
     const jobId = await startJob(t);
@@ -3673,6 +5209,21 @@ form.addEventListener("submit", async (event) => {
   // forcé comme séparateur décimal, borné [0,1] ; undefined si vide -> le
   // back applique sa valeur par défaut.
   const themePrecision = readThemePrecision();
+
+  if (mode === "interactive") {
+    interactiveLanguage = language;
+    interactiveDifficulty = difficulty;
+    interactiveTheme = theme;
+    await runInteractive({
+      language, width, height, difficulty,
+      black_enrichment_percent: blackEnrichmentPercent,
+      force_letters_percent: forceLettersPercent,
+      theme: theme || undefined,
+      theme_precision: themePrecision,
+      pseudo: userPseudo || undefined,
+    });
+    return;
+  }
 
   await runGeneration(async (t) => {
     let response;

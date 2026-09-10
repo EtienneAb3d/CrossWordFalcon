@@ -165,6 +165,22 @@ _TITLE_COUNT = 3
 # call.
 _TITLE_RETRIES = 3
 
+# generate_definitions re-asks the model this many extra times when a
+# whole response yields zero usable definitions at all — observed live in
+# backend.log: the small local model sometimes phrases every one of its
+# candidates as "<word> is a ..."/"<word> est un..." (repeating the target
+# word as the sentence's own subject), which the shared containment
+# filter (_filter_candidates, rule 1) correctly rejects every single time,
+# purely by chance of that one phrasing choice — reported directly by the
+# user as "Proposer" (the interactive-mode button backed by this same
+# method) spinning and then showing no result at all. A fresh call often
+# phrases things differently; a bounded retry recovers the common case
+# instead of asking the player to click again themselves. Small — a
+# handful of extra ~seconds-long calls, not the multi-round-per-word
+# budget generate() uses for a real grid clue — and it only ever loops on
+# a genuinely empty result, so a normal call still makes exactly one.
+DEFINE_RETRIES = 2
+
 # A wrapping quote pair the model sometimes puts around a title despite
 # rule 2 explicitly forbidding it (e.g. '"Vol de Nuit"') — stripped by
 # _clean_title. Deliberately narrow (quote characters only, not general
@@ -539,6 +555,66 @@ def _strip_leading_word_label(candidate, answer, accented, canonical):
         return candidate
     rest = candidate[match.end():].strip()
     return rest or candidate
+
+
+# A leaked "<word> <copula> <article>? ..." clause at the very start of a
+# candidate — the model restating the word being defined as its own
+# grammatical subject, e.g. French "Chat est un mammifère carnivore..." for
+# CHAT — a different leaked shape than _LEADING_LABEL_RE's "word - " label
+# (no punctuation separates the word from the rest, a real subject/copula
+# clause instead). Observed live in backend.log, persisting even after
+# rule 1 (_build_definitions_system_prompt / the grid-clue system prompt)
+# was reworded to explicitly forbid it — this project's own small local
+# model has an unusually strong prior for exactly this phrasing on some
+# words (French "chat" reproduced it in every single sampled attempt).
+# One pattern per language, matching the copula and an optional following
+# indefinite/definite article — only the copula is required to match;
+# whether the leading token actually *is* the target word is checked
+# separately in _strip_leading_word_is_a_prefix, the same two-step design
+# as _strip_leading_word_label.
+_WORD_IS_A_PREFIX_RE = {
+    "fr": re.compile(r"^\s*est\s+(?:une?\s+|l['’]\s*|les?\s+)?", re.IGNORECASE),
+    "en": re.compile(r"^\s*is\s+(?:an?\s+|the\s+)?", re.IGNORECASE),
+    "de": re.compile(r"^\s*ist\s+(?:ein(?:e)?\s+|der\s+|die\s+|das\s+)?", re.IGNORECASE),
+    "es": re.compile(r"^\s*es\s+(?:una?\s+|el\s+|la\s+)?", re.IGNORECASE),
+    "it": re.compile(r"^\s*è\s+(?:un['’]?a?\s+|il\s+|lo\s+|la\s+)?", re.IGNORECASE),
+    "pt": re.compile(r"^\s*é\s+(?:um(?:a)?\s+|o\s+|a\s+)?", re.IGNORECASE),
+}
+
+
+def _strip_leading_word_is_a_prefix(candidate, answer, accented, canonical, language):
+    """Salvages a candidate that only fails `_contains_target_word` because
+    it opens with "<word> <copula> ..." — restating the word being defined
+    as the sentence's own grammatical subject (e.g. "Chat est un mammifère
+    carnivore..." for CHAT) — the exact same "salvage a mechanically
+    fixable leaked shape instead of discarding a perfectly good definition"
+    principle as `_strip_leading_word_label`, for this different leaked
+    shape (a full subject/copula clause, not a bare label before
+    punctuation). Strips the word and the copula (plus a following
+    indefinite/definite article, if any — see `_WORD_IS_A_PREFIX_RE`) and
+    returns just the definition that follows. Returns `candidate` unchanged
+    whenever the leading token isn't exactly the target word (or its
+    accented spelling, or a candidate canonical form), whenever `language`
+    has no registered copula pattern, or whenever what follows the leading
+    token doesn't start with that language's own copula — narrow on
+    purpose, so it can never rewrite an unrelated candidate that merely
+    happens to use that copula somewhere of its own."""
+    pattern = _WORD_IS_A_PREFIX_RE.get(language)
+    if pattern is None:
+        return candidate
+    head_match = re.match(r"^\s*(\S+)\s*", candidate)
+    if not head_match:
+        return candidate
+    targets = {_normalize(answer), _normalize(accented)}
+    targets.update(_normalize(c) for c in canonical)
+    if _normalize(head_match.group(1)) not in targets:
+        return candidate
+    rest = candidate[head_match.end():]
+    copula_match = pattern.match(rest)
+    if not copula_match:
+        return candidate
+    stripped = rest[copula_match.end():].strip()
+    return stripped or candidate
 
 
 # DeepSeek-R1-distill models (unlike Qwen3.5 with `enable_thinking: false`,
@@ -1676,8 +1752,10 @@ class LLMClueGenerator:
         in the model's own order (fewer if it wrote less, or if some
         candidates were filtered out) — never raises for "the model gave
         a bad or empty answer" (an empty list simply means no definition
-        this time), only `ClueGenerationError` for a genuine connection
-        failure (from `_call`)."""
+        after every attempt), only `ClueGenerationError` for a genuine
+        connection failure (from `_call`). Re-asks the model up to
+        `DEFINE_RETRIES` extra times whenever a whole attempt yields zero
+        kept definitions — see that constant's own comment."""
         text = " ".join(str(text).split())
         if not text:
             return []
@@ -1691,26 +1769,30 @@ class LLMClueGenerator:
                 parts.append(block)
         user_message = "\n\n".join(parts)
         max_tokens = REASONING_TOKEN_BUDGET + 200 + 40 * count
-        content = self._call(
-            entry[0], text, 1, system_prompt, user_message, max_tokens, timeout,
-            total_rounds=1,
-        )
-        candidates = self._parse_response(content)
-        accepted, _details, _maskable = self._filter_candidates(
-            candidates, entry[0], text, entry[2], language, 1, total_rounds=1,
-        )
         definitions = []
-        seen = set()
-        for c, _idx in accepted:
-            if c in seen:
-                continue
-            seen.add(c)
-            definitions.append(c)
-            if len(definitions) >= count:
+        for attempt in range(1 + DEFINE_RETRIES):
+            content = self._call(
+                entry[0], text, attempt + 1, system_prompt, user_message, max_tokens,
+                timeout, total_rounds=1 + DEFINE_RETRIES,
+            )
+            candidates = self._parse_response(content)
+            accepted, _details, _maskable = self._filter_candidates(
+                candidates, entry[0], text, entry[2], language, attempt + 1,
+                total_rounds=1 + DEFINE_RETRIES,
+            )
+            seen = set()
+            for c, _idx in accepted:
+                if c in seen:
+                    continue
+                seen.add(c)
+                definitions.append(c)
+                if len(definitions) >= count:
+                    break
+            if definitions:
                 break
         logger.info(
-            "define: %r (%s) -> %d/%d definition(s) kept",
-            text, language, len(definitions), count,
+            "define: %r (%s) -> %d/%d definition(s) kept (%d attempt(s))",
+            text, language, len(definitions), count, attempt + 1,
         )
         return definitions
 
@@ -1739,7 +1821,12 @@ class LLMClueGenerator:
             "ELSE; never invent a meaning that is not listed there.\n\n"
             "Rules:\n"
             "1. Never include the word/expression itself, or a close "
-            "same-family variant of it, anywhere in a definition.\n"
+            "same-family variant of it, anywhere in a definition — this "
+            "includes using it as the sentence's own grammatical subject "
+            "(e.g. never start a definition with \"<word> is a ...\"/\"<word> "
+            "est un/une ...\" — write it as an impersonal, subject-less "
+            "definition instead, e.g. \"Small domesticated feline\" rather "
+            "than \"A cat is a small domesticated feline\").\n"
             "2. Each definition must be a real, self-contained definition "
             f"a reader would understand on its own — at most "
             f"{MAX_CLUE_WORDS} words — never a bare grammatical label and "
@@ -2440,7 +2527,11 @@ class LLMClueGenerator:
         be rejected purely for opening with a leaked "word - definition"
         label gets that label stripped instead, salvaging what's usually
         a perfectly good definition rather than losing it over a
-        mechanically fixable formatting slip.
+        mechanically fixable formatting slip — then through
+        `_strip_leading_word_is_a_prefix()`, the same salvage for the
+        different leaked shape "<word> is a .../<word> est un(e) ..."
+        (the word restated as its own grammatical subject rather than a
+        label before punctuation).
 
         `total_rounds` only affects the "N/M" figure in the log lines
         (3 for the grid-clue retry loop this was extracted from; a
@@ -2470,6 +2561,16 @@ class LLMClueGenerator:
                 if stripped != c:
                     logger.info(
                         "clue round %d/%d: %r (%r) — stripped leaked word-label "
+                        "prefix: %r -> %r",
+                        round_number, total_rounds, answer, accented, c, stripped,
+                    )
+                    c = stripped
+                stripped = _strip_leading_word_is_a_prefix(
+                    c, answer, accented, canonical, language,
+                )
+                if stripped != c:
+                    logger.info(
+                        "clue round %d/%d: %r (%r) — stripped leaked '<word> is a' "
                         "prefix: %r -> %r",
                         round_number, total_rounds, answer, accented, c, stripped,
                     )

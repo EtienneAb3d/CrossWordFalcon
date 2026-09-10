@@ -124,6 +124,7 @@
       <label for="mode">
         <span data-i18n="modeLabel">Mode</span>
         <select id="mode" name="mode">
+          <option value="interactive" data-i18n="modeInteractive">Interactif</option>
           <option value="flash" data-i18n="modeFlash">Flash</option>
           <option value="turbo" data-i18n="modeTurbo">Turbo</option>
           <option value="fast" data-i18n="modeFast">Rapide</option>
@@ -177,6 +178,10 @@
         <button type="button" id="recompute-btn" data-i18n="recomputeBtn" hidden>Recalculer</button>
         <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
         <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
+        <!-- "Créations" : liste les sessions "Interactif" en cours sauvegardées
+             automatiquement dans GRID_WORK/ (voir plus bas et backend/
+             grid_store.py) — à la demande explicite de l'utilisateur. -->
+        <button type="button" id="interactive-work-btn" data-i18n="interactiveWorkBtn">Créations</button>
         <!-- Panneau d'administration Qdrant : rendu visible uniquement quand
              la page est ouverte en localhost (script.js,
              showQdrantAdminOnLocalhost) ; le proxy (frontend/server.py,
@@ -303,6 +308,39 @@
       </div>
     </section>
 
+    <!-- Panneau "Créations" : sessions "Interactif" en cours, sauvegardées
+         automatiquement dans GRID_WORK/ après chaque Suivant/Précédent — à
+         la demande explicite de l'utilisateur. Ouvert soit par le bouton
+         "Créations" ci-dessus, soit automatiquement au chargement de la
+         page si l'utilisateur a des créations en cours (voir script.js's
+         checkForSavedInteractiveWork()). Même groupe basculant que
+         #library/#dictionary/#attempt-preview/#result. -->
+    <section id="interactive-work" hidden>
+      <div id="interactive-work-header">
+        <p id="interactive-work-label" data-i18n="interactiveWorkLabel"></p>
+        <button type="button" id="interactive-work-refresh-btn" class="nav-btn"
+                data-i18n-aria="interactiveWorkRefreshBtn">↻</button>
+        <button type="button" id="interactive-work-close-btn" class="nav-btn"
+                data-i18n-aria="interactiveWorkCloseBtn">✕</button>
+      </div>
+      <div class="table-scroll">
+        <table id="interactive-work-table">
+          <thead>
+            <tr>
+              <th data-i18n="interactiveWorkColTitle"></th>
+              <th data-i18n="interactiveWorkColLanguage"></th>
+              <th data-i18n="interactiveWorkColDifficulty"></th>
+              <th data-i18n="interactiveWorkColSize"></th>
+              <th data-i18n="interactiveWorkColUpdated"></th>
+              <th data-i18n="interactiveWorkColDelete"></th>
+            </tr>
+          </thead>
+          <tbody id="interactive-work-tbody"></tbody>
+        </table>
+      </div>
+      <p id="interactive-work-empty" data-i18n="interactiveWorkEmpty" hidden></p>
+    </section>
+
     <!-- Panneau "Dictionnaire" : recherche accent/casse-insensible dans
          <lang>_glosses.jsonl, liste les mots de la même racine. À la
          demande explicite de l'utilisateur. Même groupe basculant que
@@ -322,6 +360,13 @@
                  data-i18n-placeholder="dictionaryInputPlaceholder">
           <button type="submit" id="dictionary-search-btn"
                   data-i18n="dictionarySearchBtn">Chercher</button>
+          <!-- "Synonymes" : recherche Qdrant directe sur le mot/l'expression
+               saisi(e), SANS appel au LLM pour étendre la recherche
+               (contrairement à "Thématique") — à la demande explicite de
+               l'utilisateur. Placé entre "Chercher" et "Thématique", à la
+               demande explicite de l'utilisateur. -->
+          <button type="button" id="dictionary-synonyms-btn"
+                  data-i18n="dictionarySynonymsBtn">Synonymes</button>
           <button type="button" id="dictionary-similar-btn"
                   data-i18n="dictionarySimilarBtn">Thématique</button>
           <!-- Demande au LLM jusqu'à 10 définitions indépendantes de
@@ -405,7 +450,18 @@
           <div id="clues-across" class="clue-lines"></div>
         </div>
         <div id="grid-column">
+          <!-- "Interactif" only (script.js's enterInteractiveMode() reveals
+               them and adds .interactive-flank to #grid-column): flanking
+               the grid on each side, vertically centered against it — moved
+               here from the play-mode-shaped #interactive-nav row that used
+               to sit inside #interactive-controls, at the user's explicit
+               request. Hidden by default so an ordinary generated grid
+               never shows them. -->
+          <button type="button" id="interactive-prev-btn" class="interactive-flank-btn" hidden
+                  data-i18n="interactivePrevBtn" disabled>Précédent</button>
           <div id="grid"></div>
+          <button type="button" id="interactive-next-btn" class="interactive-flank-btn" hidden
+                  data-i18n="interactiveNextBtn">Suivant</button>
           <!-- Sélecteur de sens dupliqué du clavier virtuel, à droite de
                la zone de définition permanente (jamais masquée par le
                bouton "définitions", contrairement à #clues/#down-clues-
@@ -424,6 +480,86 @@
             </div>
           </div>
         </div>
+      </div>
+      <!-- Contrôles du mode "Interactif" (voir script.js) — insérés dans
+           #result pour réutiliser #grid/renderGrid() ; masqués pour une
+           génération normale. -->
+      <div id="interactive-controls" hidden>
+        <span id="interactive-message" role="status"></span>
+        <div id="interactive-arrows">
+          <!-- "Mots" : liste les mots réels du dictionnaire compatibles
+               avec l'emplacement sélectionné (voir POST /api/interactive/
+               candidates) — à la demande explicite de l'utilisateur. Le
+               résultat s'affiche dans #interactive-words-results,
+               juste sous le champ de définition. Placé à gauche des
+               flèches à la demande explicite de l'utilisateur. -->
+          <button type="button" id="interactive-words-btn"
+                  data-i18n="interactiveWordsBtn">Mots</button>
+          <button type="button" id="interactive-dir-across-btn" class="toggle-btn active"
+                  data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
+          <button type="button" id="interactive-dir-down-btn" class="toggle-btn"
+                  data-i18n-aria="virtualKeyboardDownBtn">↓</button>
+          <!-- "Nettoyer" : déclenche le nettoyage complet des zones
+               impossibles (retrait des mots croisants / case noire, comme
+               la génération automatique), à la demande explicite de
+               l'utilisateur — placé à droite des flèches. -->
+          <button type="button" id="interactive-clean-btn"
+                  data-i18n="interactiveCleanBtn">Nettoyer</button>
+          <!-- "Nettoyer (+noires)" : nettoyage approfondi — en plus des
+               zones impossibles, essaie de retirer chaque case noire de
+               la grille elle-même, pas seulement celles liées à un
+               emplacement impossible — à la demande explicite de
+               l'utilisateur. -->
+          <button type="button" id="interactive-clean-deep-btn"
+                  data-i18n="interactiveCleanDeepBtn">Nettoyer (+noires)</button>
+          <!-- "Vérifier" déplacé ici, à côté de "Nettoyer", à la demande
+               explicite de l'utilisateur (hors de #interactive-definition-
+               row, qui ne garde plus que le champ de définition et
+               "Proposer"). -->
+          <button type="button" id="interactive-verify-btn"
+                  data-i18n="interactiveVerifyBtn">Vérifier</button>
+          <!-- "Définitions" : génère automatiquement une définition pour
+               chaque mot entièrement rempli et valide qui n'en a pas
+               encore — à la demande explicite de l'utilisateur, à droite
+               de "Vérifier". Réutilise POST /api/interactive/verify (comme
+               "Vérifier", pour écarter les mots absents du dictionnaire)
+               puis GET /api/dictionary/define (comme "Proposer") pour
+               chacun, en gardant la première proposition. -->
+          <button type="button" id="interactive-definitions-btn"
+                  data-i18n="interactiveDefinitionsBtn">Définitions</button>
+        </div>
+        <div id="interactive-definition-row">
+          <input type="text" id="interactive-definition-input" autocomplete="off"
+                 data-i18n-placeholder="interactiveDefinitionPlaceholder">
+          <button type="button" id="interactive-propose-btn"
+                  data-i18n="interactiveProposeBtn">Proposer</button>
+        </div>
+        <!-- "Vérifier" : rapport détaillé, un mot par ligne, des problèmes
+             trouvés sur la grille entière — à la demande explicite de
+             l'utilisateur, en plus du message-résumé sur
+             #interactive-message. Voir renderInteractiveVerifyReport(). -->
+        <div id="interactive-verify-report" hidden></div>
+        <div id="interactive-words-results" hidden></div>
+        <div id="interactive-propose-results" hidden></div>
+        <div id="interactive-title-row" hidden>
+          <label for="interactive-title-input" data-i18n="interactiveTitleLabel">Titre</label>
+          <input type="text" id="interactive-title-input" autocomplete="off">
+          <button type="button" id="interactive-title-propose-btn"
+                  data-i18n="interactiveTitleProposeBtn">Proposer un titre</button>
+        </div>
+        <div id="interactive-save-row">
+          <!-- "Sauvegarder" : enregistre l'état complet de la grille dans
+               GRID_WORK (brouillon "Créations") SANS la publier — à la
+               demande explicite de l'utilisateur, à gauche de "Publier".
+               Toujours visible en mode Interactif ; "Publier"
+               (#interactive-save-btn) n'apparaît qu'une fois la grille
+               terminée. -->
+          <button type="button" id="interactive-draft-save-btn"
+                  data-i18n="interactiveSaveBtn">Sauvegarder</button>
+          <button type="button" id="interactive-save-btn" hidden
+                  data-i18n="interactivePublishBtn">Publier</button>
+        </div>
+        <p id="interactive-save-result"></p>
       </div>
       <div id="down-clues-section">
         <h2 data-i18n="downHeading">Verticalement</h2>

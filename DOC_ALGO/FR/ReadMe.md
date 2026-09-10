@@ -630,9 +630,12 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    glossaire thématique de SA PROPRE langue (un glossaire par langue) :
    un emplacement horizontal est jaugé contre le glossaire de la langue
    A, un vertical contre celui de la langue B ;
-3. à l'intérieur du groupe retenu au niveau précédent, on choisit en priorité les
-   emplacements avec **moins de `PREFILL_MIN_WORD_COUNT` (3) mots
-   candidats** — le même seuil que celui du pré-remplissage de l'étape 1.
+3. à l'intérieur du groupe retenu au niveau précédent, et **uniquement
+   pour les emplacements de 4 lettres et plus** (un emplacement de 2-3
+   lettres a un vocabulaire naturellement restreint, cette priorité n'y
+   apporte rien), on choisit en priorité les emplacements avec **moins de
+   `PREFILL_MIN_WORD_COUNT` (3) mots candidats** — le même seuil que celui
+   du pré-remplissage de l'étape 1.
    But : essayer de résoudre ces emplacements fragiles par un vrai mot
    pendant que la recherche progresse encore, avant qu'un futur palier de
    nettoyage ne les juge insuffisants et n'y ajoute une case noire pour

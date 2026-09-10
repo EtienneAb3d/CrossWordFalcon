@@ -429,6 +429,20 @@ async def proxy_similar_words(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/synonyms")
+async def proxy_synonyms(request: Request):
+    """Relaie le bouton "Synonymes" du panneau Dictionnaire — recherche
+    Qdrant directe, sans appel LLM (voir backend/app.py's `_synonyms_
+    impl`), donc le timeout générique (PROXY_TIMEOUT_S) suffit, pas besoin
+    du timeout élargi de "Thématique"."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/synonyms", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # --- Qdrant admin panel (localhost only) --------------------------------
 # _require_localhost() rejects any non-loopback client / Host BEFORE the
 # request reaches the back, so the admin panel is unreachable from the LAN
@@ -464,6 +478,185 @@ async def proxy_qdrant_admin_delete_tenant(request: Request):
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(
                 f"{BACKEND_URL}/api/qdrant/admin/delete-tenant",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/start")
+async def proxy_interactive_start(request: Request):
+    """"Interactif" mode: kicks off a one-grid authoring job. Same shape as
+    proxy_generate — the back replies with a job_id polled via
+    /api/generate/status/{job_id}."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/start",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/step")
+async def proxy_interactive_step(request: Request):
+    """"Suivant" button of the "Interactif" mode — places one more word."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/step",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/clean")
+async def proxy_interactive_clean(request: Request):
+    """"Nettoyer" button of the "Interactif" mode — full cleanup of every
+    impossible zone (remove crossing words, or blacken a cell)."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/clean",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/candidates")
+async def proxy_interactive_candidates(request: Request):
+    """"Mots" button of the "Interactif" mode — lists every real
+    dictionary word compatible with the selected slot's own letters."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/candidates",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/verify")
+async def proxy_interactive_verify(request: Request):
+    """"Vérifier" button of the "Interactif" mode — checks every complete
+    word of the whole grid against the real dictionary in one call."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/verify",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/title")
+async def proxy_interactive_title(request: Request):
+    """"Proposer un titre" button — one blocking LLM call, so it uses the
+    longer chat timeout (the 30s default would abort it)."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=CHAT_PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/title",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/save")
+async def proxy_interactive_save(request: Request):
+    """"Sauvegarder" button — stores the authored grid in the library."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/save",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/save_work")
+async def proxy_interactive_save_work(request: Request):
+    """Autosave fired after every "Suivant"/"Précédent" click in the
+    "Interactif" mode — see backend/app.py's own entry."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/save_work",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.get("/api/interactive/work")
+async def proxy_interactive_work_list(request: Request):
+    """"Créations" panel's own list — same query-string passthrough
+    convention as GET /api/library above."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/interactive/work", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/work/delete")
+async def proxy_interactive_work_delete(request: Request):
+    """"Créations" panel's own delete-icon button."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/work/delete",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/resume")
+async def proxy_interactive_resume(request: Request):
+    """"Créations" panel: relaunches a saved work-in-progress session."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/resume",
                 content=body,
                 headers={"content-type": "application/json"},
             )

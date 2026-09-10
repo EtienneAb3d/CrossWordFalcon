@@ -106,6 +106,10 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   the page is opened on the local machine; from another machine on the
   network its option is greyed out and unavailable
   (`frontend/static/script.js`, `restrictUltraModeToLocalhost`).
+  **Interactif / Interactive** is a different kind of mode, listed above
+  Flash: instead of the computer filling the whole grid on its own, it
+  hands you a black-cell pattern with one word already placed and lets
+  you build the rest yourself (see "Interactive authoring mode" below).
 - **Précision thématique / Theme precision** (`#theme-precision`) — the
   minimum closeness a word must have to the theme to enter the theme
   glossary, a number from 0 to 1 (0.68 by default; use a **point**, not a
@@ -435,6 +439,82 @@ Once generation completes, the search-progress panel disappears and
   clue, grouped by its starting cell number; hidden until "Définitions"
   is turned on. Hovering a clue line highlights its word in the grid, the
   same as hovering the grid highlights its clue.
+
+## Interactive authoring mode
+
+Choosing **Interactif / Interactive** in the **Mode** selector and
+submitting the form starts a hands-on authoring session
+(`frontend/static/script.js`, `runInteractive`, `POST /api/interactive/
+start`) instead of an automatic generation. The form's Language, size,
+Difficulty, Taux noir and Thématique fields still apply — they shape the
+black-cell pattern and, if Thématique is filled in, a preferred-word
+glossary. The status line briefly shows "Building the interactive grid…"
+while the server prepares a pattern with one word already placed, then
+the grid appears in the usual result area with a control strip below it
+(`#interactive-controls`).
+
+**Building the grid**
+
+- **Suivant / Next** (`#interactive-next-btn`, `POST /api/interactive/
+  step`) — places exactly one more word, choosing the spot where the
+  fewest words still fit and preferring a theme word where one does. If
+  no word fits anywhere, it leaves the grid unchanged and shows either
+  "Grid complete and valid" (when every white cell is filled and every
+  word is a real dictionary entry) or "Grid has become impossible"
+  (otherwise — edit it or step back, then try again).
+- **Précédent / Back** (`#interactive-prev-btn`) — undoes the last change
+  one step at a time: a typed letter, a black-cell toggle, or a whole
+  "Suivant" placement. Disabled once there is nothing left to undo.
+- The grid is fully editable, black cells included. Click any cell, then:
+  type a letter to fill it; press **Space** (or the **■** key on the
+  virtual keyboard) to turn it black or white; press **Backspace** or
+  **Delete** to clear it. The cursor advances in the current Across/Down
+  direction after a letter.
+- **→ / ↓** (`#interactive-dir-across-btn`/`#interactive-dir-down-btn`) —
+  set which direction the cursor advances and which word counts as
+  "selected"; the same shared state as the virtual keyboard's arrows and
+  Shift/Caps Lock. They do **not** influence which word "Suivant" places.
+
+**Writing the definitions**
+
+- The text field below the grid holds the definition of the currently
+  selected word; typing there stores it for that word, and it comes back
+  when you reselect the word.
+- **Proposer / Suggest** (`#interactive-propose-btn`) — asks the language
+  model for several possible definitions of the selected word (it must be
+  fully filled in); click one of the suggestions to drop it into the
+  field.
+- **Vérifier / Check** (`#interactive-verify-btn`) — checks that every
+  word has a definition; if one is missing, it selects that word (and
+  switches the Across/Down direction to match) so you can fill it in.
+- **Définitions / Definitions** (`#interactive-definitions-btn`,
+  `frontend/static/script.js`) — generates a definition automatically for
+  every fully filled-in, valid word that does not have one yet: it first
+  checks each candidate word against the dictionary (words absent from it
+  are skipped), then asks the language model for a definition of each
+  remaining word and keeps the first suggestion. It works through the
+  words one at a time and shows its progress; a word whose definition
+  could not be produced is simply left blank.
+
+**Finishing**
+
+- Once every white cell is filled and every word has a definition, a
+  **title** field appears, pre-filled with a language-model suggestion
+  (`POST /api/interactive/title`) that you can edit freely.
+- **Sauvegarder / Save** (`#interactive-draft-save-btn`, `POST /api/
+  interactive/save_work`) — saves the whole current grid, its definitions
+  and its title to your "Créations" list as a draft, **without**
+  publishing it. Available the whole time you are building the grid, so
+  you can keep the draft up to date between (or without) placing more
+  words.
+- **Publier / Publish** (`#interactive-save-btn`, `POST /api/interactive/
+  save`) — appears to the right of "Save" once the grid is complete
+  (every white cell filled, every word defined). It stores the grid in
+  the Library with your nickname as the author, tagged **(Création)**
+  next to the name in the Library list, and also refreshes this
+  session's own "Créations" entry with the final published version.
+  Deleting a "Créations" entry later only removes the draft, never the
+  published Library grid.
 
 ## David FALCON (chat assistant)
 
