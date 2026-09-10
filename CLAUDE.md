@@ -6772,6 +6772,78 @@ servers:
   browser** — same tooling limitation noted throughout this project's UI
   work.
 
+  **A per-row "Ouvrir en mode Interactif" icon button was added to the
+  Library list**, at the user's explicit request: "Dans la liste de la
+  Bibliothèque, à coté de 'Jouer', ajouter un bouton icône permettant
+  d'ouvrir la grille en mode Interactif, donc de créer une nouvelle tâche
+  dans GRID_WORK." A new column (`<th data-i18n="libraryColInteractive">`,
+  intentionally blank — same icon-only-column convention as
+  `interactiveWorkColDelete`) sits between "Lien" and "PDF" in
+  `#library-table`; `renderLibraryList()`'s row builds an
+  `interactiveTd` holding a `.library-interactive-btn` `<button>` — an
+  inline-SVG pencil (`stroke="currentColor"`, no external icon font, same
+  convention as the PDF badge), `aria-label`/`title` =
+  `libraryInteractiveText` (all 6 languages), `stopPropagation` on
+  click/keydown so it never also fires the row's own `loadLibraryGrid()`.
+  Clicking it (`openLibraryGridInteractive(gridId)`) hides the library
+  panel and calls `runInteractive({grid_id}, "/api/interactive/from-
+  library")` — reusing that function's *entire* existing flow (hide
+  play-mode chrome, "Stop", poll, `enterInteractiveMode(result)`), the
+  same way `resumeInteractiveWork()` already reuses it for
+  `/api/interactive/resume`.
+
+  Backend (`backend/app.py`): `POST /api/interactive/from-library`
+  (`InteractiveFromLibraryRequest{grid_id}`, 202 — a background job
+  polled the same way as `interactive_start`/`interactive_resume`;
+  matching `proxy_interactive_from_library` route in `frontend/server.py`
+  per this project's every-endpoint-needs-a-proxy rule) loads the full
+  stored record via `grid_store.get_grid(grid_id)` (404 `"grille
+  introuvable dans la bibliothèque"` for a bad-shaped or unknown id —
+  `get_grid` already rejects both), reshapes it via a new
+  `_library_record_to_interactive(record)` helper into the *exact*
+  minimal GRID_WORK-shaped dict `_run_interactive_resume_job` already
+  consumes, and delegates to `_run_interactive_resume_job` wholesale — so
+  the entire resume machinery (fresh `_interactive_fill_diagnostics`
+  recompute, `definitions`/`title` restore for `enterInteractiveMode`)
+  is reused with no duplication.
+
+  `_library_record_to_interactive` takes the finished grid straight from
+  `record["solution"]` (already exactly the interactive-grid convention:
+  `build_letters_grid` output — `"#"` for a black cell, an uppercase
+  letter for every white one; a finished grid has no empty white cell, so
+  no `"."` placeholder ever appears), falling back to `record["pattern"]`
+  (an all-blank editable grid) if `solution` is somehow absent. Each of
+  `record["words"]`'s own `row`/`col`/`direction`/`clue` is projected
+  straight into the GRID_WORK `definitions` list. It deliberately carries
+  **no `id` key**: `_run_interactive_resume_job` reads `record.get("id")`
+  into the session's `resumed_from`, which `grid_store.save_grid_work`
+  only honours for a real GRID_WORK id (`_WORK_ID_RE`) — so with it
+  absent, the very first autosave simply creates a fresh GRID_WORK file,
+  exactly "créer une nouvelle tâche dans GRID_WORK". `priority_words`
+  stays `[]` even for a themed grid — the raw `theme` string is carried
+  forward (shown in "Créations"/on save) but the resolved Qdrant glossary
+  was never stored on a library record, the same documented limitation a
+  recompute job already has (see `_run_recompute_job`). `seed` is a fixed
+  `0` — interactive placement only needs *a* reproducible starting point.
+  The stored library record itself is never modified.
+
+  Verified live, end to end, through the real running API (both the
+  direct backend port and the frontend's own proxy on port 3000): opening
+  a real library grid (15×10, French, 62 words) resolved a `done` job
+  with the full filled grid, all 62 definitions, the title, and
+  `impossible: False`; the resulting session's own `POST /api/interactive/
+  step` worked (session registered in `INTERACTIVE_SESSIONS`); the first
+  `POST /api/interactive/save_work` created a **brand-new** GRID_WORK file
+  (filename `<ts>_<pseudo>_<new-job-id>.json`, carrying neither the
+  library id's own 4-digit code nor its slug — confirming `resumed_from`
+  was `None` and a fresh task was created), with the right language/
+  difficulty/theme and an empty `priority_words`, appearing in the
+  "Créations" list for the author's pseudo; a malformed
+  (`../../etc/passwd`) and a well-shaped-but-nonexistent grid id both
+  returned 404 through the proxy. `py_compile`/`esprima`/CSS-brace/HTML
+  checks all clean. **Not yet visually confirmed in an actual browser** —
+  same tooling limitation noted throughout this project's UI work.
+
 - **"Synonymes" button** (Dictionary panel, `#dictionary-synonyms-btn`,
   right next to "Thématique"), at the user's explicit request: "un bouton
   'Synonymes' qui lance une recherche Qdrant avec le mot ou l'expression

@@ -193,8 +193,9 @@ the rest by hand:
   **"Back"** undoes the last change, one step at a time.
 - You can click any cell and type a letter, press **Space** to add or
   remove a black cell, or **Delete** to clear a cell.
-- Once the grid is full, write a definition for each word (a **"Suggest"**
-  button asks the language model for ideas, **"Definitions"** fills in one
+- Once the grid is full, write a definition for each word (a **"Suggest a
+  definition"** button asks the language model for ideas, **"Definitions"**
+  fills in one
   automatically for every valid word that still lacks one, and **"Check"**
   points you at any word still missing one), pick a title, then click
   **"Publish"** — your creation goes into the Library, shown with your
@@ -212,6 +213,12 @@ language filter lets you narrow the list to one language, or to
 level filter narrows it to Easy, Medium, or Hard grids (**"All levels"**
 by default). Click a row to load that grid straight into the player,
 exactly as if it had just finished generating.
+
+Each row also has a shareable "Play" link, a PDF download of the empty
+grid, and a small pencil button that opens the grid in Interactive mode
+with all its letters and clues already filled in — handy for editing an
+existing grid. Opening one that way starts a fresh entry in your
+"Créations" list and never changes the stored grid.
 
 If two people generate grids around the same time, each generation
 waits its turn in one of two short queues (one for building the grid

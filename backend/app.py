@@ -766,6 +766,20 @@ class InteractiveWorkIdRequest(BaseModel):
     work_id: str
 
 
+class InteractiveFromLibraryRequest(BaseModel):
+    """Body of POST /api/interactive/from-library — the "Ouvrir en mode
+    Interactif" icon button next to a library grid's "Jouer" link, at the
+    user's explicit request: "ouvrir la grille en mode Interactif, donc
+    créer une nouvelle tâche dans GRID_WORK." Only the library id is sent;
+    the backend reloads the full stored record (grid_store.get_grid),
+    reshapes its finished pattern/solution/words into an editable
+    interactive session (every letter already placed, every clue
+    pre-filled) and, from the very first autosave on, that session lives
+    as its own brand-new GRID_WORK "Créations" entry — the original
+    library record is never touched."""
+    grid_id: str
+
+
 @dataclass
 class GenerationTask:
     """Everything the two-stage background pipeline below (GRID_QUEUE,
@@ -3593,6 +3607,76 @@ async def _run_interactive_resume_job(job_id, record):
         job["error_code"] = "internal_error"
         job["error"] = "Erreur interne."
         logger.exception("[%s] unhandled error during interactive resume", short_id)
+
+
+def _library_record_to_interactive(record):
+    """Reshapes a finished library grid record (grid_store.get_grid — a
+    generate_grid()-shaped dict with pattern/solution/words) into the
+    minimal GRID_WORK-shaped dict `_run_interactive_resume_job` already
+    consumes, so opening a library grid in "Interactif" mode reuses the
+    entire resume machinery (diagnostics recompute, definitions/title
+    restore) with no duplication.
+
+    The `solution` grid is already exactly the interactive-grid
+    convention (build_letters_grid: "#" for a black cell, an uppercase
+    letter for every white one — a finished grid has no empty white
+    cells, so no "." placeholder ever appears); `pattern` is the
+    fallback if `solution` is somehow absent (an all-blank editable
+    grid). Every word carries its own row/col/direction/clue, so the
+    GRID_WORK `definitions` list ({row, col, direction, clue}) is a
+    direct projection.
+
+    Deliberately carries NO `id` key: `_run_interactive_resume_job` reads
+    `record.get("id")` into the session's `resumed_from`, which
+    grid_store.save_grid_work only honours for a real GRID_WORK id
+    (`_WORK_ID_RE`) — so with it absent, the first autosave simply
+    creates a fresh GRID_WORK file, exactly "créer une nouvelle tâche
+    dans GRID_WORK". `priority_words` stays empty even for a themed grid:
+    the raw `theme` string is kept (shown in "Créations"/on save) but the
+    resolved Qdrant glossary was never stored on a library record — the
+    same limitation a recompute job already has (see _run_recompute_job).
+    `seed` is a fixed 0: interactive placement only needs *a* reproducible
+    starting point, not a continuation of any prior RNG stream."""
+    grid = record.get("solution") or record.get("pattern") or []
+    definitions = [
+        {
+            "row": w.get("row"),
+            "col": w.get("col"),
+            "direction": w.get("direction"),
+            "clue": w.get("clue", ""),
+        }
+        for w in (record.get("words") or [])
+    ]
+    return {
+        "language": record.get("language", "fr"),
+        "difficulty": record.get("difficulty", "easy"),
+        "grid": grid,
+        "definitions": definitions,
+        "title": record.get("title") or "",
+        "theme": record.get("theme"),
+        "priority_words": [],
+        "seed": 0,
+    }
+
+
+@app.post("/api/interactive/from-library", status_code=202)
+async def interactive_from_library(req: InteractiveFromLibraryRequest):
+    """Open a finished library grid in the "Interactif" authoring mode —
+    a brand-new job_id/session (the stored library record is never
+    touched), seeded from that grid's own filled pattern/definitions/
+    title instead of a fresh blank pattern, so the player can edit an
+    existing grid and it becomes its own new GRID_WORK "Créations" entry
+    from the first autosave on. Reuses _run_interactive_resume_job
+    wholesale via _library_record_to_interactive."""
+    record = await asyncio.to_thread(get_grid, req.grid_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    job_id = _new_job()
+    synthetic = _library_record_to_interactive(record)
+    task = asyncio.create_task(_run_interactive_resume_job(job_id, synthetic))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"job_id": job_id}
 
 
 # Les cinq phases exposées par GET /api/generate/phase/{job_id}, à la

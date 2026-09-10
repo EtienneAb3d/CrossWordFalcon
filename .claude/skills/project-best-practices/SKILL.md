@@ -263,7 +263,15 @@ project's engineering language.
   word — and a "Vérifier" check), proposes a title, and either saves a
   draft to `GRID_WORK` ("Sauvegarder", no publish) or publishes to the
   Library tagged `(Création)` ("Publier", shown only once the grid is
-  complete). Backend: four endpoints
+  complete). The Library list also has a per-row "Ouvrir en mode
+  Interactif" icon button (`POST /api/interactive/from-library`, matching
+  proxy route per rule 15) that reshapes a finished library grid into an
+  editable interactive session — reusing `_run_interactive_resume_job`
+  wholesale — so it becomes its own brand-new `GRID_WORK` "Créations"
+  entry on first autosave; the stored library record is never touched
+  (`priority_words` is left empty even for a themed grid — the resolved
+  Qdrant glossary was never stored on a library record, same limitation
+  as a recompute job). Backend:
   (`POST /api/interactive/start` — a background job polled via
   `GET /api/generate/status/{job_id}` and cancelled via `POST /api/
   generate/cancel/{job_id}`; `POST /api/interactive/step` /`/title`

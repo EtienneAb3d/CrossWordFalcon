@@ -2693,6 +2693,33 @@ English (see `project-best-practices`).
   appends ` (Création)` (`libraryCreationTag`, all 6 languages) after the
   pseudo/`libraryAuthorBot` name when a row's `interactive` flag is set
   (a grid built via the authoring mode above). Plain text, no new style.
+- **Library-row "Ouvrir en mode Interactif" icon button**
+  (`.library-interactive-btn`, `renderLibraryList()`) — a new column
+  between "Lien" (Jouer) and "PDF", at the user's explicit request ("à
+  côté de 'Jouer'"). Header `<th data-i18n="libraryColInteractive">` is
+  intentionally blank (like `interactiveWorkColDelete`'s own icon-only
+  column) — `applyTranslations()` skips a falsy i18n value, so an empty
+  string leaves the `<th>` empty. The button is icon-only: an inline SVG
+  pencil (`.interactive-icon`, `stroke="currentColor"` so CSS drives its
+  color), same "no external icon font" convention as the PDF badge / the
+  header info badge. `.library-interactive-btn` must **reset** the generic
+  `button` rules — `background: none; border: none; border-radius: 0;
+  padding: 0; color: var(--accent)` — the same white-on-accent-blue trap
+  already documented for the virtual-keyboard keys; otherwise
+  `inline-flex` + `.interactive-icon { display: block }` like
+  `.library-pdf-link`. `aria-label`/`title` = `libraryInteractiveText`
+  (all 6 languages); `stopPropagation` on click/keydown so it never also
+  fires the row's own `loadLibraryGrid()`. Clicking it hides the library
+  panel and calls `runInteractive({grid_id}, "/api/interactive/from-
+  library")` — the backend reshapes the finished library grid into an
+  editable interactive session that becomes its own new GRID_WORK
+  "Créations" entry on first autosave; the stored library record is never
+  touched. **Not yet visually confirmed in an actual browser** — same
+  tooling limitation noted throughout this file; verified structurally
+  (`esprima` JS syntax check, CSS brace balance) and end to end through
+  the real running API (from-library → done job with grid/definitions/
+  title; first autosave creates a fresh GRID_WORK file, not the library
+  id; 404 for a bad/unknown grid id).
 
 **Not visually confirmed in an actual browser** — same tooling
 limitation noted throughout this file; verified structurally (CSS

@@ -1036,6 +1036,26 @@ button:disabled {
   display: block;
 }
 
+/* Colonne "Interactif" : bouton icône (crayon) ouvrant la grille en mode
+   Interactif — pas de texte donc pas de fond/bordure de bouton, teinté
+   accent, centré comme le lien PDF voisin. Doit remettre à zéro le fond
+   bleu / texte blanc / padding / bordure que la règle générique `button`
+   applique à tout bouton. */
+#library-table td .library-interactive-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+#library-table td .library-interactive-btn .interactive-icon {
+  display: block;
+}
+
 #library-empty {
   margin: 0;
   font-size: 0.85rem;

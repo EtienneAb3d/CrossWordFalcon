@@ -2842,6 +2842,32 @@ async function renderLibraryList() {
     link.addEventListener("click", (event) => event.stopPropagation());
     link.addEventListener("keydown", (event) => event.stopPropagation());
     linkTd.appendChild(link);
+    // Colonne "Interactif" : bouton icône (crayon) ouvrant la grille dans
+    // le mode "Interactif" — le back crée alors une nouvelle tâche
+    // GRID_WORK à partir de cette grille (voir POST /api/interactive/
+    // from-library). Icône SVG inline (aucune police/lib d'icône externe,
+    // même convention que le badge PDF / le badge "i" de l'en-tête).
+    // stopPropagation comme les liens voisins pour ne pas aussi déclencher
+    // le loadLibraryGrid() du clic sur la ligne.
+    const interactiveTd = document.createElement("td");
+    const interactiveBtn = document.createElement("button");
+    interactiveBtn.type = "button";
+    interactiveBtn.className = "library-interactive-btn";
+    interactiveBtn.setAttribute("aria-label", t.libraryInteractiveText);
+    interactiveBtn.title = t.libraryInteractiveText;
+    interactiveBtn.innerHTML =
+      '<svg class="interactive-icon" viewBox="0 0 24 24" width="18" height="18" ' +
+      'aria-hidden="true" focusable="false">' +
+      '<path d="M4 20h4L18.5 9.5l-4-4L4 16v4z" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.6" stroke-linejoin="round"/>' +
+      '<path d="M13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+      "</svg>";
+    interactiveBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openLibraryGridInteractive(entry.id);
+    });
+    interactiveBtn.addEventListener("keydown", (event) => event.stopPropagation());
+    interactiveTd.appendChild(interactiveBtn);
     // Dernière colonne : téléchargement PDF imprimable (grille vide +
     // définitions + titre, sans réponses — voir GET /api/library/<id>/pdf),
     // à la demande explicite de l'utilisateur. URL relative : passe par le
@@ -2875,7 +2901,7 @@ async function renderLibraryList() {
     pdfTd.appendChild(pdfLink);
     tr.append(
       languageTd, dateTd, titleTd, themeTd, difficultyTd, sizeTd, authorTd,
-      linkTd, pdfTd,
+      linkTd, interactiveTd, pdfTd,
     );
     tr.addEventListener("click", () => loadLibraryGrid(entry.id));
     tr.addEventListener("keydown", (event) => {
@@ -2916,6 +2942,19 @@ async function loadLibraryGrid(gridId) {
   } catch (err) {
     setStatus(err.message, true);
   }
+}
+
+// The library list's own "Ouvrir en mode Interactif" icon button: opens a
+// finished library grid in the "Interactif" authoring mode. The backend
+// (POST /api/interactive/from-library) reshapes the stored record into an
+// editable session and, from the first autosave on, it lives as its own
+// brand-new GRID_WORK "Créations" entry — the original library grid is
+// never touched. Reuses runInteractive()'s full flow (hide play-mode
+// chrome, "Stop", poll, enterInteractiveMode) exactly like
+// resumeInteractiveWork(), only the endpoint/body differ.
+async function openLibraryGridInteractive(gridId) {
+  hideLibraryPanel();
+  await runInteractive({ grid_id: gridId }, "/api/interactive/from-library");
 }
 
 libraryBtn.addEventListener("click", () => {

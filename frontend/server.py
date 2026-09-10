@@ -665,6 +665,23 @@ async def proxy_interactive_resume(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/interactive/from-library")
+async def proxy_interactive_from_library(request: Request):
+    """Library list: opens a finished library grid in "Interactif" mode
+    as a brand-new GRID_WORK creation."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/from-library",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # Montée en dernier : les routes /api/* déclarées ci-dessus restent prioritaires,
 # tout le reste est résolu dans static/ (404 si le fichier n'y existe pas).
 app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")

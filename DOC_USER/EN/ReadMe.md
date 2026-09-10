@@ -320,10 +320,16 @@ Enter/Space on it) loads that grid straight into the player
 (`loadLibraryGrid`), exactly as if it had just finished generating — the
 same "Vérification"/"Solution" buttons become available.
 
-The last two columns of each row are links. **Lien / Link** ("Jouer" /
-"Play") is a shareable address — `https://falcon.cubaix.com/?grid=<id>` —
-that opens the site with that grid already loaded into the player; you
-can also paste `?grid=<id>` onto your own local address. **PDF** (a small
+The last columns of each row are links and one action button. **Lien /
+Link** ("Jouer" / "Play") is a shareable address —
+`https://falcon.cubaix.com/?grid=<id>` — that opens the site with that
+grid already loaded into the player; you can also paste `?grid=<id>` onto
+your own local address. Next to it, a small pencil icon
+(`.library-interactive-btn`, `renderLibraryList`) opens that grid in
+Interactive authoring mode (see "Interactive mode" below) with every
+letter and clue already in place, so you can edit an existing grid; doing
+so creates a brand-new entry in your **Créations** list on the first
+autosave and never changes the stored library grid. **PDF** (a small
 red PDF icon) downloads a printable sheet of the grid: the empty grid,
 its clues and its title only — never the answers — with a footer line
 linking back to play it online, with its solution, at the same shareable
@@ -480,7 +486,8 @@ the grid appears in the usual result area with a control strip below it
 - The text field below the grid holds the definition of the currently
   selected word; typing there stores it for that word, and it comes back
   when you reselect the word.
-- **Proposer / Suggest** (`#interactive-propose-btn`) — asks the language
+- **Proposer une définition / Suggest a definition**
+  (`#interactive-propose-btn`) — asks the language
   model for several possible definitions of the selected word (it must be
   fully filled in); click one of the suggestions to drop it into the
   field.
