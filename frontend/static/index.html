@@ -381,6 +381,28 @@
                   data-i18n="dictionaryDefineBtn">Définir</button>
           <button type="button" id="dictionary-clear-btn" class="nav-btn"
                   data-i18n="dictionaryClearBtn">Effacer</button>
+          <!-- Ouvre Perplexity, dans un nouvel onglet, avec une requête de
+               définition ("Définir le mot <langue> : <mot>", adaptée à la
+               langue du sélecteur #dictionary-language) portant sur le mot
+               saisi dans #dictionary-input — à la demande explicite de
+               l'utilisateur. Texte "Perplexity" non traduit (nom propre du
+               service, comme "Falcon Auto Bot" ailleurs dans ce fichier) ;
+               icône "lien externe" en SVG inline (aucune police/lib
+               d'icônes externe dans ce projet) signalant l'ouverture hors
+               site. -->
+          <button type="button" id="dictionary-perplexity-btn" class="nav-btn"
+                  data-i18n-aria="dictionaryPerplexityTitle"
+                  data-i18n-title="dictionaryPerplexityTitle">Perplexity
+            <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                 aria-hidden="true" focusable="false">
+              <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                    fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M14 4h6v6M20 4l-9 9"
+                    fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </form>
         <button type="button" id="dictionary-close-btn" class="nav-btn"
                 data-i18n-aria="dictionaryCloseBtn">✕</button>

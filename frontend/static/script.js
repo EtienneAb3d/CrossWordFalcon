@@ -169,6 +169,7 @@ const dictionarySynonymsBtn = document.getElementById("dictionary-synonyms-btn")
 const dictionaryDefineBtn = document.getElementById("dictionary-define-btn");
 const dictionaryResults = document.getElementById("dictionary-results");
 const dictionaryClearBtn = document.getElementById("dictionary-clear-btn");
+const dictionaryPerplexityBtn = document.getElementById("dictionary-perplexity-btn");
 const dictionaryCloseBtn = document.getElementById("dictionary-close-btn");
 const dictionaryLanguage = document.getElementById("dictionary-language");
 const qdrantAdminBtn = document.getElementById("qdrant-admin-btn");
@@ -3202,6 +3203,36 @@ dictionaryClearBtn.addEventListener("click", () => {
   dictionaryResults.replaceChildren();
   dictionaryInput.value = "";
   dictionaryInput.focus();
+});
+
+// Requête de définition envoyée à Perplexity, adaptée à la langue du
+// sélecteur #dictionary-language — jamais à uiLanguage (l'interface),
+// puisqu'on veut demander la définition D'UN MOT DANS CETTE langue-là,
+// quelle que soit la langue de l'interface elle-même. `%s` reçoit le mot
+// tel que saisi (jamais traduit, ni ré-accentué). Fallback sur le
+// gabarit français si `dictionaryLanguage.value` ne correspond à aucune
+// entrée connue (ne devrait jamais arriver, le sélecteur n'offre que ces
+// 6 langues).
+const PERPLEXITY_DEFINE_QUERY_TEMPLATES = {
+  fr: (word) => `Définir le mot français : ${word}`,
+  en: (word) => `Define the English word: ${word}`,
+  de: (word) => `Definiere das deutsche Wort: ${word}`,
+  es: (word) => `Definir la palabra española: ${word}`,
+  it: (word) => `Definisci la parola italiana: ${word}`,
+  pt: (word) => `Definir a palavra portuguesa: ${word}`,
+};
+
+dictionaryPerplexityBtn.addEventListener("click", () => {
+  const word = dictionaryInput.value.trim();
+  if (!word) {
+    dictionaryInput.focus();
+    return;
+  }
+  const template =
+    PERPLEXITY_DEFINE_QUERY_TEMPLATES[dictionaryLanguage.value] ||
+    PERPLEXITY_DEFINE_QUERY_TEMPLATES.fr;
+  const url = `https://www.perplexity.ai/search?q=${encodeURIComponent(template(word))}`;
+  window.open(url, "_blank", "noopener,noreferrer");
 });
 
 dictionaryForm.addEventListener("submit", async (event) => {

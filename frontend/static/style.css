@@ -1197,6 +1197,19 @@ button:disabled {
   padding: 0.15rem 0.3rem;
 }
 
+/* Bouton "Perplexity" (script.js) : label + icône "lien externe" côte à
+   côte, comme un .nav-btn ordinaire mais avec un petit espacement pour
+   l'icône. */
+#dictionary-perplexity-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+#dictionary-perplexity-btn .external-link-icon {
+  display: block;
+}
+
 #dictionary-input {
   width: 14rem;
 }
