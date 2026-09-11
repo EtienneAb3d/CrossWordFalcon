@@ -380,7 +380,11 @@ _BATCH_SIZE = 1
 # without request concurrency (e.g. a plain llama.cpp build with no
 # --parallel) simply serialises them — no speed-up but no harm either.
 # Env-overridable, same convention as CROSSWORDFALCON_PARALLEL_ATTEMPTS —
-# set to 1 to force the old fully-sequential behaviour.
+# set to 1 to force the old fully-sequential behaviour. This is the
+# module-wide default only — `LLMClueGenerator.generate()`'s own
+# `batch_parallelism` parameter can override it per call (used by
+# backend/app.py to force a Populate-originated job to 1, see that
+# parameter's own docstring).
 CLUE_BATCH_PARALLELISM = max(1, int(os.environ.get("CLUE_BATCH_PARALLELISM", "10")))
 
 # A worked example per level, not just an abstract description — small
@@ -1003,7 +1007,7 @@ class LLMClueGenerator:
 
     def generate(self, word_entries, difficulty, language="fr", timeout=DEFAULT_TIMEOUT,
                  on_progress=None, cancel_event=None, should_pause=None,
-                 theme_description=None):
+                 theme_description=None, batch_parallelism=None):
         """`word_entries` is an iterable of (answer, accented, canonical)
         triples — `answer` is the grid's bare uppercase form (used as the
         returned dict's key, to match backend/crossword_gen.py's
@@ -1080,7 +1084,25 @@ class LLMClueGenerator:
         `THEME` steering directive — see `_build_user_message`'s own
         docstring. Accuracy stays inviolable: a theme flavour never
         overrides the dictionary definition or the exact-grammar rule,
-        and is dropped for any clue it would make wrong."""
+        and is dropped for any clue it would make wrong.
+
+        `batch_parallelism` (`None` by default — every pre-existing caller
+        keeps the module-wide `CLUE_BATCH_PARALLELISM`), at the user's
+        explicit request: "Populate : quand une demande vient de Populate,
+        générer les définitions sans paralléliser plusieurs requêtes en
+        parallèle, pour ne pas surcharger le GPU pour les utilisateurs."
+        `Automation/Populate.py` already never runs more than one grid job
+        at a time, and `backend/app.py`'s own CLUES_QUEUE already lets only
+        one job's `generate()` call run at a time — but that one call still
+        fires up to CLUE_BATCH_PARALLELISM concurrent single-word LLM
+        requests, which can still crowd out a real user's own concurrent,
+        queue-exempt call (e.g. "Proposer une définition"/"Proposer un
+        titre", see backend/app.py's `/api/dictionary/define`/
+        `/api/interactive/title`) for the same GPU. `backend/app.py` passes
+        `batch_parallelism=1` here specifically for a Populate-originated
+        job (see `GenerateRequest.source`), forcing its own words fully
+        sequential (one LLM request in flight at a time for that job) while
+        every other job keeps the normal, parallel default."""
         def _normalize_entry(e):
             # Accepts both the pre-existing 3-tuple (answer, accented,
             # canonical) and the new 4-tuple with an explicit per-word
@@ -1157,7 +1179,10 @@ class LLMClueGenerator:
         if should_pause is not None and should_pause():
             raise GenerationPaused((clues, list(entries)))
 
-        executor = ThreadPoolExecutor(max_workers=min(CLUE_BATCH_PARALLELISM, total))
+        effective_parallelism = (
+            CLUE_BATCH_PARALLELISM if batch_parallelism is None else max(1, batch_parallelism)
+        )
+        executor = ThreadPoolExecutor(max_workers=min(effective_parallelism, total))
         try:
             futures = [
                 executor.submit(

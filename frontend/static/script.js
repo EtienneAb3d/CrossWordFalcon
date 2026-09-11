@@ -1552,6 +1552,7 @@ function handleKeydown(event) {
     event.preventDefault();
     const isUpper = key !== key.toLowerCase();
     userLetters[selected.row][selected.col] = key.toUpperCase();
+    ensureGridTimerRunning();
     // Auto-advance follows the current selection direction (activeDirection
     // — set by Ctrl, the Across/Down buttons, or Shift/Caps Lock), not just
     // the letter's own case. Typing an uppercase letter still advances down
@@ -1862,6 +1863,7 @@ function typeVirtualLetter(letter) {
   // rien plutôt que d'écrire dans le vide ou d'écraser la solution.
   if (!puzzle || !selected || showSolution) return;
   userLetters[selected.row][selected.col] = letter;
+  ensureGridTimerRunning();
   // moveSelection() attend "right" pour horizontal, n'importe quelle
   // autre valeur pour vertical (voir sa propre définition) — pas les
   // mêmes libellés qu'activeDirection ("across"/"down").
@@ -2355,10 +2357,21 @@ function formatDuration(seconds) {
 }
 
 // Compteur de temps de la partie en cours, affiché à gauche du titre de
-// la grille (#grid-timer) et s'incrémentant toutes les secondes, à la
-// demande explicite de l'utilisateur. Module-level (pas un simple état
-// local de startGridTimer) puisque scheduleGridGameSave() (voir plus
-// bas) doit pouvoir lire sa valeur courante à chaque autosauvegarde.
+// la grille (#grid-timer), à la demande explicite de l'utilisateur — qui
+// a ensuite précisé que le décompte ne doit se mettre à progresser qu'au
+// moment où le joueur tape sa toute première lettre, y compris après une
+// reprise (recharger une grille en cours ne doit pas faire tourner le
+// compteur pendant que la page reste simplement ouverte sans être
+// utilisée). startGridTimer() se contente donc d'afficher la valeur de
+// départ (0, ou la valeur sauvegardée) sans démarrer l'intervalle ;
+// ensureGridTimerRunning() — appelée depuis les deux points où une
+// lettre est réellement écrite dans la grille, handleKeydown() et
+// typeVirtualLetter() — démarre l'intervalle au tout premier appel et ne
+// fait plus rien ensuite (elle est aussi appelée à chaque lettre
+// suivante, mais `gridTimerIntervalId` déjà posé en fait un no-op).
+// Module-level (pas un simple état local) puisque scheduleGridGameSave()
+// (voir plus bas) doit pouvoir lire la valeur courante à chaque
+// autosauvegarde.
 let gridTimerSeconds = 0;
 let gridTimerIntervalId = null;
 
@@ -2367,7 +2380,7 @@ function renderGridTimer() {
 }
 
 // Arrête le compteur SANS le masquer (voir startGridTimer, qui gère
-// l'affichage) — appelé juste avant d'en (re)démarrer un nouveau, pour
+// l'affichage) — appelé juste avant d'en (ré)afficher un nouveau, pour
 // ne jamais laisser deux `setInterval` tourner en parallèle.
 function stopGridTimer() {
   if (gridTimerIntervalId !== null) {
@@ -2376,18 +2389,26 @@ function stopGridTimer() {
   }
 }
 
-// (Re)démarre le compteur à `initialSeconds` (0 pour une grille
-// fraîchement générée, ou une grille de la bibliothèque sans partie
-// sauvegardée — voir displayFinalGrid et GET /api/library/{grid_id}'s
-// own `saved_game`; sinon la valeur de la dernière sauvegarde GRID_GAME,
-// "relancer le compteur de temps là où il était à la sauvegarde" à la
-// demande explicite de l'utilisateur). Masqué à nouveau (et arrêté) par
-// hideGridTimer() ci-dessous quand le mode jeu n'est plus affiché.
+// Affiche le compteur à `initialSeconds` (0 pour une grille fraîchement
+// générée, ou une grille de la bibliothèque sans partie sauvegardée —
+// voir displayFinalGrid et GET /api/library/{grid_id}'s own `saved_game`;
+// sinon la valeur de la dernière sauvegarde GRID_GAME, "relancer le
+// compteur de temps là où il était à la sauvegarde" à la demande
+// explicite de l'utilisateur) SANS le démarrer — voir
+// ensureGridTimerRunning() ci-dessous, qui déclenche le décompte
+// lui-même dès la première lettre tapée par le joueur.
 function startGridTimer(initialSeconds) {
   stopGridTimer();
   gridTimerSeconds = Math.max(0, Math.round(initialSeconds || 0));
   gridTimerEl.hidden = false;
   renderGridTimer();
+}
+
+// Démarre réellement le décompte, un seul `setInterval` à la fois —
+// appelée à chaque lettre tapée par le joueur (voir handleKeydown/
+// typeVirtualLetter) ; un no-op une fois qu'il tourne déjà.
+function ensureGridTimerRunning() {
+  if (gridTimerIntervalId !== null) return;
   gridTimerIntervalId = setInterval(() => {
     gridTimerSeconds += 1;
     renderGridTimer();
@@ -2796,9 +2817,11 @@ function displayFinalGrid(gridData) {
   // (sans titre) suffit à afficher la ligne #grid-title.
   renderGridDifficulty();
   gridTitleEl.hidden = !gridData.title && gridDifficultyEl.hidden;
-  // Compteur de temps : repart de 0 pour une grille sans partie
-  // sauvegardée, ou reprend "là où il était à la sauvegarde" (voir
-  // savedGame ci-dessus) — à la demande explicite de l'utilisateur.
+  // Compteur de temps : affiche 0 pour une grille sans partie sauvegardée,
+  // ou "là où il était à la sauvegarde" (voir savedGame ci-dessus), mais
+  // ne démarre le décompte qu'à la première lettre tapée (voir
+  // ensureGridTimerRunning) — à la demande explicite de l'utilisateur, y
+  // compris lors d'une reprise comme celle-ci.
   startGridTimer(savedGame ? savedGame.elapsed_seconds : 0);
   // Marque cette grille "déjà vue" — même chemin pour une grille qui vient
   // d'être générée (backend/app.py ajoute `id` au `result`, voir son

@@ -113,6 +113,15 @@ def _build_request(args):
         "height": height,
         # seed omis volontairement -> le back en tire un ; on veut des
         # grilles différentes à chaque fois.
+        # Marque cette requête comme venant de Populate, à la demande
+        # explicite de l'utilisateur : "quand une demande vient de
+        # Populate, générer les définitions sans paralléliser plusieurs
+        # requêtes en parallèle, pour ne pas surcharger le GPU pour les
+        # utilisateurs." Lu par backend/app.py's GenerateRequest.source :
+        # force LLMClueGenerator.generate(batch_parallelism=1) pour ce
+        # job (un seul mot en cours de génération à la fois), sans
+        # affecter aucune autre requête.
+        "source": "populate",
     }
 
 

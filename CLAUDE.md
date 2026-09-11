@@ -2931,6 +2931,71 @@ servers:
   tooling limitation noted throughout this project's UI work) — verified
   structurally (`esprima` JS syntax check, `py_compile`) and via the real
   HTTP/job-polling path.
+
+  A **Populate-originated job now generates its clues fully sequentially**,
+  never several LLM requests in parallel, at the user's explicit request:
+  "Populate : quand une demande vient de Populate, générer les définitions
+  sans paralléliser plusieurs requêtes en parallèle, pour ne pas surcharger
+  le GPU pour les utilisateurs." Investigated first, since the project
+  already has two separate concurrency mechanisms that could plausibly have
+  already covered this: `Automation/Populate.py` itself already only ever
+  runs one grid job at a time (a plain sequential `for` loop, no threading/
+  asyncio/multiprocessing anywhere in that file — confirmed by its own
+  module docstring), and `CLUES_QUEUE` already serializes clue-generation
+  *jobs* project-wide, one `clue_generator.generate()` call running at a
+  time regardless of origin. Neither of those was the gap: the one job
+  currently holding the `CLUES_QUEUE` slot still fires up to `CLUE_BATCH_
+  PARALLELISM` (10 by default, see `backend/clues.py`) concurrent single-
+  word LLM requests via its own internal `ThreadPoolExecutor` — and two
+  other endpoints call straight into the LLM with no queue involvement at
+  all (`GET /api/dictionary/define`/"Proposer une définition",
+  `POST /api/interactive/title`/"Proposer un titre") — so a real user's own
+  interactive request could still end up competing directly against a
+  Populate job's own 10 concurrent requests for the same shared GPU, even
+  though `CLUES_QUEUE` gives the impression that only one clue job runs at
+  a time.
+
+  `LLMClueGenerator.generate()` (`backend/clues.py`) gained a new
+  `batch_parallelism=None` parameter (no effect for any pre-existing
+  caller): `effective_parallelism = CLUE_BATCH_PARALLELISM if batch_
+  parallelism is None else max(1, batch_parallelism)` (the `max(1, ...)`
+  guards against an accidental `0`/negative override), then `ThreadPool
+  Executor(max_workers=min(effective_parallelism, total))` uses that
+  instead of the bare module constant. `GenerateRequest` gained a new
+  `source: Optional[str] = None` field (no pydantic constraint — an
+  unrecognized value degrades to an ordinary request, never a 422), and
+  `_run_generate_job`'s call to `clue_generator.generate(...)` now passes
+  `batch_parallelism=(1 if req.source == "populate" else None)` — a
+  Populate job's own words are generated one LLM request at a time, while
+  every other job (the web UI's normal generation flow, an ordinary user
+  submitting `POST /api/generate` directly) keeps the default parallel
+  behavior untouched. `Automation/Populate.py`'s own `_build_request()`
+  now sends `"source": "populate"` in every request body it builds — the
+  only caller that ever sets this field. The startup log line
+  (`"[%s] starting generation: ..."`) also logs `source=%s` for
+  observability. `_run_recompute_job` (the "Recalculer" button, right
+  above) is deliberately left untouched — it is never triggered by
+  Populate.py, only by a user clicking "Recalculer" on an existing library
+  grid, so it always keeps the normal parallel default; the `POST /api/
+  generate/continue/{job_id}` "Continuer" endpoint needed no change at
+  all, since it rebuilds `GenerateRequest` via a generic `GenerateRequest
+  (**job["request"])` unpack of the whole stored dict, which already
+  round-trips `source` for free.
+
+  Verified: `python3 -m py_compile` on all three touched files; an
+  isolated check confirmed `generate()`'s new signature includes `batch_
+  parallelism=None`; a direct arithmetic reproduction of `effective_
+  parallelism` confirmed it resolves to `1` when `batch_parallelism=1` is
+  passed (even against a `total` of 20 words), to the module default (10)
+  when `None` is passed, and to `1` (never `0`) when a defensive `0`
+  override is passed; `GenerateRequest(source="populate")` round-trips
+  correctly, an omitted `source` defaults to `None`, and an unrecognized
+  value is accepted with no validation error; `Automation.Populate.
+  _build_request(args)` was called directly and confirmed to include
+  `"source": "populate"` in its built dict. No end-to-end run against a
+  real, running LLM server was performed for this change — verified via
+  isolated logic/arithmetic checks and `py_compile` only, not a live
+  generation.
 - `backend/system_info.py` — `get_system_info(llm_model)`, best-effort *local
   machine* hardware detection for that info badge: `nvidia-smi --query-gpu=name,
   memory.total` for a discrete NVIDIA GPU's exact name and dedicated VRAM if present,
@@ -10209,6 +10274,72 @@ of that kind ships here.
   pass, especially a real bilingual generation exercised all the way
   through actual LLM clue generation against a running local model,
   has not been performed this session.
+
+- **Playing timer + game state saving (`GRID_GAME`)**, at the user's
+  explicit request: "A chaque modification de la grille, sauvegarder
+  l'état de la grille dans GRID_GAME avec le nom de l'utilisateur pour
+  pouvoir la recharger plus tard. Inclure l'état du compteur temps. Dans
+  la Librairie, quand un utilisateur clique pour jouer sur une grille,
+  chercher si cette grille existe dans GRID_GAME pour la recharger et
+  relancer le compteur de temps là où il était à la sauvegarde." A small
+  elapsed-time counter (`#grid-timer`, `frontend/static/script.js`'s
+  `startGridTimer`/`renderGridTimer`) sits to the left of the grid's own
+  title on a normal (non-"Interactif") playable grid, ticking once a
+  second. Every time the player types or erases a letter (`handleKeydown`/
+  `typeVirtualLetter`), `scheduleGridGameSave()` fires a best-effort,
+  fire-and-forget `POST /api/game/save` (`GridGameSaveRequest` —
+  `grid_id`/`pseudo`/`user_letters`/`elapsed_seconds`) — skipped entirely
+  in "Interactif" mode (which has its own, separate `GRID_WORK` autosave),
+  for a grid with no real `id` (not yet saved to the library), or while no
+  pseudo is set (see the welcome-overlay/`userPseudo` mechanism — a game
+  state is never saved anonymously, per the request's own wording).
+
+  `backend/grid_store.py` gained a new `GRID_GAME/` store (project root,
+  gitignored, same convention as `GRID_STORE`/`GRID_WORK`) — one file per
+  `(grid_id, pseudo)` pair (`GRID_GAME/<grid_id>/<pseudo-slug>.json`,
+  always overwritten in place, never an append-only log), so the same
+  library grid can be played independently by several different players,
+  each keeping their own letters/elapsed time. `save_grid_game`/
+  `get_grid_game` are pure no-ops (return `False`/`None`) for a malformed
+  `grid_id` or a blank pseudo. `backend/app.py`'s `GET /api/library/
+  {grid_id}` gained an optional `pseudo` query param: when given, it looks
+  up a matching `GRID_GAME` record and folds it into the response as
+  `saved_game` (`{user_letters, elapsed_seconds}`) — `loadLibraryGrid()`
+  always sends the current pseudo, so reopening a grid from the Library
+  restores exactly where the player left off, letters and timer alike.
+  `POST /api/game/save` has a matching `proxy_game_save` route in
+  `frontend/server.py` (rule 15).
+
+  **The timer only starts ticking once the player types their very first
+  letter — including after a resume**, at the user's own later, explicit
+  follow-up request: "En mode jeu, ne déclencher le compteur de temps
+  qu'au moment où l'utilisateur tape la première lettre (y compris lors
+  d'une reprise plus tard)." Previously `startGridTimer(initialSeconds)`
+  both displayed the counter *and* started its own `setInterval`
+  immediately, the moment `displayFinalGrid()` ran — so simply loading or
+  reopening a grid (including one with a saved elapsed time) began
+  accumulating time even while the player was just looking at it, not
+  actually playing. `startGridTimer()` now only displays the starting
+  value (0 for a fresh grid, or the saved `elapsed_seconds` for a resumed
+  one) without starting the interval; a new `ensureGridTimerRunning()` —
+  called from the two places a real letter is written into the grid,
+  `handleKeydown`'s letter branch and `typeVirtualLetter` (never from the
+  Backspace/Delete branch, which clears a cell rather than typing into
+  it) — starts the `setInterval` on its first call and is a no-op on every
+  later one. This applies uniformly whether the grid was just generated,
+  loaded fresh from the Library, or reopened with a previously-saved game
+  state: in every case the displayed time stays frozen until the player's
+  own next keystroke actually resumes it.
+
+  Verified: a real JS syntax check (`esprima`, temporarily installed and
+  removed again afterward, this project's own established one-off-tool
+  pattern) confirmed `script.js` still parses correctly after the change;
+  the real served `script.js` was fetched directly from the running
+  frontend server (a pure static-file change, no restart needed — see
+  rule 8) and confirmed to contain `ensureGridTimerRunning` at all three
+  expected call sites. **Not yet visually confirmed in an actual
+  browser** — the same tooling limitation noted throughout this project's
+  UI work.
 
 ## Commands
 

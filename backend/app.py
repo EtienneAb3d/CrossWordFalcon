@@ -707,6 +707,23 @@ class GenerateRequest(BaseModel):
         default=THEME_MIN_SCORE, ge=0.0, le=1.0,
         description="Seuil de similarité Qdrant minimal du glossaire thématique (0.0 à 1.0)",
     )
+    # Origine de la requête, à la demande explicite de l'utilisateur :
+    # "Populate : quand une demande vient de Populate, générer les
+    # définitions sans paralléliser plusieurs requêtes en parallèle, pour
+    # ne pas surcharger le GPU pour les utilisateurs." `None` (une requête
+    # ordinaire du web UI) par défaut — `Automation/Populate.py` est le
+    # seul appelant à envoyer `"populate"` ici (voir sa propre
+    # `_build_request()`). `_run_generate_job` lit ce champ pour forcer
+    # `clue_generator.generate(batch_parallelism=1)` (voir backend/
+    # clues.py's own docstring) uniquement pour ce cas — CLUES_QUEUE
+    # sérialise déjà les jobs entre eux, mais un seul job peut encore
+    # tirer jusqu'à CLUE_BATCH_PARALLELISM requêtes LLM concurrentes, ce
+    # qui pouvait ralentir un vrai utilisateur appelant en parallèle un
+    # endpoint hors file (ex. "Proposer une définition"/"Proposer un
+    # titre"). Non borné par une contrainte pydantic : une valeur
+    # inconnue est simplement ignorée (traitée comme une requête
+    # ordinaire), jamais un 422.
+    source: Optional[str] = None
 
 
 class RecomputeRequest(BaseModel):
@@ -2533,10 +2550,10 @@ async def _run_generate_job(job_id, req, resume_state=None):
         logger.info(
             "[%s] starting generation: language=%s bilingual_language=%s width=%s "
             "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
-            "mode=%s theme_precision=%s",
+            "mode=%s theme_precision=%s source=%s",
             short_id, req.language, req.bilingual_language, req.width, req.height,
             req.difficulty, req.force_letters_percent, req.black_enrichment_percent,
-            req.mode, req.theme_precision,
+            req.mode, req.theme_precision, req.source,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
         # QUEUE's own module-level docstring: at most one grid search runs
@@ -2844,6 +2861,14 @@ async def _run_generate_job(job_id, req, resume_state=None):
                         # Reste "" pour une grille non thématique (voir
                         # plus haut) : aucun effet.
                         theme_description=theme_description,
+                        # 1 seule requête LLM à la fois pour une grille
+                        # venant de Populate, à la demande explicite de
+                        # l'utilisateur ("ne pas surcharger le GPU pour
+                        # les utilisateurs") — voir GenerateRequest.source
+                        # et LLMClueGenerator.generate's own docstring.
+                        # `None` (le comportement par défaut, parallèle)
+                        # pour toute autre requête.
+                        batch_parallelism=(1 if req.source == "populate" else None),
                     )
                     accumulated_clues.update(new_clues)
                     clues_compute_s += time.monotonic() - clues_start

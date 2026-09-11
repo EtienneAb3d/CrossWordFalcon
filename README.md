@@ -116,7 +116,9 @@ background:
 The app (`./run_Falcon.sh`) must be running first. Each finished grid is
 added to the Library automatically. The batch runs quietly in the
 background and survives closing the terminal; its progress is written to
-`logs/populate.log`.
+`logs/populate.log`. It also writes its own definitions one at a time
+rather than several at once, so it never slows down other people using
+the app at the same time.
 
 ## Using the app
 

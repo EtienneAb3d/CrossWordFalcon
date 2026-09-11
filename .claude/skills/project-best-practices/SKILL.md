@@ -1051,12 +1051,26 @@ the current defaults/behavior to know before touching this code.
   module scope. Talks to any OpenAI-compatible chat-completions endpoint —
   the local `llama_cpp.server` (`run_llm.sh`) by default, or a cloud API
   (e.g. Mistral) via `env.sh`, no code change needed either way.
-- One word per LLM call (`_BATCH_SIZE = 1` — even a small batch degraded
-  reliability on small local models); up to 3 immediate, consecutive
-  retries per word before giving up. `llama_cpp.server` has no
-  parallel-request/continuous-batching support at all — client-side
-  concurrency does not speed this up, don't re-attempt it without first
-  addressing that server-side limitation.
+- One word per LLM *request* (`_BATCH_SIZE = 1` — even a small batch
+  degraded reliability on small local models); up to 3 immediate,
+  consecutive retries per word before giving up. `generate()` fires up to
+  `CLUE_BATCH_PARALLELISM` (10 by default, env-overridable) of those
+  single-word requests concurrently via a `ThreadPoolExecutor`, so a
+  server with continuous batching (e.g. SGLang) decodes several at once;
+  a server without request concurrency (a plain llama.cpp build with no
+  `--parallel`) simply serializes them — no speed-up but no harm.
+  `generate()` also accepts a per-call `batch_parallelism` override
+  (`None` = the module default): `backend/app.py` passes `1` whenever
+  `GenerateRequest.source == "populate"` (set by `Automation/
+  Populate.py`'s own `_build_request()`), forcing that one job's own
+  words fully sequential — at the user's explicit request, so a
+  Populate-originated grid's clue generation never crowds out a real
+  user's own concurrent, `CLUES_QUEUE`-exempt LLM call (`GET /api/
+  dictionary/define`, `POST /api/interactive/title`) for the same GPU.
+  `CLUES_QUEUE` itself already serializes clue-generation *jobs*
+  project-wide (one job's `generate()` call at a time) regardless of
+  origin — this override only narrows the *intra-job* concurrency of
+  whichever job currently holds that queue slot.
 - The model is asked for exactly 4 lines: an `A=` line first (the target
   word's part of speech + full inflection — person/number/mood/tense for
   a verb, number/gender for a noun/adjective), then 3 clue lines
