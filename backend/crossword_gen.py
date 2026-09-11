@@ -2718,7 +2718,7 @@ class Filler:
         demande explicite de l'utilisateur — un doublon manuel de cette
         logique y avait été écrit à la main (un simple MRV : le domaine le
         plus petit, puis un emplacement déjà partiellement connu, puis au
-        hasard), sans le seuil de longueur du niveau 3 (qui exclut les
+        hasard), sans le seuil de longueur du niveau 2 (qui exclut les
         emplacements de 2-3 lettres) ni le score géométrique du niveau 5
         (qui privilégie le coin en haut à gauche) — ce qui faisait démarrer
         le remplissage interactif par des emplacements de 2 lettres
@@ -2738,21 +2738,7 @@ class Filler:
         #    non remplis a plus de chances d'être choisie que l'autre, ce
         #    qui tend naturellement à alterner/équilibrer les deux au fil du
         #    remplissage sans figer un ordre strict ;
-        # 2. **Grille thématique uniquement, à la demande explicite de
-        #    l'utilisateur** : ce niveau s'applique systématiquement juste
-        #    après le niveau 1, exactement comme tous les niveaux suivants
-        #    — plus de "priorité sur les niveaux suivants", c'est un
-        #    maillon ordinaire de la cascade. S'il existe dans la catégorie
-        #    tirée au niveau 1 au moins un emplacement où un mot du
-        #    glossaire thématique (`self.priority_words`, non encore
-        #    utilisé) tient encore compte tenu des lettres connues, le
-        #    choix se restreint à ces emplacements. On commence donc par
-        #    remplir les zones thématiquement réalisables (et on y pose un
-        #    mot thématique en priorité, voir le tri des candidats plus
-        #    bas). Sans thématique, ou si aucun emplacement de la catégorie
-        #    n'accepte de mot thématique, ce niveau ne change rien : le
-        #    niveau 3 s'applique alors à la catégorie entière ;
-        # 3. **Nouveau, à la demande explicite de l'utilisateur, prioritaire
+        # 2. **Nouveau, à la demande explicite de l'utilisateur, prioritaire
         #    sur le critère de domaine ci-dessous** : parmi les emplacements
         #    de la catégorie tirée **de 4 lettres et plus** (à la demande
         #    explicite de l'utilisateur — un emplacement de 2-3 lettres a
@@ -2773,9 +2759,9 @@ class Filler:
         #    l'utilisateur, qui vise directement le même seuil que le
         #    pré-remplissage plutôt qu'un proxy géométrique. Si aucun
         #    emplacement de la catégorie n'est dans ce cas, ce niveau ne
-        #    change rien : le niveau 4 s'applique alors à l'ensemble de la
+        #    change rien : le niveau 3 s'applique alors à l'ensemble de la
         #    catégorie, exactement comme avant l'ajout de ce niveau ;
-        # 4. **Nouveau, à la demande explicite de l'utilisateur** : parmi
+        # 3. **Nouveau, à la demande explicite de l'utilisateur** : parmi
         #    les emplacements du groupe obtenu au niveau précédent, s'il en
         #    existe au moins un qui a déjà au moins une case déterminée par
         #    une vraie lettre (`_has_known_letter` — un mot croisé déjà
@@ -2786,8 +2772,25 @@ class Filler:
         #    partiellement connu — finir un emplacement déjà entamé plutôt
         #    que d'en ouvrir un nouveau. Si tous les emplacements du groupe
         #    sont entièrement vierges, ce niveau ne change rien : le niveau
-        #    5 s'applique alors à l'ensemble du groupe, exactement comme
+        #    4 s'applique alors à l'ensemble du groupe, exactement comme
         #    avant l'ajout de ce niveau ;
+        # 4. **Grille thématique uniquement, à la demande explicite de
+        #    l'utilisateur** : déplacé ici, après les niveaux "peu de
+        #    candidats" et "au moins une case connue" ci-dessus — initiale-
+        #    ment appliqué juste après le niveau 1, déplacé à cette place à
+        #    la demande explicite de l'utilisateur. Comme tout autre maillon
+        #    de la cascade, ce niveau s'applique systématiquement après le
+        #    niveau précédent, sans priorité particulière sur les niveaux
+        #    suivants. S'il existe, parmi les emplacements du groupe obtenu
+        #    au niveau précédent, au moins un emplacement où un mot du
+        #    glossaire thématique (`self.priority_words`, non encore
+        #    utilisé) tient encore compte tenu des lettres connues, le
+        #    choix se restreint à ces emplacements. On commence donc par
+        #    remplir les zones thématiquement réalisables (et on y pose un
+        #    mot thématique en priorité, voir le tri des candidats plus
+        #    bas). Sans thématique, ou si aucun emplacement du groupe
+        #    n'accepte de mot thématique, ce niveau ne change rien : le
+        #    niveau suivant s'applique alors à l'ensemble du groupe ;
         # 5. les critères précédents de ce niveau (le moins de cases encore
         #    blanches en priorité, le plus de lettres déjà fixées en
         #    départage, un tirage pondéré par la longueur en dernier
@@ -2874,33 +2877,6 @@ class Filler:
             )[0]
         else:
             direction_pool = free_across or free_down
-        # Niveau 2 : appliqué systématiquement juste après le tirage de
-        # catégorie (niveau 1), comme tout autre maillon de la cascade —
-        # pas de priorité particulière sur les niveaux suivants. Pour une
-        # grille thématique, on restreint le choix aux emplacements où au
-        # moins un mot du glossaire thématique (`self.priority_words`)
-        # tient encore, compte tenu des lettres déjà connues et des mots
-        # déjà posés ailleurs — le remplissage privilégie ainsi les zones
-        # thématiquement réalisables (et y place un mot thématique en
-        # priorité, voir le tri des candidats plus bas). Sauté s'il n'y a
-        # aucune thématique, ou si aucun emplacement du pool de direction
-        # n'accepte de mot thématique (rien à restreindre).
-        if self.priority_words:
-            # `direction_pool` est d'une seule direction (across ou down),
-            # donc le glossaire applicable (le même pour tous ses
-            # emplacements) se résout une fois — frozenset unique sur une
-            # grille monolingue, glossaire de la langue de cette direction
-            # sur une grille bilingue (voir `_priority_words_for`).
-            _pw = _priority_words_for(self.priority_words, self.slots[direction_pool[0]])
-            theme_placeable = [
-                i for i in direction_pool
-                if any(
-                    w not in self.used_words
-                    for w in _pw.intersection(domains[i])
-                )
-            ]
-            if theme_placeable:
-                direction_pool = theme_placeable
         # Uniquement pour les emplacements de 4 lettres et plus, à la
         # demande explicite de l'utilisateur : un emplacement de 2-3
         # lettres a un vocabulaire naturellement restreint, y déclencher
@@ -2922,6 +2898,39 @@ class Filler:
         non_blank = [i for i in selection_pool if self._has_known_letter(i)]
         if non_blank:
             selection_pool = non_blank
+        # Niveau thématique : déplacé ici, après les deux niveaux
+        # ci-dessus ("peu de candidats" puis "au moins une case connue"),
+        # à la demande explicite de l'utilisateur — initialement appliqué
+        # juste après le tirage de catégorie. Comme tout autre maillon de
+        # la cascade, ce niveau s'applique systématiquement après le
+        # niveau précédent, sans priorité particulière sur les niveaux
+        # suivants. Pour une grille thématique, on restreint le choix aux
+        # emplacements du groupe obtenu au niveau précédent où au moins un
+        # mot du glossaire thématique (`self.priority_words`) tient
+        # encore, compte tenu des lettres déjà connues et des mots déjà
+        # posés ailleurs — le remplissage privilégie ainsi les zones
+        # thématiquement réalisables (et y place un mot thématique en
+        # priorité, voir le tri des candidats plus bas). Sauté s'il n'y a
+        # aucune thématique, ou si aucun emplacement du groupe n'accepte
+        # de mot thématique (rien à restreindre).
+        if self.priority_words:
+            # `selection_pool` reste toujours d'une seule direction (across
+            # ou down) — il ne fait que rétrécir `direction_pool`, jamais
+            # mélanger les deux — donc le glossaire applicable (le même
+            # pour tous ses emplacements) se résout une fois — frozenset
+            # unique sur une grille monolingue, glossaire de la langue de
+            # cette direction sur une grille bilingue (voir
+            # `_priority_words_for`).
+            _pw = _priority_words_for(self.priority_words, self.slots[selection_pool[0]])
+            theme_placeable = [
+                i for i in selection_pool
+                if any(
+                    w not in self.used_words
+                    for w in _pw.intersection(domains[i])
+                )
+            ]
+            if theme_placeable:
+                selection_pool = theme_placeable
         # Score géométrique, à la demande explicite de l'utilisateur : x + y,
         # où (y, x) est la première case de l'emplacement (self.slots[i][0],
         # toujours la case la plus en haut/à gauche parmi les siennes — voir
@@ -4226,7 +4235,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
     # `domains` garde le domaine BRUT (comme dans _backtrack, jamais filtré
     # par used_words) — c'est ce que _select_target_slot attend, en
     # particulier pour son propre seuil "moins de PREFILL_MIN_WORD_COUNT
-    # candidats" (niveau 3), qui compare bien la taille du domaine brut.
+    # candidats" (niveau 2), qui compare bien la taille du domaine brut.
     # `viable` reste la version filtrée (candidats réellement disponibles)
     # que le tirage du mot, juste après, utilise.
     domains, viable = {}, {}
@@ -4248,7 +4257,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
     # l'utilisateur, après avoir constaté en direct que ce MRV (le domaine
     # le plus petit d'abord) faisait démarrer le mode Interactif par des
     # emplacements de 2 lettres dispersés dans la grille, sans respecter
-    # ni le seuil de longueur (niveau 3, ≥4 lettres) ni le front haut-
+    # ni le seuil de longueur (niveau 2, ≥4 lettres) ni le front haut-
     # gauche voulu par le score géométrique (niveau 5) de la génération
     # automatique.
     target = filler._select_target_slot(list(viable.keys()), domains)

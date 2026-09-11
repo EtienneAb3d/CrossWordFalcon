@@ -8642,6 +8642,23 @@ servers:
   collapsed them), 55,634 preselected words, `WORD<TAB>LEN<TAB>SCORE`
   sorted by increasing length. The generation itself completed normally
   (`theme` step visible for ~7 polls, then `pattern_generated`→`clues`).
+
+  `THEME_LENGTH_MIN` was raised from 2 to 3, at the user's explicit
+  request: "Lors de la génération d'un dictionnaire thématique, ne
+  garder que les mots de 3 lettres et plus." A one-constant change — the
+  filter itself (`THEME_LENGTH_MIN <= len(word) <= THEME_LENGTH_MAX` in
+  `_theme_words_by_length`) was already exactly this shape, only its
+  lower bound moved. Scoped to the grid-glossary path only, exactly as
+  the length filter always has been: `_similar_words_impl`/
+  `_compiled_similar_words` (the Dictionary panel's "Thématique" button)
+  deliberately apply no length filter at all — a plain dictionary lookup
+  should never drop a short word — so they're unaffected by this change,
+  and their own docstrings (which cite the grid glossary's bound as
+  "2-15" for context) were updated to "3-15" to match. Verified live
+  against the real running Qdrant/embedder: a themed query ("animaux de
+  la ferme", fr) returned 13 words with the shortest at 5 letters and no
+  2-letter word anywhere in the result, confirming the new floor takes
+  effect end to end, not just in the constant's own value.
 - **Qdrant admin — `GET /api/qdrant/admin`, `POST /api/qdrant/admin/
   recreate`, `POST /api/qdrant/admin/delete-tenant`** (`backend/app.py`),
   backing the localhost-only "Qdrant (admin)" panel (see `frontend/
@@ -20529,3 +20546,91 @@ syntax check (`esprima`, installed and removed again afterward) and a
 CSS brace-balance check both passed. **Not visually confirmed in a
 browser** — the usual tooling limitation — verified structurally and via
 the real backend data reaching the frontend correctly.
+
+`THEME_LENGTH_MIN` was raised from 2 to 3, at the user's explicit
+request: "Lors de la génération d'un dictionnaire thématique, ne garder
+que les mots de 3 lettres et plus." A one-constant change — the filter
+itself (`THEME_LENGTH_MIN <= len(word) <= THEME_LENGTH_MAX` in
+`_theme_words_by_length`) was already exactly this shape, only its
+lower bound moved. Scoped to the grid-glossary path only, exactly as the
+length filter always has been: `_similar_words_impl`/`_compiled_similar_
+words` (the Dictionary panel's "Thématique" button) deliberately apply
+no length filter at all — a plain dictionary lookup should never drop a
+short word — so they're unaffected, and their own docstrings (which cite
+the grid glossary's bound as "2-15" for context) were updated to "3-15"
+to match. Verified live against the real running Qdrant/embedder: a
+themed query ("animaux de la ferme", fr) returned 13 words with the
+shortest at 5 letters and no 2-letter word anywhere in the result,
+confirming the new floor takes effect end to end.
+
+**The "grille thématique uniquement" tier of `Filler._select_target_
+slot`'s 7-level cascade was moved from its original position (right
+after the direction/category tier) to right after the "au moins une case
+connue" tier**, at the user's explicit request: "Deplacer cette règle 2
+après l'actuelle règle 4 (la règle 4 devient donc la règle 3, et la
+règle 2 devient la règle 4)" — quoting `DOC_ALGO/FR/ReadMe.md`'s own
+current wording of the theme tier back. Since the two tiers between them
+("moins de `PREFILL_MIN_WORD_COUNT` mots candidats", ≥4-letter slots
+only, and "au moins une case connue") already used purely relative
+language ("au niveau précédent"/"le niveau suivant", no hardcoded
+numbers), moving them up by one position each needed zero textual
+changes to their own content — only the theme tier itself, and every
+cross-reference elsewhere in the file naming a tier by its old number,
+needed rewording.
+
+In `Filler._select_target_slot`, the `if self.priority_words: ...` block
+(previously applied to `direction_pool`, right after direction selection
+and before the `few_candidates`/`non_blank` narrowing) was moved to run
+*after* both of those — operating on `selection_pool` instead of
+`direction_pool`, restricting it further whenever at least one
+still-viable candidate slot in the already-narrowed group has a
+theme-glossary word fitting. `selection_pool[0]` (used to resolve which
+per-direction glossary applies via `_priority_words_for` on a bilingual
+grid) is always safe to read at this later point too, since `selection_
+pool` is always a subset of `direction_pool` and therefore always a
+single, consistent direction — never mixed. `selection_pool` itself is
+guaranteed non-empty whenever the theme block runs (each of the two
+preceding tiers falls back to its own unfiltered input when it finds
+nothing to narrow, never to an empty pool), so `selection_pool[0]` can
+never raise an `IndexError`. Every cross-referencing comment naming the
+theme tier's old number ("niveau 2") or its old successor ("niveau 3"
+for the length-threshold tier, now niveau 2; "niveau 4" for the
+known-letter tier, now niveau 3) was reworded throughout `_select_target_
+slot`'s own docstring/inline comments, `interactive_place_word`'s own
+two comments citing the length-threshold tier by number, and `DOC_ALGO/
+FR/ReadMe.md`'s matching numbered list — including the one place the
+doc had a genuine stale-if-left cross-reference (item 6, "même
+distinction fait-acquis/simple-supposition que le niveau 4", correctly
+updated to "le niveau 3" since that distinction was introduced by the
+tier now occupying that position). `DOC_ALGO`'s own theme-tier
+paragraph was reworded from "S'il existe dans la catégorie tirée au
+niveau 1..." to "S'il existe, parmi les emplacements retenus au niveau
+précédent...", matching the same relative-language convention every
+neighboring tier already used, since the tier's own input is no longer
+the raw direction pool.
+
+Verified live rather than assumed correct from the reasoning alone,
+since a plain "both slots are blank" test can't actually distinguish the
+two possible orderings (a theme word with no differentiating crossing
+constraint remains domain-viable for every blank slot regardless of
+which tier ran first). Built a decisive 3-independent-slot scenario
+instead: slot A blank (a theme word fits), slot B fully locked to a real,
+different word via `locked_letters` (already "known", no theme word
+fits it), slot C blank (no theme word fits). Under the *old* order, the
+theme tier would run first and restrict the pool to {A, C} (the two
+still-domain-viable-for-the-theme-word slots) before the known-letter
+tier ever got a chance to single out B — B could never be chosen. Under
+the *new* order, the known-letter tier runs first and correctly narrows
+the pool to {B} alone (the only slot with a real, confirmed letter)
+before the theme tier ever sees it; since B's own domain no longer
+contains the theme word, the theme tier finds nothing to further narrow
+and leaves the selection at B. A 200-seed sweep confirmed the new code
+picks slot B in **200/200** trials — a result the old ordering could
+never produce, since B was structurally excluded from its own
+theme-narrowed pool. Two full, real `generate_grid()` runs on the
+standard 15×10 benchmark (Flash mode, both reference seeds) confirmed no
+regression: 0 mismatches, 0 empty white cells each (36.5s/52 words;
+61.7s/60 words). A real, non-mocked themed 9×9 generation (seed 3, a
+farm-animal glossary) still succeeded and still placed a theme word
+(`POULE`), confirming the reordered tier remains functional end to end
+in the full pipeline, not just in the isolated tier-selection test.

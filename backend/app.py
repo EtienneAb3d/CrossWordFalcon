@@ -303,7 +303,7 @@ BUDGET_MODES = {
 # aucun plafond par longueur (voir THEME_MIN_SCORE plus bas) : TOUS les
 # mots dont le score dépasse ce seuil sont pris. Voir
 # _theme_words_by_length.
-THEME_LENGTH_MIN = 2
+THEME_LENGTH_MIN = 3
 THEME_LENGTH_MAX = 15
 # Taille de chaque page Qdrant lue en itérant (voir _theme_words_by_length) :
 # assez grande pour amortir l'aller-retour réseau, assez petite pour
@@ -1611,7 +1611,7 @@ def _compiled_similar_words(keywords: list[str], lang: str,
     Dictionnaire : lance une recherche Qdrant du plus-proche-voisin pour
     CHAQUE mot-clef de `keywords` (embedding + `_iter_scored_words`) et
     fusionne — chaque mot garde son MEILLEUR score. Deux différences avec
-    la version "glossaire de grille" : (1) aucun filtre de longueur 2-15
+    la version "glossaire de grille" : (1) aucun filtre de longueur 3-15
     (une recherche de dictionnaire ne doit pas écarter les mots longs) ;
     (2) tri par score DÉCROISSANT (l'ordre "plus similaires d'abord" du
     panneau), pas par longueur. Un mot-clef dont la recherche Qdrant
@@ -1676,7 +1676,7 @@ def _similar_words_impl(query: str, lang: str,
     Every kept `(word, score)` has a similarity >= `min_score` (the
     "Précision thématique" form field's current value, forwarded as the
     `min_score` query param; default THEME_MIN_SCORE). No count limit and
-    no length filter (unlike the grid glossary's 2-15 bound). Returned
+    no length filter (unlike the grid glossary's 3-15 bound). Returned
     most-similar-first; the score is shown to 2 decimals next to each word
     in the panel."""
     desc = ""
