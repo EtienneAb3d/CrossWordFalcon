@@ -726,6 +726,19 @@
                autocomplete="nickname" autocapitalize="off"
                data-i18n-placeholder="welcomePseudoPlaceholder">
       </label>
+      <label for="welcome-secret">
+        <span data-i18n="welcomeSecretLabel">Mot secret</span>
+        <!-- Requis, même mécanisme que le pseudo ci-dessus : le panneau
+             ne se ferme pas tant qu'il est vide (validation native
+             `required` + garde JS contre les espaces seuls). Sert à
+             prouver que le pseudo saisi appartient bien à cet
+             utilisateur (voir POST /api/pseudo/claim, backend/
+             secret_store.py) — à la demande explicite de l'utilisateur. -->
+        <input type="password" id="welcome-secret" maxlength="60" required
+               autocomplete="off" autocapitalize="off"
+               data-i18n-placeholder="welcomeSecretPlaceholder">
+      </label>
+      <p id="welcome-secret-hint" data-i18n="welcomeSecretHint"></p>
       <p id="welcome-cookie-notice" data-i18n="welcomeCookieNotice"></p>
       <button type="submit" id="welcome-accept-btn"
               data-i18n="welcomeAcceptBtn">Accepter</button>

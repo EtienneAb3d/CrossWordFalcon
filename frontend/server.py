@@ -139,6 +139,23 @@ async def proxy_presence(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/pseudo/claim")
+async def proxy_pseudo_claim(request: Request):
+    """Relaie la vérification/revendication du couple pseudo/mot secret
+    soumise à la fermeture du panneau d'accueil vers le back — voir
+    backend/app.py's POST /api/pseudo/claim et backend/secret_store.py."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/pseudo/claim", content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.get("/api/scrapp")
 async def proxy_scrapp():
     """Miroir exact de proxy_rss ci-dessus, pour l'agrégation de grilles

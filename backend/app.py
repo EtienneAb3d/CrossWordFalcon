@@ -44,6 +44,7 @@ from .clues import ClueGenerationError, LLMClueGenerator, TITLE_PROPOSALS_COUNT
 from .dictionary_lookup import search as dictionary_search_impl
 from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError
+from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
@@ -499,6 +500,13 @@ LIBRARY_PAGE_SIZE = 20
 # rejected, so a stray extra character can't block a generation.
 MAX_PSEUDO_LENGTH = 15
 
+# Longueur max du mot secret associé à un pseudo (backend/secret_store.py),
+# à la demande explicite de l'utilisateur — permet à un utilisateur de
+# prouver qu'un pseudo choisi lui appartient bien. Même convention
+# défensive que MAX_PSEUDO_LENGTH : borné côté serveur, jamais rejeté pour
+# une longueur excessive avant troncature.
+MAX_SECRET_LENGTH = 60
+
 # "x en ligne" counter, at the user's explicit request. Each open web-UI
 # tab POSTs /api/presence every 2s with its own session id + current
 # pseudo; a session is "active" while its last ping is under
@@ -528,7 +536,7 @@ _PRESENCE = {}  # session_id -> {"last_seen": monotonic float, "pseudo": str}
 USERS_LOG_DIR = _PROJECT_ROOT / "LOG_USERS"
 
 # Un `threading.Lock` protège maintenant `_PRESENCE` et
-# `_last_logged_presence_count` : `POST /api/presence` (fonction `def`
+# `_last_logged_pseudos` : `POST /api/presence` (fonction `def`
 # synchrone, exécutée dans le pool de threads de Starlette) et le balayage
 # périodique `_presence_sweep_scheduler` (coroutine sur la boucle
 # d'événements) peuvent tous deux recalculer l'effectif — sans verrou, la
@@ -538,11 +546,18 @@ USERS_LOG_DIR = _PROJECT_ROOT / "LOG_USERS"
 # recalcul en mémoire ; l'écriture disque se fait toujours en dehors.
 _PRESENCE_LOCK = threading.Lock()
 
-# Dernier effectif distinct consigné dans LOG_USERS (None au démarrage, si
-# bien que le tout premier battement après lancement/redémarrage du serveur
-# consigne une ligne — ce qui marque aussi un redémarrage dans la
-# chronologie).
-_last_logged_presence_count = None
+# Dernière LISTE d'utilisateurs distincte consignée dans LOG_USERS (None au
+# démarrage, si bien que le tout premier battement après lancement/
+# redémarrage du serveur consigne une ligne — ce qui marque aussi un
+# redémarrage dans la chronologie). À la demande explicite de
+# l'utilisateur ("LOG_USERS doit se mettre à jour à chaque fois que la
+# liste des utilisateurs change") : suivi par LISTE complète (le `pseudos`
+# que _write_users_log consigne), pas seulement par effectif total — un
+# simple compteur ne capte jamais qu'un utilisateur est passé d'anonyme à
+# nommé, ou qu'un pseudo a changé, tant que le nombre total reste
+# identique, ce qui laissait justement le journal figé sur un
+# "(anonyme)" périmé une fois le panneau d'accueil validé.
+_last_logged_pseudos = None
 
 # Le balayage périodique existe pour capter une *baisse* d'effectif quand
 # les battements s'arrêtent (tout le monde a quitté) : sans lui, la purge
@@ -1031,14 +1046,17 @@ def _presence_snapshot(record=None):
     - `pseudos`: la liste à consigner — les pseudos distincts triés
       (insensible à la casse), suivis d'un `(anonyme)` par session encore
       sans pseudo, de sorte que `len(pseudos) == count` ;
-    - `changed`: `True` si et seulement si `count` diffère du dernier
-      effectif consigné dans LOG_USERS — et, dans ce cas, met à jour ce
-      marqueur ici même (sous le verrou), de sorte qu'un seul appelant
-      voit jamais une transition donnée et écrit une seule ligne.
+    - `changed`: `True` si et seulement si `pseudos` (la LISTE complète,
+      pas seulement sa longueur) diffère de la dernière liste consignée
+      dans LOG_USERS — et, dans ce cas, met à jour ce marqueur ici même
+      (sous le verrou), de sorte qu'un seul appelant voit jamais une
+      transition donnée et écrit une seule ligne. Un utilisateur passant
+      d'anonyme à nommé, ou changeant de pseudo, déclenche donc une
+      nouvelle ligne même quand l'effectif total, lui, ne bouge pas.
 
     Le verrou ne couvre que ce recalcul en mémoire ; l'appelant fait
     l'écriture disque (`_write_users_log`) en dehors."""
-    global _last_logged_presence_count
+    global _last_logged_pseudos
     with _PRESENCE_LOCK:
         now = time.monotonic()
         if record is not None:
@@ -1067,9 +1085,9 @@ def _presence_snapshot(record=None):
                 anonymous += 1
         count = len(named) + anonymous
         pseudos = sorted(named, key=str.lower) + ["(anonyme)"] * anonymous
-        changed = count != _last_logged_presence_count
+        changed = pseudos != _last_logged_pseudos
         if changed:
-            _last_logged_presence_count = count
+            _last_logged_pseudos = pseudos
         return count, pseudos, changed
 
 
@@ -1167,8 +1185,13 @@ def _write_theme_log(short_id, theme, description, words,
 def presence(req: PresenceRequest):
     """Enregistre/rafraîchit ce battement de cœur et renvoie
     `{"count": N}` où N est le nombre d'utilisateurs actifs distincts (voir
-    `_presence_snapshot`). Consigne une ligne dans LOG_USERS/ si ce nombre
-    a changé. À la demande explicite de l'utilisateur."""
+    `_presence_snapshot`). Consigne une ligne dans LOG_USERS/ si la LISTE
+    des utilisateurs (pas seulement l'effectif total) a changé depuis la
+    dernière ligne écrite — à la demande explicite de l'utilisateur
+    ("LOG_USERS doit se mettre à jour à chaque fois que la liste des
+    utilisateurs change") : un utilisateur passant d'anonyme à nommé, ou
+    changeant de pseudo, déclenche donc une nouvelle ligne même quand
+    l'effectif total, lui, ne bouge pas."""
     record = (req.session_id, {
         "last_seen": time.monotonic(),
         "pseudo": (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH],
@@ -1177,6 +1200,44 @@ def presence(req: PresenceRequest):
     if changed:
         _write_users_log(count, pseudos)
     return {"count": count}
+
+
+class PseudoClaimRequest(BaseModel):
+    """Corps de POST /api/pseudo/claim — soumis à la fermeture du panneau
+    d'accueil (voir frontend/static/script.js, `welcomeForm`), à la
+    demande explicite de l'utilisateur : "ajouter une entrée 'Mot secret'
+    permettant à l'utilisateur de prouver que le pseudo lui appartient."
+    Contrairement à tout autre champ `pseudo` de ce fichier (toujours
+    `Optional[str] = None`, tronqué en silence à MAX_PSEUDO_LENGTH),
+    celui-ci est ici obligatoire (`min_length=1`) — mais volontairement
+    sans `max_length` : une valeur trop longue est tronquée en silence
+    par le corps de la route ci-dessous, jamais rejetée, même convention
+    que partout ailleurs dans ce fichier pour MAX_PSEUDO_LENGTH."""
+    pseudo: str = Field(..., min_length=1)
+    secret: str = Field(..., min_length=1)
+
+
+@app.post("/api/pseudo/claim")
+def pseudo_claim(req: PseudoClaimRequest):
+    """Vérifie que `secret` correspond au mot secret déjà associé à
+    `pseudo` (backend/secret_store.py), ou l'enregistre si ce pseudo n'a
+    jamais été revendiqué (première utilisation = revendication).
+
+    Renvoie `{"ok": true}` en cas de succès (mot secret correct, ou
+    pseudo tout juste revendiqué) ; `{"ok": false, "code": "pseudo_taken"}`
+    si ce pseudo existe déjà sous un autre mot secret — à la demande
+    explicite de l'utilisateur : "si le Pseudo saisi existe déjà et que
+    le Mot secret ne correspond pas, signaler à l'utilisateur que ce
+    Pseudo est déjà pris, ne pas fermer la boite." Toujours un 200 dans
+    les deux cas : ce n'est pas une erreur de requête, seulement un
+    résultat métier normal que le client doit distinguer lui-même."""
+    pseudo = req.pseudo.strip()[:MAX_PSEUDO_LENGTH]
+    secret = req.secret.strip()[:MAX_SECRET_LENGTH]
+    if not pseudo or not secret:
+        raise HTTPException(status_code=400, detail="pseudo ou mot secret vide")
+    if verify_or_claim_pseudo_secret(pseudo, secret):
+        return {"ok": True}
+    return {"ok": False, "code": "pseudo_taken"}
 
 
 async def _presence_sweep_scheduler():

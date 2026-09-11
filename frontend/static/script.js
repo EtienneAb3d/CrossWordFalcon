@@ -93,6 +93,8 @@ const welcomeOverlay = document.getElementById("welcome-overlay");
 const welcomeForm = document.getElementById("welcome-form");
 const welcomeLanguageSelect = document.getElementById("welcome-language");
 const welcomePseudoInput = document.getElementById("welcome-pseudo");
+const welcomeSecretInput = document.getElementById("welcome-secret");
+const welcomeAcceptBtn = document.getElementById("welcome-accept-btn");
 const userPseudoBtn = document.getElementById("user-pseudo");
 const button = document.getElementById("generate-btn");
 const status = document.getElementById("status");
@@ -1954,6 +1956,12 @@ const SUPPORTED_UI_LANGS = ["fr", "en", "de", "es", "it", "pt"];
 // grid this browser generates (POST /api/generate `pseudo`) and into the
 // "Mes grilles" library filter.
 let userPseudo = "";
+// Secret word proving this browser's userPseudo actually belongs to this
+// user (see POST /api/pseudo/claim, backend/secret_store.py) — at the
+// user's explicit request. "" when none is set yet. Persisted in the
+// same cwf-prefs cookie as userPseudo, so a returning visitor who only
+// wants to change the UI language never has to retype it.
+let userSecret = "";
 // `false` until the initUserPrefs() IIFE below has run once — used to
 // skip, on that very first setUiLanguage() call, the few re-renders that
 // touch state declared later in this file (renderChatWelcome reads
@@ -1984,12 +1992,28 @@ function renderOnlineCount() {
   onlineCountEl.hidden = false;
 }
 
+// Le back (backend/app.py's presence()/_presence_snapshot) décide seul
+// s'il écrit une ligne LOG_USERS, en comparant la LISTE d'utilisateurs
+// (pas seulement l'effectif total) à la dernière consignée — à la
+// demande explicite de l'utilisateur : "LOG_USERS doit se mettre à jour
+// à chaque fois que la liste des utilisateurs change." Un utilisateur
+// passant d'anonyme à nommé (ou changeant de pseudo) déclenche donc déjà
+// une nouvelle ligne dès ce battement-ci, même quand l'effectif total ne
+// bouge pas. Cette fonction est appelée à la fois au chargement de la
+// page et juste après la validation du formulaire d'accueil (voir
+// welcomeForm's "submit" listener) pour que ce recalcul ait lieu tout de
+// suite, sans attendre le prochain battement régulier du setInterval
+// (jusqu'à PRESENCE_INTERVAL_MS plus tard) — mais dans tous les cas,
+// c'est le back qui décide, jamais un indicateur envoyé par ce client.
 async function pingPresence() {
   try {
     const response = await fetchWithTimeout("/api/presence", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: presenceSessionId, pseudo: userPseudo || "" }),
+      body: JSON.stringify({
+        session_id: presenceSessionId,
+        pseudo: userPseudo || "",
+      }),
     }, PRESENCE_TIMEOUT_MS);
     if (!response.ok) return;
     const data = await response.json();
@@ -2094,6 +2118,10 @@ welcomeLanguageSelect.addEventListener("change", () => setUiLanguage(welcomeLang
 // no advertising — leaving the (potentially large) seen-grids list in
 // localStorage as before.
 const MAX_PSEUDO_LENGTH = 15;
+// Secret word max length (see backend/app.py's own MAX_SECRET_LENGTH,
+// kept in sync) — at the user's explicit request, to let a user prove a
+// pseudo belongs to them.
+const MAX_SECRET_LENGTH = 60;
 const PREFS_COOKIE = "cwf-prefs";
 
 function loadPrefs() {
@@ -2138,11 +2166,29 @@ function renderUserPseudo() {
 function openWelcomeOverlay() {
   welcomeLanguageSelect.value = uiLanguage;
   welcomePseudoInput.value = userPseudo;
+  welcomeSecretInput.value = userSecret;
   welcomeOverlay.hidden = false;
   welcomePseudoInput.focus();
 }
 
-welcomeForm.addEventListener("submit", (event) => {
+// POST /api/pseudo/claim (backend/app.py + backend/secret_store.py) — at
+// the user's explicit request: "Mot secret" proves a chosen pseudo
+// belongs to this user. Returns true (claim accepted — either the secret
+// matched, or the pseudo was genuinely unclaimed and is now registered
+// with it) or false (the pseudo already exists under a different secret
+// — the caller must keep the panel open and tell the user so).
+async function claimPseudoSecret(pseudo, secret) {
+  const response = await fetchWithTimeout("/api/pseudo/claim", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pseudo, secret }),
+  }, FETCH_TIMEOUT_MS);
+  if (!response.ok) throw new Error("pseudo claim failed: " + response.status);
+  const data = await response.json();
+  return !!data.ok;
+}
+
+welcomeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const pseudo = welcomePseudoInput.value.trim().slice(0, MAX_PSEUDO_LENGTH);
   // Le panneau ne se ferme pas si le pseudo est vide, à la demande
@@ -2155,10 +2201,50 @@ welcomeForm.addEventListener("submit", (event) => {
     return;
   }
   welcomePseudoInput.setCustomValidity("");
+  // Même règle pour le mot secret, à la demande explicite de
+  // l'utilisateur : "Le 'Mot secret' ne doit pas être vide pour pouvoir
+  // fermer la boite (comme le pseudo)."
+  const secret = welcomeSecretInput.value.trim().slice(0, MAX_SECRET_LENGTH);
+  if (!secret) {
+    welcomeSecretInput.setCustomValidity(I18N[uiLanguage].welcomeSecretRequired);
+    welcomeSecretInput.reportValidity();
+    return;
+  }
+  welcomeSecretInput.setCustomValidity("");
+
+  welcomeAcceptBtn.disabled = true;
+  let claimed;
+  try {
+    claimed = await claimPseudoSecret(pseudo, secret);
+  } catch (err) {
+    welcomeSecretInput.setCustomValidity(I18N[uiLanguage].welcomeSecretCheckError);
+    welcomeSecretInput.reportValidity();
+    welcomeAcceptBtn.disabled = false;
+    return;
+  }
+  welcomeAcceptBtn.disabled = false;
+  if (!claimed) {
+    // Pseudo déjà pris sous un autre mot secret — à la demande explicite
+    // de l'utilisateur : "signaler à l'utilisateur que ce Pseudo est déjà
+    // pris, ne pas fermer la boite."
+    welcomeSecretInput.setCustomValidity(I18N[uiLanguage].welcomeSecretTaken);
+    welcomeSecretInput.reportValidity();
+    return;
+  }
+
   userPseudo = pseudo;
-  savePrefs({ accepted: true, lang: uiLanguage, pseudo: userPseudo });
+  userSecret = secret;
+  savePrefs({ accepted: true, lang: uiLanguage, pseudo: userPseudo, secret: userSecret });
   renderUserPseudo();
   welcomeOverlay.hidden = true;
+  // Redéclenche un battement de présence tout de suite (voir
+  // pingPresence's own docstring) plutôt que d'attendre le prochain tick
+  // du setInterval, pour que LOG_USERS reflète sans délai perceptible un
+  // utilisateur qui vient de se nommer (ou de changer de pseudo) — à la
+  // demande explicite de l'utilisateur. Fire-and-forget, comme
+  // pingPresence() l'est déjà partout ailleurs — ne doit jamais retarder
+  // la fermeture du panneau.
+  pingPresence();
   // Le pseudo peut avoir changé — si la Bibliothèque est ouverte (et
   // surtout sur le filtre "Mes grilles"), on la rafraîchit.
   if (!libraryPanel.hidden) {
@@ -2176,6 +2262,9 @@ welcomeForm.addEventListener("submit", (event) => {
 welcomePseudoInput.addEventListener("input", () => {
   welcomePseudoInput.setCustomValidity("");
 });
+welcomeSecretInput.addEventListener("input", () => {
+  welcomeSecretInput.setCustomValidity("");
+});
 
 userPseudoBtn.addEventListener("click", openWelcomeOverlay);
 
@@ -2185,9 +2274,24 @@ userPseudoBtn.addEventListener("click", openWelcomeOverlay);
     userPseudo = typeof prefs.pseudo === "string"
       ? prefs.pseudo.slice(0, MAX_PSEUDO_LENGTH)
       : "";
+    userSecret = typeof prefs.secret === "string"
+      ? prefs.secret.slice(0, MAX_SECRET_LENGTH)
+      : "";
     setUiLanguage(typeof prefs.lang === "string" ? prefs.lang : "fr");
     renderUserPseudo();
     checkForSavedInteractiveWork();
+    // Un pseudo choisi avant l'ajout du "Mot secret" (ou un cookie
+    // remis à zéro côté secret pour une autre raison) n'a pas encore de
+    // mot secret associé — à la demande explicite de l'utilisateur, on
+    // rouvre le panneau pour lui demander de compléter son profil,
+    // plutôt que de laisser ce pseudo durablement non protégé. Le
+    // panneau se comporte alors exactement comme d'habitude (le pseudo
+    // est déjà prérempli, le mot secret reste requis pour le fermer) —
+    // s'il n'a jamais été revendiqué par personne d'autre, le soumettre
+    // le revendique simplement pour la première fois.
+    if (userPseudo && !userSecret) {
+      openWelcomeOverlay();
+    }
   } else {
     setUiLanguage(detectBrowserLanguage());
     openWelcomeOverlay();
