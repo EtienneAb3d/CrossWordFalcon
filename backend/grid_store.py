@@ -89,7 +89,7 @@ def _slugify_title(title):
 
 
 def save_grid_json(result, language, difficulty, mode, title, bilingual=None, pseudo=None,
-                   theme=None, interactive=False):
+                   theme=None, interactive=False, origin=None):
     """Writes the grid to GRID_STORE/<language>/<id>.json — or, for a
     genuinely bilingual grid, GRID_STORE/bilingual/<id>.json instead — and
     returns the new record's own id (its filename stem, without the .json
@@ -122,7 +122,29 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     sauvegarder le pseudo dans le JSON de la grille." Stored verbatim in
     the record's own `pseudo` field (blank/whitespace normalised to
     `None`) so the web UI can show an author column and offer a "Mes
-    grilles" filter (see backend/app.py's `_library_page`)."""
+    grilles" filter (see backend/app.py's `_library_page`).
+
+    `origin` (`None` by default — every pre-existing caller unaffected)
+    is set only for a grid saved after being hand-edited from an
+    existing library grid (the "Ouvrir en mode Interactif" icon button —
+    see backend/app.py's `_library_record_to_interactive`/POST
+    `/api/interactive/from-library`), at the user's explicit request:
+    "Quand un utilisateur modifie une grille sélectionnée dans la
+    Bibliothèque, conserver dans la sauvegarde de la nouvelle grille, les
+    information sur la grille d'origine : nom de la grille, date de
+    création de la grille, auteur de la grille, ID de la grille." A plain
+    `{"id", "title", "pseudo", "created_at"}` dict, a straight snapshot of
+    the origin grid's own record at the moment editing started — never
+    re-read from the origin grid later (which may itself since have been
+    edited or deleted), so this stays a durable, self-contained record of
+    "what this grid was derived from" even if the origin's own file
+    later changes or disappears. Threaded through unchanged whenever the
+    edited grid is itself autosaved to GRID_WORK and back (see
+    `save_grid_work`'s own `origin` parameter) and re-published, so the
+    provenance survives a pause/resume of the editing session too. Drives
+    the "(créée depuis ...)" provenance tag the web UI's own Bibliothèque
+    list shows next to such a grid's title (see `_iter_stored_grids`
+    below and `frontend/static/script.js`'s `renderLibraryList`)."""
     is_bilingual = bool(bilingual) and bilingual != language
     pseudo = (pseudo or "").strip() or None
     # Thématique saisie par l'utilisateur (liste de mots), à la demande
@@ -153,6 +175,10 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
         # .get(). Shown as a "(Création)" tag next to the author in the
         # library list.
         "interactive": bool(interactive) or None,
+        # See this function's own docstring — a snapshot of the origin
+        # grid's {id, title, pseudo, created_at}, or None for a grid not
+        # derived from an existing library grid.
+        "origin": origin,
         "difficulty": difficulty,
         "mode": mode,
         "created_at": datetime.now().isoformat(),
@@ -165,8 +191,9 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
 
 def _iter_stored_grids():
     """Yields every stored grid's own compact metadata dict ({id,
-    created_at, language, bilingual, pseudo, theme, difficulty, title,
-    width, height}) — never the full pattern/solution/words payload, so listing
+    created_at, language, bilingual, pseudo, interactive, origin, theme,
+    difficulty, title, width, height}) — never the full pattern/solution/
+    words payload, so listing
     many grids stays cheap even though each file can run to several
     dozen KB.
     A file that fails to parse (corrupted, or written by some future,
@@ -202,6 +229,12 @@ def _iter_stored_grids():
             # author in the library list (frontend/static/script.js,
             # renderLibraryList). None/absent for every ordinary grid.
             "interactive": record.get("interactive"),
+            # Snapshot of the origin grid this one was edited from (see
+            # save_grid_json's own `origin` parameter) — None/absent for
+            # any grid not created by editing an existing library grid.
+            # Drives the "(créée depuis ...)" provenance tag next to the
+            # title in the library list (frontend/static/script.js).
+            "origin": record.get("origin"),
             # Thématique saisie à la génération (voir save_grid_json) —
             # `None`/absent pour une grille sans thématique ou d'avant ce
             # champ. Affichée dans la colonne "Thématique" de la
@@ -318,7 +351,7 @@ def _slugify_pseudo(pseudo):
 
 
 def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme,
-                    priority_words, seed, pseudo=None, resumed_from=None):
+                    priority_words, seed, pseudo=None, resumed_from=None, origin=None):
     """Autosaves (or updates) the in-progress state of one "Interactif"
     session. The very first call for a given `job_id` creates
     `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`; every later call
@@ -355,7 +388,17 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
     be, since nothing about "Suivant" placing a further word depends on
     continuing the *exact* same random sequence a resumed session would
     have followed had it never been interrupted). Returns the record's own
-    id (its filename stem)."""
+    id (its filename stem).
+
+    `origin` (`None` by default) is the same `{id, title, pseudo,
+    created_at}` snapshot `save_grid_json` accepts — see its own
+    docstring — carried through here too so a session's provenance
+    survives an autosave/resume/publish cycle: `backend/app.py` reads it
+    back from `JOBS[job_id]["interactive"]["origin"]` (set once, at
+    session start/resume, from whichever record this session came from —
+    a library grid, or a previously-resumed GRID_WORK entry that already
+    carried one) and passes it straight through on every autosave, so it
+    never has to be re-derived."""
     pseudo = (pseudo or "").strip() or None
     existing = list(GRID_WORK_DIR.glob(f"*_{job_id}.json")) if GRID_WORK_DIR.is_dir() else []
     created_at = None
@@ -400,6 +443,7 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
         "priority_words": sorted(priority_words or ()),
         "seed": seed,
         "pseudo": pseudo,
+        "origin": origin,
         "created_at": created_at or now,
         "updated_at": now,
     }
@@ -428,6 +472,12 @@ def _iter_stored_grid_work():
             "difficulty": record.get("difficulty"),
             "theme": record.get("theme"),
             "pseudo": record.get("pseudo"),
+            # See save_grid_work's own `origin` parameter — None/absent
+            # unless this session started by editing an existing library
+            # grid. Not currently shown by the "Créations" panel; kept
+            # here for parity with _iter_stored_grids and in case a later
+            # feature wants it.
+            "origin": record.get("origin"),
             "created_at": record.get("created_at"),
             "updated_at": record.get("updated_at"),
             "width": len(grid[0]) if grid and grid[0] else None,

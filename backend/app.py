@@ -40,7 +40,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .chatbot import ChatBot, ChatError
-from .clues import ClueGenerationError, LLMClueGenerator
+from .clues import ClueGenerationError, LLMClueGenerator, TITLE_PROPOSALS_COUNT
 from .dictionary_lookup import search as dictionary_search_impl
 from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError
@@ -716,11 +716,25 @@ class InteractiveVerifyRequest(BaseModel):
 class InteractiveTitleRequest(BaseModel):
     """Body of POST /api/interactive/title — the "Proposer un titre" button.
     `words` is a list of `{answer, accented?, canonical?}` for every grid
-    word; the backend asks the LLM for a title (best-effort, "" on
-    failure)."""
+    word; the backend asks the LLM for up to TITLE_PROPOSALS_COUNT (10)
+    candidate titles (best-effort, [] on failure — see backend/clues.py's
+    `LLMClueGenerator.generate_titles`), at the user's explicit request:
+    "Le bouton 'Proposer un titre' doit générer 10 propositions affichées
+    en dessous (comme 'Proposer une définition')."
+
+    `theme` (optional) is the CURRENT value of the "Thématique" field —
+    at the user's explicit request ("également utiliser le champ
+    Thématique si renseigné"). Sent by the frontend rather than always
+    read back from the session's own stored `theme`/`theme_description`
+    so a player's own live edit to the field is honoured immediately,
+    and so a re-edited grid whose theme was never computed into a rich
+    LLM sentence (see `_run_interactive_resume_job`'s own `theme_
+    description: None`) still gets *some* theme steering — falls back to
+    the session's own stored theme when omitted/blank."""
     job_id: str
     words: list[dict]
     language: str = "fr"
+    theme: Optional[str] = None
 
 
 class InteractiveSaveRequest(BaseModel):
@@ -1377,7 +1391,7 @@ DEFINE_COUNT = 10
 
 
 @app.get("/api/dictionary/define")
-async def dictionary_define(q: str, lang: str = "fr"):
+async def dictionary_define(q: str, lang: str = "fr", theme: str = ""):
     """"Définir" bouton du panneau Dictionnaire (voir frontend/static/
     script.js) : demande au LLM jusqu'à DEFINE_COUNT (10) définitions
     indépendantes de l'expression saisie, comme pour un mot de grille
@@ -1385,7 +1399,17 @@ async def dictionary_define(q: str, lang: str = "fr"):
     ancrage réel dictionnaire/exemples, même filtre de contenu — mais un
     seul appel best-effort, sans la boucle de relance par mot d'une
     génération de grille). Un ClueGenerationError (LLM injoignable)
-    devient un 503 propre ; le reste de l'UI n'est pas affecté."""
+    devient un 503 propre ; le reste de l'UI n'est pas affecté.
+
+    `theme` (optionnel, "" par défaut) est le contenu actuel du champ
+    "Thématique" du mode Interactif — à la demande explicite de
+    l'utilisateur ("Vérifier que le bouton 'Propose une définition'
+    utilise bien le champ thématique pour les propositions quand il est
+    renseigné") — le bouton "Proposer" (et "Définitions") de ce mode
+    l'envoie systématiquement quand ce champ n'est pas vide (voir
+    frontend/static/script.js's `dictionaryDefineUrl`). Le panneau
+    Dictionnaire générique, lui, n'envoie jamais ce paramètre : sans
+    grille en cours, il n'y a pas de thématique à transmettre."""
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
     text = q.strip()
@@ -1394,6 +1418,7 @@ async def dictionary_define(q: str, lang: str = "fr"):
     try:
         definitions = await asyncio.to_thread(
             clue_generator.generate_definitions, text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT,
+            timeout=90.0, theme_description=theme.strip() or None,
         )
     except ClueGenerationError as exc:
         logger.warning("dictionary_define unavailable: %s", exc)
@@ -2909,6 +2934,23 @@ async def _run_interactive_job(job_id, req):
             "has_theme": bool(priority_words),
             "impossible_cells": placed.get("impossible_cells", []),
             "low_candidate_cells": placed.get("low_candidate_cells", []),
+            # The raw theme string this session started from (already set
+            # on job["interactive"]["theme"] above — mirrored here too so
+            # the frontend can read it straight off pollJob()'s own return
+            # value, which is job["result"] alone, never job["interactive"]
+            # — see enterInteractiveMode()'s own use of it to re-fill the
+            # "Thématique" field on every entry path uniformly).
+            "theme": theme or None,
+            # Same reasoning as "theme" above: job["interactive"] already
+            # carries language/difficulty, but pollJob() only ever returns
+            # job["result"] to the frontend — mirrored here so
+            # enterInteractiveMode() can keep interactiveLanguage/
+            # interactiveDifficulty correct on every entry path (a real
+            # bug otherwise: "Publier"/"Sauvegarder" send whatever those
+            # two module-level `let`s last held, which used to only ever
+            # be set by the generation form's own submit handler).
+            "language": req.language,
+            "difficulty": req.difficulty,
         }
         progress("done")
         job["status"] = "done"
@@ -3346,31 +3388,56 @@ async def interactive_verify(req: InteractiveVerifyRequest):
 
 @app.post("/api/interactive/title")
 async def interactive_title(req: InteractiveTitleRequest):
-    """"Proposer un titre" button: one best-effort LLM call for a whole-
-    grid title. Returns "" (never an error) on any failure."""
+    """"Proposer un titre" button: one best-effort LLM call for up to
+    TITLE_PROPOSALS_COUNT (10) candidate titles for the whole grid,
+    displayed as a pick list the same way "Proposer une définition"
+    already shows its own proposals — see backend/clues.py's
+    `LLMClueGenerator.generate_titles`, at the user's explicit request.
+    Returns `{"titles": [...]}`, possibly `[]` (never an error) on any
+    failure.
+
+    The theme steering the request carries — `req.theme` if given
+    (the CURRENT "Thématique" field, per InteractiveTitleRequest's own
+    docstring), else this session's own stored `theme_description` (a
+    themed FRESH generation's rich LLM sentence — see `_run_generate_
+    job`/`_build_theme_glossary`), else its own raw `theme` string (a
+    re-edited grid, whose `theme_description` is never recomputed — see
+    `_run_interactive_resume_job`) — mirrors the same fallback chain
+    `req.theme` itself documents, so a caller that omits it entirely
+    still benefits from whatever theme context the session already has."""
     entries = [
         (w["answer"], w.get("accented") or w["answer"], w.get("canonical") or w["answer"])
         for w in req.words
         if w.get("answer")
     ]
     meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
+    theme_description = (
+        (req.theme or "").strip()
+        or meta.get("theme_description")
+        or meta.get("theme")
+        or None
+    )
     try:
-        title = await asyncio.to_thread(
-            clue_generator.generate_title, entries, req.language,
-            theme_description=(meta.get("theme_description") or None),
+        titles = await asyncio.to_thread(
+            clue_generator.generate_titles, entries, req.language,
+            count=TITLE_PROPOSALS_COUNT, theme_description=theme_description,
         )
     except Exception:
         logger.exception("interactive title generation failed")
-        title = ""
-    return {"title": title or ""}
+        titles = []
+    return {"titles": titles}
 
 
 @app.post("/api/interactive/save")
 async def interactive_save(req: InteractiveSaveRequest):
-    """"Sauvegarder" button: rebuild a generate_grid()-shaped result from
-    the final editable grid + hand-written definitions, save it to the
+    """"Publier" button: rebuild a generate_grid()-shaped result from the
+    final editable grid + hand-written definitions, save it to the
     library tagged interactive=True ("(Création)"), best-effort SVG/PNG.
-    Returns the new library id."""
+    If this session started from an existing library grid ("Ouvrir en
+    mode Interactif"), carries that grid's own origin snapshot
+    (job["interactive"]["origin"], set by _run_interactive_resume_job)
+    onto the new record — see grid_store.save_grid_json's own `origin`
+    parameter. Returns the new library id."""
     rows = len(req.grid)
     cols = len(req.grid[0]) if req.grid else 0
     if rows < 1 or cols < 1:
@@ -3419,9 +3486,16 @@ async def interactive_save(req: InteractiveSaveRequest):
     except OSError:
         logger.warning("interactive save: SVG/PNG export skipped")
     pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
+    # Read once, up front, so both saves below (the new library record and
+    # the GRID_WORK snapshot further down) agree on the same origin
+    # snapshot — see grid_store.save_grid_json/save_grid_work's own
+    # `origin` parameter and _run_interactive_resume_job's own comment on
+    # job["interactive"]["origin"].
+    meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
     grid_id = await asyncio.to_thread(
         save_grid_json, result, req.language, req.difficulty, "interactive",
         req.title, None, pseudo, (req.theme or "").strip() or None, True,
+        meta.get("origin"),
     )
     # Also refresh this session's own GRID_WORK snapshot to the final,
     # published state (at the user's explicit request: "Au moment de
@@ -3435,7 +3509,6 @@ async def interactive_save(req: InteractiveSaveRequest):
     # calls delete_grid_work).
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is not None:
-        meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
         try:
             await asyncio.to_thread(
                 save_grid_work,
@@ -3444,7 +3517,7 @@ async def interactive_save(req: InteractiveSaveRequest):
                 meta.get("difficulty", req.difficulty),
                 meta.get("theme") or ((req.theme or "").strip() or None),
                 sess["priority_words"], sess.get("seed", 0), pseudo,
-                sess.get("resumed_from"),
+                sess.get("resumed_from"), meta.get("origin"),
             )
         except Exception:
             logger.warning("interactive save: GRID_WORK snapshot skipped", exc_info=True)
@@ -3466,8 +3539,9 @@ async def interactive_save(req: InteractiveSaveRequest):
 async def interactive_save_work(req: InteractiveSaveWorkRequest):
     """Autosave fired by the frontend after every "Suivant"/"Précédent"
     click — see InteractiveSaveWorkRequest. `language`/`difficulty`/
-    `theme` are read back from `JOBS[req.job_id]["interactive"]` (set once
-    at session start/resume) rather than trusted from the request body."""
+    `theme`/`origin` are read back from `JOBS[req.job_id]["interactive"]`
+    (set once at session start/resume) rather than trusted from the
+    request body."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
@@ -3478,7 +3552,7 @@ async def interactive_save_work(req: InteractiveSaveWorkRequest):
         req.job_id, req.grid, req.definitions, req.title,
         meta.get("language", "fr"), meta.get("difficulty", "easy"), meta.get("theme"),
         sess["priority_words"], sess.get("seed", 0), pseudo,
-        sess.get("resumed_from"),
+        sess.get("resumed_from"), meta.get("origin"),
     )
     return {"work_id": work_id}
 
@@ -3581,6 +3655,17 @@ async def _run_interactive_resume_job(job_id, record):
             "theme": record.get("theme"),
             "has_theme": bool(priority_words),
             "theme_description": None,
+            # Snapshot of the grid this session was derived from — set
+            # only when `record` itself carries one (a library grid
+            # opened via "Ouvrir en mode Interactif", or a GRID_WORK
+            # entry that already carried its own — see
+            # _library_record_to_interactive/save_grid_work's own
+            # `origin`) — None for an ordinary fresh session/resume.
+            # Read back by POST /api/interactive/save[_work] and passed
+            # straight through to grid_store.save_grid_json/
+            # save_grid_work so the provenance survives both a publish
+            # and a pause/resume of the editing session.
+            "origin": record.get("origin"),
         }
         job["result"] = {
             "width": cols,
@@ -3597,6 +3682,25 @@ async def _run_interactive_resume_job(job_id, record):
             # session never needs to do.
             "definitions": record.get("definitions") or [],
             "title": record.get("title") or "",
+            # The raw theme string this session started from — mirrors
+            # job["interactive"]["theme"] above, at the user's explicit
+            # request: "Quand un utilisateur réédite une grille
+            # thématique, renseigner le champ Thématique avec les mots de
+            # la grille d'origine." pollJob() only ever returns job
+            # ["result"], never job["interactive"], so it needs to be
+            # here too for enterInteractiveMode() to re-fill the
+            # "Thématique" field — works identically whether `record`
+            # came from a real GRID_WORK resume or from a library grid
+            # reshaped by _library_record_to_interactive.
+            "theme": record.get("theme"),
+            # Same reasoning as "theme" above, and as the fresh-start
+            # path's own job["result"] in _run_interactive_job: pollJob()
+            # only ever returns job["result"], so language/difficulty
+            # (already on job["interactive"]) need to be mirrored here too
+            # for enterInteractiveMode() to keep interactiveLanguage/
+            # interactiveDifficulty correct on this entry path as well.
+            "language": language,
+            "difficulty": difficulty,
         }
         progress("done")
         job["status"] = "done"
@@ -3626,17 +3730,28 @@ def _library_record_to_interactive(record):
     GRID_WORK `definitions` list ({row, col, direction, clue}) is a
     direct projection.
 
-    Deliberately carries NO `id` key: `_run_interactive_resume_job` reads
-    `record.get("id")` into the session's `resumed_from`, which
-    grid_store.save_grid_work only honours for a real GRID_WORK id
-    (`_WORK_ID_RE`) — so with it absent, the first autosave simply
-    creates a fresh GRID_WORK file, exactly "créer une nouvelle tâche
-    dans GRID_WORK". `priority_words` stays empty even for a themed grid:
-    the raw `theme` string is kept (shown in "Créations"/on save) but the
-    resolved Qdrant glossary was never stored on a library record — the
-    same limitation a recompute job already has (see _run_recompute_job).
-    `seed` is a fixed 0: interactive placement only needs *a* reproducible
-    starting point, not a continuation of any prior RNG stream."""
+    Deliberately carries NO top-level `id` key of its own (`_run_
+    interactive_resume_job` reads `record.get("id")` into the session's
+    `resumed_from`, which grid_store.save_grid_work only honours for a
+    real GRID_WORK id — `_WORK_ID_RE` — so with it absent, the first
+    autosave simply creates a fresh GRID_WORK file, exactly "créer une
+    nouvelle tâche dans GRID_WORK"). `priority_words` stays empty even
+    for a themed grid: the raw `theme` string is kept (shown in
+    "Créations"/on save) but the resolved Qdrant glossary was never
+    stored on a library record — the same limitation a recompute job
+    already has (see _run_recompute_job). `seed` is a fixed 0: interactive
+    placement only needs *a* reproducible starting point, not a
+    continuation of any prior RNG stream.
+
+    `origin` is a snapshot of THIS library record's own id/title/pseudo/
+    created_at — at the user's explicit request: "Quand un utilisateur
+    modifie une grille sélectionnée dans la Bibliothèque, conserver dans
+    la sauvegarde de la nouvelle grille, les information sur la grille
+    d'origine : nom de la grille, date de création de la grille, auteur
+    de la grille, ID de la grille." `_run_interactive_resume_job` reads
+    it into `job["interactive"]["origin"]`, from where every later save
+    (POST /api/interactive/save[_work]) picks it up — see grid_store.
+    save_grid_json/save_grid_work's own `origin` parameter."""
     grid = record.get("solution") or record.get("pattern") or []
     definitions = [
         {
@@ -3656,6 +3771,12 @@ def _library_record_to_interactive(record):
         "theme": record.get("theme"),
         "priority_words": [],
         "seed": 0,
+        "origin": {
+            "id": record.get("id"),
+            "title": record.get("title") or "",
+            "pseudo": record.get("pseudo"),
+            "created_at": record.get("created_at"),
+        },
     }
 
 

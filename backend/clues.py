@@ -181,6 +181,25 @@ _TITLE_RETRIES = 3
 # a genuinely empty result, so a normal call still makes exactly one.
 DEFINE_RETRIES = 2
 
+# generate_titles() (the "Proposer un titre" button's own method — see
+# its own docstring) asks for this many distinct candidate titles and
+# shows every one that survives filtering, at the user's explicit
+# request: "Le bouton 'Proposer un titre' doit générer 10 propositions
+# affichées en dessous (comme 'Proposer une définition')." Deliberately a
+# separate constant from _TITLE_COUNT (3) — generate_title() itself is
+# unchanged, still asking for only 3 and picking one at random for the
+# automatic, non-interactive pipeline; this one is only ever used by the
+# "Proposer un titre" button's own list-and-pick interaction.
+TITLE_PROPOSALS_COUNT = 10
+
+# How many EXTRA times generate_titles() re-asks the model when a whole
+# response yields zero usable candidates at all — same bounded-retry
+# shape as DEFINE_RETRIES right above (never _TITLE_RETRIES's own
+# always-retry-until-something-usable loop: there is no single "the"
+# title to protect the quality of here by discarding a merely-small
+# batch, so a genuinely non-empty response is already useful).
+TITLE_PROPOSALS_RETRIES = 2
+
 # A wrapping quote pair the model sometimes puts around a title despite
 # rule 2 explicitly forbidding it (e.g. '"Vol de Nuit"') — stripped by
 # _clean_title. Deliberately narrow (quote characters only, not general
@@ -1364,108 +1383,8 @@ class LLMClueGenerator:
         # rejection — the check only ever fires on a content word.
         hollow = _TITLE_HOLLOW_WORDS.get(language, set())
         grid_norm = {_normalize(w) for w in words} - hollow
-        theme_description = " ".join(str(theme_description or "").split())
-        theme_note = (
-            "THEME INSPIRATION — this grid was built around a theme; here "
-            f"is a description of it, for context only: \"{theme_description}\". "
-            "You may let it inform the mood, imagery or setting of your "
-            "titles if that helps, but you are NOT required to reference "
-            "it directly, and it never overrides the rules above — in "
-            "particular, never quote or repeat this description verbatim "
-            "(a title is 1 to "
-            f"{MAX_TITLE_WORDS} words, not a sentence), and a title must "
-            "still never contain a grid word.\n\n"
-            if theme_description else ""
-        )
-        # History: first rewritten (after "Titre de mots croisés en
-        # français") to carry three concrete worked GOOD examples
-        # (words -> title), following this module's usual small-model
-        # pattern. That backfired badly here — Qwen3-4B simply COPIED the
-        # first example's title ("The salty horizon"), emitting
-        # "L'horizon salé" for every grid regardless of its words (the
-        # string was also the most-repeated token in the prompt, since
-        # the WRONG-answers block quoted it three more times). Titles are
-        # short and creative, so a tiny model latches onto any literal
-        # title string it sees far more than it does for a full-sentence
-        # clue. Fix: NO concrete good-example title strings at all — only
-        # an abstract shape description plus a "build it from THESE grid
-        # words" construction step, plus a higher per-request temperature
-        # (below) so the output actually varies with the input.
-        system_prompt = (
-            "You invent TITLES for a crossword puzzle — short names, like "
-            "the title of a book, a song, or a film. You are given the "
-            "list of every answer word in the grid.\n\n"
-            f"Output exactly {_TITLE_COUNT} DIFFERENT titles, ONE PER "
-            f"LINE. Each title is 1 to {MAX_TITLE_WORDS} words, entirely "
-            f"in {language_name}, loosely evoking the words or their "
-            "shared theme if one is apparent. The "
-            f"{_TITLE_COUNT} must be genuinely different from each other "
-            "— a different key word or a different angle each time, not "
-            "near-duplicates.\n\n"
-            f"Your ENTIRE reply is those {_TITLE_COUNT} lines and nothing "
-            "else. Each line's first character is that title's first "
-            "character. No numbering, no bullet, no blank line between "
-            "them, no greeting, no preamble, no comment before or after.\n\n"
-            "NEVER do any of these:\n"
-            f"- Give fewer than {_TITLE_COUNT} lines, or repeat the same "
-            "title twice.\n"
-            "- Describe the task or explain yourself. A line must NOT "
-            "mean things like \"a crossword title\", \"title in "
-            f"{language_name}\", \"here is a title\", \"puzzle name\" — "
-            "that is a description, not a title.\n"
-            "- Start a line with a greeting or an introductory phrase "
-            "such as \"Bonjour\", \"Je propose\", \"Voici\", \"Voici les "
-            "titres\", \"Le titre est\", \"Un titre possible\", \"Je "
-            "suggère\", \"Here is\", \"How about\" — or any equivalent in "
-            f"{language_name}. Write each bare title with no such "
-            "lead-in.\n"
-            "- Add any comment, justification or explanation after a "
-            "title (\"car il évoque…\", \"parce que…\", \"(en référence "
-            "à…)\"). Stop each line the moment its title is complete.\n"
-            "- Output a whole sentence, a definition, or a list of the "
-            "grid words.\n"
-            "- Add quotes, a trailing period, or a label such as "
-            "\"Title:\" / \"Titre :\".\n"
-            f"- Write in any language other than {language_name}, even if "
-            "some answers are foreign names.\n"
-            "- MOST IMPORTANT RULE: never put a grid word into a title. "
-            "Not the word itself, not its singular/plural, not another "
-            "tense of it, not it with or without an accent. If a grid "
-            "word (or any form of it) appears in your title, that title "
-            "is rejected. Only tiny function words (a, the, of, in, and "
-            "their equivalents) are allowed to coincide.\n\n"
-            "SHAPE of a good title: 2 or 3 words, an evocative noun "
-            "phrase or a small play on words — an image or a mood, never "
-            "a sentence and never a definition. (No sample titles are "
-            "given on purpose: any example would just get copied. Invent "
-            "your own.)\n\n"
-            f"{theme_note}"
-            "HOW TO BUILD THEM:\n"
-            "1. Read the grid words in the user message. Note the mood, "
-            "place, season, time of day, or action they bring to mind.\n"
-            f"2. Build {_TITLE_COUNT} short names in "
-            f"{language_name} that EVOKE that mood/place/idea WITHOUT "
-            "naming any of the grid words. Say it sideways: a related "
-            "word, a broader word, a metaphor. Each of the "
-            f"{_TITLE_COUNT} anchored on a DIFFERENT idea. A title that "
-            "could sit on top of any random grid is also wrong — it must "
-            "clearly fit THESE words while never containing one.\n"
-            "3. Before writing each line, scan it word by word against "
-            "the grid list. If any word matches, replace it with a "
-            "synonym or a related image and scan again.\n\n"
-            "WRONG answers, never produce anything like these:\n"
-            "- \"Titre de mots croisés\", \"Titre de la grille\", "
-            f"\"{language_name} crossword\" — that names the task, not "
-            "this puzzle.\n"
-            "- Any line opening with \"Je propose\", \"Voici les "
-            "titres\", \"Bonjour\" or the like — each line's first "
-            "character is its title's first character.\n"
-            "- A title followed by \", car…\" / \"(en référence à…)\" — "
-            "stop the instant the title is complete.\n"
-            "- A title with no visible link to the grid words below.\n"
-            "- A title that contains any grid word from the list below "
-            "(this is the rule broken most often — check every line "
-            "against the list before sending).\n"
+        system_prompt = self._build_title_system_prompt(
+            _TITLE_COUNT, language_name, theme_description,
         )
         # Show the model only a random ~1/3 of the grid words, re-drawn
         # every attempt, at the user's explicit request ("rather than
@@ -1603,6 +1522,267 @@ class LLMClueGenerator:
         )
         return ""
 
+    def generate_titles(self, word_entries, language="fr", count=TITLE_PROPOSALS_COUNT,
+                         timeout=DEFAULT_TIMEOUT, cancel_event=None, theme_description=None):
+        """"Proposer un titre" button in the "Interactif" authoring mode
+        (POST /api/interactive/title): asks the LLM for up to `count` (10
+        by default, TITLE_PROPOSALS_COUNT) distinct candidate titles for
+        the whole grid, and returns EVERY ONE that survives the same
+        validity checks generate_title() itself already uses (length,
+        punctuation, grid-word reuse, wrong language) — instead of
+        generate_title()'s own "generate N, pick one at random" behavior
+        for the automatic, non-interactive pipeline, at the user's
+        explicit request: "Le bouton 'Proposer un titre' doit générer 10
+        propositions affichées en dessous (comme 'Proposer une
+        définition')." The player is shown every usable candidate and
+        picks one — the exact same "show a list, click a line to fill the
+        field" interaction generate_definitions()/"Proposer une
+        définition" already backs, reused here for titles rather than
+        picking automatically.
+
+        Shares `_build_title_system_prompt()` with generate_title() (see
+        that method's own docstring for the reasoning behind the prompt's
+        shape/wording — this is the exact same prompt, just parametrized
+        by `count` instead of the fixed _TITLE_COUNT), but is otherwise
+        its own single-call, bounded-retry method — deliberately NOT
+        generate_title()'s own "keep retrying up to _TITLE_RETRIES times
+        until something usable comes back" loop: there is no single "the"
+        title to protect the quality of by discarding a merely-small
+        batch here, so a genuinely non-empty response, even a short one,
+        is already useful to show the player. Instead it mirrors
+        generate_definitions()'s own bounded-retry shape (only re-asking,
+        up to TITLE_PROPOSALS_RETRIES extra times, when a whole attempt
+        yields ZERO usable candidates at all).
+
+        Talks to the LLM directly via `httpx.post` (like generate_title()
+        itself), never through `_call()` — the same reason generate_title()
+        doesn't: a title needs a higher, more creative `temperature` than
+        the shared TEMPERATURE constant `_call()` always uses. No per-call
+        `LOG_LLM/` record, matching generate_title()'s own convention for
+        this kind of auxiliary, non-puzzle-output call.
+
+        `word_entries`/`theme_description` are the exact same shape/
+        meaning as generate_title()'s own — see its docstring. Returns a
+        list of up to `count` title strings, de-duplicated (case-
+        insensitively), in the model's own order — possibly fewer than
+        `count`, possibly `[]`; never raises for a bad/empty LLM answer,
+        only lets a genuine `GenerationCancelled` through."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelled()
+        words = sorted({accented for _, accented, _ in word_entries})
+        if not words:
+            return []
+        language_name = LANGUAGE_NAMES.get(language, language)
+        hollow = _TITLE_HOLLOW_WORDS.get(language, set())
+        grid_norm = {_normalize(w) for w in words} - hollow
+        system_prompt = self._build_title_system_prompt(count, language_name, theme_description)
+        sample_size = max(1, round(len(words) / 3))
+        total_rounds = 1 + TITLE_PROPOSALS_RETRIES
+        titles = []
+        seen = set()
+        attempt = 0
+        for attempt in range(total_rounds):
+            if cancel_event is not None and cancel_event.is_set():
+                raise GenerationCancelled()
+            shown = sorted(random.sample(words, sample_size))
+            user_message = (
+                "Some words from the grid: " + ", ".join(shown)
+                + f"\n{count} titles, one per line:"
+            )
+            try:
+                response = httpx.post(
+                    self.base_url,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ],
+                        # See generate_title()'s own identical field for
+                        # why this is deliberately higher than the shared
+                        # TEMPERATURE.
+                        "temperature": 0.9,
+                        # Room for `count` short lines (reasoning itself
+                        # is disabled by reasoning_effort:none) — scales
+                        # with count the same way generate_title()'s own
+                        # fixed `+ 60` scales with _TITLE_COUNT (3): 20
+                        # tokens of headroom per requested line.
+                        "max_tokens": REASONING_TOKEN_BUDGET + 20 * count,
+                        # See generate_title()'s own identical field for
+                        # the full reasoning.
+                        "reasoning_effort": "none",
+                    },
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+            except httpx.HTTPError as e:
+                logger.warning(
+                    "title proposals attempt %d/%d failed (%s, model=%r): %s",
+                    attempt + 1, total_rounds, self.base_url, self.model, e,
+                )
+                continue
+            logger.info(
+                "title proposals attempt %d/%d: raw LLM response: %r",
+                attempt + 1, total_rounds, content,
+            )
+            candidates = _clean_titles(_strip_reasoning(content))
+            for t in candidates:
+                if _detect_wrong_language(t, language):
+                    continue
+                if _title_too_long(t):
+                    continue
+                if _title_has_bad_punctuation(t):
+                    continue
+                if _title_grid_word_reuse(t, grid_norm, hollow):
+                    continue
+                key = t.casefold()
+                if key in seen:
+                    continue
+                seen.add(key)
+                titles.append(t)
+                if len(titles) >= count:
+                    break
+            if titles:
+                break
+            logger.info(
+                "title proposals attempt %d/%d: no usable candidate "
+                "(empty / wrong-language / too long / bad punctuation / "
+                "all reuse a grid word), retrying",
+                attempt + 1, total_rounds,
+            )
+        logger.info(
+            "title proposals: %d/%d title(s) kept (%d attempt(s))",
+            len(titles), count, attempt + 1,
+        )
+        return titles
+
+    @staticmethod
+    def _build_title_system_prompt(count, language_name, theme_description=None):
+        """The system prompt generate_title()/generate_titles() share,
+        parametrized by how many distinct candidate titles to ask for —
+        `_TITLE_COUNT` (3) for generate_title()'s own "generate N, pick
+        one at random" diversity trick; `TITLE_PROPOSALS_COUNT` (10) for
+        generate_titles()'s own "show every one, let the player pick"
+        list (the "Proposer un titre" button — see that method's
+        docstring). Factored out once a second caller needed the exact
+        same prompt shape at a different count, rather than duplicating
+        this whole block a second time.
+
+        `theme_description`, when given (a themed generation's own
+        keyword-list/LLM sentence — see `describe_theme`), is folded in
+        as an inspiration reference: the model is told it may draw on its
+        mood/imagery but must not quote it verbatim, and the pre-existing
+        "never contain a grid word" rule still applies unconditionally on
+        top of it. `None`/empty leaves the prompt completely unchanged
+        from before this parameter existed — see generate_title()'s own
+        docstring for the full history of this design.
+
+        History: first rewritten (after "Titre de mots croisés en
+        français") to carry three concrete worked GOOD examples (words ->
+        title), following this module's usual small-model pattern. That
+        backfired badly here — Qwen3-4B simply COPIED the first example's
+        title ("The salty horizon"), emitting "L'horizon salé" for every
+        grid regardless of its words (the string was also the most-
+        repeated token in the prompt, since the WRONG-answers block
+        quoted it three more times). Titles are short and creative, so a
+        tiny model latches onto any literal title string it sees far more
+        than it does for a full-sentence clue. Fix: NO concrete good-
+        example title strings at all — only an abstract shape description
+        plus a "build it from THESE grid words" construction step, plus a
+        higher per-request temperature (set by the two callers themselves)
+        so the output actually varies with the input."""
+        theme_description = " ".join(str(theme_description or "").split())
+        theme_note = (
+            "THEME INSPIRATION — this grid was built around a theme; here "
+            f"is a description of it, for context only: \"{theme_description}\". "
+            "You may let it inform the mood, imagery or setting of your "
+            "titles if that helps, but you are NOT required to reference "
+            "it directly, and it never overrides the rules above — in "
+            "particular, never quote or repeat this description verbatim "
+            "(a title is 1 to "
+            f"{MAX_TITLE_WORDS} words, not a sentence), and a title must "
+            "still never contain a grid word.\n\n"
+            if theme_description else ""
+        )
+        return (
+            "You invent TITLES for a crossword puzzle — short names, like "
+            "the title of a book, a song, or a film. You are given the "
+            "list of every answer word in the grid.\n\n"
+            f"Output exactly {count} DIFFERENT titles, ONE PER "
+            f"LINE. Each title is 1 to {MAX_TITLE_WORDS} words, entirely "
+            f"in {language_name}, loosely evoking the words or their "
+            "shared theme if one is apparent. The "
+            f"{count} must be genuinely different from each other "
+            "— a different key word or a different angle each time, not "
+            "near-duplicates.\n\n"
+            f"Your ENTIRE reply is those {count} lines and nothing "
+            "else. Each line's first character is that title's first "
+            "character. No numbering, no bullet, no blank line between "
+            "them, no greeting, no preamble, no comment before or after.\n\n"
+            "NEVER do any of these:\n"
+            f"- Give fewer than {count} lines, or repeat the same "
+            "title twice.\n"
+            "- Describe the task or explain yourself. A line must NOT "
+            "mean things like \"a crossword title\", \"title in "
+            f"{language_name}\", \"here is a title\", \"puzzle name\" — "
+            "that is a description, not a title.\n"
+            "- Start a line with a greeting or an introductory phrase "
+            "such as \"Bonjour\", \"Je propose\", \"Voici\", \"Voici les "
+            "titres\", \"Le titre est\", \"Un titre possible\", \"Je "
+            "suggère\", \"Here is\", \"How about\" — or any equivalent in "
+            f"{language_name}. Write each bare title with no such "
+            "lead-in.\n"
+            "- Add any comment, justification or explanation after a "
+            "title (\"car il évoque…\", \"parce que…\", \"(en référence "
+            "à…)\"). Stop each line the moment its title is complete.\n"
+            "- Output a whole sentence, a definition, or a list of the "
+            "grid words.\n"
+            "- Add quotes, a trailing period, or a label such as "
+            "\"Title:\" / \"Titre :\".\n"
+            f"- Write in any language other than {language_name}, even if "
+            "some answers are foreign names.\n"
+            "- MOST IMPORTANT RULE: never put a grid word into a title. "
+            "Not the word itself, not its singular/plural, not another "
+            "tense of it, not it with or without an accent. If a grid "
+            "word (or any form of it) appears in your title, that title "
+            "is rejected. Only tiny function words (a, the, of, in, and "
+            "their equivalents) are allowed to coincide.\n\n"
+            "SHAPE of a good title: 2 or 3 words, an evocative noun "
+            "phrase or a small play on words — an image or a mood, never "
+            "a sentence and never a definition. (No sample titles are "
+            "given on purpose: any example would just get copied. Invent "
+            "your own.)\n\n"
+            f"{theme_note}"
+            "HOW TO BUILD THEM:\n"
+            "1. Read the grid words in the user message. Note the mood, "
+            "place, season, time of day, or action they bring to mind.\n"
+            f"2. Build {count} short names in "
+            f"{language_name} that EVOKE that mood/place/idea WITHOUT "
+            "naming any of the grid words. Say it sideways: a related "
+            "word, a broader word, a metaphor. Each of the "
+            f"{count} anchored on a DIFFERENT idea. A title that "
+            "could sit on top of any random grid is also wrong — it must "
+            "clearly fit THESE words while never containing one.\n"
+            "3. Before writing each line, scan it word by word against "
+            "the grid list. If any word matches, replace it with a "
+            "synonym or a related image and scan again.\n\n"
+            "WRONG answers, never produce anything like these:\n"
+            "- \"Titre de mots croisés\", \"Titre de la grille\", "
+            f"\"{language_name} crossword\" — that names the task, not "
+            "this puzzle.\n"
+            "- Any line opening with \"Je propose\", \"Voici les "
+            "titres\", \"Bonjour\" or the like — each line's first "
+            "character is its title's first character.\n"
+            "- A title followed by \", car…\" / \"(en référence à…)\" — "
+            "stop the instant the title is complete.\n"
+            "- A title with no visible link to the grid words below.\n"
+            "- A title that contains any grid word from the list below "
+            "(this is the rule broken most often — check every line "
+            "against the list before sending).\n"
+        )
+
     def describe_theme(self, theme_words, language="fr", timeout=DEFAULT_TIMEOUT,
                        cancel_event=None, temperature=0.7):
         """Asks the LLM for a short (~30-word) telegraphic
@@ -1702,9 +1882,12 @@ class LLMClueGenerator:
         return sentence
 
     def generate_definitions(self, text, language="fr", difficulty="medium",
-                             count=10, timeout=90.0):
+                             count=10, timeout=90.0, theme_description=None):
         """"Définir" button in the Dictionary panel (frontend/static/
-        script.js, GET /api/dictionary/define): asks the LLM for up to
+        script.js, GET /api/dictionary/define) — also reused by the
+        "Interactif" authoring mode's own "Proposer une définition"
+        button/"Définitions" button (a specific grid word, via that same
+        endpoint) — asks the LLM for up to
         `count` (10 by default) independent definitions of the typed
         word or expression, one per line — reusing the same grounding
         (`_build_user_message`: real dictionary definitions, real usage
@@ -1712,6 +1895,25 @@ class LLMClueGenerator:
         the same content filter (`_filter_candidates`) already used for a
         real grid word's clue, but returning every surviving candidate
         instead of picking just one.
+
+        `theme_description` (`None` by default — no effect for any
+        pre-existing caller), when given, is the CURRENT value of the
+        Interactive mode "Thématique" field — at the user's explicit
+        request: "Vérifier que le bouton 'Propose une définition' utilise
+        bien le champ thématique pour les propositions quand il est
+        renseigné." Deliberately the raw, literal theme text as typed (or
+        pre-filled from a re-edited grid's own origin, see backend/app.py's
+        `_run_interactive_resume_job`), never a richer LLM-computed
+        description — there is no per-grid `describe_theme()` sentence
+        available to a free-text lookup like this one, and re-running that
+        whole LLM pass just for one "Proposer" click would add real
+        latency for a lightweight, best-effort button. Folded into the
+        user message as a dedicated `THEME` steering paragraph, the same
+        "strongly prefer it, but accuracy always wins" framing the grid-
+        word clue prompt's own THEME block already uses (see
+        `_build_user_message`), reworded for an arbitrary `count` of
+        independent definitions rather than a fixed 3 clues of one grid
+        word.
 
         Deliberately does NOT reuse `_build_system_prompt()` — that one
         is tightly tuned around asking for exactly 3 candidates plus a
@@ -1767,6 +1969,28 @@ class LLMClueGenerator:
             block = block_builder(entry, language, difficulty)
             if block:
                 parts.append(block)
+        theme_description = " ".join(str(theme_description or "").split())
+        if theme_description:
+            parts.append(
+                "THEME — these definitions are being written in the "
+                "context of a theme. Here is that theme: "
+                f"\"{theme_description}\". STRONGLY steer each of your "
+                f"{count} definitions toward this theme: whenever the "
+                "word/expression's real meaning leaves you ANY latitude "
+                "in angle, wording, imagery, chosen example or register, "
+                "deliberately pick the formulation that best evokes this "
+                "theme — its vocabulary, its setting, its people and "
+                "activities — rather than a neutral one. Prefer a "
+                "synonym, an example or a turn of phrase drawn from the "
+                "theme's world. The ONE thing this must never do is make "
+                "a definition wrong: it must still be accurate for THIS "
+                "EXACT word/expression (its real meaning — see the "
+                "ABSOLUTE RULE above) and point at nothing else. If a "
+                "theme-flavoured phrasing would be inaccurate or "
+                "ambiguous, drop the flavour for that definition and stay "
+                "plain — accuracy always wins that trade. Never quote "
+                "this theme text verbatim."
+            )
         user_message = "\n\n".join(parts)
         max_tokens = REASONING_TOKEN_BUDGET + 200 + 40 * count
         definitions = []

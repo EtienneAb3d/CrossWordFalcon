@@ -335,6 +335,18 @@ its clues and its title only — never the answers — with a footer line
 linking back to play it online, with its solution, at the same shareable
 address.
 
+A grid created this way (`backend/grid_store.py`, `save_grid_json`'s own
+`origin` field — a snapshot of the original grid's title, author and
+creation date taken the moment editing starts, never re-read from it
+later) keeps a note of the original grid it was edited from — published
+under **Publish**, its row in the Library shows that provenance right
+under the new title, e.g. "(created from *Original title* / *Author*
+*date*)" (`renderLibraryList`, `.library-origin-tag`); a grid that isn't
+derived from an existing one (a fresh Interactive session, or an
+automatically generated grid) never shows this line. Drafts saved to
+your **Créations** list along the way keep the same note, so it survives
+even if you pause and resume the editing session before publishing.
+
 The list shows at most 20 rows per page (`backend/app.py`,
 `LIBRARY_PAGE_SIZE`); **◀**/**▶** buttons (`#library-pagination`,
 `#library-prev-btn`/`#library-next-btn`) move between pages, and a
@@ -421,13 +433,21 @@ Once generation completes, the search-progress panel disappears and
   the rest of the word running through it in the current Across/Down
   direction is tinted light green (`applySelectedWordHighlight`), so it
   is clear which word is being filled. Type a letter to fill the cell
-  and move to the next cell of that word (`handleKeydown`,
-  `moveSelection`). Typing a **lowercase** letter continues across
-  (rightward); typing an **uppercase** letter (or holding Shift, or with
-  Caps Lock on) continues down — switching direction this way (or with
-  the Across/Down buttons) re-tints the green band along the other word
+  and move to the next cell in the current Across/Down direction
+  (`handleKeydown`, `moveSelection`) — so setting the direction with
+  **Ctrl** or the Across/Down buttons also controls which way typing
+  advances, not just Shift/Caps Lock. Typing an **uppercase** letter
+  (or holding Shift, or with Caps Lock on) still forces a downward
+  advance — an uppercase key implies a vertical word, and Shift/Caps Lock
+  set the direction to down anyway. Pressing **Ctrl** flips the current
+  Across/Down direction on each tap (`toggleDirectionOnCtrl`) —
+  press-to-toggle, unlike Shift/Caps Lock which only change direction
+  while held. Switching direction any of these ways (or with the
+  Across/Down buttons) re-tints the green band along the other word
   through the same cell. Backspace/Delete clears the selected cell
-  without moving.
+  without moving. The **arrow keys** move the selection to the next white
+  cell in that direction, skipping black cells and stopping at the grid
+  edge (`moveSelectionArrow`) — the same navigation Interactive mode has.
   Hovering a cell (or a clue line, see below) outlines every cell of that
   same word (`wordCellsAt`) and shows that word's own clue in a fixed
   5-line panel underneath the grid (`#hover-definition`). When nothing is
@@ -457,7 +477,19 @@ black-cell pattern and, if Thématique is filled in, a preferred-word
 glossary. The status line briefly shows "Building the interactive grid…"
 while the server prepares a pattern with one word already placed, then
 the grid appears in the usual result area with a control strip below it
-(`#interactive-controls`).
+(`#interactive-controls`). The Dictionary panel (see "Dictionary" above)
+opens automatically the moment the session starts, for looking words up
+while filling in the grid by hand; it never steals keyboard focus away
+from the grid to do so.
+
+Opening an existing grid for editing (the Library's own pencil icon, or
+resuming a "Créations" draft — see "Library" below) re-fills the
+Thématique field from that grid's own theme (`enterInteractiveMode`,
+reading `theme` off the started/resumed session's own result) rather
+than leaving it at whatever it previously held or blank — so a themed
+grid keeps steering both "Suggest a definition"/"Suggest a title" (see
+below) toward its own theme once you start editing it, with no need to
+retype it by hand.
 
 **Building the grid**
 
@@ -478,8 +510,10 @@ the grid appears in the usual result area with a control strip below it
   direction after a letter.
 - **→ / ↓** (`#interactive-dir-across-btn`/`#interactive-dir-down-btn`) —
   set which direction the cursor advances and which word counts as
-  "selected"; the same shared state as the virtual keyboard's arrows and
-  Shift/Caps Lock. They do **not** influence which word "Suivant" places.
+  "selected"; the same shared state as the virtual keyboard's arrows,
+  Shift/Caps Lock, and the **Ctrl** key (each Ctrl tap flips this
+  direction, `toggleDirectionOnCtrl`). They do **not** influence which
+  word "Suivant" places.
 
 **Writing the definitions**
 
@@ -490,7 +524,10 @@ the grid appears in the usual result area with a control strip below it
   (`#interactive-propose-btn`) — asks the language
   model for several possible definitions of the selected word (it must be
   fully filled in); click one of the suggestions to drop it into the
-  field.
+  field. When the Thématique field (see above) has something in it, the
+  suggestions lean toward that theme whenever the word's own real
+  meaning leaves room for it — a definition that would become wrong is
+  never sacrificed for the theme.
 - **Vérifier / Check** (`#interactive-verify-btn`) — checks that every
   word has a definition; if one is missing, it selects that word (and
   switches the Across/Down direction to match) so you can fill it in.
@@ -506,8 +543,18 @@ the grid appears in the usual result area with a control strip below it
 **Finishing**
 
 - Once every white cell is filled and every word has a definition, a
-  **title** field appears, pre-filled with a language-model suggestion
-  (`POST /api/interactive/title`) that you can edit freely.
+  **title** field appears, automatically pre-filled with one language-
+  model suggestion the first time — you can edit it freely from there,
+  or pick a different one from the list right below it (see the next
+  bullet).
+- **Proposer un titre / Suggest a title** (`#interactive-title-propose-btn`,
+  `POST /api/interactive/title`) — asks the language model for up to 10
+  distinct title ideas for the whole grid and lists them right below the
+  field, the same clickable-list behavior as "Suggest a definition"
+  above; click one to drop it into the title field. Clicking this button
+  never touches whatever is already typed there on its own — only
+  picking a line from the list does. Like "Suggest a definition", it
+  leans toward the Thématique field's own theme when one is set.
 - **Sauvegarder / Save** (`#interactive-draft-save-btn`, `POST /api/
   interactive/save_work`) — saves the whole current grid, its definitions
   and its title to your "Créations" list as a draft, **without**

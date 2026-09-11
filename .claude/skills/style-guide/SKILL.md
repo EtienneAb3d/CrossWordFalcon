@@ -772,19 +772,17 @@ English (see `project-best-practices`).
   state, so a revealed state never survives into the next generation.
 
 - `#hover-definition`'s idle placeholder (`hoverDefinitionPlaceholder`, all
-  5 languages) now also mentions that holding Shift (or having Caps Lock
-  on) switches which of a cell's two words — across or down — the hover
-  highlight/definition follows, at the user's explicit request. This
-  wasn't previously documented anywhere in the UI itself (only in
-  README.md, and there only for the *typing* convention, not hovering) —
-  the same modifier already drove `handleKeydown`'s upper/lowercase
-  direction convention and, since a later addition, `highlightWordAt()`'s
-  own hover direction (see the bidirectional-hover-highlighting entry
-  above), so this is documentation catching up to existing behavior, not
-  a new feature. No layout change needed: `#hover-definition` is already
-  5 lines tall (`height: 7.5rem`, `line-height: 1.5rem`) with
-  `overflow-wrap: break-word`, comfortably fitting the now-two-sentence
-  placeholder on any realistically-sized grid.
+  6 languages) mentions the direction-switch keys — holding Shift (or
+  having Caps Lock on), or pressing **Ctrl** (each Ctrl tap flips it, see
+  the `toggleDirectionOnCtrl` entry below) — that change which of a cell's
+  two words the hover highlight/definition follows, at the user's explicit
+  request ("Le message d'aide dans la zone de définition doit expliquer le
+  rôle de la touche CTRL (en plus de SHIFT/CAPSLOCK)"). Each key was
+  documentation catching up to existing behavior at the time it was added
+  here, not a new feature. No layout change needed: `#hover-definition` is
+  already 5 lines tall (`height: 7.5rem`, `line-height: 1.5rem`) with
+  `overflow-wrap: break-word`, comfortably fitting the placeholder on any
+  realistically-sized grid.
 
 - The `#attempt-preview-reveal-btn` ("Lettres") toggle moved out of
   `#attempt-preview` into `#generate-form` itself, right after
@@ -2163,6 +2161,53 @@ English (see `project-best-practices`).
   verified structurally and via the real served files instead, the same
   limitation and workaround already noted throughout this project's UI
   work.
+
+- **Ctrl toggles the fill direction**, at the user's explicit request:
+  "Dans les grilles à jouer ou le mode interactif, un appui sur la touche
+  CTRL doit changer le sens vertical/horizontal." A new
+  `toggleDirectionOnCtrl` keydown listener (`script.js`, right next to the
+  Shift/CapsLock `updateHoverForModifierKey` one) flips `activeDirection`
+  via the shared `setActiveDirection()` on each Ctrl press — so it drives
+  and reflects the same state as all 4 direction buttons, Shift/CapsLock,
+  and grid hover, in both play mode and Interactive mode. Deliberately a
+  press-to-toggle, not a held modifier like Shift/CapsLock
+  (`hoverDirectionFromEvent`'s `getModifierState` = down while held): each
+  Ctrl tap swaps across ↔ down. Guarded the same way as the other grid
+  shortcuts — `isTextInputFocused()` (so Ctrl+C / Ctrl+A in the chat box
+  or a form input aren't hijacked) — plus `event.repeat` skipped (holding
+  Ctrl down must not flip it repeatedly) and a `!puzzle && !interactiveMode`
+  early-return (no-op on the plain generation form). `preventDefault()` is
+  never called, so browser Ctrl shortcuts (Ctrl+T, Ctrl+R, ...) still
+  work; a Ctrl+key combo does still flip the direction on the initial Ctrl
+  keydown, an accepted minor side effect matching how any Shift press
+  already flips it. Verified with a real `esprima` syntax check
+  (temporarily installed, removed afterward); **not visually confirmed in
+  a browser** — same tooling limitation noted throughout this file.
+
+  Follow-up (`handleKeydown`), after the user reported the fill still
+  ignored the Ctrl-set direction: typing a letter now auto-advances in
+  `activeDirection` (`moveSelection(isUpper || activeDirection === "down"
+  ? "down" : "right")`), not purely on the letter's own case. An uppercase
+  letter still forces a downward advance — it implies a vertical word, and
+  Shift/Caps Lock already set `activeDirection` to "down" by the time the
+  letter keydown fires — kept as an `||` fallback only for the edge case
+  where Caps Lock was already on before the grid opened (no keydown ever
+  fired to sync `activeDirection`).
+
+- **Arrow keys move the selection on the playable grid**, at the user's
+  explicit request ("Les flèches du clavier doivent permettre de se
+  déplacer dans la grille à jouer (comme en mode interactif)") — Interactive
+  mode already had this (`interactiveArrowMove`, every cell selectable).
+  New `moveSelectionArrow(dr, dc)` in `script.js`, wired into `handleKeydown`
+  via an `ARROW_DELTAS` map: from the selected cell it steps in the
+  arrow's direction until it lands on a white cell (black cells are skipped,
+  since they're never selectable in play mode) or reaches the grid edge, in
+  which case nothing happens. `event.preventDefault()` on the arrow so the
+  page doesn't also scroll. Gated by `handleKeydown`'s existing
+  `!puzzle || !selected || showSolution` guard (no navigation before a cell
+  is clicked, or while the solution is shown). Verified with a real
+  `esprima` syntax check; **not visually confirmed in a browser** — same
+  tooling limitation noted throughout this file.
 
 - **Selected-word highlight**, at the user's explicit request: "Quand
   l'utilisateur clique sur une case, montrer le mot sélectionné via

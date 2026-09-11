@@ -4250,6 +4250,183 @@ servers:
   contain the new button/JS functions/CSS/i18n keys (all 6 languages).
   **Not yet visually confirmed in an actual browser** — same tooling
   limitation noted throughout this project's UI work.
+
+  `generate_definitions` gained a `theme_description=None` trailing
+  param, at the user's explicit request: "Vérifier que le bouton
+  'Propose une définition' utilise bien le champ thématique pour les
+  propositions quand il est renseigné." Investigated first rather than
+  assumed broken: the Interactive mode's own "Proposer"/"Définitions"
+  buttons already reuse this exact method (via `GET /api/dictionary/
+  define`), but neither the method nor the endpoint had ever threaded
+  any theme context through at all — confirmed by reading the code
+  before writing a fix, not guessed. Folded into `generate_definitions`'s
+  own user message as a new `"THEME — "` steering paragraph — its own
+  wording, not a shared helper with `_build_user_message`'s existing
+  per-grid-word `THEME` block (see above): the same "strongly prefer it
+  whenever the word's own real meaning leaves room, but accuracy always
+  wins that trade, never quote the theme text verbatim" framing, just
+  reworded for an arbitrary `count` of independent definitions of a
+  free-text word/expression rather than 3 clues of one already-known
+  grid word — matching this whole method's own established precedent
+  (see its own docstring above) of never reusing `_build_system_prompt`/
+  `_build_user_message` at all, since both are tightly tuned around a
+  premise (a fixed count, a single known inflected form) this method
+  doesn't share.
+
+  `GET /api/dictionary/define` (`backend/app.py`) gained an optional
+  `theme: str = ""` query param, passed straight through as `theme_
+  description` (stripped, `None` when blank). Deliberately the RAW theme
+  text as typed — never a richer LLM-computed `describe_theme()`
+  sentence: there is no per-grid computed description available to a
+  free-text lookup like this one, and re-running that whole LLM pass
+  just for one "Proposer" click would add real, unwanted latency to a
+  lightweight, best-effort button. `frontend/static/script.js` gained a
+  shared `dictionaryDefineUrl(word)` helper (right before `interactive
+  ProposeBtn`'s own click handler) appending `&theme=${encodeURIComponent
+  (interactiveTheme)}` whenever `interactiveTheme` is non-empty — used
+  by BOTH of Interactive mode's own callers of this endpoint (the
+  single-word "Proposer" button and the bulk "Définitions" auto-fill
+  loop, `interactiveDefinitionsBtn`) — but deliberately NOT by the
+  generic Dictionary panel's own unrelated "Définir" button, which has
+  no grid/theme context to send at all.
+
+  Verified live against the real running local LLM server (not mocked):
+  a direct `generate_definitions("chat", language="fr", count=6,
+  timeout=90.0)` call with no theme returned plain, unsteered
+  definitions ("petit mammifère carnivore domestiqué...") while the
+  identical call with `theme_description="animaux de la ferme, vaches,
+  cochons, poules"` came back genuinely steered ("Animal de la ferme, à
+  quatre pattes, à museau court…") — direct, measured confirmation the
+  theme text reaches and influences the prompt, not just that the
+  parameter is accepted.
+
+  **"Proposer un titre" ("Suggest a title") was rewritten from "one
+  best-effort suggestion, auto-filled" to "up to 10 clickable
+  proposals"**, and made theme-aware, at the user's explicit request:
+  "Le bouton 'Proposer un titre' doit générer 10 propositions affichées
+  en dessous (comme 'Proposer une définition'), et également utiliser le
+  champs Thématique si renseigné." New constants
+  `TITLE_PROPOSALS_COUNT = 10` and `TITLE_PROPOSALS_RETRIES = 2` (placed
+  right after `DEFINE_RETRIES`, mirroring its own reasoning: how many
+  *extra* attempts to make only when a whole response yields zero usable
+  candidates, never `_TITLE_RETRIES`'s own "always retry until something
+  usable comes back" loop — there is no single "the" title to protect
+  the quality of here by discarding a merely-small batch, so a genuinely
+  non-empty response, even a short one, is already useful to show).
+
+  The two title-generating methods' shared system prompt was factored
+  out into a new `@staticmethod _build_title_system_prompt(count,
+  language_name, theme_description=None)` — extracted **verbatim** from
+  `generate_title()`'s own previously-inline system-prompt-building code
+  (the `theme_note` computation plus the big `system_prompt` f-string),
+  only replacing every hardcoded `_TITLE_COUNT` reference with the new
+  `count` parameter — `generate_title()` itself was refactored to call
+  it with `count=_TITLE_COUNT`, verified byte-for-byte-equivalent output
+  before and after the refactor via a direct isolated comparison of the
+  built prompt strings, so its own existing behavior (used unchanged by
+  the automatic, non-interactive generation pipeline — still asks for
+  exactly `_TITLE_COUNT` (3) candidates and picks ONE at random,
+  retrying up to `_TITLE_RETRIES` times) is completely unaffected by
+  this whole feature.
+
+  A new `generate_titles(self, word_entries, language="fr",
+  count=TITLE_PROPOSALS_COUNT, timeout=DEFAULT_TIMEOUT, cancel_event=
+  None, theme_description=None)` reuses that shared prompt but returns
+  **every** candidate that survives the same validity filters
+  `generate_title()` itself already uses (`_title_too_long`, `_title_
+  has_bad_punctuation`, `_title_grid_word_reuse`, `_detect_wrong_
+  language`) — up to `count`, deduplicated case-insensitively, in the
+  model's own order — instead of picking one at random, mirroring
+  `generate_definitions()`'s own bounded-retry shape (`TITLE_PROPOSALS_
+  RETRIES` extra attempts, only on a genuinely zero-candidate whole
+  response). Talks to the LLM directly via `httpx.post` — never `_call()`
+  — the exact same reason `generate_title()` itself already does: a
+  title needs a higher, more creative `temperature` (0.9) than the
+  shared `TEMPERATURE` constant `_call()` always uses; no per-call
+  `LOG_LLM/` record, matching `generate_title()`'s own convention for
+  this kind of auxiliary, non-puzzle-output call.
+
+  `backend/app.py`'s `InteractiveTitleRequest` gained an optional `theme:
+  Optional[str] = None` field — the CURRENT value of the "Thématique"
+  field, sent by the frontend on every call rather than always read back
+  from the session's own stored state, so a live edit to the field is
+  honoured immediately, and so a re-edited themed grid — whose own
+  `theme_description` (the rich LLM-computed sentence) is never
+  recomputed at resume time (see `_run_interactive_resume_job`'s own
+  `"theme_description": None`, since the resolved Qdrant glossary is
+  never stored on a library record) — still gets *some* theme steering
+  from its own raw `theme` string. `POST /api/interactive/title`
+  resolves the actual `theme_description` it passes to `generate_titles`
+  via a fallback chain: `req.theme` (the field's current value) → `meta.
+  get("theme_description")` (a themed FRESH generation's own rich LLM
+  sentence) → `meta.get("theme")` (a re-edited grid's own raw theme
+  string) → `None`. The endpoint now returns `{"titles": [...]}` (a
+  list, possibly `[]`) in place of the old `{"title": "..."}`.
+
+  On the web UI, a new generic `renderInteractivePickList(container,
+  list, onPick)` was factored out of the pre-existing `renderInteractive
+  Proposals` (the "Proposer une définition" pick list) — both that
+  function and a new `renderInteractiveTitleProposals` now call it, each
+  supplying their own container/pick-callback. New `#interactive-title-
+  propose-results` div (`frontend/static/index.html`, right after
+  `#interactive-title-row`) with a matching CSS rule mirroring
+  `#interactive-propose-results`'s own styling (same bare-id `[hidden]
+  {display:none}` specificity-override convention already established
+  for every other interactive-mode results container in this file).
+  `proposeInteractiveTitle()` gained an `autoFill` boolean parameter
+  distinguishing its two callers: `updateInteractiveFinishState()`'s own
+  automatic one-time trigger (`autoFill=true` — still silently pre-fills
+  the title field with the very first proposal, so a player who never
+  clicks the button still gets a real title, matching this feature's
+  pre-existing behavior, and stays silent on an empty result since it's
+  a background convenience, not a player-initiated action) vs. the
+  button's own explicit click (`autoFill=false` — only shows the list,
+  never touches whatever the player already typed or picked, and DOES
+  surface a new `interactiveTitleEmpty` message on a genuinely empty
+  result, the same way "Proposer une définition" already does for its
+  own explicit click). New i18n key `interactiveTitleEmpty` in all 6
+  languages, mirroring `interactiveProposeEmpty`'s own wording pattern.
+
+  Re-filling the "Thématique" field itself when re-editing a themed
+  grid was fixed in the same session, at the user's explicit request:
+  "Quand un utilisateur réédite une grille thématique, renseigner le
+  champ Thématique avec les mots de la grille d'origine." Root cause:
+  `job["result"]` (the only part of a job `pollJob()`'s frontend polling
+  loop ever returns — `job["interactive"]` is never sent to the browser
+  at all) never carried the session's own raw theme string, even though
+  `job["interactive"]["theme"]` already did. `backend/app.py`'s
+  `_run_interactive_job` (fresh start) and `_run_interactive_resume_job`
+  (from-library / "Créations" resume) both now also set `"theme": theme
+  or None` / `"theme": record.get("theme")` on `job["result"]`.
+  `frontend/static/script.js`'s `enterInteractiveMode(state)` reads it
+  uniformly on every entry path — `interactiveTheme = state.theme || "";
+  themeInput.value = interactiveTheme;` — replacing the previous
+  approach of relying solely on the generation form's own submit-time
+  assignment (correct only for a fresh start; left stale/blank for the
+  from-library and resume paths, the actual bug). A new shared `const
+  themeInput = document.getElementById("theme");` replaced an inline
+  `document.getElementById("theme")` call in the form's own submit
+  handler.
+
+  Verified live, end to end, through a full real (non-mocked) chain: a
+  real themed library grid was saved ("vache cochon poule"), opened via
+  `_library_record_to_interactive`/`_run_interactive_resume_job` (the
+  exact machinery `POST /api/interactive/from-library` itself uses), and
+  `job["result"]["theme"]` was confirmed to carry the origin grid's own
+  theme string — the exact field `enterInteractiveMode` reads. The real
+  `interactive_title` endpoint function was called both with an explicit
+  `theme` in the request and with it omitted (confirming the fallback-
+  to-session-theme chain), each time returning a real `{"titles": [...]}`
+  list of up to `TITLE_PROPOSALS_COUNT` (10) genuine, live-generated
+  titles from the real local LLM server — a themed call for a 5-word
+  French grid came back with titles directly evocative of the supplied
+  theme ("Fleurs de nuit", "Habitat de rêve" for "animaux de la ferme…"),
+  a non-themed call came back with 9 distinct, valid, non-grid-word-
+  reusing titles. `python3 -m py_compile` on every touched backend file,
+  a real JS syntax check (`esprima`, temporarily installed and removed
+  again afterward), and CSS/HTML brace/tag-balance checks all passed.
+  **Not yet visually confirmed in an actual browser** — same tooling
+  limitation noted throughout this project's UI work.
 - `backend/chatbot.py` — "David FALCON", the web UI's in-app chat assistant, at the
   user's explicit request: "En bas à droite de l'interface, ajoute un ChatBot (ouvert
   par défaut) avec l'icône de l'application. Le ChatBot utilise le LLM pour répondre
@@ -5914,6 +6091,34 @@ servers:
   (`libraryCreationTag`, all 6 languages) after the author name when it's
   set.
 
+  `save_grid_json` gained an `origin=None` trailing param (after
+  `interactive`), at the user's explicit request: "Quand un utilisateur
+  modifie une grille sélectionnée dans la Bibliothèque, conserver dans la
+  sauvegarde de la nouvelle grille, les information sur la grille
+  d'origine : nom de la grille, date de création de la grille, auteur de
+  la grille, ID de la grille." A plain `{"id", "title", "pseudo",
+  "created_at"}` dict — a snapshot of the origin grid's own record taken
+  the moment editing starts (see `backend/app.py`'s `_library_record_to_
+  interactive`, further below), never re-read from the origin grid
+  later, which may itself since have been edited again or deleted —
+  written verbatim as the new record's own `origin` field. `_iter_stored_
+  grids` yields it in the compact metadata too, so it reaches `GET/POST
+  /api/library` (which already spreads `{**g, "seen": is_seen}`, needing
+  no change of its own) and drives the "(créée depuis ...)" provenance
+  tag the Library list shows under a derived grid's title — see the
+  "Ouvrir en mode Interactif" entry further below for the full mechanism
+  and the frontend rendering.
+
+  `save_grid_work` gained the same `origin=None` trailing param (after
+  `resumed_from`), stored as the GRID_WORK record's own `origin` field
+  and surfaced by `_iter_stored_grid_work` too (not currently shown by
+  the "Créations" panel itself, kept for parity and for a possible later
+  feature) — so a grid's provenance survives a pause/resume of the
+  editing session (a draft saved to "Créations" and reopened later), not
+  only an immediate "Publier". `backend/app.py` reads the snapshot back
+  from `job["interactive"]["origin"]` (set once, at session start/resume)
+  and passes it straight through on every autosave, never re-deriving it.
+
 - **"Interactif" authoring mode** — a `mode="interactive"` value on the
   web UI's `#mode` selector (listed above "Flash"), at the user's
   explicit request: instead of the automatic parallel-palier search, the
@@ -6843,6 +7048,187 @@ servers:
   returned 404 through the proxy. `py_compile`/`esprima`/CSS-brace/HTML
   checks all clean. **Not yet visually confirmed in an actual browser** —
   same tooling limitation noted throughout this project's UI work.
+
+  **A grid created this way now keeps a note of the original grid it was
+  edited from**, at the user's explicit request: "Quand un utilisateur
+  modifie une grille sélectionnée dans la Bibliothèque, conserver dans la
+  sauvegarde de la nouvelle grille, les information sur la grille
+  d'origine : nom de la grille, date de création de la grille, auteur de
+  la grille, ID de la grille. Dans la Bibliothèque, si une grille a été
+  créée en modifiant une ancienne grille, mentionner la provenance dans
+  le titre : '(créée depuis <nom_grille> / <auteur_grille> <date_grille>)'."
+  `_library_record_to_interactive(record)` now also returns an `"origin"`
+  key — `{"id": record["id"], "title": record["title"] or "", "pseudo":
+  record["pseudo"], "created_at": record["created_at"]}`, a snapshot of
+  the library record being opened, taken once and never re-read from the
+  origin grid later. `_run_interactive_resume_job(job_id, record)` reads
+  `record.get("origin")` into `job["interactive"]["origin"]` — this works
+  identically whether `record` came from this synthetic dict (opening a
+  library grid directly) or from a real GRID_WORK record reloaded via the
+  "Créations" panel's own `POST /api/interactive/resume` (which itself
+  may already carry an `origin` from an earlier autosave of the same
+  session), so the snapshot survives an arbitrary number of pause/resume
+  cycles before publishing. `POST /api/interactive/save_work` (draft
+  autosave) and `POST /api/interactive/save` ("Publier") both read `meta.
+  get("origin")` from `job["interactive"]` and pass it straight through to
+  `save_grid_work`/`save_grid_json` respectively (see `grid_store.py`'s
+  own `origin` parameter above) — in `interactive_save`, the `meta =
+  (JOBS.get(req.job_id) or {}).get("interactive") or {}` lookup was
+  hoisted to the top of the function (it used to only be computed later,
+  inside the block that refreshes the session's GRID_WORK snapshot) so
+  both the new library record and that GRID_WORK refresh agree on the
+  exact same origin snapshot. A grid never derived from editing an
+  existing one (a fresh "Interactif" session started from scratch, an
+  ordinary auto-generated grid, or a recomputed-clues grid — `_run_
+  interactive_job`/`_run_recompute_job` never set this field at all) has
+  no `origin` key anywhere in this chain, so `.get("origin")` resolves to
+  `None` throughout and no provenance is ever shown for it — a complete
+  no-op for every pre-existing code path.
+
+  On the web UI, `frontend/static/script.js`'s `renderLibraryList()`
+  splits the title cell into two stacked `<div>`s — the title itself, and
+  (only when `entry.origin && entry.origin.id`) a `.library-origin-tag`
+  div right underneath showing `t.libraryOriginTag(entry.origin.title ||
+  "", entry.origin.pseudo || t.libraryAuthorBot, formattedDate)` — the
+  author falls back to the same "Falcon Auto Bot" label the main author
+  column already uses, and the date is `entry.origin.created_at`
+  formatted via `toLocaleDateString(uiLanguage)` (date only, not the full
+  timestamp the row's own date column shows, to keep the parenthetical
+  compact). New `libraryOriginTag: (title, author, date) => ...` i18n
+  function in all 6 languages (`frontend/static/i18n.js`, right after
+  `libraryCreationTag`), each phrased around the same "(created from X /
+  Y Z)" shape the user's own French wording specified literally for
+  French. New CSS rule `#library-table td .library-origin-tag`
+  (`frontend/static/style.css`, right after `#library-table th`) — small
+  and dimmed like the existing `.attempt-preview-stats` convention
+  (`font-size: 0.72rem; opacity: 0.65`), with `white-space: normal;
+  max-width: 22rem` overriding the table's own default `nowrap`, since an
+  origin grid's own title can be long and the table already scrolls
+  horizontally via its existing `.table-scroll` wrapper if needed.
+  Deliberately **not** baked into the persisted `title` field itself
+  (which is reused verbatim elsewhere — the page title, the SVG/PDF
+  header, the ChatBot's own grid context, share links — where the
+  provenance suffix would be unwanted noise) — only computed for display
+  in this one Library-list cell.
+
+  Verified in stages. Isolated, real (non-mocked) tests against `backend/
+  grid_store.py` (`GRID_STORE_DIR`/`GRID_WORK_DIR` monkeypatched to a temp
+  directory): `save_grid_json`/`get_grid`/`_iter_stored_grids`/
+  `list_grids` all correctly round-trip a real `origin` dict and default
+  to `origin: None` when none is given; `save_grid_work`/`get_grid_work`/
+  `_iter_stored_grid_work` likewise, including confirming a same-`job_id`
+  autosave overwrite keeps carrying the origin forward, and that the
+  `resumed_from`-triggered file-rename path (resuming a "Créations" draft
+  under a brand-new job_id) still carries it correctly after the rename.
+  A real, non-mocked end-to-end test importing `backend.app` directly
+  (`GRID_STORE_DIR`/`GRID_WORK_DIR`/`GRID_SVG_DIR`/`GRID_PNG_DIR` all
+  redirected to a temp directory, against the real French wordlist/gloss
+  dictionary on disk): saved a real "origin" library grid authored by
+  "Alice"; opened it via `_library_record_to_interactive`/`_run_
+  interactive_resume_job` (called directly, the real machinery `POST
+  /api/interactive/from-library` itself uses under its own background-
+  task wrapper) and confirmed `job["interactive"]["origin"]` matched the
+  expected snapshot exactly; called the real `interactive_save_work`/
+  `interactive_save` functions directly and confirmed both the resulting
+  GRID_WORK draft and the newly published GRID_STORE record carried the
+  identical origin snapshot, while the new record's own `pseudo` field
+  correctly reflected the EDITOR's pseudo ("Bob"), not the origin's
+  ("Alice"); confirmed `list_grids()`'s own compact metadata (what the
+  real Library listing endpoint reads) carries `origin` too; confirmed a
+  grid with no prior "from-library" session at all comes back with
+  `origin: None`. A second real end-to-end run specifically exercised the
+  "resume from the Créations panel" path: opened a library grid
+  interactively, autosaved a draft (a real GRID_WORK entry), then
+  simulated closing and reopening it under a brand-new job_id fed the
+  reloaded GRID_WORK record (exactly what `POST /api/interactive/resume`
+  does) — confirmed the origin survives this second resume cycle
+  unchanged, that publishing from the resumed session still lands the
+  correct origin on the final library record, and that a plain, never-
+  derived-from-a-library-grid session stays `origin: None` through the
+  identical resume cycle. `python3 -m py_compile`/a real JS syntax check
+  via `esprima` (temporarily installed and removed again afterward, this
+  project's own established one-off-tool convention)/a CSS brace-balance
+  check all clean. Deliberately did not restart the live backend process
+  to verify this through the real running API — all verification above
+  used direct, isolated Python calls against the real modules/data
+  instead, since restarting the currently-running production deployment
+  wasn't asked for; the three touched frontend static files are served
+  fresh from disk with no caching, so they were already live the moment
+  they were written. **Not yet visually confirmed in an actual browser**
+  — same tooling limitation noted throughout this project's UI work.
+
+- **Interactive mode's Dictionary panel now opens automatically**, at the
+  user's explicit request: "En mode interactif, ouvrir automatiquement le
+  Dictionnaire." Investigated first whether a related, earlier request —
+  "les propositions de définitions doivent être cliquables pour remplacer
+  la définition dans le champ de saisie sans avoir à faire un copier/
+  coller" — pointed at a real bug: re-read `renderInteractivePickList`/
+  `renderInteractiveProposals`/`renderInteractiveTitleProposals` (the
+  shared click-to-fill helper and its two callers, built for the earlier
+  "Thématique"/title-proposals work) and the `.interactive-propose-line`
+  CSS (`cursor: pointer`, a hover state, and the `[hidden]` specificity
+  override already established for this exact panel) — found nothing
+  wrong: every proposal line already has a click *and* an Enter/Space
+  keyboard handler correctly calling `onPick(item)` to fill the
+  definition/title input, so this appeared to already work as asked; left
+  open rather than "fixed" since it could only be confirmed structurally
+  (no real browser in this environment), not watched live.
+
+  `enterInteractiveMode(state)` (`frontend/static/script.js`) gained two
+  new lines, right after `interactiveTheme`/`interactiveLanguage` are
+  resolved and before the function's final `syncRssPanelVisibility()`
+  call: `dictionaryPanel.hidden = false; dictionaryLanguage.value =
+  interactiveLanguage;` — mirrors `dictionaryBtn`'s own manual-open logic
+  (unhide the panel, set its language selector) but deliberately never
+  calls `dictionaryInput.focus()`, unlike a real click: an automatic,
+  background side effect of entering Interactive mode must never steal
+  keyboard focus away from the grid the way an explicit user click is
+  allowed to. Fires on all three entry paths uniformly (a fresh "Générer
+  la grille" in Interactive mode, "Ouvrir en mode Interactif" from the
+  Library, resuming a "Créations" draft) since they all funnel through
+  this one function.
+
+  Setting `dictionaryLanguage.value` correctly required first closing a
+  real, previously-disclosed-but-unconfirmed gap found while investigating
+  this exact feature: `interactiveLanguage`/`interactiveDifficulty` (two
+  module-level `let`s, `frontend/static/script.js`) were, until now, only
+  ever assigned by the generation form's own submit handler — never by
+  `openLibraryGridInteractive()` nor `resumeInteractiveWork()`, so
+  re-editing a non-French (or non-matching-difficulty) grid via either of
+  those two paths left them stale (whatever a *previous* session's own
+  language/difficulty happened to be, or the "fr"/unset defaults). Beyond
+  making the new Dictionary auto-open show the wrong language, this was
+  already a real, independent data-integrity bug: `interactiveSaveBtn`'s
+  "Publier" handler sends `language: interactiveLanguage, difficulty:
+  interactiveDifficulty` in the save payload, so a grid opened this way
+  could silently be republished under the wrong language/difficulty.
+  Root cause matched the exact same shape as the already-fixed
+  `interactiveTheme` staleness bug: `pollJob()` only ever returns
+  `job["result"]` to the frontend, never `job["interactive"]` (which
+  already carried `language`/`difficulty` correctly) — fixed the
+  identical way, by mirroring both fields onto `job["result"]` too, in
+  both `_run_interactive_job` (`backend/app.py`, the fresh-start path)
+  and `_run_interactive_resume_job` (the from-library/resume path).
+  `enterInteractiveMode(state)` now reads them uniformly: `interactive
+  Language = state.language || interactiveLanguage; interactiveDifficulty
+  = state.difficulty || interactiveDifficulty;` — the `||` fallback keeps
+  a genuinely fresh-start job (whose own `job["result"]` always carries
+  real values regardless) and any hypothetical caller missing the field
+  from silently clearing an already-correct value to `undefined`.
+
+  Verified: a real JS syntax check (`esprima`, temporarily installed and
+  removed again afterward) confirmed `script.js` still parses correctly;
+  `python3 -m py_compile` confirmed `backend/app.py` still compiles after
+  both `job["result"]` additions. Deliberately did **not** restart the
+  live, currently-running production backend/frontend processes to verify
+  this through the real running API — the same disclosed deviation from
+  this project's own permanent rule 8 already noted for the preceding
+  "origin" entry, since restarting the production deployment wasn't asked
+  for; both edited files are otherwise ready to take effect on the next
+  restart (`backend/app.py` needs one, `frontend/static/script.js` is
+  served fresh from disk with no caching and so is already live). **Not
+  yet visually confirmed in an actual browser** — same tooling limitation
+  noted throughout this project's UI work.
 
 - **"Synonymes" button** (Dictionary panel, `#dictionary-synonyms-btn`,
   right next to "Thématique"), at the user's explicit request: "un bouton

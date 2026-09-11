@@ -205,6 +205,11 @@ const chatbotInput = document.getElementById("chatbot-input");
 const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
+// "Thématique" field — shared const so both the generation form's submit
+// handler and Interactive mode's own enterInteractiveMode() (re-filling
+// it from a re-edited grid's own origin theme, at the user's explicit
+// request) can reach it without each re-querying the DOM.
+const themeInput = document.getElementById("theme");
 
 // "Interactif" authoring mode controls (see the Interactive-mode section
 // further down).
@@ -227,6 +232,7 @@ const interactiveVerifyReportEl = document.getElementById("interactive-verify-re
 const interactiveTitleRow = document.getElementById("interactive-title-row");
 const interactiveTitleInput = document.getElementById("interactive-title-input");
 const interactiveTitleProposeBtn = document.getElementById("interactive-title-propose-btn");
+const interactiveTitleProposeResults = document.getElementById("interactive-title-propose-results");
 const interactiveDraftSaveBtn = document.getElementById("interactive-draft-save-btn");
 const interactiveSaveBtn = document.getElementById("interactive-save-btn");
 const interactiveSaveResult = document.getElementById("interactive-save-result");
@@ -827,6 +833,26 @@ function updateHoverForModifierKey(event) {
   // direction and the currently-hovered word (see isTextInputFocused()).
   if (isTextInputFocused()) return;
   setActiveDirection(hoverDirectionFromEvent(event));
+}
+
+// Ctrl flips the fill direction (across <-> down) on every press, in both
+// play mode and Interactive mode, at the user's explicit request. Unlike
+// Shift/CapsLock (a held modifier — down while held, across while
+// released, mirroring the lowercase/uppercase typing convention), Ctrl is
+// a plain press-to-toggle: each tap swaps the direction. Guarded like the
+// other grid shortcuts — ignored while a text field has focus, so Ctrl+C /
+// Ctrl+A in the chat box or a form input aren't hijacked — and event.repeat
+// is skipped so holding Ctrl down doesn't flip it over and over. Only fires
+// once the page actually has a grid (a loaded puzzle or Interactive mode),
+// so it's a no-op on the plain generation form. preventDefault() is never
+// called, so browser Ctrl shortcuts (Ctrl+T, Ctrl+R, ...) still work.
+document.addEventListener("keydown", toggleDirectionOnCtrl);
+
+function toggleDirectionOnCtrl(event) {
+  if (event.key !== "Control" || event.repeat) return;
+  if (isTextInputFocused()) return;
+  if (!puzzle && !interactiveMode) return;
+  setActiveDirection(activeDirection === "across" ? "down" : "across");
 }
 
 function setStatus(message, isError) {
@@ -1457,6 +1483,35 @@ function moveSelection(direction) {
   }
 }
 
+// Arrow keys move the selection to the next white cell in that direction,
+// skipping black cells, clamped to the grid (nothing happens at the edge,
+// or when only black cells lie beyond), at the user's explicit request —
+// matching the arrow-key navigation Interactive mode already has. Unlike
+// moveSelection() (used after typing a letter, one direction only), this
+// handles all four directions from the currently-selected cell.
+function moveSelectionArrow(dr, dc) {
+  if (!selected || !puzzle) return;
+  const { width, height } = puzzle;
+  let { row, col } = selected;
+  while (true) {
+    row += dr;
+    col += dc;
+    if (row < 0 || col < 0 || row >= height || col >= width) return;
+    if (isWhite(row, col)) {
+      selected = { row, col };
+      renderGrid();
+      return;
+    }
+  }
+}
+
+const ARROW_DELTAS = {
+  ArrowUp: [-1, 0],
+  ArrowDown: [1, 0],
+  ArrowLeft: [0, -1],
+  ArrowRight: [0, 1],
+};
+
 function handleKeydown(event) {
   // Never intercept a keystroke meant for a focused text field — reported
   // live by the user: with a grid cell selected, clicking into #chatbot-
@@ -1474,11 +1529,21 @@ function handleKeydown(event) {
   if (!puzzle || !selected || showSolution) return;
   const key = event.key;
 
-  if (key.length === 1 && /[a-zA-Z]/.test(key)) {
+  if (ARROW_DELTAS[key]) {
+    event.preventDefault();
+    moveSelectionArrow(...ARROW_DELTAS[key]);
+  } else if (key.length === 1 && /[a-zA-Z]/.test(key)) {
     event.preventDefault();
     const isUpper = key !== key.toLowerCase();
     userLetters[selected.row][selected.col] = key.toUpperCase();
-    moveSelection(isUpper ? "down" : "right");
+    // Auto-advance follows the current selection direction (activeDirection
+    // — set by Ctrl, the Across/Down buttons, or Shift/Caps Lock), not just
+    // the letter's own case. Typing an uppercase letter still advances down
+    // (an uppercase key implies a vertical word, and Shift/Caps Lock have
+    // already set activeDirection to "down" anyway) — kept as a fallback
+    // for the rare case where Caps Lock was on before the grid opened, so
+    // no keydown ever fired to update activeDirection.
+    moveSelection(isUpper || activeDirection === "down" ? "down" : "right");
     renderGrid();
   } else if (key === "Backspace" || key === "Delete") {
     event.preventDefault();
@@ -2807,7 +2872,27 @@ async function renderLibraryList() {
     const dateTd = document.createElement("td");
     dateTd.textContent = entry.created_at ? new Date(entry.created_at).toLocaleString(uiLanguage) : "";
     const titleTd = document.createElement("td");
-    titleTd.textContent = entry.title || "";
+    const titleMain = document.createElement("div");
+    titleMain.textContent = entry.title || "";
+    titleTd.appendChild(titleMain);
+    // Grille créée en modifiant une grille existante de la Bibliothèque
+    // (bouton "Ouvrir en mode Interactif" — voir backend/grid_store.py's
+    // save_grid_json/save_grid_work's own `origin`), à la demande
+    // explicite de l'utilisateur : mentionne la provenance (grille/
+    // auteur/date d'origine) sous le titre, sur sa propre ligne. `origin`
+    // est un instantané pris au moment où l'édition a commencé (jamais
+    // relu depuis la grille d'origine, qui peut depuis avoir changé ou
+    // disparu) — absent/`None` pour toute grille non issue d'une édition.
+    if (entry.origin && entry.origin.id) {
+      const originDate = entry.origin.created_at
+        ? new Date(entry.origin.created_at).toLocaleDateString(uiLanguage)
+        : "";
+      const originAuthor = entry.origin.pseudo || t.libraryAuthorBot;
+      const originTag = document.createElement("div");
+      originTag.className = "library-origin-tag";
+      originTag.textContent = t.libraryOriginTag(entry.origin.title || "", originAuthor, originDate);
+      titleTd.appendChild(originTag);
+    }
     // Colonne "Thématique" : la liste de mots saisie à la génération
     // (champ `theme` du JSON de la grille — voir backend/grid_store.py),
     // vide quand la grille n'a pas de thématique. À la demande explicite
@@ -4025,7 +4110,7 @@ function updateInteractiveFinishState() {
   // draft to GRID_WORK, no publish) sits to its left.
   interactiveSaveBtn.hidden = !complete;
   if (complete && !interactiveTitleProposed && !interactiveTitleInput.value.trim()) {
-    proposeInteractiveTitle();
+    proposeInteractiveTitle(true);
   }
 }
 
@@ -4176,26 +4261,30 @@ function handleInteractiveKeydown(event) {
   }
 }
 
-// ---- Definition proposals (reuses GET /api/dictionary/define) ----
-function renderInteractiveProposals(list) {
-  interactiveProposeResults.innerHTML = "";
+// ---- Definition / title proposals (reuse GET /api/dictionary/define,
+// POST /api/interactive/title) ----
+
+// Renders `list` as a stack of clickable lines inside `container` —
+// shared by renderInteractiveProposals() (definitions) and
+// renderInteractiveTitleProposals() (titles) below, since the two are
+// otherwise identical: one <p class="interactive-propose-line"> per
+// item, clicking (or Enter/Space) calls `onPick(item)` and nothing else
+// — each caller's own `onPick` decides what "picking" one actually
+// means (fill a field, remember it against a slot, hide the list, ...).
+// Empty/missing `list` just hides `container`, matching both callers'
+// pre-existing "no proposals" behavior.
+function renderInteractivePickList(container, list, onPick) {
+  container.innerHTML = "";
   if (!list || !list.length) {
-    interactiveProposeResults.hidden = true;
+    container.hidden = true;
     return;
   }
-  for (const def of list) {
+  for (const item of list) {
     const line = document.createElement("p");
     line.className = "interactive-propose-line";
     line.tabIndex = 0;
-    line.textContent = def;
-    const pick = () => {
-      interactiveDefinitionInput.value = def;
-      const w = selectedInteractiveWord();
-      if (w) interactiveDefs.set(interactiveKey(w), def);
-      interactiveProposeResults.hidden = true;
-      interactiveProposeResults.innerHTML = "";
-      updateInteractiveFinishState();
-    };
+    line.textContent = item;
+    const pick = () => onPick(item);
     line.addEventListener("click", pick);
     line.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
@@ -4203,9 +4292,32 @@ function renderInteractiveProposals(list) {
         pick();
       }
     });
-    interactiveProposeResults.appendChild(line);
+    container.appendChild(line);
   }
-  interactiveProposeResults.hidden = false;
+  container.hidden = false;
+}
+
+function renderInteractiveProposals(list) {
+  renderInteractivePickList(interactiveProposeResults, list, (def) => {
+    interactiveDefinitionInput.value = def;
+    const w = selectedInteractiveWord();
+    if (w) interactiveDefs.set(interactiveKey(w), def);
+    interactiveProposeResults.hidden = true;
+    interactiveProposeResults.innerHTML = "";
+    updateInteractiveFinishState();
+  });
+}
+
+// "Proposer un titre" button's own 10-proposal list, at the user's
+// explicit request ("10 propositions affichées en dessous, comme
+// 'Proposer une définition'") — see proposeInteractiveTitle() below for
+// how the list itself is fetched.
+function renderInteractiveTitleProposals(list) {
+  renderInteractivePickList(interactiveTitleProposeResults, list, (title) => {
+    interactiveTitleInput.value = title;
+    interactiveTitleProposeResults.hidden = true;
+    interactiveTitleProposeResults.innerHTML = "";
+  });
 }
 
 // ---- Candidate words for the selected slot (POST /api/interactive/
@@ -4297,7 +4409,20 @@ interactiveWordsBtn.addEventListener("click", async () => {
   }
 });
 
-async function proposeInteractiveTitle() {
+// Fetches up to 10 candidate titles and shows them as a pick list (see
+// renderInteractiveTitleProposals()), at the user's explicit request:
+// "Le bouton 'Proposer un titre' doit générer 10 propositions affichées
+// en dessous (comme 'Proposer une définition'), et également utiliser
+// le champ Thématique si renseigné." Two callers, distinguished by
+// `autoFill`: the automatic, one-time proposal fired by
+// updateInteractiveFinishState() once the grid becomes complete
+// (`autoFill=true` — also fills #interactive-title-input with the very
+// first proposal, so a player who never bothers clicking still gets a
+// real title, exactly like before this feature existed) vs. the
+// "Proposer un titre" button's own explicit click (`autoFill=false` —
+// only shows the list, never touches whatever the player already typed
+// or picked).
+async function proposeInteractiveTitle(autoFill) {
   interactiveTitleProposed = true;
   const t = I18N[uiLanguage];
   const words = interactiveSlots().map((s) => ({ answer: s.answer }));
@@ -4305,12 +4430,23 @@ async function proposeInteractiveTitle() {
     const resp = await fetchWithTimeout("/api/interactive/title", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: interactiveJobId, words, language: interactiveLanguage }),
+      body: JSON.stringify({
+        job_id: interactiveJobId, words, language: interactiveLanguage,
+        theme: interactiveTheme || undefined,
+      }),
     }, DEFINE_FETCH_TIMEOUT_MS);
     const data = await resp.json();
-    if (resp.ok && data.title && !interactiveTitleInput.value.trim()) {
-      interactiveTitleInput.value = data.title;
+    const list = (resp.ok && data.titles) || [];
+    renderInteractiveTitleProposals(list);
+    if (autoFill && list.length && !interactiveTitleInput.value.trim()) {
+      interactiveTitleInput.value = list[0];
     }
+    // The automatic trigger stays silent on an empty result (matching its
+    // own pre-existing behavior — it's a background convenience, not a
+    // player-initiated action) — only the explicit button click surfaces
+    // this, the same way "Proposer une définition" only ever does for its
+    // own explicit click.
+    if (!autoFill && !list.length) setInteractiveMessage(t.interactiveTitleEmpty, true);
   } catch (err) {
     setInteractiveMessage(t.interactiveTitleError, true);
   }
@@ -4322,6 +4458,33 @@ function enterInteractiveMode(state) {
   interactiveJobId = currentJobId || interactiveJobId;
   interactiveGrid = state.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
   interactiveHasTheme = !!state.has_theme;
+  // Re-fill the "Thématique" field from this session's own theme — ""
+  // for an untouched/themeless grid — at the user's explicit request:
+  // "Quand un utilisateur réédite une grille thématique, renseigner le
+  // champ Thématique avec les mots de la grille d'origine." Covers every
+  // entry path uniformly (a fresh start, "Ouvrir en mode Interactif"
+  // from the Library, resuming a "Créations" draft): backend/app.py's
+  // _run_interactive_job/_run_interactive_resume_job both put the raw
+  // theme string on job["result"]["theme"] (pollJob() only ever returns
+  // that, never job["interactive"]). `interactiveTheme` also feeds
+  // "Proposer une définition"/"Proposer un titre" below (see
+  // dictionaryDefineUrl()/proposeInteractiveTitle()).
+  interactiveTheme = state.theme || "";
+  themeInput.value = interactiveTheme;
+  // `interactiveLanguage`/`interactiveDifficulty` used to only ever be set
+  // by the generation form's own submit handler (correct for a fresh
+  // start, but left stale — whatever a PREVIOUS session set, or the "fr"/
+  // "easy" defaults — for "Ouvrir en mode Interactif" from the Library and
+  // for resuming a "Créations" draft, neither of which ever touched them).
+  // A real bug, not just cosmetic: "Publier"/"Sauvegarder" both send
+  // `language: interactiveLanguage`/`difficulty: interactiveDifficulty`,
+  // so re-editing a non-French (or non-"easy") grid this way could
+  // silently publish it under the WRONG language/difficulty. Fixed the
+  // same way as `interactiveTheme` above — backend/app.py's
+  // _run_interactive_job/_run_interactive_resume_job both now include
+  // them on job["result"] too, read here uniformly on every entry path.
+  interactiveLanguage = state.language || interactiveLanguage;
+  interactiveDifficulty = state.difficulty || interactiveDifficulty;
   // A resumed session's own result carries `definitions`/`title` (see
   // backend/app.py's _run_interactive_resume_job) — a fresh start's never
   // does (neither field exists yet), so `interactiveDefs` still starts
@@ -4343,6 +4506,8 @@ function enterInteractiveMode(state) {
   interactiveSaveResult.textContent = "";
   interactiveProposeResults.hidden = true;
   interactiveProposeResults.innerHTML = "";
+  interactiveTitleProposeResults.hidden = true;
+  interactiveTitleProposeResults.innerHTML = "";
   interactiveTitleRow.hidden = true;
   interactiveSaveBtn.hidden = true;
   interactiveDraftSaveBtn.disabled = false;
@@ -4412,6 +4577,17 @@ function enterInteractiveMode(state) {
       : "",
     startImpossible,
   );
+  // "En mode interactif, ouvrir automatiquement le Dictionnaire." — at
+  // the user's explicit request. Mirrors dictionaryBtn's own manual-open
+  // logic (unhide the panel, set its language) but deliberately never
+  // calls dictionaryInput.focus(): an automatic/background action must
+  // never steal keyboard focus away from the grid the way a real click
+  // on the button is allowed to. `interactiveLanguage` is reliably
+  // correct here on every entry path (fresh start, "Ouvrir en mode
+  // Interactif" from the Library, resuming a draft) — see its own
+  // assignment above, fixed for exactly this kind of use.
+  dictionaryPanel.hidden = false;
+  dictionaryLanguage.value = interactiveLanguage;
   syncRssPanelVisibility();
   setActiveDirection(activeDirection); // syncs the 4 direction buttons + renders
 }
@@ -4859,6 +5035,26 @@ interactiveDefinitionInput.addEventListener("input", () => {
   updateInteractiveFinishState();
 });
 
+// GET /api/dictionary/define URL for one word, in the CURRENT session
+// language, carrying the CURRENT "Thématique" field's value along (when
+// not blank) — shared by every interactive-mode caller of this endpoint
+// ("Proposer" below and the bulk "Définitions" button further down), at
+// the user's explicit request: "Vérifier que le bouton 'Propose une
+// définition' utilise bien le champ thématique pour les propositions
+// quand il est renseigné." `interactiveTheme` is kept current by
+// enterInteractiveMode() (re-editing/resuming a themed grid) and by the
+// generation form's own submit handler (a fresh themed session) — never
+// re-read from the DOM here, so a mid-session edit of the visible field
+// alone (without going through those two paths) isn't picked up; that
+// matches every other interactive-mode use of `interactiveLanguage`/
+// `interactiveDifficulty`, which are session-scoped the same way.
+function dictionaryDefineUrl(word) {
+  let url = `/api/dictionary/define?q=${encodeURIComponent(word)}`
+    + `&lang=${encodeURIComponent(interactiveLanguage)}`;
+  if (interactiveTheme) url += `&theme=${encodeURIComponent(interactiveTheme)}`;
+  return url;
+}
+
 interactiveProposeBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   const w = selectedInteractiveWord();
@@ -4870,9 +5066,7 @@ interactiveProposeBtn.addEventListener("click", async () => {
   setInteractiveMessage("");
   try {
     const resp = await fetchWithTimeout(
-      `/api/dictionary/define?q=${encodeURIComponent(w.answer)}`
-        + `&lang=${encodeURIComponent(interactiveLanguage)}`,
-      {}, DEFINE_FETCH_TIMEOUT_MS,
+      dictionaryDefineUrl(w.answer), {}, DEFINE_FETCH_TIMEOUT_MS,
     );
     if (!resp.ok) throw new Error(t.interactiveProposeError);
     const data = await resp.json();
@@ -5036,9 +5230,7 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
       setInteractiveMessage(t.interactiveDefinitionsWorking(done, targets.length));
       try {
         const resp = await fetchWithTimeout(
-          `/api/dictionary/define?q=${encodeURIComponent(s.answer)}`
-            + `&lang=${encodeURIComponent(interactiveLanguage)}`,
-          {}, DEFINE_FETCH_TIMEOUT_MS,
+          dictionaryDefineUrl(s.answer), {}, DEFINE_FETCH_TIMEOUT_MS,
         );
         const data = resp.ok ? await resp.json() : null;
         const first = ((data && data.definitions) || [])
@@ -5066,10 +5258,18 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
   }
 });
 
-interactiveTitleProposeBtn.addEventListener("click", () => {
+interactiveTitleProposeBtn.addEventListener("click", async () => {
   interactiveTitleProposed = false;
-  interactiveTitleInput.value = "";
-  proposeInteractiveTitle();
+  interactiveTitleProposeBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    // Never touches the currently-typed/picked title (autoFill=false) —
+    // just shows the 10-proposal list below, same "look, then pick"
+    // interaction as "Proposer une définition".
+    await proposeInteractiveTitle(false);
+  } finally {
+    interactiveTitleProposeBtn.disabled = false;
+  }
 });
 
 // "Sauvegarder" — writes the whole current grid + definitions + title to
@@ -5242,7 +5442,7 @@ form.addEventListener("submit", async (event) => {
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
   const forceLettersPercent = Number(document.getElementById("force-letters").value);
   // Thématique optionnelle (liste de mots) — omise si vide.
-  const theme = document.getElementById("theme").value.trim();
+  const theme = themeInput.value.trim();
   // "Précision thématique" : seuil de similarité Qdrant minimal du
   // glossaire thématique (voir backend/app.py's THEME_MIN_SCORE). Point
   // forcé comme séparateur décimal, borné [0,1] ; undefined si vide -> le

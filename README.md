@@ -161,10 +161,16 @@ On the page:
 Click a white cell to select it (it turns blue), then type letters on your
 keyboard:
 
-- A **lowercase** letter fills the cell and moves the selection to the next
-  cell **to the right**.
-- An **uppercase** letter (Shift or Caps Lock) fills the cell and moves the
-  selection **downwards** instead — handy for typing a vertical word.
+- A letter fills the cell and moves the selection to the next cell in the
+  current direction — set with **Ctrl** (see below) or the Across/Down
+  buttons.
+- An **uppercase** letter (Shift or Caps Lock) always moves the selection
+  **downwards** — handy for typing a vertical word without changing the
+  direction first.
+- Pressing **Ctrl** flips between the horizontal and vertical direction —
+  one tap each time, so you can switch without holding a key down.
+- The **arrow keys** move the selection around the grid, skipping over
+  black cells.
 
 Two buttons above the grid help you check your progress:
 
@@ -187,21 +193,29 @@ the grid you started from is left untouched.
 Pick **"Interactive"** in the **Mode** menu (above "Flash") and click
 "Generate grid". Instead of building the whole grid for you, the app
 gives you a black-cell layout with a single word placed and lets you do
-the rest by hand:
+the rest by hand. The **Dictionary** panel opens automatically as soon as
+you enter this mode, so you can look up words while you fill in the grid:
 
 - **"Next"** places one more word for you wherever it fits best;
   **"Back"** undoes the last change, one step at a time.
 - You can click any cell and type a letter, press **Space** to add or
-  remove a black cell, or **Delete** to clear a cell.
+  remove a black cell, or **Delete** to clear a cell. **Ctrl** flips the
+  horizontal/vertical direction the cursor moves in, one tap at a time.
 - Once the grid is full, write a definition for each word (a **"Suggest a
-  definition"** button asks the language model for ideas, **"Definitions"**
+  definition"** button asks the language model for a handful of ideas you
+  can click through and pick from, **"Definitions"**
   fills in one
   automatically for every valid word that still lacks one, and **"Check"**
-  points you at any word still missing one), pick a title, then click
+  points you at any word still missing one), pick a title — **"Suggest a
+  title"** offers up to 10 clickable ideas the same way — then click
   **"Publish"** — your creation goes into the Library, shown with your
   nickname and a "(Création)" tag. A **"Save"** button (left of
   "Publish", available at any point) keeps a draft in your "Créations"
-  list without publishing it.
+  list without publishing it. If the "Theme" field (above "Generate
+  grid") has something in it, both "Suggest" buttons lean their
+  suggestions toward it; opening an existing themed grid for editing
+  (see "Library" below) fills this field back in automatically from that
+  grid's own theme.
 
 ### Library
 
@@ -218,7 +232,9 @@ Each row also has a shareable "Play" link, a PDF download of the empty
 grid, and a small pencil button that opens the grid in Interactive mode
 with all its letters and clues already filled in — handy for editing an
 existing grid. Opening one that way starts a fresh entry in your
-"Créations" list and never changes the stored grid.
+"Créations" list and never changes the stored grid. When you publish
+your edit, its row in the Library shows a note of which grid it came
+from — its title, author, and date — right under the new title.
 
 If two people generate grids around the same time, each generation
 waits its turn in one of two short queues (one for building the grid

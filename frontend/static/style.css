@@ -993,6 +993,30 @@ button:disabled {
   font-weight: 600;
 }
 
+/* Provenance ("(créée depuis ...)") sous le titre d'une grille issue de
+   l'édition d'une grille existante de la Bibliothèque (script.js's
+   renderLibraryList, `entry.origin` — voir backend/grid_store.py's
+   save_grid_json/save_grid_work's own `origin`), à la demande explicite
+   de l'utilisateur. Même traitement discret que .attempt-preview-stats
+   (petit, atténué) : un simple sous-titre secondaire, pas une donnée
+   aussi importante que le titre lui-même juste au-dessus. Sur sa propre
+   ligne (un <div>, empilé sous le <div> du titre par le flux de bloc
+   normal — le `white-space: nowrap` hérité de la cellule ne s'applique
+   qu'au texte à l'intérieur de chaque <div>, jamais entre eux) ; peut
+   contenir un titre de grille d'origine potentiellement long, donc
+   repasse en retour à la ligne normal plutôt que de forcer la table
+   entière à défiler horizontalement pour cette seule cellule (elle
+   défile déjà via .table-scroll si nécessaire, voir #library ci-dessous).
+   */
+#library-table td .library-origin-tag {
+  margin-top: 0.15rem;
+  font-size: 0.72rem;
+  color: var(--fg);
+  opacity: 0.65;
+  white-space: normal;
+  max-width: 22rem;
+}
+
 /* Every row loads its own grid on click (script.js's loadLibraryGrid()) —
    styled to read as clickable (pointer cursor, a hover tint) the same way
    a real link/button would, even though it's a plain <tr>. */
@@ -1732,7 +1756,8 @@ button:disabled {
 #interactive-propose-results[hidden],
 #interactive-words-results[hidden],
 #interactive-verify-report[hidden],
-#interactive-title-row[hidden] {
+#interactive-title-row[hidden],
+#interactive-title-propose-results[hidden] {
   display: none;
 }
 /* "Précédent"/"Suivant" flank #grid on each side, vertically centered
@@ -1866,6 +1891,21 @@ button:disabled {
 #interactive-title-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+/* "Proposer un titre" button's own 10-line pick list — same shape/look
+   as #interactive-propose-results just above (reuses .interactive-
+   propose-line: identical click-a-line-to-fill-the-field interaction),
+   at the user's explicit request: "10 propositions affichées en
+   dessous (comme 'Proposer une définition')." A separate container
+   rather than sharing #interactive-propose-results itself, since the
+   two lists are independent and can both be populated at once (a
+   definition proposal for the selected word, a title proposal for the
+   whole grid). */
+#interactive-title-propose-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: 100%;
 }
 #interactive-save-result {
   margin: 0;

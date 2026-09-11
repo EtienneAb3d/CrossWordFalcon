@@ -551,6 +551,14 @@
           <button type="button" id="interactive-title-propose-btn"
                   data-i18n="interactiveTitleProposeBtn">Proposer un titre</button>
         </div>
+        <!-- 10 propositions de titre affichées ici, comme
+             #interactive-propose-results (une ligne par proposition,
+             cliquable pour remplir #interactive-title-input) — à la
+             demande explicite de l'utilisateur : "Le bouton 'Proposer un
+             titre' doit générer 10 propositions affichées en dessous
+             (comme 'Proposer une définition')." Voir
+             renderInteractiveTitleProposals(). -->
+        <div id="interactive-title-propose-results" hidden></div>
         <div id="interactive-save-row">
           <!-- "Sauvegarder" : enregistre l'état complet de la grille dans
                GRID_WORK (brouillon "Créations") SANS la publier — à la
