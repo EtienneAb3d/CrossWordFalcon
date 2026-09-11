@@ -313,6 +313,38 @@ button:disabled {
   color: var(--error);
 }
 
+/* Ligne du titre : #grid-title (gauche) + #grid-timer (droite), à la
+   demande explicite de l'utilisateur ("l'afficher à droite sur la même
+   ligne que le titre de la grille") — troisième et dernière étape d'un
+   historique de placement (voir #grid-timer ci-dessous) : d'abord en
+   ligne à gauche du titre, puis en position fixe dans le coin de la
+   fenêtre (jugé "trop haut, pas assez lié au titre"), maintenant de
+   retour en ligne mais du côté droit de cette même ligne. */
+#grid-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin: 0 0 0.3rem;
+}
+
+/* Compteur de temps de la partie en cours (script.js's startGridTimer/
+   scheduleGridGameSave), à la demande explicite de l'utilisateur.
+   "XhXmnXs" via la même formatDuration() que le rapport des temps de
+   génération plus bas. `margin-left: auto` (même technique que h1 dans
+   #page-header) le pousse à l'extrémité droite de #grid-title-row quel
+   que soit le contenu de #grid-title à sa gauche — plus robuste qu'un
+   `justify-content: space-between` sur la ligne, qui replierait le
+   compteur à GAUCHE si #grid-title lui-même est masqué (grille sans
+   titre ni difficulté, cas rare mais réel — voir displayFinalGrid). */
+#grid-timer {
+  margin-left: auto;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #777;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Short, LLM-generated grid title (backend/clues.py's LLMClueGenerator.
    generate_title), at the user's explicit request: "Affiche ce nom en
    haut de la grille à jouer." A proper heading (not styled like #stats'
@@ -321,9 +353,11 @@ button:disabled {
    readout. Hidden via the `hidden` attribute (see script.js's
    displayFinalGrid) rather than emptied out, for a grid with no title at
    all (title generation itself failed, or a grid saved before this
-   feature existed) — no empty heading line taking up space. */
+   feature existed) — no empty heading line taking up space. `margin`'s
+   own bottom spacing now lives on #grid-title-row instead (see above),
+   so #grid-title itself only needs 0. */
 #grid-title {
-  margin: 0 0 0.3rem;
+  margin: 0;
   font-size: 1.3rem;
 }
 
@@ -385,24 +419,31 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* Centré (jamais collé à gauche), à la demande explicite de
+   l'utilisateur : "En mode jeu, centrer le bloc grille+définition+
+   flèches." Dans l'état par défaut du mode jeu (#clues/#down-clues-
+   section masqués tant que "Définitions" n'a pas été activé, voir
+   applyDefinitionsVisibility()), #grid-column — grille + panneau de
+   définition + flèches de sens — est le seul enfant visible de #board,
+   donc ce centrage porte exactement sur ce bloc-là. Si "Définitions" est
+   activé, #clues (liste horizontale) réapparaît à côté et le centrage
+   porte alors sur la paire #clues+#grid-column ensemble — un
+   comportement dégradé raisonnable, jamais un cas que l'utilisateur a
+   exclu.
+   Cette règle était auparavant scopée à `#board.interactive-centered`
+   (posée/retirée par script.js's enterInteractiveMode()/
+   hideInteractivePanel()), seul le mode "Interactif" étant centré — le
+   mode jeu restait volontairement collé à gauche. Rendue inconditionnelle
+   ici ; la classe `.interactive-centered` elle-même (devenue un pur
+   doublon, #board étant maintenant toujours centré) a été retirée du
+   HTML/JS plutôt que laissée morte. */
 #board {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
+  justify-content: center;
   gap: 2rem;
   margin-top: 1rem;
-}
-
-/* "Interactif" mode only (script.js's enterInteractiveMode()/
-   hideInteractivePanel() toggle this class on #board): centers the
-   Précédent+Grille+Suivant row within #board's own full width, at the
-   user's explicit request. #clues is always hidden in this mode (see
-   applyDefinitionsVisibility()), so #grid-column — the row itself — is
-   #board's only visible child here; scoped to this class rather than
-   applied unconditionally so the ordinary play-mode #clues+#grid-column
-   layout (flush left, by design) is never affected. */
-#board.interactive-centered {
-  justify-content: center;
 }
 
 /* Wraps #grid and #hover-definition-row so the definition panel (plus its

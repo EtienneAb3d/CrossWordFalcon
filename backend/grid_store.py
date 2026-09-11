@@ -531,3 +531,101 @@ def delete_grid_work(work_id):
         return True
     except OSError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# GRID_GAME — a player's own in-progress PLAY state for one library grid
+# (project root, gitignored, same convention as GRID_STORE/GRID_WORK — a
+# generated artifact, not source content), at the user's explicit request:
+# "A chaque modification de la grille, sauvegarder l'état de la grille dans
+# GRID_GAME avec le nom de l'utilisateur pour pouvoir la recharger plus
+# tard. Inclure l'état du compteur temps. Dans la Librairie, quand un
+# utilisateur clique pour jouer sur une grille, chercher si cette grille
+# existe dans GRID_GAME pour la recharger et relancer le compteur de temps
+# là où il était à la sauvegarde."
+#
+# Unlike GRID_STORE (one brand-new, never-touched-again file per finished
+# grid) or GRID_WORK (one file per in-progress "Interactif" *authoring*
+# session, found by its own job_id), a GRID_GAME record is keyed by the
+# pair (grid_id, pseudo) — the same grid can be played, independently, by
+# several different players, each with their own saved letters/elapsed
+# time. There is exactly one file per pair, always overwritten in place —
+# every letter the player types is a fresh snapshot of the whole grid, not
+# an append-only log. Filed as GRID_GAME/<grid_id>/<pseudo-slug>.json (one
+# subdirectory per grid rather than a single flat directory, or the
+# <timestamp>_<slug>_<...> naming GRID_STORE/GRID_WORK use) so the read
+# side (backend/app.py's `library_get`, given only a grid_id + a pseudo)
+# can find — or fail to find — the exact right file with a single,
+# non-glob path lookup: no timestamp is ever part of the key, since a
+# player's own saved game for a given grid is a singleton, not a series.
+# Both path segments are safe to use directly, without a further
+# existence/traversal check: `grid_id` is only ever accepted here after
+# matching `_GRID_ID_RE` (no slash/"../" can match it), and the pseudo
+# segment is already ASCII/underscore-only via `_slugify_pseudo` (reused
+# as-is from the GRID_WORK section above — the same slugging rules apply
+# to a player's own nickname whichever of the two stores it ends up in).
+# ---------------------------------------------------------------------------
+
+GRID_GAME_DIR = Path(__file__).resolve().parent.parent / "GRID_GAME"
+
+
+def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds):
+    """Saves (or updates) one player's own play state for `grid_id` — the
+    letters they've typed so far (`user_letters`, a plain 2D list of
+    strings, "" for a still-empty cell — the exact shape script.js's own
+    `userLetters` already uses, so no reshaping is needed on either side of
+    the wire) and the elapsed-time counter shown to the left of the grid's
+    title. Returns True on success; False (a pure no-op, nothing written)
+    if `grid_id` doesn't match the expected shape (see _GRID_ID_RE) or
+    `pseudo` is blank — a game state is only ever saved "avec le nom de
+    l'utilisateur", per the user's own explicit request, never for an
+    anonymous player.
+
+    `created_at` is preserved across updates (read from the existing file,
+    if any, before it gets overwritten) the same way save_grid_work already
+    does for its own record — so the very first time this grid was played
+    stays known even after many later saves; only `updated_at` and the
+    content itself change on every call after the first."""
+    pseudo = (pseudo or "").strip()
+    if not _GRID_ID_RE.match(grid_id) or not pseudo:
+        return False
+    directory = GRID_GAME_DIR / grid_id
+    path = directory / f"{_slugify_pseudo(pseudo)}.json"
+    created_at = None
+    if path.is_file():
+        try:
+            with open(path, encoding="utf-8") as f:
+                created_at = json.load(f).get("created_at")
+        except (OSError, json.JSONDecodeError):
+            created_at = None
+    now = datetime.now().isoformat()
+    record = {
+        "grid_id": grid_id,
+        "pseudo": pseudo,
+        "user_letters": user_letters,
+        "elapsed_seconds": max(0, int(elapsed_seconds or 0)),
+        "created_at": created_at or now,
+        "updated_at": now,
+    }
+    directory.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return True
+
+
+def get_grid_game(grid_id, pseudo):
+    """The saved play state for (`grid_id`, `pseudo`) — `user_letters` +
+    `elapsed_seconds`, see save_grid_game above — or None if `grid_id`
+    doesn't match the expected shape, `pseudo` is blank, or no matching
+    file exists (this specific player never played this specific grid
+    before, or never long enough to trigger an autosave)."""
+    pseudo = (pseudo or "").strip()
+    if not _GRID_ID_RE.match(grid_id) or not pseudo:
+        return None
+    path = GRID_GAME_DIR / grid_id / f"{_slugify_pseudo(pseudo)}.json"
+    if not path.is_file():
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None

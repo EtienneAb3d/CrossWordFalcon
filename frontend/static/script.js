@@ -104,7 +104,6 @@ const generationTimesNextBtn = document.getElementById("generation-times-next-bt
 const generationTimesPosition = document.getElementById("generation-times-position");
 const gridEl = document.getElementById("grid");
 const gridColumn = document.getElementById("grid-column");
-const board = document.getElementById("board");
 const hoverDefinition = document.getElementById("hover-definition");
 // The flex row wrapping #hover-definition and its own duplicated
 // direction-selector buttons (see #hover-definition-row's own comment
@@ -140,6 +139,7 @@ const wordVerificationTbody = document.getElementById("word-verification-tbody")
 const gridTitleEl = document.getElementById("grid-title");
 const gridTitleTextEl = document.getElementById("grid-title-text");
 const gridDifficultyEl = document.getElementById("grid-difficulty");
+const gridTimerEl = document.getElementById("grid-timer");
 const libraryBtn = document.getElementById("library-btn");
 const libraryPanel = document.getElementById("library");
 const libraryRefreshBtn = document.getElementById("library-refresh-btn");
@@ -1175,6 +1175,21 @@ function updatePreviewNavButtons() {
   // other regardless of which one the player actually clicks.
   generationTimesPrevBtn.disabled = atStart;
   generationTimesNextBtn.disabled = atEnd;
+  // "Le mode jeu affiche des flèches qui correspondent à la navigation
+  // dans l'historique de génération, qui ne doivent pas être affichées
+  // si cet historique est vide" — à la demande explicite de l'utilisateur.
+  // previewHistory reste vide pour une grille chargée depuis la
+  // Bibliothèque/un lien partagé/une reprise GRID_GAME (aucune génération
+  // n'a eu lieu dans cet onglet — voir loadLibraryGrid's own
+  // hideAttemptPreview()), donc rien à naviguer. Seule et unique source de
+  // vérité pour la visibilité de ce trio (voir enterInteractiveMode() /
+  // hideInteractivePanel(), qui appellent cette fonction plutôt que de
+  // fixer `.hidden` eux-mêmes) — toujours masqué en mode "Interactif"
+  // aussi, qui n'a aucun rapport avec previewHistory.
+  const hasNavigableHistory = !interactiveMode && previewHistory.length > 0;
+  generationTimesPrevBtn.hidden = !hasNavigableHistory;
+  generationTimesNextBtn.hidden = !hasNavigableHistory;
+  generationTimesPosition.hidden = !hasNavigableHistory;
   renderPreviewPosition();
 }
 
@@ -1546,10 +1561,12 @@ function handleKeydown(event) {
     // no keydown ever fired to update activeDirection.
     moveSelection(isUpper || activeDirection === "down" ? "down" : "right");
     renderGrid();
+    scheduleGridGameSave();
   } else if (key === "Backspace" || key === "Delete") {
     event.preventDefault();
     userLetters[selected.row][selected.col] = "";
     renderGrid();
+    scheduleGridGameSave();
   }
 }
 
@@ -1850,6 +1867,7 @@ function typeVirtualLetter(letter) {
   // mêmes libellés qu'activeDirection ("across"/"down").
   moveSelection(activeDirection === "across" ? "right" : "down");
   renderGrid();
+  scheduleGridGameSave();
 }
 
 function buildVirtualKeyboard() {
@@ -2336,6 +2354,82 @@ function formatDuration(seconds) {
   return out;
 }
 
+// Compteur de temps de la partie en cours, affiché à gauche du titre de
+// la grille (#grid-timer) et s'incrémentant toutes les secondes, à la
+// demande explicite de l'utilisateur. Module-level (pas un simple état
+// local de startGridTimer) puisque scheduleGridGameSave() (voir plus
+// bas) doit pouvoir lire sa valeur courante à chaque autosauvegarde.
+let gridTimerSeconds = 0;
+let gridTimerIntervalId = null;
+
+function renderGridTimer() {
+  gridTimerEl.textContent = formatDuration(gridTimerSeconds);
+}
+
+// Arrête le compteur SANS le masquer (voir startGridTimer, qui gère
+// l'affichage) — appelé juste avant d'en (re)démarrer un nouveau, pour
+// ne jamais laisser deux `setInterval` tourner en parallèle.
+function stopGridTimer() {
+  if (gridTimerIntervalId !== null) {
+    clearInterval(gridTimerIntervalId);
+    gridTimerIntervalId = null;
+  }
+}
+
+// (Re)démarre le compteur à `initialSeconds` (0 pour une grille
+// fraîchement générée, ou une grille de la bibliothèque sans partie
+// sauvegardée — voir displayFinalGrid et GET /api/library/{grid_id}'s
+// own `saved_game`; sinon la valeur de la dernière sauvegarde GRID_GAME,
+// "relancer le compteur de temps là où il était à la sauvegarde" à la
+// demande explicite de l'utilisateur). Masqué à nouveau (et arrêté) par
+// hideGridTimer() ci-dessous quand le mode jeu n'est plus affiché.
+function startGridTimer(initialSeconds) {
+  stopGridTimer();
+  gridTimerSeconds = Math.max(0, Math.round(initialSeconds || 0));
+  gridTimerEl.hidden = false;
+  renderGridTimer();
+  gridTimerIntervalId = setInterval(() => {
+    gridTimerSeconds += 1;
+    renderGridTimer();
+  }, 1000);
+}
+
+function hideGridTimer() {
+  stopGridTimer();
+  gridTimerEl.hidden = true;
+}
+
+// GRID_GAME autosave — "A chaque modification de la grille, sauvegarder
+// l'état de la grille dans GRID_GAME avec le nom de l'utilisateur pour
+// pouvoir la recharger plus tard. Inclure l'état du compteur temps." —
+// à la demande explicite de l'utilisateur. Fire-and-forget, comme
+// autosaveInteractiveWork() : un échec ou une lenteur ne doit jamais
+// bloquer la frappe. Ne se déclenche que pour une grille réellement
+// stockée (`puzzle.id` — voir backend/app.py's _run_generate_job, qui
+// l'ajoute au résultat dès la sauvegarde en bibliothèque, qu'elle vienne
+// d'être générée ou d'être rechargée) jouée en mode normal (jamais en
+// mode "Interactif", qui a son propre mécanisme de sauvegarde), par un
+// joueur ayant déjà défini un pseudo — une partie n'est jamais
+// sauvegardée "anonymement", per la demande explicite de l'utilisateur.
+async function scheduleGridGameSave() {
+  if (interactiveMode || !puzzle || !puzzle.id || !userPseudo) return;
+  try {
+    await fetchWithTimeout("/api/game/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grid_id: puzzle.id,
+        pseudo: userPseudo,
+        user_letters: userLetters,
+        elapsed_seconds: gridTimerSeconds,
+      }),
+    }, FETCH_TIMEOUT_MS);
+  } catch (err) {
+    // Best-effort, silencieusement ignoré — même convention que
+    // autosaveInteractiveWork().
+  }
+}
+
 // Décompte de mots essayés (backend/crossword_gen.py, `total_attempts` —
 // somme de `Filler.checks`, incrémenté une fois par mot candidat essayé,
 // voir son propre historique) formaté pour rester lisible même une fois
@@ -2659,6 +2753,21 @@ function renderGridDifficulty() {
 function displayFinalGrid(gridData) {
   puzzle = gridData;
   userLetters = Array.from({ length: gridData.height }, () => Array(gridData.width).fill(""));
+  // Partie déjà sauvegardée dans GRID_GAME pour cette grille + ce pseudo
+  // (voir GET /api/library/{grid_id}'s own `saved_game`, transmis par
+  // loadLibraryGrid — jamais présent pour une grille qui vient d'être
+  // générée, dont le grid_id est tout neuf), à la demande explicite de
+  // l'utilisateur : "chercher si cette grille existe dans GRID_GAME pour
+  // la recharger et relancer le compteur de temps là où il était à la
+  // sauvegarde." Dimensions revérifiées avant usage — ne devrait jamais
+  // différer (un grid_id désigne toujours le même contenu), défensif
+  // seulement.
+  const savedGame = gridData.saved_game || null;
+  const savedLetters = savedGame && savedGame.user_letters;
+  if (savedLetters && savedLetters.length === gridData.height
+      && savedLetters.every((row) => row.length === gridData.width)) {
+    userLetters = savedLetters.map((row) => row.slice());
+  }
   selected = null;
   showSolution = false;
   checking = false;
@@ -2687,6 +2796,10 @@ function displayFinalGrid(gridData) {
   // (sans titre) suffit à afficher la ligne #grid-title.
   renderGridDifficulty();
   gridTitleEl.hidden = !gridData.title && gridDifficultyEl.hidden;
+  // Compteur de temps : repart de 0 pour une grille sans partie
+  // sauvegardée, ou reprend "là où il était à la sauvegarde" (voir
+  // savedGame ci-dessus) — à la demande explicite de l'utilisateur.
+  startGridTimer(savedGame ? savedGame.elapsed_seconds : 0);
   // Marque cette grille "déjà vue" — même chemin pour une grille qui vient
   // d'être générée (backend/app.py ajoute `id` au `result`, voir son
   // commentaire) et une grille rechargée depuis la bibliothèque
@@ -3010,7 +3123,14 @@ async function renderLibraryList() {
 async function loadLibraryGrid(gridId) {
   const t = I18N[uiLanguage];
   try {
-    const response = await fetchWithTimeout(`/api/library/${gridId}`, {}, FETCH_TIMEOUT_MS);
+    // Pseudo transmis en query string — à la demande explicite de
+    // l'utilisateur, le back cherche alors une partie déjà sauvegardée
+    // dans GRID_GAME pour (gridId, userPseudo) et la joint au résultat
+    // sous `saved_game` (voir backend/app.py's library_get et
+    // displayFinalGrid, qui la lit). Omis si aucun pseudo n'est encore
+    // défini — rien à retrouver dans ce cas.
+    const query = userPseudo ? `?pseudo=${encodeURIComponent(userPseudo)}` : "";
+    const response = await fetchWithTimeout(`/api/library/${gridId}${query}`, {}, FETCH_TIMEOUT_MS);
     const data = await response.json();
     if (!response.ok) {
       throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
@@ -4576,9 +4696,10 @@ function enterInteractiveMode(state) {
   // Reported directly by the user: leftover arrows floating above the
   // grid with no "Grille générée" text next to them, since this function
   // already empties that text but never hid the buttons themselves.
-  generationTimesPrevBtn.hidden = true;
-  generationTimesNextBtn.hidden = true;
-  generationTimesPosition.hidden = true;
+  // `interactiveMode` is already `true` at this point (see the top of this
+  // function) — updatePreviewNavButtons() is the single source of truth
+  // for this trio's own visibility (see its own comment).
+  updatePreviewNavButtons();
   cluesAcross.innerHTML = "";
   cluesDown.innerHTML = "";
   applyDefinitionsVisibility(); // hides #clues/#down-clues-section/#hover-definition-row
@@ -4588,13 +4709,9 @@ function enterInteractiveMode(state) {
   // #grid, which switches to a horizontal flex row for this mode (see
   // style.css's #grid-column.interactive-flank).
   gridColumn.classList.add("interactive-flank");
-  // Centers the whole Précédent+Grille+Suivant row within #board's full
-  // width, at the user's explicit request — scoped to interactive mode
-  // only (via this class) so the ordinary play-mode #clues+#grid-column
-  // layout is never affected: #clues is always hidden in this mode (see
-  // applyDefinitionsVisibility above), so #grid-column is #board's only
-  // visible child here, with nothing else for centering it to disturb.
-  board.classList.add("interactive-centered");
+  // #board is now unconditionally centered (see its own style.css
+  // comment) — this mode's own Précédent+Grille+Suivant row lands
+  // centered "for free", no dedicated class needed here any more.
   interactivePrevBtn.hidden = false;
   interactiveNextBtn.hidden = false;
   // A full grid reported "impossible" (e.g. a resumed session the player
@@ -4627,16 +4744,21 @@ function hideInteractivePanel() {
   interactiveMode = false;
   interactiveControls.hidden = true;
   gridColumn.classList.remove("interactive-flank");
-  board.classList.remove("interactive-centered");
   interactivePrevBtn.hidden = true;
   interactiveNextBtn.hidden = true;
+  // Le compteur de temps ne concerne que le mode jeu — arrêté à chaque
+  // fois qu'on en sort ou qu'on s'apprête à en (re)démarrer un nouveau
+  // (displayFinalGrid rappelle startGridTimer juste après). Le mode
+  // "Interactif" a son propre mécanisme de sauvegarde (GRID_WORK), sans
+  // compteur.
+  hideGridTimer();
   // Restore the automatic-generation history-navigation controls hidden by
-  // enterInteractiveMode() — harmless even before a real grid exists, since
-  // they were never conditionally hidden outside of interactive mode to
-  // begin with (only ever disabled via updatePreviewNavButtons()).
-  generationTimesPrevBtn.hidden = false;
-  generationTimesNextBtn.hidden = false;
-  generationTimesPosition.hidden = false;
+  // enterInteractiveMode() — only actually shown again if previewHistory
+  // itself is non-empty (updatePreviewNavButtons() is the single source
+  // of truth for this trio's own visibility, see its own comment).
+  // `interactiveMode` is already `false` at this point (see the top of
+  // this function).
+  updatePreviewNavButtons();
   applyDefinitionsVisibility(); // restore normal #clues/#hover-definition-row rules
   syncRssPanelVisibility();
 }

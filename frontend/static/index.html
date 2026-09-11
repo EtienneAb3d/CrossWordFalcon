@@ -460,7 +460,20 @@
     </section>
 
     <section id="result" hidden>
-      <h2 id="grid-title" hidden><span id="grid-title-text"></span><span id="grid-difficulty" hidden></span></h2>
+      <!-- #grid-timer : compteur de temps (s'incrémente toutes les
+           secondes, script.js's startGridTimer()), à la demande explicite
+           de l'utilisateur. Historique de placement : d'abord à gauche du
+           titre (en ligne), puis "aligné à droite de l'écran" (position
+           fixe, coin de la fenêtre), puis — signalé "trop haut, pas assez
+           lié au titre" — de retour en ligne ici, sur la même ligne que
+           #grid-title mais alignée à droite de cette ligne (voir
+           #grid-title-row ci-dessous, margin-left: auto sur #grid-timer).
+           Masqué par défaut (mode "Interactif", ou avant qu'une grille
+           jouable existe) — voir hideInteractivePanel()/startGridTimer(). -->
+      <div id="grid-title-row">
+        <h2 id="grid-title" hidden><span id="grid-title-text"></span><span id="grid-difficulty" hidden></span></h2>
+        <span id="grid-timer" hidden></span>
+      </div>
       <p id="stats"></p>
       <p id="generation-times">
         <span id="generation-times-text"></span>

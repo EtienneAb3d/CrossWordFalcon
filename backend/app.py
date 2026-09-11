@@ -54,6 +54,7 @@ from .crossword_gen import (
 from .grid_store import (
     _slugify_title, get_grid, list_grids, save_grid_json,
     save_grid_work, list_grid_work, get_grid_work, delete_grid_work,
+    save_grid_game, get_grid_game,
 )
 from .svg_export import (
     render_puzzle_svg,
@@ -383,30 +384,96 @@ async def _rss_daily_scheduler():
     demande explicite de l'utilisateur : "Reproduit l'agrégation que fait
     le site ci-dessus, pour récupérer les liens et descriptions une fois
     par jour (comme les flux RSS)." Un `try/except` propre à chacun des
-    deux appels — l'échec de l'un ne doit jamais empêcher l'autre de
-    tourner ce même jour, exactement le même principe déjà appliqué en
-    interne à chaque flux RSS pris individuellement."""
+    deux appels (factorisés dans _refresh_rss/_refresh_scrapp ci-dessous,
+    partagés avec _rss_startup_catchup) — l'échec de l'un ne doit jamais
+    empêcher l'autre de tourner ce même jour, exactement le même principe
+    déjà appliqué en interne à chaque flux RSS pris individuellement.
+
+    Ce mécanisme n'a lui-même AUCUN rattrapage : s'il ne tourne pas
+    exactement à RSS_FETCH_HOUR un jour donné (ex. un redémarrage du
+    processus survenu entre les deux appels, un incident réel constaté le
+    2026-09-11 où SCRAPP était resté daté de la veille malgré un RSS
+    fraîchement à jour), rien ne retente avant le tick du lendemain —
+    voir _rss_startup_catchup, qui comble exactement ce trou au
+    démarrage du processus."""
     while True:
         now = datetime.datetime.now()
         next_run = now.replace(hour=RSS_FETCH_HOUR, minute=0, second=0, microsecond=0)
         if next_run <= now:
             next_run += datetime.timedelta(days=1)
         await asyncio.sleep((next_run - now).total_seconds())
-        try:
-            items = await asyncio.to_thread(fetch_rss_feeds.fetch_all)
-            logger.info("rss: %d articles rafraichis", len(items))
-        except Exception:
-            logger.exception("rss: echec du rafraichissement quotidien")
-        try:
-            grids = await asyncio.to_thread(fetch_grid_links.fetch_all)
-            logger.info("scrapp: %d grilles rafraichies", len(grids) if grids is not None else 0)
-        except Exception:
-            logger.exception("scrapp: echec du rafraichissement quotidien")
+        await _refresh_rss()
+        await _refresh_scrapp()
+
+
+async def _refresh_rss():
+    """Un appel à fetch_rss_feeds.fetch_all(), journalisé dans tous les
+    cas — factorisé pour être partagé entre le tick quotidien ci-dessus
+    et le rattrapage au démarrage ci-dessous (_rss_startup_catchup), pour
+    qu'ils ne puissent jamais diverger dans la façon de rapporter un
+    succès/échec."""
+    try:
+        items = await asyncio.to_thread(fetch_rss_feeds.fetch_all)
+        logger.info("rss: %d articles rafraichis", len(items))
+    except Exception:
+        logger.exception("rss: echec du rafraichissement")
+
+
+async def _refresh_scrapp():
+    """Même rôle que _refresh_rss ci-dessus, pour fetch_grid_links.
+    fetch_all()."""
+    try:
+        grids = await asyncio.to_thread(fetch_grid_links.fetch_all)
+        logger.info("scrapp: %d grilles rafraichies", len(grids) if grids is not None else 0)
+    except Exception:
+        logger.exception("scrapp: echec du rafraichissement")
+
+
+def _combined_json_is_fresh(path):
+    """True si `path` (RSS/combined.json ou SCRAPP/combined.json) existe
+    et que son propre `fetched_at` date d'aujourd'hui (date locale) —
+    utilisé par _rss_startup_catchup ci-dessous. False dans tout autre
+    cas (fichier absent, illisible, ou daté d'un jour antérieur), sans
+    jamais lever — un fichier corrompu/absent doit simplement déclencher
+    un rafraîchissement, pas faire planter le démarrage du serveur."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        fetched_at = datetime.datetime.fromisoformat(data["fetched_at"])
+        if fetched_at.tzinfo is not None:
+            fetched_at = fetched_at.astimezone().replace(tzinfo=None)
+        return fetched_at.date() == datetime.datetime.now().date()
+    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        return False
+
+
+async def _rss_startup_catchup():
+    """Rattrapage exécuté une seule fois, au démarrage du processus (pas
+    sur le cycle quotidien de RSS_FETCH_HOUR) — à la suite d'un incident
+    réel constaté le 2026-09-11 : RSS/combined.json s'était bien
+    rafraîchi à 8h ce matin-là, mais SCRAPP/combined.json était resté
+    daté de la veille. _rss_daily_scheduler() lui-même est pourtant
+    correct (chacun des deux appels a son propre try/except indépendant,
+    l'échec de l'un ne peut jamais empêcher l'autre de tourner dans le
+    même tick) — le scénario le plus probable est qu'un redémarrage du
+    processus (pour une raison sans rapport) est survenu exactement entre
+    les deux appels ce matin-là, avant que fetch_grid_links.fetch_all()
+    n'ait eu le temps d'écrire son fichier. Dans ce cas, sans ce
+    rattrapage, plus aucun rafraîchissement n'aurait eu lieu avant le
+    tick du lendemain 8h — jusqu'à 24h de retard, exactement ce qui a été
+    signalé. Relance chacun des deux fetch, indépendamment, seulement si
+    son propre fichier n'est pas déjà daté d'aujourd'hui — ne fait donc
+    rien du tout au démarrage un jour où les deux se sont déjà bien
+    rafraîchis normalement."""
+    if not _combined_json_is_fresh(RSS_DIR / "combined.json"):
+        await _refresh_rss()
+    if not _combined_json_is_fresh(SCRAPP_DIR / "combined.json"):
+        await _refresh_scrapp()
 
 
 @app.on_event("startup")
 async def _start_rss_scheduler():
     asyncio.create_task(_rss_daily_scheduler())
+    asyncio.create_task(_rss_startup_catchup())
     # Balayage périodique de la présence : capte une baisse d'effectif
     # (LOG_USERS/) même quand plus aucun battement n'arrive — voir
     # _presence_sweep_scheduler.
@@ -1173,6 +1240,23 @@ _LIBRARY_SEEN_FILTERS = ("all", "unseen", "seen", "mine")
 _LIBRARY_DIFFICULTY_FILTERS = ("easy", "medium", "hard")
 
 
+class GridGameSaveRequest(BaseModel):
+    """Corps de POST /api/game/save — autosauvegarde de la partie en cours
+    d'un joueur sur une grille de la bibliothèque (voir grid_store.
+    save_grid_game), à la demande explicite de l'utilisateur : "A chaque
+    modification de la grille, sauvegarder l'état de la grille dans
+    GRID_GAME avec le nom de l'utilisateur... Inclure l'état du compteur
+    temps." `grid_id` doit correspondre à une grille réellement stockée
+    (id de GRID_STORE, voir grid_store._GRID_ID_RE) ; `pseudo` est
+    obligatoire — le frontend ne déclenche cet appel que si un pseudo est
+    déjà défini (voir script.js's scheduleGridGameSave), mais l'endpoint
+    le revalide quand même côté serveur."""
+    grid_id: str
+    pseudo: str
+    user_letters: list[list[str]]
+    elapsed_seconds: int = Field(default=0, ge=0)
+
+
 class LibraryListRequest(BaseModel):
     """Corps de POST /api/library — même rôle que les paramètres de query
     de la route GET, mais en POST pour pouvoir transporter `seen_ids`, qui
@@ -1326,16 +1410,40 @@ def library_list_filtered(req: LibraryListRequest):
 
 
 @app.get("/api/library/{grid_id}")
-def library_get(grid_id: str):
+def library_get(grid_id: str, pseudo: str = ""):
     """Charge une grille précédemment sauvegardée pour la rejouer —
     renvoie exactement la même forme qu'un job terminé (`result`, voir
     _run_generate_job), avec en plus les métadonnées de la bibliothèque
     (id/titre/langue/difficulté/mode/date), pour que le frontend puisse
     l'afficher via le même chemin de code qu'une génération qui vient de
-    se terminer (voir frontend/static/script.js's displayFinalGrid)."""
+    se terminer (voir frontend/static/script.js's displayFinalGrid).
+
+    `pseudo` (optionnel) : si renseigné, cherche aussi dans GRID_GAME
+    (voir grid_store.get_grid_game) une partie déjà sauvegardée par ce
+    joueur pour cette grille précise, et l'ajoute au résultat sous
+    `saved_game` (`{user_letters, elapsed_seconds}`, ou absent/None si
+    rien n'a été trouvé) — à la demande explicite de l'utilisateur :
+    "Dans la Librairie, quand un utilisateur clique pour jouer sur une
+    grille, chercher si cette grille existe dans GRID_GAME pour la
+    recharger et relancer le compteur de temps là où il était à la
+    sauvegarde." Le frontend (loadLibraryGrid) transmet le pseudo courant
+    à chaque appel ; omis, ce champ est simplement absent, sans erreur —
+    une génération fraîchement terminée n'a jamais de partie sauvegardée
+    à chercher (son grid_id vient d'être créé)."""
     record = get_grid(grid_id)
     if record is None:
         raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    pseudo = (pseudo or "").strip()
+    if pseudo:
+        saved_game = get_grid_game(grid_id, pseudo)
+        if saved_game is not None:
+            record = {
+                **record,
+                "saved_game": {
+                    "user_letters": saved_game.get("user_letters"),
+                    "elapsed_seconds": saved_game.get("elapsed_seconds", 0),
+                },
+            }
     return record
 
 
@@ -1364,6 +1472,22 @@ async def library_get_pdf(grid_id: str):
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{slug}.pdf"'},
     )
+
+
+@app.post("/api/game/save")
+def game_save(req: GridGameSaveRequest):
+    """Autosauvegarde de la partie en cours (voir GridGameSaveRequest /
+    grid_store.save_grid_game) — appelée par le frontend à chaque
+    modification de la grille en mode jeu (lettre tapée ou effacée), tant
+    qu'un pseudo est défini. Toujours un simple accusé de réception
+    (`{"ok": True}`) ; jamais d'erreur si aucune grille GRID_STORE ne
+    correspond réellement à `grid_id` — un game state reste valable même
+    pour une grille qui ne serait, hypothétiquement, plus référencée
+    ailleurs (il n'existe aujourd'hui aucun mécanisme de suppression de
+    grille de la bibliothèque)."""
+    if not save_grid_game(req.grid_id, req.pseudo, req.user_letters, req.elapsed_seconds):
+        raise HTTPException(status_code=400, detail="identifiant de grille ou pseudo invalide")
+    return {"ok": True}
 
 
 @app.get("/api/dictionary")

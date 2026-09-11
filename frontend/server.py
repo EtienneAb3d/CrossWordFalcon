@@ -335,13 +335,17 @@ async def proxy_library_list_filtered(request: Request):
 
 
 @app.get("/api/library/{grid_id}")
-async def proxy_library_get(grid_id: str):
+async def proxy_library_get(grid_id: str, request: Request):
     """Relaie le chargement d'une grille de la bibliothèque (voir
     script.js) vers le back — même schéma que les autres routes de ce
-    proxy."""
+    proxy. La query string (`pseudo`, voir backend/app.py's library_get —
+    fait chercher une partie déjà sauvegardée dans GRID_GAME) est
+    transmise telle quelle."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
-            resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}")
+            resp = await client.get(
+                f"{BACKEND_URL}/api/library/{grid_id}", params=request.query_params
+            )
     except httpx.RequestError:
         raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
     return JSONResponse(status_code=resp.status_code, content=resp.json())
@@ -371,6 +375,24 @@ async def proxy_library_get_pdf(grid_id: str):
     return Response(
         content=resp.content, media_type="application/pdf", headers=headers
     )
+
+
+@app.post("/api/game/save")
+async def proxy_game_save(request: Request):
+    """Relaie l'autosauvegarde de la partie en cours (voir script.js's
+    scheduleGridGameSave, backend/app.py's game_save) vers le back — corps
+    JSON relayé tel quel, même schéma que proxy_recompute."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/game/save",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
 @app.get("/api/dictionary")
