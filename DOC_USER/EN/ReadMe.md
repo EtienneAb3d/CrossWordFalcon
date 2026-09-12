@@ -546,6 +546,21 @@ retype it by hand.
   remaining word and keeps the first suggestion. It works through the
   words one at a time and shows its progress; a word whose definition
   could not be produced is simply left blank.
+- **Finir la grille / Finish the grid** (`#interactive-finish-btn`,
+  `POST /api/interactive/finish`) — permanently locks every letter
+  already placed and hands the grid off to the automatic generation
+  engine, which fills in whatever is left (adding new black cells/words
+  wherever still needed) and writes a definition for any word that does
+  not already have one, leaving every existing definition untouched.
+  Clicking it leaves Interactive mode and shows the exact same live
+  attempt-preview grids and progress reporting as an ordinary automatic
+  generation, ending with the same playable, finished grid. In those
+  preview grids, every cell already carrying a letter at the moment you
+  clicked is framed in light green — distinct from the orange frame used
+  elsewhere for a cell the search itself has confirmed so far, since a
+  light-green letter can never be changed or removed for the rest of
+  this generation. Your interactive session itself is left untouched, so
+  it stays available in your "Créations" list.
 
 **Finishing**
 

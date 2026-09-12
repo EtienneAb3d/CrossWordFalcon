@@ -624,6 +624,14 @@
                chacun, en gardant la première proposition. -->
           <button type="button" id="interactive-definitions-btn"
                   data-i18n="interactiveDefinitionsBtn">Définitions</button>
+          <!-- "Finir la grille": permanently locks every letter already
+               placed and starts a brand-new automatic generation from
+               that state (new black cells/words added as needed),
+               including generating missing definitions — at the user's
+               explicit request, right after "Définitions". See
+               POST /api/interactive/finish. -->
+          <button type="button" id="interactive-finish-btn"
+                  data-i18n="interactiveFinishBtn">Finir la grille</button>
         </div>
         <div id="interactive-definition-row">
           <input type="text" id="interactive-definition-input" autocomplete="off"

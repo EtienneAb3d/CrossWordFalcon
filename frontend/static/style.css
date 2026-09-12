@@ -19,6 +19,7 @@
   --noise-bg: #e9d5ff;
   --best: #16a34a;
   --theme-fg: #ff00fb;
+  --finish-locked: #4ade80;
 }
 
 * {
@@ -807,6 +808,27 @@ button:disabled {
    fournit aujourd'hui de case noire pour ces trois-là). */
 .attempt-preview-grid .cell.black.locked {
   box-shadow: inset 0 0 0 2px var(--locked);
+}
+
+/* "Finir la grille" (Interactif mode): a light-green frame on any cell
+   whose letter was already positioned MANUALLY by the player before
+   clicking that button, at the user's explicit request — "en
+   verrouillant définitivement les lettres déjà positionnées (affichées
+   dans les aperçus encadrées en vert clair)." A dedicated light-green
+   token (`--finish-locked`), distinct both from `.locked` (orange — a
+   letter confirmed BY THE SEARCH itself, which can in principle still be
+   removed by a later cleanup) and from `--best` (the more saturated
+   green surrounding a batch's winning grid): a letter locked here can
+   NEVER disappear or change for the entire rest of the generation (see
+   backend/crossword_gen.py's own `locked_letters`) — a stronger
+   guarantee than `.locked`, and an unrelated meaning to `--best`. A
+   border (like .forced/.locked), not a fill, so it composes cleanly with
+   any .impossible/.noise/.low-candidates already on the same cell.
+   `finishLockedCells` (script.js) is only ever set while a generation
+   started by "Finir la grille" is running — `null` everywhere else, so a
+   no-op for any other generation. */
+.attempt-preview-grid .cell.white.finish-locked {
+  box-shadow: inset 0 0 0 2px var(--finish-locked);
 }
 
 /* Lettres magenta vif pour les cases d'un mot issu du glossaire de la

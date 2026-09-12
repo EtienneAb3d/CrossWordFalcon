@@ -218,6 +218,14 @@ you enter this mode, so you can look up words while you fill in the grid:
   suggestions toward it; opening an existing themed grid for editing
   (see "Library" below) fills this field back in automatically from that
   grid's own theme.
+- If you don't want to place every remaining word by hand, click **"Finir
+  la grille"** at any point: it permanently locks every letter you've
+  already placed and lets the automatic grid generator take over from
+  there, filling in the rest (adding black cells where needed) and
+  writing a definition for any word that doesn't already have one — your
+  own definitions are left untouched. The screen switches to the same
+  live preview you'd see for an ordinary automatic generation, and your
+  already-placed letters are shown framed in light green throughout.
 
 ### Library
 

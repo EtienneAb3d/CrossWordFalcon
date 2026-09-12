@@ -3139,3 +3139,44 @@ end through the real running API (interactive start/step/save,
   brace-balance check: 281/281 before and after). **Not yet visually
   confirmed in an actual browser** — same tooling limitation noted
   throughout this file.
+
+- A **"Finir la grille"** button was added at the end of
+  `#interactive-arrows`, right after "Définitions", at the user's
+  explicit request: locks every letter already positioned and hands the
+  grid off to the automatic generation engine. A plain unstyled
+  `<button>` — same shared accent-blue base look as every other
+  interactive-mode action button, no dedicated CSS. Its click handler
+  reuses `runGeneration()` (the same mechanism already established for
+  "Continuer"), so the whole automatic-search attempt-preview UI takes
+  over exactly as for an ordinary generation.
+
+  A new highlight, `.attempt-preview-grid .cell.white.finish-locked`,
+  frames every cell already carrying a letter at the moment the button
+  is clicked, in every attempt-preview grid shown while that generation
+  runs — at the user's explicit request: "verrouillant définitivement
+  les lettres déjà positionnées (affichées dans les aperçus encadrées en
+  vert clair)." A new light-green token, `--finish-locked: #4ade80`,
+  deliberately distinct from both `.locked` (`--locked`, orange — a cell
+  merely confirmed *by the search itself*, which a later cleanup can
+  still revert) and `--best` (the more saturated green marking a batch's
+  overall winning grid, an unrelated concept): a letter locked this way
+  can never disappear or change for the rest of that generation (see
+  `crossword_gen.py`'s `locked_letters`), a strictly stronger guarantee
+  than `.locked`'s own. A border, not a fill, matching `.forced`/
+  `.locked`'s own convention so it composes cleanly with any
+  `.impossible`/`.noise`/`.low-candidates` fill already on the same cell.
+
+  `finishLockedCells` (`script.js`, a `Set` of `"row,col"` strings) is
+  computed once, right when the button is clicked, from whichever cells
+  of `interactiveGrid` already carry a letter — `null` for every other
+  kind of generation (a fresh form submit resets it explicitly; a
+  "Continuer" click deliberately does not, since it resumes this exact
+  same job) — so `renderAttemptPreview()`'s new overlay pass is a
+  complete no-op outside this one specific flow. Verified structurally
+  only (a real JS syntax check via a temporarily installed `esprima`,
+  removed again afterward; a CSS brace-balance check; a direct,
+  non-mocked isolated call to the real `POST /api/interactive/finish`
+  endpoint confirming the request/response shapes, the built
+  `resume_state`/`preserved_clues`, and the reused theme glossary all
+  come out correct). **Not yet visually confirmed in an actual browser**
+  — same tooling limitation noted throughout this file.

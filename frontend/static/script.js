@@ -240,6 +240,7 @@ const interactiveDefinitionInput = document.getElementById("interactive-definiti
 const interactiveProposeBtn = document.getElementById("interactive-propose-btn");
 const interactiveVerifyBtn = document.getElementById("interactive-verify-btn");
 const interactiveDefinitionsBtn = document.getElementById("interactive-definitions-btn");
+const interactiveFinishBtn = document.getElementById("interactive-finish-btn");
 const interactiveWordsBtn = document.getElementById("interactive-words-btn");
 const interactiveWordsResults = document.getElementById("interactive-words-results");
 const interactiveProposeResults = document.getElementById("interactive-propose-results");
@@ -663,6 +664,17 @@ let interactiveDefs = new Map();
 // Pruned on every renderInteractive() to cells that still carry a letter,
 // so undo/erase/toggle-black drop the mark naturally.
 let interactiveThemeCells = new Set();
+// "row,col" for every cell already carrying a letter in `interactiveGrid`
+// at the moment "Finir la grille" is clicked — highlighted in light green
+// in every attempt-preview grid of the automatic generation that button
+// launches (renderAttemptPreview()'s own .finish-locked overlay, see
+// style.css), at the user's explicit request: "verrouillant définitivement
+// les lettres déjà positionnées (affichées dans les aperçus encadrées en
+// vert clair)." `null` (not merely empty) whenever no such generation is
+// in progress — reset only by a genuinely fresh, unrelated generation (the
+// plain form submit handler), never by "Continuer" (which resumes THIS
+// SAME finish job) nor by runGeneration()'s own generic reset.
+let finishLockedCells = null;
 // "row,col" keys for the backend-computed fill diagnostics of the LAST
 // auto-placement (start / "Suivant") — impossible slots (no candidate word
 // left at all) and slots below the fill-option threshold — shown in
@@ -1217,6 +1229,18 @@ function renderAttemptPreview(examples) {
     for (const [r, c] of themeCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("theme");
+    }
+    // "Finir la grille": a light-green frame around every letter already
+    // placed manually before this generation was launched (see style.css's
+    // own .finish-locked rule) — `finishLockedCells` (module-level) is only
+    // ever set while a generation started by that button is running,
+    // `null` for every other generation, so this whole block is a no-op
+    // there.
+    if (finishLockedCells) {
+      for (const key of finishLockedCells) {
+        const cell = cellElementsByCoord.get(key);
+        if (cell) cell.classList.add("finish-locked");
+      }
     }
     const totalCells = height * width;
     const blackPercent = Math.round((100 * blackCount) / totalCells);
@@ -5344,6 +5368,20 @@ function enterInteractiveMode(state) {
   languageSelect.value = interactiveLanguage;
   bilingualLanguageSelect.value = interactiveBilingualLanguage || interactiveLanguage;
   interactiveDifficulty = state.difficulty || interactiveDifficulty;
+  // Reconfigure the generation form's own Largeur/Hauteur fields too, at
+  // the user's explicit request: re-editing a grid whose own dimensions
+  // differ from whatever the form last showed (a previous session, or
+  // the "5"/"5" defaults) otherwise left them silently wrong — a real
+  // bug for "Publier"/"Sauvegarder", which never read these two fields
+  // in the first place (interactiveGrid's own real shape is what's
+  // actually saved), but a genuinely misleading display regardless.
+  // `state.width`/`state.height` are always present on every entry path
+  // (backend/app.py's _run_interactive_job/_run_interactive_resume_job
+  // both set them on job["result"], see its own docstring for `width`),
+  // so no `||` fallback is needed here unlike interactiveLanguage/
+  // interactiveDifficulty just above.
+  if (state.width) widthInput.value = String(state.width);
+  if (state.height) heightInput.value = String(state.height);
   // Reconfigure the generation-form's own Mode/Taux noir/Graines/
   // Précision thématique fields to match whatever was used to create
   // this grid automatically, at the user's explicit request: "Quand une
@@ -5525,6 +5563,24 @@ function interactiveDefinitionsPayload() {
     direction: s.direction,
     clue: interactiveDefs.get(interactiveKey(s)) || "",
   }));
+}
+
+// "Finir la grille" : every "row,col" already carrying a real letter in
+// `interactiveGrid` right now — used both as the light-green preview
+// highlight (see finishLockedCells above/renderAttemptPreview()) and,
+// implicitly, as exactly the set of cells the backend will lock forever
+// (POST /api/interactive/finish sends the whole grid; the backend derives
+// its own locked-letter set from it the same way).
+function computeFinishLockedCells() {
+  const cells = new Set();
+  for (let r = 0; r < interactiveGrid.length; r++) {
+    const row = interactiveGrid[r];
+    for (let c = 0; c < row.length; c++) {
+      const ch = row[c];
+      if (ch && ch !== "#") cells.add(`${r},${c}`);
+    }
+  }
+  return cells;
 }
 
 // Fired after every "Suivant"/"Précédent" click, at the user's explicit
@@ -6163,6 +6219,50 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
   }
 });
 
+// "Finir la grille": permanently locks every letter already placed and
+// starts a brand-new automatic generation from that state, at the user's
+// explicit request — "en verrouillant définitivement les lettres déjà
+// positionnées..., y compris la génération des définitions manquantes
+// (mais pas celles déjà définies)." Reuses runGeneration() (the same
+// mechanism as "Continuer"): leaves Interactive mode and shows the exact
+// same attempt-preview grids / final grid as an ordinary automatic
+// generation. See POST /api/interactive/finish (backend/app.py) for the
+// letter-locking and the reuse of already-typed definitions.
+interactiveFinishBtn.addEventListener("click", async () => {
+  if (!interactiveMode || !interactiveJobId) return;
+  // Captured now, while Interactive mode is still active — interactiveGrid
+  // itself is never wiped by hideInteractivePanel()/runGeneration() anyway,
+  // but pin down the "before" state unambiguously before anything else
+  // happens.
+  finishLockedCells = computeFinishLockedCells();
+  await runGeneration(async (t) => {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    let response;
+    try {
+      response = await fetchWithTimeout("/api/interactive/finish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: interactiveJobId,
+          grid: wireGrid,
+          definitions: interactiveDefinitionsPayload(),
+          mode: document.getElementById("mode").value,
+          black_enrichment_percent: Number(blackEnrichmentInput.value),
+          force_letters_percent: Number(document.getElementById("force-letters").value),
+          pseudo: userPseudo || undefined,
+        }),
+      }, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      throw new Error(t.errorConnectionLost);
+    }
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail));
+    }
+    return data.job_id;
+  });
+});
+
 interactiveTitleProposeBtn.addEventListener("click", async () => {
   interactiveTitleProposed = false;
   interactiveTitleProposeBtn.disabled = true;
@@ -6376,6 +6476,12 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
+  // A genuinely fresh, unrelated generation — never keep a previous
+  // "Finir la grille" run's own light-green preview highlight around for
+  // this one (see finishLockedCells above). "Continuer" deliberately
+  // never resets this, since it resumes THIS SAME job, whatever started
+  // it.
+  finishLockedCells = null;
   await runGeneration(async (t) => {
     let response;
     try {

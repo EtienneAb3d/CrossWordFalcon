@@ -7362,6 +7362,181 @@ servers:
   yet visually confirmed in an actual browser** — same tooling limitation
   noted throughout this project's UI work.
 
+- **Opening a grid in Interactive mode (from the Library, or resuming a
+  "Créations" draft) now also restores the generation form's own Largeur/
+  Hauteur fields**, at the user's explicit request. `backend/app.py`'s
+  `_run_interactive_job`/`_run_interactive_resume_job` already put
+  `width`/`height` on `job["result"]` (the only part of a job `pollJob()`
+  ever returns to the frontend — no backend change needed at all). The
+  gap was purely client-side: `enterInteractiveMode(state)`
+  (`frontend/static/script.js`) already restored `interactiveLanguage`/
+  `interactiveDifficulty`/`interactiveBilingualLanguage` (and the
+  generation form's own Mode/Taux noir/Graines/Précision thématique
+  fields, when `state.generation_params` is present) on every entry
+  path, but never touched `#width`/`#height` at all, leaving them showing
+  whatever the form last had (a previous session, or the "5"/"5"
+  defaults). Fixed by setting `widthInput.value`/`heightInput.value` from
+  `state.width`/`state.height` right alongside the existing language/
+  difficulty restore — no `||` fallback needed, since both fields are
+  always present on every entry path's own `job["result"]`. Verified: a
+  real JS syntax check (`esprima`, temporarily installed and removed
+  again afterward) confirmed `script.js` still parses correctly. Pure
+  static-file change, live immediately with no server restart needed.
+
+- **"Finir la grille" / "Finish the grid" button** (Interactive mode,
+  `#interactive-finish-btn`, at the end of `#interactive-arrows`, right
+  after "Définitions"), at the user's explicit request: "ajouter un
+  bouton 'Finir la grille' qui lance une génération automatique en
+  verrouillant définitivement les lettres déjà positionnées (affichées
+  dans les aperçus encadrées en vert clair), y compris la génération des
+  définitions manquantes (mais pas celles déjà définies)." Hands the
+  current hand-edited grid off to the ordinary automatic engine
+  (`generate_grid()`) instead of leaving the player to place every last
+  word by hand — every already-placed letter becomes a permanent, hard
+  constraint the search can never remove, and the search fills in
+  whatever's left (adding new black cells/words wherever still needed),
+  writing a clue only for a word that doesn't already have one.
+
+  Implemented by reusing the exact same `resume_state` mechanism already
+  built for the "Continuer" button (`crossword_gen._serialize_resume_
+  state`/`_deserialize_resume_state`, see this file's own `generate_grid`
+  section) rather than inventing a second resume path: a new `POST
+  /api/interactive/finish` endpoint (`backend/app.py`,
+  `InteractiveFinishRequest{job_id, grid, definitions, mode,
+  black_enrichment_percent, force_letters_percent, pseudo}`) converts the
+  current editable grid into a `seed_grid` (black/white pattern — `bw =
+  [["#" if ch == "#" else "." for ch in row] for row in req.grid]`, the
+  exact same conversion `interactive_save` already uses for its own `bw`)
+  and a `locked_letters` map (`{(r, c): ch}` for every cell that isn't
+  `"#"`/`"."`), serializes them via `_serialize_resume_state(seed_grid,
+  locked_letters, None, None)` — `preseed_assignment`/`excluded_slots`
+  both `None`, so the very first palier of the resumed run dispatches
+  through `_pattern_attempt` (the fresh-pattern path, free to add new
+  black cells) rather than `_pattern_continue` (which would require
+  reusing the exact same pattern verbatim) — and hands this off to
+  `_run_generate_job` under a brand-new `job_id`, built from `job
+  ["interactive"]`/`INTERACTIVE_SESSIONS[job_id]` (language/difficulty/
+  bilingual_language/theme/the session's own already-resolved theme
+  glossary), never trusted from the request body, the same convention
+  `InteractiveSaveWorkRequest` already establishes. The original
+  interactive session itself is left completely untouched — same
+  "never mutate the job it's derived from" convention as "Continuer" —
+  so it stays available in the player's own "Créations" list regardless
+  of whether the automatic finish succeeds.
+
+  `_run_generate_job(job_id, req, resume_state=None,
+  override_priority_words=None, override_theme_description="",
+  preserved_clues=None)` gained three new optional parameters (`None`/
+  `""` by default — no effect for any pre-existing caller):
+  `override_priority_words`/`override_theme_description` let a caller
+  hand in an already-resolved theme glossary instead of having this
+  function recompute one itself via `_build_theme_glossary` (a costly,
+  non-deterministic LLM call + a Qdrant search per keyword) — the theme
+  block's own `if theme:` became `if override_priority_words is not
+  None: ... elif theme: ...`, so "Finir la grille" reuses
+  `INTERACTIVE_SESSIONS[job_id]["priority_words"]` verbatim (the exact
+  same "never re-derive, just reuse" principle already established for
+  `_run_interactive_resume_job`'s own `priority_words`) — an empty
+  frozenset (a non-themed interactive session) still takes this branch
+  and correctly resolves to "no theme," since every consumer of
+  `priority_words` downstream already treats it via truthiness, not an
+  explicit `is None` check.
+
+  `preserved_clues` (a `{(row, col, direction): clue}` map built from
+  `req.definitions`, keeping only entries with a non-empty clue) is the
+  "mais pas celles déjà définies" half of the request: `_run_generate_job`
+  now computes `words_needing_clue` (every one of `result["words"]` whose
+  exact `(row, col, direction)` is *not* in `preserved_clues`) right
+  before its very first "clues" progress event, and `total_words_for_
+  clues = len(words_needing_clue)` replaces every `total=len(result
+  ["words"])` in that function (the initial preview event, the live
+  per-word progress lambda) — provably a no-op when `preserved_clues` is
+  empty/`None`, since `words_needing_clue` then reduces to the full word
+  list. Only `words_needing_clue` (not the full word list) is ever turned
+  into `remaining_entries` and sent to `clue_generator.generate()` — a
+  word whose letters were just locked keeps the exact same position/
+  spelling through the whole search (a locked cell can never be
+  blackened, see `make_pattern`'s own `locked_cells` exclusion), so
+  matching by `(row, col, direction)` against the *final* word list still
+  correctly identifies the same word. The final per-word clue assignment
+  (`for w in result["words"]: w["clue"] = ...`) now checks
+  `preserved_by_key` first, falling back to `accumulated_clues.get(w
+  ["answer"], "")` only when nothing was preserved for that exact word —
+  a preserved clue can never be overwritten by a coincidental same-answer
+  entry elsewhere in `accumulated_clues`, since a preserved word was never
+  part of `remaining_entries` in the first place.
+
+  On the web UI, the button's click handler reuses `runGeneration()` (the
+  same mechanism "Continuer" already reuses) — `hideInteractivePanel()`
+  (called by `runGeneration()`'s own generic reset) leaves Interactive
+  mode automatically, and the whole live attempt-preview/final-grid UI
+  takes over exactly as for an ordinary generation. Sends the whole
+  current grid (converted to the wire format, `"" -> "."`) and
+  `interactiveDefinitionsPayload()` (already built for the "Sauvegarder"/
+  autosave calls — `[{row, col, direction, clue}]` for every slot, empty
+  string for one with no clue yet) alongside the generation form's own
+  current Mode/Taux noir/Graines values and the player's own pseudo.
+
+  A new `finishLockedCells` module-level `Set` (`"row,col"` keys, `null`
+  when not applicable) is computed once, at click time, from every cell
+  of `interactiveGrid` already carrying a letter
+  (`computeFinishLockedCells()`) — `renderAttemptPreview()` gained one
+  more overlay pass, right after the existing `theme_cells` one, adding a
+  new `.finish-locked` class to every matching cell of every preview grid
+  shown while this specific generation runs. A new CSS token,
+  `--finish-locked: #4ade80` (light green), and a matching border rule
+  (`.attempt-preview-grid .cell.white.finish-locked { box-shadow: inset 0
+  0 0 2px var(--finish-locked); }`, the same border-not-fill convention
+  already established for `.forced`/`.locked` so it composes cleanly with
+  `.impossible`/`.noise`/`.low-candidates`) — deliberately a different
+  token from both `.locked`'s orange (a cell merely *confirmed by the
+  search itself*, which a later cleanup can in principle still revert)
+  and `--best`'s more saturated green (an unrelated "this is the batch's
+  overall winner" marker): a letter locked this way can never disappear
+  or change for the rest of the generation. `finishLockedCells` is reset
+  to `null` only by a genuinely fresh, unrelated generation (the plain
+  form-submit handler) — never by "Continuer" (which resumes this exact
+  same job) nor by `runGeneration()`'s own generic reset, so the
+  highlight survives across a "Continuer" retry of a failed "Finir la
+  grille" run.
+
+  A matching `frontend/server.py` proxy route (`proxy_interactive_finish`)
+  was added in the same change, per this project's own rule that every
+  new backend endpoint needs one.
+
+  Verified: a real, non-mocked isolated call to `interactive_finish`
+  (`INTERACTIVE_SESSIONS`/`JOBS` populated directly, `_run_generate_job`
+  monkeypatched to capture its own arguments rather than run the full
+  pipeline) confirmed the built `resume_state` correctly matches the
+  grid's own black/white pattern and locked-letter map, that `override_
+  priority_words`/`override_theme_description` correctly carry the
+  session's own stored values through unmodified, that `preserved_clues`
+  correctly keeps only the one non-empty definition sent, and that the
+  synthesized `GenerateRequest` correctly reflects both the session's own
+  metadata (language/difficulty/width/height/theme) and the request
+  body's own mode/percent/pseudo fields. A second, real (non-mocked)
+  isolated call to `_run_generate_job` itself — `generate_grid`/
+  `clue_generator`/`_build_word_verification_table` all replaced with
+  small fakes recording their own inputs, `save_grid_svg`/`save_grid_png`/
+  `save_grid_json` left real — confirmed `_build_theme_glossary` is never
+  called (0 invocations) when `override_priority_words` is given, that
+  the very first "clues" progress event's `total` already reflects only
+  the words genuinely needing a clue (not the full word count), that only
+  those words are ever sent to the fake clue generator, and that the
+  finished result correctly shows the preserved clue verbatim for the
+  already-defined word and a freshly generated one for the other — real
+  generated `GRID_SVG`/`GRID_PNG`/`GRID_STORE` files from this test run
+  were deleted afterward as scratch verification artifacts. A real JS
+  syntax check (`esprima`, temporarily installed and removed again
+  afterward) confirmed `script.js`/`i18n.js` still parse correctly, and a
+  CSS brace-balance check confirmed `style.css` still parses correctly.
+  **Not yet visually confirmed in an actual browser** — same tooling
+  limitation noted throughout this project's UI work; a real generation
+  job was already in progress on the live running server at verification
+  time (a genuine, unrelated user session), so the backend was
+  deliberately *not* restarted to avoid interrupting it — the change is
+  ready to take effect on the next restart.
+
 - **"Synonymes" button** (Dictionary panel, `#dictionary-synonyms-btn`,
   right next to "Thématique"), at the user's explicit request: "un bouton
   'Synonymes' qui lance une recherche Qdrant avec le mot ou l'expression

@@ -296,6 +296,31 @@ project's engineering language.
   "Using the app" section does get a short user-facing paragraph, per rule
   5). `run_llm.sh` must be running for "Proposer" and the title
   suggestion, exactly as for normal clue generation.
+- A **"Finir la grille"** button, at the end of the `#interactive-arrows`
+  row, hands the current editable grid off to the ordinary automatic
+  generation engine: every already-placed letter becomes a hard,
+  permanent lock (`crossword_gen.generate_grid`'s own `resume_state`
+  mechanism — the same one "Continuer" already uses, seeded with a
+  `locked_letters` map built from the whole editable grid rather than
+  from a previously failed automatic run), and the search fills in
+  whatever's left, adding new black cells/words wherever still needed.
+  `POST /api/interactive/finish` (matching `frontend/server.py` proxy
+  route per rule 15) reuses the interactive session's own already-
+  resolved theme glossary verbatim (`_run_generate_job`'s
+  `override_priority_words`/`override_theme_description` parameters —
+  no re-derivation of the theme via a second LLM/Qdrant round trip) and
+  only asks the LLM for a clue on a word that doesn't already have one
+  (`_run_generate_job`'s `preserved_clues` parameter, a `{(row, col,
+  direction): clue}` map built from the definitions already typed) — a
+  word's exact position/spelling can't have changed once its letters are
+  locked, so this map still matches after the grid is completed. Returns
+  a brand-new job_id, polled exactly like an ordinary generation
+  (`GET /api/generate/status/{job_id}`); the interactive session itself
+  is left untouched. The frontend highlights every already-placed cell
+  in a dedicated light-green border (`.finish-locked`, `--finish-locked`
+  token) throughout every attempt-preview grid of that run, distinct
+  from `.locked` (a cell merely confirmed by the search itself, which a
+  later cleanup can still revert) — see the `style-guide` SKILL.
 
 ### Ports and environment variables
 

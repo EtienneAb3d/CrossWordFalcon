@@ -56,6 +56,7 @@ const I18N = {
         ? `${n} mots posent problème (surlignés en rouge).`
         : "1 mot pose problème (surligné en rouge).",
     interactiveDefinitionsBtn: "Définitions",
+    interactiveFinishBtn: "Finir la grille",
     interactiveDefinitionsNothing: "Aucun mot à définir.",
     interactiveDefinitionsWorking: (done, total) =>
       `Génération des définitions… (${done}/${total})`,
@@ -337,6 +338,7 @@ const I18N = {
     interactiveVerifyProblems: (n) =>
       `${n} word${n > 1 ? "s have" : " has"} a problem (highlighted in red).`,
     interactiveDefinitionsBtn: "Definitions",
+    interactiveFinishBtn: "Finish the grid",
     interactiveDefinitionsNothing: "No word to define.",
     interactiveDefinitionsWorking: (done, total) =>
       `Generating definitions… (${done}/${total})`,
@@ -615,6 +617,7 @@ const I18N = {
         ? `${n} Wörter haben ein Problem (rot markiert).`
         : "1 Wort hat ein Problem (rot markiert).",
     interactiveDefinitionsBtn: "Definitionen",
+    interactiveFinishBtn: "Gitter fertigstellen",
     interactiveDefinitionsNothing: "Kein Wort zu definieren.",
     interactiveDefinitionsWorking: (done, total) =>
       `Definitionen werden erzeugt… (${done}/${total})`,
@@ -893,6 +896,7 @@ const I18N = {
         ? `${n} palabras tienen un problema (resaltadas en rojo).`
         : "1 palabra tiene un problema (resaltada en rojo).",
     interactiveDefinitionsBtn: "Definiciones",
+    interactiveFinishBtn: "Terminar el crucigrama",
     interactiveDefinitionsNothing: "No hay ninguna palabra que definir.",
     interactiveDefinitionsWorking: (done, total) =>
       `Generando definiciones… (${done}/${total})`,
@@ -1171,6 +1175,7 @@ const I18N = {
         ? `${n} parole hanno un problema (evidenziate in rosso).`
         : "1 parola ha un problema (evidenziata in rosso).",
     interactiveDefinitionsBtn: "Definizioni",
+    interactiveFinishBtn: "Completa la griglia",
     interactiveDefinitionsNothing: "Nessuna parola da definire.",
     interactiveDefinitionsWorking: (done, total) =>
       `Generazione delle definizioni… (${done}/${total})`,
@@ -1450,6 +1455,7 @@ const I18N = {
         ? `${n} palavras têm um problema (destacadas a vermelho).`
         : "1 palavra tem um problema (destacada a vermelho).",
     interactiveDefinitionsBtn: "Definições",
+    interactiveFinishBtn: "Terminar a grelha",
     interactiveDefinitionsNothing: "Nenhuma palavra para definir.",
     interactiveDefinitionsWorking: (done, total) =>
       `A gerar definições… (${done}/${total})`,

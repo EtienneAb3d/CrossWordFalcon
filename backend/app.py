@@ -49,7 +49,7 @@ from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
     build_word_entries, extract_slots, generate_grid, _interactive_fill_diagnostics,
-    interactive_clean_impossible_zones, interactive_minimize_black_cells,
+    _serialize_resume_state, interactive_clean_impossible_zones, interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
 )
 from .grid_store import (
@@ -889,6 +889,35 @@ class InteractiveSaveWorkRequest(BaseModel):
     grid: list[list[str]]
     definitions: list[dict] = []
     title: str = ""
+    pseudo: Optional[str] = None
+
+
+class InteractiveFinishRequest(BaseModel):
+    """Body of POST /api/interactive/finish — the "Finir la grille" button
+    of the "Interactif" authoring mode, at the user's explicit request:
+    "lance une génération automatique en verrouillant définitivement les
+    lettres déjà positionnées..., y compris la génération des définitions
+    manquantes (mais pas celles déjà définies)." `grid`/`definitions` are
+    the current editable state (same shape as InteractiveSaveRequest);
+    `language`/`difficulty`/`bilingual_language`/`theme`/the interactive
+    session's own already-resolved theme glossary are all read back from
+    `JOBS[job_id]["interactive"]`/`INTERACTIVE_SESSIONS[job_id]` (set once
+    at session start), never trusted from the request body — the same
+    convention `InteractiveSaveWorkRequest` already establishes.
+    `mode`/`black_enrichment_percent`/`force_letters_percent` mirror the
+    generation form's own current values, since this reuses the ordinary
+    automatic-generation engine (see `interactive_finish`/
+    `_run_generate_job`)."""
+    job_id: str
+    grid: list[list[str]]
+    definitions: list[dict] = []
+    mode: str = "medium"
+    black_enrichment_percent: int = Field(default=17, ge=0, le=100)
+    force_letters_percent: int = Field(default=1, ge=0, le=100)
+    # Same convention as InteractiveSaveRequest/InteractiveSaveWorkRequest
+    # (trusted directly from the frontend's own current userPseudo, never
+    # derived from the session) — this is who's using the browser right
+    # now, not necessarily tracked anywhere on the session itself.
     pseudo: Optional[str] = None
 
 
@@ -2624,7 +2653,30 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
     return theme_priority_words, theme_description
 
 
-async def _run_generate_job(job_id, req, resume_state=None):
+async def _run_generate_job(job_id, req, resume_state=None, override_priority_words=None,
+                             override_theme_description="", preserved_clues=None):
+    """`override_priority_words`/`override_theme_description` (`None`/`""`
+    by default — no effect for any pre-existing caller) let a caller hand
+    in an ALREADY-RESOLVED theme glossary instead of having this function
+    recompute one itself via `_build_theme_glossary` (an LLM call + a
+    Qdrant search per keyword — costly and non-deterministic) — used by
+    POST /api/interactive/finish (see its own docstring) to reuse the
+    interactive session's own `priority_words` verbatim, exactly the same
+    "never re-derive, just reuse" principle already established for
+    `_run_interactive_resume_job`'s own `priority_words`. Only ever
+    `bilingual_theme_priority_words = None` in that case (an interactive
+    session never builds a per-language glossary, see
+    `_run_interactive_job`'s own docstring).
+
+    `preserved_clues` (`None` by default — a `{(row, col, direction):
+    clue}` map, no effect for any pre-existing caller), at the user's
+    explicit request for "Finir la grille" ("génération des définitions
+    manquantes... mais pas celles déjà définies"): a word whose exact
+    (row, col, direction) is in this map already has a clue — its letters
+    were locked into the search as hard constraints (see `resume_state`),
+    so its position/spelling can't have changed — and is excluded from
+    the LLM clue-generation batch entirely, keeping that clue text
+    verbatim instead of asking the LLM for a new one."""
     job = JOBS[job_id]
     short_id = job_id[:8]
     cancel_event = CANCEL_EVENTS[job_id]
@@ -2810,7 +2862,14 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # theme_description=...) et son propre commentaire), qui doit
         # rester défini même sans thématique.
         theme_description = ""
-        if theme:
+        if override_priority_words is not None:
+            # "Finir la grille" (see POST /api/interactive/finish): reuses
+            # the glossary already resolved by the interactive session
+            # itself verbatim, rather than re-running the whole LLM/Qdrant
+            # call — see this function's own docstring.
+            theme_priority_words = override_priority_words
+            theme_description = override_theme_description
+        elif theme:
             # Étape de statut dédiée, à la demande explicite de
             # l'utilisateur ("indiquer la phase de génération du
             # glossaire thématique") : cette phase (appel LLM +
@@ -3012,8 +3071,26 @@ async def _run_generate_job(job_id, req, resume_state=None):
             for w in result["words"] if w["answer"] in _theme_set
             for dk in range(len(w["answer"]))
         })
+        # "Finir la grille" (see POST /api/interactive/finish): a word
+        # whose exact (row, col, direction) already carries a preserved
+        # clue (`preserved_clues`) is never sent to the LLM — its letters
+        # were just locked as a hard constraint in the search (see
+        # `resume_state`), so its position/spelling can't have changed.
+        # `None`/empty for any pre-existing caller: `words_needing_clue`
+        # then becomes `result["words"]` in full, `total_words_for_clues`
+        # == `len(result["words"])`, unchanged behavior. Computed here
+        # (not only further below, where `remaining_entries` also needs
+        # it) so this very first "clues" event already shows the true
+        # total word count to define, consistent with the progress shown
+        # afterward.
+        preserved_by_key = preserved_clues or {}
+        words_needing_clue = [
+            w for w in result["words"]
+            if not preserved_by_key.get((w["row"], w["col"], w["direction"]))
+        ]
+        total_words_for_clues = len(words_needing_clue)
         progress(
-            "clues", current=0, total=len(result["words"]),
+            "clues", current=0, total=total_words_for_clues,
             examples=[{
                 "example_grid": result["solution"],
                 "impossible_cells": [],
@@ -3063,9 +3140,12 @@ async def _run_generate_job(job_id, req, resume_state=None):
             # language`, l'argument positionnel ci-dessous, pour un mot
             # qui n'en porterait pas) plutôt qu'une seule langue pour tout
             # l'appel comme avant cette fonctionnalité.
+            # `words_needing_clue`/`preserved_by_key` already computed above
+            # (see the very first "clues" progress event, right before this
+            # queue wait) — reused here so the two never disagree.
             remaining_entries = [
                 (w["answer"], w["accented"], w["canonical"], w.get("language"))
-                for w in result["words"]
+                for w in words_needing_clue
             ]
             # Lookup used only to enrich the live "clues_progress" feed
             # (see progress()'s own "new_clue" handling) with a word's
@@ -3089,7 +3169,7 @@ async def _run_generate_job(job_id, req, resume_state=None):
                         req.difficulty,
                         req.language,
                         on_progress=lambda current, total, answer=None, clue=None: progress(
-                            "clues", current=len(accumulated_clues) + current, total=len(result["words"]),
+                            "clues", current=len(accumulated_clues) + current, total=total_words_for_clues,
                             new_clue=({
                                 "answer": answer,
                                 "accented": words_by_answer.get(answer, {}).get("accented", answer),
@@ -3134,7 +3214,13 @@ async def _run_generate_job(job_id, req, resume_state=None):
                     CLUES_QUEUE.append(task)
             result["clues_duration_seconds"] = clues_compute_s
             for w in result["words"]:
-                w["clue"] = accumulated_clues.get(w["answer"], "")
+                # A preserved clue ("Finir la grille", see
+                # `preserved_clues` above) always wins — never overwritten
+                # by any entry of the same word in `accumulated_clues`
+                # (which can't hold one for this exact word anyway, since
+                # it was never part of `remaining_entries`).
+                preserved = preserved_by_key.get((w["row"], w["col"], w["direction"]))
+                w["clue"] = preserved if preserved else accumulated_clues.get(w["answer"], "")
 
             # A short, catchy title for the whole grid, at the user's explicit
             # request: "demande au LLM de générer un titre sympa pour la
@@ -4356,6 +4442,95 @@ async def interactive_from_library(req: InteractiveFromLibraryRequest):
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return {"job_id": job_id}
+
+
+@app.post("/api/interactive/finish", status_code=202)
+async def interactive_finish(req: InteractiveFinishRequest):
+    """"Finir la grille" button of the "Interactif" authoring mode, at the
+    user's explicit request: "lance une génération automatique en
+    verrouillant définitivement les lettres déjà positionnées..., y
+    compris la génération des définitions manquantes (mais pas celles
+    déjà définies)." Every already-placed letter of the current editable
+    grid becomes a hard, permanent constraint (`locked_letters` — see
+    crossword_gen.generate_grid's own docstring: a locked cell can never
+    be blackened, and its letter is never dropped by any later cleanup
+    pass, unlike the merely-carried-forward "confirmed" content an
+    ordinary retry cycle produces) via the exact same `resume_state`
+    mechanism already built for the "Continuer" button — the ordinary
+    automatic engine (_run_generate_job) then takes over from there,
+    adding new black cells / words wherever still needed, exactly like a
+    fresh generation would.
+
+    Reuses the interactive session's own already-resolved theme glossary
+    verbatim (`override_priority_words`/`override_theme_description` —
+    see _run_generate_job's own docstring) rather than re-running the
+    LLM/Qdrant theme pre-search a second time. Every word whose exact
+    (row, col, direction) already carries a real definition
+    (`preserved_clues`) keeps that clue untouched — only a genuinely NEW
+    word (one the search itself completed) ever gets sent to the LLM.
+
+    Returns a brand-new job_id, polled exactly like an ordinary
+    generation (GET /api/generate/status/{job_id}) — the interactive
+    session itself (`req.job_id`) is left completely untouched, the same
+    "never mutate the job it's derived from" convention already
+    established for "Continuer"."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    job = JOBS.get(req.job_id)
+    if sess is None or job is None or job.get("interactive") is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+
+    meta = job["interactive"]
+    # Black/white pattern + locked letters, the exact same conversion
+    # `interactive_save` already established (see its own `bw`) — a wire
+    # grid cell is either "#" (black), "." (empty white), or a real
+    # uppercase letter.
+    seed_grid = [["#" if ch == "#" else "." for ch in row] for row in req.grid]
+    locked_letters = {
+        (r, c): ch
+        for r, row in enumerate(req.grid)
+        for c, ch in enumerate(row)
+        if ch not in ("#", ".")
+    }
+    resume_state = _serialize_resume_state(seed_grid, locked_letters, None, None)
+    # {(row, col, direction): clue} for every definition already typed —
+    # this is `interactive_finish`'s own preserved-clues map; an empty
+    # entry (word not defined yet) is simply omitted, letting that word
+    # go through automatic clue generation like any other missing one.
+    preserved_clues = {
+        (d.get("row"), d.get("col"), d.get("direction")): (d.get("clue") or "").strip()
+        for d in req.definitions
+        if (d.get("clue") or "").strip()
+    }
+    genreq = GenerateRequest(
+        language=meta["language"],
+        bilingual_language=meta.get("bilingual_language"),
+        width=cols,
+        height=rows,
+        difficulty=meta.get("difficulty", "easy"),
+        seed=random.randrange(2**31),
+        force_letters_percent=req.force_letters_percent,
+        black_enrichment_percent=req.black_enrichment_percent,
+        mode=req.mode,
+        theme=meta.get("theme") or None,
+        pseudo=req.pseudo,
+    )
+    _validate_generate_request(genreq)
+    new_job_id = _new_job()
+    task = asyncio.create_task(
+        _run_generate_job(
+            new_job_id, genreq, resume_state=resume_state,
+            override_priority_words=sess["priority_words"],
+            override_theme_description=meta.get("theme_description") or "",
+            preserved_clues=preserved_clues,
+        )
+    )
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"job_id": new_job_id}
 
 
 # Les cinq phases exposées par GET /api/generate/phase/{job_id}, à la
