@@ -200,6 +200,19 @@ TITLE_PROPOSALS_COUNT = 10
 # batch, so a genuinely non-empty response is already useful).
 TITLE_PROPOSALS_RETRIES = 2
 
+# describe_theme() re-asks the model this many EXTRA times when its reply
+# looks wrong for the requested `language` — at the user's explicit
+# request, for a bilingual grid whose two directions ask for the SAME
+# typed theme words but in two different target languages: a real,
+# observed failure on the small local model is simply re-emitting the
+# input theme words verbatim (or in whatever language they themselves
+# happen to be typed in) instead of genuinely translating/writing new
+# content in the requested `language` — see _theme_echoes_input's own
+# docstring for the exact shape of this bug. Same small, bounded-retry
+# shape as TITLE_PROPOSALS_RETRIES right above: a normal call that
+# already looks fine in one attempt costs nothing extra.
+THEME_DESCRIPTION_RETRIES = 2
+
 # A wrapping quote pair the model sometimes puts around a title despite
 # rule 2 explicitly forbidding it (e.g. '"Vol de Nuit"') — stripped by
 # _clean_title. Deliberately narrow (quote characters only, not general
@@ -946,6 +959,44 @@ def _detect_wrong_language(candidate, target_language):
     return None
 
 
+# Minimum fraction of the typed theme's own distinct word tokens that must
+# reappear verbatim in describe_theme()'s reply before _theme_echoes_input
+# treats it as a likely untranslated echo rather than a coincidental,
+# genuine overlap (a correctly-translated reply naturally still shares a
+# handful of the same words, especially cognates/proper nouns).
+_THEME_ECHO_OVERLAP_THRESHOLD = 0.7
+
+
+def _theme_echoes_input(sentence, theme_text):
+    """True if `sentence` (describe_theme()'s own LLM reply) looks like it
+    mostly just repeats/extends `theme_text` (the raw theme exactly as
+    typed) rather than genuinely being written in the requested target
+    language — a real, observed failure mode on the small local model:
+    asked to answer in a language different from the one the theme was
+    typed in (a bilingual grid's second, per-direction glossary call — see
+    backend/app.py's _build_theme_glossary), it sometimes simply re-emits
+    the same words as given instead of translating the underlying
+    concepts. `_detect_wrong_language` alone can't reliably catch this: its
+    stopword-based check depends on function words (le/la/the/der/...),
+    which describe_theme's own telegraphic, content-word-only style
+    deliberately drops (see its prompt: "Drop ONLY articles, prepositions
+    and connectors").
+
+    Compares whole-word tokens, case-insensitively, regardless of which
+    language either side is actually in — language-agnostic by design,
+    unlike `_detect_wrong_language`. Requires `theme_text` to have at
+    least 3 distinct tokens before ever flagging anything: a very short
+    theme (one or two words) legitimately recurs almost entirely in any
+    genuine expansion of it, in any language, so overlap alone would
+    otherwise misfire on the common, correct case."""
+    theme_tokens = {t.lower() for t in _WORD_TOKEN_RE.findall(theme_text)}
+    if len(theme_tokens) < 3:
+        return False
+    sentence_tokens = {t.lower() for t in _WORD_TOKEN_RE.findall(sentence)}
+    overlap = theme_tokens & sentence_tokens
+    return len(overlap) / len(theme_tokens) >= _THEME_ECHO_OVERLAP_THRESHOLD
+
+
 def _contains_target_word(candidate, answer, accented, canonical=()):
     """True if the word being defined — its bare/accented spelling, or one
     of its candidate canonical form(s)/lemma(s) (see backend/crossword_gen.
@@ -1042,12 +1093,20 @@ class LLMClueGenerator:
         that constant). Each word's own up-to-3 retry attempts still run
         in immediate succession within its own worker.
 
-        `on_progress`, if given, is called `on_progress(current, total)`
-        as each word finishes (its clue found, or its 3 attempts
-        exhausted) — `current` is how many words have a clue so far,
-        `total` how many were asked for; used to surface live progress
-        (see backend/app.py) since this is by far the slowest phase of
-        grid generation.
+        `on_progress`, if given, is called `on_progress(current, total,
+        answer, clue)` as each word finishes (its clue found, or its 3
+        attempts exhausted) — `current` is how many words have a clue so
+        far, `total` how many were asked for; used to surface live
+        progress (see backend/app.py) since this is by far the slowest
+        phase of grid generation. `answer`/`clue` (the word that just
+        finished and its generated clue text, or `clue=None` if every
+        attempt for it failed) were added at the user's explicit request
+        ("afficher les définitions créées sous la grille aperçu"), so a
+        caller can show a live, growing list of just-generated
+        definitions as they arrive rather than only a bare N/total
+        counter — every pre-existing caller's own lambda already accepted
+        exactly `(current, total)` and needed updating alongside this
+        change (see backend/app.py's two callers).
 
         `cancel_event` (a `threading.Event`, `None` by default — no effect
         for any pre-existing caller), at the user's explicit request:
@@ -1198,7 +1257,7 @@ class LLMClueGenerator:
                     clues[answer] = clue
                 errors.extend(word_errors)
                 if on_progress:
-                    on_progress(len(clues), total)
+                    on_progress(len(clues), total, answer, clue)
                 # Checked here, as each word lands, rather than only after
                 # the whole pool drains: cancel_futures=True drops every
                 # word not yet started so we don't wait it out, and we
@@ -1809,7 +1868,7 @@ class LLMClueGenerator:
         )
 
     def describe_theme(self, theme_words, language="fr", timeout=DEFAULT_TIMEOUT,
-                       cancel_event=None, temperature=0.7):
+                       cancel_event=None, temperature=0.7, verify_translation=False):
         """Asks the LLM for a short (~30-word) telegraphic
         description, in `language`, of the shared theme of the words the
         player typed into the web UI's "Thématique" field. Used by
@@ -1825,21 +1884,54 @@ class LLMClueGenerator:
         verbs, adjectives, adverbs), at the user's explicit request, so
         the resulting glossary isn't nouns-only.
 
-        A single best-effort call — no retry loop, and no per-call
-        LOG_LLM/ record (like generate_title, this is a convenience, not
-        core puzzle output). Returns "" on any failure (HTTP error,
-        empty/unusable reply); the caller then falls back to embedding
-        the raw theme string itself. Raises GenerationCancelled if
-        `cancel_event` is set.
+        `theme_words` (the typed theme, exactly as-is) and `language`
+        (the target output language) are two independent things — on a
+        bilingual grid, backend/app.py's `_build_theme_glossary` calls
+        this method once per direction's own language, always with the
+        SAME `theme_words`, at the user's explicit request: "demander au
+        LLM de générer des mots dans la langue de la grille, en tenant
+        compte du fait que les grilles peuvent être bilingues." The
+        prompt is always explicit that the input theme words may
+        themselves be written in a different language than the one the
+        reply must use — harmless to state even when they're actually
+        the same language, since "translate if needed" is a no-op then.
 
-        `theme_words` is the raw theme string exactly as typed (a short
-        list of words / a phrase); it is passed to the model verbatim.
+        `verify_translation` (`False` by default — no effect for any
+        pre-existing caller) additionally makes up to
+        `THEME_DESCRIPTION_RETRIES` extra attempts when a reply looks
+        like it just echoed the input untranslated instead of genuinely
+        answering in `language` (`_detect_wrong_language` for a clearly
+        different-language reply; `_theme_echoes_input`, language-
+        agnostic, for the harder case of the model simply repeating/
+        extending the input's own words verbatim — the telegraphic,
+        function-word-free style this prompt asks for defeats `_detect_
+        wrong_language`'s own stopword-based check most of the time,
+        since there are rarely any stopwords left to detect). Pass this
+        ONLY when `language` is genuinely expected to differ from
+        whatever language `theme_words` was likely typed in (a bilingual
+        grid's second, per-direction glossary call) — measured live to
+        otherwise misfire on the ordinary, correct case: a genuine reply
+        in the SAME language as the input naturally reuses most of the
+        input's own words too (they're already valid, on-topic
+        vocabulary in that language), which `_theme_echoes_input` cannot
+        tell apart from an untranslated echo by word-overlap alone, so
+        turning this on unconditionally would only add wasted retries to
+        the common case. Still best-effort throughout: no per-call
+        LOG_LLM/ record (like generate_title, this is a convenience, not
+        core puzzle output), and the LAST reply obtained is returned even
+        if every attempt still looks wrong — a small local model's own
+        reliability ceiling on this kind of instruction is a known,
+        accepted limitation elsewhere in this project too, not something
+        an unbounded retry loop could fix. Returns "" only if every
+        attempt fails outright (HTTP error, or an empty/unusable reply
+        every time); the caller then falls back to embedding the raw
+        theme string itself. Raises GenerationCancelled if `cancel_event`
+        is set (checked before each attempt, not just the first).
+
         `temperature` defaults to 0.7 (the Dictionary panel's own value);
         grid-glossary construction passes 0.9 so its repeated calls
         (`_run_generate_job`'s keyword top-up loop) yield more varied
         keyword lists."""
-        if cancel_event is not None and cancel_event.is_set():
-            raise GenerationCancelled()
         theme_text = " ".join(str(theme_words).split())
         if not theme_text:
             return ""
@@ -1860,51 +1952,81 @@ class LLMClueGenerator:
             "text is used to search a dictionary for words semantically "
             "close to the theme, so pack it with on-topic terms of every "
             "part of speech and no filler or meta-commentary.\n\n"
+            "IMPORTANT: the theme words you are given may be written in "
+            f"a DIFFERENT language than {language_name}. If so, you must "
+            "genuinely TRANSLATE the underlying concepts into "
+            f"{language_name} — do NOT simply copy, repeat, or extend "
+            "the input words in their own original language. Every "
+            f"single word of your reply must be a real {language_name} "
+            "word, never a word from the input's own language.\n\n"
             "Your ENTIRE reply is that description and nothing "
             "else: no preamble, no title, no bullet list, no quotes, no "
             f"note before or after. Write only in {language_name}."
         )
         user_message = (
-            f"Theme words: {theme_text}\n"
-            "~30-word telegraphic description:"
+            f"Theme words (possibly in a different language than "
+            f"required): {theme_text}\n"
+            f"Write your ~30-word telegraphic description ENTIRELY in "
+            f"{language_name}, translating as needed — do not reuse the "
+            f"input words verbatim unless they already are real "
+            f"{language_name} words:"
         )
-        try:
-            response = httpx.post(
-                self.base_url,
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message},
-                    ],
-                    "temperature": temperature,
-                    # ~30 words of answer plus headroom; reasoning itself
-                    # is disabled by reasoning_effort:none.
-                    "max_tokens": REASONING_TOKEN_BUDGET + 150,
-                    "reasoning_effort": "none",
-                },
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-        except httpx.HTTPError as e:
+        last_sentence = ""
+        for attempt in range(THEME_DESCRIPTION_RETRIES + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise GenerationCancelled()
+            try:
+                response = httpx.post(
+                    self.base_url,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ],
+                        "temperature": temperature,
+                        # ~30 words of answer plus headroom; reasoning itself
+                        # is disabled by reasoning_effort:none.
+                        "max_tokens": REASONING_TOKEN_BUDGET + 150,
+                        "reasoning_effort": "none",
+                    },
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+            except httpx.HTTPError as e:
+                logger.warning(
+                    "theme description failed (%s, model=%r): %s",
+                    self.base_url, self.model, e,
+                )
+                continue
+            logger.info("theme description: raw LLM response: %r", content)
+            sentence = " ".join(_strip_reasoning(content).split())
+            if not sentence:
+                continue
+            # Safety net: the prompt asks for ~30 words; a small model
+            # sometimes keeps going. Cap well above the target so a normal
+            # answer is never truncated.
+            parts = sentence.split()
+            if len(parts) > 70:
+                sentence = " ".join(parts[:70])
+            last_sentence = sentence
+            if not verify_translation:
+                return sentence
+            wrong_language = _detect_wrong_language(sentence, language)
+            echoed_input = _theme_echoes_input(sentence, theme_text)
+            if not wrong_language and not echoed_input:
+                return sentence
             logger.warning(
-                "theme description failed (%s, model=%r): %s",
-                self.base_url, self.model, e,
+                "theme description attempt %d/%d for language=%s looked "
+                "wrong (wrong_language=%s, echoed_input=%s): %r — %s",
+                attempt + 1, THEME_DESCRIPTION_RETRIES + 1, language,
+                wrong_language, echoed_input, sentence,
+                "retrying" if attempt < THEME_DESCRIPTION_RETRIES
+                else "no attempts left, using it anyway",
             )
-            return ""
-        logger.info("theme description: raw LLM response: %r", content)
-        sentence = " ".join(_strip_reasoning(content).split())
-        if not sentence:
-            return ""
-        # Safety net: the prompt asks for ~30 words; a small model
-        # sometimes keeps going. Cap well above the target so a normal
-        # answer is never truncated.
-        parts = sentence.split()
-        if len(parts) > 70:
-            sentence = " ".join(parts[:70])
-        return sentence
+        return last_sentence
 
     def generate_definitions(self, text, language="fr", difficulty="medium",
                              count=10, timeout=90.0, theme_description=None):

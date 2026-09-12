@@ -8156,6 +8156,67 @@ servers:
   mechanism is a genuine per-slot preference with fallback, not a hard
   restriction, exactly as requested.
 
+  **A real bug in this exact per-language mechanism was found and fixed
+  later**, reported directly by the user after opening a real `LOG_THEME/
+  *_en.log` file from a bilingual (fr-across/en-down) themed generation:
+  "demander au LLM de générer des mots dans la langue de la grille, en
+  tenant compte du fait que les grilles peuvent être bilingues (une
+  langue différente par sens, mais avec les mêmes mots Thématiques en
+  entrée)." Investigated by reading the actual log file rather than
+  assumed: `_build_theme_glossary` was already, structurally, calling
+  `describe_theme(theme, req.bilingual_language, ...)` for the `en` call
+  — the code was correct — but the small local LLM itself often ignored
+  the "reply entirely in {language_name}" instruction: the whole-theme
+  keyword line for a French-typed theme, requested in English, came back
+  as the *exact same French words as typed*, merely extended with a few
+  more French words, rather than translated at all; several of the
+  per-word calls came back correctly in English, one leaked a raw
+  `</think>` tag mid-response.
+
+  Fixed two ways. First, the `describe_theme` prompt (both the system
+  prompt and, at the highest-recency position, the very end of the user
+  message) now explicitly warns the model that the input theme words may
+  themselves be written in a different language than the one it must
+  reply in, and that it must genuinely translate the underlying concepts
+  rather than copy/extend the input verbatim — a real, previously-missing
+  instruction gap, since the original prompt only ever said what language
+  to answer in, never that the input itself might already be in a
+  different one. Second, a new opt-in `verify_translation` parameter (a
+  new `_theme_echoes_input(sentence, theme_text)` check, deliberately
+  language-agnostic and comparing whole-word token overlap rather than
+  reusing `_detect_wrong_language`'s stopword-based approach — the
+  telegraphic, function-word-free style this prompt asks for leaves
+  `_detect_wrong_language` almost nothing to detect, since it depends on
+  articles/prepositions the prompt explicitly tells the model to drop)
+  retries up to `THEME_DESCRIPTION_RETRIES` (2) extra times whenever the
+  reply still looks like an untranslated echo of the input. Deliberately
+  opt-in, not automatic: a first version applied the echo-check
+  unconditionally and, measured live, wastefully retried the ordinary
+  *same*-language case (the primary/across call) every single time — a
+  genuinely correct French reply to a French theme naturally reuses most
+  of the input's own words too (they're already valid vocabulary in that
+  language), which pure word-overlap can never tell apart from a lazy
+  echo. `_build_theme_glossary` gained a `theme_language=None` parameter
+  (the language the theme was likely typed in, when known and different
+  from this call's own target) — only the bilingual second call passes
+  it (`theme_language=req.language`, since its own target is `req.
+  bilingual_language`), so `verify_translation` engages exactly for the
+  one call where a language mismatch is actually expected, and the
+  primary call (and Interactive mode's own single-language call) stay
+  byte-for-byte as fast/cheap as before. Verified live: with the exact
+  reported French theme and `language="en"`, the unconditional-echo-check
+  draft correctly translated on the very first attempt already ("school
+  student teaching math physics chemistry spelling grammar notebook
+  lesson exercises"); the scoped, final version confirmed both halves at
+  once through the real `_build_theme_glossary` — the `fr` (no `theme_
+  language`, no verification) call returned a real French description in
+  one attempt with no wasted retries, 11,897 preselected words; the `en`
+  call (`theme_language="fr"`, verification on) returned a genuine
+  English description ("school student teaching math physics chemistry
+  spelling grammar notebook lesson exercises...") with a real English
+  word list (7,584 words: `ADD`, `INK`, `LOG`, `KEY`, `USE`, `LAB`,
+  `RUN`, `PEN`, `EYE`, `ASK`...).
+
   **The theme preference was extended from "which word to try first" to
   "which slot to fill first"**, at the user's explicit request: "Lors de
   la construction d'un grille avec une thématique, commencer par choisir

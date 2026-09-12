@@ -968,6 +968,50 @@ button:disabled {
   max-width: 28rem;
 }
 
+/* Live "definitions created so far" feed (script.js's renderLiveClues()),
+   shown right below #attempt-preview-grids during the "clues" step, at the
+   user's explicit request: "afficher les définitions créées sous la
+   grille aperçu." Unlike #word-verification-wrap (hidden entirely unless
+   showPreviewLetters is on — it identifies the exact grid word), this list
+   is visible unconditionally the moment at least one clue exists — only
+   the target word itself is gated behind showPreviewLetters ("si Voir est
+   sélectionné, afficher aussi les mots"), matching the "reveal the answer,
+   never the definition text itself" spoiler convention already
+   established for every other preview element in this panel. Same small/
+   discreet treatment as #word-verification-wrap right below it. */
+#live-clues-wrap {
+  margin-top: 0.75rem;
+}
+
+#live-clues-title {
+  margin: 0 0 0.3rem 0;
+  font-size: 0.9rem;
+  color: #777;
+  font-style: italic;
+}
+
+#live-clues-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.8rem;
+  color: var(--fg);
+}
+
+#live-clues-list li {
+  margin-bottom: 0.2rem;
+}
+
+/* Same identifying-label treatment as .attempt-preview-process (full
+   opacity + the accent color, unlike the dimmed --fg used for plain
+   secondary text) — this is the one piece of #live-clues-list content
+   that must stay hidden by default (it names the actual grid answer), so
+   it needs to read as clearly distinct from the always-visible definition
+   text next to it once showPreviewLetters reveals it. */
+.live-clue-word {
+  color: var(--accent);
+  font-weight: 700;
+}
+
 /* "Bibliothèque" panel (#library-btn's click handler, script.js), at the
    user's explicit request — a plain toggled panel like #attempt-preview,
    listing every grid saved under GRID_STORE/ (backend/grid_store.py) so

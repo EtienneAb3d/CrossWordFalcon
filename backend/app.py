@@ -2320,6 +2320,15 @@ def _new_job():
         "status": "running", "step": {"code": "starting"}, "result": None,
         "error": None, "error_code": None,
         "examples_history": [],
+        # Live feed of every definition the LLM has produced so far during
+        # the "clues" step, one {"answer", "accented", "clue"} dict per
+        # successfully-clued word, appended in arrival order — never
+        # overwritten, mirroring `examples_history`'s own append-only
+        # design (see progress()'s own "clues" handling) — at the user's
+        # explicit request: "afficher les définitions créées sous la
+        # grille aperçu." A word whose clue generation ultimately failed
+        # never gets an entry here at all (nothing to show).
+        "clues_progress": [],
         # "Continuer" button (see POST /api/generate/continue/{job_id}
         # below), at the user's explicit request: set once generate_grid()
         # exhausts every one of its `attempts` without finding a fillable
@@ -2347,7 +2356,7 @@ def _new_job():
 
 
 async def _build_theme_glossary(theme, language, theme_precision, short_id,
-                                cancel_event, log_tag):
+                                cancel_event, log_tag, theme_language=None):
     """Pré-recherche thématique complète pour UNE langue : expansion LLM en
     mots-clefs (describe_theme, + une liste par mot du thème + top-ups),
     puis une recherche Qdrant du plus-proche-voisin par mot-clef dans le
@@ -2356,8 +2365,23 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
     une fois pour la langue principale et, sur une grille bilingue, une
     seconde fois pour la langue des mots verticaux, à la demande explicite
     de l'utilisateur : "Quand une grille est bilingue, il faut générer un
-    glossaire thématique par langue." `log_tag` distingue les lignes de
-    journal et le nom du fichier LOG_THEME/ des deux appels."""
+    glossaire thématique par langue [...] demander au LLM de générer des
+    mots dans la langue de la grille, en tenant compte du fait que les
+    grilles peuvent être bilingues (une langue différente par sens, mais
+    avec les mêmes mots Thématiques en entrée)." `log_tag` distingue les
+    lignes de journal et le nom du fichier LOG_THEME/ des deux appels.
+
+    `theme_language` (`None` par défaut — aucun effet) est la langue dans
+    laquelle `theme` a probablement été tapé, quand elle est CONNUE et
+    DIFFÉRENTE de `language` — c'est-à-dire uniquement pour le second
+    appel (bilingue), dont la langue cible diffère par construction de la
+    langue principale. Passé tel quel à chaque appel `describe_theme(...,
+    verify_translation=...)` de cette fonction (l'appel du thème entier,
+    chaque appel par mot, et les top-ups) — voir ce paramètre pour la
+    raison de ne l'activer QUE lorsqu'un décalage de langue est
+    réellement probable (un faux positif sur le cas courant, même
+    langue, coûterait des tentatives inutiles pour rien)."""
+    verify_translation = theme_language is not None and theme_language != language
     theme_priority_words = None
     theme_description = ""
     try:
@@ -2365,6 +2389,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
             clue_generator.describe_theme,
             theme, language, cancel_event=cancel_event,
             temperature=THEME_KEYWORD_LLM_TEMPERATURE,
+            verify_translation=verify_translation,
         )
     except GenerationCancelled:
         raise
@@ -2398,6 +2423,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
                     clue_generator.describe_theme,
                     tok, language, cancel_event=cancel_event,
                     temperature=THEME_KEYWORD_LLM_TEMPERATURE,
+                    verify_translation=verify_translation,
                 )
             except GenerationCancelled:
                 raise
@@ -2444,6 +2470,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
                 clue_generator.describe_theme,
                 theme, language, cancel_event=cancel_event,
                 temperature=THEME_KEYWORD_LLM_TEMPERATURE,
+                verify_translation=verify_translation,
             )
         except GenerationCancelled:
             raise
@@ -2605,6 +2632,18 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # is only ever one `resume_state` to keep per job.
         if "resume_state" in data:
             job["resume_state"] = data["resume_state"]
+        # Live "definitions created so far" feed, at the user's explicit
+        # request: "afficher les définitions créées sous la grille aperçu."
+        # `new_clue` (an {"answer", "accented", "clue"} dict) only ever
+        # rides on a "clues" progress event, one per word that just got a
+        # real clue (never for a word whose clue generation failed — see
+        # the lambda passed to clue_generator.generate below) — appended
+        # here rather than overwriting, the same append-only convention as
+        # `examples_history` just above, so the frontend can grow a running
+        # list across polls instead of only ever seeing the latest one.
+        new_clue = data.get("new_clue")
+        if new_clue:
+            job["clues_progress"].append(new_clue)
         logger.info("[%s] %s %s", short_id, step, data)
 
     try:
@@ -2688,6 +2727,13 @@ async def _run_generate_job(job_id, req, resume_state=None):
                 bilingual_theme_priority_words, _ = await _build_theme_glossary(
                     theme, req.bilingual_language, req.theme_precision, short_id,
                     cancel_event, f"{short_id}_{req.bilingual_language}",
+                    # `theme` was typed with `req.language` in mind (the
+                    # grid's own primary/across language) — passing it
+                    # here, differing from this call's own target
+                    # `req.bilingual_language`, is what tells describe_
+                    # theme() a genuine translation is expected, not just
+                    # a coincidental echo, at the user's explicit request.
+                    theme_language=req.language,
                 )
 
         GRID_QUEUE.append(task)
@@ -2886,6 +2932,11 @@ async def _run_generate_job(job_id, req, resume_state=None):
                 (w["answer"], w["accented"], w["canonical"], w.get("language"))
                 for w in result["words"]
             ]
+            # Lookup used only to enrich the live "clues_progress" feed
+            # (see progress()'s own "new_clue" handling) with a word's
+            # natural accented spelling — clue_generator.generate() itself
+            # only ever hands `on_progress` the bare grid answer.
+            words_by_answer = {w["answer"]: w for w in result["words"]}
             if theme_description:
                 logger.info(
                     "[%s] clue generation steered by theme keyword list: %r",
@@ -2902,8 +2953,13 @@ async def _run_generate_job(job_id, req, resume_state=None):
                         remaining_entries,
                         req.difficulty,
                         req.language,
-                        on_progress=lambda current, total: progress(
+                        on_progress=lambda current, total, answer=None, clue=None: progress(
                             "clues", current=len(accumulated_clues) + current, total=len(result["words"]),
+                            new_clue=({
+                                "answer": answer,
+                                "accented": words_by_answer.get(answer, {}).get("accented", answer),
+                                "clue": clue,
+                            } if clue else None),
                         ),
                         cancel_event=cancel_event,
                         should_pause=_make_should_pause(CLUES_QUEUE, task),
@@ -3222,6 +3278,13 @@ async def _run_recompute_job(job_id, grid_id):
             if "word_table" in data:
                 entry["word_table"] = data["word_table"]
             job["examples_history"].append(entry)
+        # Live "definitions created so far" feed — see _run_generate_job's
+        # own progress() for the full rationale; mirrored here since a
+        # recompute also re-runs clue generation and shows the same
+        # attempt-preview panel.
+        new_clue = data.get("new_clue")
+        if new_clue:
+            job["clues_progress"].append(new_clue)
         logger.info("[%s] %s %s", short_id, step, data)
 
     try:
@@ -3284,6 +3347,7 @@ async def _run_recompute_job(job_id, grid_id):
                 (w["answer"], w["accented"], w["canonical"], w.get("language"))
                 for w in result["words"]
             ]
+            words_by_answer = {w["answer"]: w for w in result["words"]}
             accumulated_clues = {}
             clues_compute_s = 0.0
             while True:
@@ -3295,9 +3359,14 @@ async def _run_recompute_job(job_id, grid_id):
                         remaining_entries,
                         difficulty,
                         language,
-                        on_progress=lambda current, total: progress(
+                        on_progress=lambda current, total, answer=None, clue=None: progress(
                             "clues", current=len(accumulated_clues) + current,
                             total=len(result["words"]),
+                            new_clue=({
+                                "answer": answer,
+                                "accented": words_by_answer.get(answer, {}).get("accented", answer),
+                                "clue": clue,
+                            } if clue else None),
                         ),
                         cancel_event=cancel_event,
                         should_pause=_make_should_pause(CLUES_QUEUE, task),

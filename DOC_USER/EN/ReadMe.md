@@ -400,6 +400,13 @@ back through earlier moments of the search rather than only ever seeing
 the latest one; it keeps auto-advancing on its own (`autoFollowPreview`)
 unless a player has manually stepped back.
 
+Once clue writing starts, a live list of definitions (`#live-clues-wrap`,
+`frontend/static/script.js`, `renderLiveClues`) grows underneath these
+preview grids as each one is produced — this list is always visible, so
+the definitions themselves are never treated as a spoiler; only the
+matching grid word/answer for each one is shown once the **Voir** button
+is turned on.
+
 Letters inside these preview grids, and a word-verification table
 underneath them (`#word-verification-wrap`, listing every word placed so
 far, whether it's a real dictionary entry, and its dictionary/glossary

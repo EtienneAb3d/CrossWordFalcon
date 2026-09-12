@@ -138,6 +138,8 @@ const attemptPreviewPosition = document.getElementById("attempt-preview-position
 const attemptPreviewStatus = document.getElementById("attempt-preview-status");
 const wordVerificationWrap = document.getElementById("word-verification-wrap");
 const wordVerificationTbody = document.getElementById("word-verification-tbody");
+const liveCluesWrap = document.getElementById("live-clues-wrap");
+const liveCluesList = document.getElementById("live-clues-list");
 const gridTitleEl = document.getElementById("grid-title");
 const gridTitleTextEl = document.getElementById("grid-title-text");
 const gridDifficultyEl = document.getElementById("grid-difficulty");
@@ -1120,6 +1122,7 @@ function togglePreviewLetters() {
   attemptPreviewRevealBtn.classList.toggle("active", showPreviewLetters);
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
   renderWordTable(lastWordTable);
+  renderLiveClues();
 }
 
 attemptPreviewRevealBtn.addEventListener("click", togglePreviewLetters);
@@ -1303,6 +1306,49 @@ function renderWordTable(table) {
   wordVerificationWrap.hidden = false;
 }
 
+// Live "definitions created so far" feed, at the user's explicit request:
+// "afficher les définitions créées sous la grille aperçu, si Voir est
+// sélectionné, afficher aussi les mots." Every entry backend/app.py's own
+// "clues_progress" job field has ever produced during the current
+// generation (one {answer, accented, clue} dict per word that actually got
+// a clue — see pollJob() below, which appends to this array as new entries
+// arrive), never shortened or reset except at the start of a brand new
+// generation (hideAttemptPreview()). Unlike lastWordTable/lastPreviewExamples
+// this isn't tied to any one previewHistory entry — it's a single, ever-
+// growing feed shown regardless of which historical grid the player happens
+// to be browsing, since it reflects the clue-generation phase as a whole,
+// not one specific search attempt.
+let liveClues = [];
+
+function renderLiveClues() {
+  liveCluesList.innerHTML = "";
+  if (!liveClues.length) {
+    liveCluesWrap.hidden = true;
+    return;
+  }
+  for (const entry of liveClues) {
+    const li = document.createElement("li");
+    // The word/answer itself is the one piece of this list that would
+    // spoil the puzzle, so — unlike the definition text right next to it,
+    // always shown — it only ever appears once showPreviewLetters ("Voir")
+    // is on, mirroring the same reveal convention already used for every
+    // other answer-carrying element in this panel (renderWordTable, the
+    // preview grids' own letters).
+    if (showPreviewLetters) {
+      const wordSpan = document.createElement("span");
+      wordSpan.className = "live-clue-word";
+      wordSpan.textContent = entry.accented || entry.answer;
+      li.appendChild(wordSpan);
+      li.appendChild(document.createTextNode(" — "));
+    }
+    const clueSpan = document.createElement("span");
+    clueSpan.textContent = entry.clue;
+    li.appendChild(clueSpan);
+    liveCluesList.appendChild(li);
+  }
+  liveCluesWrap.hidden = false;
+}
+
 // Displays one previewHistory entry: its grids (via renderAttemptPreview,
 // unchanged), its paired status text, and its word-verification table (if
 // any) together — the one place every part of an entry actually reaches
@@ -1430,6 +1476,8 @@ function hideAttemptPreview() {
   previewHistoryIndex = -1;
   autoFollowPreview = true;
   renderWordTable(null);
+  liveClues = [];
+  renderLiveClues();
   updatePreviewNavButtons();
   syncRssPanelVisibility();
 }
@@ -2732,6 +2780,12 @@ async function pollJob(jobId, t) {
   // entry the moment the job reaches a terminal status, so a large
   // remaining backlog never delays the actual result.
   let nextExampleIndex = 0;
+  // Same incremental-read cursor as nextExampleIndex just above, but for
+  // job["clues_progress"] (backend/app.py) — every definition the LLM has
+  // produced since the last poll is appended to the module-level
+  // liveClues array (never overwritten), at the user's explicit request:
+  // "afficher les définitions créées sous la grille aperçu."
+  let nextClueIndex = 0;
   // Consecutive failed polls so far (network error or backend_unavailable
   // 502) — reset to 0 the moment a poll actually succeeds. See
   // POLL_RECONNECT_ATTEMPTS's own comment for why this exists.
@@ -2777,6 +2831,12 @@ async function pollJob(jobId, t) {
         throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail, true));
       }
       consecutivePollFailures = 0;
+      const cluesFeed = data.clues_progress || [];
+      if (cluesFeed.length > nextClueIndex) {
+        liveClues = liveClues.concat(cluesFeed.slice(nextClueIndex));
+        nextClueIndex = cluesFeed.length;
+        renderLiveClues();
+      }
       const history = data.examples_history || [];
       if (history.length > nextExampleIndex) {
         recordPreviewHistory(history.slice(nextExampleIndex));

@@ -2956,3 +2956,43 @@ end through the real running API (interactive start/step/save,
   cycle repeated 3 times confirming the same on-disk file is reused
   throughout rather than ever accumulating a duplicate — see CLAUDE.md
   for the full trail).
+
+- **Live "definitions created so far" list** (`#live-clues-wrap`/
+  `#live-clues-title`/`#live-clues-list`, `.live-clue-word`), at the
+  user's explicit request: "Lors de la génération des définitions,
+  afficher les définitions créées sous la grille aperçu, si Voir est
+  sélectionné, afficher aussi les mots." A new `<div id="live-clues-
+  wrap" hidden>` sits between `#attempt-preview-grids` and `#word-
+  verification-wrap`, so it reads as one more piece of the panel's
+  secondary metadata rather than a new, separate widget. Unlike
+  `#word-verification-wrap` (fully hidden unless `showPreviewLetters` is
+  on, since it identifies the exact grid word), this list is visible
+  unconditionally as soon as at least one clue exists — only the target
+  word/answer span (`.live-clue-word`) is gated behind
+  `showPreviewLetters`, matching the "reveal the answer, never withhold
+  the definition text itself" spoiler convention already established for
+  every other element in this panel. Styling matches the rest of
+  `#attempt-preview`'s discreet secondary text: `#live-clues-title` is
+  `0.9rem` italic `#777`, identical to `#word-verification-title`;
+  `#live-clues-list` is `0.8rem`, `color: var(--fg)` — deliberately with
+  **no opacity dimming**, a departure from `.attempt-preview-stats`/
+  `#attempt-preview-status`'s own `opacity: 0.7` treatment, since this is
+  real content the player is meant to read, not a pure stat/diagnostic
+  line. `.live-clue-word` reuses `.attempt-preview-process`'s existing
+  identifying-label treatment (`var(--accent)`, `font-weight: 700`) since
+  it's the one spoiler-sensitive piece of an otherwise plain-text list.
+  Implementation: `script.js`'s `renderLiveClues()` builds one `<li>`
+  per entry of a module-level `liveClues` array, fed incrementally by
+  `pollJob()` from a new backend job field, `job["clues_progress"]`
+  (`backend/app.py`, appended to by `progress()`'s own "clues" handling —
+  mirrors `examples_history`'s append-only design, never overwritten).
+  Reset only in `hideAttemptPreview()` (the start of a fresh generation),
+  not `hideAttemptPreviewPanel()` — so, like `lastWordTable`, it survives
+  navigating back to the panel once the final grid is ready, via the
+  `#generation-times` prev/next buttons. **Not yet visually confirmed in
+  an actual browser** — same tooling limitation noted throughout this
+  file; verified structurally only (a real JS syntax check via a
+  temporarily-installed `esprima`, removed again afterward; a CSS brace-
+  balance check; an HTML tag-balance check) and via the real backend
+  job-status shape (`clues_progress`/`new_clue` fields reaching the
+  polled job dict correctly), not a live screenshot.
