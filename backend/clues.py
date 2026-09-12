@@ -2212,6 +2212,98 @@ class LLMClueGenerator:
             "commentary before, between, or after them."
         )
 
+    def generate_paraphrases(self, text, language="fr", count=5, timeout=90.0):
+        """"Paraphraser" button in the new "Paraphraseur" panel (frontend/
+        static/script.js), at the user's explicit request: asks the LLM
+        for `count` (5 by default) alternative phrasings of a whole
+        sentence/short text typed by the player, one per line.
+
+        Unlike `generate_definitions()`/`generate()`, this needs no
+        dictionary/gloss/example-sentence grounding at all — paraphrasing
+        is self-contained, the typed text itself is the only material the
+        model needs (there is no single target "word" to look up in the
+        gloss dictionary, and the input can be an arbitrary sentence, not
+        a lemma). So this gets its own compact system prompt
+        (`_build_paraphrase_system_prompt`) rather than reusing
+        `_build_system_prompt()`/`_build_definitions_system_prompt()`,
+        both of which are built around a known target word.
+
+        A single best-effort call via the shared `_call()` helper (so it
+        still gets the same raw-response logging as every other clue-
+        generation call) — no multi-round retry loop (re-clicking
+        "Paraphraser" is the retry, same convention as `generate_
+        definitions()`), and no per-call `LOG_LLM/` record, matching
+        `generate_title()`/`describe_theme()`'s own convention for this
+        kind of auxiliary, non-puzzle-output call.
+
+        Deliberately does NOT reuse `_filter_candidates()` — that helper
+        rejects a candidate for containing the target word/canonical
+        form (irrelevant here: a paraphrase legitimately reuses many of
+        the original words) and caps length at `MAX_CLUE_WORDS` (~20
+        words, far too short for a genuine sentence paraphrase). Instead,
+        every non-empty line `_parse_response()` returns is kept as-is,
+        de-duplicated case-insensitively, in the model's own order.
+
+        Returns a list of up to `count` distinct paraphrase strings
+        (fewer if the model wrote less) — never raises for "the model
+        gave a bad/empty answer" (an empty list simply means no
+        paraphrase came back), only `ClueGenerationError` for a genuine
+        connection failure (from `_call`)."""
+        text = " ".join(str(text).split())
+        if not text:
+            return []
+        system_prompt = self._build_paraphrase_system_prompt(language, count)
+        user_message = f"Text: {text}"
+        max_tokens = REASONING_TOKEN_BUDGET + 200 + 60 * count
+        content = self._call(
+            text[:60].upper(), text, 1, system_prompt, user_message, max_tokens,
+            timeout, total_rounds=1,
+        )
+        seen = set()
+        paraphrases = []
+        for line in self._parse_response(content):
+            key = line.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            paraphrases.append(line)
+            if len(paraphrases) >= count:
+                break
+        logger.info(
+            "paraphrase: %r (%s) -> %d/%d kept",
+            text, language, len(paraphrases), count,
+        )
+        return paraphrases
+
+    @staticmethod
+    def _build_paraphrase_system_prompt(language, count):
+        """Compact, standalone system prompt for `generate_paraphrases()`
+        — see that method's own docstring for why this is deliberately
+        NOT a variant of `_build_system_prompt()`/`_build_definitions_
+        system_prompt()`, both built around a single known target word."""
+        language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
+        return (
+            f"You are a paraphrasing assistant writing in {language_name}.\n\n"
+            "The user message gives you one sentence or short text. Write "
+            f"exactly {count} different paraphrases of it — each one on "
+            "its own line, nothing else on that line.\n\n"
+            "Rules:\n"
+            "1. Each paraphrase must keep EXACTLY the same meaning as the "
+            "original — never add information that wasn't there, never "
+            "drop information that was, never change a fact, a number, a "
+            "name, or the overall tone.\n"
+            "2. Genuinely reword it: use different vocabulary and/or a "
+            "different sentence structure — do not just swap one or two "
+            "words and leave the rest identical.\n"
+            f"3. Vary the {count} paraphrases from each other, not only "
+            "from the original.\n"
+            f"4. Write entirely in {language_name}, every paraphrase, "
+            "from the first word to the last.\n\n"
+            f"OUTPUT FORMAT — exactly {count} lines and nothing else: no "
+            "numbering, no bullets, no labels, no blank lines, and no "
+            "commentary before, between, or after them."
+        )
+
     @staticmethod
     def _build_examples_block(entry, language, difficulty):
         """Real sentences (from the OpenSubtitles+Wikipedia reference

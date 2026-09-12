@@ -2877,6 +2877,73 @@ servers:
   `multiprocessing` worker processes beyond the ordinary
   `resource_tracker` helper were found after any of these checks.
 
+  **Populate priority preemption** was added on top of this same pause
+  mechanism, at the user's explicit request: "quand une demande de
+  génération arrive dans une des files d'attente (remplissage /
+  définition), mettre en pause la tâche Populate à la fin de l'étape en
+  cours (cycle de remplissage / génération d'une définition) pour donner
+  la priorité à la tâche dans la file d'attente. Ne reprendre la tâche
+  Populate que quand la file d'attente qui le concerne est vide." Before
+  this, a `Automation/Populate.py`-originated job competed for
+  `GRID_QUEUE`/`CLUES_QUEUE` on exactly the same footing as a real user's
+  own request — only ever yielding via the generic `MAX_TURN_DURATION_S`
+  (15-minute) fairness rule above, which could still make a real user
+  wait up to 15 minutes behind Populate's own background bulk-generation
+  work.
+
+  A new `_is_populate_task(task)` identifies a `GenerationTask` started by
+  Populate the same way `LLMClueGenerator`'s own single-clue-at-a-time
+  branch already does (`task.req is not None and task.req.source ==
+  "populate"` — see `GenerateRequest.source`/`Automation/Populate.py`'s
+  own `_build_request()`) — always `False` for a recompute task
+  (`req=None`) or the "Continuer" resume path, neither ever started by
+  Populate. `_make_should_pause(queue, task)`'s returned closure now
+  checks this *before* the generic 15-minute rule: if `task` is a
+  Populate task and *any other* task currently in `queue` is not itself a
+  Populate task, it returns `True` immediately, with no minimum elapsed
+  time at all — Populate yields at the very next checkpoint already built
+  into `generate_grid()`/`LLMClueGenerator.generate()` (the top of a
+  palier, or before the next word), i.e. exactly "à la fin de l'étape en
+  cours." Never triggered by another Populate task waiting behind it
+  (`Automation/Populate.py` only ever runs one grid at a time regardless,
+  but the check is written to stay correct even if that changed) — only a
+  genuine, non-Populate competitor counts.
+
+  Since `_make_should_pause(queue, task)` is already called fresh at the
+  top of each queue's own `while True:` retry loop (in `_run_generate_
+  job`'s two stages and `_run_recompute_job`'s clues stage), no change
+  was needed at any of those three call sites: a Populate task that
+  yields is moved to the back of its queue by the existing `GenerationPaused`
+  handling exactly as the 15-minute rule already does, then re-enters
+  `_wait_in_queue` and rebuilds a fresh `should_pause` the moment it's
+  front again — re-checking the identical condition. As long as a foreign
+  task remains anywhere in that same queue, Populate keeps yielding on
+  essentially every turn it gets, so it can never accumulate more than
+  one checkpoint's worth of work before deferring again; the moment the
+  queue is genuinely free of non-Populate work (`_is_populate_task` true
+  for every other entry, or the queue holds only `task` itself), the
+  condition stops firing and Populate resumes normal, uninterrupted
+  processing — "ne reprendre... que quand la file d'attente... est vide"
+  (of competing work).
+
+  Verified in isolation, directly against the real `_make_should_pause`/
+  `_is_populate_task` functions (no live server needed, since the whole
+  mechanism is pure queue-list logic) with hand-built `GenerationTask`
+  stand-ins: a lone Populate task with nothing else queued never pauses;
+  a Populate task sharing its queue with a real (non-Populate) task pauses
+  immediately, with `MAX_TURN_DURATION_S` left at its real 15-minute
+  value (proving no elapsed-time wait is needed for this branch); two
+  Populate tasks sharing a queue do **not** trigger this preemption
+  (confirming it's genuinely scoped to a foreign competitor, not just
+  "someone else is present"); a real user's own task is completely
+  unaffected by this new rule even with a Populate task waiting behind
+  it; the pre-existing generic 15-minute fairness rule still functions
+  correctly for two ordinary (non-Populate) tasks once `MAX_TURN_
+  DURATION_S` is temporarily forced to 0; and a recompute task (`req=
+  None`) is confirmed never treated as a Populate task even when queued
+  alongside a real one. `python3 -m py_compile backend/app.py` confirmed
+  no syntax regression.
+
   A **"Recalculer" button** was added to the play-mode action row (right
   after "Définitions"), at the user's explicit request: "Sur une grille
   en mode jeu, ajouter un bouton Recalculer à droite de Définitions
@@ -20695,3 +20762,202 @@ regression: 0 mismatches, 0 empty white cells each (36.5s/52 words;
 farm-animal glossary) still succeeded and still placed a theme word
 (`POULE`), confirming the reordered tier remains functional end to end
 in the full pipeline, not just in the isolated tier-selection test.
+
+- **Interactive mode ("Édition de grille") is now genuinely bilingual-
+  aware, and the "Vérifier" button's own long-standing bug is fixed**, at
+  the user's explicit request: "En mode Edition de grille, quand une
+  grille bilingue est chargée, configurer les langues dans celles de la
+  grille (idem en monolingue). Le bouton 'Vérifier' ne semble pas tenir
+  compte du fait que la grille est bilingue, et signale les mots de la
+  seconde langue comme ne faisant pas partie du dictionnaire."
+
+  `_load_interactive_index(language, difficulty, bilingual_language=
+  None)` (`backend/app.py`) gained the new parameter: `None`/identical to
+  `language` still returns `DualIndex(idx, idx)` exactly as before (an
+  ordinary monolingual session, byte-for-byte unchanged); a genuinely
+  different `bilingual_language` now loads a *second* wordlist/index and
+  returns `DualIndex(idx_across, idx_down)` — the same convention
+  `crossword_gen.generate_grid()` already uses for a bilingual grid. This
+  alone was enough to make the entire interactive solving pipeline
+  bilingual-aware with **no change to crossword_gen.py at all**: `interactive_
+  place_word`/`interactive_slot_candidates`/`interactive_clean_impossible_
+  zones`/`interactive_minimize_black_cells`/`_interactive_fill_diagnostics`
+  already resolve every lookup via `index.for_cells(cells)`/`.for_direction
+  (direction)`, never `index[length]` directly — confirmed directly by
+  grep before writing any code. A real, pre-existing latent bug in
+  `_run_interactive_job`'s own `available_lengths` computation was fixed
+  along the way: both its `across` and `down` sets were built from
+  `index.across.items()` (a copy-paste artifact, invisible until now since
+  `index.across is index.down` for every session before this feature) —
+  `down` now correctly reads `index.down.items()`.
+
+  `GenerateRequest` (reused as-is by `POST /api/interactive/start`) already
+  had a `bilingual_language` field from the automatic generator's own
+  bilingual support — no new request model needed. `interactive_start`
+  gained the same bilingual validation `_validate_generate_request`
+  already does (known language, dictionary actually built on this server,
+  only when genuinely given and different from `language`).
+  `_run_interactive_job` reads `req.bilingual_language`, passes it to
+  `_load_interactive_index`, and mirrors it onto both `job["interactive"]`
+  and `job["result"]` (the latter is all `pollJob()` ever returns to the
+  frontend, the same "mirror everything onto result too" pattern already
+  established for `language`/`difficulty`/`theme`). `_run_interactive_
+  resume_job` reads `record.get("bilingual_language")` from whichever
+  record it's given (a real GRID_WORK record, or a library grid reshaped
+  by `_library_record_to_interactive`) — degrading to `None` rather than
+  failing the whole resume if that language's dictionary is no longer
+  built on this server, the same tolerance already extended elsewhere in
+  this file to a bilingual grid's second language. `_library_record_to_
+  interactive` translates the library record's own `"bilingual"` field
+  (set by `grid_store.save_grid_json`) into the shaped dict's
+  `"bilingual_language"` key, so `_run_interactive_resume_job` can read
+  every source generically under one name.
+
+  The actual reported bug lived in `interactive_verify`'s own `_check()`:
+  it unconditionally read `sess["index"].across` for every word,
+  regardless of that word's real direction — on a bilingual session this
+  meant every down (second-language) word was checked against the
+  *primary* language's dictionary and reported invalid, no matter how
+  real it was. `InteractiveVerifyRequest.words` changed from a plain
+  `list[str]` to `list[InteractiveVerifyWord]` (`{answer, direction}`),
+  and `_check()` now resolves `sess["index"].for_direction(w.direction)`
+  per word before the dictionary lookup — a no-op for a monolingual
+  session (`.across`/`.down` are still the same object there), and
+  correct for a bilingual one. `invalid_words` is still returned as a
+  flat list of bare answer strings (matched by content on the frontend,
+  not by direction) — an accepted, disclosed simplification: a word whose
+  exact spelling happens to be valid in one direction but not the other
+  (a rare cross-language coincidence) can still be mis-flagged in the
+  valid direction too, same as documented for the pre-existing
+  `invalid_words` matching convention.
+
+  Frontend (`frontend/static/script.js`): a new `let interactiveBilingualLanguage
+  = ""` module variable, set from `state.bilingual_language || ""` in
+  `enterInteractiveMode()` on every entry path (fresh start, "Ouvrir en
+  mode Interactif" from the Library, resuming a "Créations" draft), and
+  from the generation form's own `bilingualLanguageSelect` when starting a
+  fresh interactive session via the main submit handler. `syncPuzzleFromInteractive
+  ()` now sets `puzzle.bilingual_language` from it, so `currentBilingualLangs()`
+  — and so `defaultToBilingualOption(dictionaryLanguage)` — correctly
+  offers the combined "<lang1>/<lang2>" option for a bilingual interactive
+  session, exactly like a normal generated bilingual grid already does.
+
+  **A real ordering bug was found and fixed in the same investigation**:
+  `enterInteractiveMode()` used to call `defaultToBilingualOption
+  (dictionaryLanguage)` *before* `puzzle` was ever rebuilt for this session
+  (`puzzle` is only refreshed by `renderInteractive()`, itself only
+  reached via the `setActiveDirection(activeDirection)` call at the very
+  end of the function) — so the bilingual-option check always saw a stale
+  or absent `puzzle`, and the Dictionary panel's combined-language option
+  never appeared on a genuinely bilingual interactive session. Fixed by
+  calling `syncPuzzleFromInteractive()` explicitly right before the
+  Dictionary-panel block — `setActiveDirection()` still runs afterward for
+  its own, unrelated side effects (button active-states) and simply
+  recomputes the identical `puzzle` a second time, harmlessly.
+
+  The 3 frontend call sites of `POST /api/interactive/verify` ("Suivant"'s
+  own completion check, the "Vérifier" button, the "Définitions" button)
+  were all updated to send `{answer, direction}` pairs (`interactiveSlots
+  ()`'s own entries already carry `.direction`) instead of bare answer
+  strings. `dictionaryDefineUrl(word, direction)` gained the same
+  direction-awareness (a down word on a bilingual session now asks for a
+  definition in `interactiveBilingualLanguage` instead of always
+  `interactiveLanguage`) — used by both "Proposer" (`interactiveProposeBtn`)
+  and the bulk "Définitions" auto-fill loop. `interactive_save`'s own
+  `result["bilingual_language"]` (previously hardcoded `None`) is now
+  `req.bilingual_language if is_bilingual else None`, and each word's own
+  `language` field is resolved per direction (`req.bilingual_language` for
+  a down word on a bilingual grid, `req.language` otherwise) — mirroring
+  `generate_grid()`'s own per-word `language` convention exactly.
+  `InteractiveSaveRequest` gained a `bilingual_language` field, sent by the
+  "Publier" (`interactiveSaveBtn`) handler; `grid_store.save_grid_json`'s
+  own pre-existing `bilingual` parameter now receives it instead of a
+  hardcoded `None`.
+
+  `grid_store.save_grid_work` gained a matching `bilingual_language=None`
+  parameter, stored under that same key in the GRID_WORK JSON record —
+  deliberately a *different* field name than `save_grid_json`'s own
+  `"bilingual"` (GRID_STORE convention), matching instead the session/job
+  state's own naming (`job["interactive"]["bilingual_language"]`) —
+  `_library_record_to_interactive`'s own translation (`"bilingual"` ->
+  `"bilingual_language"`) is exactly the bridge between the two
+  conventions. `interactive_save_work` (the "Suivant"/"Précédent"
+  autosave) and `interactive_save`'s own GRID_WORK-refresh call both now
+  read `meta.get("bilingual_language")` from `job["interactive"]` — the
+  session's own authoritative value, never trusted from the request body,
+  matching the existing convention already used there for `language`/
+  `difficulty`/`theme`. No frontend change was needed for the autosave
+  path specifically — `InteractiveSaveWorkRequest` was deliberately never
+  given a `bilingual_language` field of its own, exactly like it already
+  omits `language`/`difficulty`/`theme` for the same reason.
+
+  Verified in stages, all against the real running API/data, never a
+  restricted vocabulary. `_load_interactive_index("fr", "medium", "en")`
+  confirmed a real, materially different two-language index (`across is
+  down: False`; `"CAT"` present only in `.down`, absent from `.across`;
+  `.for_direction("across"/"down")` resolving to the right object) and
+  correctly degrading to a shared single index for both `None` and an
+  identical-language `bilingual_language`. A real `interactive_place_word`
+  sweep (9×9, a real bilingual fr/en index, 20 successive placements)
+  confirmed every single placed word is a genuine member of its own
+  direction's dictionary (`in_own_dict=True`, 20/20) — including several
+  unambiguous English-only words (`PARADERS`, `HASTEN`, `BEATER`, `SMOTE`,
+  `AND`) correctly placed as down words and correctly absent from the
+  French dictionary (`in_other_dict=False`) — direct, conclusive proof the
+  bilingual index is genuinely driving word selection, not a coincidence.
+  A direct call to `interactive_verify` (both in isolation and, separately,
+  through the real running HTTP API after restarting the backend) with a
+  mixed batch — `CHAT`/across (valid French), `CAT`/down (valid English),
+  `CAT`/across (invalid French), `ZZZQX`/down (invalid everywhere) —
+  returned exactly `{"invalid_words": ["CAT", "ZZZQX"]}` both times: the
+  English down word is correctly recognized as valid where the old,
+  direction-blind code would have flagged it, and the genuinely invalid
+  entries are still caught. `_run_interactive_resume_job` and `_library_
+  record_to_interactive` were each exercised directly with a real
+  bilingual record, confirming `job["interactive"]`/`job["result"]` both
+  carry the right `bilingual_language` and the session's own index is
+  genuinely two-language. `interactive_save` was exercised end-to-end
+  (against a temporary GRID_STORE/GRID_WORK directory, never the real
+  project data) with a bilingual request — the saved record correctly
+  landed in `GRID_STORE/bilingual/`, carried both `"bilingual": "en"` and
+  `"bilingual_language": "en"`, and every word's own `language` field
+  matched its direction (`across` → `fr`, `down` → `en`) regardless of the
+  grid's actual content. `interactive_save_work` was exercised the same
+  way, confirming the GRID_WORK record correctly carries `bilingual_
+  language` read from the session's own `job["interactive"]`. A real,
+  non-mocked `_run_interactive_job` call through the actual running API
+  (`POST /api/interactive/start` with `bilingual_language: "en"`, polled
+  to completion) confirmed `job["result"]`/`job["interactive"]` both
+  report `"bilingual_language": "en"` end to end, not just via direct
+  Python calls. `python3 -m py_compile` on every touched backend file and
+  a real JS syntax check (`esprima`, temporarily installed and removed
+  again afterward) on `script.js` both passed. **Not yet visually
+  confirmed in an actual browser** — the same tooling limitation noted
+  throughout this project's UI work — the Dictionary-panel ordering fix
+  in particular was verified by tracing `enterInteractiveMode()`'s own
+  call order directly rather than by watching the combined-language
+  option actually appear on screen.
+
+- **The crossword grid no longer intercepts a keystroke meant for text
+  selected/focused elsewhere on the page**, at the user's explicit
+  request: "Quand un texte est sélectionné dans la page, ou que le focus
+  est sur le champ de saisie d'un outil (Dictionnaire, Paraphraseur,
+  ChatBot, etc) la grille ne doit pas intercepter les touches du clavier
+  (empêche de faire un copier/coller entre les outils)." The focused-
+  input half was already handled by the pre-existing `isTextInputFocused()`
+  (guarding `handleKeydown`/`updateHoverForModifierKey`/`toggleDirectionOnCtrl`)
+  — the real gap was a plain text *selection* with no focused input at
+  all: selecting some Dictionnaire/Paraphraseur/ChatBot result text (a
+  `<div>`/`<span>`, never an `<input>`) never moves `document.activeElement`,
+  so pressing Ctrl+C to copy it hit `handleKeydown`'s own letter-typing
+  branch (`"c"` matches `/[a-zA-Z]/`), writing "C" into the selected grid
+  cell and blocking the real browser copy outright. A new `hasActiveTextSelection()`
+  (`window.getSelection()`, non-collapsed, non-empty) and a combining
+  `shouldGridIgnoreKeydown()` (`isTextInputFocused() || hasActiveTextSelection()`)
+  replace all three pre-existing `if (isTextInputFocused()) return;` guards.
+  See the `style-guide` SKILL for the full entry. Verified: a real JS
+  syntax check (`esprima`, temporarily installed and removed again
+  afterward) confirmed `script.js` still parses correctly. **Not yet
+  visually confirmed in an actual browser** — verified by tracing the
+  exact guard/call-site logic directly rather than reproducing the
+  reported copy/paste failure live.

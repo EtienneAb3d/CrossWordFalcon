@@ -176,6 +176,16 @@ const dictionaryClearBtn = document.getElementById("dictionary-clear-btn");
 const dictionaryPerplexityBtn = document.getElementById("dictionary-perplexity-btn");
 const dictionaryCloseBtn = document.getElementById("dictionary-close-btn");
 const dictionaryLanguage = document.getElementById("dictionary-language");
+const paraphraseBtn = document.getElementById("paraphrase-btn");
+const paraphrasePanel = document.getElementById("paraphrase");
+const paraphraseForm = document.getElementById("paraphrase-form");
+const paraphraseInput = document.getElementById("paraphrase-input");
+const paraphraseGenerateBtn = document.getElementById("paraphrase-generate-btn");
+const paraphraseResults = document.getElementById("paraphrase-results");
+const paraphraseClearBtn = document.getElementById("paraphrase-clear-btn");
+const paraphrasePerplexityBtn = document.getElementById("paraphrase-perplexity-btn");
+const paraphraseCloseBtn = document.getElementById("paraphrase-close-btn");
+const paraphraseLanguage = document.getElementById("paraphrase-language");
 const qdrantAdminBtn = document.getElementById("qdrant-admin-btn");
 const qdrantAdminPanel = document.getElementById("qdrant-admin");
 const qdrantAdminBody = document.getElementById("qdrant-admin-body");
@@ -549,7 +559,8 @@ let interactiveMode = false;
 
 function syncRssPanelVisibility() {
   rssPanel.hidden = generationInProgress || interactiveMode
-    || !(libraryPanel.hidden && dictionaryPanel.hidden && qdrantAdminPanel.hidden
+    || !(libraryPanel.hidden && dictionaryPanel.hidden && paraphrasePanel.hidden
+         && qdrantAdminPanel.hidden
          && interactiveWorkPanel.hidden && attemptPreview.hidden && result.hidden);
 }
 // Etat initial explicite plutôt que de compter sur une simple coïncidence
@@ -634,6 +645,14 @@ let interactiveGrid = [];
 let interactiveUndoStack = [];
 let interactiveHasTheme = false;
 let interactiveLanguage = "fr";
+// The session's own second (vertical-words) language on a genuinely
+// bilingual "Interactif" grid — "" (falsy) for an ordinary monolingual
+// one, mirroring interactiveLanguage's own always-a-string convention.
+// Read from backend/app.py's job["result"]["bilingual_language"] on every
+// entry path (fresh start, "Ouvrir en mode Interactif", resuming a
+// draft) — see enterInteractiveMode() — and sent back on "Suivant"'s own
+// wire format via syncPuzzleFromInteractive()'s puzzle.bilingual_language.
+let interactiveBilingualLanguage = "";
 let interactiveDifficulty = "easy";
 let interactiveTheme = "";
 // "startRow,startCol,direction" -> clue text.
@@ -714,6 +733,97 @@ function clearHighlights() {
 // user's explicit request for a fixed 5-line panel under the grid, so a
 // player can read the currently-hovered word's definition without the
 // full across/down clue lists in view at the same time.
+// Les "deux langues sélectionnées" pour le Dictionnaire ET le
+// Paraphraseur, à la demande explicite de l'utilisateur : "quand deux
+// langues sont sélectionnées, ajouter '<lang1>/<lang2>' dans le
+// sélecteur de langue du Dictionnaire [...] Idem pour le Paraphraseur."
+// Source de vérité, dans l'ordre : la grille actuellement chargée si
+// elle est bilingue (`puzzle.language`/`puzzle.bilingual_language` — voir
+// backend/crossword_gen.py's generate_grid ; le joueur a pu changer les
+// sélecteurs du formulaire depuis avoir généré/chargé cette grille
+// précise, donc seule la grille elle-même sait dans quelle(s) langue(s)
+// elle a réellement été écrite), sinon les deux sélecteurs du formulaire
+// de génération (#language/#bilingual-language) s'ils diffèrent
+// actuellement. Renvoie `[lang1, lang2]` (dans cet ordre — lang1 = langue
+// des mots horizontaux/principale, lang2 = langue des mots verticaux/
+// secondaire) ou `null` si une seule langue est actuellement en jeu.
+// Partagée par les deux panneaux, jamais dupliquée : les deux ne peuvent
+// donc jamais se contredire sur "combien de langues sont configurées".
+function currentBilingualLangs() {
+  if (puzzle && puzzle.bilingual_language && puzzle.bilingual_language !== puzzle.language) {
+    return [puzzle.language, puzzle.bilingual_language];
+  }
+  if (bilingualLanguageSelect.value && bilingualLanguageSelect.value !== languageSelect.value) {
+    return [languageSelect.value, bilingualLanguageSelect.value];
+  }
+  return null;
+}
+
+// Le libellé natif d'un code langue simple (jamais une combinaison), lu
+// directement sur une des 6 `<option>` de base de `selectEl` (ex. "fr"
+// -> "Français") plutôt que dupliqué ici — ces six options ne sont jamais
+// traduites par uiLanguage (voir index.html, identiques sur #dictionary-
+// language ET #paraphrase-language), donc ce libellé reste stable quelle
+// que soit la langue de l'interface, et quel que soit le sélecteur.
+function nativeLanguageLabel(selectEl, lang) {
+  const opt = selectEl.querySelector(`option[value="${lang}"]`);
+  return opt ? opt.textContent : lang;
+}
+
+// Ajoute/retire/actualise, dans `selectEl` (#dictionary-language ou
+// #paraphrase-language), l'option combinée "<lang1>/<lang2>"
+// correspondant à currentBilingualLangs() ci-dessus — à la demande
+// explicite de l'utilisateur. Repère l'option déjà ajoutée par un
+// précédent appel via `data-bilingual-combo` (jamais plus d'une à la
+// fois) et la retire avant de recalculer, pour ne jamais accumuler de
+// doublons ni laisser une combinaison de langues devenue obsolète.
+// Préserve la sélection courante quand elle reste valide ; si elle
+// pointait sur l'ancienne combinaison (ou s'il n'y a plus de combinaison
+// du tout), retombe respectivement sur la nouvelle combinaison ou sur la
+// langue de l'interface — jamais sur une valeur qui ne correspond plus à
+// aucune `<option>`. Renvoie la valeur de la combinaison ("lang1/lang2")
+// si une combinaison est disponible, `null` sinon — utilisé par
+// defaultToBilingualOption() ci-dessous pour décider s'il faut la
+// sélectionner d'office.
+function refreshBilingualOption(selectEl) {
+  const previousValue = selectEl.value;
+  const existing = selectEl.querySelector("option[data-bilingual-combo]");
+  if (existing) existing.remove();
+  const langs = currentBilingualLangs();
+  if (!langs) {
+    if (previousValue.includes("/")) selectEl.value = uiLanguage;
+    return null;
+  }
+  const [lang1, lang2] = langs;
+  const value = `${lang1}/${lang2}`;
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = `${nativeLanguageLabel(selectEl, lang1)}/${nativeLanguageLabel(selectEl, lang2)}`;
+  opt.dataset.bilingualCombo = "1";
+  selectEl.appendChild(opt);
+  if (previousValue === value || previousValue.includes("/")) {
+    selectEl.value = value;
+  } else {
+    selectEl.value = previousValue;
+  }
+  return value;
+}
+
+// Comme refreshBilingualOption() ci-dessus, mais sélectionne d'office la
+// combinaison bilingue dès qu'elle existe — à la demande explicite de
+// l'utilisateur : "Sur Dictionnaire et Paraphraseur, si bilingue,
+// sélectionner par défaut la paire de langues." Utilisée aux points
+// d'entrée "par défaut" d'un panneau (ouverture, grille chargée,
+// changement de langue) ; updateDictionaryLanguageForDirection()
+// ci-dessous (déclenchée par un simple survol de mot dans la grille)
+// appelle volontairement refreshBilingualOption() seule, jamais celle-ci,
+// pour ne jamais écraser un choix de langue unique fait entre-temps par
+// le joueur — voir sa propre note.
+function defaultToBilingualOption(selectEl) {
+  const value = refreshBilingualOption(selectEl);
+  if (value) selectEl.value = value;
+}
+
 // Fait suivre le sélecteur de langue du panneau "Dictionnaire" à la
 // langue du mot survolé/sélectionné dans la grille à jouer, à la demande
 // explicite de l'utilisateur : "le sélecteur de langue du dictionnaire
@@ -726,14 +836,34 @@ function clearHighlights() {
 // sait dans quelle(s) langue(s) elle a réellement été écrite. Sans effet
 // sur une grille monolingue ordinaire (`puzzle.bilingual_language` alors
 // `null`/absent) : `direction === "down"` retombe simplement sur la même
-// langue primaire que "across".
+// langue primaire que "across". Ne force jamais le sélecteur hors d'une
+// combinaison bilingue déjà sélectionnée (que ce soit par défaut ou
+// choisie explicitement par le joueur, voir refreshBilingualOption()/
+// defaultToBilingualOption() ci-dessus) — un simple survol ne doit pas
+// annuler ce choix.
 function updateDictionaryLanguageForDirection(direction) {
   if (!puzzle) return;
+  refreshBilingualOption(dictionaryLanguage);
+  if (dictionaryLanguage.value.includes("/")) return;
   const lang = (direction === "down" && puzzle.bilingual_language)
     ? puzzle.bilingual_language
     : (puzzle.language || languageSelect.value);
   if (lang) dictionaryLanguage.value = lang;
 }
+
+// Refait le point (et sélectionne d'office la combinaison, voir
+// defaultToBilingualOption() ci-dessus) sur les deux sélecteurs
+// "bilingues" (Dictionnaire et Paraphraseur) dès que le sélecteur
+// "Bilingue" du formulaire de génération change — même si les panneaux
+// correspondants sont actuellement fermés (travail DOM sans effet
+// visible, donc sans coût réel). #language a son propre appel équivalent
+// au bout de setUiLanguage() (voir plus bas) — inutile de dupliquer un
+// deuxième listener ici, puisque tout changement de #language passe déjà
+// par elle.
+bilingualLanguageSelect.addEventListener("change", () => {
+  defaultToBilingualOption(dictionaryLanguage);
+  defaultToBilingualOption(paraphraseLanguage);
+});
 
 function highlightWordAt(row, col, direction) {
   clearHighlights();
@@ -786,6 +916,23 @@ function isTextInputFocused() {
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
 }
 
+// A real, non-collapsed text selection anywhere on the page (e.g. the
+// player selected some dictionary/paraphrase/chat text to copy it) — even
+// though nothing is focused in that case (a plain text selection doesn't
+// move document.activeElement), the grid must still not swallow the
+// keystroke: reported live, Ctrl+C to copy a selected definition was
+// instead typing "C" into the currently-selected grid cell and blocking
+// the browser's own copy, because isTextInputFocused() alone saw no
+// focused input and let the grid handle it.
+function hasActiveTextSelection() {
+  const sel = window.getSelection && window.getSelection();
+  return !!sel && !sel.isCollapsed && sel.toString().length > 0;
+}
+
+function shouldGridIgnoreKeydown() {
+  return isTextInputFocused() || hasActiveTextSelection();
+}
+
 // Vertical word on Shift or CapsLock (either one), horizontal otherwise —
 // getModifierState() is part of the DOM's shared modifier-key mixin, so it
 // works on a MouseEvent (mouseenter) exactly like on a KeyboardEvent, no
@@ -833,10 +980,11 @@ document.addEventListener("keyup", updateHoverForModifierKey);
 function updateHoverForModifierKey(event) {
   if (interactiveMode) return;
   if (event.key !== "Shift" && event.key !== "CapsLock") return;
-  // Ignore Shift/CapsLock while typing in the chat (or any text field) —
-  // otherwise typing a capital there silently changes the grid's active
-  // direction and the currently-hovered word (see isTextInputFocused()).
-  if (isTextInputFocused()) return;
+  // Ignore Shift/CapsLock while typing in the chat (or any text field), or
+  // while some page text is selected — otherwise typing a capital there
+  // silently changes the grid's active direction and the currently-hovered
+  // word (see shouldGridIgnoreKeydown()).
+  if (shouldGridIgnoreKeydown()) return;
   setActiveDirection(hoverDirectionFromEvent(event));
 }
 
@@ -855,7 +1003,7 @@ document.addEventListener("keydown", toggleDirectionOnCtrl);
 
 function toggleDirectionOnCtrl(event) {
   if (event.key !== "Control" || event.repeat) return;
-  if (isTextInputFocused()) return;
+  if (shouldGridIgnoreKeydown()) return;
   if (!puzzle && !interactiveMode) return;
   setActiveDirection(activeDirection === "across" ? "down" : "across");
 }
@@ -1587,7 +1735,11 @@ function handleKeydown(event) {
   // focused, generically (any <input>/<textarea>/contenteditable), not
   // just the chat input by id — so any other text field added later is
   // protected the same way, with no need to special-case it here too.
-  if (isTextInputFocused()) return;
+  // Also bails out on a plain page text selection with no focused field at
+  // all (see hasActiveTextSelection()) — otherwise Ctrl+C to copy some
+  // selected dictionary/paraphrase/chat text typed "C" into the grid and
+  // blocked the real copy instead, breaking copy/paste between tools.
+  if (shouldGridIgnoreKeydown()) return;
   if (interactiveMode) {
     handleInteractiveKeydown(event);
     return;
@@ -2144,10 +2296,18 @@ function setUiLanguage(lang) {
     libraryCurrentPage = 1;
     renderLibraryList();
   }
-  // Le sélecteur de langue du dictionnaire suit lui aussi la langue de
-  // l'interface (défaut demandé), tant que le joueur n'a rien changé
-  // dessus sur ce panneau précisément.
+  // Les sélecteurs de langue du Dictionnaire ET du Paraphraseur suivent
+  // eux aussi la langue de l'interface (défaut demandé), tant que le
+  // joueur n'a rien changé dessus sur ces panneaux précisément.
   dictionaryLanguage.value = lang;
+  paraphraseLanguage.value = lang;
+  // Sélectionne d'office la combinaison "<lang1>/<lang2>" sur les deux si
+  // elle existe encore (voir currentBilingualLangs()/
+  // defaultToBilingualOption() ci-dessus) — #bilingual-language vient
+  // d'être forcé sur `lang` juste au-dessus, donc seule une grille
+  // bilingue déjà chargée peut encore en produire une à ce stade.
+  defaultToBilingualOption(dictionaryLanguage);
+  defaultToBilingualOption(paraphraseLanguage);
   // Le panneau d'admin Qdrant (localhost) : ses libellés sont posés à la
   // construction, donc on le re-rend s'il est ouvert.
   if (!qdrantAdminPanel.hidden) loadQdrantAdmin();
@@ -2937,6 +3097,13 @@ function renderGridDifficulty() {
 // easily-drifting rendering logic for the two cases.
 function displayFinalGrid(gridData) {
   puzzle = gridData;
+  // Une grille bilingue nouvellement chargée doit immédiatement offrir
+  // (et sélectionner par défaut, à la demande explicite de l'utilisateur)
+  // sa propre combinaison "<lang1>/<lang2>" dans le Dictionnaire ET le
+  // Paraphraseur, sans attendre un premier survol de mot (voir
+  // currentBilingualLangs()/defaultToBilingualOption()).
+  defaultToBilingualOption(dictionaryLanguage);
+  defaultToBilingualOption(paraphraseLanguage);
   userLetters = Array.from({ length: gridData.height }, () => Array(gridData.width).fill(""));
   // Partie déjà sauvegardée dans GRID_GAME pour cette grille + ce pseudo
   // (voir GET /api/library/{grid_id}'s own `saved_game`, transmis par
@@ -3419,8 +3586,13 @@ function hideDictionaryPanel() {
 // Un tableau par mot cherché : colonne 1 = forme complète (forme canonique
 // entre parenthèses), colonne 2 = liste "type grammatical : définition".
 // Construit entièrement via l'API DOM (textContent) — aucune donnée
-// dictionnaire n'est jamais injectée en innerHTML.
-function renderDictionaryResult(query, data) {
+// dictionnaire n'est jamais injectée en innerHTML. Renvoie le nœud SANS
+// le rattacher à la page (voir buildBilingualResultBlock() plus bas, à la
+// demande explicite de l'utilisateur : quand deux langues sont
+// sélectionnées, ce nœud devient une des deux colonnes d'un résultat
+// bilingue au lieu d'être seul dans la pile) — le handler du formulaire,
+// plus bas, décide lui-même de l'empiler seul ou dans un bloc bilingue.
+function buildDictionaryResultNode(query, data) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
   block.className = "dictionary-result";
@@ -3435,8 +3607,7 @@ function renderDictionaryResult(query, data) {
     empty.className = "dictionary-empty";
     empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
     block.appendChild(empty);
-    dictionaryResults.prepend(block);
-    return;
+    return block;
   }
 
   if (data.truncated) {
@@ -3490,13 +3661,14 @@ function renderDictionaryResult(query, data) {
   table.appendChild(tbody);
   wrap.appendChild(table);
   block.appendChild(wrap);
-  dictionaryResults.prepend(block);
+  return block;
 }
 
 dictionaryBtn.addEventListener("click", () => {
   if (dictionaryPanel.hidden) {
     dictionaryPanel.hidden = false;
     dictionaryLanguage.value = uiLanguage;
+    defaultToBilingualOption(dictionaryLanguage);
     syncRssPanelVisibility();
     dictionaryInput.focus();
   } else {
@@ -3512,21 +3684,79 @@ dictionaryClearBtn.addEventListener("click", () => {
   dictionaryInput.focus();
 });
 
+// Combine deux nœuds de résultat déjà construits (un par langue) dans un
+// bloc affiché en 50/50, chacun titré par sa langue — à la demande
+// explicite de l'utilisateur, pour le Dictionnaire ET le Paraphraseur :
+// "quand deux langues sont sélectionnées... chaque outil est alors lancé
+// dans chacune des deux langues, et les résultats affichés dans un
+// tableau 50/50 avec la langue affichée en titre." `selectEl` est le
+// sélecteur de langue (#dictionary-language ou #paraphrase-language) dont
+// lire les libellés natifs ; `lang1`/`lang2` sont toujours des codes ISO
+// simples (jamais eux-mêmes une combinaison "xx/yy") ; `node1`/`node2`
+// les nœuds déjà construits par une des buildXNode() de ce fichier.
+function buildBilingualResultBlock(selectEl, lang1, node1, lang2, node2) {
+  const wrap = document.createElement("div");
+  wrap.className = "bilingual-result";
+  for (const [lang, node] of [[lang1, node1], [lang2, node2]]) {
+    const col = document.createElement("div");
+    col.className = "bilingual-col";
+    const title = document.createElement("h4");
+    title.className = "bilingual-lang-title";
+    title.textContent = nativeLanguageLabel(selectEl, lang);
+    col.appendChild(title);
+    col.appendChild(node);
+    wrap.appendChild(col);
+  }
+  return wrap;
+}
+
+// Adjectifs de langue par langue de PHRASE (le gabarit Perplexity du
+// Dictionnaire ET du Paraphraseur ci-dessous), un jeu par langue de
+// phrase couvrant les 6 langues possibles comme cible — permet de
+// composer "français/anglais" etc. quand deux langues sont sélectionnées,
+// à la demande explicite de l'utilisateur : "Envoyer à Perplexity une
+// requête avec également <lang1>/<lang2>." Accord déjà choisi pour
+// chaque gabarit (masculin "mot" en français, neutre "Wort" en allemand,
+// féminin "palabra"/"parola"/"palavra" en espagnol/italien/portugais,
+// invariable en anglais).
+const PERPLEXITY_LANGUAGE_ADJECTIVES = {
+  fr: { fr: "français", en: "anglais", de: "allemand", es: "espagnol", it: "italien", pt: "portugais" },
+  en: { fr: "French", en: "English", de: "German", es: "Spanish", it: "Italian", pt: "Portuguese" },
+  de: { fr: "französische", en: "englische", de: "deutsche", es: "spanische", it: "italienische", pt: "portugiesische" },
+  es: { fr: "francesa", en: "inglesa", de: "alemana", es: "española", it: "italiana", pt: "portuguesa" },
+  it: { fr: "francese", en: "inglese", de: "tedesca", es: "spagnola", it: "italiana", pt: "portoghese" },
+  pt: { fr: "francesa", en: "inglesa", de: "alemã", es: "espanhola", it: "italiana", pt: "portuguesa" },
+};
+
+function perplexityLanguageAdjective(sentenceLang, targetLang) {
+  const table = PERPLEXITY_LANGUAGE_ADJECTIVES[sentenceLang] || PERPLEXITY_LANGUAGE_ADJECTIVES.fr;
+  return table[targetLang] || targetLang;
+}
+
+// Décompose une valeur de sélecteur de langue (simple "fr", ou combinée
+// "fr/en") en tableau de 1 ou 2 codes ISO — partagé par tous les usages
+// bilingues (Dictionnaire, Paraphraseur).
+function splitLanguageValue(langValue) {
+  return langValue.includes("/") ? langValue.split("/") : [langValue];
+}
+
 // Requête de définition envoyée à Perplexity, adaptée à la langue du
 // sélecteur #dictionary-language — jamais à uiLanguage (l'interface),
 // puisqu'on veut demander la définition D'UN MOT DANS CETTE langue-là,
-// quelle que soit la langue de l'interface elle-même. `%s` reçoit le mot
-// tel que saisi (jamais traduit, ni ré-accentué). Fallback sur le
-// gabarit français si `dictionaryLanguage.value` ne correspond à aucune
-// entrée connue (ne devrait jamais arriver, le sélecteur n'offre que ces
-// 6 langues).
+// quelle que soit la langue de l'interface elle-même. Le mot tel que
+// saisi (jamais traduit, ni ré-accentué) est inséré dans `${word}`.
+// Quand deux langues sont sélectionnées, la phrase reste dans la langue
+// de la première (`langCodes[0]`, celle des mots horizontaux — voir
+// currentBilingualLangs()) mais l'adjectif de langue devient
+// "<adj1>/<adj2>" (perplexityLanguageAdjective ci-dessus), à la demande
+// explicite de l'utilisateur.
 const PERPLEXITY_DEFINE_QUERY_TEMPLATES = {
-  fr: (word) => `Définir le mot français : ${word}`,
-  en: (word) => `Define the English word: ${word}`,
-  de: (word) => `Definiere das deutsche Wort: ${word}`,
-  es: (word) => `Definir la palabra española: ${word}`,
-  it: (word) => `Definisci la parola italiana: ${word}`,
-  pt: (word) => `Definir a palavra portuguesa: ${word}`,
+  fr: (adj, word) => `Définir le mot ${adj} : ${word}`,
+  en: (adj, word) => `Define the ${adj} word: ${word}`,
+  de: (adj, word) => `Definiere das ${adj} Wort: ${word}`,
+  es: (adj, word) => `Definir la palabra ${adj} : ${word}`,
+  it: (adj, word) => `Definisci la parola ${adj} : ${word}`,
+  pt: (adj, word) => `Definir a palavra ${adj} : ${word}`,
 };
 
 dictionaryPerplexityBtn.addEventListener("click", () => {
@@ -3535,12 +3765,31 @@ dictionaryPerplexityBtn.addEventListener("click", () => {
     dictionaryInput.focus();
     return;
   }
+  const langCodes = splitLanguageValue(dictionaryLanguage.value);
+  const sentenceLang = langCodes[0];
+  const adjective = langCodes
+    .map((code) => perplexityLanguageAdjective(sentenceLang, code))
+    .join("/");
   const template =
-    PERPLEXITY_DEFINE_QUERY_TEMPLATES[dictionaryLanguage.value] ||
+    PERPLEXITY_DEFINE_QUERY_TEMPLATES[sentenceLang] ||
     PERPLEXITY_DEFINE_QUERY_TEMPLATES.fr;
-  const url = `https://www.perplexity.ai/search?q=${encodeURIComponent(template(word))}`;
+  const url = `https://www.perplexity.ai/search?q=${encodeURIComponent(template(adjective, word))}`;
   window.open(url, "_blank", "noopener,noreferrer");
 });
+
+// Interroge /api/dictionary pour une langue donnée et renvoie le nœud de
+// résultat déjà construit (jamais rattaché à la page) — factorisé pour
+// être appelé une ou deux fois (bilingue) par le handler ci-dessous.
+async function fetchDictionaryResultNode(query, lang) {
+  const t = I18N[uiLanguage];
+  const response = await fetchWithTimeout(
+    `/api/dictionary?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(lang)}`,
+    {}, FETCH_TIMEOUT_MS,
+  );
+  if (!response.ok) throw new Error(t.dictionaryError);
+  const data = await response.json();
+  return buildDictionaryResultNode(query, data);
+}
 
 dictionaryForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -3549,13 +3798,17 @@ dictionaryForm.addEventListener("submit", async (event) => {
   const t = I18N[uiLanguage];
   dictionarySearchBtn.disabled = true;
   try {
-    const response = await fetchWithTimeout(
-      `/api/dictionary?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(dictionaryLanguage.value)}`,
-      {}, FETCH_TIMEOUT_MS,
-    );
-    if (!response.ok) throw new Error(t.dictionaryError);
-    const data = await response.json();
-    renderDictionaryResult(query, data);
+    const langCodes = splitLanguageValue(dictionaryLanguage.value);
+    if (langCodes.length === 2) {
+      const [lang1, lang2] = langCodes;
+      const [node1, node2] = await Promise.all([
+        fetchDictionaryResultNode(query, lang1),
+        fetchDictionaryResultNode(query, lang2),
+      ]);
+      dictionaryResults.prepend(buildBilingualResultBlock(dictionaryLanguage, lang1, node1, lang2, node2));
+    } else {
+      dictionaryResults.prepend(await fetchDictionaryResultNode(query, langCodes[0]));
+    }
     dictionaryInput.select();
   } catch (err) {
     const line = document.createElement("p");
@@ -3567,12 +3820,15 @@ dictionaryForm.addEventListener("submit", async (event) => {
   }
 });
 
-// "Mots similaires" : les 50 mots les plus proches de l'expression saisie
-// dans la collection Qdrant "words" (tenant = langue du panneau), triés du
-// plus similaire au moins similaire, affichés sur une seule ligne séparés
-// par des virgules. Empilé en haut comme les résultats du dictionnaire.
-// Voir GET /api/similar_words (backend/app.py) + backend/qdrant_store.py.
-function renderSimilarWordsResult(query, words) {
+// "Mots similaires" / "Synonymes" : les mots les plus proches de
+// l'expression saisie dans la collection Qdrant "words" (tenant = langue
+// choisie), triés du plus similaire au moins similaire, affichés sur une
+// seule ligne séparés par des virgules. Empilé en haut comme les
+// résultats du dictionnaire. Voir GET /api/similar_words / GET
+// /api/synonyms (backend/app.py) + backend/qdrant_store.py. Renvoie le
+// nœud sans le rattacher à la page — même raison que
+// buildDictionaryResultNode() ci-dessus.
+function buildSimilarWordsResultNode(query, words) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
   block.className = "dictionary-result";
@@ -3600,7 +3856,7 @@ function renderSimilarWordsResult(query, words) {
       .join(", ");
     block.appendChild(line);
   }
-  dictionaryResults.prepend(block);
+  return block;
 }
 
 // #theme-precision est un <input type="text"> (voir index.html) : on lit
@@ -3631,6 +3887,19 @@ function readThemePrecision() {
   });
 })();
 
+// Interroge /api/similar_words ou /api/synonyms pour une langue donnée et
+// renvoie le nœud de résultat déjà construit — factorisé pour être appelé
+// une ou deux fois (bilingue) par "Thématique"/"Synonymes" ci-dessous.
+async function fetchSimilarWordsResultNode(query, lang, endpoint, timeoutMs, errorMessage) {
+  const prec = readThemePrecision();
+  let url = `/api/${endpoint}?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(lang)}`;
+  if (prec !== undefined) url += `&min_score=${prec}`;
+  const response = await fetchWithTimeout(url, {}, timeoutMs);
+  if (!response.ok) throw new Error(errorMessage);
+  const data = await response.json();
+  return buildSimilarWordsResultNode(query, (data && data.words) || []);
+}
+
 dictionarySimilarBtn.addEventListener("click", async () => {
   const query = dictionaryInput.value.trim();
   if (!query) return;
@@ -3640,16 +3909,21 @@ dictionarySimilarBtn.addEventListener("click", async () => {
     // Le bouton "Thématique" du Dictionnaire réutilise le seuil du champ
     // "Précision thématique" du formulaire de génération (min_score), à la
     // demande explicite de l'utilisateur — omis si le champ est vide.
-    const prec = readThemePrecision();
-    let url = `/api/similar_words?q=${encodeURIComponent(query)}`
-      + `&lang=${encodeURIComponent(dictionaryLanguage.value)}`;
-    if (prec !== undefined) url += `&min_score=${prec}`;
     // Timeout élargi : le back fait une expansion LLM du terme avant les
     // recherches Qdrant (voir SIMILAR_FETCH_TIMEOUT_MS).
-    const response = await fetchWithTimeout(url, {}, SIMILAR_FETCH_TIMEOUT_MS);
-    if (!response.ok) throw new Error(t.dictionarySimilarError);
-    const data = await response.json();
-    renderSimilarWordsResult(query, (data && data.words) || []);
+    const langCodes = splitLanguageValue(dictionaryLanguage.value);
+    if (langCodes.length === 2) {
+      const [lang1, lang2] = langCodes;
+      const [node1, node2] = await Promise.all([
+        fetchSimilarWordsResultNode(query, lang1, "similar_words", SIMILAR_FETCH_TIMEOUT_MS, t.dictionarySimilarError),
+        fetchSimilarWordsResultNode(query, lang2, "similar_words", SIMILAR_FETCH_TIMEOUT_MS, t.dictionarySimilarError),
+      ]);
+      dictionaryResults.prepend(buildBilingualResultBlock(dictionaryLanguage, lang1, node1, lang2, node2));
+    } else {
+      dictionaryResults.prepend(
+        await fetchSimilarWordsResultNode(query, langCodes[0], "similar_words", SIMILAR_FETCH_TIMEOUT_MS, t.dictionarySimilarError),
+      );
+    }
     dictionaryInput.select();
   } catch (err) {
     const line = document.createElement("p");
@@ -3661,7 +3935,7 @@ dictionarySimilarBtn.addEventListener("click", async () => {
   }
 });
 
-// "Synonymes" : même rendu que "Thématique" (renderSimilarWordsResult),
+// "Synonymes" : même rendu que "Thématique" (buildSimilarWordsResultNode),
 // mais une recherche Qdrant directe sur le mot/l'expression saisi(e),
 // SANS appel au LLM pour étendre la recherche — à la demande explicite
 // de l'utilisateur. Timeout générique (FETCH_TIMEOUT_MS), pas le timeout
@@ -3672,14 +3946,19 @@ dictionarySynonymsBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   dictionarySynonymsBtn.disabled = true;
   try {
-    const prec = readThemePrecision();
-    let url = `/api/synonyms?q=${encodeURIComponent(query)}`
-      + `&lang=${encodeURIComponent(dictionaryLanguage.value)}`;
-    if (prec !== undefined) url += `&min_score=${prec}`;
-    const response = await fetchWithTimeout(url, {}, FETCH_TIMEOUT_MS);
-    if (!response.ok) throw new Error(t.dictionarySynonymsError);
-    const data = await response.json();
-    renderSimilarWordsResult(query, (data && data.words) || []);
+    const langCodes = splitLanguageValue(dictionaryLanguage.value);
+    if (langCodes.length === 2) {
+      const [lang1, lang2] = langCodes;
+      const [node1, node2] = await Promise.all([
+        fetchSimilarWordsResultNode(query, lang1, "synonyms", FETCH_TIMEOUT_MS, t.dictionarySynonymsError),
+        fetchSimilarWordsResultNode(query, lang2, "synonyms", FETCH_TIMEOUT_MS, t.dictionarySynonymsError),
+      ]);
+      dictionaryResults.prepend(buildBilingualResultBlock(dictionaryLanguage, lang1, node1, lang2, node2));
+    } else {
+      dictionaryResults.prepend(
+        await fetchSimilarWordsResultNode(query, langCodes[0], "synonyms", FETCH_TIMEOUT_MS, t.dictionarySynonymsError),
+      );
+    }
     dictionaryInput.select();
   } catch (err) {
     const line = document.createElement("p");
@@ -3697,8 +3976,9 @@ dictionarySynonymsBtn.addEventListener("click", async () => {
 // best-effort côté back (pas de relance comme en génération de grille) —
 // re-cliquer suffit à retenter. Voir DEFINE_FETCH_TIMEOUT_MS ci-dessus
 // pour pourquoi ce bouton utilise un délai bien plus long que les deux
-// autres boutons de ce même formulaire.
-function renderDefineResult(query, definitions) {
+// autres boutons de ce même formulaire. Renvoie le nœud sans le rattacher
+// à la page — même raison que buildDictionaryResultNode() ci-dessus.
+function buildDefineResultNode(query, definitions) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
   block.className = "dictionary-result";
@@ -3723,7 +4003,21 @@ function renderDefineResult(query, definitions) {
     }
     block.appendChild(list);
   }
-  dictionaryResults.prepend(block);
+  return block;
+}
+
+// Interroge /api/dictionary/define pour une langue donnée et renvoie le
+// nœud déjà construit — factorisé pour être appelé une ou deux fois
+// (bilingue) par le handler ci-dessous.
+async function fetchDefineResultNode(query, lang) {
+  const t = I18N[uiLanguage];
+  const response = await fetchWithTimeout(
+    `/api/dictionary/define?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(lang)}`,
+    {}, DEFINE_FETCH_TIMEOUT_MS,
+  );
+  if (!response.ok) throw new Error(t.dictionaryDefineError);
+  const data = await response.json();
+  return buildDefineResultNode(query, (data && data.definitions) || []);
 }
 
 dictionaryDefineBtn.addEventListener("click", async () => {
@@ -3732,14 +4026,17 @@ dictionaryDefineBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   dictionaryDefineBtn.disabled = true;
   try {
-    const response = await fetchWithTimeout(
-      `/api/dictionary/define?q=${encodeURIComponent(query)}`
-      + `&lang=${encodeURIComponent(dictionaryLanguage.value)}`,
-      {}, DEFINE_FETCH_TIMEOUT_MS,
-    );
-    if (!response.ok) throw new Error(t.dictionaryDefineError);
-    const data = await response.json();
-    renderDefineResult(query, (data && data.definitions) || []);
+    const langCodes = splitLanguageValue(dictionaryLanguage.value);
+    if (langCodes.length === 2) {
+      const [lang1, lang2] = langCodes;
+      const [node1, node2] = await Promise.all([
+        fetchDefineResultNode(query, lang1),
+        fetchDefineResultNode(query, lang2),
+      ]);
+      dictionaryResults.prepend(buildBilingualResultBlock(dictionaryLanguage, lang1, node1, lang2, node2));
+    } else {
+      dictionaryResults.prepend(await fetchDefineResultNode(query, langCodes[0]));
+    }
     dictionaryInput.select();
   } catch (err) {
     const line = document.createElement("p");
@@ -3748,6 +4045,173 @@ dictionaryDefineBtn.addEventListener("click", async () => {
     dictionaryResults.prepend(line);
   } finally {
     dictionaryDefineBtn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Panneau "Paraphraseur", à la demande explicite de l'utilisateur : "Sur la
+// page principale, ajouter un outil Paraphraseur. Cet outil est similaire
+// au dictionnaire : un sélecteur de langue, un champ de saisie... un
+// bouton Paraphraser, un bouton effacer, un bouton Perplexity." Le bouton
+// "Paraphraser" demande au LLM 5 reformulations du texte saisi (backend/
+// clues.py's LLMClueGenerator.generate_paraphrases, GET /api/paraphrase) ;
+// même comportement bilingue 50/50 que le Dictionnaire ci-dessus, en
+// réutilisant directement currentBilingualLangs()/refreshBilingualOption()/
+// defaultToBilingualOption()/buildBilingualResultBlock()/
+// splitLanguageValue() — un seul mécanisme, jamais dupliqué.
+// ---------------------------------------------------------------------------
+function hideParaphrasePanel() {
+  paraphrasePanel.hidden = true;
+  syncRssPanelVisibility();
+}
+
+paraphraseBtn.addEventListener("click", () => {
+  if (paraphrasePanel.hidden) {
+    paraphrasePanel.hidden = false;
+    paraphraseLanguage.value = uiLanguage;
+    defaultToBilingualOption(paraphraseLanguage);
+    syncRssPanelVisibility();
+    paraphraseInput.focus();
+  } else {
+    hideParaphrasePanel();
+  }
+});
+
+paraphraseCloseBtn.addEventListener("click", hideParaphrasePanel);
+
+paraphraseClearBtn.addEventListener("click", () => {
+  paraphraseResults.replaceChildren();
+  paraphraseInput.value = "";
+  paraphraseInput.focus();
+});
+
+// Noms de langue "en <lang>"/"in <lang>" par langue de PHRASE, DISTINCTS
+// de PERPLEXITY_LANGUAGE_ADJECTIVES ci-dessus : "en français"/"in French"
+// utilise le nom de la langue lui-même (souvent masculin/par défaut, ou
+// invariable), pas l'adjectif accordé au genre d'un nom particulier
+// ("la palabra española"/"la parola tedesca") que la table ci-dessus
+// fournit — les deux divergent en espagnol ("español" vs. "española"),
+// italien ("tedesco" vs. "tedesca"), portugais ("alemão" vs. "alemã") et
+// allemand (adverbe non décliné "Deutsch" vs. l'adjectif décliné
+// "deutsche"). Français et anglais, eux, coïncident (les deux tables
+// leur donnent la même valeur) — pas de troisième jeu de valeurs need.
+const PERPLEXITY_LANGUAGE_NAMES = {
+  fr: { fr: "français", en: "anglais", de: "allemand", es: "espagnol", it: "italien", pt: "portugais" },
+  en: { fr: "French", en: "English", de: "German", es: "Spanish", it: "Italian", pt: "Portuguese" },
+  de: { fr: "Französisch", en: "Englisch", de: "Deutsch", es: "Spanisch", it: "Italienisch", pt: "Portugiesisch" },
+  es: { fr: "francés", en: "inglés", de: "alemán", es: "español", it: "italiano", pt: "portugués" },
+  it: { fr: "francese", en: "inglese", de: "tedesco", es: "spagnolo", it: "italiano", pt: "portoghese" },
+  pt: { fr: "francês", en: "inglês", de: "alemão", es: "espanhol", it: "italiano", pt: "português" },
+};
+
+function perplexityLanguageName(sentenceLang, targetLang) {
+  const table = PERPLEXITY_LANGUAGE_NAMES[sentenceLang] || PERPLEXITY_LANGUAGE_NAMES.fr;
+  return table[targetLang] || targetLang;
+}
+
+// "Donner 5 paraphrases en <lang> : <texte>", à la demande explicite de
+// l'utilisateur — même principe que PERPLEXITY_DEFINE_QUERY_TEMPLATES
+// ci-dessus (nom de langue combiné "<nom1>/<nom2>" quand deux langues
+// sont sélectionnées, phrase dans la langue de la première), mais avec
+// perplexityLanguageName() plutôt que perplexityLanguageAdjective() —
+// voir la note ci-dessus sur pourquoi les deux doivent rester distincts.
+const PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES = {
+  fr: (name, text) => `Donner 5 paraphrases en ${name} : ${text}`,
+  en: (name, text) => `Give 5 paraphrases in ${name}: ${text}`,
+  de: (name, text) => `Formuliere 5 Paraphrasen auf ${name}: ${text}`,
+  es: (name, text) => `Da 5 paráfrasis en ${name}: ${text}`,
+  it: (name, text) => `Dai 5 parafrasi in ${name}: ${text}`,
+  pt: (name, text) => `Dê 5 paráfrases em ${name}: ${text}`,
+};
+
+paraphrasePerplexityBtn.addEventListener("click", () => {
+  const text = paraphraseInput.value.trim();
+  if (!text) {
+    paraphraseInput.focus();
+    return;
+  }
+  const langCodes = splitLanguageValue(paraphraseLanguage.value);
+  const sentenceLang = langCodes[0];
+  const name = langCodes
+    .map((code) => perplexityLanguageName(sentenceLang, code))
+    .join("/");
+  const template =
+    PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES[sentenceLang] ||
+    PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES.fr;
+  const url = `https://www.perplexity.ai/search?q=${encodeURIComponent(template(name, text))}`;
+  window.open(url, "_blank", "noopener,noreferrer");
+});
+
+// 5 reformulations, une par ligne — même présentation que "Définir"
+// (.dictionary-define-list/.dictionary-define-line, réutilisées telles
+// quelles : une liste "une réponse par ligne" est une liste "une réponse
+// par ligne" quel que soit l'outil qui l'a produite). Renvoie le nœud
+// sans le rattacher à la page — même raison que buildDefineResultNode().
+function buildParaphraseResultNode(query, paraphrases) {
+  const t = I18N[uiLanguage];
+  const block = document.createElement("div");
+  block.className = "dictionary-result";
+
+  const heading = document.createElement("h3");
+  heading.textContent = `${t.paraphraseHeading} « ${query} »`;
+  block.appendChild(heading);
+
+  if (!paraphrases || !paraphrases.length) {
+    const empty = document.createElement("p");
+    empty.className = "dictionary-empty";
+    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
+    block.appendChild(empty);
+  } else {
+    const list = document.createElement("div");
+    list.className = "dictionary-define-list";
+    for (const p of paraphrases) {
+      const line = document.createElement("p");
+      line.className = "dictionary-define-line";
+      line.textContent = p;
+      list.appendChild(line);
+    }
+    block.appendChild(list);
+  }
+  return block;
+}
+
+async function fetchParaphraseResultNode(query, lang) {
+  const t = I18N[uiLanguage];
+  const response = await fetchWithTimeout(
+    `/api/paraphrase?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(lang)}`,
+    {}, DEFINE_FETCH_TIMEOUT_MS,
+  );
+  if (!response.ok) throw new Error(t.paraphraseError);
+  const data = await response.json();
+  return buildParaphraseResultNode(query, (data && data.paraphrases) || []);
+}
+
+paraphraseForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const query = paraphraseInput.value.trim();
+  if (!query) return;
+  const t = I18N[uiLanguage];
+  paraphraseGenerateBtn.disabled = true;
+  try {
+    const langCodes = splitLanguageValue(paraphraseLanguage.value);
+    if (langCodes.length === 2) {
+      const [lang1, lang2] = langCodes;
+      const [node1, node2] = await Promise.all([
+        fetchParaphraseResultNode(query, lang1),
+        fetchParaphraseResultNode(query, lang2),
+      ]);
+      paraphraseResults.prepend(buildBilingualResultBlock(paraphraseLanguage, lang1, node1, lang2, node2));
+    } else {
+      paraphraseResults.prepend(await fetchParaphraseResultNode(query, langCodes[0]));
+    }
+    paraphraseInput.select();
+  } catch (err) {
+    const line = document.createElement("p");
+    line.className = "dictionary-empty";
+    line.textContent = t.paraphraseError;
+    paraphraseResults.prepend(line);
+  } finally {
+    paraphraseGenerateBtn.disabled = false;
   }
 });
 
@@ -4430,6 +4894,11 @@ function syncPuzzleFromInteractive() {
     })),
     difficulty: interactiveDifficulty,
     language: interactiveLanguage,
+    // "" (falsy) for an ordinary monolingual session — currentBilingualLangs()
+    // already treats a bilingual_language identical to/absent from
+    // language as "no bilingual pair", exactly like a real generated
+    // puzzle does, so this needs no extra normalization here.
+    bilingual_language: interactiveBilingualLanguage || null,
   };
   userLetters = interactiveGrid.map((row) => row.map((ch) => (/[A-Z]/.test(ch) ? ch : "")));
   showSolution = false;
@@ -4822,6 +5291,33 @@ function enterInteractiveMode(state) {
   // _run_interactive_job/_run_interactive_resume_job both now include
   // them on job["result"] too, read here uniformly on every entry path.
   interactiveLanguage = state.language || interactiveLanguage;
+  // Same reasoning as interactiveLanguage/interactiveDifficulty just
+  // above, at the user's explicit request: "quand une grille bilingue
+  // est chargée, configurer les langues dans celles de la grille (idem
+  // en monolingue)." `state.bilingual_language` is only ever non-null on
+  // a genuinely bilingual session (backend/app.py's own is_bilingual
+  // check already normalizes it) — a monolingual entry always resets
+  // this back to "", never leaving a PREVIOUS session's own bilingual
+  // pair stuck on screen.
+  interactiveBilingualLanguage = state.bilingual_language || "";
+  // Reflect the same two values onto the top-of-page generation selectors
+  // themselves (#language/#bilingual-language), at the user's explicit
+  // request: "quand on charge une grille bilingue en édition, configurer
+  // les 2 langues dans les sélecteurs principaux en haut de page (idem en
+  // monolingue)." Until now, only the internal `interactiveLanguage`/
+  // `interactiveBilingualLanguage` variables (and, through them, `puzzle`
+  // — see syncPuzzleFromInteractive()) reflected the loaded grid's own
+  // language(s); the visible dropdowns kept showing whatever they were
+  // last left at, inconsistent with the rest of this same fix. A plain
+  // `.value` assignment (no synthetic "change" event) — this never
+  // touches `uiLanguage`/setUiLanguage() itself, since loading a grid's
+  // own language(s) is a different concern from switching the whole
+  // interface's language. For an ordinary monolingual grid, both
+  // selectors simply end up showing the same language, exactly as
+  // #bilingual-language's own "change" handler already forces for a
+  // fresh generation.
+  languageSelect.value = interactiveLanguage;
+  bilingualLanguageSelect.value = interactiveBilingualLanguage || interactiveLanguage;
   interactiveDifficulty = state.difficulty || interactiveDifficulty;
   // A resumed session's own result carries `definitions`/`title` (see
   // backend/app.py's _run_interactive_resume_job) — a fresh start's never
@@ -4923,6 +5419,19 @@ function enterInteractiveMode(state) {
   // assignment above, fixed for exactly this kind of use.
   dictionaryPanel.hidden = false;
   dictionaryLanguage.value = interactiveLanguage;
+  // Rebuild `puzzle` right now (normally only ever refreshed by
+  // renderInteractive(), itself only reached via setActiveDirection()
+  // further below) so defaultToBilingualOption()'s own currentBilingualLangs()
+  // check already sees THIS session's real language/bilingual_language
+  // pair instead of whatever puzzle a previous session (or none) left
+  // behind — a real, previously-reported bug: on a genuinely bilingual
+  // interactive session, the Dictionary's own combined-language option
+  // never appeared because this call used to run before puzzle was ever
+  // synced. setActiveDirection() below calls renderInteractive() again
+  // regardless, harmlessly recomputing the identical puzzle a second
+  // time (nothing else changes state in between).
+  syncPuzzleFromInteractive();
+  defaultToBilingualOption(dictionaryLanguage);
   syncRssPanelVisibility();
   setActiveDirection(activeDirection); // syncs the 4 direction buttons + renders
 }
@@ -5260,7 +5769,7 @@ interactiveNextBtn.addEventListener("click", async () => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               job_id: interactiveJobId,
-              words: interactiveSlots().map((s) => s.answer),
+              words: interactiveSlots().map((s) => ({ answer: s.answer, direction: s.direction })),
             }),
           }, FETCH_TIMEOUT_MS);
           if (vresp.ok) {
@@ -5388,9 +5897,16 @@ interactiveDefinitionInput.addEventListener("input", () => {
 // alone (without going through those two paths) isn't picked up; that
 // matches every other interactive-mode use of `interactiveLanguage`/
 // `interactiveDifficulty`, which are session-scoped the same way.
-function dictionaryDefineUrl(word) {
+function dictionaryDefineUrl(word, direction) {
+  // A down word on a genuinely bilingual interactive session is in the
+  // second language — see interactiveBilingualLanguage — everything else
+  // (a monolingual session, or an across word on a bilingual one) stays
+  // on interactiveLanguage, unchanged from before this parameter existed.
+  const lang = (direction === "down" && interactiveBilingualLanguage)
+    ? interactiveBilingualLanguage
+    : interactiveLanguage;
   let url = `/api/dictionary/define?q=${encodeURIComponent(word)}`
-    + `&lang=${encodeURIComponent(interactiveLanguage)}`;
+    + `&lang=${encodeURIComponent(lang)}`;
   if (interactiveTheme) url += `&theme=${encodeURIComponent(interactiveTheme)}`;
   return url;
 }
@@ -5406,7 +5922,7 @@ interactiveProposeBtn.addEventListener("click", async () => {
   setInteractiveMessage("");
   try {
     const resp = await fetchWithTimeout(
-      dictionaryDefineUrl(w.answer), {}, DEFINE_FETCH_TIMEOUT_MS,
+      dictionaryDefineUrl(w.answer, w.direction), {}, DEFINE_FETCH_TIMEOUT_MS,
     );
     if (!resp.ok) throw new Error(t.interactiveProposeError);
     const data = await resp.json();
@@ -5458,7 +5974,7 @@ interactiveVerifyBtn.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         job_id: interactiveJobId,
-        words: filled.map((s) => s.answer),
+        words: filled.map((s) => ({ answer: s.answer, direction: s.direction })),
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -5545,7 +6061,7 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           job_id: interactiveJobId,
-          words: pending.map((s) => s.answer),
+          words: pending.map((s) => ({ answer: s.answer, direction: s.direction })),
         }),
       }, FETCH_TIMEOUT_MS);
       if (resp.status === 404) {
@@ -5570,7 +6086,7 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
       setInteractiveMessage(t.interactiveDefinitionsWorking(done, targets.length));
       try {
         const resp = await fetchWithTimeout(
-          dictionaryDefineUrl(s.answer), {}, DEFINE_FETCH_TIMEOUT_MS,
+          dictionaryDefineUrl(s.answer, s.direction), {}, DEFINE_FETCH_TIMEOUT_MS,
         );
         const data = resp.ok ? await resp.json() : null;
         const first = ((data && data.definitions) || [])
@@ -5670,6 +6186,7 @@ interactiveSaveBtn.addEventListener("click", async () => {
         definitions,
         title: interactiveTitleInput.value.trim(),
         language: interactiveLanguage,
+        bilingual_language: interactiveBilingualLanguage || undefined,
         difficulty: interactiveDifficulty,
         theme: interactiveTheme || undefined,
         pseudo: userPseudo || undefined,
@@ -5791,10 +6308,16 @@ form.addEventListener("submit", async (event) => {
 
   if (mode === "interactive") {
     interactiveLanguage = language;
+    // Same "omit rather than send a no-op identical value" convention as
+    // the automatic-generation request just above — GenerateRequest
+    // (reused as-is by POST /api/interactive/start) already treats
+    // None/an identical value as "monolingual session".
+    interactiveBilingualLanguage = bilingualLanguage !== language ? bilingualLanguage : "";
     interactiveDifficulty = difficulty;
     interactiveTheme = theme;
     await runInteractive({
       language, width, height, difficulty,
+      bilingual_language: interactiveBilingualLanguage || undefined,
       black_enrichment_percent: blackEnrichmentPercent,
       force_letters_percent: forceLettersPercent,
       theme: theme || undefined,

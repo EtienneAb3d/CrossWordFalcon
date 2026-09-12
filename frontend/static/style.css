@@ -1371,6 +1371,92 @@ button:disabled {
   line-height: 1.4;
 }
 
+/* "Bilingue" : quand deux langues sont sélectionnées (grille bilingue
+   chargée, ou #language/#bilingual-language du formulaire différents),
+   chaque outil du Dictionnaire OU du Paraphraseur lance sa recherche
+   dans les deux langues et affiche les deux résultats côte à côte,
+   50/50, chacun titré par sa langue — à la demande explicite de
+   l'utilisateur. Partagé par les deux panneaux (script.js's
+   buildBilingualResultBlock()), jamais dupliqué. */
+.bilingual-result {
+  display: flex;
+  gap: 1rem;
+}
+
+.bilingual-col {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.bilingual-col + .bilingual-col {
+  border-left: 1px solid var(--border);
+  padding-left: 1rem;
+}
+
+.bilingual-lang-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Panneau "Paraphraseur" (#paraphrase-btn's click handler, script.js), à
+   la demande explicite de l'utilisateur — même carte transparente/bordée
+   que #dictionary juste au-dessus, membre du même groupe de panneaux
+   centraux basculants. Chaque reformulation empile son propre résultat. */
+#paraphrase {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+}
+
+#paraphrase-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 0.75rem;
+}
+
+#paraphrase-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0;
+  flex: 1;
+}
+
+#paraphrase-language {
+  font-size: 0.85rem;
+  padding: 0.15rem 0.3rem;
+}
+
+/* Champ de saisie volontairement plus large que #dictionary-input (14rem)
+   — à la demande explicite de l'utilisateur, "assez long pour une phrase
+   complète" plutôt qu'un seul mot/une courte expression. */
+#paraphrase-input {
+  width: 22rem;
+}
+
+/* Même traitement que #dictionary-perplexity-btn ci-dessus. */
+#paraphrase-perplexity-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+#paraphrase-perplexity-btn .external-link-icon {
+  display: block;
+}
+
+#paraphrase-results {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
 /* Panneau "Qdrant (admin)" (#qdrant-admin-btn's click handler, script.js) —
    visible uniquement en localhost. Même carte transparente/bordée que
    #dictionary / #library, membre du même groupe de panneaux centraux

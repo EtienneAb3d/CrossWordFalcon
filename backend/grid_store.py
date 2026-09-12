@@ -351,7 +351,8 @@ def _slugify_pseudo(pseudo):
 
 
 def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme,
-                    priority_words, seed, pseudo=None, resumed_from=None, origin=None):
+                    priority_words, seed, pseudo=None, resumed_from=None, origin=None,
+                    bilingual_language=None):
     """Autosaves (or updates) the in-progress state of one "Interactif"
     session. The very first call for a given `job_id` creates
     `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`; every later call
@@ -377,6 +378,18 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
     every later call for the same session, since by then the file's own
     name already matches the current `job_id` and the normal lookup above
     finds it directly.
+
+    `bilingual_language` (`None` by default — every pre-existing caller
+    unaffected) is the session's own second (vertical-words) language on
+    a genuinely bilingual "Interactif" grid — mirrors `save_grid_json`'s
+    own `bilingual` parameter, but under its own name here since a
+    GRID_WORK record is keyed by the same field name `backend/app.py`'s
+    own session/job state already uses (`job["interactive"]["bilingual_
+    language"]`), rather than `save_grid_json`'s `"bilingual"` (which a
+    library record derived from a bilingual GRID_STORE grid stores
+    instead — see `_library_record_to_interactive`, which translates
+    between the two names when opening a published bilingual grid for
+    editing).
 
     Carries everything POST /api/interactive/resume needs to rebuild the
     session from scratch without redoing any expensive or non-repeatable
@@ -438,6 +451,7 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
         "definitions": definitions,
         "title": title,
         "language": language,
+        "bilingual_language": bilingual_language,
         "difficulty": difficulty,
         "theme": theme,
         "priority_words": sorted(priority_words or ()),

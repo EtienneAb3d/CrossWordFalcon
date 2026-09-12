@@ -798,18 +798,33 @@ class InteractiveCandidatesRequest(BaseModel):
     cells: list[list[int]]
 
 
+class InteractiveVerifyWord(BaseModel):
+    """One word to check via POST /api/interactive/verify — carries its
+    own `direction` so a genuinely bilingual interactive session (see
+    _load_interactive_index's own `bilingual_language` parameter) checks
+    each word against the right language's dictionary. Reported directly
+    by the user: "Le bouton 'Vérifier' ne semble pas tenir compte du fait
+    que la grille est bilingue, et signale les mots de la seconde langue
+    comme ne faisant pas partie du dictionnaire" — the previous shape
+    (`words: list[str]`) had no way to say which direction a given answer
+    belonged to, so the endpoint always checked every word against
+    `.across` regardless."""
+    answer: str
+    direction: str = "across"
+
+
 class InteractiveVerifyRequest(BaseModel):
     """Body of POST /api/interactive/verify — the "Vérifier" button of the
     "Interactif" authoring mode, at the user's explicit request: check the
     WHOLE grid at once (not just the currently selected word, as this
     button used to) and report every complete word that is not a real
     dictionary word. `words` is every currently complete (fully filled)
-    slot's own answer string — whether a complete word also has a
+    slot's own {answer, direction} — whether a complete word also has a
     definition is resolved entirely client-side (interactiveDefs lives
     only in the browser), so the backend is only ever asked to validate
     dictionary membership, nothing else."""
     job_id: str
-    words: list[str]
+    words: list[InteractiveVerifyWord]
 
 
 class InteractiveTitleRequest(BaseModel):
@@ -847,6 +862,11 @@ class InteractiveSaveRequest(BaseModel):
     definitions: list[dict]
     title: str = ""
     language: str = "fr"
+    # The session's own second (vertical-words) language on a genuinely
+    # bilingual interactive grid — `None` (the default) for an ordinary
+    # monolingual one. Passed straight through to grid_store.save_grid_
+    # json's own `bilingual` parameter.
+    bilingual_language: Optional[str] = None
     difficulty: str = "easy"
     theme: Optional[str] = None
     pseudo: Optional[str] = None
@@ -996,6 +1016,32 @@ async def _wait_in_queue(queue, task, job, cancel_event, step_code):
 MAX_TURN_DURATION_S = 15 * 60
 
 
+def _is_populate_task(task):
+    """Whether `task` was started by Automation/Populate.py — identified
+    the same way LLMClueGenerator's own single-clue-at-a-time branch
+    already does (`req.source == "populate"`, see GenerateRequest.source
+    and Automation/Populate.py's own `_build_request()`). Always `False`
+    for a recompute task (`req=None`, see GenerationTask's own docstring)
+    and for the "Continuer" resume path — neither is ever started by
+    Populate.py."""
+    return task.req is not None and task.req.source == "populate"
+
+
+# Populate priority preemption, at the user's explicit request: "quand une
+# demande de génération arrive dans une des files d'attente (remplissage /
+# définition), mettre en pause la tâche Populate à la fin de l'étape en
+# cours (cycle de remplissage / génération d'une définition) pour donner
+# la priorité à la tâche dans la file d'attente. Ne reprendre la tâche
+# Populate que quand la file d'attente qui le concerne est vide." Distinct
+# from — and checked *before* — the generic MAX_TURN_DURATION_S fairness
+# rule below: a Populate task yields the very next time its own
+# `should_pause()` is checked (the next palier/word boundary, i.e. "the
+# end of the current step"), with no 15-minute grace period at all,
+# whenever at least one *other*, non-Populate task is anywhere in the same
+# queue — never for another Populate task (Automation/Populate.py only
+# ever runs one grid at a time, but this stays correct even if that ever
+# changed): Populate's own background bulk generation is never meant to
+# compete with a real user's own request, only with other Populate work.
 def _make_should_pause(queue, task):
     """Builds a fresh `should_pause` callable for one single "turn" of
     `task` at the front of `queue` — call this again (a new closure, a
@@ -1009,10 +1055,23 @@ def _make_should_pause(queue, task):
     (see QUEUE_STATUS_POLL_INTERVAL_S) for nothing in return. Passed
     straight through to generate_grid()/LLMClueGenerator.generate() as
     their own `should_pause` parameter — see GenerationPaused's own
-    docstring for what happens once it returns true."""
+    docstring for what happens once it returns true.
+
+    `task` re-entering the front of `queue` after being paused this way
+    re-checks the exact same condition immediately (no minimum turn
+    duration for this branch) — as long as a foreign task is still
+    present anywhere in `queue`, `task` keeps yielding to the back on its
+    very next checkpoint, effectively never accumulating more than one
+    checkpoint's worth of work at a time until the queue is genuinely
+    free of competing (non-Populate) work again."""
     turn_start = time.monotonic()
+    is_populate = _is_populate_task(task)
 
     def should_pause():
+        if is_populate and any(
+            other is not task and not _is_populate_task(other) for other in queue
+        ):
+            return True
         return time.monotonic() - turn_start >= MAX_TURN_DURATION_S and len(queue) > 1
 
     return should_pause
@@ -1629,6 +1688,41 @@ async def dictionary_define(q: str, lang: str = "fr", theme: str = ""):
             detail={"code": "define_unavailable", "message": str(exc)},
         )
     return {"query": text, "lang": lang, "definitions": definitions}
+
+
+# "Paraphraseur" panel, at the user's explicit request — mirrors "Définir"
+# above (fixed count, a single best-effort LLM call, no difficulty
+# selector of its own since this panel has none either).
+PARAPHRASE_COUNT = 5
+PARAPHRASE_TIMEOUT_S = 90.0
+
+
+@app.get("/api/paraphrase")
+async def paraphrase(q: str, lang: str = "fr"):
+    """"Paraphraser" bouton du panneau "Paraphraseur" (voir frontend/
+    static/script.js), à la demande explicite de l'utilisateur : demande
+    au LLM PARAPHRASE_COUNT (5) reformulations indépendantes du texte
+    saisi (backend/clues.py, LLMClueGenerator.generate_paraphrases — un
+    seul appel best-effort, sans ancrage dictionnaire/exemples, sans la
+    boucle de relance par mot d'une génération de grille). Un
+    ClueGenerationError (LLM injoignable) devient un 503 propre."""
+    if lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
+    text = q.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="texte vide")
+    try:
+        paraphrases = await asyncio.to_thread(
+            clue_generator.generate_paraphrases, text, lang, PARAPHRASE_COUNT,
+            timeout=PARAPHRASE_TIMEOUT_S,
+        )
+    except ClueGenerationError as exc:
+        logger.warning("paraphrase unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "paraphrase_unavailable", "message": str(exc)},
+        )
+    return {"query": text, "lang": lang, "paraphrases": paraphrases}
 
 
 def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
@@ -3092,17 +3186,30 @@ async def _run_generate_job(job_id, req, resume_state=None):
         logger.exception("[%s] unhandled error during generation", short_id)
 
 
-async def _load_interactive_index(language, difficulty):
+async def _load_interactive_index(language, difficulty, bilingual_language=None):
     """Loads the wordlist/frequency index for one language/difficulty and
     wraps it as the DualIndex every interactive-mode helper
     (interactive_place_word, interactive_slot_candidates, _interactive_
-    fill_diagnostics...) expects — interactive mode is always
-    monolingual, so `.across`/`.down` end up the identical object.
+    fill_diagnostics, interactive_clean_impossible_zones, interactive_
+    minimize_black_cells...) expects. For an ordinary monolingual session
+    (`bilingual_language` `None` or identical to `language`), `.across`/
+    `.down` end up the identical object, exactly as before this parameter
+    existed. When a genuinely different `bilingual_language` is given, a
+    second wordlist/index is loaded for it and used as `.down` — the same
+    DualIndex convention crossword_gen.generate_grid() already uses for a
+    bilingual grid (see its own `bilingual_wordlist_path`) — at the user's
+    explicit request: "quand une grille bilingue est chargée, configurer
+    les langues dans celles de la grille (idem en monolingue)." Every one
+    of the interactive-mode helpers above already resolves the right
+    dictionary per direction via `.for_cells()`/`.for_direction()`, never
+    `index[length]` directly, so this is the only change needed to make
+    the whole solving/checking pipeline bilingual-aware.
+
     Shared by `_run_interactive_job` (fresh start) and `_run_interactive_
-    resume_job` (resume), factored out once the latter needed the exact
-    same loading step. Returns `(index, known_words)` — `known_words` is
-    the set of every word actually in this lexicon, used to filter a
-    theme/saved `priority_words` list down to real entries."""
+    resume_job` (resume). Returns `(index, known_words)` — `known_words`
+    is the union of every word actually in either lexicon loaded (just
+    the one lexicon's own words for a monolingual session), used to
+    filter a theme/saved `priority_words` list down to real entries."""
     by_length, accents, _canon, frequencies = await asyncio.to_thread(
         load_wordlist,
         str(WORDLISTS[language]),
@@ -3111,7 +3218,18 @@ async def _load_interactive_index(language, difficulty):
         exclude_proper_nouns=(difficulty == "easy"),
     )
     idx = build_index(by_length, frequencies)
-    return DualIndex(idx, idx), set(accents)
+    is_bilingual = bool(bilingual_language) and bilingual_language != language
+    if not is_bilingual:
+        return DualIndex(idx, idx), set(accents)
+    by_length_down, accents_down, _canon_down, frequencies_down = await asyncio.to_thread(
+        load_wordlist,
+        str(WORDLISTS[bilingual_language]),
+        DIFFICULTY_PRESETS.get(difficulty),
+        require_gloss=(difficulty == "easy"),
+        exclude_proper_nouns=(difficulty == "easy"),
+    )
+    idx_down = build_index(by_length_down, frequencies_down)
+    return DualIndex(idx, idx_down), set(accents) | set(accents_down)
 
 
 async def _run_interactive_job(job_id, req):
@@ -3143,11 +3261,26 @@ async def _run_interactive_job(job_id, req):
 
         progress("interactive_building")
 
-        index, known = await _load_interactive_index(req.language, req.difficulty)
+        # `None`/identical-to-`language` degrades to an ordinary
+        # monolingual session, exactly like GenerateRequest.bilingual_
+        # language already does for the automatic generator (see
+        # _validate_generate_request) — this field is validated the same
+        # way in interactive_start before this job is ever started.
+        bilingual_language = req.bilingual_language
+        is_bilingual = bool(bilingual_language) and bilingual_language != req.language
+        index, known = await _load_interactive_index(
+            req.language, req.difficulty, bilingual_language,
+        )
 
         # Same MOT-form normalization generate_grid applies to its own
         # priority_words: uppercase, keep only words actually in the loaded
-        # lexicon. Always a plain frozenset here (never bilingual).
+        # lexicon (either language, on a bilingual session). Always a
+        # plain frozenset here — Filler/_priority_words_for already treat
+        # a plain frozenset as applying uniformly to both directions (see
+        # crossword_gen.py's own `_priority_words_for`), which is an
+        # accepted simplification for interactive mode: unlike the
+        # automatic generator, a themed interactive session never builds a
+        # separate per-language glossary.
         priority_words = frozenset(
             u for w in (theme_priority_words or ())
             if (u := str(w).upper()) in known
@@ -3157,7 +3290,7 @@ async def _run_interactive_job(job_id, req):
         rows, cols = req.height, req.width
         available_lengths = DualSet(
             across={L for L, d in index.across.items() if len(d["words"]) >= PREFILL_MIN_WORD_COUNT},
-            down={L for L, d in index.across.items() if len(d["words"]) >= PREFILL_MIN_WORD_COUNT},
+            down={L for L, d in index.down.items() if len(d["words"]) >= PREFILL_MIN_WORD_COUNT},
         )
         grid = await asyncio.to_thread(
             make_pattern, rows, cols, 0.0, rng,
@@ -3183,6 +3316,11 @@ async def _run_interactive_job(job_id, req):
         }
         job["interactive"] = {
             "language": req.language,
+            # None for an ordinary monolingual session — see is_bilingual
+            # above. Mirrored onto job["result"] below too, since pollJob()
+            # only ever returns that one, for the same reason "theme"/
+            # "language" already are (see enterInteractiveMode()).
+            "bilingual_language": bilingual_language if is_bilingual else None,
             "difficulty": req.difficulty,
             "width": req.width,
             "height": req.height,
@@ -3208,14 +3346,16 @@ async def _run_interactive_job(job_id, req):
             # "Thématique" field on every entry path uniformly).
             "theme": theme or None,
             # Same reasoning as "theme" above: job["interactive"] already
-            # carries language/difficulty, but pollJob() only ever returns
-            # job["result"] to the frontend — mirrored here so
-            # enterInteractiveMode() can keep interactiveLanguage/
-            # interactiveDifficulty correct on every entry path (a real
-            # bug otherwise: "Publier"/"Sauvegarder" send whatever those
-            # two module-level `let`s last held, which used to only ever
-            # be set by the generation form's own submit handler).
+            # carries language/difficulty/bilingual_language, but pollJob()
+            # only ever returns job["result"] to the frontend — mirrored
+            # here so enterInteractiveMode() can keep interactiveLanguage/
+            # interactiveDifficulty/interactiveBilingualLanguage correct on
+            # every entry path (a real bug otherwise: "Publier"/
+            # "Sauvegarder" send whatever those module-level `let`s last
+            # held, which used to only ever be set by the generation
+            # form's own submit handler).
             "language": req.language,
+            "bilingual_language": job["interactive"]["bilingual_language"],
             "difficulty": req.difficulty,
         }
         progress("done")
@@ -3526,6 +3666,13 @@ async def interactive_start(req: GenerateRequest):
     than via _validate_generate_request."""
     if req.language not in WORDLISTS or not WORDLISTS[req.language].exists():
         raise HTTPException(status_code=400, detail="langue inconnue ou dictionnaire absent")
+    # Same bilingual validation as _validate_generate_request — only when a
+    # real bilingual session is requested (given AND different from
+    # `language`); `None`/identical degrades to monolingual, no further
+    # check needed.
+    if req.bilingual_language is not None and req.bilingual_language != req.language:
+        if req.bilingual_language not in WORDLISTS or not WORDLISTS[req.bilingual_language].exists():
+            raise HTTPException(status_code=400, detail="langue bilingue inconnue ou dictionnaire absent")
     if req.difficulty not in DIFFICULTY_PRESETS:
         raise HTTPException(status_code=400, detail="difficulté inconnue")
     job_id = _new_job()
@@ -3637,28 +3784,37 @@ async def interactive_candidates(req: InteractiveCandidatesRequest):
 async def interactive_verify(req: InteractiveVerifyRequest):
     """"Vérifier" button: check every currently complete word of the whole
     grid against the real dictionary in one pass — a plain, per-length set
-    lookup against the same monolingual index this session's other
-    endpoints already use (interactive mode never builds a bilingual
-    session, so `.across`/`.down` are always the identical index). Returns
-    the subset of `req.words` that aren't real dictionary words; the
-    frontend already knows each complete word's own missing-definition
-    status locally, so that half of the check never needs a round trip at
-    all."""
+    lookup, resolved per word against its own direction's dictionary
+    (`sess["index"].for_direction(word.direction)`) so a genuinely
+    bilingual session (see `_load_interactive_index`'s own `bilingual_
+    language`) checks a down word against the second language's own
+    lexicon instead of always the primary one — for an ordinary
+    monolingual session `.across`/`.down` are still the identical index,
+    so this is a no-op there. Returns the subset of `req.words`' own
+    answer strings that aren't real dictionary words; the frontend already
+    knows each complete word's own missing-definition status locally, so
+    that half of the check never needs a round trip at all. Note: a word
+    whose exact spelling happens to be valid in one direction but not the
+    other (a rare cross-language coincidence) is still only ever reported
+    back as a bare answer string, matching by content on the frontend —
+    an accepted, disclosed simplification, not a full per-slot round
+    trip."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
 
     def _check():
-        idx = sess["index"].across
         invalid = []
         seen = set()
-        for word in req.words:
-            if word in seen:
+        for w in req.words:
+            key = (w.direction, w.answer)
+            if key in seen:
                 continue
-            seen.add(word)
-            entry = idx.get(len(word))
-            if not entry or word not in entry["words"]:
-                invalid.append(word)
+            seen.add(key)
+            idx = sess["index"].for_direction(w.direction)
+            entry = idx.get(len(w.answer))
+            if not entry or w.answer not in entry["words"]:
+                invalid.append(w.answer)
         return invalid
 
     invalid_words = await asyncio.to_thread(_check)
@@ -3729,11 +3885,17 @@ async def interactive_save(req: InteractiveSaveRequest):
         (d["row"], d["col"], d["direction"]): (d.get("clue") or "")
         for d in req.definitions
     }
+    # A down word on a genuinely bilingual grid is in the second language,
+    # mirroring crossword_gen.generate_grid()'s own per-word `language`
+    # (see its own docstring) — an ordinary monolingual grid (bilingual_
+    # language None/identical to language) leaves every word on the
+    # primary language, unchanged from before this field existed.
+    is_bilingual = bool(req.bilingual_language) and req.bilingual_language != req.language
     for w in words:
         w["clue"] = clue_by_key.get((w["row"], w["col"], w["direction"]), "")
         w.setdefault("accented", w["answer"])
         w.setdefault("canonical", w["answer"])
-        w.setdefault("language", req.language)
+        w["language"] = req.bilingual_language if (is_bilingual and w["direction"] == "down") else req.language
     solution = build_letters_grid(rows, cols, slots, assignment)
     n_black = sum(c == "#" for row in bw for c in row)
     result = {
@@ -3746,7 +3908,7 @@ async def interactive_save(req: InteractiveSaveRequest):
         "black_count": n_black,
         "black_ratio": n_black / (rows * cols) if rows and cols else 0,
         "language": req.language,
-        "bilingual_language": None,
+        "bilingual_language": req.bilingual_language if is_bilingual else None,
         "generation_duration_seconds": 0,
         "optimization_duration_seconds": 0,
         "clues_duration_seconds": 0,
@@ -3773,8 +3935,8 @@ async def interactive_save(req: InteractiveSaveRequest):
     meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
     grid_id = await asyncio.to_thread(
         save_grid_json, result, req.language, req.difficulty, "interactive",
-        req.title, None, pseudo, (req.theme or "").strip() or None, True,
-        meta.get("origin"),
+        req.title, req.bilingual_language if is_bilingual else None, pseudo,
+        (req.theme or "").strip() or None, True, meta.get("origin"),
     )
     # Also refresh this session's own GRID_WORK snapshot to the final,
     # published state (at the user's explicit request: "Au moment de
@@ -3797,6 +3959,7 @@ async def interactive_save(req: InteractiveSaveRequest):
                 meta.get("theme") or ((req.theme or "").strip() or None),
                 sess["priority_words"], sess.get("seed", 0), pseudo,
                 sess.get("resumed_from"), meta.get("origin"),
+                meta.get("bilingual_language"),
             )
         except Exception:
             logger.warning("interactive save: GRID_WORK snapshot skipped", exc_info=True)
@@ -3817,10 +3980,10 @@ async def interactive_save(req: InteractiveSaveRequest):
 @app.post("/api/interactive/save_work")
 async def interactive_save_work(req: InteractiveSaveWorkRequest):
     """Autosave fired by the frontend after every "Suivant"/"Précédent"
-    click — see InteractiveSaveWorkRequest. `language`/`difficulty`/
-    `theme`/`origin` are read back from `JOBS[req.job_id]["interactive"]`
-    (set once at session start/resume) rather than trusted from the
-    request body."""
+    click — see InteractiveSaveWorkRequest. `language`/`bilingual_
+    language`/`difficulty`/`theme`/`origin` are read back from
+    `JOBS[req.job_id]["interactive"]` (set once at session start/resume)
+    rather than trusted from the request body."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
@@ -3832,6 +3995,7 @@ async def interactive_save_work(req: InteractiveSaveWorkRequest):
         meta.get("language", "fr"), meta.get("difficulty", "easy"), meta.get("theme"),
         sess["priority_words"], sess.get("seed", 0), pseudo,
         sess.get("resumed_from"), meta.get("origin"),
+        meta.get("bilingual_language"),
     )
     return {"work_id": work_id}
 
@@ -3894,6 +4058,17 @@ async def _run_interactive_resume_job(job_id, record):
     try:
         language = record.get("language", "fr")
         difficulty = record.get("difficulty", "easy")
+        # See _load_interactive_index's own `bilingual_language` parameter.
+        # Never fails the whole resume over a stale/unknown value (a
+        # dictionary retired since this record was saved, say) — it just
+        # degrades to a monolingual session in that case, the same
+        # tolerance _iter_stored_grids/_library_page already extend to a
+        # bilingual grid's own second language elsewhere in this file.
+        bilingual_language = record.get("bilingual_language")
+        if bilingual_language and (
+            bilingual_language not in WORDLISTS or not WORDLISTS[bilingual_language].exists()
+        ):
+            bilingual_language = None
         if language not in WORDLISTS or not WORDLISTS[language].exists():
             job["status"] = "error"
             job["error_code"] = "internal_error"
@@ -3901,7 +4076,7 @@ async def _run_interactive_resume_job(job_id, record):
             return
 
         progress("interactive_building")
-        index, known = await _load_interactive_index(language, difficulty)
+        index, known = await _load_interactive_index(language, difficulty, bilingual_language)
         priority_words = frozenset(
             u for w in (record.get("priority_words") or ())
             if (u := str(w).upper()) in known
@@ -3928,6 +4103,7 @@ async def _run_interactive_resume_job(job_id, record):
         }
         job["interactive"] = {
             "language": language,
+            "bilingual_language": bilingual_language,
             "difficulty": difficulty,
             "width": cols,
             "height": rows,
@@ -3974,11 +4150,13 @@ async def _run_interactive_resume_job(job_id, record):
             "theme": record.get("theme"),
             # Same reasoning as "theme" above, and as the fresh-start
             # path's own job["result"] in _run_interactive_job: pollJob()
-            # only ever returns job["result"], so language/difficulty
-            # (already on job["interactive"]) need to be mirrored here too
-            # for enterInteractiveMode() to keep interactiveLanguage/
-            # interactiveDifficulty correct on this entry path as well.
+            # only ever returns job["result"], so language/difficulty/
+            # bilingual_language (already on job["interactive"]) need to be
+            # mirrored here too for enterInteractiveMode() to keep
+            # interactiveLanguage/interactiveDifficulty/
+            # interactiveBilingualLanguage correct on this entry path too.
             "language": language,
+            "bilingual_language": bilingual_language,
             "difficulty": difficulty,
         }
         progress("done")
@@ -4043,6 +4221,14 @@ def _library_record_to_interactive(record):
     ]
     return {
         "language": record.get("language", "fr"),
+        # The library record's own second (vertical-words) language field
+        # is "bilingual" (see grid_store.save_grid_json), never "bilingual_
+        # language" — translated to the latter key here so _run_
+        # interactive_resume_job can read every source (a real GRID_WORK
+        # record, or this library-shaped dict) the same generic way, at
+        # the user's explicit request: "quand une grille bilingue est
+        # chargée, configurer les langues dans celles de la grille."
+        "bilingual_language": record.get("bilingual"),
         "difficulty": record.get("difficulty", "easy"),
         "grid": grid,
         "definitions": definitions,

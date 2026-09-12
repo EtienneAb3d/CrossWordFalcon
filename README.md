@@ -263,6 +263,23 @@ looking words up in the chosen language:
   of that isn't set up, the button just shows a short "unavailable"
   message and everything else keeps working.
 
+If you're playing a bilingual grid (or you've picked two different
+languages in the generation form), the Dictionary's own language selector
+also offers a combined "**<language 1>/<language 2>**" option, selected
+by default in that case — pick it and every button above searches both
+languages at once, showing the two results side by side.
+
+### Paraphraser
+
+Right next to "Dictionnaire" / "Dictionary" is a **"Paraphraseur" /
+"Paraphraser"** button: type a sentence, pick a language, and click
+"Paraphraser" / "Paraphrase" to get 5 alternative ways to say the same
+thing. Just like the Dictionary, a bilingual grid (or two different
+languages picked in the generation form) adds a combined language option
+and shows the 5 paraphrases for each language side by side. A
+"Perplexity" button next to it opens a ready-made paraphrase request for
+your text on [Perplexity](https://www.perplexity.ai) in a new tab.
+
 ### Chatting with David FALCON
 
 A small chat panel, open by default in the bottom-right corner of the

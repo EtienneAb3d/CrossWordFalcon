@@ -178,6 +178,13 @@
         <button type="button" id="recompute-btn" data-i18n="recomputeBtn" hidden>Recalculer</button>
         <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
         <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
+        <!-- "Paraphraseur" : demande au LLM 5 reformulations du texte saisi
+             (voir backend/clues.py, LLMClueGenerator.generate_paraphrases) —
+             à la demande explicite de l'utilisateur, placé juste à côté de
+             "Dictionnaire". Même panneau bilingue/50-50 que le Dictionnaire
+             (voir refreshBilingualOption()/buildBilingualResultBlock() dans
+             script.js). -->
+        <button type="button" id="paraphrase-btn" data-i18n="paraphraseBtn">Paraphraseur</button>
         <!-- "Créations" : liste les sessions "Interactif" en cours sauvegardées
              automatiquement dans GRID_WORK/ (voir plus bas et backend/
              grid_store.py) — à la demande explicite de l'utilisateur. -->
@@ -408,6 +415,53 @@
                 data-i18n-aria="dictionaryCloseBtn">✕</button>
       </div>
       <div id="dictionary-results"></div>
+    </section>
+
+    <!-- Panneau "Paraphraseur" : demande au LLM 5 reformulations du texte
+         saisi (backend/clues.py's LLMClueGenerator.generate_paraphrases),
+         à la demande explicite de l'utilisateur — même structure que
+         #dictionary juste au-dessus (sélecteur de langue, éventuellement
+         complété d'une paire "<lang1>/<lang2>", champ de saisie, bouton
+         d'action, Effacer, Perplexity). Même groupe basculant que
+         #library / #dictionary / #attempt-preview / #result. -->
+    <section id="paraphrase" hidden>
+      <div id="paraphrase-header">
+        <form id="paraphrase-form">
+          <select id="paraphrase-language" data-i18n-aria="paraphraseLanguageLabel">
+            <option value="fr">Français</option>
+            <option value="en">English</option>
+            <option value="de">Deutsch</option>
+            <option value="es">Español</option>
+            <option value="it">Italiano</option>
+            <option value="pt">Português</option>
+          </select>
+          <input type="text" id="paraphrase-input" autocomplete="off"
+                 data-i18n-placeholder="paraphraseInputPlaceholder">
+          <button type="submit" id="paraphrase-generate-btn"
+                  data-i18n="paraphraseGenerateBtn">Paraphraser</button>
+          <button type="button" id="paraphrase-clear-btn" class="nav-btn"
+                  data-i18n="paraphraseClearBtn">Effacer</button>
+          <!-- Même icône "lien externe" que #dictionary-perplexity-btn,
+               "Perplexity" non traduit (nom propre du service) — voir sa
+               propre note plus haut dans ce fichier. -->
+          <button type="button" id="paraphrase-perplexity-btn" class="nav-btn"
+                  data-i18n-aria="paraphrasePerplexityTitle"
+                  data-i18n-title="paraphrasePerplexityTitle">Perplexity
+            <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                 aria-hidden="true" focusable="false">
+              <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                    fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M14 4h6v6M20 4l-9 9"
+                    fill="none" stroke="currentColor" stroke-width="1.8"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </form>
+        <button type="button" id="paraphrase-close-btn" class="nav-btn"
+                data-i18n-aria="paraphraseCloseBtn">✕</button>
+      </div>
+      <div id="paraphrase-results"></div>
     </section>
 
     <!-- Panneau "Qdrant (admin)" : état lecture seule de la base vectorielle

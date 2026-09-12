@@ -2996,3 +2996,127 @@ end through the real running API (interactive start/step/save,
   balance check; an HTML tag-balance check) and via the real backend
   job-status shape (`clues_progress`/`new_clue` fields reaching the
   polled job dict correctly), not a live screenshot.
+
+- **Bilingual Dictionary/Paraphraseur lookups**, at the user's explicit
+  request: "quand deux langues sont sélectionnées, ajouter
+  '<lang1>/<lang2>' dans le sélecteur de langue... chaque outil est alors
+  lancé dans chacune des deux langues, et les résultats affichés dans un
+  tableau 50/50 avec la langue affichée en titre." "Two languages
+  selected" means either the currently loaded puzzle is bilingual
+  (`puzzle.language`/`puzzle.bilingual_language`) or, absent a loaded
+  puzzle, the generation form's own `#language`/`#bilingual-language`
+  selectors currently differ (`script.js`'s `currentBilingualLangs()`,
+  shared by both panels — the single source of truth for "how many
+  languages are configured right now", so the two panels can never
+  disagree). `refreshBilingualOption(selectEl)` adds/updates/removes a
+  synthetic `<option value="lang1/lang2">` (marked `data-bilingual-
+  combo`) on `#dictionary-language`/`#paraphrase-language` accordingly,
+  preserving whatever was already selected when it's still valid.
+  `defaultToBilingualOption(selectEl)` — used at every "fresh state"
+  entry point (opening a panel, a puzzle loading, a language change) —
+  additionally forces the combo to become the *selected* value whenever
+  one exists, at the user's own explicit follow-up request ("si bilingue,
+  sélectionner par défaut la paire de langues"); the plain refresh (no
+  forcing) is used only from the grid-hover auto-follow function
+  (`updateDictionaryLanguageForDirection`), so hovering a grid word can
+  never silently override a combo the player is already looking at.
+
+  When the selector's value contains a `/` (`splitLanguageValue()`),
+  every tool (Dictionary's Chercher/Thématique/Synonymes/Définir,
+  Paraphraseur's Paraphraser) fires its API call once per language
+  (`Promise.all`) and combines the two already-built result nodes into
+  one `.bilingual-result` block (`buildBilingualResultBlock()`, shared by
+  both panels) — a plain flex row of two `.bilingual-col` children
+  (`flex: 1 1 0; min-width: 0`, the same shrink-to-wrap fix already
+  established for `#hover-definition`), the second bordered on its left
+  edge (`border-left: 1px solid var(--border)`) as the visual divider
+  between the two 50/50 halves, each headed by a `.bilingual-lang-title`
+  (`font-weight: 700; color: var(--accent)` — an identifying label, the
+  same treatment already used for `.attempt-preview-process`) reading the
+  native language name straight off the selector's own base `<option>`
+  text (`nativeLanguageLabel()` — these six options are never translated
+  by `uiLanguage`, so the label is stable regardless of UI language).
+  Every existing single-language render function was split into a
+  `buildXResultNode()` (returns the node, never touches the page) and a
+  thin fetch wrapper, so the exact same node-building code feeds either a
+  lone `dictionaryResults.prepend(node)` or one half of a bilingual block
+  — no visual difference between a monolingual and a bilingual "half".
+
+  A single Perplexity button also composes a bilingual query, at the
+  user's explicit request ("Envoyer à Perplexity une requête avec
+  également <lang1>/<lang2>") — no new markup, the phrase is built in the
+  *first* selected language's own grammar (matching "adapter la requête
+  dans la première langue sélectionnée" for the Paraphraseur's own
+  Perplexity button) with the two language names joined by `/`. Two
+  distinct lookup tables were needed, not one: `PERPLEXITY_LANGUAGE_
+  ADJECTIVES` (a declined adjective agreeing with a specific noun's own
+  gender — "le mot français", "la palabra española", "das deutsche
+  Wort" — used by the Dictionary's "Définir le mot X" query) and
+  `PERPLEXITY_LANGUAGE_NAMES` (the language's own plain name, for a
+  prepositional "in/en/auf X" phrase — used by the Paraphraseur's "en X"
+  query) genuinely diverge in Spanish ("español" vs. "española"), Italian
+  ("tedesco" vs. "tedesca"), Portuguese ("alemão" vs. "alemã") and German
+  (the undeclined adverb "Deutsch" vs. the weak-declined adjective
+  "deutsche") — reusing one table for both would have produced incorrect
+  grammar in 4 of the 6 languages the moment a query needed the *other*
+  construction. French and English happen to coincide across both tables
+  (no third set of values needed for them).
+
+  **Paraphraseur panel** (`#paraphrase`, `#paraphrase-btn` right next to
+  `#dictionary-btn` in `#form-actions`, at the user's own explicit
+  placement request), at the user's explicit request — a full mirror of
+  `#dictionary`'s own box/header/form/results styling (same transparent
+  bordered card, same `#xxx-header`/`#xxx-form`/`#xxx-results` shape),
+  reusing `.dictionary-result`/`.dictionary-define-list`/`.dictionary-
+  define-line`/`.dictionary-empty` outright for its own 5-paraphrase
+  results (a "one answer per line" list is a "one answer per line" list
+  regardless of which tool produced it — no `.paraphrase-*` result
+  classes were introduced). The one genuinely new sizing choice:
+  `#paraphrase-input` is `22rem` (vs. `#dictionary-input`'s `14rem`), at
+  the user's own explicit request for a field "assez long pour une phrase
+  complète" rather than a single word/short expression.
+
+  Verified without a real browser (same tooling limitation noted
+  throughout this file): a real JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) on `script.js`/`i18n.js`; an
+  HTML tag-balance check (`<section>`/`<div>`/`<form>`/`<button>` open/
+  close counts) and a CSS brace-balance check on `index.html`/`style.css`;
+  a real `LLMClueGenerator.generate_paraphrases()` call (a mocked `_call`)
+  confirming the dedup/count-cap logic; a real, non-mocked FastAPI
+  `TestClient` round trip through `GET /api/paraphrase` (200 with real
+  paraphrases, 400 on an empty/unknown-language query, 503 mapped from a
+  `ClueGenerationError`); and a Python port of both Perplexity-query
+  lookup tables confirming every one of the 6 monolingual phrasings and 4
+  sample bilingual combinations reads as natural, grammatically correct
+  text in its own sentence language. **Not yet visually confirmed in an
+  actual browser** — same tooling limitation noted throughout this file.
+
+- **The grid must never intercept a keystroke meant for text selected/
+  focused elsewhere on the page**, at the user's explicit request: "Quand
+  un texte est sélectionné dans la page, ou que le focus est sur le champ
+  de saisie d'un outil (Dictionnaire, Paraphraseur, ChatBot, etc) la
+  grille ne doit pas intercepter les touches du clavier (empêche de faire
+  un copier/coller entre les outils)." The focused-input half of this was
+  already covered by the pre-existing `isTextInputFocused()` (guarding
+  `handleKeydown`/`updateHoverForModifierKey`/`toggleDirectionOnCtrl`, see
+  their own earlier entries in this file) — the real gap was a plain text
+  *selection* with no focused input at all: selecting some Dictionnaire/
+  Paraphraseur/ChatBot result text (a `<div>`/`<span>`, never an
+  `<input>`) never moves `document.activeElement`, so `isTextInputFocused()`
+  alone still returned `false`; pressing Ctrl+C to copy that selection hit
+  `handleKeydown`'s own letter-typing branch (`"c"` matches `/[a-zA-Z]/`),
+  writing "C" into the currently-selected grid cell and blocking the
+  browser's real copy outright.
+
+  A new `hasActiveTextSelection()` (`window.getSelection()`, non-collapsed,
+  non-empty `toString()`) and a combining `shouldGridIgnoreKeydown()`
+  (`isTextInputFocused() || hasActiveTextSelection()`) replace every one of
+  the three pre-existing `if (isTextInputFocused()) return;` guards — same
+  three call sites, same early-return shape, just a wider condition. No new
+  UI/visual treatment: purely a keyboard-routing fix, nothing rendered
+  differently. Verified: a real JS syntax check (`esprima`, temporarily
+  installed and removed again afterward) confirmed `script.js` still
+  parses correctly after the change. **Not yet visually confirmed in an
+  actual browser** — same tooling limitation noted throughout this file —
+  the fix was verified by tracing the exact guard/call-site logic directly
+  rather than by reproducing the reported copy/paste failure live.

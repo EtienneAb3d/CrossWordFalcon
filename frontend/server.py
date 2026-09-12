@@ -482,6 +482,26 @@ async def proxy_synonyms(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+# "Paraphraser" (backend/clues.py's LLMClueGenerator.generate_paraphrases)
+# makes one real LLM round-trip asking for several paraphrases at once —
+# same "one meaningfully heavier single call" reasoning as DEFINE_PROXY_
+# TIMEOUT_S above, set above generate_paraphrases()'s own 90s default.
+PARAPHRASE_PROXY_TIMEOUT_S = 100.0
+
+
+@app.get("/api/paraphrase")
+async def proxy_paraphrase(request: Request):
+    """Relaie le bouton "Paraphraser" du panneau "Paraphraseur" (voir
+    script.js) vers le back — query string (`q`, `lang`) transmise telle
+    quelle, même schéma que proxy_dictionary_define."""
+    try:
+        async with httpx.AsyncClient(timeout=PARAPHRASE_PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/paraphrase", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # --- Qdrant admin panel (localhost only) --------------------------------
 # _require_localhost() rejects any non-loopback client / Host BEFORE the
 # request reaches the back, so the admin panel is unreachable from the LAN
