@@ -1295,8 +1295,11 @@ button:disabled {
   display: block;
 }
 
+/* Même largeur que #paraphrase-input (22rem) — demande explicite de
+   l'utilisateur, pour que les deux champs restent alignés quand les
+   deux panneaux sont affichés ensemble. */
 #dictionary-input {
-  width: 14rem;
+  width: 22rem;
 }
 
 #dictionary-results {
@@ -1433,9 +1436,10 @@ button:disabled {
   padding: 0.15rem 0.3rem;
 }
 
-/* Champ de saisie volontairement plus large que #dictionary-input (14rem)
-   — à la demande explicite de l'utilisateur, "assez long pour une phrase
-   complète" plutôt qu'un seul mot/une courte expression. */
+/* Même largeur que #dictionary-input (22rem, voir sa propre règle) —
+   à la demande explicite de l'utilisateur, "assez long pour une phrase
+   complète" plutôt qu'un seul mot/une courte expression ; alignés
+   quand les deux panneaux sont affichés ensemble. */
 #paraphrase-input {
   width: 22rem;
 }

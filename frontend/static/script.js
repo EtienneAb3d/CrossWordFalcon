@@ -4969,6 +4969,31 @@ function renderInteractive() {
   // left showing outdated candidates; the player just clicks "Mots" again.
   interactiveWordsResults.hidden = true;
   interactiveWordsResults.innerHTML = "";
+  // Same reasoning applies to the "Proposer" (définition) pick-list —
+  // reported live: "si on change le sens Horizontal/Vertical sans
+  // recliquer dans la grille, Suggestion de définitions continue à
+  // prendre le sens configuré avant." Root cause: setActiveDirection()
+  // already calls renderInteractive() on every H/V toggle, which
+  // correctly recomputes selectedInteractiveWord() for the NEW
+  // direction — but, before this fix, never cleared the pick-list still
+  // showing suggestions fetched for the OLD direction's word. Clicking
+  // one of those stale entries then called interactiveDefs.set(
+  // interactiveKey(w), def) with a freshly-recomputed `w` (the new
+  // word), silently attaching the previous direction's suggestion text
+  // to the new word's key — a genuine, reproducible bug, not merely a
+  // stale-looking display. "Proposer un titre" was checked too, at the
+  // same explicit request: proposeInteractiveTitle() never reads
+  // selected/activeDirection at all (it lists every slot's own answer,
+  // whole-grid, direction-independent), so its own pick-list can never
+  // go stale from a direction change specifically — but it's just as
+  // stale after any OTHER grid edit renderInteractive() already reacts
+  // to (a typed letter, undo, clean, ...), so it's cleared here too for
+  // the same reason, not because the reported symptom itself applies to
+  // it.
+  interactiveProposeResults.hidden = true;
+  interactiveProposeResults.innerHTML = "";
+  interactiveTitleProposeResults.hidden = true;
+  interactiveTitleProposeResults.innerHTML = "";
   renderInteractiveVerifyReport();
   updateInteractiveFinishState();
 }
@@ -5319,6 +5344,30 @@ function enterInteractiveMode(state) {
   languageSelect.value = interactiveLanguage;
   bilingualLanguageSelect.value = interactiveBilingualLanguage || interactiveLanguage;
   interactiveDifficulty = state.difficulty || interactiveDifficulty;
+  // Reconfigure the generation-form's own Mode/Taux noir/Graines/
+  // Précision thématique fields to match whatever was used to create
+  // this grid automatically, at the user's explicit request: "Quand une
+  // grille est sauvegardée après création automatique, sauvegarder tous
+  // les paramètres (Taux noir, Graines, Mode, Précision Thématique, etc)
+  // pour pouvoir les reconfigurer à l'identique quand la grille est
+  // rechargée en mode édition." `state.generation_params` is only ever
+  // set for a grid whose origin went through the automatic generator
+  // (backend/app.py's _run_generate_job) — a fresh interactive session,
+  // or one resumed from a Créations draft that itself started that way,
+  // has none, and every field below is simply left untouched.
+  if (state.generation_params) {
+    const gp = state.generation_params;
+    if (gp.mode) document.getElementById("mode").value = gp.mode;
+    if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
+      blackEnrichmentInput.value = gp.black_enrichment_percent;
+    }
+    if (gp.force_letters_percent !== undefined && gp.force_letters_percent !== null) {
+      document.getElementById("force-letters").value = gp.force_letters_percent;
+    }
+    if (gp.theme_precision !== undefined && gp.theme_precision !== null) {
+      document.getElementById("theme-precision").value = gp.theme_precision;
+    }
+  }
   // A resumed session's own result carries `definitions`/`title` (see
   // backend/app.py's _run_interactive_resume_job) — a fresh start's never
   // does (neither field exists yet), so `interactiveDefs` still starts

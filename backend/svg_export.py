@@ -54,6 +54,10 @@ HEADER_HEIGHT = HEADER_LOGO_SIZE + 16 + 18
 # rendered width (see render_grid_svg), not a separately-chosen constant.
 GRID_SIDEBAR_GAP = 24
 DOWN_COLUMN_GAP = 24
+# Utilisé par render_puzzle_svg (le PDF imprimable) uniquement — voir sa
+# propre docstring/commentaire de mise en page ; render_grid_svg garde
+# volontairement le partage 50/50 documenté ci-dessus.
+MAX_GRID_WIDTH_FRACTION = 0.6
 # rsvg-convert defaults to 96 DPI (screen resolution) when the source SVG has
 # no physical units — GRID_PNG/ is a print-quality visual record (see
 # save_grid_png), so it's rendered at 300 DPI instead, scaling up the output
@@ -543,10 +547,34 @@ def render_puzzle_svg(result, language, title="", difficulty=None):
     the user's explicit request ("un lien permettant de télécharger la
     grille en PDF (sans les réponses, seulement la grille vide, les
     définitions, et le titre de la grille)") — used by GET /api/library/
-    {grid_id}/pdf. Same layout (empty grid + across sidebar + 2-column
-    down clues) minus the "=== Solution ===" grid at the bottom, plus the
-    grid's own `title` in the header. No mode/durations line: irrelevant
-    on a puzzle sheet.
+    {grid_id}/pdf. Same overall pieces as render_grid_svg (empty grid +
+    across sidebar + 2-column down clues) minus the "=== Solution ==="
+    grid at the bottom, plus the grid's own `title` in the header. No
+    mode/durations line: irrelevant on a puzzle sheet.
+
+    Its own layout is deliberately NOT the 50/50 split render_grid_svg
+    uses (see GRID_SIDEBAR_GAP's own comment) — at the user's explicit
+    request: "placer la grille tout à droite de la page (actuellement
+    elle est mise plutôt à gauche en tassant les définitions
+    Horizontales). Elle ne doit pas occuper plus de 60% en largeur de
+    page. Utiliser l'espace restant à gauche pour les définitions
+    Horizontales, et l'espace en dessous (pleine largeur) pour les
+    définitions Verticales." Root cause of the reported "stuck on the
+    left" symptom: `canvas_width` is often floored by MIN_CANVAS_WIDTH
+    (a small grid's own natural `2*grid_width_px + gap` can fall well
+    short of it) — the old 50/50 split still sized the grid+sidebar row
+    from the grid's own width alone, leaving the extra canvas width
+    (down past that row) entirely unused on the right, with the grid
+    itself sitting flush against the sidebar rather than the page's own
+    right edge. Fixed by sizing the page around the grid instead of the
+    reverse: `canvas_width` is now whatever's needed to keep the grid at
+    exactly MAX_GRID_WIDTH_FRACTION (60%) of the page (or MIN_CANVAS_
+    WIDTH, whichever is larger — a small grid then occupies well under
+    60%, never over), the grid is placed flush against the right margin
+    (`grid_x0 = canvas_width - MARGIN - grid_width_px`), and the across
+    sidebar fills every remaining pixel to its left. Down clues are
+    unaffected — they already spanned the full `canvas_width` in 2
+    columns.
 
     `result` is a grid_store record (or a generate_grid() result): it
     needs `pattern`, `words` (each with `clue`/`row`/`col`/`direction`/
@@ -557,10 +585,9 @@ def render_puzzle_svg(result, language, title="", difficulty=None):
     down_lines = _group_clue_lines(words, "down", "col", language)
 
     grid_width_px = CELL_SIZE + result["width"] * CELL_SIZE
-    sidebar_width = grid_width_px
-    canvas_width = max(
-        2 * grid_width_px + GRID_SIDEBAR_GAP + 2 * MARGIN, MIN_CANVAS_WIDTH
-    )
+    canvas_width = max(grid_width_px / MAX_GRID_WIDTH_FRACTION, MIN_CANVAS_WIDTH)
+    grid_x0 = canvas_width - MARGIN - grid_width_px
+    sidebar_width = grid_x0 - GRID_SIDEBAR_GAP - MARGIN
     parts = []
     y = MARGIN
 
@@ -593,7 +620,10 @@ def render_puzzle_svg(result, language, title="", difficulty=None):
     )
     y += max(HEADER_LOGO_SIZE, 58) + 12
 
-    # Row: across clues sidebar (left) + empty grid (right), side by side.
+    # Row: across clues sidebar (left, filling whatever's left of the
+    # page) + empty grid (right, flush against the right margin — see
+    # this function's own docstring for why grid_x0/sidebar_width are no
+    # longer a plain 50/50 split).
     parts.append(_heading_svg(MARGIN, y, across_heading))
     across_lines_svg, across_lines_height = _clue_lines_svg(
         MARGIN, sidebar_width, y + 22, across_lines
@@ -601,7 +631,6 @@ def render_puzzle_svg(result, language, title="", difficulty=None):
     parts.append(across_lines_svg)
     sidebar_height = 22 + across_lines_height
 
-    grid_x0 = MARGIN + sidebar_width + GRID_SIDEBAR_GAP
     empty_grid_svg, grid_height, _ = _grid_svg(result["pattern"], None, words, y, x_offset=grid_x0)
     parts.append(empty_grid_svg)
 

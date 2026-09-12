@@ -89,7 +89,7 @@ def _slugify_title(title):
 
 
 def save_grid_json(result, language, difficulty, mode, title, bilingual=None, pseudo=None,
-                   theme=None, interactive=False, origin=None):
+                   theme=None, interactive=False, origin=None, generation_params=None):
     """Writes the grid to GRID_STORE/<language>/<id>.json — or, for a
     genuinely bilingual grid, GRID_STORE/bilingual/<id>.json instead — and
     returns the new record's own id (its filename stem, without the .json
@@ -144,7 +144,38 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     provenance survives a pause/resume of the editing session too. Drives
     the "(créée depuis ...)" provenance tag the web UI's own Bibliothèque
     list shows next to such a grid's title (see `_iter_stored_grids`
-    below and `frontend/static/script.js`'s `renderLibraryList`)."""
+    below and `frontend/static/script.js`'s `renderLibraryList`).
+
+    `generation_params` (`None` by default — every pre-existing caller
+    unaffected) is a plain `{black_enrichment_percent, force_letters_
+    percent, mode, theme_precision}` dict — the generation-form knobs
+    tuning the automatic search itself, at the user's explicit request:
+    "Quand une grille est sauvegardée après création automatique,
+    sauvegarder tous les paramètres (Taux noir, Graines, Mode, Précision
+    Thématique, etc) pour pouvoir les reconfigurer à l'identique quand la
+    grille est rechargée en mode édition." `mode` is also already stored
+    as its own top-level field (see the `mode` parameter above) — kept
+    here too so the frontend's own restore logic (see `frontend/static/
+    script.js`'s `enterInteractiveMode()`) can read every one of these
+    four values from a single object, rather than one from a top-level
+    key and the other three from this one. `backend/app.py`'s
+    `_run_generate_job` is the only real source of a non-`None` value
+    here (built straight from that request's own `GenerateRequest`
+    fields); `_run_recompute_job` carries whatever the original grid
+    already had forward unchanged (a recompute never touches the grid's
+    own layout, only its clues, so the search parameters that produced
+    it are still accurate); `_run_interactive_resume_job` reads it back
+    (via `record.get("generation_params")`, working the same way whether
+    `record` is a real GRID_WORK record or `_library_record_to_
+    interactive`'s own reshaped dict) onto both `job["interactive"]` and
+    `job["result"]`, so "Ouvrir en mode Interactif"/resuming a
+    "Créations" draft can reconfigure the web UI's own Mode/Taux noir/
+    Graines/Précision thématique fields to match — see
+    `enterInteractiveMode()`. A grid never derived from an automatic
+    generation (a fresh "Interactif" session, or one resumed from a
+    draft that itself started that way) simply has `None` here, exactly
+    as before this feature — nothing to restore, so every field is left
+    untouched."""
     is_bilingual = bool(bilingual) and bilingual != language
     pseudo = (pseudo or "").strip() or None
     # Thématique saisie par l'utilisateur (liste de mots), à la demande
@@ -181,6 +212,10 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
         "origin": origin,
         "difficulty": difficulty,
         "mode": mode,
+        # See this function's own docstring — the automatic search's own
+        # tuning knobs (Taux noir/Graines/Mode/Précision thématique),
+        # None for a grid never derived from an automatic generation.
+        "generation_params": generation_params,
         "created_at": datetime.now().isoformat(),
     }
     (directory / f"{grid_id}.json").write_text(
@@ -352,7 +387,7 @@ def _slugify_pseudo(pseudo):
 
 def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme,
                     priority_words, seed, pseudo=None, resumed_from=None, origin=None,
-                    bilingual_language=None):
+                    bilingual_language=None, generation_params=None):
     """Autosaves (or updates) the in-progress state of one "Interactif"
     session. The very first call for a given `job_id` creates
     `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`; every later call
@@ -411,7 +446,17 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
     session start/resume, from whichever record this session came from —
     a library grid, or a previously-resumed GRID_WORK entry that already
     carried one) and passes it straight through on every autosave, so it
-    never has to be re-derived."""
+    never has to be re-derived.
+
+    `generation_params` (`None` by default) is the same `{black_
+    enrichment_percent, force_letters_percent, mode, theme_precision}`
+    dict `save_grid_json` accepts — see its own docstring — carried
+    through here the same way as `origin` so a session started from an
+    automatically-generated grid ("Ouvrir en mode Interactif") keeps
+    those values available across a pause/resume of the editing session
+    too: `backend/app.py` reads it back from `JOBS[job_id]["interactive"]
+    ["generation_params"]` and passes it straight through on every
+    autosave."""
     pseudo = (pseudo or "").strip() or None
     existing = list(GRID_WORK_DIR.glob(f"*_{job_id}.json")) if GRID_WORK_DIR.is_dir() else []
     created_at = None
@@ -458,6 +503,7 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
         "seed": seed,
         "pseudo": pseudo,
         "origin": origin,
+        "generation_params": generation_params,
         "created_at": created_at or now,
         "updated_at": now,
     }

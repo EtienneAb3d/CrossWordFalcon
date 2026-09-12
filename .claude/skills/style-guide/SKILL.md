@@ -3120,3 +3120,22 @@ end through the real running API (interactive start/step/save,
   actual browser** — same tooling limitation noted throughout this file —
   the fix was verified by tracing the exact guard/call-site logic directly
   rather than by reproducing the reported copy/paste failure live.
+
+- `#dictionary-input` widened from `14rem` to `22rem`, at the user's
+  explicit request: "fixer la largeur du champ de saisie identique au
+  champ de saisie du Paraphraser (alignés quand affichés ensemble)."
+  Previously `#paraphrase-input` (22rem) was deliberately *wider* than
+  `#dictionary-input` (14rem) — a dictionary lookup is normally one word
+  or a short expression, a paraphrase input is meant for a full sentence
+  (see that field's own earlier entry above) — but with both panels able
+  to be open side by side (Dictionnaire's own "Ouvrir aussi le
+  Paraphraseur"-style adjacency, or simply both toggled on at once), the
+  mismatched widths meant the two input fields didn't line up visually.
+  Now both are `22rem`, and each rule's own comment cross-references the
+  other (rather than restating the same reasoning twice) so a future
+  edit to one width is a reminder to check the other. No behavior change
+  — a dictionary lookup still only ever sends whatever short text is
+  typed, the field is simply wider now. Verified structurally (CSS
+  brace-balance check: 281/281 before and after). **Not yet visually
+  confirmed in an actual browser** — same tooling limitation noted
+  throughout this file.

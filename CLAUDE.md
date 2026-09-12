@@ -8787,6 +8787,54 @@ servers:
   la ferme", fr) returned 13 words with the shortest at 5 letters and no
   2-letter word anywhere in the result, confirming the new floor takes
   effect end to end, not just in the constant's own value.
+
+  **The two per-language `_build_theme_glossary` calls on a bilingual
+  grid now run in parallel**, at the user's explicit request:
+  "Lors de la génération des Glossaires thématiques sur une grille
+  bilingue, paralléliser la génération des deux langues." Previously
+  `_run_generate_job` `await`ed the primary-language call, then `await`ed
+  the bilingual one only once the first had fully returned — two
+  sequential rounds of LLM keyword expansion + per-keyword Qdrant search,
+  even though the two glossaries are entirely independent of each other.
+  Since `_build_theme_glossary` is itself `async` and every one of its
+  own blocking calls (`clue_generator.describe_theme`, `_compiled_theme_
+  words_by_length`, `_write_theme_log`) is already wrapped in `await
+  asyncio.to_thread(...)`, the two calls genuinely overlap on the thread
+  pool the moment they're both scheduled — no new thread-pool/executor
+  plumbing was needed, only launching both via `asyncio.gather(...,
+  return_exceptions=True)` instead of two sequential `await`s.
+  `return_exceptions=True` is load-bearing, not decorative: without it,
+  whichever call finishes first (success or a real exception) would make
+  `gather()` raise immediately, leaving the still-running sibling task's
+  own eventual result (or exception, e.g. a `GenerationCancelled` from
+  the same "Stop" click) never awaited/consumed — asyncio's own "exception
+  never retrieved" warning. Both results are now collected first; only
+  once both have returned does a small loop re-raise the first genuine
+  exception among them (if any), giving `GenerationCancelled` the exact
+  same propagation behavior as the old sequential code. `log_tag` (and
+  so each call's own distinct `LOG_THEME/` filename) is unchanged — still
+  `short_id` for the primary language, `f"{short_id}_{req.bilingual_
+  language}"` for the bilingual one — so the two logs never collide
+  despite now being written concurrently. The plain monolingual path
+  (`req.bilingual_language` unset or identical to `req.language`) is
+  completely untouched, still a single, direct `await` with no `gather`
+  involved at all.
+
+  Verified: `python3 -m py_compile backend/app.py` passed. A standalone
+  reproduction (two fake coroutines each doing two sequential
+  `asyncio.to_thread(time.sleep, 0.5)` calls, exactly mirroring `_build_
+  theme_glossary`'s own real shape) confirmed `asyncio.gather` on both
+  completes in ~1.0s total, not the ~2.0s a sequential `await`/`await`
+  would take — direct, measured proof the two glossaries now genuinely
+  run at the same time rather than merely being expressed side by side
+  in code. A second reproduction (one coroutine succeeding, the other
+  raising a stand-in `GenerationCancelled`) confirmed the `return_
+  exceptions=True` + re-raise pattern still correctly propagates the
+  cancellation to the caller, matching the pre-existing sequential
+  behavior for the "Stop" button mid-theme-generation case. **Not yet
+  verified against the real running LLM/Qdrant stack for an actual
+  bilingual themed generation** — only the concurrency mechanism itself
+  was exercised with stand-ins, not a live end-to-end request.
 - **Qdrant admin — `GET /api/qdrant/admin`, `POST /api/qdrant/admin/
   recreate`, `POST /api/qdrant/admin/delete-tenant`** (`backend/app.py`),
   backing the localhost-only "Qdrant (admin)" panel (see `frontend/
@@ -20961,3 +21009,114 @@ in the full pipeline, not just in the isolated tier-selection test.
   visually confirmed in an actual browser** — verified by tracing the
   exact guard/call-site logic directly rather than reproducing the
   reported copy/paste failure live.
+
+- **A real, reproducible bug in the "Proposer" (definition) pick-list was
+  found and fixed in Interactive mode**, reported directly by the user:
+  "si on change le sens Horizontal/Vertical sans recliquer dans la grille,
+  Suggestion de définitions continue à prendre le sens configuré avant
+  (vérifier aussi Suggérer un titre)." Investigated by tracing every step
+  of the H/V toggle → propose-fetch chain directly (`setActiveDirection()`,
+  `selectedInteractiveWord()`, `interactiveProposeBtn`'s own click handler,
+  `dictionaryDefineUrl()`) before touching any code — every one of them
+  already read `activeDirection`/`selected` fresh at call time, with no
+  cached/stale variable anywhere in that chain: `setActiveDirection()`
+  reassigns `activeDirection` as its very first line and, in interactive
+  mode, immediately calls `renderInteractive()`, which recomputes
+  `selectedInteractiveWord()` (itself reading `activeDirection` live, no
+  parameter, no cache) and refreshes the definition text field from it —
+  so the *word actually fetched* when "Proposer" is clicked was already
+  correct.
+
+  The real bug was one level up: `renderInteractive()` — called on *every*
+  direction toggle, cell selection, and grid edit alike — already cleared
+  the stale "Mots" candidate list on every call (`interactiveWordsResults`,
+  with its own comment explaining why: "any render... can make it stale,
+  so it's cleared here rather than left showing outdated candidates") but
+  never did the same for the "Proposer" pick-list (`interactiveProposeResults`)
+  or the "Suggérer un titre" one (`interactiveTitleProposeResults`) — both
+  were only ever cleared inside their own pick-item click handler, or once
+  at session start. So after toggling H/V without re-clicking a cell, the
+  *previous* direction's own suggestions stayed fully visible and
+  clickable on screen — and clicking one of them called `interactiveDefs.
+  set(interactiveKey(w), def)` with a **freshly recomputed** `w` (the new,
+  post-toggle word), silently attaching the *old* direction's suggestion
+  text to the *new* word's key: a genuine data-mismatch bug, not merely a
+  stale-looking display, and exactly matching "continue à prendre le sens
+  configuré avant."
+
+  Fixed by adding the identical clearing (`.hidden = true; .innerHTML =
+  ""`) for both `interactiveProposeResults` and `interactiveTitleProposeResults`
+  right next to the pre-existing `interactiveWordsResults` one inside
+  `renderInteractive()` — the single choke point already reached by every
+  relevant state change (direction toggle, cell selection, virtual-keyboard
+  typing, undo, Nettoyer/Vérifier, ...), so this one fix covers every path
+  uniformly, not just the H/V-button case reported. "Suggérer un titre"
+  was checked per the user's own explicit request and confirmed a *false
+  lead* for the literal reported symptom: `proposeInteractiveTitle()` never
+  reads `selected`/`activeDirection` at all — it lists every slot's own
+  answer across the whole grid, direction-independent by construction — so
+  its own pick-list can never go stale specifically *from* a direction
+  change. It's just as stale after any *other* grid edit `renderInteractive()`
+  already reacts to (a typed letter, undo, a clean pass, ...) though, so it
+  was cleared for that same general reason, not because the reported bug
+  itself applies to it.
+
+  Verified: `python3 -m py_compile` is not applicable here (pure frontend
+  change); a real JS syntax check (`esprima`, temporarily installed and
+  removed again afterward, this project's own established one-off-tool
+  pattern) confirmed `script.js`/`i18n.js` still parse correctly after the
+  edit. **Not yet visually confirmed in an actual browser** — the same
+  tooling limitation noted throughout this project's UI work — verified by
+  tracing the exact call graph (`setActiveDirection` → `renderInteractive`
+  → `selectedInteractiveWord`/pick-list clearing → the propose-button
+  handler's own `interactiveDefs.set` call) directly rather than
+  reproducing the reported symptom live.
+
+- **The Library's "Bilingue" filter now sorts purely by reverse
+  chronological order instead of grouping by primary language**, at the
+  user's explicit request: "La liste des grilles de la Bibliothèque
+  Bilingue doit être classé dans l'ordre chronologique inverse (et non
+  regroupé par langues)." `_library_page`'s own re-sort step (`rows.sort
+  (key=lambda e: e.get("created_at") or "", reverse=True)`) already
+  existed for `language_filter == "all"` specifically, to cancel out
+  `list_grids()`'s own language-grouping (preferred language first, then
+  English, then everything else, most recent first within each group) —
+  but its guard, `if not only_bilingual and only_language is None:`,
+  explicitly excluded the "bilingual" filter from this re-sort, so a
+  bilingual grid's own compact metadata (built by `_iter_stored_grids`
+  from `GRID_STORE/bilingual/*.json`) stayed grouped by its `language`
+  field — the grid's *primary* (across) language, e.g. `fr` for a
+  fr/en grid, `es` for an es/it one — exactly like the ordinary,
+  single-language view. Unlike a genuine single-language filter (where
+  every row already shares the same `language`, making the grouping a
+  harmless no-op — the reasoning the original guard was built on), a
+  bilingual grid's own primary language varies grid to grid, so the
+  grouping was never a no-op here: two grids saved minutes apart could
+  land far apart in the list if their primary languages differed,
+  exactly the "regroupé par langues" the user reported.
+
+  Fixed by widening the guard from `if not only_bilingual and only_
+  language is None:` to `if only_language is None:` — the re-sort now
+  runs whenever `only_language` is unset, covering both `"all"` and
+  `"bilingual"` alike, and still skipped only for a genuine single-
+  language filter (where it would be a no-op anyway). `_library_page`'s
+  own docstring and the surrounding comments were updated to document
+  the "bilingual" case explicitly rather than only "all".
+
+  Verified: `python3 -m py_compile backend/app.py` passed. A real,
+  non-mocked `_library_page()` call against a temporary `GRID_STORE_DIR`
+  (5 synthetic bilingual records — 3 with primary language `fr`
+  interleaved in time with 2 with primary language `es`) confirmed the
+  exact reported symptom first: before this fix's guard, the "Bilingue"
+  view would show `id5, id3, id1` (every `fr`-primary grid) before
+  `id4, id2` (every `es`-primary grid), instead of the true chronological
+  `id5, id4, id3, id2, id1` — reproduced directly from `list_grids()`'s
+  own real grouping output, not assumed. With the fix applied, the same
+  fixture through the real `_library_page(..., language_filter=
+  "bilingual")` call returned exactly `id5, id4, id3, id2, id1` — pure
+  reverse-chronological order, language grouping gone. The pre-existing
+  `"all"` filter was re-checked on the same fixture and still returns the
+  identical pure-chronological order (no regression), and a genuine
+  single-language filter (`"fr"`) still correctly excludes every
+  bilingual grid outright (a separate, unrelated, already-existing rule),
+  confirming this fix didn't disturb either of those two other cases.

@@ -1455,7 +1455,17 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
     Chaque grille renvoyée porte en plus `seen` (bool) pour que le
     frontend puisse la griser sans re-consulter son propre stockage.
     `page` bornée à 1 au minimum ; une page au-delà de la dernière renvoie
-    une liste vide, pas une erreur."""
+    une liste vide, pas une erreur.
+
+    Le filtre "bilingual" subit la même annulation du regroupement que
+    "all", à la demande explicite de l'utilisateur : "La liste des
+    grilles de la Bibliothèque Bilingue doit être classée dans l'ordre
+    chronologique inverse (et non regroupé par langues)." Le regroupement
+    de list_grids() se fait sur le champ `language` (la langue primaire)
+    de chaque grille — pour une grille bilingue, ce champ varie d'une
+    grille à l'autre (fr/en, es/it, ...), donc ce regroupement n'est
+    JAMAIS un no-op ici, contrairement au cas d'une langue précise (où
+    toutes les lignes partagent déjà la même langue)."""
     if seen_filter not in _LIBRARY_SEEN_FILTERS:
         seen_filter = "all"
     # "bilingual" (voir GRID_STORE/bilingual/, backend/grid_store.py's
@@ -1504,13 +1514,16 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         ):
             continue
         rows.append({**g, "seen": is_seen})
-    # "Toutes les langues" (ni "bilingual", ni une vraie clé de WORDLISTS) :
-    # ordre purement chronologique inverse, sans le regroupement par langue
-    # que list_grids() applique pour la vue par défaut — à la demande
-    # explicite de l'utilisateur. Un filtre sur une langue précise rend ce
+    # "Toutes les langues" ET "Bilingue" (ni l'un ni l'autre n'est une
+    # vraie clé de WORDLISTS) : ordre purement chronologique inverse, sans
+    # le regroupement par langue que list_grids() applique pour la vue par
+    # défaut — à la demande explicite de l'utilisateur, y compris pour
+    # "Bilingue" spécifiquement : "La liste des grilles de la Bibliothèque
+    # Bilingue doit être classé dans l'ordre chronologique inverse (et non
+    # regroupé par langues)." Un filtre sur une langue précise rend ce
     # regroupement inopérant de toute façon (toutes les lignes partagent la
-    # même langue), donc on ne re-trie que dans le cas "all".
-    if not only_bilingual and only_language is None:
+    # même langue), donc on ne re-trie que dans ce seul cas-là.
+    if only_language is None:
         rows.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     page = max(1, page)
     start = (page - 1) * LIBRARY_PAGE_SIZE
@@ -2809,25 +2822,53 @@ async def _run_generate_job(job_id, req, resume_state=None):
             # chiffrée (contrairement à "pattern"/"clues"/etc.) : tout ce
             # bloc s'exécute d'un bloc, sans sous-étapes à rapporter.
             progress("theme", theme=theme)
-            theme_priority_words, theme_description = await _build_theme_glossary(
-                theme, req.language, req.theme_precision, short_id, cancel_event,
-                short_id,
-            )
             # Grille bilingue : un second glossaire pour la langue des mots
             # verticaux (voir _build_theme_glossary), à la demande explicite
             # de l'utilisateur. `theme_description` reste celle de la langue
-            # principale (titre + orientation des définitions).
+            # principale (titre + orientation des définitions). Les deux
+            # appels sont lancés en parallèle via asyncio.gather (à la
+            # demande explicite de l'utilisateur : "paralléliser la
+            # génération des deux langues") plutôt que l'un après l'autre —
+            # chacun n'est qu'un enchaînement d'appels déjà enveloppés dans
+            # asyncio.to_thread (l'appel LLM describe_theme, la recherche
+            # Qdrant), donc les deux tournent réellement en même temps sur
+            # le thread pool sans jamais se bloquer mutuellement ni bloquer
+            # la boucle asyncio elle-même. `return_exceptions=True` : les
+            # deux résultats sont d'abord récupérés avant qu'une éventuelle
+            # exception (typiquement GenerationCancelled, si l'utilisateur
+            # clique Stop pendant que les deux tournent) ne soit relevée
+            # explicitement — sans ça, l'exception de la tâche la plus
+            # rapide serait levée immédiatement par gather() sans jamais
+            # attendre/consommer le résultat (ou l'exception) de l'autre,
+            # ce qu'asyncio journalise comme "exception never retrieved".
             if req.bilingual_language and req.bilingual_language != req.language:
-                bilingual_theme_priority_words, _ = await _build_theme_glossary(
-                    theme, req.bilingual_language, req.theme_precision, short_id,
-                    cancel_event, f"{short_id}_{req.bilingual_language}",
-                    # `theme` was typed with `req.language` in mind (the
-                    # grid's own primary/across language) — passing it
-                    # here, differing from this call's own target
-                    # `req.bilingual_language`, is what tells describe_
-                    # theme() a genuine translation is expected, not just
-                    # a coincidental echo, at the user's explicit request.
-                    theme_language=req.language,
+                primary_result, bilingual_result = await asyncio.gather(
+                    _build_theme_glossary(
+                        theme, req.language, req.theme_precision, short_id,
+                        cancel_event, short_id,
+                    ),
+                    _build_theme_glossary(
+                        theme, req.bilingual_language, req.theme_precision, short_id,
+                        cancel_event, f"{short_id}_{req.bilingual_language}",
+                        # `theme` was typed with `req.language` in mind (the
+                        # grid's own primary/across language) — passing it
+                        # here, differing from this call's own target
+                        # `req.bilingual_language`, is what tells describe_
+                        # theme() a genuine translation is expected, not just
+                        # a coincidental echo, at the user's explicit request.
+                        theme_language=req.language,
+                    ),
+                    return_exceptions=True,
+                )
+                for _r in (primary_result, bilingual_result):
+                    if isinstance(_r, BaseException):
+                        raise _r
+                theme_priority_words, theme_description = primary_result
+                bilingual_theme_priority_words, _ = bilingual_result
+            else:
+                theme_priority_words, theme_description = await _build_theme_glossary(
+                    theme, req.language, req.theme_precision, short_id, cancel_event,
+                    short_id,
                 )
 
         GRID_QUEUE.append(task)
@@ -3147,9 +3188,25 @@ async def _run_generate_job(job_id, req, resume_state=None):
         # the player is actually waiting on.
         try:
             pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
+            # Les paramètres du moteur de recherche automatique (voir
+            # grid_store.save_grid_json's own `generation_params`
+            # docstring), à la demande explicite de l'utilisateur :
+            # "sauvegarder tous les paramètres... pour pouvoir les
+            # reconfigurer à l'identique quand la grille est rechargée en
+            # mode édition." `mode` est déjà son propre champ de premier
+            # niveau (voir juste au-dessus) — dupliqué ici aussi pour que
+            # le Front n'ait qu'un seul objet à lire pour reconfigurer les
+            # 4 champs du formulaire à la fois.
+            generation_params = {
+                "black_enrichment_percent": req.black_enrichment_percent,
+                "force_letters_percent": req.force_letters_percent,
+                "mode": req.mode,
+                "theme_precision": req.theme_precision,
+            }
             grid_id = await asyncio.to_thread(
                 save_grid_json, result, req.language, req.difficulty, req.mode, title,
                 result.get("bilingual_language"), pseudo, theme or None,
+                generation_params=generation_params,
             )
             logger.info("[%s] saved to library: %s (pseudo=%r)", short_id, grid_id, pseudo)
             # L'identifiant du fichier GRID_STORE de cette grille, pour que
@@ -3550,6 +3607,12 @@ async def _run_recompute_job(job_id, grid_id):
             new_grid_id = await asyncio.to_thread(
                 save_grid_json, result, language, difficulty, mode, new_title,
                 bilingual_language, result.get("pseudo"), result.get("theme"),
+                # Un recalcul ne touche jamais la mise en page de la grille,
+                # seulement ses définitions — les paramètres du moteur de
+                # recherche qui l'ont produite restent donc valables et sont
+                # simplement reconduits (`result` est déjà le record d'origine
+                # minus id/created_at/bilingual, voir plus haut).
+                generation_params=result.get("generation_params"),
             )
             logger.info("[%s] recompute saved to library: %s", short_id, new_grid_id)
             result["id"] = new_grid_id
@@ -3937,6 +4000,13 @@ async def interactive_save(req: InteractiveSaveRequest):
         save_grid_json, result, req.language, req.difficulty, "interactive",
         req.title, req.bilingual_language if is_bilingual else None, pseudo,
         (req.theme or "").strip() or None, True, meta.get("origin"),
+        # Voir grid_store.save_grid_json's own `generation_params`
+        # docstring — reconduit tel quel (None pour une session
+        # démarrée à la main, les vraies valeurs pour une grille
+        # rééditée depuis une création automatique via "Ouvrir en mode
+        # Interactif"), pour que la provenance des réglages survive la
+        # publication comme "origin"/"theme" ci-dessus.
+        generation_params=meta.get("generation_params"),
     )
     # Also refresh this session's own GRID_WORK snapshot to the final,
     # published state (at the user's explicit request: "Au moment de
@@ -3960,6 +4030,7 @@ async def interactive_save(req: InteractiveSaveRequest):
                 sess["priority_words"], sess.get("seed", 0), pseudo,
                 sess.get("resumed_from"), meta.get("origin"),
                 meta.get("bilingual_language"),
+                generation_params=meta.get("generation_params"),
             )
         except Exception:
             logger.warning("interactive save: GRID_WORK snapshot skipped", exc_info=True)
@@ -3981,9 +4052,9 @@ async def interactive_save(req: InteractiveSaveRequest):
 async def interactive_save_work(req: InteractiveSaveWorkRequest):
     """Autosave fired by the frontend after every "Suivant"/"Précédent"
     click — see InteractiveSaveWorkRequest. `language`/`bilingual_
-    language`/`difficulty`/`theme`/`origin` are read back from
-    `JOBS[req.job_id]["interactive"]` (set once at session start/resume)
-    rather than trusted from the request body."""
+    language`/`difficulty`/`theme`/`origin`/`generation_params` are read
+    back from `JOBS[req.job_id]["interactive"]` (set once at session
+    start/resume) rather than trusted from the request body."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
@@ -3996,6 +4067,7 @@ async def interactive_save_work(req: InteractiveSaveWorkRequest):
         sess["priority_words"], sess.get("seed", 0), pseudo,
         sess.get("resumed_from"), meta.get("origin"),
         meta.get("bilingual_language"),
+        generation_params=meta.get("generation_params"),
     )
     return {"work_id": work_id}
 
@@ -4083,6 +4155,16 @@ async def _run_interactive_resume_job(job_id, record):
         )
         seed = record.get("seed", 0)
         rng = random.Random(seed)
+        # Voir grid_store.save_grid_json's own `generation_params`
+        # docstring — les paramètres du moteur de recherche automatique
+        # (Taux noir/Graines/Mode/Précision thématique) qui ont produit
+        # cette grille, None pour une grille jamais issue d'une création
+        # automatique. Mirroré à la fois sur job["interactive"] et
+        # job["result"] (pollJob() ne renvoie jamais que ce dernier),
+        # même convention que "theme"/"origin" ci-dessous, pour que
+        # enterInteractiveMode() puisse reconfigurer les champs Mode/Taux
+        # noir/Graines/Précision thématique du formulaire à l'identique.
+        generation_params = record.get("generation_params")
         grid = record.get("grid") or []
         rows = len(grid)
         cols = len(grid[0]) if grid else 0
@@ -4110,6 +4192,7 @@ async def _run_interactive_resume_job(job_id, record):
             "theme": record.get("theme"),
             "has_theme": bool(priority_words),
             "theme_description": None,
+            "generation_params": generation_params,
             # Snapshot of the grid this session was derived from — set
             # only when `record` itself carries one (a library grid
             # opened via "Ouvrir en mode Interactif", or a GRID_WORK
@@ -4158,6 +4241,11 @@ async def _run_interactive_resume_job(job_id, record):
             "language": language,
             "bilingual_language": bilingual_language,
             "difficulty": difficulty,
+            # Same reasoning again, for enterInteractiveMode()'s own
+            # Mode/Taux noir/Graines/Précision thématique restore — see
+            # grid_store.save_grid_json's own `generation_params`
+            # docstring.
+            "generation_params": generation_params,
         }
         progress("done")
         job["status"] = "done"
@@ -4234,6 +4322,11 @@ def _library_record_to_interactive(record):
         "definitions": definitions,
         "title": record.get("title") or "",
         "theme": record.get("theme"),
+        # Voir grid_store.save_grid_json's own `generation_params`
+        # docstring — None pour une grille jamais issue d'une création
+        # automatique (ex. une grille elle-même construite à la main en
+        # mode Interactif, puis publiée).
+        "generation_params": record.get("generation_params"),
         "priority_words": [],
         "seed": 0,
         "origin": {
