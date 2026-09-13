@@ -716,13 +716,11 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    entamé plutôt que d'en ouvrir un nouveau. Si tous les emplacements
    retenus au niveau précédent sont entièrement vierges, ce niveau ne
    change rien : le niveau suivant s'applique alors au groupe entier ;
-4. **grille thématique uniquement** — déplacé ici, après les deux niveaux
-   précédents ("moins de `PREFILL_MIN_WORD_COUNT` mots candidats" puis "au
-   moins une case connue"), à la demande explicite de l'utilisateur : ce
-   niveau s'applique systématiquement juste après le niveau précédent
-   (comme tous les niveaux de cette liste), sans priorité particulière sur
-   les autres. S'il existe, parmi les emplacements retenus au niveau
-   précédent, au moins un emplacement où un mot du glossaire thématique
+4. **grille thématique uniquement** — ce niveau s'applique systématiquement
+   juste après le niveau précédent (comme tous les niveaux de cette
+   liste), sans priorité particulière sur les autres. S'il existe, parmi
+   les emplacements retenus au niveau précédent, au moins un emplacement
+   où un mot du glossaire thématique
    (non encore posé ailleurs) tient encore compte tenu des lettres déjà
    connues, le choix se restreint à ces emplacements — on commence donc
    par remplir les zones thématiquement réalisables, et on y pose un mot
@@ -734,24 +732,25 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    (un glossaire par langue) : un emplacement horizontal est jaugé contre
    le glossaire de la langue A, un vertical contre celui de la langue B ;
 5. parmi les emplacements retenus au niveau précédent, on calcule pour
-   chacun le score **x + y**, où `(x, y)` sont les coordonnées de la
+   chacun le score **x² + y²**, où `(x, y)` sont les coordonnées de la
    première case de l'emplacement (son coin le plus en haut à gauche),
    mesurées par rapport au coin **en haut à gauche** de la grille — la
    même origine que celle utilisée partout ailleurs dans ce document (`x`
    = colonne, `y` = ligne) : un emplacement dont la première case est déjà
    au coin en haut à gauche obtient le score le plus bas possible (0), le
    score augmentant à mesure qu'un emplacement démarre plus bas et/ou plus
-   à droite. Ce score ne dépend pas de l'état de remplissage de
-   l'emplacement — seulement de sa position fixe dans la grille — ce qui
-   tend à faire progresser le remplissage selon un front géométrique
-   partant du coin en haut à gauche plutôt que selon la difficulté de
-   chaque emplacement. On retient, **parmi les emplacements ayant obtenu
-   le plus petit score** (les plus proches du coin en haut à gauche),
-   **une fenêtre de max(5, int(taille du groupe × `SLOT_SELECTION_WINDOW_
-   FRACTION`)) emplacements** — une proportion fixée à **1/10**
-   (`backend/crossword_gen.py`) — une fenêtre qui s'élargit quand ce
-   groupe compte encore beaucoup d'emplacements, et se resserre (jusqu'à
-   ce plancher de 5) une fois qu'il n'en reste plus beaucoup ;
+   à droite — un emplacement franchement excentré sur un seul axe est donc
+   davantage pénalisé qu'un emplacement à distance équivalente mais
+   répartie sur les deux axes, resserrant le front de remplissage autour
+   du coin en haut à gauche. Ce score ne dépend pas de l'état de
+   remplissage de l'emplacement — seulement de sa position fixe dans la
+   grille — ce qui tend à faire progresser le remplissage selon un front
+   géométrique partant du coin en haut à gauche plutôt que selon la
+   difficulté de chaque emplacement. On retient, **parmi les emplacements
+   ayant obtenu le plus petit score** (les plus proches du coin en haut à
+   gauche), une **fenêtre de taille fixe de `SLOT_SELECTION_WINDOW_SIZE`
+   (10) emplacements** (`backend/crossword_gen.py`) — jamais moins si le
+   groupe compte lui-même moins de 10 emplacements ;
 6. cette fenêtre de niveau 5 est ensuite **retriée** par nombre de lettres
    déjà posées dans chaque emplacement (le plus de lettres en premier —
    même distinction fait-acquis/simple-supposition que le niveau 3, une
@@ -759,11 +758,11 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    `SLOT_SELECTION_REFINE_FRACTION` premiers emplacements (1/2,
    `backend/crossword_gen.py`) — mêlangée d'abord (même raison que le
    mélange du niveau 5) pour éviter tout biais positionnel à la coupure.
-   Un plancher de seulement 1 emplacement (pas 5 comme la fenêtre du
-   niveau 5) : la fenêtre de niveau 5 peut déjà être aussi petite que son
-   propre plancher de 5, et un plancher de 5 ici annulerait la réduction
-   dans ce cas très courant — cette fenêtre réduite ne peut donc jamais
-   finir vide ;
+   Un plancher de seulement 1 emplacement, jamais 0 : la fenêtre de
+   niveau 5 peut déjà être aussi petite qu'un seul emplacement (si le
+   groupe retenu au niveau précédent n'en compte lui-même qu'un), et un
+   plancher plus élevé ici annulerait la réduction dans ce cas très
+   courant — cette fenêtre réduite ne peut donc jamais finir vide ;
 7. cette fenêtre réduite est enfin retriée une dernière fois par un score
    statistique — la somme des carrés des fréquences mesurées (le même
    échantillonnage statistique qui alimente les graines, voir "Les

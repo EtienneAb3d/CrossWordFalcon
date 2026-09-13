@@ -93,10 +93,10 @@ from html.parser import HTMLParser
 
 import httpx
 
-# Un en-tête réaliste de navigateur — nécessaire pour au moins une source
-# (notretemps.com) qui bloque une requête trop nue (403) mais répond
-# normalement (200) une fois Accept/Accept-Language présents, vérifié en
-# direct par comparaison avant/après plutôt que supposé.
+# A realistic browser header — needed for at least one source
+# (notretemps.com), which blocks a too-bare request (403) but responds
+# normally (200) once Accept/Accept-Language are present, confirmed live
+# by a direct before/after comparison rather than assumed.
 _REQUEST_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -108,11 +108,11 @@ _REQUEST_HEADERS = {
 
 
 class _VisibleTextExtractor(HTMLParser):
-    """Extrait uniquement le texte visible d'une page (jamais le contenu
-    de <script>/<style>/<noscript>) — nécessaire pour chercher un vrai
-    numéro de grille lu par un humain sans tomber sur un faux positif
-    (un code couleur CSS de la forme #039 ressemble, en apparence, à un
-    numéro de grille si on cherche dans le HTML brut sans filtrer)."""
+    """Extracts only the visible text of a page (never the content of
+    <script>/<style>/<noscript>) — needed to search for a real,
+    human-readable grid number without hitting a false positive (a CSS
+    color code like #039 looks, on the surface, like a grid number if
+    searching the raw HTML unfiltered)."""
     def __init__(self):
         super().__init__()
         self._skip_depth = 0
@@ -137,14 +137,14 @@ class _VisibleTextExtractor(HTMLParser):
 
 
 def _extract_from_visible_text(html, pattern):
-    """Le numéro cherché doit apparaître dans le texte réellement visible
-    de la page (voir _VisibleTextExtractor) — jamais dans un <script>/
-    <style>, où un nombre à 2-6 chiffres est bien trop souvent un faux
-    positif (couleur CSS, identifiant technique). Renvoie le tuple complet
-    des groupes captés par `pattern` (jamais seulement le premier) — pour
-    que rustica.fr, dont le motif capture 3 groupes (jour/mois/année), et
-    les 3 autres sources, qui n'en capturent qu'un, partagent la même
-    interface d'appel dans fetch_all()."""
+    """The number being searched for must appear in the page's actually
+    visible text (see _VisibleTextExtractor) — never inside a <script>/
+    <style> block, where a 2-6-digit number is far too often a false
+    positive (a CSS color, a technical identifier). Returns the full
+    tuple of groups captured by `pattern` (never just the first) — so
+    rustica.fr, whose pattern captures 3 groups (day/month/year), and the
+    3 other sources, which only capture one, share the same call
+    interface inside fetch_all()."""
     parser = _VisibleTextExtractor()
     try:
         parser.feed(html)
@@ -155,11 +155,11 @@ def _extract_from_visible_text(html, pattern):
 
 
 def _extract_from_iframe_src(html, pattern):
-    """Pour rustica.fr : le numéro (une date encodée AAMMJJ) vit dans
-    l'attribut src d'un <iframe> pointant vers la plateforme de jeu
-    embarquée (rcijeux.fr), jamais dans le texte visible de la page
-    elle-même. Même contrat de retour que _extract_from_visible_text
-    ci-dessus (le tuple complet des groupes captés)."""
+    """For rustica.fr: the number (a date encoded as YYMMDD) lives in the
+    src attribute of an <iframe> pointing at the embedded game platform
+    (rcijeux.fr), never in the visible text of the page itself. Same
+    return contract as _extract_from_visible_text above (the full tuple
+    of captured groups)."""
     iframes = re.findall(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.IGNORECASE)
     for src in iframes:
         match = re.search(pattern, src)
@@ -168,26 +168,25 @@ def _extract_from_iframe_src(html, pattern):
     return None
 
 
-# Chaque source : un lien STABLE (jamais une URL datée/à identifiant
-# imprévisible) vers la page qui affiche la grille courante de ce
-# support — vérifié en direct, un par un, avant d'être ajouté ici (voir
-# le docstring du module pour la méthode et les 3 exclusions). "language"
-# vaut "fr" par défaut (fetch_all() applique ce repli via .get(), voir
-# plus bas) — omis sur chacune des 18 sources francophones ci-dessous
-# pour ne pas les retoucher inutilement ; explicite ("en"/"de"/"it"/"es"/
-# "pt") sur les sources non francophones, ou une liste de codes pour une
-# source multilingue (ex. WordsCroisés, "en"+"fr"). "extract" (optionnel)
-# : (fonction, pattern, title_template) pour les sources dont un vrai
-# numéro de grille est automatiquement récupérable — voir le docstring
-# du module pour comment chacune a été confirmée en direct.
+# Each source: a STABLE link (never a dated/unpredictable-id URL) to the
+# page that shows this publisher's own current grid — verified live, one
+# by one, before being added here (see the module docstring for the
+# method and the 3 exclusions). "language" defaults to "fr" (fetch_all()
+# applies this fallback via .get(), see below) — omitted on each of the
+# 18 French-language sources below to avoid touching them unnecessarily;
+# explicit ("en"/"de"/"it"/"es"/"pt") on non-French sources, or a list of
+# codes for a multilingual source (e.g. WordsCroisés, "en"+"fr").
+# "extract" (optional): (function, pattern, title_template) for sources
+# whose real, current grid number can be automatically recovered — see
+# the module docstring for how each one was confirmed live.
 SOURCES = {
     "20minutes": {"name": "20 Minutes", "url": "https://www.20minutes.fr/services/jeux/mots-croises"},
-    # "franceinfo_classique" (l'URL générique "classique/", sans slug) est
-    # délibérément absente ici — voir le docstring du module : elle
-    # redirige réellement vers https://www.franceinfo.fr/culture/musique/
-    # classique/, sans aucun rapport avec les mots croisés, confirmé en
-    # direct. "cnews" et "lebelage" sont exclues pour leurs propres
-    # raisons, également détaillées dans le docstring.
+    # "franceinfo_classique" (the generic "classique/" URL, no slug) is
+    # deliberately absent here — see the module docstring: it really does
+    # redirect to https://www.franceinfo.fr/culture/musique/classique/,
+    # completely unrelated to crosswords, confirmed live. "cnews" and
+    # "lebelage" are excluded for their own reasons, also detailed in the
+    # docstring.
     "franceinfo_mini": {
         "name": "Franceinfo – Mini", "url": "https://jeux.franceinfo.fr/mots-croises/mini/",
         "extract": (_extract_from_visible_text, r'Mots croisés\s*#(\d{2,6})', "Franceinfo – Mini #{}"),
@@ -201,13 +200,12 @@ SOURCES = {
     "leparisien": {"name": "Le Parisien", "url": "https://www.leparisien.fr/jeux/mots-croises"},
     "letelegramme": {
         "name": "Le Télégramme", "url": "https://www.letelegramme.fr/jeux/mots-croises/",
-        # La date de l'édition numérique du jour ("L'édition numérique du
-        # 5 septembre 2026"), confirmée en direct comme étant bien
-        # aujourd'hui, pas la date propre à la grille elle-même (jamais
-        # trouvée sur cette page) — mais un signal de date réel et fiable
-        # malgré tout, contrairement à Le Devoir/TF1 Info (voir plus bas),
-        # dont les seules dates trouvées appartenaient à d'autres articles
-        # sans rapport, pas à aujourd'hui.
+        # The date of the day's own digital edition ("L'édition numérique
+        # du 5 septembre 2026"), confirmed live to genuinely be today,
+        # not the crossword's own dedicated date (never found on this
+        # page) — but a real, reliable date signal all the same, unlike
+        # Le Devoir/TF1 Info (see below), whose only found dates belonged
+        # to other, unrelated articles, not to today.
         "extract": (_extract_from_visible_text, r"édition numérique du\s*\|\s*(\d{1,2} \w+ \d{4})", "Le Télégramme – Édition du {}"),
     },
     "maximag": {"name": "Maximag", "url": "https://www.maxi-mag.fr/jeux/mots-croises"},
@@ -218,11 +216,11 @@ SOURCES = {
     },
     "rustica": {
         "name": "Rustica", "url": "https://www.rustica.fr/jeux/mots-croises/1",
-        # Ce "numéro" est en réalité une date encodée AAMMJJ (confirmé
-        # en direct : "id=260905" pour le 5 septembre 2026), pas un
-        # numéro de grille séquentiel comme pour les 3 autres sources —
-        # reformaté en date lisible plutôt que montré tel quel, qui
-        # laisserait croire, à tort, à un vrai numéro de grille.
+        # This "number" is actually a date encoded as YYMMDD (confirmed
+        # live: "id=260905" for September 5, 2026), not a sequential
+        # grid number like the 3 other sources — reformatted as a
+        # readable date rather than shown as-is, which would wrongly
+        # suggest a real grid number.
         "extract": (_extract_from_iframe_src, r'[?&]id=(\d{2})(\d{2})(\d{2})\b', "Rustica – Grille du {2}/{1}/20{0}"),
     },
     "sudouest": {"name": "Sud Ouest", "url": "https://www.sudouest.fr/jeux/mots-croises/"},
@@ -233,55 +231,55 @@ SOURCES = {
     },
     "telepro": {"name": "Télépro", "url": "https://www.telepro.be/jeux/mots-croises/"},
 
-    # Sources anglophones, à la demande explicite de l'utilisateur :
-    # "Ajoute EN aussi (complémentaire des flux RSS)" — les flux RSS déjà
-    # en place (fetch_rss_feeds.py) sont des blogs *à propos* des mots
-    # croisés (Rex Parker, Diary of a Crossword Fiend), jamais des liens
-    # directs vers une grille jouable ; ces 4 sources comblent ce manque,
-    # vérifiées en direct avec la même méthode que pour le français (voir
-    # le docstring du module). Deux candidats sérieux ont été rejetés au
-    # passage : Washington Post (aucune connexion possible depuis cette
-    # machine — HTTP 000/403 selon l'outil, un vrai échec réseau, pas
-    # supposé) et USA Today (games.usatoday.com redirige réellement vers
-    # "eu.usatoday.com/unsupported-eu/", un blocage géographique des
-    # visiteurs européens — exactement la même classe d'échec que
-    # Franceinfo Classique en français : une redirection vers une page
-    # sans rapport).
+    # English-language sources, at the user's explicit request: "Ajoute
+    # EN aussi (complémentaire des flux RSS)" ("Add EN too, complementary
+    # to the RSS feeds") — the RSS feeds already in place
+    # (fetch_rss_feeds.py) are blogs *about* crosswords (Rex Parker, Diary
+    # of a Crossword Fiend), never a direct link to a playable grid; these
+    # 4 sources fill that gap, verified live with the same method as for
+    # French (see the module docstring). Two serious candidates were
+    # rejected along the way: Washington Post (no connection at all
+    # possible from this machine — HTTP 000/403 depending on the tool, a
+    # genuine network failure, not assumed) and USA Today
+    # (games.usatoday.com really does redirect to
+    # "eu.usatoday.com/unsupported-eu/", a geographic block against
+    # European visitors — exactly the same failure class as Franceinfo
+    # Classique in French: a redirect to an unrelated page).
     "foxnews": {
         "name": "Fox News", "url": "https://www.foxnews.com/games/daily-crossword-puzzle", "language": "en",
-        # L'exemple donné directement par l'utilisateur : "<h3
-        # class='date'>Saturday, September 5th</h3>" — confirmé en direct
-        # (texte visible réel, correspondant bien à la date du jour).
+        # The exact example given directly by the user: "<h3
+        # class='date'>Saturday, September 5th</h3>" — confirmed live
+        # (real visible text, genuinely matching today's date).
         "extract": (_extract_from_visible_text, r'((?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday), \w+ \d{1,2}(?:st|nd|rd|th)?)', "Fox News – {}"),
     },
     "guardian": {
         "name": "The Guardian – Cryptic", "url": "https://www.theguardian.com/crosswords/series/cryptic",
         "language": "en",
-        # Une page d'archive listant plusieurs grilles récentes (comme
-        # Notre Temps/Télé 7 Jours en français) — la première entrée est
-        # toujours la plus récente, confirmé en direct.
+        # An archive page listing several recent grids (like Notre
+        # Temps/Télé 7 Jours in French) — the first entry is always the
+        # most recent one, confirmed live.
         "extract": (_extract_from_visible_text, r'Cryptic crossword No ([\d,]+)', "The Guardian – Cryptic No {}"),
     },
     "bestcrosswords": {
-        # URL corrigée par l'utilisateur : "Sur ce site, la page de mots
-        # croisés du jour est en fait ici" — l'ancienne URL (la page
-        # d'accueil du site) n'était pas fausse en soi, mais pas la bonne
-        # page spécifique aux mots croisés quotidiens. Confirmée en direct
-        # (200, aucune redirection, contenu réel), et une vraie date
-        # extractible trouvée au passage : "Puzzles for Saturday,
-        # September 5, 2026".
+        # URL corrected by the user: "Sur ce site, la page de mots
+        # croisés du jour est en fait ici" ("On this site, the daily
+        # crossword page is actually here") — the old URL (the site's own
+        # homepage) wasn't wrong as such, just not the specific daily-
+        # crossword page. Confirmed live (200, no redirect, real content),
+        # and a genuine extractable date found along the way: "Puzzles
+        # for Saturday, September 5, 2026".
         "name": "BestCrosswords", "url": "https://www.bestcrosswords.com/daily-crossword-puzzles", "language": "en",
         "extract": (_extract_from_visible_text, r'Puzzles for ((?:Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday), \w+ \d{1,2}, \d{4})', "BestCrosswords – {}"),
     },
     "onlinecrosswords": {
-        # URL corrigée par l'utilisateur, même remarque que pour
-        # bestcrosswords.com : la page d'accueil n'était pas la bonne
-        # page spécifique. Confirmée en direct (200, aucune redirection).
-        # Numéro ET date extractibles ensemble ici : "This is the online
-        # crossword puzzle #1 for Sep 5, 2026." — 4 groupes captés
-        # séparément (numéro, mois, jour, année) plutôt qu'un bloc de
-        # date unique, pour ne pas recopier tel quel le double espace
-        # réel trouvé dans le texte source ("Sep  5, 2026").
+        # URL corrected by the user, same note as for bestcrosswords.com:
+        # the homepage wasn't the specific right page. Confirmed live
+        # (200, no redirect). Number AND date both extractable here
+        # together: "This is the online crossword puzzle #1 for Sep 5,
+        # 2026." — 4 groups captured separately (number, month, day,
+        # year) rather than one single date block, so as not to copy the
+        # real double space found in the source text verbatim
+        # ("Sep  5, 2026").
         "name": "OnlineCrosswords.net", "url": "https://www.onlinecrosswords.net/online-daily-crosswords-1.php", "language": "en",
         "extract": (
             _extract_from_visible_text,
@@ -311,23 +309,23 @@ SOURCES = {
         ),
     },
 
-    # Sources allemandes/italiennes/espagnoles, à la demande explicite de
-    # l'utilisateur : "Cherche des sites donnant des grilles quotidiennes
-    # en DE/IT/ES pour les scrapper une fois par jour et donner un lien
-    # précis dans l'actu." Recherchées via un agent dédié (WebSearch +
-    # WebFetch), puis chacune revérifiée en direct une seconde fois par
-    # curl (même méthode, même en-tête réaliste, que pour les sources
-    # françaises/anglaises) avant d'être ajoutée ici — jamais ajoutée sur
-    # la seule foi du rapport de l'agent. Cette seconde vérification a
-    # d'ailleurs corrigé un faux négatif : l'agent avait rejeté eldiario.es
-    # en le croyant redirigé vers une page générique, mais un fetch direct
-    # confirme au contraire une vraie page de crucigramas ("Crucigramas
-    # en Juegos elDiario.es", aucune redirection) — gardée sur la base de
-    # cette vérification indépendante plutôt que sur le rapport initial.
-    # t-online.de redirige bien, mais vers une URL quasi identique (même
-    # identifiant numérique, ordre des mots du slug seulement changé) —
-    # l'URL finale (canonique) est celle utilisée ci-dessous, pas
-    # l'originale.
+    # German/Italian/Spanish sources, at the user's explicit request:
+    # "Cherche des sites donnant des grilles quotidiennes en DE/IT/ES pour
+    # les scrapper une fois par jour et donner un lien précis dans
+    # l'actu." ("Find sites giving daily grids in DE/IT/ES to scrape once
+    # a day and give a precise link in the news feed.") Researched via a
+    # dedicated agent (WebSearch + WebFetch), then each one re-verified
+    # live a second time via curl (same method, same realistic header, as
+    # for the French/English sources) before being added here — never
+    # added on the strength of the agent's own report alone. This second
+    # verification actually corrected a false negative: the agent had
+    # rejected eldiario.es, believing it redirected to a generic page, but
+    # a direct fetch instead confirms a real crucigramas page ("Crucigramas
+    # en Juegos elDiario.es", no redirect) — kept on the strength of this
+    # independent verification rather than the initial report.
+    # t-online.de does redirect, but to an almost-identical URL (same
+    # numeric id, only the slug's own word order changed) — the final
+    # (canonical) URL is the one used below, not the original one.
     "tonline": {"name": "T-Online", "url": "https://www.t-online.de/spiele/t-online-spiele/id_87469764/kniffliges-kreuzwortraetsel-kostenlos-taeglich-online-spielen.html", "language": "de"},
     "nzz": {"name": "NZZ", "url": "https://spiele.nzz.ch/kreuzwortraetsel/", "language": "de"},
     "rheinpfalz": {"name": "Die Rheinpfalz", "url": "https://www.rheinpfalz.de/spiele/kreuzwortraetsel.html", "language": "de"},
@@ -335,22 +333,22 @@ SOURCES = {
     "weserkurier": {"name": "Weser-Kurier", "url": "https://www.weser-kurier.de/thema/kreuzwortraetsel-q83207/", "language": "de"},
     "focusde": {"name": "Focus", "url": "https://focus.arkadiumarena.com/games/taeglisches-kreuzwortraetsel/", "language": "de"},
 
-    # IT : recherche nettement plus faible que pour les autres langues
-    # (voir CLAUDE.md) — les grands quotidiens italiens n'ont soit pas de
-    # page de cruciverba stable trouvable (La Repubblica, Il Fatto
-    # Quotidiano), soit sont payants (Corriere della Sera, La Settimana
-    # Enigmistica) — seuls ces 2 sites indépendants ont passé la
-    # vérification. iltuocruciverba.com publie en réalité chaque
-    # SEMAINE, pas chaque jour ("Ogni settimana pubblichiamo un nuovo
-    # cruciverba") — gardé quand même : la page elle-même reste stable et
-    # réelle, seule sa cadence de mise à jour diffère des autres sources.
+    # IT: markedly weaker search results than for the other languages
+    # (see CLAUDE.md) — the major Italian dailies either have no findable
+    # stable cruciverba page (La Repubblica, Il Fatto Quotidiano), or are
+    # paywalled (Corriere della Sera, La Settimana Enigmistica) — only
+    # these 2 independent sites passed verification. iltuocruciverba.com
+    # actually publishes every WEEK, not daily ("Ogni settimana
+    # pubblichiamo un nuovo cruciverba" — "Every week we publish a new
+    # crossword") — kept anyway: the page itself stays stable and real,
+    # only its own update cadence differs from the other sources.
     "cruciverbalab": {
-        # URL corrigée par l'utilisateur, même remarque que pour
-        # bestcrosswords.com/onlinecrosswords.net : la page d'accueil
-        # n'était pas la page spécifique au cruciverba lui-même. Confirmée
-        # en direct (200, aucune redirection), et une vraie date
-        # extractible trouvée au passage : "Cruciverba Lab | 5 settembre
-        # 2026" (texte visible réel, correspondant bien à aujourd'hui).
+        # URL corrected by the user, same note as for bestcrosswords.com/
+        # onlinecrosswords.net: the homepage wasn't the specific page for
+        # the cruciverba itself. Confirmed live (200, no redirect), and a
+        # genuine extractable date found along the way: "Cruciverba Lab |
+        # 5 settembre 2026" (real visible text, genuinely matching
+        # today).
         "name": "Cruciverba Lab", "url": "https://cruciverba-lab.it/cruciverba", "language": "it",
         "extract": (_extract_from_visible_text, r"Cruciverba Lab\s*\|\s*(\d{1,2} \w+ \d{4})", "Cruciverba Lab – {}"),
     },
@@ -360,27 +358,26 @@ SOURCES = {
     "lanacion": {"name": "La Nación", "url": "https://www.lanacion.com.ar/juegos/crucigrama/", "language": "es"},
     "eldiario": {"name": "elDiario.es", "url": "https://www.eldiario.es/juegos/game/crossword/", "language": "es"},
 
-    # PT : une seule source a passé la vérification, sur ~15 candidats
-    # testés en direct. Aucun quotidien portugais n'est exploitable avec
-    # le mécanisme (httpx simple, sans navigateur) : Público renvoie une
-    # page anti-robot Cloudflare (HTTP 202, "verify you're not a robot") ;
-    # Record, Sábado et Correio da Manhã (groupe Medialivre) ne servent
-    # qu'une page de rubrique dont la grille est rendue en JS, sans grille
-    # ni iframe de jeu dans le HTML brut ; Jornal de Notícias et Diário de
-    # Notícias renvoient 404 sur tout chemin /passatempos/palavras-cruzadas
-    # essayé ; palavrascruzadas.pt (le site de l'auteur Paulo Freixinho)
-    # est une bibliothèque/boutique organisée par séries, sans URL stable
-    # "grille du jour". Côté Brésil : geniol.com.br est bloqué par
-    # Cloudflare (403 dur) ; ojogos.com.br embarque un jeu générique
-    # étranger reskiné, pas une grille brésilienne ; sopalavrascruzadas.
-    # com.br n'a plus rien de récent (dernières grilles datées 2024) ;
-    # rachacuca.com.br n'a qu'un petit archivage numéroté (#1..#55, pas
-    # une publication quotidienne) et la grille y est uniquement en JS.
-    # Cruzadas Clube, lui, publie une nouvelle grille datée chaque jour
-    # (vérifié en direct : "Cruzadas clássicas 682", "postado em
-    # 04/09/2026") — la page de catégorie est stable et liste la plus
-    # récente en premier, d'où la règle "extract" qui prend le premier
-    # numéro visible.
+    # PT: only one source passed verification, out of ~15 candidates
+    # tested live. No Portuguese daily is usable with this project's own
+    # mechanism (plain httpx, no browser): Público returns a Cloudflare
+    # anti-bot page (HTTP 202, "verify you're not a robot"); Record,
+    # Sábado and Correio da Manhã (Medialivre group) only serve a section
+    # page whose own grid is JS-rendered, with no grid or game iframe in
+    # the raw HTML; Jornal de Notícias and Diário de Notícias return 404
+    # on every /passatempos/palavras-cruzadas path tried; palavrascruzadas.
+    # pt (author Paulo Freixinho's own site) is a library/shop organized
+    # by series, with no stable "today's grid" URL. On the Brazilian
+    # side: geniol.com.br is blocked by Cloudflare (a hard 403);
+    # ojogos.com.br embeds a generic, reskinned foreign game, not a
+    # Brazilian grid; sopalavrascruzadas.com.br has nothing recent left
+    # (its latest grids are dated 2024); rachacuca.com.br only has a
+    # small numbered archive (#1..#55, not a daily publication) and its
+    # grid is JS-only. Cruzadas Clube, on the other hand, publishes a new,
+    # dated grid every day (confirmed live: "Cruzadas clássicas 682",
+    # "postado em 04/09/2026") — the category page is stable and lists
+    # the most recent one first, hence the "extract" rule taking the
+    # first visible number.
     "cruzadasclube": {
         "name": "Cruzadas Clube",
         "url": "https://cruzadasclube.com.br/jogo/categoria/id/1/n/cruzadas-classicas",
@@ -388,19 +385,20 @@ SOURCES = {
         "extract": (_extract_from_visible_text, r"Cruzadas cl[aá]ssicas\s+(\d{2,5})", "Cruzadas Clube – Clássicas {}"),
     },
     "onlinecrosswords_pt": {
-        # Ajoutée directement par l'utilisateur : "Site Portugais à ajouter
-        # au SCAPP : https://www.onlinecrosswords.net/br/online-daily-
-        # crosswords-1.php" — la variante brésilienne/portugaise de la
-        # source anglaise "onlinecrosswords" déjà présente plus haut, sur
-        # le même site (OnlineCrosswords.net). Confirmée en direct (200,
-        # aucune redirection, ~450 caractères de texte visible réel,
-        # contenu authentiquement en portugais : "Palavras Cruzadas
-        # Online... Este é o puzzle #1 para Sep 6, 2026"). Numéro ET date
-        # extractibles ensemble ici, exactement comme la source anglaise
-        # (même site, même structure de page, seul "for" devient "para") —
-        # 4 groupes captés séparément (numéro, mois, jour, année), même
-        # raison que la version anglaise : ne pas recopier tel quel le
-        # double espace réel trouvé dans le texte source ("Sep  6, 2026").
+        # Added directly by the user: "Site Portugais à ajouter au SCAPP :
+        # https://www.onlinecrosswords.net/br/online-daily-crosswords-1.php"
+        # ("Portuguese site to add to SCRAPP: ...") — the Brazilian/
+        # Portuguese variant of the English "onlinecrosswords" source
+        # already present above, on the same site (OnlineCrosswords.net).
+        # Confirmed live (200, no redirect, ~450 characters of real
+        # visible text, genuinely Portuguese content: "Palavras Cruzadas
+        # Online... Este é o puzzle #1 para Sep 6, 2026"). Number AND
+        # date both extractable together here, exactly like the English
+        # source (same site, same page structure, only "for" becomes
+        # "para") — 4 groups captured separately (number, month, day,
+        # year), same reason as the English version: so as not to copy
+        # the real double space found in the source text verbatim
+        # ("Sep  6, 2026").
         "name": "OnlineCrosswords.net (BR)",
         "url": "https://www.onlinecrosswords.net/br/online-daily-crosswords-1.php",
         "language": "pt",
@@ -416,18 +414,18 @@ SCRAPP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 
 
 def fetch_all():
-    """Vérifie, pour chaque source de SOURCES, que son URL stable répond
-    toujours (best-effort, comme chaque flux RSS pris individuellement
-    dans fetch_rss_feeds.py) — une source qui échoue est journalisée et
-    simplement omise de ce run, jamais laissée à interrompre les autres.
-    Pour les sources porteuses d'une règle "extract", tente en plus d'en
-    tirer le vrai numéro de grille du jour — un échec d'extraction (page
-    répondant normalement mais motif introuvable, par ex. si le format du
-    site changeait) est journalisé mais n'exclut pas la source : elle est
-    tout de même gardée, avec son simple nom générique comme titre plutôt
-    qu'un numéro qu'on ne peut plus garantir. Écrit SCRAPP/combined.json
-    (écrasé à chaque exécution, comme RSS/combined.json) dans la même
-    forme {"fetched_at", "items"} déjà utilisée par fetch_rss_feeds.py."""
+    """Checks, for every source in SOURCES, that its stable URL still
+    responds (best-effort, like every RSS feed taken individually in
+    fetch_rss_feeds.py) — a source that fails is logged and simply
+    skipped for this run, never left to interrupt the others. For
+    sources carrying an "extract" rule, also tries to pull today's real
+    grid number out of the page — an extraction failure (the page
+    responds normally but the pattern isn't found, e.g. if the site's own
+    format changed) is logged but doesn't exclude the source: it's still
+    kept, with its own plain generic name as the title instead of a
+    number that can no longer be guaranteed. Writes SCRAPP/combined.json
+    (overwritten on every run, like RSS/combined.json) in the same
+    {"fetched_at", "items"} shape already used by fetch_rss_feeds.py."""
     os.makedirs(SCRAPP_DIR, exist_ok=True)
     today = date.today().isoformat()
     combined = []

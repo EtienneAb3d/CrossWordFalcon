@@ -1,27 +1,23 @@
-"""Stocke les couples pseudo/mot secret permettant à un utilisateur de
-prouver qu'un pseudo lui appartient, à la demande explicite de
-l'utilisateur : "ajouter une entrée 'Mot secret' permettant à
-l'utilisateur de prouver que le pseudo lui appartient... Stocker les
-couples Pseudo/Secret dans le dossier SECRET."
+"""Stores pseudo/secret-word pairs letting a user prove a given pseudo
+belongs to them — backing the "Mot secret" field on the welcome overlay.
 
-Un fichier JSON par pseudo sous SECRET/ (racine du projet, gitignoré —
-même convention que GRID_STORE/, GRID_WORK/, LOG_CHAT/, etc. : un
-répertoire déclaré comme constante de module, créé paresseusement via
-`mkdir(parents=True, exist_ok=True)` juste avant la première écriture,
-jamais au chargement du module). Le fichier est nommé par le hachage
-SHA-256 du pseudo lui-même (comparaison exacte, sensible à la casse —
-la même convention que le reste du projet pour ce champ, ex. le filtre
-"Mes grilles" de `GET /api/library`) plutôt qu'un slug, pour éviter tout
-souci de caractères invalides dans un nom de fichier sans avoir à écrire
-une fonction de slugification séparée rien que pour ça.
+One JSON file per pseudo under SECRET/ (project root, gitignored — same
+convention as GRID_STORE/, GRID_WORK/, LOG_CHAT/, etc.: a directory
+declared as a module constant, created lazily via
+`mkdir(parents=True, exist_ok=True)` right before the first write, never
+at module load time). The file is named by the SHA-256 hash of the
+pseudo itself (an exact, case-sensitive comparison — the same convention
+this project already uses for that field elsewhere, e.g. `GET /api/
+library`'s own "Mes grilles" filter) rather than a slug, avoiding any
+invalid-filename-character concern without writing a separate
+slugification function just for this.
 
-Le mot secret lui-même n'est jamais stocké en clair : haché avec un sel
-aléatoire propre à chaque pseudo via `hashlib.pbkdf2_hmac` (uniquement la
-bibliothèque standard, pas de nouvelle dépendance). Ce n'est pas un
-mécanisme d'authentification à haute sécurité — juste "prouver qu'on est
-bien le premier à avoir choisi ce pseudo" pour un jeu de mots croisés —
-mais il n'y a aucune raison de stocker un secret en clair sur disque
-quand le hachage ne coûte presque rien.
+The secret word itself is never stored in plain text: hashed with a
+random salt unique to each pseudo via `hashlib.pbkdf2_hmac` (standard
+library only, no new dependency). This is not a high-security
+authentication mechanism — just "prove you were genuinely the first to
+pick this pseudo" for a crossword game — but there's no reason to store
+a secret in plain text on disk when hashing costs almost nothing.
 """
 import hashlib
 import json
@@ -32,18 +28,18 @@ from pathlib import Path
 
 SECRET_DIR = Path(__file__).resolve().parent.parent / "SECRET"
 
-# Nombre d'itérations PBKDF2 — une valeur usuelle pour ce niveau
-# d'enjeu (pas un coffre-fort bancaire, juste éviter le vol de pseudo
-# entre deux joueurs), sans ralentir perceptiblement une requête.
+# PBKDF2 iteration count — a reasonable value for this level of stakes
+# (not a bank vault, just avoiding pseudo theft between two players),
+# without perceptibly slowing down a request.
 _PBKDF2_ITERATIONS = 200_000
 _SALT_BYTES = 16
 
-# Protège la lecture-puis-écriture d'un même fichier pseudo contre une
-# course entre deux requêtes simultanées qui tenteraient de revendiquer
-# le même pseudo tout neuf en même temps — même principe que
-# `_PRESENCE_LOCK` dans backend/app.py. Un seul verrou global suffit :
-# ce mécanisme n'est jamais sur un chemin chaud (un appel par ouverture
-# du panneau d'accueil, jamais par frappe de touche).
+# Protects a read-then-write of the same pseudo file against a race
+# between two simultaneous requests both trying to claim the same
+# brand-new pseudo at once — same principle as `_PRESENCE_LOCK` in
+# backend/app.py. A single global lock is enough: this mechanism is
+# never on a hot path (one call per welcome-overlay open, never per
+# keystroke).
 _SECRET_LOCK = threading.Lock()
 
 
@@ -59,14 +55,14 @@ def _hash_secret(secret: str, salt: bytes) -> str:
 
 
 def verify_or_claim(pseudo: str, secret: str) -> bool:
-    """Vérifie que `secret` correspond au mot secret déjà enregistré pour
-    `pseudo` — ou, si ce pseudo n'a encore jamais été revendiqué,
-    l'enregistre avec ce `secret` (première utilisation = revendication).
+    """Checks that `secret` matches the secret word already stored for
+    `pseudo` — or, if that pseudo has never been claimed yet, stores it
+    with this `secret` (first use = claim).
 
-    Renvoie `True` dans les deux cas de succès (mot secret correct, ou
-    pseudo tout juste revendiqué) ; `False` uniquement si `pseudo` existe
-    déjà sous un mot secret différent — le seul cas où l'appelant doit
-    refuser et garder le panneau ouvert."""
+    Returns `True` on either success case (correct secret word, or a
+    freshly claimed pseudo); `False` only if `pseudo` already exists
+    under a different secret word — the one case where the caller
+    should refuse and keep the overlay open."""
     path = _pseudo_path(pseudo)
     with _SECRET_LOCK:
         if path.exists():
@@ -75,9 +71,9 @@ def verify_or_claim(pseudo: str, secret: str) -> bool:
                 salt = bytes.fromhex(data["salt"])
                 stored_hash = data["secret_hash"]
             except (OSError, ValueError, KeyError):
-                # Fichier corrompu/illisible : traité comme absent plutôt
-                # que de bloquer indéfiniment ce pseudo — réécrit ci-dessous
-                # comme une nouvelle revendication.
+                # Corrupted/unreadable file: treated as absent rather
+                # than permanently locking out this pseudo — rewritten
+                # below as a fresh claim.
                 pass
             else:
                 return _hash_secret(secret, salt) == stored_hash

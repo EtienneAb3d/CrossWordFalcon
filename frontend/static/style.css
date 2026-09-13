@@ -20,15 +20,23 @@
   --best: #16a34a;
   --theme-fg: #ff00fb;
   --finish-locked: #4ade80;
+  /* "Cases hors zone" — a plain gray fill for every cell NOT part of a
+     click-dragged selection zone (Édition mode), at the user's explicit
+     request: "mettre en fond gris les cases qui ne font pas partie de la
+     sélection." Distinct from --border (used for the thin grid-line gaps
+     between cells, never a whole-cell fill) and from --white-cell/
+     --black-cell so it reads as a real overlay state, not a third kind of
+     ordinary cell. */
+  --zone-unselected-bg: #d4d4d4;
   /* Track (background) of the small CPU/GPU occupancy meters in the info
      tooltip (#resource-meters) — a semi-transparent white overlay, since
      the tooltip's own background (--fg, near-black) is fixed regardless
      of theme; the fill itself reuses --accent, no new token needed. */
   --meter-track: rgba(255, 255, 255, 0.25);
-  /* Boutons "Perplexity" (Dictionnaire/Paraphraseur) — même forme que les
-     boutons bleus, mais en violet, à la demande explicite de
-     l'utilisateur, pour renforcer l'indication qu'ils ouvrent une URL
-     externe plutôt qu'une action interne à l'application. */
+  /* "Perplexity" buttons (Dictionnaire/Paraphraseur) — same shape as the
+     blue buttons, but in purple, at the user's explicit request, to
+     reinforce the indication that they open an external URL rather than
+     an action internal to the application. */
   --external-link: #7c3aed;
 }
 
@@ -71,15 +79,15 @@ body::before {
   pointer-events: none;
 }
 
-/* `min-height: 100vh` + une colonne flexible, à la demande explicite de
-   l'utilisateur ("Afficher les actus en dessous des boutons de
-   l'application, sur ce qui reste de fenêtre vide") — #rss-panel (seul
-   enfant avec `flex: 1`, voir plus bas) grandit alors pour occuper tout
-   l'espace vertical encore libre de la fenêtre, quelle que soit la
-   hauteur réelle du formulaire au-dessus de lui ; les autres enfants
-   (#generate-form, #library/#attempt-preview/#result une fois affichés)
-   gardent leur propre hauteur naturelle, `display: flex` en colonne ne
-   change rien à leur mise en page interne. */
+/* `min-height: 100vh` + a flex column, at the user's explicit request
+   ("Afficher les actus en dessous des boutons de l'application, sur ce
+   qui reste de fenêtre vide") — #rss-panel (the only child with
+   `flex: 1`, see further below) then grows to occupy all of the window's
+   remaining vertical space, regardless of the form's own actual height
+   above it; the other children (#generate-form, #library/#attempt-
+   preview/#result once shown) keep their own natural height, `display:
+   flex` in column direction changes nothing about their internal
+   layout. */
 main {
   width: 80%;
   margin: 0 auto;
@@ -90,14 +98,14 @@ main {
   flex-direction: column;
 }
 
-/* Marge de défilement réservée pendant que le clavier virtuel est
-   déplié, à la demande explicite de l'utilisateur — voir script.js pour
-   quand cette classe est posée/retirée. `position: fixed` (voir
-   #virtual-keyboard) fait que le clavier ne pousse jamais naturellement
-   le bas de <main> ; sans ce padding, rien ne permet de faire défiler la
-   page assez loin pour dégager le bas de la grille de dessous le
-   clavier. 14rem (~224px) suffit largement à couvrir la hauteur réelle
-   du clavier déplié (2 rangées de lettres + la marge du widget). */
+/* Scroll margin reserved while the virtual keyboard is expanded, at the
+   user's explicit request — see script.js for when this class is
+   added/removed. `position: fixed` (see #virtual-keyboard) means the
+   keyboard never naturally pushes the bottom of <main>; without this
+   padding, nothing lets the page scroll far enough to clear the bottom
+   of the grid from under the keyboard. 14rem (~224px) comfortably covers
+   the real height of the expanded keyboard (2 rows of letters + the
+   widget's own margin). */
 main.keyboard-open-padding {
   padding-bottom: 14rem;
 }
@@ -153,9 +161,9 @@ h1 {
   outline: none;
 }
 
-/* Lien vers le dépôt GitHub, en haut à droite du header (dernier élément
-   de la ligne flex, après le badge d'info). Discret par défaut, comme
-   le badge d'info, et mis en avant au survol / focus clavier. */
+/* Link to the GitHub repo, top-right of the header (last element of the
+   flex row, after the info badge). Discreet by default, like the info
+   badge, and highlighted on hover / keyboard focus. */
 #github-link,
 #discussions-link {
   flex-shrink: 0;
@@ -304,11 +312,11 @@ form {
   margin-bottom: 1rem;
 }
 
-/* Les boutons d'action (bleus) sur leur propre ligne, sous les combos
-   d'options, à la demande explicite de l'utilisateur : `flex-basis: 100%`
-   force ce conteneur à passer seul sur la ligne suivante du flex-wrap du
-   #generate-form ; #library-btn garde son `margin-left: auto` (voir plus
-   bas) et pousse "Bibliothèque" + "Dictionnaire" à droite de cette ligne. */
+/* The action buttons (blue) on their own row, below the option combos, at
+   the user's explicit request: `flex-basis: 100%` forces this container
+   onto its own next line of #generate-form's flex-wrap; #library-btn
+   keeps its own `margin-left: auto` (see further below) and pushes
+   "Bibliothèque" + "Dictionnaire" to the right of this row. */
 #form-actions {
   flex-basis: 100%;
   display: flex;
@@ -317,11 +325,11 @@ form {
   align-items: center;
 }
 
-/* Champ "Thématique" optionnel, placé à côté du bouton "Générer la grille"
-   dans #form-actions, à la demande explicite de l'utilisateur. Disposé en
-   ligne (libellé + saisie) plutôt qu'en colonne comme les autres `label`,
-   pour rester compact sur la ligne des boutons, et plus large que le
-   `input` par défaut (6rem) pour accueillir une liste de mots. */
+/* Optional "Thématique" field, placed next to the "Générer la grille"
+   button in #form-actions, at the user's explicit request. Laid out in a
+   row (label + input) rather than a column like the other `label`
+   elements, to stay compact on the buttons' row, and wider than the
+   default `input` (6rem) to accommodate a list of words. */
 #theme-field {
   flex-direction: row;
   align-items: center;
@@ -427,13 +435,13 @@ button:disabled {
   color: var(--error);
 }
 
-/* Ligne du titre : #grid-title (gauche) + #grid-timer (droite), à la
-   demande explicite de l'utilisateur ("l'afficher à droite sur la même
-   ligne que le titre de la grille") — troisième et dernière étape d'un
-   historique de placement (voir #grid-timer ci-dessous) : d'abord en
-   ligne à gauche du titre, puis en position fixe dans le coin de la
-   fenêtre (jugé "trop haut, pas assez lié au titre"), maintenant de
-   retour en ligne mais du côté droit de cette même ligne. */
+/* Title row: #grid-title (left) + #grid-timer (right), at the user's
+   explicit request ("l'afficher à droite sur la même ligne que le titre
+   de la grille") — the third and final step of a placement history (see
+   #grid-timer below): first inline to the left of the title, then in a
+   fixed position in the window's corner (judged "too high up, not
+   linked enough to the title"), now back inline but on the right side
+   of that same row. */
 #grid-title-row {
   display: flex;
   align-items: baseline;
@@ -441,15 +449,16 @@ button:disabled {
   margin: 0 0 0.3rem;
 }
 
-/* Compteur de temps de la partie en cours (script.js's startGridTimer/
-   scheduleGridGameSave), à la demande explicite de l'utilisateur.
-   "XhXmnXs" via la même formatDuration() que le rapport des temps de
-   génération plus bas. `margin-left: auto` (même technique que h1 dans
-   #page-header) le pousse à l'extrémité droite de #grid-title-row quel
-   que soit le contenu de #grid-title à sa gauche — plus robuste qu'un
-   `justify-content: space-between` sur la ligne, qui replierait le
-   compteur à GAUCHE si #grid-title lui-même est masqué (grille sans
-   titre ni difficulté, cas rare mais réel — voir displayFinalGrid). */
+/* Elapsed-time counter for the game in progress (script.js's
+   startGridTimer/scheduleGridGameSave), at the user's explicit request.
+   "XhXmnXs" via the same formatDuration() as the generation-times report
+   further below. `margin-left: auto` (the same technique as h1 in
+   #page-header) pushes it to the far right of #grid-title-row regardless
+   of #grid-title's own content to its left — more robust than a
+   `justify-content: space-between` on the row, which would fold the
+   counter back to the LEFT if #grid-title itself is hidden (a grid with
+   neither title nor difficulty, a rare but real case — see
+   displayFinalGrid). */
 #grid-timer {
   margin-left: auto;
   font-size: 1rem;
@@ -475,10 +484,10 @@ button:disabled {
   font-size: 1.3rem;
 }
 
-/* Niveau de difficulté ("Facile" / "Moyen" / "Difficile") affiché à
-   droite du titre de la grille à jouer, à la demande explicite de
-   l'utilisateur — libellé secondaire : plus petit, discret, poids
-   normal, légèrement décalé du titre. */
+/* Difficulty level ("Facile" / "Moyen" / "Difficile") shown to the right
+   of the playable grid's title, at the user's explicit request —
+   secondary label: smaller, discreet, normal weight, slightly offset
+   from the title. */
 #grid-difficulty {
   margin-left: 0.6rem;
   font-size: 0.85rem;
@@ -492,12 +501,12 @@ button:disabled {
   color: #555;
 }
 
-/* Rapport des temps de génération, à la demande explicite de
-   l'utilisateur : "en petits caractères sur une seule ligne", juste après
-   le rapport "% mots placés"/"% cases noires" (#stats ci-dessus) — même
-   traitement visuel que .attempt-preview-stats (petit, discret), pour
-   rester cohérent avec l'autre endroit de l'interface qui affiche déjà ce
-   genre de métadonnée secondaire. */
+/* Generation-times report, at the user's explicit request: "en petits
+   caractères sur une seule ligne", right after the "% mots placés"/"%
+   cases noires" report (#stats above) — same visual treatment as
+   .attempt-preview-stats (small, discreet), to stay consistent with the
+   other place in the interface that already shows this kind of secondary
+   metadata. */
 #generation-times {
   margin: 0;
   font-size: 0.7rem;
@@ -533,25 +542,24 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
-/* Centré (jamais collé à gauche), à la demande explicite de
-   l'utilisateur : "En mode jeu, centrer le bloc grille+définition+
-   flèches." Dans l'état par défaut du mode jeu (#clues/#down-clues-
-   section masqués tant que "Définitions" n'a pas été activé, voir
-   applyDefinitionsVisibility()), #grid-column — grille + panneau de
-   définition + flèches de sens — est le seul enfant visible de #board,
-   donc ce centrage porte exactement sur ce bloc-là. Si "Définitions" est
-   activé, #clues (liste horizontale) réapparaît à côté et le centrage
-   porte alors sur la paire #clues+#grid-column ensemble — un
-   comportement dégradé raisonnable, jamais un cas que l'utilisateur a
-   exclu.
-   Cette règle était auparavant scopée à `#board.interactive-centered`
-   (posée/retirée par script.js's enterInteractiveMode()/
-   hideInteractivePanel()), seul le mode "Interactif" étant centré — le
-   mode jeu restait volontairement collé à gauche. Rendue inconditionnelle
-   ici ; la classe `.interactive-centered` elle-même (devenue un pur
-   doublon, #board étant maintenant toujours centré) a été retirée du
-   HTML/JS plutôt que laissée morte. */
+/* Centered (never flush left), at the user's explicit request: "En mode
+   jeu, centrer le bloc grille+définition+flèches." In play mode's own
+   default state (#clues/#down-clues-section hidden until "Définitions"
+   has been enabled, see applyDefinitionsVisibility()), #grid-column —
+   grid + definition panel + direction arrows — is the only visible
+   child of #board, so this centering applies exactly to that one block.
+   If "Définitions" is enabled, #clues (a horizontal list) reappears
+   alongside it and the centering then applies to the #clues+#grid-column
+   pair together — a reasonable degraded behavior, never a case the user
+   excluded.
+   This rule used to be scoped to `#board.interactive-centered` (set/
+   removed by script.js's enterInteractiveMode()/hideInteractivePanel()),
+   with only "Interactif" mode centered — play mode deliberately stayed
+   flush left. Made unconditional here; the `.interactive-centered` class
+   itself (having become a pure duplicate, #board now always being
+   centered) was removed from the HTML/JS rather than left dead. */
 #board {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -627,6 +635,63 @@ button:disabled {
   gap: 2px;
   background: var(--border);
   border: 2px solid var(--border);
+}
+
+/* Interactive mode only: wraps #grid — never #interactive-cell-stats
+   (see below, positioned independently, out of normal flow) — kept as
+   its own element because #grid-column itself becomes a horizontal row
+   in Interactive mode (see #grid-column.interactive-flank below, which
+   puts the Précédent/grid-wrap/Suivant trio side by side); harmless
+   outside Interactive mode too, rendering identically to a bare #grid. */
+#interactive-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Black-cell / white-cell-fill percentages, one line each, floating at
+   the top-left corner of #board — the central content column where the
+   grid itself is displayed, not the raw browser window edge and not the
+   grid's own (centered, and in Interactive mode Précédent-button-offset)
+   left edge. #board already uses align-items: flex-start, so its own top
+   edge coincides with #grid-column's, which in turn coincides with
+   #grid's own top edge once #grid-column becomes a row (see
+   .interactive-flank below) with align-items: center around #grid as its
+   tallest child — so top: 0/left: 0 against #board lands this card
+   precisely at the grid's own top-left corner without needing a JS
+   measurement. #board gets position: relative purely to serve as this
+   card's containing block; position: absolute takes the card out of
+   normal flow entirely, so it can never add height above #grid or push
+   it down, and it scrolls with the page (unlike a viewport-fixed
+   position) since #board itself is an ordinary in-flow element. A small
+   card (background/border/shadow, matching #chatbot's own card look)
+   keeps it legible over whatever content happens to sit beneath it. */
+#interactive-cell-stats {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white-cell);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  font-size: 0.7rem;
+  color: var(--fg);
+  opacity: 0.9;
+}
+#interactive-cell-stats p {
+  margin: 0;
+}
+/* Bare-id `display` above beats `[hidden]{display:none}` on specificity
+   (same trap as #interactive-controls/#rss-panel/#hover-definition-row,
+   see the style-guide SKILL) — without this override, script.js's own
+   `.hidden = true`/`= false` toggling would have no visual effect. */
+#interactive-cell-stats[hidden] {
+  display: none;
 }
 
 /* Fixed-height, always-5-lines-tall panel showing the definition of
@@ -856,25 +921,24 @@ button:disabled {
   background: var(--low-candidates-bg);
 }
 
-/* Cases où aucune lettre ne satisfait à la fois l'emplacement horizontal
-   et l'emplacement vertical qui s'y croisent (backend/crossword_gen.py's
-   `_noise_slot_cells`) — distinct de `.impossible` ci-dessous : chacun
-   des deux emplacements pris séparément peut très bien avoir un domaine
-   non vide (donc aucun des deux n'est lui-même `.impossible`), mais si
-   aucun de leurs mots réellement jouables (ni déjà utilisés ailleurs
-   dans la grille, ni du bruit statistique) ne partage la même lettre à
-   cette case précise, elle reste en pratique injouable — un critère plus
-   fin que le simple domaine vide, à la demande explicite de
-   l'utilisateur. Fond violet (`--noise-bg`), une couleur dédiée plutôt
-   que réutiliser l'orange de `.low-candidates` (un avertissement plus
-   doux, "peu de candidats") ou le rouge de `.impossible` (un domaine
-   brut totalement vide) — les trois signalent des degrés de gravité
-   différents. Déclarée après `.low-candidates` et avant `.impossible`
-   dans la cascade : les deux peuvent en principe se recouper sur la même
-   case (un emplacement au domaine juste en dessous du seuil peut aussi
-   être en cause dans un croisement injouable), auquel cas le violet
-   l'emporte sur l'orange (signal plus sévère), mais s'efface devant le
-   rouge (le cas le plus sévère de tous). */
+/* Cells where no letter satisfies both the horizontal slot and the
+   vertical slot crossing there (backend/crossword_gen.py's
+   `_noise_slot_cells`) — distinct from `.impossible` below: each of the
+   two slots taken separately can very well have a non-empty domain (so
+   neither one is itself `.impossible`), but if none of their genuinely
+   playable words (neither already used elsewhere in the grid, nor pure
+   statistical noise) share the same letter at this exact cell, it stays
+   effectively unplayable in practice — a finer-grained criterion than a
+   simple empty domain, at the user's explicit request. A violet
+   background (`--noise-bg`), a dedicated color rather than reusing
+   `.low-candidates`'s orange (a softer warning, "few candidates") or
+   `.impossible`'s red (a raw, totally empty domain) — the three signal
+   different degrees of severity. Declared after `.low-candidates` and
+   before `.impossible` in the cascade: the two can in principle overlap
+   on the same cell (a slot whose domain is just under the threshold can
+   also be involved in an unplayable crossing), in which case violet wins
+   over orange (a more severe signal), but yields to red (the most severe
+   case of all). */
 .attempt-preview-grid .cell.white.noise {
   background: var(--noise-bg);
 }
@@ -906,19 +970,18 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--locked);
 }
 
-/* Même traitement pour une case NOIRE verrouillée — à la demande
-   explicite de l'utilisateur, une fois `_optimize_before_cleanup`
-   (backend/crossword_gen.py) étendu pour verrouiller aussi les cases
-   noires qui bordent un emplacement encore entièrement vide, pas
-   seulement les cases blanches de cet emplacement lui-même. Même liseré
-   orange (`--locked`) — reste visible sur le fond déjà sombre de
-   `.cell.black` puisque `box-shadow: inset` se dessine par-dessus le
-   fond, jamais masqué par lui. Règle distincte plutôt qu'un sélecteur
-   commun `.cell.locked` : garde la même convention "un sélecteur par
-   couleur de case" déjà en place pour chaque autre overlay de ce
-   fichier, et rend explicite que .forced/.low-candidates/.noise restent,
-   eux, volontairement réservés aux cases blanches (aucun appelant ne
-   fournit aujourd'hui de case noire pour ces trois-là). */
+/* Same treatment for a locked BLACK cell — at the user's explicit
+   request, once `_optimize_before_cleanup` (backend/crossword_gen.py)
+   was extended to also lock the black cells bordering a slot that's
+   still entirely empty, not just that slot's own white cells. Same
+   orange border (`--locked`) — stays visible against `.cell.black`'s
+   already-dark background since `box-shadow: inset` is drawn on top of
+   the background, never hidden by it. A separate rule rather than a
+   shared `.cell.locked` selector: keeps the same "one selector per cell
+   color" convention already in place for every other overlay in this
+   file, and makes explicit that .forced/.low-candidates/.noise remain
+   deliberately reserved for white cells (no caller supplies a black cell
+   for those three today). */
 .attempt-preview-grid .cell.black.locked {
   box-shadow: inset 0 0 0 2px var(--locked);
 }
@@ -938,27 +1001,38 @@ button:disabled {
    border (like .forced/.locked), not a fill, so it composes cleanly with
    any .impossible/.noise/.low-candidates already on the same cell.
    `finishLockedCells` (script.js) is only ever set while a generation
-   started by "Finir la grille" is running — `null` everywhere else, so a
-   no-op for any other generation. */
+   started by "Finir la grille"/"Finir la zone" is running — `null`
+   everywhere else, so a no-op for any other generation. */
 .attempt-preview-grid .cell.white.finish-locked {
   box-shadow: inset 0 0 0 2px var(--finish-locked);
 }
 
-/* Lettres magenta vif pour les cases d'un mot issu du glossaire de la
-   génération thématique — le but est de trancher franchement avec les
-   lettres noires voisines de l'aperçu, plus que d'être lisible sur le
-   fond blanc de la case. Voir backend/crossword_gen.py's
-   `_theme_word_cells` et script.js's renderAttemptPreview(). Une couleur
-   de TEXTE (jamais un fond), pour se composer proprement avec les fonds
-   .impossible/.noise/.low-candidates et les bordures .forced/.locked
-   possibles sur la même case ; `--theme-fg` = #ff00fb (magenta vif), à la
-   demande explicite de l'utilisateur ("Essayer cette couleur : #ff00fb").
-   Historique de la couleur : vert foncé -> "pas assez visible" -> violet
-   foncé -> violet clair -> vert très clair -> "trop clair" -> ce magenta.
-   Poids `800` (extra-gras) à la demande explicite de l'utilisateur
-   ("mettre les mots du glossaire thématique en gras"), nettement plus
-   lourd que le `500` des autres cases. Jamais présent pour une génération
-   non thématique. */
+/* Same border, for a black cell frozen by "Finir la zone" (a cell outside
+   the selected zone, whether it was already black or just got converted
+   from an empty white cell) — at the user's explicit request, once
+   computeFinishLockedCells() (script.js) was extended to also cover
+   these cells, not just already-lettered ones: "les cases grisées...
+   devraient toutes être affichées entourées de vert dans les
+   prévisualisations." Same "one rule per cell color" convention already
+   established for .locked above. */
+.attempt-preview-grid .cell.black.finish-locked {
+  box-shadow: inset 0 0 0 2px var(--finish-locked);
+}
+
+/* Bright magenta letters for the cells of a word coming from the themed-
+   generation glossary — the goal is a sharp contrast with the neighboring
+   black letters of the preview, more than being readable against the
+   cell's own white background. See backend/crossword_gen.py's
+   `_theme_word_cells` and script.js's renderAttemptPreview(). A TEXT
+   color (never a background), so it composes cleanly with the possible
+   .impossible/.noise/.low-candidates backgrounds and .forced/.locked
+   borders on the same cell; `--theme-fg` = #ff00fb (bright magenta), at
+   the user's explicit request ("Essayer cette couleur : #ff00fb"). Color
+   history: dark green -> "not visible enough" -> dark purple -> light
+   purple -> very light green -> "too light" -> this magenta. Weight
+   `800` (extra-bold) at the user's explicit request ("mettre les mots du
+   glossaire thématique en gras"), noticeably heavier than the `500` of
+   other cells. Never present for a non-themed generation. */
 .attempt-preview-grid .cell.white.theme {
   color: var(--theme-fg);
   font-weight: 800;
@@ -1024,13 +1098,13 @@ button:disabled {
   cursor: default;
 }
 
-/* Caractère éponge (U+1F9FD) remplaçant le texte "Effacer" sur tous les
-   boutons "Effacer" de l'application (Dictionnaire, Paraphraseur, mode
-   Interactif) — à la demande explicite de l'utilisateur (une première
-   version, en icône SVG dessinée à la main, a été essayée puis remplacée
-   par ce caractère). `font-size` légèrement au-dessus du texte du bouton
-   pour rester lisible à cette taille — les émojis rendent souvent un peu
-   petits à `font-size` hérité (0.8rem sur un .nav-btn). */
+/* Sponge character (U+1F9FD) replacing the "Effacer" text on every
+   "Effacer" button of the app (Dictionnaire, Paraphraseur, Interactif
+   mode) — at the user's explicit request (a first version, a hand-drawn
+   SVG icon, was tried then replaced by this character). `font-size`
+   slightly above the button's own text to stay readable at that size —
+   emoji often render a bit small at the inherited `font-size` (0.8rem on
+   a .nav-btn). */
 .clear-icon {
   font-size: 1rem;
   line-height: 1;
@@ -1054,11 +1128,11 @@ button:disabled {
   padding: 0;
 }
 
-/* Bouton icône "aide" du mode Interactif (voir index.html) — un .nav-btn
-   comme l'éponge "Effacer" voisine, mais avec une icône SVG "?" en cercle
-   au lieu d'un caractère : centrage flex explicite (le même que
-   .chatbot-icon-btn/.library-interactive-btn ailleurs dans ce fichier),
-   puisqu'un .nav-btn "texte" n'a jamais eu besoin de cette règle. */
+/* Interactive mode's "help" icon button (see index.html) — a .nav-btn
+   like the neighboring "Effacer" sponge, but with a circled SVG "?" icon
+   instead of a character: explicit flex centering (the same as
+   .chatbot-icon-btn/.library-interactive-btn elsewhere in this file),
+   since a "text" .nav-btn never needed this rule. */
 #interactive-help-btn {
   display: inline-flex;
   align-items: center;
@@ -1206,15 +1280,15 @@ button:disabled {
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  /* Fond transparent, à la demande explicite de l'utilisateur ("Afficher
-     également la bibliothèque sur fond transparent"), le même traitement
-     et la même justification déjà appliqués à #rss-panel juste au-dessus
-     dans ce fichier : était `var(--white-cell)` (opaque), ce qui masquait
-     entièrement le filigrane logo du corps de page (`body::before`) sous
-     ce panneau. Aucune cellule de #library-table n'a de fond opaque
-     propre (seul un survol/focus de ligne en donne un, voir plus bas), le
-     texte reste donc parfaitement lisible sur le fond de page clair,
-     filigrane compris. */
+  /* Transparent background, at the user's explicit request ("Afficher
+     également la bibliothèque sur fond transparent"), the same treatment
+     and reasoning already applied to #rss-panel just above in this file:
+     used to be `var(--white-cell)` (opaque), which entirely hid the page
+     body's own logo watermark (`body::before`) under this panel. No cell
+     of #library-table has an opaque background of its own (only a row's
+     hover/focus gives it one, see further below), so the text stays
+     perfectly readable against the light page background, watermark
+     included. */
   background: transparent;
 }
 
@@ -1233,7 +1307,8 @@ button:disabled {
   font-weight: 600;
 }
 
-/* Les trois sélecteurs en haut de la Bibliothèque (langue, niveau, "déjà vues"). */
+/* The three selectors at the top of the Bibliothèque (language, level,
+   "déjà vues"). */
 #library-header select {
   font-size: 0.8rem;
   padding: 0.15rem 0.3rem;
@@ -1258,21 +1333,19 @@ button:disabled {
   font-weight: 600;
 }
 
-/* Provenance ("(créée depuis ...)") sous le titre d'une grille issue de
-   l'édition d'une grille existante de la Bibliothèque (script.js's
-   renderLibraryList, `entry.origin` — voir backend/grid_store.py's
-   save_grid_json/save_grid_work's own `origin`), à la demande explicite
-   de l'utilisateur. Même traitement discret que .attempt-preview-stats
-   (petit, atténué) : un simple sous-titre secondaire, pas une donnée
-   aussi importante que le titre lui-même juste au-dessus. Sur sa propre
-   ligne (un <div>, empilé sous le <div> du titre par le flux de bloc
-   normal — le `white-space: nowrap` hérité de la cellule ne s'applique
-   qu'au texte à l'intérieur de chaque <div>, jamais entre eux) ; peut
-   contenir un titre de grille d'origine potentiellement long, donc
-   repasse en retour à la ligne normal plutôt que de forcer la table
-   entière à défiler horizontalement pour cette seule cellule (elle
-   défile déjà via .table-scroll si nécessaire, voir #library ci-dessous).
-   */
+/* Provenance ("(créée depuis ...)") under the title of a grid that came
+   from editing an existing Library grid (script.js's renderLibraryList,
+   `entry.origin` — see backend/grid_store.py's save_grid_json/
+   save_grid_work's own `origin`), at the user's explicit request. Same
+   discreet treatment as .attempt-preview-stats (small, dimmed): a plain
+   secondary subtitle, not data as important as the title itself right
+   above it. On its own line (a <div>, stacked below the title's own
+   <div> by normal block flow — the `white-space: nowrap` inherited from
+   the cell only applies to the text inside each <div>, never between
+   them); can contain a potentially long origin-grid title, so it falls
+   back to normal line wrapping rather than forcing the entire table to
+   scroll horizontally for this one cell alone (it already scrolls via
+   .table-scroll when needed, see #library below). */
 #library-table td .library-origin-tag {
   margin-top: 0.15rem;
   font-size: 0.72rem;
@@ -1295,18 +1368,17 @@ button:disabled {
   outline: none;
 }
 
-/* Grille déjà vue par ce navigateur (script.js's markGridSeen / le champ
-   `seen` renvoyé par POST /api/library) — texte grisé, la ligne reste
-   pleinement cliquable et garde son survol. */
+/* Grid already seen by this browser (script.js's markGridSeen / the
+   `seen` field returned by POST /api/library) — grayed-out text, the row
+   stays fully clickable and keeps its hover state. */
 #library-table tbody tr.library-grid-seen td {
   color: #9aa0a6;
 }
 
-/* Liens des deux dernières colonnes (script.js's renderLibraryList) :
-   "Jouer" (partageable, SHARE_BASE_URL) et le téléchargement PDF —
-   teintés accent, garde leur couleur même sur une ligne grisée
-   .library-grid-seen (le lien reste valable, la grille "déjà vue" ou
-   non). */
+/* Links of the last two columns (script.js's renderLibraryList): "Jouer"
+   (shareable, SHARE_BASE_URL) and the PDF download — accent-tinted, keep
+   their color even on a grayed-out .library-grid-seen row (the link
+   stays valid regardless of whether the grid is "already seen"). */
 #library-table td .library-link,
 #library-table tbody tr.library-grid-seen td .library-link {
   color: var(--accent);
@@ -1314,8 +1386,8 @@ button:disabled {
   white-space: nowrap;
 }
 
-/* Colonne PDF : une icône SVG inline (badge rouge "PDF"), pas de texte —
-   donc pas de soulignement, et centrée verticalement dans la cellule. */
+/* PDF column: an inline SVG icon (red "PDF" badge), no text — so no
+   underline, and vertically centered in the cell. */
 #library-table td .library-pdf-link {
   display: inline-flex;
   text-decoration: none;
@@ -1325,11 +1397,11 @@ button:disabled {
   display: block;
 }
 
-/* Colonne "Interactif" : bouton icône (crayon) ouvrant la grille en mode
-   Interactif — pas de texte donc pas de fond/bordure de bouton, teinté
-   accent, centré comme le lien PDF voisin. Doit remettre à zéro le fond
-   bleu / texte blanc / padding / bordure que la règle générique `button`
-   applique à tout bouton. */
+/* "Interactif" column: an icon button (pencil) opening the grid in
+   Interactif mode — no text so no button background/border, accent-
+   tinted, centered like the neighboring PDF link. Must reset the blue
+   background / white text / padding / border that the generic `button`
+   rule applies to every button. */
 #library-table td .library-interactive-btn {
   display: inline-flex;
   align-items: center;
@@ -1352,10 +1424,10 @@ button:disabled {
   font-style: italic;
 }
 
-/* Panneau "Créations" (#interactive-work-btn's click handler, script.js),
-   à la demande explicite de l'utilisateur — même carte transparente/
-   bordée que #library juste au-dessus, membre du même groupe de panneaux
-   centraux basculants. */
+/* "Créations" panel (#interactive-work-btn's click handler, script.js),
+   at the user's explicit request — same transparent/bordered card as
+   #library just above, a member of the same central toggling-panel
+   group. */
 #interactive-work {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
@@ -1429,10 +1501,10 @@ button:disabled {
   font-style: italic;
 }
 
-/* Panneau "Dictionnaire" (#dictionary-btn's click handler, script.js), à
-   la demande explicite de l'utilisateur — même carte transparente/bordée
-   que #library juste au-dessus, membre du même groupe de panneaux
-   centraux basculants. Chaque recherche empile son propre tableau. */
+/* "Dictionnaire" panel (#dictionary-btn's click handler, script.js), at
+   the user's explicit request — same transparent/bordered card as
+   #library just above, a member of the same central toggling-panel
+   group. Each search stacks its own table. */
 #dictionary {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
@@ -1462,10 +1534,10 @@ button:disabled {
   padding: 0.15rem 0.3rem;
 }
 
-/* Bouton "Perplexity" (script.js) : label + icône "lien externe" côte à
-   côte — forme/couleur (bleu -> violet) fournies par .external-link-btn
-   (voir plus haut dans ce fichier), ce bloc ne gère que la mise en page
-   interne (icône + texte, petit espacement entre les deux). */
+/* "Perplexity" button (script.js): label + "external link" icon side by
+   side — shape/color (blue -> purple) supplied by .external-link-btn
+   (see further above in this file), this block only handles the
+   internal layout (icon + text, a small gap between the two). */
 #dictionary-perplexity-btn {
   display: inline-flex;
   align-items: center;
@@ -1476,9 +1548,9 @@ button:disabled {
   display: block;
 }
 
-/* Même largeur que #paraphrase-input (22rem) — demande explicite de
-   l'utilisateur, pour que les deux champs restent alignés quand les
-   deux panneaux sont affichés ensemble. */
+/* Same width as #paraphrase-input (22rem) — the user's explicit
+   request, so the two fields stay aligned when both panels are shown
+   together. */
 #dictionary-input {
   width: 22rem;
 }
@@ -1530,19 +1602,19 @@ button:disabled {
   margin-top: 0.15rem;
 }
 
-/* "Mots similaires" : les 50 mots les plus proches (Qdrant), du plus
-   similaire au moins similaire, sur une seule ligne logique séparés par
-   des virgules — le texte s'enroule naturellement, pas de scroll. */
+/* "Mots similaires": the 50 closest words (Qdrant), from most to least
+   similar, on a single logical line separated by commas — the text wraps
+   naturally, no scrolling. */
 .dictionary-similar-line {
   margin: 0;
   font-size: 0.9rem;
   line-height: 1.5;
 }
 
-/* "Définir" : jusqu'à 10 définitions générées par le LLM, une par ligne
-   (contrairement à "Mots similaires" ci-dessus, qui tient sur une seule
-   ligne logique) — chaque .dictionary-define-line est son propre
-   paragraphe, avec un léger espacement vertical entre elles. */
+/* "Définir": up to 10 LLM-generated definitions, one per line (unlike
+   "Mots similaires" above, which fits on a single logical line) — each
+   .dictionary-define-line is its own paragraph, with a small vertical
+   gap between them. */
 .dictionary-define-list {
   display: flex;
   flex-direction: column;
@@ -1555,13 +1627,12 @@ button:disabled {
   line-height: 1.4;
 }
 
-/* "Bilingue" : quand deux langues sont sélectionnées (grille bilingue
-   chargée, ou #language/#bilingual-language du formulaire différents),
-   chaque outil du Dictionnaire OU du Paraphraseur lance sa recherche
-   dans les deux langues et affiche les deux résultats côte à côte,
-   50/50, chacun titré par sa langue — à la demande explicite de
-   l'utilisateur. Partagé par les deux panneaux (script.js's
-   buildBilingualResultBlock()), jamais dupliqué. */
+/* "Bilingue": when two languages are selected (a loaded bilingual grid,
+   or the form's #language/#bilingual-language differing), every tool of
+   the Dictionnaire OR the Paraphraseur runs its search in both languages
+   and shows the two results side by side, 50/50, each titled by its own
+   language — at the user's explicit request. Shared by both panels
+   (script.js's buildBilingualResultBlock()), never duplicated. */
 .bilingual-result {
   display: flex;
   gap: 1rem;
@@ -1584,10 +1655,10 @@ button:disabled {
   color: var(--accent);
 }
 
-/* Panneau "Paraphraseur" (#paraphrase-btn's click handler, script.js), à
-   la demande explicite de l'utilisateur — même carte transparente/bordée
-   que #dictionary juste au-dessus, membre du même groupe de panneaux
-   centraux basculants. Chaque reformulation empile son propre résultat. */
+/* "Paraphraseur" panel (#paraphrase-btn's click handler, script.js), at
+   the user's explicit request — same transparent/bordered card as
+   #dictionary just above, a member of the same central toggling-panel
+   group. Each rewording stacks its own result. */
 #paraphrase {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
@@ -1617,15 +1688,15 @@ button:disabled {
   padding: 0.15rem 0.3rem;
 }
 
-/* Même largeur que #dictionary-input (22rem, voir sa propre règle) —
-   à la demande explicite de l'utilisateur, "assez long pour une phrase
-   complète" plutôt qu'un seul mot/une courte expression ; alignés
-   quand les deux panneaux sont affichés ensemble. */
+/* Same width as #dictionary-input (22rem, see its own rule) — at the
+   user's explicit request, "assez long pour une phrase complète" rather
+   than a single word/short expression; aligned when both panels are
+   shown together. */
 #paraphrase-input {
   width: 22rem;
 }
 
-/* Même traitement que #dictionary-perplexity-btn ci-dessus. */
+/* Same treatment as #dictionary-perplexity-btn above. */
 #paraphrase-perplexity-btn {
   display: inline-flex;
   align-items: center;
@@ -1642,10 +1713,10 @@ button:disabled {
   gap: 1rem;
 }
 
-/* Panneau "Qdrant (admin)" (#qdrant-admin-btn's click handler, script.js) —
-   visible uniquement en localhost. Même carte transparente/bordée que
-   #dictionary / #library, membre du même groupe de panneaux centraux
-   basculants. */
+/* "Qdrant (admin)" panel (#qdrant-admin-btn's click handler, script.js) —
+   visible only on localhost. Same transparent/bordered card as
+   #dictionary / #library, a member of the same central toggling-panel
+   group. */
 #qdrant-admin {
   margin: 0.75rem 0;
   padding: 0.75rem 1rem;
@@ -1688,7 +1759,7 @@ button:disabled {
   color: #777;
 }
 
-/* Bloc clé/valeur : deux colonnes, la clé grise à gauche. */
+/* Key/value block: two columns, the gray key on the left. */
 .qdrant-admin-stats {
   display: grid;
   grid-template-columns: max-content 1fr;
@@ -1741,46 +1812,43 @@ button:disabled {
   user-select: all;
 }
 
-/* Panneau "Actu Croisée" (flux RSS + agrégation de grilles, voir
-   fetch_rss_feeds.py/fetch_grid_links.py), à la demande explicite de
-   l'utilisateur. **Revirement assumé** par rapport à une décision
-   antérieure de ce même projet : il vivait jusqu'ici comme une section
-   persistante, jamais masquée par les sections centrales qui se
-   basculent entre elles (#library/#attempt-preview/#result) — l'inverse
-   a été explicitement redemandé plus tard ("Le journal d'actu doit
-   disparaître quand quelque chose d'autre doit s'afficher, par exemple
-   la Bibliothèque"), voir script.js's syncRssPanelVisibility() pour le
-   mécanisme réel qui masque désormais ce panneau dès que l'un des trois
-   autres est visible. Même look que #library (carte blanche, bordure
-   fine) pour rester cohérent avec les autres panneaux de contenu de la
-   page, mais avec sa propre hauteur bornée + défilement interne ("le
-   panneau doit tenir sur la page d'accueil avec sa propre barre pour
-   scroller") plutôt qu'une hauteur qui grandit avec le nombre
-   d'articles. */
-/* `flex: 1` (voir main's propre commentaire ci-dessus) : ce panneau
-   grandit pour occuper tout l'espace vertical encore libre de la
-   fenêtre, jamais une hauteur fixe. `min-height: 0` est nécessaire ici
-   (un piège flexbox classique) : sans lui, un enfant flex ne peut jamais
-   se laisser rétrécir sous la hauteur de son propre contenu, ce qui
-   empêcherait #rss-list (voir plus bas) de jamais défiler en interne —
-   il grandirait plutôt indéfiniment et ferait déborder la page entière.
-   `display: flex; flex-direction: column` à son tour, pour que son
-   propre titre (h2) garde une hauteur fixe pendant que #rss-list (avec
-   son propre `flex: 1`) absorbe tout le reste de cet espace. */
+/* "Actu Croisée" panel (RSS feed + grid-link aggregation, see
+   fetch_rss_feeds.py/fetch_grid_links.py), at the user's explicit
+   request. **A deliberate reversal** of an earlier decision in this
+   same project: it used to live as a persistent section, never hidden
+   by the central sections that toggle between each other (#library/
+   #attempt-preview/#result) — the opposite was explicitly requested
+   later ("Le journal d'actu doit disparaître quand quelque chose
+   d'autre doit s'afficher, par exemple la Bibliothèque"), see script.js's
+   syncRssPanelVisibility() for the real mechanism that now hides this
+   panel the moment any of the other three is visible. Same look as
+   #library (white card, thin border) to stay consistent with the page's
+   other content panels, but with its own bounded height + internal
+   scrolling ("le panneau doit tenir sur la page d'accueil avec sa propre
+   barre pour scroller") rather than a height that grows with the number
+   of articles. */
+/* `flex: 1` (see main's own comment above) — this panel grows to occupy
+   all of the window's remaining vertical space, never a fixed height.
+   `min-height: 0` is needed here (a classic flexbox trap): without it, a
+   flex child can never shrink below the height of its own content, which
+   would keep #rss-list (see further below) from ever scrolling
+   internally — it would instead grow indefinitely and overflow the whole
+   page. `display: flex; flex-direction: column` in turn, so its own
+   title (h2) keeps a fixed height while #rss-list (with its own
+   `flex: 1`) absorbs the rest of that space. */
 #rss-panel {
   margin: 0.75rem 0 0;
   padding: 0.75rem 1rem;
   border: 1px solid var(--border);
   border-radius: 8px;
-  /* Fond transparent, à la demande explicite de l'utilisateur ("Afficher
-     le fil Actu avec un fond transparent pour laisser voir le fond de
-     page avec le logo") — était `var(--white-cell)` (opaque), ce qui
-     masquait entièrement le filigrane logo du corps de page
-     (`body::before`, voir plus haut dans ce fichier) partout où ce
-     panneau s'affichait. Aucune ligne de #rss-list n'a son propre fond
-     opaque (seul un survol/focus en donne un, voir plus bas) — le texte
-     reste donc parfaitement lisible sur le fond de page clair, filigrane
-     compris. */
+  /* Transparent background, at the user's explicit request ("Afficher le
+     fil Actu avec un fond transparent pour laisser voir le fond de page
+     avec le logo") — used to be `var(--white-cell)` (opaque), which
+     entirely hid the page body's own logo watermark (`body::before`, see
+     further above in this file) everywhere this panel was shown. No row
+     of #rss-list has an opaque background of its own (only a hover/focus
+     gives it one, see further below) — so the text stays perfectly
+     readable against the light page background, watermark included. */
   background: transparent;
   flex: 1;
   min-height: 0;
@@ -1788,25 +1856,24 @@ button:disabled {
   flex-direction: column;
 }
 
-/* Le vrai bug derrière "le masquage du fil d'actu ne fonctionne pas",
-   rapporté directement par l'utilisateur — la même classe de bug CSS déjà
-   corrigée une fois pour #rss-detail[hidden], jamais réappliquée ici
-   puisque #rss-panel n'existait pas encore à l'époque. `display: flex`
-   ci-dessus est fixé inconditionnellement sur le sélecteur d'ID
-   (spécificité 1-0-0), qui l'emporte toujours sur la règle native du
-   navigateur `[hidden] { display: none }` (sélecteur d'attribut,
-   spécificité 0-1-0), quel que soit l'ordre des règles dans le fichier —
-   donc `rssPanel.hidden = true` (voir syncRssPanelVisibility() dans
-   script.js) n'avait jamais d'effet visuel réel : le panneau restait
-   affiché en permanence, peu importe la justesse de la logique JS qui
-   décide quand il devrait disparaître. Corrigé par une règle plus
-   spécifique (ID + attribut, spécificité 1-1-0) qui l'emporte enfin. */
+/* The real bug behind "le masquage du fil d'actu ne fonctionne pas",
+   reported directly by the user — the same class of CSS bug already
+   fixed once for #rss-detail[hidden], never reapplied here since
+   #rss-panel didn't exist yet at the time. `display: flex` above is
+   set unconditionally on this ID selector (specificity 1-0-0), which
+   always beats the browser's native `[hidden] { display: none }` rule
+   (an attribute selector, specificity 0-1-0), regardless of the rules'
+   order in the file — so `rssPanel.hidden = true` (see
+   syncRssPanelVisibility() in script.js) never had any real visual
+   effect: the panel stayed permanently shown, no matter how correct the
+   JS logic deciding when it should disappear was. Fixed with a more
+   specific rule (ID + attribute, specificity 1-1-0) that finally wins. */
 #rss-panel[hidden] {
   display: none;
 }
 
-/* Titre + sélecteur de langue sur une même ligne, à la demande explicite
-   de l'utilisateur ("A droite du titre des entrées RSS, afficher un
+/* Title + language selector on the same row, at the user's explicit
+   request ("A droite du titre des entrées RSS, afficher un
    sélecteur"). */
 #rss-panel-header {
   display: flex;
@@ -1860,11 +1927,11 @@ button:disabled {
   outline: none;
 }
 
-/* Icône d'origine (lien externe vs article RSS), à la demande explicite
-   de l'utilisateur : "ajoute à gauche une petite icône permettant de
-   savoir si c'est un lien vers une page web ou une infos RSS." Taille
-   fixe (`flex-shrink: 0`) pour ne jamais se comprimer si le titre est
-   long — c'est le texte qui doit s'adapter, pas l'icône. */
+/* Origin icon (external link vs. RSS article), at the user's explicit
+   request: "ajoute à gauche une petite icône permettant de savoir si
+   c'est un lien vers une page web ou une infos RSS." Fixed size
+   (`flex-shrink: 0`) so it never shrinks if the title is long — it's the
+   text that should adapt, not the icon. */
 #rss-list .rss-item-kind-icon {
   flex-shrink: 0;
   font-size: 1rem;
@@ -1880,9 +1947,9 @@ button:disabled {
   font-size: 0.75rem;
 }
 
-/* Entrée "grid" (lien direct) : la ligne sous le titre montre l'URL
-   ouverte au clic — tenue sur une seule ligne avec ellipsis pour qu'une
-   URL longue ne déforme pas le panneau. */
+/* "grid" entry (direct link): the line under the title shows the URL
+   opened on click — kept on a single line with an ellipsis so a long URL
+   doesn't distort the panel. */
 #rss-list .rss-item-url {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1896,27 +1963,27 @@ button:disabled {
   font-style: italic;
 }
 
-/* Note de repli sur l'anglais (voir renderRssList() dans script.js) —
-   même taille que #rss-empty mais sans l'italique/le gris estompé : ce
-   n'est pas "rien à afficher", c'est une information sur ce qui s'affiche
-   quand même juste en dessous. */
+/* Fallback-to-English notice (see renderRssList() in script.js) — same
+   size as #rss-empty but without the italic/dimmed gray: this isn't
+   "nothing to show", it's information about what's shown anyway right
+   below it. */
 #rss-language-fallback-notice {
   margin: 0 0 0.4rem;
   font-size: 0.8rem;
   color: #777;
 }
 
-/* Détail d'un article, ouvert en cliquant une ligne de #rss-list — une
-   simple carte superposée (pas une vraie boîte de dialogue modale native,
-   cohérent avec le reste de cette page qui n'en utilise nulle part
-   ailleurs) plutôt qu'un remplacement du panneau lui-même, pour ne
-   jamais faire disparaître la liste sous-jacente. */
-/* `display: flex; flex-direction: column` plutôt qu'un simple bloc à
-   défilement direct, à la demande explicite de l'utilisateur ("doit
-   garder son bouton pour fermer visible en haut à droite") : seul
-   #rss-detail-body (voir plus bas) défile en interne — le bouton fermer,
-   hors de cette zone défilante, reste toujours visible quelle que soit la
-   longueur de l'article affiché. */
+/* An article's detail, opened by clicking a row of #rss-list — a plain
+   overlaid card (not a real native modal dialog, consistent with the
+   rest of this page, which never uses one anywhere else) rather than a
+   replacement of the panel itself, so the underlying list is never made
+   to disappear. */
+/* `display: flex; flex-direction: column` rather than a plain directly-
+   scrolling block, at the user's explicit request ("doit garder son
+   bouton pour fermer visible en haut à droite"): only #rss-detail-body
+   (see further below) scrolls internally — the close button, outside
+   that scrolling area, stays always visible regardless of how long the
+   shown article is. */
 #rss-detail {
   position: fixed;
   inset: 0;
@@ -1933,19 +2000,18 @@ button:disabled {
   flex-direction: column;
 }
 
-/* Bug réel signalé en direct : un rechargement de page affichait ce
-   panneau déjà ouvert, impossible à refermer. Cause : `display: flex`
-   ci-dessus, fixé sans condition sur ce sélecteur d'ID (spécificité 100),
-   l'emportait sur la règle par défaut du navigateur pour l'attribut
-   `hidden` (`[hidden] { display: none }`, un simple sélecteur
-   d'attribut, spécificité 10) — l'attribut `hidden` du HTML restait donc
-   sans le moindre effet visuel, que ce soit au chargement de la page ou
-   après un clic sur "Fermer" (`rssDetail.hidden = true` en JS, tout aussi
-   inefficace pour la même raison). Cette règle, plus spécifique que la
-   précédente (ID + attribut), rétablit le comportement attendu. Aucun
-   autre panneau de cette page n'a ce problème : #library/#attempt-preview/
-   #result ne déclarent jamais leur propre `display` du tout, laissant la
-   règle par défaut du navigateur s'appliquer sans conflit. */
+/* Real bug reported live: a page reload showed this panel already open,
+   impossible to close. Cause: `display: flex` above, set unconditionally
+   on this ID selector (specificity 100), beat the browser's default rule
+   for the `hidden` attribute (`[hidden] { display: none }`, a plain
+   attribute selector, specificity 10) — so the HTML `hidden` attribute
+   had no visual effect at all, whether at page load or after clicking
+   "Fermer" (`rssDetail.hidden = true` in JS, just as ineffective for the
+   same reason). This rule, more specific than the previous one (ID +
+   attribute), restores the expected behavior. No other panel of this
+   page has this problem: #library/#attempt-preview/#result never
+   declare their own `display` at all, letting the browser's default
+   rule apply with no conflict. */
 #rss-detail[hidden] {
   display: none;
 }
@@ -1978,23 +2044,23 @@ button:disabled {
   color: #777;
 }
 
-/* Contenu brut du flux (voir renderRssDetail() dans script.js) : un sous-
-   ensemble de balises HTML autorisées, chaque lien forcé vers un nouvel
-   onglet côté JS avant l'insertion — même esprit que les règles
-   .chatbot-message-assistant ci-dessus, une simple tempérance de l'espacement
-   par défaut du navigateur pour ce contenu inséré dynamiquement. */
+/* Raw feed content (see renderRssDetail() in script.js): an allowed
+   subset of HTML tags, every link forced to open in a new tab on the JS
+   side before insertion — same spirit as the .chatbot-message-assistant
+   rules above, a plain tempering of the browser's default spacing for
+   this dynamically-inserted content. */
 #rss-detail-content img {
   max-width: 100%;
 }
 
-/* Panneau d'aide du mode Interactif (ouvert par #interactive-help-btn) —
-   même recouvrement/structure que #rss-detail juste au-dessus (bouton
-   fermer toujours visible en haut, seul le corps défile), y compris le
-   même correctif `[hidden]` que celui-ci a nécessité (voir le
-   commentaire de #rss-detail[hidden]) : la règle `display: flex`
-   ci-dessous, fixée sans condition sur cet ID (spécificité 100),
-   l'emporterait sinon sur la règle par défaut du navigateur pour
-   l'attribut `hidden` (`[hidden] { display: none }`, spécificité 10). */
+/* Interactive mode's help panel (opened by #interactive-help-btn) — same
+   overlay/structure as #rss-detail just above (close button always
+   visible at the top, only the body scrolls), including the same
+   `[hidden]` fix that one needed (see #rss-detail[hidden]'s own
+   comment): the `display: flex` rule below, set unconditionally on this
+   ID (specificity 100), would otherwise beat the browser's default rule
+   for the `hidden` attribute (`[hidden] { display: none }`, specificity
+   10). */
 #interactive-help-overlay {
   position: fixed;
   inset: 0;
@@ -2065,6 +2131,33 @@ button:disabled {
 
 .cell.black {
   background: var(--black-cell);
+}
+
+/* "Interactif" mode: click-drag zone selection (script.js's
+   interactiveZoneSelection) — every cell NOT part of the (already
+   whole-emplacement-expanded) selection gets a plain gray fill, at the
+   user's explicit request. Applies to both white AND black cells (a
+   dragged rectangle can span either), and is deliberately declared
+   BEFORE .selected/.selected-word/.correct/.incorrect/the fill
+   diagnostics below, so all of those still take visual priority over
+   this plain "not in the zone" overlay wherever they also apply — same
+   ordering convention already established for those overlays. */
+.cell.white.zone-unselected,
+.cell.black.zone-unselected {
+  background: var(--zone-unselected-bg);
+}
+
+/* Live preview of the rectangle currently being dragged, before the
+   drag ends and interactiveZoneSelection itself is computed — reuses
+   the existing --selected (light blue) token rather than a new one,
+   consistent with it already meaning "about to become/currently the
+   active selection" elsewhere on this grid. Toggled directly by
+   script.js's renderInteractiveDragPreview() (not a full re-render), so
+   it must win over the plain .zone-unselected gray above it whenever a
+   drag is in progress over a cell that isn't part of any prior zone. */
+.cell.white.zone-drag-preview,
+.cell.black.zone-drag-preview {
+  background: var(--selected);
 }
 
 /* "Interactif" mode fill diagnostics — same meaning and colours as the
@@ -2191,16 +2284,18 @@ button:disabled {
   display: none;
 }
 /* "Précédent"/"Suivant" flank #grid on each side, vertically centered
-   against it, at the user's explicit request — moved out of the play-
-   mode-shaped #interactive-nav row (removed) into #grid-column itself
-   (see index.html), right before/after #grid. script.js's
+   against it, at the user's explicit request — moved out of the
+   play-mode-shaped #interactive-nav row (removed) into #grid-column
+   itself (see index.html), right before/after #interactive-grid-wrap
+   (which wraps #grid alone — the black/fill stats card floats
+   independently via `position: fixed`, see #interactive-cell-stats
+   above, so it no longer adds to this wrapper's own height). script.js's
    enterInteractiveMode()/hideInteractivePanel() add/remove this class on
-   #grid-column and toggle the two buttons' own `hidden` attribute.
-   #grid keeps its own `align-self: flex-start` (see its own rule) —
-   pinned to this row's top edge — so the row's cross-axis size equals
-   #grid's own height, and these two shorter buttons, using the row's
-   default `align-items: center`, land exactly at #grid's own vertical
-   midpoint with no JS measurement needed. */
+   #grid-column and toggle the two buttons' own `hidden` attribute. The
+   row's cross-axis size is #interactive-grid-wrap's own height — now
+   exactly #grid's own height — so these two buttons, using the row's
+   default `align-items: center`, land precisely at #grid's own vertical
+   midpoint. */
 #grid-column.interactive-flank {
   flex-direction: row;
   align-items: center;
@@ -2326,6 +2421,36 @@ button:disabled {
 .interactive-word-item:focus-visible {
   background: var(--selected);
   outline: none;
+}
+/* "Croisés" button — one .interactive-crossing-group per compatible
+   letter, inside its own .interactive-words-block (same stacking
+   convention as "Mots"). Each group holds three stacked lines — the
+   reference letter itself, then H, then V, all flush against the
+   group's own left edge — at the user's explicit request: "mettre la
+   lettre de référence sur une ligne, puis H et V sur 2 lignes en
+   dessous" (the letter used to be prefixed directly onto the H line,
+   "A : H mot1, mot2..."). Before that, H/V themselves were already split
+   from a single "H ... — V ..." line into their own two rows ("H sur une
+   ligne, et V sur une autre ligne, alignés à gauche"), which could wrap
+   unevenly once either word list got long. Each line reuses
+   .interactive-word-item/.interactive-word-highlight-letter for its own
+   word list. */
+.interactive-crossing-group {
+  margin: 0 0 0.35rem;
+}
+.interactive-crossing-line {
+  margin: 0 0 0.15rem;
+  text-align: left;
+}
+.interactive-crossing-letter-line {
+  font-size: 1.05rem;
+}
+.interactive-crossing-line-down {
+  margin-bottom: 0;
+}
+.interactive-crossing-dir-label {
+  font-size: 0.75rem;
+  opacity: 0.7;
 }
 /* Theme-glossary words shown first, in the same bright magenta already
    used everywhere else in this app for a theme-glossary match (see
@@ -2518,10 +2643,11 @@ button:disabled {
    exact same collapsed state as the button always did) so there's
    still a one-click affordance to re-expand, just presented as the
    site's own icon rather than a generic minimize dash. */
-/* Une fois replié, l'en-tête accent (fond bleu) rendait l'icône du site
-   peu lisible, à la demande explicite de l'utilisateur : en mode replié,
-   juste un filet bleu sur fond blanc autour de l'icône (le fond accent
-   ne sert plus qu'en mode déployé, où le titre en blanc le contrebalance). */
+/* Once collapsed, the accent header (blue background) made the site's
+   icon hard to read, at the user's explicit request: in collapsed mode,
+   just a thin blue border on a white background around the icon (the
+   accent background is now only used in expanded mode, where the white
+   title text balances it out). */
 #chatbot.chatbot-collapsed {
   width: auto;
   border-color: var(--accent);
@@ -2629,11 +2755,11 @@ button:disabled {
   border-radius: 4px;
 }
 
-/* Bouton "Envoyer" remplacé par une icône, plus un bouton icône
-   "réinitialiser la conversation" à côté, à la demande explicite de
-   l'utilisateur. Deux boutons carrés de la même taille que la hauteur du
-   champ de saisie ; l'envoi garde le fond accent, la réinitialisation
-   reste neutre/discrète pour ne pas concurrencer l'action principale. */
+/* "Envoyer" button replaced by an icon, plus a "reset conversation" icon
+   button next to it, at the user's explicit request. Two square buttons
+   the same size as the input field's own height; send keeps the accent
+   background, reset stays neutral/discreet so it doesn't compete with
+   the primary action. */
 .chatbot-icon-btn {
   flex: 0 0 auto;
   display: inline-flex;
@@ -2660,33 +2786,32 @@ button:disabled {
   background: var(--border);
 }
 
-/* Clavier virtuel, à la demande explicite de l'utilisateur : "En bas à
-   gauche de l'interface, au même niveau que le ChatBot" — même
-   positionnement fixe/même niveau vertical que #chatbot, mais côté
-   gauche plutôt que droit, et sa propre largeur (bien plus étroite,
-   26 lettres sur 2 rangs n'a pas besoin de la largeur d'une fenêtre de
-   discussion). Même mécanisme de repli que #chatbot (en-tête toujours
-   visible, corps caché en mode réduit) — voir #chatbot-collapsed
-   ci-dessus pour le raisonnement déjà établi, repris ici à l'identique. */
-/* Restructuré deux fois à la demande explicite de l'utilisateur : plus
-   de bandeau de titre pleine largeur (voir #virtual-keyboard-toggle-btn
-   ci-dessous, désormais un enfant direct plutôt que niché dans un
-   en-tête), et les flèches de direction passent d'une rangée au-dessus
-   des lettres à une colonne à droite de celles-ci ("mettre les flèches
-   de direction sur la droite des lettres, pour gagner en hauteur"). Le
-   widget entier devient une colonne flex alignée à droite
-   (`align-items: flex-end`) : le petit bouton replier/déplier flotte
-   ainsi naturellement au-dessus de la colonne de flèches (le seul autre
-   enfant aligné à droite), sans bandeau ni titre dédiés — exactement
-   "l'icône de fermeture en petit au-dessus des flèches". */
+/* Virtual keyboard, at the user's explicit request: "En bas à gauche de
+   l'interface, au même niveau que le ChatBot" — same fixed positioning/
+   same vertical level as #chatbot, but on the left side rather than the
+   right, and its own width (much narrower, 26 letters over 2 rows
+   doesn't need the width of a chat window). Same collapse mechanism as
+   #chatbot (header always visible, body hidden in collapsed mode) — see
+   #chatbot-collapsed above for the reasoning already established, reused
+   here verbatim. */
+/* Restructured twice at the user's explicit request: no more full-width
+   title bar (see #virtual-keyboard-toggle-btn below, now a direct child
+   rather than nested inside a header), and the direction arrows moved
+   from a row above the letters to a column to their right ("mettre les
+   flèches de direction sur la droite des lettres, pour gagner en
+   hauteur"). The whole widget becomes a right-aligned flex column
+   (`align-items: flex-end`): the small collapse/expand button then
+   naturally floats above the arrow column (the only other right-aligned
+   child), with no dedicated bar or title — exactly "l'icône de fermeture
+   en petit au-dessus des flèches". */
 #virtual-keyboard {
   position: fixed;
   left: 1rem;
   bottom: 1rem;
-  /* 60% de la largeur de l'écran, à la demande explicite de l'utilisateur
-     ("Le clavier doit occupé 60% de la largeur de l'écran") — remplace
-     l'ancienne largeur fixe de 280px, bien trop étroite pour que 13
-     touches par rangée restent lisibles. */
+  /* 60% of the screen's width, at the user's explicit request ("Le
+     clavier doit occupé 60% de la largeur de l'écran") — replaces the
+     old fixed 280px width, far too narrow for 13 keys per row to stay
+     readable. */
   width: 60vw;
   max-width: calc(100vw - 2rem);
   border: 1px solid var(--border);
@@ -2703,11 +2828,11 @@ button:disabled {
   box-sizing: border-box;
 }
 
-/* Plus d'en-tête à colorer en accent (voir la note ci-dessus) : ce
-   bouton vit désormais sur le fond clair du widget lui-même, donc plus
-   besoin de la surcharge blanc-sur-transparent qui visait un fond
-   accent — .nav-btn (déjà appliqué via la classe HTML) fournit déjà un
-   contraste correct par défaut sur fond clair. */
+/* No more header to color with the accent (see the note above): this
+   button now lives on the widget's own light background, so there's no
+   more need for the white-on-transparent override that targeted an
+   accent background — .nav-btn (already applied via the HTML class)
+   already provides correct contrast by default on a light background. */
 #virtual-keyboard-toggle-btn {
   font-size: 0.9rem;
 }
@@ -2733,9 +2858,9 @@ button:disabled {
    collapsed`'s own selector, which was never affected by this bug
    precisely because it was already written this same way from the
    start. */
-/* Même traitement que #chatbot replié, à la demande explicite de
-   l'utilisateur ("Idem pour l'icône du clavier virtuel") : filet bleu
-   sur fond blanc autour de l'icône ⌨ une fois le clavier replié. */
+/* Same treatment as #chatbot collapsed, at the user's explicit request
+   ("Idem pour l'icône du clavier virtuel"): a thin blue border on a
+   white background around the ⌨ icon once the keyboard is collapsed. */
 #virtual-keyboard.virtual-keyboard-collapsed {
   width: auto;
   border-color: var(--accent);
@@ -2764,11 +2889,11 @@ button:disabled {
   gap: 0.25rem;
 }
 
-/* Colonne de flèches (→ puis ↓), à droite des lettres — voir la note en
-   tête de ce bloc. `align-items: stretch` par défaut sur
-   #virtual-keyboard-body (aucune surcharge nécessaire) étire déjà cette
-   colonne pour occuper exactement la même hauteur que les 2 rangées de
-   lettres à sa gauche. */
+/* Arrow column (→ then ↓), to the right of the letters — see the note at
+   the top of this block. The default `align-items: stretch` on
+   #virtual-keyboard-body (no override needed) already stretches this
+   column to occupy exactly the same height as the 2 rows of letters to
+   its left. */
 #virtual-keyboard-direction-col {
   display: flex;
   flex-direction: column;
@@ -2783,15 +2908,15 @@ button:disabled {
 
 .virtual-keyboard-key {
   flex: 1;
-  /* Touches agrandies pour rester lisibles à la largeur du clavier (60vw,
-     voir #virtual-keyboard ci-dessus) — l'ancien padding/taille de police
-     visait la précédente largeur fixe de 280px, bien trop petite une fois
-     étirée. `color` explicite : la règle générique `button` (plus haut
-     dans ce fichier) fixe `color: var(--accent-fg)` (blanc) pour TOUT
-     bouton — sans cette surcharge, le texte des touches restait blanc sur
-     un fond clair (`--bg`), donc invisible. C'était le bug rapporté par
-     l'utilisateur ("on ne voit pas les lettres"), pas un simple défaut de
-     contraste réglable en changeant juste le fond. */
+  /* Enlarged keys to stay readable at the keyboard's own width (60vw, see
+     #virtual-keyboard above) — the old padding/font size targeted the
+     previous fixed 280px width, far too small once stretched. Explicit
+     `color`: the generic `button` rule (further above in this file) sets
+     `color: var(--accent-fg)` (white) for EVERY button — without this
+     override, the keys' own text stayed white on a light background
+     (`--bg`), so invisible. This was the bug the user reported ("on ne
+     voit pas les lettres"), not a plain contrast issue fixable by just
+     changing the background. */
   padding: 0.9rem 0;
   font-size: 1.4rem;
   font-weight: 700;
@@ -2808,12 +2933,12 @@ button:disabled {
   outline: none;
 }
 
-/* Pseudo de l'utilisateur dans l'en-tête, centré entre le titre et les
-   boutons/icônes de droite — à la demande explicite de l'utilisateur.
-   h1 garde son `margin-right: auto` ; #user-pseudo en a un aussi : les
-   deux marges auto se partagent également l'espace libre de la rangée
-   flex, ce qui centre le pseudo entre le bord droit du titre et le bord
-   gauche des badges. Bouton cliquable (rouvre #welcome-overlay). */
+/* The user's own nickname in the header, centered between the title and
+   the right-hand buttons/icons — at the user's explicit request. h1
+   keeps its own `margin-right: auto`; #user-pseudo has one too: the two
+   auto margins split the flex row's free space evenly, which centers the
+   nickname between the title's right edge and the badges' left edge.
+   Clickable button (reopens #welcome-overlay). */
 #user-pseudo {
   flex-shrink: 0;
   margin-right: auto;
@@ -2837,8 +2962,9 @@ button:disabled {
   outline: none;
 }
 
-/* Tant qu'aucun pseudo n'est saisi, le bouton montre "définir un pseudo"
-   dans un style discret (gris, cadre neutre) plutôt que le style accent. */
+/* As long as no nickname has been entered, the button shows "définir un
+   pseudo" in a discreet style (gray, neutral border) rather than the
+   accent style. */
 #user-pseudo.user-pseudo-unset {
   border-color: var(--border);
   color: #555;
@@ -2849,13 +2975,13 @@ button:disabled {
   display: none;
 }
 
-/* Panneau d'accueil obligatoire au premier chargement — à la demande
-   explicite de l'utilisateur. Overlay plein écran, au-dessus de tout
-   (chatbot/clavier virtuel sont à z-index 5). Aucun bouton de fermeture :
-   seul "Accepter" (soumission du formulaire) le referme. Règle
-   [hidden] avec une spécificité ID+attribut (1-1-0) pour battre le
-   `display: flex` de l'ID nu (1-0-0) — même piège de spécificité déjà
-   rencontré pour #rss-detail/#rss-panel/#virtual-keyboard. */
+/* Mandatory welcome panel on first load — at the user's explicit
+   request. Full-screen overlay, above everything (chatbot/virtual
+   keyboard are at z-index 5). No close button: only "Accepter" (the
+   form's own submission) closes it. [hidden] rule with an ID+attribute
+   specificity (1-1-0) to beat the bare ID's `display: flex` (1-0-0) —
+   the same specificity trap already encountered for #rss-detail/
+   #rss-panel/#virtual-keyboard. */
 #welcome-overlay {
   position: fixed;
   inset: 0;
@@ -2876,13 +3002,13 @@ button:disabled {
   max-width: 26rem;
   display: flex;
   flex-direction: column;
-  /* Le sélecteur global `form` pose `flex-wrap: wrap`, `align-items: end`
-     et `margin-bottom: 1rem` (pour #generate-form) — ici il faut les
-     annuler : dans une colonne flex, `align-items: end` collerait tout
-     le contenu (titre, champs, bouton) contre le bord droit du panneau.
-     `stretch` laisse chaque <label> occuper toute la largeur, texte
-     aligné à gauche ; seul le bouton Accepter est repoussé à droite via
-     son propre `align-self` ci-dessous. */
+  /* The global `form` selector sets `flex-wrap: wrap`, `align-items: end`
+     and `margin-bottom: 1rem` (for #generate-form) — here they need to
+     be canceled: in a flex column, `align-items: end` would stick all
+     the content (title, fields, button) against the panel's right edge.
+     `stretch` lets each <label> occupy the full width, text aligned
+     left; only the Accepter button is pushed to the right via its own
+     `align-self` below. */
   flex-wrap: nowrap;
   align-items: stretch;
   gap: 0.9rem;
@@ -2920,10 +3046,10 @@ button:disabled {
   align-self: flex-end;
 }
 
-/* Compteur "x en ligne" — même pilule neutre que #version-badge (class
-   "badge"), juste teinté en vert : convention quasi universelle pour
-   "en ligne / live", et ça distingue les deux pilules côte à côte.
-   Réutilise --correct-fg (déjà un vert foncé du thème), pas de nouveau
+/* "x en ligne" counter — the same neutral pill as #version-badge (class
+   "badge"), just tinted green: a near-universal convention for
+   "online / live", and it distinguishes the two pills side by side.
+   Reuses --correct-fg (already a dark green of the theme), no new
    token. */
 #online-count {
   color: var(--correct-fg);

@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
-"""Automation/Populate.py — génère des grilles complètes une par une.
+"""Automation/Populate.py — generates full grids one at a time.
 
-À la demande explicite de l'utilisateur : "générer 1000 grilles une par
-une pour ne pas surcharger les files d'attente". Le script ne lance JAMAIS
-deux générations en parallèle : il soumet une requête à
-`POST /api/generate`, sonde `GET /api/generate/phase/{job_id}` (la route
-condensée ajoutée pour ça) jusqu'à ce que le job soit `finished`, puis
-passe au suivant. Les files d'attente `GRID_QUEUE`/`CLUES_QUEUE` du back
-(voir backend/app.py) ne voient donc jamais plus d'un job à la fois venant
-d'ici — d'autres clients (l'interface web) peuvent continuer à s'en servir
-normalement en même temps.
+At the user's explicit request: "generate 1000 grids one at a time so as
+not to overload the queues." The script NEVER launches two generations in
+parallel: it submits a request to `POST /api/generate`, polls
+`GET /api/generate/phase/{job_id}` (the condensed route added for this)
+until the job is `finished`, then moves on to the next one. The
+backend's `GRID_QUEUE`/`CLUES_QUEUE` queues (see backend/app.py)
+therefore never see more than one job at a time coming from here — other
+clients (the web UI) can keep using them normally at the same time.
 
-Chaque grille terminée est automatiquement enregistrée dans la
-bibliothèque par le back (`save_grid_json`, voir `_run_generate_job`) —
-c'est tout l'intérêt de "populate".
+Every finished grid is automatically saved to the library by the backend
+(`save_grid_json`, see `_run_generate_job`) — that's the whole point of
+"populate."
 
-Par défaut les paramètres (langue, difficulté, taille) sont tirés au
-hasard à chaque grille pour peupler la bibliothèque avec de la variété ;
-on peut en figer n'importe lequel en ligne de commande (voir --help).
+By default the parameters (language, difficulty, size) are drawn at
+random for every grid to populate the library with variety; any of them
+can be pinned via the command line (see --help).
 
-Usage :
-    .venv/bin/python Automation/Populate.py            # 1000 grilles, params aléatoires
+Usage:
+    .venv/bin/python Automation/Populate.py            # 1000 grids, random params
     .venv/bin/python Automation/Populate.py --count 50 --language fr --difficulty easy
     .venv/bin/python Automation/Populate.py --mode turbo --width 15 --height 10
 
-Ctrl-C : arrête proprement après la grille en cours (affiche le bilan).
+Ctrl-C: stops cleanly after the current grid (prints a summary).
 """
 import argparse
 import json
@@ -40,11 +39,10 @@ LANGUAGES = ["fr", "en", "de", "es", "it", "pt"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 MODES = ["flash", "turbo", "fast", "medium", "ultra"]
 
-# Bornes de la taille aléatoire d'une grille (largeur ET hauteur), à la
-# demande explicite de l'utilisateur : "des tailles entre 8 et 20
-# (horizontal et vertical)". `--width`/`--height` peuvent toujours figer
-# une valeur hors de cet intervalle si besoin (bornée seulement par le
-# back, 5 à 30).
+# Bounds for a grid's random size (width AND height), at the user's
+# explicit request: "sizes between 8 and 20 (horizontal and vertical)".
+# `--width`/`--height` can always still pin a value outside this range if
+# needed (only bounded by the backend, 5 to 30).
 MIN_SIZE = 8
 MAX_SIZE = 20
 
@@ -69,8 +67,8 @@ def _handle_sigint(signum, frame):
 
 
 def _http_json(url, payload=None, timeout=60):
-    """GET si payload est None, sinon POST JSON. Renvoie le corps décodé
-    en JSON. Lève urllib.error.HTTPError / URLError comme d'habitude."""
+    """GET if payload is None, otherwise a JSON POST. Returns the
+    JSON-decoded body. Raises urllib.error.HTTPError / URLError as usual."""
     if payload is None:
         req = urllib.request.Request(url, method="GET")
     else:
@@ -86,7 +84,7 @@ def _http_json(url, payload=None, timeout=60):
 
 
 def _pick(fixed, pool):
-    """`fixed` si non None, sinon un tirage aléatoire dans `pool`."""
+    """`fixed` if not None, otherwise a random draw from `pool`."""
     return fixed if fixed is not None else random.choice(pool)
 
 
@@ -95,48 +93,47 @@ def _build_request(args):
     height = args.height if args.height is not None else random.randint(MIN_SIZE, MAX_SIZE)
     return {
         "language": _pick(args.language, LANGUAGES),
-        # `bilingual_language` (GenerateRequest, backend/app.py) est
-        # délibérément omis ici, à la demande explicite de l'utilisateur
-        # ("Populate.py ne doit pas générer de grille bilingue pour le
-        # moment") — son absence dégrade déjà proprement en génération
-        # monolingue ordinaire (voir crossword_gen.generate_grid's own
-        # `bilingual_wordlist_path`), donc rien de plus à faire ici pour
-        # obtenir ce comportement.
+        # `bilingual_language` (GenerateRequest, backend/app.py) is
+        # deliberately omitted here, at the user's explicit request
+        # ("Populate.py should not generate bilingual grids for now") —
+        # its absence already degrades cleanly into an ordinary
+        # monolingual generation (see crossword_gen.generate_grid's own
+        # `bilingual_wordlist_path`), so there's nothing more to do here
+        # to get that behavior.
         "difficulty": _pick(args.difficulty, DIFFICULTIES),
-        # Toujours le mode "medium", à la demande explicite de
-        # l'utilisateur ("Populate ne doit utiliser que le mode MOYEN") —
-        # le mode "ultra" peut passer des heures sur la seule recherche
-        # d'une grille, ce qui rend un peuplement de 1000 grilles
-        # ingérable. `--mode` peut toujours forcer une autre valeur.
+        # Always "medium" mode, at the user's explicit request ("Populate
+        # should only use MEDIUM mode") — "ultra" mode can spend hours on
+        # a single grid search alone, which makes populating 1000 grids
+        # unmanageable. `--mode` can always force a different value.
         "mode": args.mode or "medium",
         "width": width,
         "height": height,
-        # seed omis volontairement -> le back en tire un ; on veut des
-        # grilles différentes à chaque fois.
-        # Marque cette requête comme venant de Populate, à la demande
-        # explicite de l'utilisateur : "quand une demande vient de
-        # Populate, générer les définitions sans paralléliser plusieurs
-        # requêtes en parallèle, pour ne pas surcharger le GPU pour les
-        # utilisateurs." Lu par backend/app.py's GenerateRequest.source :
-        # force LLMClueGenerator.generate(batch_parallelism=1) pour ce
-        # job (un seul mot en cours de génération à la fois), sans
-        # affecter aucune autre requête.
+        # seed deliberately omitted -> the backend draws one; we want
+        # different grids every time.
+        # Marks this request as coming from Populate, at the user's
+        # explicit request: "when a request comes from Populate, generate
+        # definitions without parallelizing several requests at once, so
+        # as not to overload the GPU for real users." Read by
+        # backend/app.py's GenerateRequest.source: forces
+        # LLMClueGenerator.generate(batch_parallelism=1) for this job
+        # (only one word being generated at a time), without affecting
+        # any other request.
         "source": "populate",
     }
 
 
 def _generate_one(base_url, req, poll_interval, per_grid_timeout):
-    """Soumet une génération et sonde sa phase jusqu'à la fin. Renvoie
-    (job_id, phase_finale, error_code|None, secondes_écoulées)."""
+    """Submits a generation and polls its phase until it finishes. Returns
+    (job_id, final_phase, error_code|None, elapsed_seconds)."""
     started = time.monotonic()
     try:
         resp = _http_json(f"{base_url}/api/generate", payload=req, timeout=60)
     except urllib.error.HTTPError as e:
         if e.code == 400:
-            # Requête refusée d'emblée (ex. une langue tout juste ajoutée
-            # dont le dictionnaire n'est pas encore construit) — pas une
-            # panne : on retire cette combinaison et on retire une autre,
-            # sans la compter comme échec ni consommer un retry.
+            # Request rejected outright (e.g. a language just added whose
+            # dictionary isn't built yet) — not a real failure: this
+            # combination is dropped and another one is drawn instead,
+            # without counting it as a failure or spending a retry.
             return None, "rejected", None, time.monotonic() - started
         raise
     job_id = resp["job_id"]
@@ -151,8 +148,9 @@ def _generate_one(base_url, req, poll_interval, per_grid_timeout):
             )
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                # Job évincé de JOBS (MAX_JOBS) avant qu'on ait vu la fin —
-                # rare ici (un seul job à la fois), traité comme inconnu.
+                # Job evicted from JOBS (MAX_JOBS) before we saw it
+                # finish — rare here (only one job at a time), treated as
+                # unknown.
                 return job_id, "gone", None, time.monotonic() - started
             raise
         phase = phase_info.get("phase")
@@ -257,9 +255,10 @@ def main():
                 print(f"    délai dépassé ({args.per_grid_timeout:.0f}s), on passe.", flush=True)
                 break
             if phase == "rejected":
-                # Combinaison refusée par le back (langue pas encore prête).
-                # Si la langue n'est pas figée, on retire une autre requête
-                # au hasard sans rien compter ; sinon c'est un vrai échec.
+                # Combination rejected by the backend (language not ready
+                # yet). If the language isn't pinned, another request is
+                # drawn at random without counting anything; otherwise
+                # it's a genuine failure.
                 print("    combinaison refusée par le serveur (langue pas prête ?)", flush=True)
                 if args.language is None and not _stop_requested:
                     attempt -= 1  # ne consomme pas de tentative

@@ -33,8 +33,8 @@ function applyTranslations() {
   // own language, not interface chrome — see highlightWordAt() below).
   if (!hoveredGridCell) renderHoverDefinitionForSelection();
   renderRssList();
-  // "x en ligne" — texte paramétré (voir i18n.js), à ré-appliquer au
-  // changement de langue à partir de la dernière valeur connue.
+  // "x online" — parameterized text (see i18n.js), re-applied on a
+  // language change from the last known value.
   renderOnlineCount();
   // CPU/GPU meters — same reason: the labels ("CPU"/"GPU N") are
   // translated, so re-render from the last known value on a language switch.
@@ -206,10 +206,11 @@ const virtualKeyboardRows = document.getElementById("virtual-keyboard-rows");
 const virtualKeyboardAcrossBtn = document.getElementById("virtual-keyboard-across-btn");
 const virtualKeyboardDownBtn = document.getElementById("virtual-keyboard-down-btn");
 // Duplicate of the same pair, next to "Verticalement" under the grid, at
-// the user's explicit request: "Duplique le sélecteur de sens du clavier
-// virtuel pour le mettre à droite des définitions sous la grille." Both
-// pairs drive and reflect the exact same activeDirection state (see
-// below) — clicking either pair's own buttons keeps all 4 in sync.
+// the user's explicit request: "duplicate the virtual keyboard's own
+// direction selector to put it to the right of the definitions below the
+// grid." Both pairs drive and reflect the exact same activeDirection
+// state (see below) — clicking either pair's own buttons keeps all 4 in
+// sync.
 const cluesDirectionAcrossBtn = document.getElementById("clues-direction-across-btn");
 const cluesDirectionDownBtn = document.getElementById("clues-direction-down-btn");
 const rssLanguageFilter = document.getElementById("rss-language-filter");
@@ -239,6 +240,9 @@ const themeInput = document.getElementById("theme");
 const interactiveControls = document.getElementById("interactive-controls");
 const interactivePrevBtn = document.getElementById("interactive-prev-btn");
 const interactiveNextBtn = document.getElementById("interactive-next-btn");
+const interactiveCellStats = document.getElementById("interactive-cell-stats");
+const interactiveBlackStat = document.getElementById("interactive-black-stat");
+const interactiveFillStat = document.getElementById("interactive-fill-stat");
 const interactiveMessage = document.getElementById("interactive-message");
 const interactiveDirAcrossBtn = document.getElementById("interactive-dir-across-btn");
 const interactiveDirDownBtn = document.getElementById("interactive-dir-down-btn");
@@ -250,6 +254,7 @@ const interactiveProposeClearBtn = document.getElementById("interactive-propose-
 const interactiveImpossibleBtn = document.getElementById("interactive-impossible-btn");
 const interactiveVerifyBtn = document.getElementById("interactive-verify-btn");
 const interactiveDefinitionsBtn = document.getElementById("interactive-definitions-btn");
+const interactiveFinishZoneBtn = document.getElementById("interactive-finish-zone-btn");
 const interactiveFinishBtn = document.getElementById("interactive-finish-btn");
 const interactiveResultsClearBtn = document.getElementById("interactive-results-clear-btn");
 const interactiveHelpBtn = document.getElementById("interactive-help-btn");
@@ -258,6 +263,8 @@ const interactiveHelpCloseBtn = document.getElementById("interactive-help-close-
 const interactiveHelpList = document.getElementById("interactive-help-list");
 const interactiveWordsBtn = document.getElementById("interactive-words-btn");
 const interactiveWordsResults = document.getElementById("interactive-words-results");
+const interactiveCrossingBtn = document.getElementById("interactive-crossing-btn");
+const interactiveCrossingResults = document.getElementById("interactive-crossing-results");
 const interactiveProposeResults = document.getElementById("interactive-propose-results");
 const interactiveVerifyReportEl = document.getElementById("interactive-verify-report");
 const interactiveTitleRow = document.getElementById("interactive-title-row");
@@ -359,28 +366,26 @@ fetch("/api/system_info")
   })
   .catch(() => {});
 
-// Panneau "Actu Croisée" (flux RSS spécialisés mots croisés — voir
-// fetch_rss_feeds.py/backend/app.py), à la demande explicite de
-// l'utilisateur. Chargé une seule fois, au démarrage de la page — pas de
-// rafraîchissement live pendant la session, le back lui-même ne
-// rafraîchit qu'une fois par jour (voir _rss_daily_scheduler côté back).
+// "Actu Croisée" panel (crossword-specialized RSS feeds — see
+// fetch_rss_feeds.py/backend/app.py), at the user's explicit request.
+// Loaded once, at page startup — no live refresh during the session, the
+// back end itself only refreshes once a day (see its own
+// _rss_daily_scheduler).
 let rssItems = [];
 
-// Autorise un petit sous-ensemble de balises/attributs HTML issus du
-// contenu brut d'un flux RSS (tiers, non maîtrisé) avant de l'insérer
-// dans la page — jamais un innerHTML direct du contenu brut, à la
-// demande explicite de l'utilisateur : "Assure-toi que les liens
-// éventuellement indiqués soient cliquables et renvoient vers un nouvel
-// onglet." Parse via le DOMParser réel du navigateur (jamais une
-// approche par regex sur une chaîne HTML, trop facile à contourner) puis
-// reconstruit un nouvel arbre ne contenant que des éléments/attributs
-// explicitement autorisés — tout le reste (balises non listées, tout
-// attribut "on*", tout attribut absent de la liste blanche de sa propre
-// balise) est silencieusement abandonné plutôt que copié tel quel. Un
-// <a> conserve son "href" uniquement s'il commence par http(s):/mailto:
-// (jamais "javascript:" ou un schéma inconnu) et se voit systématiquement
-// forcer target="_blank" rel="noopener noreferrer", qu'il l'ait déjà eu
-// ou non dans le flux d'origine.
+// Allows a small subset of HTML tags/attributes from an RSS feed's raw
+// content (third-party, untrusted) before inserting it into the page —
+// never a direct innerHTML of the raw content, at the user's explicit
+// request: "make sure any links shown are clickable and open in a new
+// tab." Parsed via the browser's real DOMParser (never a regex-based
+// approach on an HTML string, too easy to bypass), then rebuilds a new
+// tree containing only explicitly allowed elements/attributes — anything
+// else (an unlisted tag, any "on*" attribute, any attribute absent from
+// its own tag's allowlist) is silently dropped rather than copied as-is.
+// An <a> keeps its "href" only if it starts with http(s):/mailto: (never
+// "javascript:" or an unknown scheme) and systematically gets
+// target="_blank" rel="noopener noreferrer" forced onto it, whether or
+// not it already had them in the original feed.
 const RSS_ALLOWED_TAGS = new Set([
   "p", "br", "b", "strong", "i", "em", "u", "ul", "ol", "li", "blockquote",
   "a", "img", "div", "span", "h1", "h2", "h3", "h4", "h5", "h6",
@@ -401,11 +406,11 @@ function sanitizeRssHtml(rawHtml) {
     if (node.nodeType !== Node.ELEMENT_NODE) return null;
     const tag = node.tagName.toLowerCase();
     if (!RSS_ALLOWED_TAGS.has(tag)) {
-      // Balise non autorisée : on garde quand même son propre contenu
-      // textuel/enfants (un <script>/<style> n'a normalement aucun enfant
-      // "visible" pertinent, mais un simple <font>/<center> inconnu, lui,
-      // a un contenu qui mérite de survivre) — seule la balise elle-même
-      // est abandonnée, pas ce qu'elle contenait.
+      // Disallowed tag: still keep its own text/child content (a
+      // <script>/<style> normally has no relevant "visible" child at all,
+      // but a plain, unrecognized <font>/<center> does have content worth
+      // preserving) — only the tag itself is dropped, not what it
+      // contained.
       const frag = document.createDocumentFragment();
       node.childNodes.forEach((child) => {
         const safe = cloneSafe(child);
@@ -440,10 +445,10 @@ function sanitizeRssHtml(rawHtml) {
 function renderRssList() {
   const t = I18N[uiLanguage];
   rssList.replaceChildren();
-  // Filtre par langue (voir #rss-language-filter), à la demande explicite
-  // de l'utilisateur — "all" (Toutes les langues, en tête de liste)
-  // n'exclut rien ; toute autre valeur ne garde que les articles de cette
-  // langue exacte (voir fetch_rss_feeds.py's own "language" field).
+  // Language filter (see #rss-language-filter), at the user's explicit
+  // request — "all" ("All languages", at the top of the list) excludes
+  // nothing; any other value keeps only articles of that exact language
+  // (see fetch_rss_feeds.py's own "language" field).
   const filterLang = rssLanguageFilter.value;
   // An entry may be monolingual (item.language is a string) or
   // multilingual (item.language is an array of language codes, e.g.
@@ -454,12 +459,13 @@ function renderRssList() {
   let filteredItems = filterLang === "all"
     ? rssItems
     : rssItems.filter((item) => itemMatchesLang(item, filterLang));
-  // Repli sur l'anglais si la langue choisie n'a aucun article, à la
-  // demande explicite de l'utilisateur ("afficher la liste anglaise" +
-  // un message l'expliquant en haut de la liste) — jamais quand la langue
-  // choisie est déjà "en" ou "all" (le repli lui-même, ou déjà tout
-  // montré), pour ne jamais boucler sur lui-même ni masquer un "aucun
-  // article" réellement global (tout repli anglais lui-même vide).
+  // Falls back to English if the chosen language has no article at all,
+  // at the user's explicit request ("show the English list" plus a
+  // message explaining it at the top of the list) — never when the
+  // chosen language is already "en" or "all" (the fallback itself, or
+  // already showing everything), so it can never loop back on itself nor
+  // hide a genuinely global "no articles" state (the English fallback
+  // itself being empty too).
   let showFallbackNotice = false;
   if (!filteredItems.length && filterLang !== "all" && filterLang !== "en") {
     const englishItems = rssItems.filter((item) => itemMatchesLang(item, "en"));
@@ -485,15 +491,15 @@ function renderRssList() {
     const index = rssItems.indexOf(item);
     const li = document.createElement("li");
     li.tabIndex = 0;
-    // Petite icône à gauche indiquant l'origine de l'entrée, à la demande
-    // explicite de l'utilisateur : "ajoute à gauche une petite icône
-    // permettant de savoir si c'est un lien vers une page web ou une
-    // infos RSS." Un simple caractère Unicode (comme #virtual-keyboard's
-    // own "⌨"/"→"/"↓" ailleurs dans ce fichier), jamais une image/icône
-    // externe — 🔗 pour "grid" (un clic ouvre directement la page externe
-    // de la grille), 📰 pour "rss" (un clic ouvre l'aperçu d'article
-    // interne) — le même repli "rss" qu'ailleurs pour un item sans
-    // `kind` du tout (cache écrit avant l'ajout de ce champ).
+    // Small icon on the left indicating the entry's own origin, at the
+    // user's explicit request: "add a small icon on the left showing
+    // whether this is a link to a web page or an RSS item." A plain
+    // Unicode character (like #virtual-keyboard's own "⌨"/"→"/"↓"
+    // elsewhere in this file), never an external image/icon — 🔗 for
+    // "grid" (a click opens the grid's own external page directly), 📰
+    // for "rss" (a click opens the internal article preview) — the same
+    // "rss" fallback used elsewhere for an item with no `kind` at all (a
+    // cache written before this field was added).
     const isGrid = item.kind === "grid";
     const kindIcon = document.createElement("span");
     kindIcon.className = "rss-item-kind-icon";
@@ -505,28 +511,27 @@ function renderRssList() {
     textWrap.className = "rss-item-text";
     const title = document.createElement("div");
     title.textContent = item.title;
-    // Ligne sous le titre : pour une entrée RSS, c'est le nom du flux
-    // (information complémentaire — de quel blog vient l'article). Pour
-    // une entrée "grid" (lien direct), le nom de la source est déjà dans
-    // le titre lui-même (ex. "Fox News – Saturday…") : cette ligne serait
-    // redondante — à la demande explicite de l'utilisateur, on y affiche
-    // à la place l'URL réellement ouverte au clic.
+    // Line under the title: for an RSS entry, this is the feed's own
+    // name (extra information — which blog the article comes from). For
+    // a "grid" entry (direct link), the source's own name is already in
+    // the title itself (e.g. "Fox News – Saturday…") — this line would
+    // be redundant, so at the user's explicit request it shows the URL
+    // that actually gets opened on click instead.
     const source = document.createElement("div");
     source.className = isGrid ? "rss-item-source rss-item-url" : "rss-item-source";
     source.textContent = isGrid ? item.link : item.source;
     textWrap.appendChild(title);
     textWrap.appendChild(source);
     li.appendChild(textWrap);
-    // Deux origines fusionnées dans le même journal, à la demande
-    // explicite de l'utilisateur ("Ajoute les entrées de SCRAPP aux
-    // journal de la première page, sachant que cette fois, un clic
-    // renvoie directement sur la page de la grille — pas d'article à
-    // afficher sur notre site") : une entrée RSS (item.kind === "rss",
-    // ou absent — repli pour un cache déjà écrit avant l'ajout de ce
-    // champ) ouvre toujours l'aperçu interne existant ; une entrée
-    // "grid" (fetch_grid_links.py/SCRAPP) ouvre directement l'URL
-    // externe de la grille dans un nouvel onglet, sans aucun aperçu.
-    // (`isGrid` déjà calculé plus haut pour l'icône.)
+    // Two origins merged into the same journal, at the user's explicit
+    // request ("add the SCRAPP entries to the front page's journal,
+    // knowing that this time, a click goes straight to the grid's own
+    // page — no article to show on our own site"): an RSS entry
+    // (item.kind === "rss", or absent — a fallback for a cache already
+    // written before this field was added) always opens the existing
+    // internal preview; a "grid" entry (fetch_grid_links.py/SCRAPP)
+    // opens the grid's own external URL directly in a new tab, with no
+    // preview at all. (`isGrid` already computed above, for the icon.)
     const open = isGrid
       ? () => window.open(item.link, "_blank", "noopener,noreferrer")
       : () => openRssDetail(index);
@@ -558,50 +563,47 @@ function closeRssDetail() {
 
 rssDetailCloseBtn.addEventListener("click", closeRssDetail);
 
-// Fermeture au clavier (touche Echap), à la demande explicite de
-// l'utilisateur — vérifie `!rssDetail.hidden` en premier, pas de coût ni
-// d'effet quand l'overlay n'est de toute façon pas ouvert.
+// Closes on Escape, at the user's explicit request — checks
+// `!rssDetail.hidden` first, no cost or effect when the overlay isn't
+// open anyway.
 document.addEventListener("keydown", (event) => {
   if (!rssDetail.hidden && event.key === "Escape") {
     closeRssDetail();
   }
 });
 
-// Valeur par défaut = langue courante de l'interface au chargement de la
-// page, à la demande explicite de l'utilisateur ("Par défaut, la langue
-// de l'interface"). Resynchronisée à chaque changement ultérieur de
-// langue de l'interface aussi, désormais (voir languageSelect's own
-// "change" listener plus bas) — un revirement assumé par rapport à la
-// décision initiale ("jamais resynchronisée... pour ne pas écraser un
-// choix du joueur"), suite à une demande explicite et plus récente de
-// l'utilisateur : "Quand l'utilisateur change la langue de l'interface,
-// il faut adapter la langue du fil d'actu."
+// Default value = the interface's current language when the page loads,
+// at the user's explicit request ("by default, the interface's
+// language"). Now also resynchronized on every later interface-language
+// change too (see languageSelect's own "change" listener further below)
+// — a deliberate reversal of the initial decision ("never
+// resynchronized... so as not to overwrite a player's own choice"),
+// following a later, explicit request from the user: "when the user
+// changes the interface language, the news feed's language should follow."
 rssLanguageFilter.value = uiLanguage;
 rssLanguageFilter.addEventListener("change", renderRssList);
 
-// Le panneau "Actu Croisée" (#rss-panel) disparaît dès que l'un des trois
-// panneaux centraux (#library, #attempt-preview, #result) est affiché, à
-// la demande explicite de l'utilisateur : "Le journal d'actu doit
-// disparaître quand quelque chose d'autre doit s'afficher, par exemple
-// la Bibliothèque (actuellement, la Bibliothèque s'affiche sous le
-// journal)." Un revirement assumé par rapport à une demande antérieure
-// de ce même projet (le panneau était devenu un frère de ces trois
-// sections, jamais caché par elles, justement pour ne plus disparaître
-// — voir plus haut dans ce fichier) : la préférence la plus récente de
-// l'utilisateur prévaut. Appelée à chaque endroit qui bascule la
-// visibilité de l'un des trois panneaux plutôt que de dupliquer cette
-// logique — un seul point de vérité pour la règle "au moins un des
-// trois est visible => masquer le journal".
-// Vrai pendant toute la durée d'une génération de grille (voir
-// runGeneration() plus bas), pas seulement une fois qu'un des trois
-// panneaux centraux est effectivement visible — corrige un vrai trou
-// rapporté par l'utilisateur : "Le panneau d'actu doit disparaître quand
-// on doit afficher autre chose sur la partie centrale (Bibliothèque,
-// génération de grille, etc)." Entre l'envoi du formulaire et le tout
-// premier événement d'aperçu reçu du back, ni #library, ni #attempt-
-// preview, ni #result ne sont encore visibles — sans ce drapeau,
-// syncRssPanelVisibility() aurait alors, à tort, laissé réapparaître le
-// journal pendant cette fenêtre.
+// The "Actu Croisée" panel (#rss-panel) disappears as soon as one of the
+// three central panels (#library, #attempt-preview, #result) is shown,
+// at the user's explicit request: "the news journal should disappear
+// whenever something else needs to be shown, e.g. the Library (currently
+// the Library displays below the journal)." A deliberate reversal of an
+// earlier request from this same project (the panel had become a
+// sibling of these three sections, never hidden by them, specifically so
+// it would no longer disappear — see further up in this file): the
+// user's most recent preference wins. Called from every place that
+// toggles one of the three panels' own visibility rather than
+// duplicating this logic — a single source of truth for the "at least
+// one of the three is visible => hide the journal" rule.
+// True for the whole duration of a grid generation (see runGeneration()
+// further below), not only once one of the three central panels is
+// actually visible — fixes a real gap reported by the user: "the news
+// panel should disappear whenever something else needs to be shown in
+// the central area (Library, grid generation, etc)." Between the form
+// submission and the very first preview event received from the back
+// end, neither #library, #attempt-preview, nor #result is visible yet —
+// without this flag, syncRssPanelVisibility() would have wrongly let the
+// journal reappear during that window.
 let generationInProgress = false;
 
 // Declared here (not with the rest of the "Interactif" state block below)
@@ -616,18 +618,17 @@ function syncRssPanelVisibility() {
          && qdrantAdminPanel.hidden
          && interactiveWorkPanel.hidden && attemptPreview.hidden && result.hidden);
 }
-// Etat initial explicite plutôt que de compter sur une simple coïncidence
-// entre l'état `hidden` par défaut de index.html et cette règle.
+// Explicit initial state rather than relying on a mere coincidence
+// between index.html's own default `hidden` state and this rule.
 syncRssPanelVisibility();
 
-// Fusionne les deux sources dans un seul journal chronologique, à la
-// demande explicite de l'utilisateur — deux fetch indépendants
-// (Promise.allSettled : l'échec de l'un ne doit jamais empêcher
-// d'afficher ce que l'autre a bien renvoyé), rassemblés puis triés une
-// seule fois par date de publication décroissante (même critère de tri
-// que chaque script d'origine applique déjà côté serveur — refait ici
-// car merger deux listes déjà triées ne garantit pas, à lui seul, que le
-// résultat combiné le reste).
+// Merges the two sources into a single chronological journal, at the
+// user's explicit request — two independent fetches (Promise.allSettled:
+// one failing must never prevent showing what the other genuinely
+// returned), gathered then sorted once by descending publication date
+// (the same sort criterion each origin script already applies
+// server-side — redone here since merging two already-sorted lists
+// doesn't, on its own, guarantee the combined result stays sorted).
 Promise.allSettled([
   fetch("/api/rss").then((r) => r.json()),
   fetch("/api/scrapp").then((r) => r.json()),
@@ -660,7 +661,7 @@ let hoveredGridCell = null; // { row, col } while the mouse is over a grid cell,
 // of its own starting cell, matching a puzzle.words entry's own shape — or
 // null when nothing is hovered. Distinct from `selected` (the clicked cell
 // the player is actively typing into): the user explicitly pointed out that
-// "quel est le mot sélectionné" refers to whichever word the mouse is
+// "what is the selected word" refers to whichever word the mouse is
 // currently over (hover), never the click-to-type target — David FALCON
 // (see buildChatUiContext()) is told about both, under clearly separate
 // labels, precisely so it doesn't conflate the two.
@@ -668,9 +669,9 @@ let hoveredWord = null;
 
 // The single, shared "which direction is currently active" state, at the
 // user's explicit request: the virtual keyboard's own direction buttons
-// ("un clavier virtuel... plus une flèche vers le bas pour configurer le
-// sens vertical... et une flèche vers la droite pour configurer le sens
-// horizontalement") were duplicated next to "Verticalement" under the
+// ("a virtual keyboard... plus an arrow pointing down to configure the
+// vertical direction... and an arrow pointing right to configure the
+// horizontal direction") were duplicated next to "Verticalement" under the
 // grid, and both pairs, plus Shift/CapsLock, now drive and reflect this
 // one variable — a persistent mode (CAPS-LOCK-like, not SHIFT-held: a
 // clicked button can't really be "held down") rather than a per-key
@@ -680,8 +681,8 @@ let hoveredWord = null;
 // event alone, so hovering the grid always respects whichever direction
 // the player last chose — by clicking a button or via Shift/CapsLock —
 // rather than the mouse-move event's own momentary key state overriding
-// it: "La sélection dans la grille (mouse over) doit s'adapter aux
-// sélecteurs de sens."
+// it: "the grid's own selection (mouse over) should follow the direction
+// selectors."
 let activeDirection = "across";
 
 // ---- "Interactif" authoring mode state ----
@@ -716,13 +717,35 @@ let interactiveDefs = new Map();
 // Pruned on every renderInteractive() to cells that still carry a letter,
 // so undo/erase/toggle-black drop the mark naturally.
 let interactiveThemeCells = new Set();
+// A click-dragged "zone" of the grid (Édition mode only), at the user's
+// explicit request: "add the ability to click-and-drag to select a zone
+// of the grid: select every emplacement that shares at least one letter
+// with the selected zone (show the cells that aren't part of the
+// selection with a gray background)." A `Set` of "row,col" strings — the
+// raw dragged rectangle already EXPANDED to every full emplacement
+// (across/down) touching it (see interactiveExpandZoneSelection()) — or
+// `null` when nothing is selected. Drives both the gray "not part of the
+// selection" overlay in renderGrid() and, when non-null, what "Finir la
+// zone" sends as its own `zone_cells` (see interactiveFinishZoneBtn below).
+// A plain click INSIDE the zone leaves it completely untouched (so the
+// player can keep working — typing, "Croisés", "Mots"... — without
+// losing it); only a genuine new drag replaces it, the Escape key/
+// leaving Interactive mode clears it outright, or a plain click on a
+// grayed-out ("not part of the zone") cell deselects it, at the user's
+// explicit request: "when the user clicks a grayed-out cell, deselect it."
+let interactiveZoneSelection = null;
+// Live drag-tracking state (module-level rather than per-listener, since
+// the drag itself spans several cells'/the document's own mouse events).
+let interactiveDragStart = null; // { row, col } while a drag is in progress, else null
+let interactiveDragCurrent = null; // { row, col }, updated as the pointer moves
+let interactiveDragActive = false;
 // "row,col" for every cell already carrying a letter in `interactiveGrid`
 // at the moment "Finir la grille" is clicked — highlighted in light green
 // in every attempt-preview grid of the automatic generation that button
 // launches (renderAttemptPreview()'s own .finish-locked overlay, see
-// style.css), at the user's explicit request: "verrouillant définitivement
-// les lettres déjà positionnées (affichées dans les aperçus encadrées en
-// vert clair)." `null` (not merely empty) whenever no such generation is
+// style.css), at the user's explicit request: "permanently locking the
+// already-placed letters (shown framed in light green in the previews)."
+// `null` (not merely empty) whenever no such generation is
 // in progress — reset only by a genuinely fresh, unrelated generation (the
 // plain form submit handler), never by "Continuer" (which resumes THIS
 // SAME finish job) nor by runGeneration()'s own generic reset.
@@ -737,16 +760,16 @@ let interactiveLowCells = new Set();
 // "Vérifier" button: cells of every complete word flagged as a problem —
 // either not a real dictionary word (checked server-side, POST /api/
 // interactive/verify) or missing a definition (checked client-side against
-// interactiveDefs) — at the user's explicit request: "vérifier toute la
-// grille et mettre en rouge les mots complets qui posent un problème."
+// interactiveDefs) — at the user's explicit request: "check the whole
+// grid and mark in red every complete word that has a problem."
 // Same staleness rule as interactiveImpossibleCells/LowCells above: cleared
 // on any manual edit, since it describes a check run against a past grid
 // state that may no longer be accurate.
 let interactiveInvalidCells = new Set();
 // Same "Vérifier" check as above, but the detailed, one-line-per-word
 // report shown below the definition input, at the user's explicit
-// request: "un rapport indiquant les problèmes rencontrés sur chaque
-// mot." Each entry is `{direction, row, col, answer, reasons}` — only
+// request: "a report showing the problems found on each word." Each
+// entry is `{direction, row, col, answer, reasons}` — only
 // words that actually have a problem are ever included (an empty array
 // means either nothing has been verified yet, or the last check found
 // nothing wrong). Same staleness rule as interactiveInvalidCells: cleared
@@ -797,22 +820,21 @@ function clearHighlights() {
 // user's explicit request for a fixed 5-line panel under the grid, so a
 // player can read the currently-hovered word's definition without the
 // full across/down clue lists in view at the same time.
-// Les "deux langues sélectionnées" pour le Dictionnaire ET le
-// Paraphraseur, à la demande explicite de l'utilisateur : "quand deux
-// langues sont sélectionnées, ajouter '<lang1>/<lang2>' dans le
-// sélecteur de langue du Dictionnaire [...] Idem pour le Paraphraseur."
-// Source de vérité, dans l'ordre : la grille actuellement chargée si
-// elle est bilingue (`puzzle.language`/`puzzle.bilingual_language` — voir
-// backend/crossword_gen.py's generate_grid ; le joueur a pu changer les
-// sélecteurs du formulaire depuis avoir généré/chargé cette grille
-// précise, donc seule la grille elle-même sait dans quelle(s) langue(s)
-// elle a réellement été écrite), sinon les deux sélecteurs du formulaire
-// de génération (#language/#bilingual-language) s'ils diffèrent
-// actuellement. Renvoie `[lang1, lang2]` (dans cet ordre — lang1 = langue
-// des mots horizontaux/principale, lang2 = langue des mots verticaux/
-// secondaire) ou `null` si une seule langue est actuellement en jeu.
-// Partagée par les deux panneaux, jamais dupliquée : les deux ne peuvent
-// donc jamais se contredire sur "combien de langues sont configurées".
+// The "two selected languages" for both the Dictionary AND the
+// Paraphraser, at the user's explicit request: "when two languages are
+// selected, add '<lang1>/<lang2>' to the Dictionary's own language
+// selector [...] Same for the Paraphraser." Source of truth, in order:
+// the currently loaded grid if it's bilingual (`puzzle.language`/
+// `puzzle.bilingual_language` — see backend/crossword_gen.py's
+// generate_grid; the player may have changed the form's own selectors
+// since generating/loading this specific grid, so only the grid itself
+// knows which language(s) it was actually written in), otherwise the
+// generation form's own two selectors (#language/#bilingual-language) if
+// they currently differ. Returns `[lang1, lang2]` (in this order — lang1
+// = the across/primary words' language, lang2 = the down/secondary
+// words' language) or `null` if only a single language is currently in
+// play. Shared by both panels, never duplicated: the two can therefore
+// never disagree about "how many languages are configured."
 function currentBilingualLangs() {
   if (puzzle && puzzle.bilingual_language && puzzle.bilingual_language !== puzzle.language) {
     return [puzzle.language, puzzle.bilingual_language];
@@ -823,32 +845,32 @@ function currentBilingualLangs() {
   return null;
 }
 
-// Le libellé natif d'un code langue simple (jamais une combinaison), lu
-// directement sur une des 6 `<option>` de base de `selectEl` (ex. "fr"
-// -> "Français") plutôt que dupliqué ici — ces six options ne sont jamais
-// traduites par uiLanguage (voir index.html, identiques sur #dictionary-
-// language ET #paraphrase-language), donc ce libellé reste stable quelle
-// que soit la langue de l'interface, et quel que soit le sélecteur.
+// A plain language code's own native label (never a combination), read
+// directly from one of `selectEl`'s 6 base `<option>`s (e.g. "fr" ->
+// "Français") rather than duplicated here — these six options are never
+// translated by uiLanguage (see index.html, identical on #dictionary-
+// language AND #paraphrase-language), so this label stays stable
+// regardless of the interface's own language, and regardless of which
+// selector is used.
 function nativeLanguageLabel(selectEl, lang) {
   const opt = selectEl.querySelector(`option[value="${lang}"]`);
   return opt ? opt.textContent : lang;
 }
 
-// Ajoute/retire/actualise, dans `selectEl` (#dictionary-language ou
-// #paraphrase-language), l'option combinée "<lang1>/<lang2>"
-// correspondant à currentBilingualLangs() ci-dessus — à la demande
-// explicite de l'utilisateur. Repère l'option déjà ajoutée par un
-// précédent appel via `data-bilingual-combo` (jamais plus d'une à la
-// fois) et la retire avant de recalculer, pour ne jamais accumuler de
-// doublons ni laisser une combinaison de langues devenue obsolète.
-// Préserve la sélection courante quand elle reste valide ; si elle
-// pointait sur l'ancienne combinaison (ou s'il n'y a plus de combinaison
-// du tout), retombe respectivement sur la nouvelle combinaison ou sur la
-// langue de l'interface — jamais sur une valeur qui ne correspond plus à
-// aucune `<option>`. Renvoie la valeur de la combinaison ("lang1/lang2")
-// si une combinaison est disponible, `null` sinon — utilisé par
-// defaultToBilingualOption() ci-dessous pour décider s'il faut la
-// sélectionner d'office.
+// Adds/removes/refreshes, on `selectEl` (#dictionary-language or
+// #paraphrase-language), the combined "<lang1>/<lang2>" option matching
+// currentBilingualLangs() above — at the user's explicit request. Finds
+// whichever option a previous call already added via
+// `data-bilingual-combo` (never more than one at a time) and removes it
+// before recomputing, so it can never accumulate duplicates or leave a
+// now-stale language combination behind. Preserves the current selection
+// when it's still valid; if it pointed at the old combination (or there's
+// no combination left at all), falls back respectively to the new
+// combination or to the interface's own language — never to a value that
+// no longer matches any `<option>`. Returns the combination's own value
+// ("lang1/lang2") if one is available, `null` otherwise — used by
+// defaultToBilingualOption() below to decide whether to select it
+// automatically.
 function refreshBilingualOption(selectEl) {
   const previousValue = selectEl.value;
   const existing = selectEl.querySelector("option[data-bilingual-combo]");
@@ -873,38 +895,36 @@ function refreshBilingualOption(selectEl) {
   return value;
 }
 
-// Comme refreshBilingualOption() ci-dessus, mais sélectionne d'office la
-// combinaison bilingue dès qu'elle existe — à la demande explicite de
-// l'utilisateur : "Sur Dictionnaire et Paraphraseur, si bilingue,
-// sélectionner par défaut la paire de langues." Utilisée aux points
-// d'entrée "par défaut" d'un panneau (ouverture, grille chargée,
-// changement de langue) ; updateDictionaryLanguageForDirection()
-// ci-dessous (déclenchée par un simple survol de mot dans la grille)
-// appelle volontairement refreshBilingualOption() seule, jamais celle-ci,
-// pour ne jamais écraser un choix de langue unique fait entre-temps par
-// le joueur — voir sa propre note.
+// Like refreshBilingualOption() above, but also selects the bilingual
+// combination by default as soon as it exists — at the user's explicit
+// request: "On Dictionnaire and Paraphraseur, if bilingual, select the
+// language pair by default." Used at a panel's "default" entry points
+// (opening it, a grid being loaded, a language change);
+// updateDictionaryLanguageForDirection() below (triggered by a plain word
+// hover in the grid) deliberately calls refreshBilingualOption() alone,
+// never this one, so a plain hover never overwrites a single-language
+// choice the player made in the meantime — see its own note.
 function defaultToBilingualOption(selectEl) {
   const value = refreshBilingualOption(selectEl);
   if (value) selectEl.value = value;
 }
 
-// Fait suivre le sélecteur de langue du panneau "Dictionnaire" à la
-// langue du mot survolé/sélectionné dans la grille à jouer, à la demande
-// explicite de l'utilisateur : "le sélecteur de langue du dictionnaire
-// doit s'adapter automatiquement à la langue suivant le sens de
-// sélection de la grille." Utilise les langues réellement enregistrées
-// sur la grille elle-même (`puzzle.language`/`puzzle.bilingual_language`
-// — voir backend/crossword_gen.py's generate_grid), pas les sélecteurs
-// du formulaire de génération : le joueur a pu les changer après avoir
-// généré/chargé cette grille précise, donc seule la grille elle-même
-// sait dans quelle(s) langue(s) elle a réellement été écrite. Sans effet
-// sur une grille monolingue ordinaire (`puzzle.bilingual_language` alors
-// `null`/absent) : `direction === "down"` retombe simplement sur la même
-// langue primaire que "across". Ne force jamais le sélecteur hors d'une
-// combinaison bilingue déjà sélectionnée (que ce soit par défaut ou
-// choisie explicitement par le joueur, voir refreshBilingualOption()/
-// defaultToBilingualOption() ci-dessus) — un simple survol ne doit pas
-// annuler ce choix.
+// Follows the "Dictionnaire" panel's own language selector to the
+// language of the hovered/selected word in the playable grid, at the
+// user's explicit request: "the dictionary's language selector should
+// automatically adapt to the language depending on the grid's selection
+// direction." Uses the languages actually recorded on the grid itself
+// (`puzzle.language`/`puzzle.bilingual_language` — see backend/
+// crossword_gen.py's generate_grid), not the generation form's own
+// selectors: the player may have changed those after generating/loading
+// this specific grid, so only the grid itself knows which language(s) it
+// was actually written in. No effect on an ordinary monolingual grid
+// (`puzzle.bilingual_language` then `null`/absent): `direction === "down"`
+// simply falls back to the same primary language as "across". Never
+// forces the selector out of an already-selected bilingual combination
+// (whether picked by default or explicitly by the player, see
+// refreshBilingualOption()/defaultToBilingualOption() above) — a plain
+// hover must never cancel that choice.
 function updateDictionaryLanguageForDirection(direction) {
   if (!puzzle) return;
   refreshBilingualOption(dictionaryLanguage);
@@ -915,15 +935,14 @@ function updateDictionaryLanguageForDirection(direction) {
   if (lang) dictionaryLanguage.value = lang;
 }
 
-// Refait le point (et sélectionne d'office la combinaison, voir
-// defaultToBilingualOption() ci-dessus) sur les deux sélecteurs
-// "bilingues" (Dictionnaire et Paraphraseur) dès que le sélecteur
-// "Bilingue" du formulaire de génération change — même si les panneaux
-// correspondants sont actuellement fermés (travail DOM sans effet
-// visible, donc sans coût réel). #language a son propre appel équivalent
-// au bout de setUiLanguage() (voir plus bas) — inutile de dupliquer un
-// deuxième listener ici, puisque tout changement de #language passe déjà
-// par elle.
+// Re-syncs (and selects the combination by default, see
+// defaultToBilingualOption() above) both "bilingual" selectors
+// (Dictionnaire and Paraphraseur) whenever the generation form's own
+// "Bilingue" selector changes — even while the matching panels are
+// currently closed (DOM work with no visible effect, so no real cost).
+// #language has its own equivalent call at the end of setUiLanguage()
+// (see further below) — no need to duplicate a second listener here,
+// since every change to #language already goes through it.
 bilingualLanguageSelect.addEventListener("change", () => {
   defaultToBilingualOption(dictionaryLanguage);
   defaultToBilingualOption(paraphraseLanguage);
@@ -959,11 +978,37 @@ function highlightWordAt(row, col, direction) {
 function applySelectedWordHighlight() {
   cellElements.forEach((el) => el.classList.remove("selected-word"));
   if (showSolution || !selected || !puzzle || !isWhite(selected.row, selected.col)) return;
-  for (const { row, col } of wordCellsAt(selected.row, selected.col, activeDirection)) {
+  const cells = wordCellsAt(selected.row, selected.col, activeDirection);
+  for (const { row, col } of cells) {
     if (row === selected.row && col === selected.col) continue;
     const el = cellElements.get(`${row},${col}`);
     if (el) el.classList.add("selected-word");
   }
+  updateDictionaryInputForSelection(cells);
+}
+
+// Auto-fills the Dictionary panel's own search field with the word
+// currently selected (the clicked cell, in the current activeDirection),
+// whenever that word is already entirely filled in — at the user's
+// explicit request: "quand un emplacement sélectionné change, si cet
+// emplacement possède toutes ses lettres remplies, renseigner
+// automatiquement le champ de saisie du Dictionnaire avec le mot
+// complet." Works the same way in ordinary play mode (userLetters) and
+// in "Interactif" mode (interactiveGrid) — `cells` is whatever
+// applySelectedWordHighlight() already resolved for the selected word,
+// reused here rather than recomputed. Left completely untouched (never
+// cleared) whenever the word isn't fully typed yet, or nothing is
+// selected — #dictionary-input is a plain, transient search field, safe
+// to leave showing whatever the player last typed/looked up.
+function updateDictionaryInputForSelection(cells) {
+  if (!cells || cells.length < 2) return;
+  let answer = "";
+  for (const { row, col } of cells) {
+    const letter = interactiveMode ? interactiveGrid[row][col] : userLetters[row][col];
+    if (!letter || letter === "#") return;
+    answer += letter;
+  }
+  dictionaryInput.value = answer;
 }
 
 // True when the keyboard focus is inside a text field (the chat box, the
@@ -1200,16 +1245,16 @@ function renderAttemptPreview(examples) {
     if (isBest) miniGrid.classList.add("attempt-preview-best");
     miniGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
     const cellElementsByCoord = new Map();
-    // Taux affichés au-dessus de chaque grille, à la demande explicite de
-    // l'utilisateur — cases noires / total, cases blanches déjà pourvues
-    // d'une vraie lettre / total, et cases réputées injouables / total (le
-    // même dénominateur pour les trois, afin qu'ils restent directement
-    // comparables). Une case blanche non déterminée ("." dans example_grid)
-    // ne compte jamais comme "remplie", que showPreviewLetters affiche sa
-    // lettre ou non — ce taux reflète le vrai progrès de la recherche, pas
-    // ce que le joueur voit à l'écran à cet instant. Le taux de cases
-    // injouables vient directement de `impossibleSet` (déjà calculé
-    // ci-dessus pour la classe .impossible) — pas un second calcul.
+    // Rates shown above each grid, at the user's explicit request — black
+    // cells / total, white cells already carrying a real letter / total,
+    // and cells deemed unplayable / total (the same denominator for all
+    // three, so they stay directly comparable). An undetermined white
+    // cell ("." in example_grid) never counts as "filled," whether
+    // showPreviewLetters shows its letter or not — this rate reflects the
+    // search's real progress, not what the player currently sees on
+    // screen. The unplayable-cell rate comes straight from `impossibleSet`
+    // (already computed above for the .impossible class) — not a second
+    // computation.
     let blackCount = 0;
     let filledCount = 0;
     for (let r = 0; r < height; r++) {
@@ -1219,18 +1264,17 @@ function renderAttemptPreview(examples) {
         if (ch === BLACK) {
           cell.className = "cell black";
           blackCount++;
-          // Enregistrée elle aussi (voir crossword_gen.py's
-          // `_optimize_before_cleanup`, à la demande explicite de
-          // l'utilisateur) — un `locked_cells` peut désormais désigner une
-          // case noire (une case bordant un emplacement encore
-          // entièrement vide, protégée du retrait pendant cette
-          // optimisation), pas seulement des cases blanches comme pour
-          // les autres appelants de ce mécanisme. Sans cet enregistrement,
-          // la case était introuvable par la passe de recouvrement plus
-          // bas (`cellElementsByCoord.get(...)` renvoyait `undefined`),
-          // donc jamais mise en évidence — signalé directement par
-          // l'utilisateur : "On devrait aussi voir les cases blanches et
-          // noires verrouillées, or elles ne sont pas entourées."
+          // Registered too (see crossword_gen.py's
+          // `_optimize_before_cleanup`, at the user's explicit request) —
+          // `locked_cells` can now name a black cell (one bordering a
+          // still-entirely-empty slot, protected from removal during this
+          // optimization), not only white cells like this mechanism's
+          // other callers. Without this registration, the cell was
+          // unreachable by the overlay pass further below
+          // (`cellElementsByCoord.get(...)` returned `undefined`), so it
+          // was never highlighted — reported directly by the user: "We
+          // should also see the locked white and black cells, but they
+          // aren't outlined."
           cellElementsByCoord.set(`${r},${c}`, cell);
         } else {
           cell.className = "cell white";
@@ -1270,14 +1314,14 @@ function renderAttemptPreview(examples) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("noise");
     }
-    // Lettres vertes pour les mots issus du glossaire thématique, à la
-    // demande explicite de l'utilisateur : "Dans les grilles aperçus,
-    // indiquer en lettres vertes les mots issus du glossaire thématique."
-    // Toujours vide pour une génération non thématique (voir backend/
-    // crossword_gen.py's `_theme_word_cells`), donc `|| []` = no-op partout
-    // ailleurs, comme les recouvrements ci-dessus. Une couleur de texte,
-    // qui se compose proprement avec les fonds .impossible/.noise/
-    // .low-candidates et les bordures .forced/.locked déjà en place.
+    // Green letters for words coming from the theme glossary, at the
+    // user's explicit request: "In the preview grids, show words coming
+    // from the theme glossary in green letters." Always empty for a
+    // non-themed generation (see backend/crossword_gen.py's
+    // `_theme_word_cells`), so `|| []` is a no-op everywhere else, same as
+    // the overlays above. A text color, which composes cleanly with the
+    // .impossible/.noise/.low-candidates backgrounds and the
+    // .forced/.locked borders already in place.
     for (const [r, c] of themeCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("theme");
@@ -1300,14 +1344,14 @@ function renderAttemptPreview(examples) {
     const impossiblePercent = Math.round((100 * impossibleSet.size) / totalCells);
     const stats = document.createElement("p");
     stats.className = "attempt-preview-stats";
-    // Préfixe en gras par le numéro du process qui a réellement produit
-    // cette grille (backend/crossword_gen.py's own `process_number`, voir
-    // sa propre docstring), à la demande explicite de l'utilisateur :
-    // "permet de suivre une grille qui change de place d'un cycle à
-    // l'autre." Absent (`null`/`undefined`) pour la seule prévisualisation
-    // qui n'a jamais de vrai process derrière elle (le tout premier palier
-    // d'une génération, avant toute soumission réelle) — dans ce cas, pas
-    // de préfixe du tout plutôt qu'un numéro inventé.
+    // Bold prefix with the number of the process that actually produced
+    // this grid (backend/crossword_gen.py's own `process_number`, see its
+    // own docstring), at the user's explicit request: "lets you track a
+    // grid that changes position from one cycle to the next." Absent
+    // (`null`/`undefined`) for the one preview that never has a real
+    // process behind it (the very first palier of a generation, before
+    // any real submission) — in that case, no prefix at all rather than a
+    // made-up number.
     if (processNumber != null) {
       const processLabel = document.createElement("strong");
       processLabel.className = "attempt-preview-process";
@@ -1404,17 +1448,16 @@ function updatePreviewNavButtons() {
   // other regardless of which one the player actually clicks.
   generationTimesPrevBtn.disabled = atStart;
   generationTimesNextBtn.disabled = atEnd;
-  // "Le mode jeu affiche des flèches qui correspondent à la navigation
-  // dans l'historique de génération, qui ne doivent pas être affichées
-  // si cet historique est vide" — à la demande explicite de l'utilisateur.
-  // previewHistory reste vide pour une grille chargée depuis la
-  // Bibliothèque/un lien partagé/une reprise GRID_GAME (aucune génération
-  // n'a eu lieu dans cet onglet — voir loadLibraryGrid's own
-  // hideAttemptPreview()), donc rien à naviguer. Seule et unique source de
-  // vérité pour la visibilité de ce trio (voir enterInteractiveMode() /
-  // hideInteractivePanel(), qui appellent cette fonction plutôt que de
-  // fixer `.hidden` eux-mêmes) — toujours masqué en mode "Interactif"
-  // aussi, qui n'a aucun rapport avec previewHistory.
+  // "Play mode shows arrows for navigating the generation history, which
+  // shouldn't be shown when that history is empty" — at the user's
+  // explicit request. previewHistory stays empty for a grid loaded from
+  // the Library/a shared link/a resumed GRID_GAME (no generation ever
+  // happened in this tab — see loadLibraryGrid's own
+  // hideAttemptPreview()), so there's nothing to navigate. The single
+  // source of truth for this trio's visibility (see enterInteractiveMode()
+  // / hideInteractivePanel(), which call this function rather than
+  // setting `.hidden` themselves) — always hidden in "Interactif" mode
+  // too, which has nothing to do with previewHistory.
   const hasNavigableHistory = !interactiveMode && previewHistory.length > 0;
   generationTimesPrevBtn.hidden = !hasNavigableHistory;
   generationTimesNextBtn.hidden = !hasNavigableHistory;
@@ -1894,7 +1937,17 @@ function renderGrid() {
           if (selected && selected.row === r && selected.col === c) {
             cell.classList.add("selected");
           }
+          // Gray-out for "not part of the drag-selected zone" — see
+          // interactiveZoneSelection's own docstring. A black cell can
+          // never belong to a real emplacement, but it can still be
+          // dragged over (part of the raw rectangle) and, being outside
+          // any resulting selection either way, is always eligible for
+          // this overlay whenever a zone is active.
+          if (interactiveZoneSelection && !interactiveZoneSelection.has(`${r},${c}`)) {
+            cell.classList.add("zone-unselected");
+          }
           cell.addEventListener("click", () => selectCell(r, c));
+          attachInteractiveDragHandlers(cell, r, c);
           cellElements.set(`${r},${c}`, cell);
         }
         gridEl.appendChild(cell);
@@ -1926,6 +1979,12 @@ function renderGrid() {
         if (interactiveImpossibleCells.has(dk)) cell.classList.add("interactive-impossible");
         else if (interactiveLowCells.has(dk)) cell.classList.add("interactive-low");
         if (interactiveInvalidCells.has(dk)) cell.classList.add("interactive-invalid");
+        // Gray-out for "not part of the drag-selected zone" — see
+        // interactiveZoneSelection's own docstring/comment above (the
+        // matching black-cell branch) for the full reasoning.
+        if (interactiveZoneSelection && !interactiveZoneSelection.has(dk)) {
+          cell.classList.add("zone-unselected");
+        }
       }
 
       if (!showSolution && checking && userLetters[r][c]) {
@@ -1937,6 +1996,7 @@ function renderGrid() {
       if (!showSolution) {
         cell.addEventListener("click", () => selectCell(r, c));
       }
+      if (interactiveMode) attachInteractiveDragHandlers(cell, r, c);
       // Hover word highlighting works the same in every mode (typing,
       // solution shown, checking) — it's a passive reading aid, not tied
       // to the click-to-select input flow above.
@@ -2063,15 +2123,14 @@ function toggleChecking() {
 // so a fresh grid always starts with the clue lists hidden regardless of
 // whatever the *previous* grid's own toggle state happened to be.
 function applyDefinitionsVisibility() {
-  // En mode "Interactif" on n'affiche jamais les listes complètes
-  // Horizontalement/Verticalement, ni le bloc de définition/flèches du
-  // mode jeu juste sous la grille (#hover-definition-row) — à la demande
-  // explicite de l'utilisateur : "il y a deux blocs de flèches et de
-  // définitions... ne pas afficher les blocs qui correspondent au mode
-  // jeu... ne garder que les blocs spécifiques au mode interactif (avec
-  // les boutons Proposer et Vérifier)", c'est-à-dire #interactive-arrows/
-  // #interactive-definition-row dans #interactive-controls, déjà seuls
-  // affichés dans ce mode.
+  // In "Interactif" mode we never show the full Horizontalement/
+  // Verticalement lists, nor the play mode's own definition/arrows block
+  // right under the grid (#hover-definition-row) — at the user's explicit
+  // request: "there are two blocks of arrows and definitions... don't show
+  // the blocks that belong to play mode... only keep the blocks specific
+  // to interactive mode (with the Proposer and Vérifier buttons)," i.e.
+  // #interactive-arrows/#interactive-definition-row in
+  // #interactive-controls, already the only ones shown in this mode.
   const showLists = showDefinitions && !interactiveMode;
   cluesEl.hidden = !showLists;
   downCluesSection.hidden = !showLists;
@@ -2089,43 +2148,41 @@ checkBtn.addEventListener("click", toggleChecking);
 definitionsBtn.addEventListener("click", toggleDefinitions);
 document.addEventListener("keydown", handleKeydown);
 
-// Clavier virtuel, à la demande explicite de l'utilisateur : "un clavier
-// virtuel ne contenant que les 26 lettres de l'alphabet en majuscules
-// dans l'ordre naturel sur 2 lignes, plus une flèche vers le bas pour
-// configurer le sens vertical... et une flèche vers la droite pour
-// configurer le sens horizontalement." Its own direction buttons drive
-// the shared `activeDirection`/`setActiveDirection()` (declared earlier,
-// alongside the hover state it's now unified with) rather than a
-// dedicated variable of their own — see that declaration's own comment
-// for the full "un mode persistant... plutôt qu'un état par touche"
-// reasoning, unchanged from this feature's own original design.
+// Virtual keyboard, at the user's explicit request: "a virtual keyboard
+// containing only the 26 uppercase letters of the alphabet in natural
+// order over 2 rows, plus a down arrow to set the vertical direction...
+// and a right arrow to set the horizontal direction." Its own direction
+// buttons drive the shared `activeDirection`/`setActiveDirection()`
+// (declared earlier, alongside the hover state it's now unified with)
+// rather than a dedicated variable of their own — see that declaration's
+// own comment for the full "a persistent mode... rather than a per-key
+// state" reasoning, unchanged from this feature's own original design.
 
 function insertAtCursor(input, text) {
-  // Insère `text` à la position du curseur (en remplaçant la sélection
-  // s'il y en a une) et laisse le curseur juste après. Sur un <input
-  // type="text"> ayant le focus, selectionStart/End sont toujours des
-  // nombres ; le repli sur value.length ne sert que par prudence.
+  // Inserts `text` at the cursor position (replacing the selection if
+  // there is one) and leaves the cursor right after it. On a focused
+  // <input type="text">, selectionStart/End are always numbers; the
+  // fallback to value.length is only there as a precaution.
   const start = input.selectionStart == null ? input.value.length : input.selectionStart;
   const end = input.selectionEnd == null ? input.value.length : input.selectionEnd;
   input.value = input.value.slice(0, start) + text + input.value.slice(end);
   const pos = start + text.length;
   input.setSelectionRange(pos, pos);
-  // Au cas où quelque chose écouterait "input" (aucun écouteur
-  // aujourd'hui — le formulaire du dictionnaire n'agit qu'à la
-  // soumission — mais sans coût et évite une surprise plus tard).
+  // In case something ever listens for "input" (no listener today — the
+  // dictionary form only acts on submit — but this costs nothing and
+  // avoids a surprise later).
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function typeVirtualLetter(letter) {
-  // Le clavier virtuel sert aussi à saisir une recherche dans le
-  // dictionnaire, à la demande explicite de l'utilisateur. Quand
-  // #dictionary-input a le focus, on écrit dedans (en minuscules,
-  // comme une frappe physique dans ce même champ — la recherche est de
-  // toute façon insensible à la casse et aux accents côté backend)
-  // plutôt que dans la grille. Le focus est préservé par le
-  // `mousedown`/preventDefault posé sur chaque touche (voir
-  // buildVirtualKeyboard) : sans lui, le clic sur le bouton retirerait
-  // le focus du champ avant même d'arriver ici.
+  // The virtual keyboard also serves to type a dictionary search, at the
+  // user's explicit request. When #dictionary-input has focus, it writes
+  // into it (lowercase, matching a real keystroke in that same field —
+  // the search is case/accent-insensitive on the backend either way)
+  // instead of into the grid. Focus is preserved by the
+  // `mousedown`/preventDefault set on every key (see buildVirtualKeyboard):
+  // without it, clicking the button would take focus away from the field
+  // before ever reaching here.
   if (document.activeElement === dictionaryInput
       || document.activeElement === interactiveDefinitionInput
       || document.activeElement === interactiveTitleInput) {
@@ -2136,15 +2193,15 @@ function typeVirtualLetter(letter) {
     interactiveTypeLetter(letter);
     return;
   }
-  // Mêmes gardes que handleKeydown() : une lettre cliquée quand aucune
-  // case n'est sélectionnée, ou que la solution est affichée, ne fait
-  // rien plutôt que d'écrire dans le vide ou d'écraser la solution.
+  // Same guards as handleKeydown(): a clicked letter with no cell
+  // selected, or while the solution is shown, does nothing rather than
+  // writing into the void or overwriting the solution.
   if (!puzzle || !selected || showSolution) return;
   userLetters[selected.row][selected.col] = letter;
   ensureGridTimerRunning();
-  // moveSelection() attend "right" pour horizontal, n'importe quelle
-  // autre valeur pour vertical (voir sa propre définition) — pas les
-  // mêmes libellés qu'activeDirection ("across"/"down").
+  // moveSelection() expects "right" for horizontal, anything else for
+  // vertical (see its own definition) — not the same labels as
+  // activeDirection ("across"/"down").
   moveSelection(activeDirection === "across" ? "right" : "down");
   renderGrid();
   scheduleGridGameSave();
@@ -2153,8 +2210,8 @@ function typeVirtualLetter(letter) {
 function buildVirtualKeyboard() {
   virtualKeyboardRows.replaceChildren();
   const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  // 2 rangs de 13 lettres chacun (A-M puis N-Z), l'ordre alphabétique
-  // naturel demandé — pas une disposition QWERTY/AZERTY.
+  // 2 rows of 13 letters each (A-M then N-Z), the requested natural
+  // alphabetical order — not a QWERTY/AZERTY layout.
   const rows = [letters.slice(0, 13), letters.slice(13)];
   for (const row of rows) {
     const rowEl = document.createElement("div");
@@ -2416,15 +2473,14 @@ function setUiLanguage(lang) {
   uiLanguage = lang;
   languageSelect.value = lang;
   welcomeLanguageSelect.value = lang;
-  // Grille bilingue, à la demande explicite de l'utilisateur : "le
-  // premier sélecteur de langue configure la langue de l'interface, et
-  // force le second sélecteur de langue à prendre la même valeur." Un
-  // simple changement de la langue de l'interface annule donc toujours
-  // un choix bilingue déjà fait sur ce sélecteur — le joueur doit
-  // reconfigurer "Bilingue" sur une langue différente à chaque fois
-  // qu'il souhaite réellement une grille bilingue, jamais que ce
-  // sélecteur reste figé sur une ancienne valeur devenue incohérente
-  // avec la nouvelle langue principale.
+  // Bilingual grid, at the user's explicit request: "the first language
+  // selector sets the interface language, and forces the second language
+  // selector to take the same value." A plain interface-language change
+  // therefore always cancels a bilingual choice already made on that
+  // selector — the player has to reconfigure "Bilingue" to a different
+  // language every time they genuinely want a bilingual grid, rather than
+  // that selector staying stuck on an old value that's now inconsistent
+  // with the new primary language.
   bilingualLanguageSelect.value = lang;
   applyTranslations();
   // attemptPreviewStats is a parameterized string (see i18n.js), rendered
@@ -2438,17 +2494,18 @@ function setUiLanguage(lang) {
   if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
   renderPreviewStatus();
   renderPreviewPosition();
-  // Le libellé du niveau à droite du titre de la grille jouée est traduit
-  // (voir renderGridDifficulty), donc à ré-appliquer au changement de langue.
+  // The difficulty label to the right of the playable grid's title is
+  // translated (see renderGridDifficulty), so it must be re-applied on a
+  // language change.
   renderGridDifficulty();
-  // Le panneau du mode "Interactif" porte des libellés/messages traduits.
+  // The "Interactif" mode panel carries translated labels/messages.
   if (interactiveMode) renderInteractive();
-  // Le panneau d'aide du mode "Interactif" construit sa liste dynamiquement
-  // (voir renderInteractiveHelpList()) — à re-rendre s'il est ouvert au
-  // moment du changement de langue.
+  // The "Interactif" mode help panel builds its list dynamically (see
+  // renderInteractiveHelpList()) — re-render it if it's open at the
+  // moment of the language change.
   if (!interactiveHelpOverlay.hidden) renderInteractiveHelpList();
-  // Pseudo de l'en-tête : le libellé "définir un pseudo" (quand aucun
-  // pseudo n'est saisi) est traduit, donc à ré-appliquer.
+  // Header pseudo: the "set a nickname" label (shown when no pseudo is
+  // set) is translated, so it must be re-applied.
   if (!userPseudoBtn.hidden) renderUserPseudo();
   // "David FALCON"'s own welcome bubble, at the user's explicit request
   // — see renderChatWelcome()'s own docstring for why this only ever
@@ -2456,41 +2513,39 @@ function setUiLanguage(lang) {
   // bootstrap call (see uiBootstrapped) — the standalone call near
   // renderChatWelcome()'s definition covers the initial render.
   if (uiBootstrapped) renderChatWelcome();
-  // Le filtre de langue du panneau "Actu Croisée" suit désormais la
-  // langue de l'interface à chaque changement, à la demande explicite de
-  // l'utilisateur : "Quand l'utilisateur change la langue de
-  // l'interface, il faut adapter la langue du fil d'actu." Revirement
-  // assumé par rapport à la décision initiale de ce même panneau (fixé
-  // une seule fois au chargement, jamais resynchronisé ensuite pour ne
-  // pas écraser un choix manuel du joueur sur ce sélecteur précisément)
-  // — la préférence la plus récente de l'utilisateur prévaut, même
-  // schéma de revirement déjà appliqué cette session à la visibilité du
-  // panneau lui-même.
+  // The "Actu Croisée" panel's own language filter now follows the
+  // interface language on every change, at the user's explicit request:
+  // "When the user changes the interface language, the news feed's
+  // language should adapt too." A deliberate reversal of this same
+  // panel's own initial decision (set once at load, never resynced
+  // afterward so as not to overwrite a manual choice the player made on
+  // that exact selector) — the user's most recent preference now wins,
+  // the same reversal pattern already applied this session to the
+  // panel's own visibility.
   rssLanguageFilter.value = lang;
   renderRssList();
-  // Le filtre de langue de la Bibliothèque suit lui aussi la langue de
-  // l'interface, à la demande explicite de l'utilisateur ("modifiée si la
-  // langue de l'interface change"). Si le panneau est ouvert, on le
-  // re-rend depuis la page 1.
+  // The Library's own language filter follows the interface language too,
+  // at the user's explicit request ("changed whenever the interface
+  // language changes"). If the panel is open, re-render it from page 1.
   libraryLanguageFilter.value = lang;
   if (!libraryPanel.hidden) {
     libraryCurrentPage = 1;
     renderLibraryList();
   }
-  // Les sélecteurs de langue du Dictionnaire ET du Paraphraseur suivent
-  // eux aussi la langue de l'interface (défaut demandé), tant que le
-  // joueur n'a rien changé dessus sur ces panneaux précisément.
+  // Both the Dictionnaire's and the Paraphraseur's own language selectors
+  // also follow the interface language (the requested default), as long
+  // as the player hasn't changed anything on those specific panels.
   dictionaryLanguage.value = lang;
   paraphraseLanguage.value = lang;
-  // Sélectionne d'office la combinaison "<lang1>/<lang2>" sur les deux si
-  // elle existe encore (voir currentBilingualLangs()/
-  // defaultToBilingualOption() ci-dessus) — #bilingual-language vient
-  // d'être forcé sur `lang` juste au-dessus, donc seule une grille
-  // bilingue déjà chargée peut encore en produire une à ce stade.
+  // Selects the "<lang1>/<lang2>" combination by default on both if it
+  // still exists (see currentBilingualLangs()/defaultToBilingualOption()
+  // above) — #bilingual-language was just forced to `lang` right above,
+  // so only an already-loaded bilingual grid can still produce one at
+  // this point.
   defaultToBilingualOption(dictionaryLanguage);
   defaultToBilingualOption(paraphraseLanguage);
-  // Le panneau d'admin Qdrant (localhost) : ses libellés sont posés à la
-  // construction, donc on le re-rend s'il est ouvert.
+  // The Qdrant admin panel (localhost): its labels are set at build time,
+  // so it's re-rendered if it's open.
   if (!qdrantAdminPanel.hidden) loadQdrantAdmin();
 }
 
@@ -2580,19 +2635,19 @@ async function claimPseudoSecret(pseudo, secret) {
 welcomeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const pseudo = welcomePseudoInput.value.trim().slice(0, MAX_PSEUDO_LENGTH);
-  // Le panneau ne se ferme pas si le pseudo est vide, à la demande
-  // explicite de l'utilisateur. `required` bloque déjà un champ
-  // strictement vide côté navigateur (l'événement "submit" ne se
-  // déclenche même pas) ; ceci couvre en plus le cas "que des espaces".
+  // The panel doesn't close if the pseudo is empty, at the user's
+  // explicit request. `required` already blocks a strictly empty field on
+  // the browser's own side (the "submit" event doesn't even fire); this
+  // additionally covers the "whitespace only" case.
   if (!pseudo) {
     welcomePseudoInput.setCustomValidity(I18N[uiLanguage].welcomePseudoRequired);
     welcomePseudoInput.reportValidity();
     return;
   }
   welcomePseudoInput.setCustomValidity("");
-  // Même règle pour le mot secret, à la demande explicite de
-  // l'utilisateur : "Le 'Mot secret' ne doit pas être vide pour pouvoir
-  // fermer la boite (comme le pseudo)."
+  // Same rule for the secret word, at the user's explicit request: "The
+  // 'Secret word' must not be empty to be able to close the box (just
+  // like the pseudo)."
   const secret = welcomeSecretInput.value.trim().slice(0, MAX_SECRET_LENGTH);
   if (!secret) {
     welcomeSecretInput.setCustomValidity(I18N[uiLanguage].welcomeSecretRequired);
@@ -2613,9 +2668,9 @@ welcomeForm.addEventListener("submit", async (event) => {
   }
   welcomeAcceptBtn.disabled = false;
   if (!claimed) {
-    // Pseudo déjà pris sous un autre mot secret — à la demande explicite
-    // de l'utilisateur : "signaler à l'utilisateur que ce Pseudo est déjà
-    // pris, ne pas fermer la boite."
+    // Pseudo already taken under a different secret word — at the user's
+    // explicit request: "tell the user this pseudo is already taken,
+    // don't close the box."
     welcomeSecretInput.setCustomValidity(I18N[uiLanguage].welcomeSecretTaken);
     welcomeSecretInput.reportValidity();
     return;
@@ -2626,28 +2681,27 @@ welcomeForm.addEventListener("submit", async (event) => {
   savePrefs({ accepted: true, lang: uiLanguage, pseudo: userPseudo, secret: userSecret });
   renderUserPseudo();
   welcomeOverlay.hidden = true;
-  // Redéclenche un battement de présence tout de suite (voir
-  // pingPresence's own docstring) plutôt que d'attendre le prochain tick
-  // du setInterval, pour que LOG_USERS reflète sans délai perceptible un
-  // utilisateur qui vient de se nommer (ou de changer de pseudo) — à la
-  // demande explicite de l'utilisateur. Fire-and-forget, comme
-  // pingPresence() l'est déjà partout ailleurs — ne doit jamais retarder
-  // la fermeture du panneau.
+  // Fires a presence heartbeat right away (see pingPresence's own
+  // docstring) instead of waiting for the setInterval's next tick, so
+  // LOG_USERS reflects with no perceptible delay a user who just named
+  // themselves (or changed their pseudo) — at the user's explicit
+  // request. Fire-and-forget, like pingPresence() already is everywhere
+  // else — must never delay the panel closing.
   pingPresence();
-  // Le pseudo peut avoir changé — si la Bibliothèque est ouverte (et
-  // surtout sur le filtre "Mes grilles"), on la rafraîchit.
+  // The pseudo may have changed — if the Library is open (especially on
+  // the "Mes grilles" filter), refresh it.
   if (!libraryPanel.hidden) {
     libraryCurrentPage = 1;
     renderLibraryList();
   }
-  // Le pseudo vient d'être connu (première visite) ou peut avoir changé
-  // (pseudo modifié plus tard) — dans les deux cas, on vérifie si ce
-  // pseudo a des créations en cours dans GRID_WORK.
+  // The pseudo has just become known (first visit) or may have changed
+  // (pseudo edited later) — either way, check whether this pseudo has
+  // any work in progress in GRID_WORK.
   checkForSavedInteractiveWork();
 });
 
-// Efface le message de validité personnalisé dès que l'utilisateur
-// retape quelque chose, sinon le champ resterait marqué invalide.
+// Clears the custom validity message as soon as the user types something
+// again, otherwise the field would stay marked invalid.
 welcomePseudoInput.addEventListener("input", () => {
   welcomePseudoInput.setCustomValidity("");
 });
@@ -2669,15 +2723,15 @@ userPseudoBtn.addEventListener("click", openWelcomeOverlay);
     setUiLanguage(typeof prefs.lang === "string" ? prefs.lang : "fr");
     renderUserPseudo();
     checkForSavedInteractiveWork();
-    // Un pseudo choisi avant l'ajout du "Mot secret" (ou un cookie
-    // remis à zéro côté secret pour une autre raison) n'a pas encore de
-    // mot secret associé — à la demande explicite de l'utilisateur, on
-    // rouvre le panneau pour lui demander de compléter son profil,
-    // plutôt que de laisser ce pseudo durablement non protégé. Le
-    // panneau se comporte alors exactement comme d'habitude (le pseudo
-    // est déjà prérempli, le mot secret reste requis pour le fermer) —
-    // s'il n'a jamais été revendiqué par personne d'autre, le soumettre
-    // le revendique simplement pour la première fois.
+    // A pseudo chosen before "Mot secret" was added (or a cookie that
+    // got reset on the secret's side for some other reason) has no
+    // associated secret word yet — at the user's explicit request, the
+    // panel is reopened to ask them to complete their profile, rather
+    // than leaving this pseudo permanently unprotected. The panel then
+    // behaves exactly as usual (the pseudo is already pre-filled, the
+    // secret word is still required to close it) — if it was never
+    // claimed by anyone else, submitting it simply claims it for the
+    // first time.
     if (userPseudo && !userSecret) {
       openWelcomeOverlay();
     }
@@ -2830,13 +2884,13 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// "XhXmnXs" (heures/minutes/secondes), à la demande explicite de
-// l'utilisateur, pour afficher les durées de génération de la grille et
-// des définitions (voir gridData.generation_duration_seconds/
-// clues_duration_seconds, calculées côté back — backend/app.py). Les
-// unités à zéro en tête sont omises (ex. "45s" plutôt que "0h0mn45s")
-// plutôt que toujours afficher les trois, pour rester lisible sur le cas
-// courant (quelques dizaines de secondes à quelques minutes).
+// "XhXmnXs" (hours/minutes/seconds), at the user's explicit request, to
+// show the grid/definitions generation durations (see
+// gridData.generation_duration_seconds/clues_duration_seconds, computed
+// on the backend side — backend/app.py). Leading zero units are omitted
+// (e.g. "45s" rather than "0h0mn45s") rather than always showing all
+// three, to stay readable in the common case (a few tens of seconds to a
+// few minutes).
 function formatDuration(seconds) {
   const total = Math.max(0, Math.round(seconds || 0));
   const h = Math.floor(total / 3600);
@@ -2849,22 +2903,20 @@ function formatDuration(seconds) {
   return out;
 }
 
-// Compteur de temps de la partie en cours, affiché à gauche du titre de
-// la grille (#grid-timer), à la demande explicite de l'utilisateur — qui
-// a ensuite précisé que le décompte ne doit se mettre à progresser qu'au
-// moment où le joueur tape sa toute première lettre, y compris après une
-// reprise (recharger une grille en cours ne doit pas faire tourner le
-// compteur pendant que la page reste simplement ouverte sans être
-// utilisée). startGridTimer() se contente donc d'afficher la valeur de
-// départ (0, ou la valeur sauvegardée) sans démarrer l'intervalle ;
-// ensureGridTimerRunning() — appelée depuis les deux points où une
-// lettre est réellement écrite dans la grille, handleKeydown() et
-// typeVirtualLetter() — démarre l'intervalle au tout premier appel et ne
-// fait plus rien ensuite (elle est aussi appelée à chaque lettre
-// suivante, mais `gridTimerIntervalId` déjà posé en fait un no-op).
-// Module-level (pas un simple état local) puisque scheduleGridGameSave()
-// (voir plus bas) doit pouvoir lire la valeur courante à chaque
-// autosauvegarde.
+// Elapsed-time counter for the current game, shown to the left of the
+// grid's title (#grid-timer), at the user's explicit request — who then
+// specified that the count should only start progressing the moment the
+// player types their very first letter, including after a resume
+// (reloading an in-progress grid must not run the counter while the page
+// simply sits open without being used). startGridTimer() therefore only
+// displays the starting value (0, or the saved value) without starting
+// the interval; ensureGridTimerRunning() — called from the two places
+// where a letter is actually written into the grid, handleKeydown() and
+// typeVirtualLetter() — starts the interval on its very first call and
+// does nothing afterward (it's also called on every following letter,
+// but `gridTimerIntervalId` already being set makes that a no-op).
+// Module-level (not a plain local state) since scheduleGridGameSave()
+// (see further below) needs to read the current value on every autosave.
 let gridTimerSeconds = 0;
 let gridTimerIntervalId = null;
 
@@ -2872,9 +2924,9 @@ function renderGridTimer() {
   gridTimerEl.textContent = formatDuration(gridTimerSeconds);
 }
 
-// Arrête le compteur SANS le masquer (voir startGridTimer, qui gère
-// l'affichage) — appelé juste avant d'en (ré)afficher un nouveau, pour
-// ne jamais laisser deux `setInterval` tourner en parallèle.
+// Stops the counter WITHOUT hiding it (see startGridTimer, which handles
+// the display) — called right before (re)displaying a new one, so two
+// `setInterval`s never run in parallel.
 function stopGridTimer() {
   if (gridTimerIntervalId !== null) {
     clearInterval(gridTimerIntervalId);
@@ -2882,14 +2934,13 @@ function stopGridTimer() {
   }
 }
 
-// Affiche le compteur à `initialSeconds` (0 pour une grille fraîchement
-// générée, ou une grille de la bibliothèque sans partie sauvegardée —
-// voir displayFinalGrid et GET /api/library/{grid_id}'s own `saved_game`;
-// sinon la valeur de la dernière sauvegarde GRID_GAME, "relancer le
-// compteur de temps là où il était à la sauvegarde" à la demande
-// explicite de l'utilisateur) SANS le démarrer — voir
-// ensureGridTimerRunning() ci-dessous, qui déclenche le décompte
-// lui-même dès la première lettre tapée par le joueur.
+// Displays the counter at `initialSeconds` (0 for a freshly generated
+// grid, or a library grid with no saved game — see displayFinalGrid and
+// GET /api/library/{grid_id}'s own `saved_game`; otherwise the value from
+// the last GRID_GAME save, "resume the time counter where it was at save
+// time" at the user's explicit request) WITHOUT starting it — see
+// ensureGridTimerRunning() below, which triggers the actual countdown as
+// soon as the player types their first letter.
 function startGridTimer(initialSeconds) {
   stopGridTimer();
   gridTimerSeconds = Math.max(0, Math.round(initialSeconds || 0));
@@ -2897,9 +2948,9 @@ function startGridTimer(initialSeconds) {
   renderGridTimer();
 }
 
-// Démarre réellement le décompte, un seul `setInterval` à la fois —
-// appelée à chaque lettre tapée par le joueur (voir handleKeydown/
-// typeVirtualLetter) ; un no-op une fois qu'il tourne déjà.
+// Actually starts the countdown, only one `setInterval` at a time —
+// called on every letter typed by the player (see handleKeydown/
+// typeVirtualLetter); a no-op once it's already running.
 function ensureGridTimerRunning() {
   if (gridTimerIntervalId !== null) return;
   gridTimerIntervalId = setInterval(() => {
@@ -2913,18 +2964,17 @@ function hideGridTimer() {
   gridTimerEl.hidden = true;
 }
 
-// GRID_GAME autosave — "A chaque modification de la grille, sauvegarder
-// l'état de la grille dans GRID_GAME avec le nom de l'utilisateur pour
-// pouvoir la recharger plus tard. Inclure l'état du compteur temps." —
-// à la demande explicite de l'utilisateur. Fire-and-forget, comme
-// autosaveInteractiveWork() : un échec ou une lenteur ne doit jamais
-// bloquer la frappe. Ne se déclenche que pour une grille réellement
-// stockée (`puzzle.id` — voir backend/app.py's _run_generate_job, qui
-// l'ajoute au résultat dès la sauvegarde en bibliothèque, qu'elle vienne
-// d'être générée ou d'être rechargée) jouée en mode normal (jamais en
-// mode "Interactif", qui a son propre mécanisme de sauvegarde), par un
-// joueur ayant déjà défini un pseudo — une partie n'est jamais
-// sauvegardée "anonymement", per la demande explicite de l'utilisateur.
+// GRID_GAME autosave — "Every time the grid is edited, save the grid's
+// state into GRID_GAME under the user's name so it can be reloaded
+// later. Include the time counter's state." — at the user's explicit
+// request. Fire-and-forget, like autosaveInteractiveWork(): a failure or
+// slowness must never block typing. Only fires for a grid that's
+// genuinely stored (`puzzle.id` — see backend/app.py's _run_generate_job,
+// which adds it to the result as soon as it's saved to the library,
+// whether it was just generated or reloaded) played in normal mode
+// (never in "Interactif" mode, which has its own save mechanism), by a
+// player who has already set a pseudo — a game is never saved
+// "anonymously," per the user's explicit request.
 async function scheduleGridGameSave() {
   if (interactiveMode || !puzzle || !puzzle.id || !userPseudo) return;
   try {
@@ -2939,18 +2989,17 @@ async function scheduleGridGameSave() {
       }),
     }, FETCH_TIMEOUT_MS);
   } catch (err) {
-    // Best-effort, silencieusement ignoré — même convention que
+    // Best-effort, silently ignored — same convention as
     // autosaveInteractiveWork().
   }
 }
 
-// Décompte de mots essayés (backend/crossword_gen.py, `total_attempts` —
-// somme de `Filler.checks`, incrémenté une fois par mot candidat essayé,
-// voir son propre historique) formaté pour rester lisible même une fois
-// dans les millions, à la demande explicite de l'utilisateur : nombre
-// exact en dessous de 1000, puis divisé par 1000 avec un suffixe K/M/G au
-// fur et à mesure — sans décimale ("12K", jamais "12,3K"), à sa demande
-// explicite elle aussi.
+// Count of words tried (backend/crossword_gen.py, `total_attempts` — the
+// sum of `Filler.checks`, incremented once per candidate word tried, see
+// its own history) formatted to stay readable even once in the millions,
+// at the user's explicit request: the exact number under 1000, then
+// divided by 1000 with a K/M/G suffix as it grows — no decimal ("12K",
+// never "12.3K"), at their own explicit further request.
 function formatAttemptCount(n) {
   const value = Math.max(0, Math.round(n || 0));
   if (value < 1000) return String(value);
@@ -3183,6 +3232,42 @@ async function pollJob(jobId, t) {
         recordPreviewHistory(history.slice(nextExampleIndex));
         nextExampleIndex = history.length;
       }
+      // "Comptage des définitions 0/27, alors que les définitions
+      // apparaissent en dessous de la grille" — bug déjà signalé
+      // plusieurs fois, root-causé ici : la phase de définitions n'a
+      // qu'UNE seule entrée dans examples_history/previewHistory (le tout
+      // premier progress("clues", current=0, ...), le seul appel de cette
+      // phase à porter `examples` — voir backend/app.py's progress()).
+      // Chaque mise à jour suivante (un mot de plus défini) ne porte
+      // jamais `examples`, donc n'est jamais enregistrée ; #attempt-
+      // preview-status (lastPreviewStep, alimenté uniquement par
+      // showPreviewEntry() sur une NOUVELLE entrée) restait donc figé sur
+      // "0/N" tout du long, même si la liste "Définitions générées"
+      // juste en dessous (liveClues, alimentée séparément ci-dessus)
+      // progressait bien à chaque mot. "saving" (juste après) ne porte
+      // pas non plus `examples`, donc cette entrée "clues" reste la
+      // dernière de previewHistory pendant toute la fin du job — on peut
+      // donc la retrouver et la rafraîchir en place ici, en direct,
+      // plutôt que de la laisser figée.
+      if (data.step && data.step.code === "clues" && previewHistory.length) {
+        const cluesEntry = previewHistory[previewHistory.length - 1];
+        if (cluesEntry.step && cluesEntry.step.code === "clues") {
+          cluesEntry.step = {
+            ...cluesEntry.step, current: data.step.current, total: data.step.total,
+          };
+          // Ne redessine que si cette entrée est bien celle actuellement
+          // affichée — si le joueur a navigué en arrière dans l'historique
+          // pour revoir une étape antérieure, cette mise à jour live ne
+          // doit pas lui changer l'affichage sous le nez ; elle sera
+          // prise en compte dès qu'il reviendra sur cette entrée (voir
+          // showNextPreview()/catchUpPreviewToEnd(), qui relisent
+          // toujours `entry.step` au moment d'afficher).
+          if (previewHistoryIndex === previewHistory.length - 1) {
+            lastPreviewStep = cluesEntry.step;
+            renderPreviewStatus();
+          }
+        }
+      }
       if (data.status === "error") {
         catchUpPreviewToEnd();
         throw new GenerationFailedError(
@@ -3205,18 +3290,17 @@ async function pollJob(jobId, t) {
   }
 }
 
-// "Déjà vues" — l'ensemble des identifiants (champ `id` d'un fichier
-// GRID_STORE, voir backend/grid_store.py) des grilles que ce navigateur a
-// déjà affichées, à la demande explicite de l'utilisateur ("stocker le
-// nom du fichier de GRID_STORE ... pour savoir qu'il l'a déjà vue").
-// Conservé en localStorage plutôt qu'un vrai cookie : après le peuplement
-// automatique (Automation/Populate.py, 1000 grilles) la liste peut
-// compter des milliers d'entrées — bien au-delà des ~4 Ko qu'un cookie
-// encaisse, et un cookie serait renvoyé à chaque requête pour rien. La
-// liste complète est passée au back dans le corps de POST /api/library
-// (voir renderLibraryList) pour qu'il filtre/annote la liste lui-même.
-// Plafond FIFO généreux : ~35 octets par id, 20000 ids ≈ 700 Ko, très
-// en dessous de la limite localStorage.
+// "Already seen" — the set of identifiers (a GRID_STORE file's own `id`
+// field, see backend/grid_store.py) of the grids this browser has already
+// displayed, at the user's explicit request ("store the GRID_STORE file
+// name ... to know it's already been seen"). Kept in localStorage rather
+// than a real cookie: after automatic population (Automation/Populate.py,
+// 1000 grids) the list can hold thousands of entries — well past the
+// ~4 KB a cookie can hold, and a cookie would be sent back on every
+// request for nothing. The full list is passed to the backend in
+// POST /api/library's own body (see renderLibraryList) so it can
+// filter/annotate the list itself. A generous FIFO ceiling: ~35 bytes per
+// id, 20000 ids ≈ 700 KB, well under localStorage's own limit.
 const SEEN_GRIDS_KEY = "cwf-seen-grids";
 const SEEN_GRIDS_MAX = 20000;
 
@@ -3238,26 +3322,26 @@ function markGridSeen(gridId) {
   try {
     localStorage.setItem(SEEN_GRIDS_KEY, JSON.stringify(ids));
   } catch (err) {
-    // Quota plein / stockage désactivé : tant pis, le suivi "déjà vue"
-    // est un confort, pas une fonctionnalité critique.
+    // Quota full / storage disabled: too bad, "already seen" tracking is
+    // a convenience, not a critical feature.
   }
 }
 
-// Niveau de difficulté affiché à droite du titre de la grille à jouer,
-// à la demande explicite de l'utilisateur. Lu depuis `puzzle` :
-// backend/app.py ajoute `difficulty` au result d'une grille fraîchement
-// générée, et l'enregistrement GRID_STORE d'une grille rechargée depuis
-// la bibliothèque le porte déjà. Le libellé est traduit (difficultyEasy/
-// Medium/Hard), donc ré-appelé au changement de langue de l'interface.
-// Une grille sans ce champ (sauvegardée avant cette fonctionnalité)
-// n'affiche simplement rien.
+// Difficulty level shown to the right of the playable grid's title, at
+// the user's explicit request. Read from `puzzle`: backend/app.py adds
+// `difficulty` to the result of a freshly generated grid, and a library
+// grid's own GRID_STORE record already carries it when reloaded. The
+// label is translated (difficultyEasy/Medium/Hard), so it's re-called on
+// an interface language change. A grid with no such field (saved before
+// this feature existed) simply shows nothing.
 function renderGridDifficulty() {
   const key = { easy: "difficultyEasy", medium: "difficultyMedium", hard: "difficultyHard" }[
     puzzle && puzzle.difficulty
   ];
   if (key) {
-    // Préfixé "Difficulté : " (ponctuation par langue) plutôt qu'un
-    // adjectif féminin nu ("Moyenne"), qui sans contexte se lit mal.
+    // Prefixed with "Difficulté : " (punctuation per language) rather
+    // than a bare adjective ("Moyenne"), which reads oddly with no
+    // context.
     gridDifficultyEl.textContent = I18N[uiLanguage].gridDifficulty(I18N[uiLanguage][key]);
     gridDifficultyEl.hidden = false;
   } else {
@@ -3278,23 +3362,22 @@ function renderGridDifficulty() {
 // easily-drifting rendering logic for the two cases.
 function displayFinalGrid(gridData) {
   puzzle = gridData;
-  // Une grille bilingue nouvellement chargée doit immédiatement offrir
-  // (et sélectionner par défaut, à la demande explicite de l'utilisateur)
-  // sa propre combinaison "<lang1>/<lang2>" dans le Dictionnaire ET le
-  // Paraphraseur, sans attendre un premier survol de mot (voir
+  // A newly loaded bilingual grid must immediately offer (and select by
+  // default, at the user's explicit request) its own "<lang1>/<lang2>"
+  // combination in both the Dictionnaire and the Paraphraseur, without
+  // waiting for a first word hover (see
   // currentBilingualLangs()/defaultToBilingualOption()).
   defaultToBilingualOption(dictionaryLanguage);
   defaultToBilingualOption(paraphraseLanguage);
   userLetters = Array.from({ length: gridData.height }, () => Array(gridData.width).fill(""));
-  // Partie déjà sauvegardée dans GRID_GAME pour cette grille + ce pseudo
-  // (voir GET /api/library/{grid_id}'s own `saved_game`, transmis par
-  // loadLibraryGrid — jamais présent pour une grille qui vient d'être
-  // générée, dont le grid_id est tout neuf), à la demande explicite de
-  // l'utilisateur : "chercher si cette grille existe dans GRID_GAME pour
-  // la recharger et relancer le compteur de temps là où il était à la
-  // sauvegarde." Dimensions revérifiées avant usage — ne devrait jamais
-  // différer (un grid_id désigne toujours le même contenu), défensif
-  // seulement.
+  // A game already saved in GRID_GAME for this grid + this pseudo (see
+  // GET /api/library/{grid_id}'s own `saved_game`, passed by
+  // loadLibraryGrid — never present for a grid that just finished
+  // generating, whose grid_id is brand new), at the user's explicit
+  // request: "check whether this grid exists in GRID_GAME to reload it
+  // and resume the time counter where it was at save time." Dimensions
+  // re-checked before use — should never differ (a grid_id always
+  // designates the same content), purely defensive.
   const savedGame = gridData.saved_game || null;
   const savedLetters = savedGame && savedGame.user_letters;
   if (savedLetters && savedLetters.length === gridData.height
@@ -3322,24 +3405,23 @@ function displayFinalGrid(gridData) {
   // title generation itself failed, see generate_title's own "" return)
   // simply has no title line shown, rather than an empty heading.
   gridTitleTextEl.textContent = gridData.title || "";
-  // Niveau de difficulté ("Facile" / "Moyen" / "Difficile") affiché à
-  // droite du titre, à la demande explicite de l'utilisateur. Traduit
-  // selon la langue de l'interface, donc re-rendu aussi au changement de
-  // langue (voir languageSelect's own handler). La difficulté seule
-  // (sans titre) suffit à afficher la ligne #grid-title.
+  // Difficulty level ("Facile" / "Moyen" / "Difficile") shown to the
+  // right of the title, at the user's explicit request. Translated per
+  // the interface language, so also re-rendered on a language change (see
+  // languageSelect's own handler). The difficulty alone (with no title)
+  // is enough to show the #grid-title line.
   renderGridDifficulty();
   gridTitleEl.hidden = !gridData.title && gridDifficultyEl.hidden;
-  // Compteur de temps : affiche 0 pour une grille sans partie sauvegardée,
-  // ou "là où il était à la sauvegarde" (voir savedGame ci-dessus), mais
-  // ne démarre le décompte qu'à la première lettre tapée (voir
-  // ensureGridTimerRunning) — à la demande explicite de l'utilisateur, y
-  // compris lors d'une reprise comme celle-ci.
+  // Time counter: shows 0 for a grid with no saved game, or "where it was
+  // at save time" (see savedGame above), but only starts the countdown on
+  // the first letter typed (see ensureGridTimerRunning) — at the user's
+  // explicit request, including on a resume like this one.
   startGridTimer(savedGame ? savedGame.elapsed_seconds : 0);
-  // Marque cette grille "déjà vue" — même chemin pour une grille qui vient
-  // d'être générée (backend/app.py ajoute `id` au `result`, voir son
-  // commentaire) et une grille rechargée depuis la bibliothèque
-  // (GET /api/library/{grid_id} renvoie déjà `id`). À la demande explicite
-  // de l'utilisateur : "y compris la grille qu'il vient de générer".
+  // Marks this grid "already seen" — the same path for a grid that just
+  // finished generating (backend/app.py adds `id` to the `result`, see
+  // its own comment) and a grid reloaded from the library
+  // (GET /api/library/{grid_id} already returns `id`). At the user's
+  // explicit request: "including the grid they just generated".
   markGridSeen(gridData.id);
   renderGrid();
   renderClues(gridData.words);
@@ -3374,7 +3456,31 @@ function displayFinalGrid(gridData) {
 function hideLibraryPanel() {
   libraryPanel.hidden = true;
   syncRssPanelVisibility();
+  // Generic close (the "Bibliothèque"/"X" button, or before loading a
+  // normal grid) — cancels any pending automatic-reopen intent.
+  // openLibraryGridInteractive() below sets it back to true right AFTER
+  // its own call to this function, so this generic reset never overwrites
+  // it in that specific case.
+  libraryReopenOnInteractive = false;
 }
+
+function openLibraryPanel() {
+  libraryPanel.hidden = false;
+  syncRssPanelVisibility();
+  libraryCurrentPage = 1;
+  renderLibraryList();
+}
+
+// The Library must reopen automatically every time Edition (Interactif)
+// mode is shown again, at the user's explicit request — including after
+// a round trip through "Finir la grille"/"Finir la zone" (which hides
+// then re-shows this mode without ever going back through
+// openLibraryGridInteractive). Set to true only when opening a Library
+// grid in Interactif mode (it was therefore necessarily shown just
+// before); reset to false by any manual/generic Library close
+// (hideLibraryPanel), so it's never forced back open after the player
+// closed it themselves.
+let libraryReopenOnInteractive = false;
 
 // 1-based, reset to 1 every time the panel is (re)opened (see the
 // libraryBtn click handler below) — module-level rather than a
@@ -3390,12 +3496,12 @@ let libraryCurrentPage = 1;
 // button's native `disabled` attribute to prevent an out-of-range click).
 let libraryTotalPages = 1;
 
-// Base publique pour les liens partageables de la Bibliothèque, à la
-// demande explicite de l'utilisateur ("URL de base https://falcon.cubaix.com/").
-// Le lien de chaque ligne est SHARE_BASE_URL + "?grid=<id>" ; ouvert dans
-// un nouvel onglet, il recharge la grille pour la jouer (voir
-// maybeLoadGridFromUrl() en fin de fichier, qui lit ?grid= quel que soit
-// l'hôte — le lien du tableau, lui, pointe toujours vers ce domaine public).
+// Public base for the Library's own shareable links, at the user's
+// explicit request ("base URL https://falcon.cubaix.com/"). Each row's
+// link is SHARE_BASE_URL + "?grid=<id>"; opened in a new tab, it reloads
+// the grid to play it (see maybeLoadGridFromUrl() at the end of this
+// file, which reads ?grid= regardless of the host — the table's own link
+// always points at this public domain).
 const SHARE_BASE_URL = "https://falcon.cubaix.com/";
 
 // "Bibliothèque" button (permanent, unlike every other button in
@@ -3444,17 +3550,18 @@ async function renderLibraryList() {
         body: JSON.stringify({
           preferred_language: uiLanguage,
           page: libraryCurrentPage,
-          // "all" ou un code langue — par défaut la langue de l'interface
-          // (voir #library-language-filter), à la demande explicite de
-          // l'utilisateur : "Par défaut, n'afficher que les grilles dans
-          // la langue de l'interface".
+          // "all" or a language code — defaults to the interface language
+          // (see #library-language-filter), at the user's explicit
+          // request: "By default, only show grids in the interface
+          // language".
           language_filter: libraryLanguageFilter.value,
-          // "all" ou easy/medium/hard — "Tous les niveaux" par défaut, ne
-          // suit pas la langue de l'interface (voir #library-difficulty-filter).
+          // "all" or easy/medium/hard — "Tous les niveaux" by default,
+          // does not follow the interface language (see
+          // #library-difficulty-filter).
           difficulty_filter: libraryDifficultyFilter.value,
-          // "all"/"unseen"/"seen"/"mine" — "Mes grilles" ("mine") filtre
-          // côté back sur le champ `pseudo` de chaque grille, comparé au
-          // pseudo courant envoyé ci-dessous.
+          // "all"/"unseen"/"seen"/"mine" — "Mes grilles" ("mine") filters
+          // on the backend side on each grid's own `pseudo` field,
+          // compared against the current pseudo sent below.
           seen_filter: librarySeenFilter.value,
           seen_ids: loadSeenGridIds(),
           pseudo: userPseudo,
@@ -3492,8 +3599,8 @@ async function renderLibraryList() {
   for (const entry of entries) {
     const tr = document.createElement("tr");
     tr.tabIndex = 0;
-    // Grisé si le back l'a annotée `seen` (ou, par sécurité, si notre
-    // propre localStorage la connaît) — reste cliquable.
+    // Greyed if the backend annotated it `seen` (or, as a safety net, if
+    // our own localStorage already knows it) — still clickable.
     if (entry.seen || seenSet.has(entry.id)) {
       tr.classList.add("library-grid-seen");
     }
@@ -3509,12 +3616,11 @@ async function renderLibraryList() {
     const languageTd = document.createElement("td");
     const languageOption = languageSelect.querySelector(`option[value="${entry.language}"]`);
     languageTd.textContent = languageOption ? languageOption.textContent : (entry.language || "");
-    // Grille bilingue (voir backend/grid_store.py's own `bilingual`
-    // field), à la demande explicite de l'utilisateur : montre les deux
-    // codes langue ("fr/en") à la suite du nom déjà affiché ci-dessus,
-    // plutôt qu'un second, éventuellement long, libellé en toutes
-    // lettres — reste lisible même quand les deux langues partagent une
-    // ligne étroite du tableau.
+    // Bilingual grid (see backend/grid_store.py's own `bilingual`
+    // field), at the user's explicit request: shows both language codes
+    // ("fr/en") right after the name already shown above, rather than a
+    // second, possibly long, spelled-out label — stays readable even
+    // when both languages share a narrow table row.
     if (entry.bilingual) {
       languageTd.textContent += ` (${entry.language}/${entry.bilingual})`;
     }
@@ -3524,14 +3630,14 @@ async function renderLibraryList() {
     const titleMain = document.createElement("div");
     titleMain.textContent = entry.title || "";
     titleTd.appendChild(titleMain);
-    // Grille créée en modifiant une grille existante de la Bibliothèque
-    // (bouton "Ouvrir en mode Interactif" — voir backend/grid_store.py's
-    // save_grid_json/save_grid_work's own `origin`), à la demande
-    // explicite de l'utilisateur : mentionne la provenance (grille/
-    // auteur/date d'origine) sous le titre, sur sa propre ligne. `origin`
-    // est un instantané pris au moment où l'édition a commencé (jamais
-    // relu depuis la grille d'origine, qui peut depuis avoir changé ou
-    // disparu) — absent/`None` pour toute grille non issue d'une édition.
+    // A grid created by editing an existing Library grid ("Ouvrir en
+    // mode Interactif" button — see backend/grid_store.py's
+    // save_grid_json/save_grid_work's own `origin`), at the user's
+    // explicit request: mentions the provenance (origin grid/author/date)
+    // under the title, on its own line. `origin` is a snapshot taken at
+    // the moment editing started (never re-read from the origin grid,
+    // which may have since changed or disappeared) — absent/`None` for
+    // any grid not born from an edit.
     if (entry.origin && entry.origin.id) {
       const originDate = entry.origin.created_at
         ? new Date(entry.origin.created_at).toLocaleDateString(uiLanguage)
@@ -3542,30 +3648,28 @@ async function renderLibraryList() {
       originTag.textContent = t.libraryOriginTag(entry.origin.title || "", originAuthor, originDate);
       titleTd.appendChild(originTag);
     }
-    // Colonne "Thématique" : la liste de mots saisie à la génération
-    // (champ `theme` du JSON de la grille — voir backend/grid_store.py),
-    // vide quand la grille n'a pas de thématique. À la demande explicite
-    // de l'utilisateur.
+    // "Thématique" column: the word list typed at generation time (the
+    // grid's own JSON `theme` field — see backend/grid_store.py), empty
+    // when the grid has no theme. At the user's explicit request.
     const themeTd = document.createElement("td");
     themeTd.textContent = entry.theme || "";
     const difficultyTd = document.createElement("td");
     difficultyTd.textContent = difficultyLabels[entry.difficulty] || entry.difficulty || "";
     const sizeTd = document.createElement("td");
     sizeTd.textContent = entry.width && entry.height ? `${entry.width}×${entry.height}` : "";
-    // Dernière colonne : pseudo de l'auteur (champ `pseudo` du JSON de la
-    // grille — voir backend/grid_store.py). Une grille sans auteur
-    // (générée sans pseudo défini) est attribuée à "Falcon Auto Bot".
+    // Last column: the author's pseudo (the grid's own JSON `pseudo`
+    // field — see backend/grid_store.py). A grid with no author
+    // (generated with no pseudo set) is attributed to "Falcon Auto Bot".
     const authorTd = document.createElement("td");
     authorTd.textContent = entry.pseudo || t.libraryAuthorBot;
-    // Grille bâtie via le mode "Interactif" : tag "(Création)" à côté de
-    // l'auteur (voir backend/grid_store.py's save_grid_json's `interactive`).
+    // A grid built via "Interactif" mode: "(Création)" tag next to the
+    // author (see backend/grid_store.py's save_grid_json's `interactive`).
     if (entry.interactive) authorTd.textContent += ` ${t.libraryCreationTag}`;
-    // Dernière colonne : lien partageable vers la grille, à la demande
-    // explicite de l'utilisateur. Ouvre SHARE_BASE_URL + "?grid=<id>" dans
-    // un nouvel onglet (le domaine public, indépendamment de l'hôte
-    // courant). stopPropagation pour ne pas déclencher aussi le
-    // loadLibraryGrid() du clic sur la ligne (qui, lui, charge dans
-    // l'onglet courant).
+    // Last column: shareable link to the grid, at the user's explicit
+    // request. Opens SHARE_BASE_URL + "?grid=<id>" in a new tab (the
+    // public domain, regardless of the current host). stopPropagation so
+    // it doesn't also trigger the row click's own loadLibraryGrid()
+    // (which loads into the current tab).
     const linkTd = document.createElement("td");
     const link = document.createElement("a");
     link.href = `${SHARE_BASE_URL}?grid=${encodeURIComponent(entry.id)}`;
@@ -3576,13 +3680,13 @@ async function renderLibraryList() {
     link.addEventListener("click", (event) => event.stopPropagation());
     link.addEventListener("keydown", (event) => event.stopPropagation());
     linkTd.appendChild(link);
-    // Colonne "Interactif" : bouton icône (crayon) ouvrant la grille dans
-    // le mode "Interactif" — le back crée alors une nouvelle tâche
-    // GRID_WORK à partir de cette grille (voir POST /api/interactive/
-    // from-library). Icône SVG inline (aucune police/lib d'icône externe,
-    // même convention que le badge PDF / le badge "i" de l'en-tête).
-    // stopPropagation comme les liens voisins pour ne pas aussi déclencher
-    // le loadLibraryGrid() du clic sur la ligne.
+    // "Interactif" column: an icon button (pencil) opening the grid in
+    // "Interactif" mode — the backend then creates a new GRID_WORK task
+    // from this grid (see POST /api/interactive/from-library). Inline
+    // SVG icon (no external icon font/library, same convention as the
+    // PDF badge / the header's own "i" badge). stopPropagation like the
+    // neighboring links so it doesn't also trigger the row click's own
+    // loadLibraryGrid().
     const interactiveTd = document.createElement("td");
     const interactiveBtn = document.createElement("button");
     interactiveBtn.type = "button";
@@ -3602,20 +3706,20 @@ async function renderLibraryList() {
     });
     interactiveBtn.addEventListener("keydown", (event) => event.stopPropagation());
     interactiveTd.appendChild(interactiveBtn);
-    // Dernière colonne : téléchargement PDF imprimable (grille vide +
-    // définitions + titre, sans réponses — voir GET /api/library/<id>/pdf),
-    // à la demande explicite de l'utilisateur. URL relative : passe par le
-    // proxy du front sur l'hôte courant (local ou public). `download` +
-    // stopPropagation, comme le lien "Jouer" ci-dessus.
+    // Last column: printable PDF download (empty grid + definitions +
+    // title, no answers — see GET /api/library/<id>/pdf), at the user's
+    // explicit request. Relative URL: goes through the frontend's own
+    // proxy on the current host (local or public). `download` +
+    // stopPropagation, like the "Jouer" link above.
     const pdfTd = document.createElement("td");
     const pdfLink = document.createElement("a");
     pdfLink.href = `/api/library/${encodeURIComponent(entry.id)}/pdf`;
     pdfLink.setAttribute("download", "");
     pdfLink.rel = "noopener";
-    // Icône PDF plutôt que le mot "Télécharger", à la demande explicite de
-    // l'utilisateur. Badge rouge "PDF" sur une page — dessiné en SVG inline
-    // (ce projet n'utilise aucune police/lib d'icônes externe, cf. le badge
-    // "i" de l'en-tête). Le libellé accessible reste `libraryPdfText`
+    // A PDF icon rather than the word "Télécharger", at the user's
+    // explicit request. A red "PDF" badge on a page — drawn as inline SVG
+    // (this project uses no external icon font/library, cf. the header's
+    // own "i" badge). The accessible label stays `libraryPdfText`
     // (aria-label + title).
     pdfLink.className = "library-link library-pdf-link";
     pdfLink.setAttribute("aria-label", t.libraryPdfText);
@@ -3658,12 +3762,12 @@ async function renderLibraryList() {
 async function loadLibraryGrid(gridId) {
   const t = I18N[uiLanguage];
   try {
-    // Pseudo transmis en query string — à la demande explicite de
-    // l'utilisateur, le back cherche alors une partie déjà sauvegardée
-    // dans GRID_GAME pour (gridId, userPseudo) et la joint au résultat
-    // sous `saved_game` (voir backend/app.py's library_get et
-    // displayFinalGrid, qui la lit). Omis si aucun pseudo n'est encore
-    // défini — rien à retrouver dans ce cas.
+    // Pseudo sent as a query string — at the user's explicit request, the
+    // backend then looks for a game already saved in GRID_GAME for
+    // (gridId, userPseudo) and joins it into the result under
+    // `saved_game` (see backend/app.py's library_get and
+    // displayFinalGrid, which reads it). Omitted if no pseudo is set
+    // yet — nothing to find in that case.
     const query = userPseudo ? `?pseudo=${encodeURIComponent(userPseudo)}` : "";
     const response = await fetchWithTimeout(`/api/library/${gridId}${query}`, {}, FETCH_TIMEOUT_MS);
     const data = await response.json();
@@ -3673,9 +3777,9 @@ async function loadLibraryGrid(gridId) {
     hideAttemptPreview();
     stopBtn.hidden = true;
     continueBtn.hidden = true;
-    // gridId est toujours connu ici ; displayFinalGrid marque déjà
-    // data.id, ce doublon couvre le cas improbable où le disque n'aurait
-    // pas renvoyé le champ.
+    // gridId is always known here; displayFinalGrid already marks
+    // data.id, this duplicate covers the unlikely case where the disk
+    // record didn't return the field.
     markGridSeen(gridId);
     displayFinalGrid(data);
     hideLibraryPanel();
@@ -3695,15 +3799,13 @@ async function loadLibraryGrid(gridId) {
 // resumeInteractiveWork(), only the endpoint/body differ.
 async function openLibraryGridInteractive(gridId) {
   hideLibraryPanel();
+  libraryReopenOnInteractive = true;
   await runInteractive({ grid_id: gridId }, "/api/interactive/from-library");
 }
 
 libraryBtn.addEventListener("click", () => {
   if (libraryPanel.hidden) {
-    libraryPanel.hidden = false;
-    syncRssPanelVisibility();
-    libraryCurrentPage = 1;
-    renderLibraryList();
+    openLibraryPanel();
   } else {
     hideLibraryPanel();
   }
@@ -3711,22 +3813,22 @@ libraryBtn.addEventListener("click", () => {
 
 libraryCloseBtn.addEventListener("click", hideLibraryPanel);
 
-// Bouton "Actualiser", à la demande explicite de l'utilisateur : re-rend
-// la page courante avec les filtres actuels, sans revenir à la page 1
-// (contrairement aux changements de filtre ci-dessous) — sert juste à
-// revoir l'état le plus récent (une grille nouvellement ajoutée, un statut
-// "vue" mis à jour par un autre onglet, etc.) sans perdre sa place.
+// "Actualiser" button, at the user's explicit request: re-renders the
+// current page with the current filters, without going back to page 1
+// (unlike the filter changes below) — only meant to review the most
+// recent state (a newly added grid, a "seen" status updated by another
+// tab, etc.) without losing one's place.
 libraryRefreshBtn.addEventListener("click", () => {
   renderLibraryList();
 });
 
-// Les trois sélecteurs en haut de la Bibliothèque : filtre de langue
-// (toutes / une langue / bilingue), filtre de niveau (tous les niveaux /
-// easy / medium / hard) et filtre "déjà vues" (toutes / non vues / déjà
-// vues). Chaque changement repart de la page 1 et re-rend la liste. Le
-// filtre de langue vaut par défaut la langue de l'interface et suit ses
-// changements (voir le handler de #language plus bas) ; le filtre de
-// niveau reste sur "Tous les niveaux" et ne suit pas la langue.
+// The three selectors at the top of the Library: language filter (all /
+// one language / bilingual), difficulty filter (all levels / easy /
+// medium / hard) and "already seen" filter (all / unseen / seen). Every
+// change goes back to page 1 and re-renders the list. The language
+// filter defaults to the interface language and follows its changes (see
+// #language's own handler further below); the difficulty filter stays on
+// "Tous les niveaux" and never follows the language.
 libraryLanguageFilter.value = uiLanguage;
 libraryLanguageFilter.addEventListener("change", () => {
   libraryCurrentPage = 1;
@@ -3753,26 +3855,26 @@ libraryNextBtn.addEventListener("click", () => {
   renderLibraryList();
 });
 
-// Panneau "Dictionnaire", à la demande explicite de l'utilisateur : à
-// partir d'un mot (accents/casse ignorés), le back liste tous les mots de
-// la même racine tirés du wordlist, avec leurs définitions du fichier
-// <lang>_glosses.jsonl (voir backend/dictionary_lookup.py + GET
-// /api/dictionary). Chaque recherche produit son propre tableau, empilé
-// en haut (le plus récent d'abord) ; "Effacer" vide la pile.
+// "Dictionnaire" panel, at the user's explicit request: given a word
+// (accents/case ignored), the backend lists every word of the same root
+// drawn from the wordlist, with their definitions from the
+// <lang>_glosses.jsonl file (see backend/dictionary_lookup.py + GET
+// /api/dictionary). Each search produces its own table, stacked at the
+// top (most recent first); "Effacer" clears the stack.
 function hideDictionaryPanel() {
   dictionaryPanel.hidden = true;
   syncRssPanelVisibility();
 }
 
-// Un tableau par mot cherché : colonne 1 = forme complète (forme canonique
-// entre parenthèses), colonne 2 = liste "type grammatical : définition".
-// Construit entièrement via l'API DOM (textContent) — aucune donnée
-// dictionnaire n'est jamais injectée en innerHTML. Renvoie le nœud SANS
-// le rattacher à la page (voir buildBilingualResultBlock() plus bas, à la
-// demande explicite de l'utilisateur : quand deux langues sont
-// sélectionnées, ce nœud devient une des deux colonnes d'un résultat
-// bilingue au lieu d'être seul dans la pile) — le handler du formulaire,
-// plus bas, décide lui-même de l'empiler seul ou dans un bloc bilingue.
+// One table per searched word: column 1 = full form (canonical form in
+// parentheses), column 2 = "part of speech : definition" list. Built
+// entirely via the DOM API (textContent) — no dictionary data is ever
+// injected as innerHTML. Returns the node WITHOUT attaching it to the
+// page (see buildBilingualResultBlock() further below, at the user's
+// explicit request: when two languages are selected, this node becomes
+// one of the two columns of a bilingual result instead of standing alone
+// in the stack) — the form handler further below decides itself whether
+// to stack it alone or inside a bilingual block.
 function buildDictionaryResultNode(query, data) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
@@ -3865,16 +3967,16 @@ dictionaryClearBtn.addEventListener("click", () => {
   dictionaryInput.focus();
 });
 
-// Combine deux nœuds de résultat déjà construits (un par langue) dans un
-// bloc affiché en 50/50, chacun titré par sa langue — à la demande
-// explicite de l'utilisateur, pour le Dictionnaire ET le Paraphraseur :
-// "quand deux langues sont sélectionnées... chaque outil est alors lancé
-// dans chacune des deux langues, et les résultats affichés dans un
-// tableau 50/50 avec la langue affichée en titre." `selectEl` est le
-// sélecteur de langue (#dictionary-language ou #paraphrase-language) dont
-// lire les libellés natifs ; `lang1`/`lang2` sont toujours des codes ISO
-// simples (jamais eux-mêmes une combinaison "xx/yy") ; `node1`/`node2`
-// les nœuds déjà construits par une des buildXNode() de ce fichier.
+// Combines two already-built result nodes (one per language) into a
+// block shown 50/50, each headed by its own language — at the user's
+// explicit request, for both the Dictionnaire and the Paraphraseur:
+// "when two languages are selected... each tool is then run in both
+// languages, and the results shown in a 50/50 table with the language
+// shown as a heading." `selectEl` is the language selector
+// (#dictionary-language or #paraphrase-language) to read the native
+// labels from; `lang1`/`lang2` are always plain ISO codes (never a
+// combination "xx/yy" themselves); `node1`/`node2` are nodes already
+// built by one of this file's buildXNode() functions.
 function buildBilingualResultBlock(selectEl, lang1, node1, lang2, node2) {
   const wrap = document.createElement("div");
   wrap.className = "bilingual-result";
@@ -3891,15 +3993,15 @@ function buildBilingualResultBlock(selectEl, lang1, node1, lang2, node2) {
   return wrap;
 }
 
-// Adjectifs de langue par langue de PHRASE (le gabarit Perplexity du
-// Dictionnaire ET du Paraphraseur ci-dessous), un jeu par langue de
-// phrase couvrant les 6 langues possibles comme cible — permet de
-// composer "français/anglais" etc. quand deux langues sont sélectionnées,
-// à la demande explicite de l'utilisateur : "Envoyer à Perplexity une
-// requête avec également <lang1>/<lang2>." Accord déjà choisi pour
-// chaque gabarit (masculin "mot" en français, neutre "Wort" en allemand,
-// féminin "palabra"/"parola"/"palavra" en espagnol/italien/portugais,
-// invariable en anglais).
+// Language adjectives per SENTENCE language (the Perplexity template
+// used by both the Dictionnaire and the Paraphraseur below), one set per
+// sentence language covering all 6 possible target languages — lets us
+// compose "français/anglais" etc. when two languages are selected, at
+// the user's explicit request: "Also send Perplexity a query with
+// <lang1>/<lang2>." Agreement already chosen for each template
+// (masculine "mot" in French, neuter "Wort" in German, feminine
+// "palabra"/"parola"/"palavra" in Spanish/Italian/Portuguese, invariable
+// in English).
 const PERPLEXITY_LANGUAGE_ADJECTIVES = {
   fr: { fr: "français", en: "anglais", de: "allemand", es: "espagnol", it: "italien", pt: "portugais" },
   en: { fr: "French", en: "English", de: "German", es: "Spanish", it: "Italian", pt: "Portuguese" },
@@ -3914,26 +4016,26 @@ function perplexityLanguageAdjective(sentenceLang, targetLang) {
   return table[targetLang] || targetLang;
 }
 
-// Décompose une valeur de sélecteur de langue (simple "fr", ou combinée
-// "fr/en") en tableau de 1 ou 2 codes ISO — partagé par tous les usages
-// bilingues (Dictionnaire, Paraphraseur).
+// Splits a language-selector value (plain "fr", or combined "fr/en")
+// into an array of 1 or 2 ISO codes — shared by every bilingual use
+// (Dictionnaire, Paraphraseur).
 function splitLanguageValue(langValue) {
   return langValue.includes("/") ? langValue.split("/") : [langValue];
 }
 
-// Requête de définition envoyée à Perplexity, adaptée à la langue du
-// sélecteur #dictionary-language — jamais à uiLanguage (l'interface),
-// puisqu'on veut demander la définition D'UN MOT DANS CETTE langue-là,
-// quelle que soit la langue de l'interface elle-même. Le mot tel que
-// saisi (jamais traduit, ni ré-accentué) est inséré dans `${word}`.
-// Quand deux langues sont sélectionnées, la phrase reste dans la langue
-// de la première (`langCodes[0]`, celle des mots horizontaux — voir
-// currentBilingualLangs()) mais l'adjectif de langue devient
-// "<adj1>/<adj2>" (perplexityLanguageAdjective ci-dessus), à la demande
-// explicite de l'utilisateur. Gabarit lui-même repris tel quel de la
-// demande explicite de l'utilisateur : "Faire 5 propositions de
-// définitions pour les mots croisés, puis définir tous les sens
-// possibles du mot <lang> : <texte>."
+// Definition query sent to Perplexity, adapted to #dictionary-language's
+// own selected language — never to uiLanguage (the interface), since we
+// want to ask for the definition OF A WORD IN THAT language, regardless
+// of the interface's own language. The word exactly as typed (never
+// translated or re-accented) is inserted into `${word}`. When two
+// languages are selected, the sentence stays in the first one's own
+// language (`langCodes[0]`, the one for horizontal words — see
+// currentBilingualLangs()) but the language adjective becomes
+// "<adj1>/<adj2>" (perplexityLanguageAdjective above), at the user's
+// explicit request. The template itself is taken verbatim from the
+// user's explicit request: "Give 5 crossword-puzzle definition
+// suggestions, then define every possible meaning of the <lang> word:
+// <text>."
 const PERPLEXITY_DEFINE_QUERY_TEMPLATES = {
   fr: (adj, word) => `Faire 5 propositions de définitions pour les mots croisés, puis définir tous les sens possibles du mot ${adj} : ${word}`,
   en: (adj, word) => `Give 5 crossword-puzzle definition suggestions, then define every possible meaning of the ${adj} word: ${word}`,
@@ -4004,14 +4106,13 @@ dictionaryForm.addEventListener("submit", async (event) => {
   }
 });
 
-// "Mots similaires" / "Synonymes" : les mots les plus proches de
-// l'expression saisie dans la collection Qdrant "words" (tenant = langue
-// choisie), triés du plus similaire au moins similaire, affichés sur une
-// seule ligne séparés par des virgules. Empilé en haut comme les
-// résultats du dictionnaire. Voir GET /api/similar_words / GET
-// /api/synonyms (backend/app.py) + backend/qdrant_store.py. Renvoie le
-// nœud sans le rattacher à la page — même raison que
-// buildDictionaryResultNode() ci-dessus.
+// "Mots similaires" / "Synonymes": the words closest to the typed
+// expression in the "words" Qdrant collection (tenant = the chosen
+// language), sorted from most to least similar, shown on a single line
+// separated by commas. Stacked at the top like the dictionary results.
+// See GET /api/similar_words / GET /api/synonyms (backend/app.py) +
+// backend/qdrant_store.py. Returns the node without attaching it to the
+// page — same reason as buildDictionaryResultNode() above.
 function buildSimilarWordsResultNode(query, words) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
@@ -4029,9 +4130,9 @@ function buildSimilarWordsResultNode(query, words) {
   } else {
     const line = document.createElement("p");
     line.className = "dictionary-similar-line";
-    // Chaque entrée est {word, score} — on affiche le score Qdrant entre
-    // parenthèses avec 2 décimales à côté du mot, à la demande explicite
-    // de l'utilisateur.
+    // Each entry is {word, score} — the Qdrant score is shown in
+    // parentheses with 2 decimals next to the word, at the user's
+    // explicit request.
     line.textContent = words
       .map((x) => {
         const s = typeof x.score === "number" ? ` (${x.score.toFixed(2)})` : "";
@@ -4043,13 +4144,13 @@ function buildSimilarWordsResultNode(query, words) {
   return block;
 }
 
-// #theme-precision est un <input type="text"> (voir index.html) : on lit
-// sa valeur en FORÇANT le point comme séparateur décimal (une virgule
-// saisie est normalisée en point, à la demande explicite de
-// l'utilisateur — un séparateur virgule est source de confusion), bornée
-// à [0, 1]. Renvoie undefined si le champ est vide (le back applique
-// alors THEME_MIN_SCORE). Partagé par la génération de grille ET le
-// bouton "Thématique" du panneau Dictionnaire.
+// #theme-precision is an <input type="text"> (see index.html): its value
+// is read while FORCING the dot as the decimal separator (a typed comma
+// is normalized to a dot, at the user's explicit request — a comma
+// separator is a source of confusion), clamped to [0, 1]. Returns
+// undefined if the field is empty (the backend then applies
+// THEME_MIN_SCORE). Shared by grid generation AND the Dictionnaire
+// panel's own "Thématique" button.
 function readThemePrecision() {
   const el = document.getElementById("theme-precision");
   if (!el) return undefined;
@@ -4060,8 +4161,8 @@ function readThemePrecision() {
   return Math.min(1, Math.max(0, n));
 }
 
-// Au blur, réécrit le champ avec la valeur normalisée (point, bornée [0,1])
-// — un "0,7" saisi devient visiblement "0.7", un "1.5" devient "1".
+// On blur, rewrites the field with the normalized value (dot, clamped to
+// [0,1]) — a typed "0,7" visibly becomes "0.7", "1.5" becomes "1".
 (() => {
   const el = document.getElementById("theme-precision");
   if (!el) return;
@@ -4071,9 +4172,9 @@ function readThemePrecision() {
   });
 })();
 
-// Interroge /api/similar_words ou /api/synonyms pour une langue donnée et
-// renvoie le nœud de résultat déjà construit — factorisé pour être appelé
-// une ou deux fois (bilingue) par "Thématique"/"Synonymes" ci-dessous.
+// Queries /api/similar_words or /api/synonyms for a given language and
+// returns the already-built result node — factored out so it can be
+// called once or twice (bilingual) by "Thématique"/"Synonymes" below.
 async function fetchSimilarWordsResultNode(query, lang, endpoint, timeoutMs, errorMessage) {
   const prec = readThemePrecision();
   let url = `/api/${endpoint}?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(lang)}`;
@@ -4090,11 +4191,11 @@ dictionarySimilarBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   dictionarySimilarBtn.disabled = true;
   try {
-    // Le bouton "Thématique" du Dictionnaire réutilise le seuil du champ
-    // "Précision thématique" du formulaire de génération (min_score), à la
-    // demande explicite de l'utilisateur — omis si le champ est vide.
-    // Timeout élargi : le back fait une expansion LLM du terme avant les
-    // recherches Qdrant (voir SIMILAR_FETCH_TIMEOUT_MS).
+    // The Dictionnaire's "Thématique" button reuses the generation
+    // form's own "Précision thématique" field as its threshold
+    // (min_score), at the user's explicit request — omitted if the field
+    // is empty. Widened timeout: the backend does an LLM expansion of the
+    // term before the Qdrant searches (see SIMILAR_FETCH_TIMEOUT_MS).
     const langCodes = splitLanguageValue(dictionaryLanguage.value);
     if (langCodes.length === 2) {
       const [lang1, lang2] = langCodes;
@@ -4119,11 +4220,11 @@ dictionarySimilarBtn.addEventListener("click", async () => {
   }
 });
 
-// "Synonymes" : même rendu que "Thématique" (buildSimilarWordsResultNode),
-// mais une recherche Qdrant directe sur le mot/l'expression saisi(e),
-// SANS appel au LLM pour étendre la recherche — à la demande explicite
-// de l'utilisateur. Timeout générique (FETCH_TIMEOUT_MS), pas le timeout
-// élargi de "Thématique" : il n'y a ici aucun aller-retour LLM à attendre.
+// "Synonymes": the same rendering as "Thématique"
+// (buildSimilarWordsResultNode), but a direct Qdrant search on the typed
+// word/expression, with NO LLM call to expand the search — at the user's
+// explicit request. Generic timeout (FETCH_TIMEOUT_MS), not "Thématique"'s
+// own widened timeout: there's no LLM round-trip to wait for here.
 dictionarySynonymsBtn.addEventListener("click", async () => {
   const query = dictionaryInput.value.trim();
   if (!query) return;
@@ -4154,14 +4255,15 @@ dictionarySynonymsBtn.addEventListener("click", async () => {
   }
 });
 
-// "Définir" : jusqu'à 10 définitions indépendantes de l'expression saisie,
-// générées par le LLM comme pour un mot de grille (voir backend/clues.py,
-// LLMClueGenerator.generate_definitions), une par ligne. Un seul appel
-// best-effort côté back (pas de relance comme en génération de grille) —
-// re-cliquer suffit à retenter. Voir DEFINE_FETCH_TIMEOUT_MS ci-dessus
-// pour pourquoi ce bouton utilise un délai bien plus long que les deux
-// autres boutons de ce même formulaire. Renvoie le nœud sans le rattacher
-// à la page — même raison que buildDictionaryResultNode() ci-dessus.
+// "Définir": up to 10 independent definitions of the typed expression,
+// generated by the LLM the same way as for a grid word (see
+// backend/clues.py, LLMClueGenerator.generate_definitions), one per
+// line. A single best-effort call on the backend side (no retry loop
+// like grid generation has) — re-clicking is enough to retry. See
+// DEFINE_FETCH_TIMEOUT_MS above for why this button uses a much longer
+// timeout than the other two buttons on this same form. Returns the
+// node without attaching it to the page — same reason as
+// buildDictionaryResultNode() above.
 function buildDefineResultNode(query, definitions) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
@@ -4190,9 +4292,9 @@ function buildDefineResultNode(query, definitions) {
   return block;
 }
 
-// Interroge /api/dictionary/define pour une langue donnée et renvoie le
-// nœud déjà construit — factorisé pour être appelé une ou deux fois
-// (bilingue) par le handler ci-dessous.
+// Queries /api/dictionary/define for a given language and returns the
+// already-built node — factored out so it can be called once or twice
+// (bilingual) by the handler below.
 async function fetchDefineResultNode(query, lang) {
   const t = I18N[uiLanguage];
   const response = await fetchWithTimeout(
@@ -4233,16 +4335,16 @@ dictionaryDefineBtn.addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Panneau "Paraphraseur", à la demande explicite de l'utilisateur : "Sur la
-// page principale, ajouter un outil Paraphraseur. Cet outil est similaire
-// au dictionnaire : un sélecteur de langue, un champ de saisie... un
-// bouton Paraphraser, un bouton effacer, un bouton Perplexity." Le bouton
-// "Paraphraser" demande au LLM 5 reformulations du texte saisi (backend/
-// clues.py's LLMClueGenerator.generate_paraphrases, GET /api/paraphrase) ;
-// même comportement bilingue 50/50 que le Dictionnaire ci-dessus, en
-// réutilisant directement currentBilingualLangs()/refreshBilingualOption()/
+// "Paraphraseur" panel, at the user's explicit request: "On the main
+// page, add a Paraphraseur tool. This tool is similar to the
+// dictionary: a language selector, a text field... a Paraphraser button,
+// a clear button, a Perplexity button." The "Paraphraser" button asks the
+// LLM for 5 rewordings of the typed text (backend/clues.py's
+// LLMClueGenerator.generate_paraphrases, GET /api/paraphrase); the same
+// bilingual 50/50 behavior as the Dictionnaire above, directly reusing
+// currentBilingualLangs()/refreshBilingualOption()/
 // defaultToBilingualOption()/buildBilingualResultBlock()/
-// splitLanguageValue() — un seul mécanisme, jamais dupliqué.
+// splitLanguageValue() — a single mechanism, never duplicated.
 // ---------------------------------------------------------------------------
 function hideParaphrasePanel() {
   paraphrasePanel.hidden = true;
@@ -4269,16 +4371,16 @@ paraphraseClearBtn.addEventListener("click", () => {
   paraphraseInput.focus();
 });
 
-// Noms de langue "en <lang>"/"in <lang>" par langue de PHRASE, DISTINCTS
-// de PERPLEXITY_LANGUAGE_ADJECTIVES ci-dessus : "en français"/"in French"
-// utilise le nom de la langue lui-même (souvent masculin/par défaut, ou
-// invariable), pas l'adjectif accordé au genre d'un nom particulier
-// ("la palabra española"/"la parola tedesca") que la table ci-dessus
-// fournit — les deux divergent en espagnol ("español" vs. "española"),
-// italien ("tedesco" vs. "tedesca"), portugais ("alemão" vs. "alemã") et
-// allemand (adverbe non décliné "Deutsch" vs. l'adjectif décliné
-// "deutsche"). Français et anglais, eux, coïncident (les deux tables
-// leur donnent la même valeur) — pas de troisième jeu de valeurs need.
+// Language names "en <lang>"/"in <lang>" per SENTENCE language, DISTINCT
+// from PERPLEXITY_LANGUAGE_ADJECTIVES above: "en français"/"in French"
+// uses the language's own name (often masculine/default, or invariable),
+// not the adjective agreed with a specific noun's gender ("la palabra
+// española"/"la parola tedesca") that the table above provides — the two
+// diverge in Spanish ("español" vs. "española"), Italian ("tedesco" vs.
+// "tedesca"), Portuguese ("alemão" vs. "alemã") and German (the
+// undeclined adverb "Deutsch" vs. the declined adjective "deutsche").
+// French and English happen to coincide (both tables give them the same
+// value) — no third set of values needed for them.
 const PERPLEXITY_LANGUAGE_NAMES = {
   fr: { fr: "français", en: "anglais", de: "allemand", es: "espagnol", it: "italien", pt: "portugais" },
   en: { fr: "French", en: "English", de: "German", es: "Spanish", it: "Italian", pt: "Portuguese" },
@@ -4293,12 +4395,12 @@ function perplexityLanguageName(sentenceLang, targetLang) {
   return table[targetLang] || targetLang;
 }
 
-// "Donner 5 paraphrases en <lang> : <texte>", à la demande explicite de
-// l'utilisateur — même principe que PERPLEXITY_DEFINE_QUERY_TEMPLATES
-// ci-dessus (nom de langue combiné "<nom1>/<nom2>" quand deux langues
-// sont sélectionnées, phrase dans la langue de la première), mais avec
-// perplexityLanguageName() plutôt que perplexityLanguageAdjective() —
-// voir la note ci-dessus sur pourquoi les deux doivent rester distincts.
+// "Donner 5 paraphrases en <lang> : <texte>", at the user's explicit
+// request — the same principle as PERPLEXITY_DEFINE_QUERY_TEMPLATES
+// above (a combined language name "<name1>/<name2>" when two languages
+// are selected, sentence in the first one's language), but with
+// perplexityLanguageName() rather than perplexityLanguageAdjective() —
+// see the note above on why the two must stay distinct.
 const PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES = {
   fr: (name, text) => `Donner 5 paraphrases en ${name} : ${text}`,
   en: (name, text) => `Give 5 paraphrases in ${name}: ${text}`,
@@ -4326,11 +4428,11 @@ paraphrasePerplexityBtn.addEventListener("click", () => {
   window.open(url, "_blank", "noopener,noreferrer");
 });
 
-// 5 reformulations, une par ligne — même présentation que "Définir"
-// (.dictionary-define-list/.dictionary-define-line, réutilisées telles
-// quelles : une liste "une réponse par ligne" est une liste "une réponse
-// par ligne" quel que soit l'outil qui l'a produite). Renvoie le nœud
-// sans le rattacher à la page — même raison que buildDefineResultNode().
+// 5 rewordings, one per line — the same presentation as "Définir"
+// (.dictionary-define-list/.dictionary-define-line, reused as-is: a
+// "one answer per line" list is a "one answer per line" list regardless
+// of which tool produced it). Returns the node without attaching it to
+// the page — same reason as buildDefineResultNode().
 function buildParaphraseResultNode(query, paraphrases) {
   const t = I18N[uiLanguage];
   const block = document.createElement("div");
@@ -4609,11 +4711,11 @@ qdrantAdminBtn.addEventListener("click", () => {
 qdrantAdminRefreshBtn.addEventListener("click", loadQdrantAdmin);
 qdrantAdminCloseBtn.addEventListener("click", hideQdrantAdminPanel);
 
-// "David FALCON" chat widget, at the user's explicit request: "En bas à
-// droite de l'interface, ajoute un ChatBot (ouvert par défaut) avec
-// l'icône de l'application... Il affiche un message de bienvenue...
-// Le message de bienvenu doit être réécrit si l'utilisateur change la
-// langue." `chatHistory` only ever holds genuine user/assistant turns
+// "David FALCON" chat widget, at the user's explicit request: "Bottom
+// right of the interface, add a ChatBot (open by default) with the
+// app's own icon... It shows a welcome message... The welcome message
+// must be rewritten if the user changes the language." `chatHistory`
+// only ever holds genuine user/assistant turns
 // actually exchanged with the LLM (backend/chatbot.py rebuilds its own
 // system prompt fresh every call, so this never includes it) — the
 // purely cosmetic welcome bubble is rendered straight to the DOM and
@@ -4627,26 +4729,25 @@ qdrantAdminCloseBtn.addEventListener("click", hideQdrantAdminPanel);
 // replace the single greeting bubble shown so far.
 let chatHistory = [];
 let chatUserHasSpoken = false;
-// Identifiant opaque, généré une seule fois par chargement de page, à la
-// demande explicite de l'utilisateur : "Pour chaque discussion dans le
-// ChatBot, crée un LOG des questions/réponses... Un fichier par session
-// utilisateur." Envoyé sur chaque message (voir plus bas) pour que
-// backend/app.py route tous les tours de cette même conversation vers le
-// même fichier de log. `crypto.randomUUID()` est disponible dans tout
-// navigateur moderne servant cette page en HTTPS/localhost (les deux
-// seuls contextes où l'API Web Crypto est exposée) ; un repli simple
-// (horodatage + nombre aléatoire) couvre le cas contraire plutôt que de
-// faire planter le chat entier pour un identifiant qui n'a besoin que
-// d'être raisonnablement unique, jamais cryptographiquement sûr.
+// Opaque identifier, generated once per page load, at the user's
+// explicit request: "For each conversation in the ChatBot, create a LOG
+// of the questions/answers... One file per user session." Sent on every
+// message (see further below) so backend/app.py routes every turn of
+// this same conversation to the same log file. `crypto.randomUUID()` is
+// available in every modern browser serving this page over HTTPS/
+// localhost (the only two contexts where the Web Crypto API is exposed);
+// a plain fallback (timestamp + random number) covers the other case
+// rather than crashing the whole chat over an identifier that only needs
+// to be reasonably unique, never cryptographically secure.
 function newChatSessionId() {
   return (window.crypto && window.crypto.randomUUID)
     ? window.crypto.randomUUID()
     : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
-// `let`, not `const` : le bouton de réinitialisation de la conversation
-// (#chatbot-reset-btn, voir plus bas) en régénère un nouveau, pour que la
-// discussion repartie soit tracée dans un nouveau fichier LOG_CHAT côté
-// backend/app.py plutôt que d'être ajoutée à la suite de la précédente.
+// `let`, not `const`: the conversation-reset button (#chatbot-reset-btn,
+// see further below) regenerates a new one, so the restarted
+// conversation is tracked in a new LOG_CHAT file on backend/app.py's
+// side rather than being appended after the previous one.
 let chatSessionId = newChatSessionId();
 
 function escapeHtml(text) {
@@ -4654,8 +4755,8 @@ function escapeHtml(text) {
 }
 
 // A small, self-contained Markdown-to-HTML renderer for David FALCON's own
-// replies, at the user's explicit request: "L'affichage du Bot doit être
-// capable de formatter du Markdown produit par le LLM." Deliberately not a
+// replies, at the user's explicit request: "The Bot's display must be
+// able to format Markdown produced by the LLM." Deliberately not a
 // third-party library pulled in from a CDN — this project has never had an
 // external frontend dependency of any kind (see index.html's own two plain
 // <script> tags), and the small subset of Markdown this project's own small
@@ -4735,19 +4836,19 @@ function renderChatWelcome() {
 }
 
 // Everything David FALCON is told about the live interface state, at the
-// user's explicit request: "A chaque question de l'utilisateur, le LLM
-// est informé de... l'état de l'interface, y compris la position et le
-// sens d'un éventuel mot sélectionner dans la grille à jouer [et] la
-// liste des définitions... numéro de ligne et de colonne de chaque mot,
-// vertical ou horizontal, définition, valeur du mot (réponse)." Reports
+// user's explicit request: "For every question from the user, the LLM
+// is told about... the interface's state, including the position and
+// direction of any word selected in the playable grid [and] the
+// definitions list... row and column number of each word, vertical or
+// horizontal, definition, the word's value (answer)." Reports
 // two genuinely distinct concepts, at the user's own later, explicit
-// clarification: "un mot est sélectionné en passant la souris au dessus
-// sans forcément cliquer sur une case. Faire la différence entre 'mot
-// sélectionné' (survol) et 'case/mot en cours de remplissage' (cliqué)."
+// clarification: "a word is selected by hovering the mouse over it,
+// without necessarily clicking a cell. Make the distinction between the
+// 'selected word' (hover) and the 'cell/word being filled in' (clicked)."
 //   - `hovered_word` — the word currently framed by the mouse-hover
 //     highlight (`hoveredWord`, see highlightWordAt()/clearHighlights()),
 //     already resolved to one specific word's own (row, col, direction) —
-//     this is what "quel est le mot sélectionné" actually refers to.
+//     this is what "which word is selected" actually refers to.
 //   - `filling_cell` — the clicked cell the player is actively typing
 //     into (`selected`, see selectCell()), which has no direction of its
 //     own and can belong to up to two words (across and down) at once;
@@ -4772,13 +4873,13 @@ function buildChatUiContext() {
     words: puzzle
       ? puzzle.words.map((w) => ({
           row: w.row, col: w.col, direction: w.direction, clue: w.clue, answer: w.answer,
-          // Langue réellement utilisée pour CE mot (voir backend/
-          // crossword_gen.py's generate_grid, chaque mot porte son propre
-          // `language` selon sa direction sur une grille bilingue) — à la
-          // demande explicite de l'utilisateur, pour que David FALCON
-          // réponde dans la langue du mot quand une aide de remplissage
-          // est demandée. Identique pour tous les mots sur une grille
-          // ordinaire, donc sans effet dans ce cas.
+          // The language actually used for THIS word (see backend/
+          // crossword_gen.py's generate_grid — every word carries its own
+          // `language` according to its direction on a bilingual grid) —
+          // at the user's explicit request, so David FALCON replies in
+          // the word's own language when help filling it in is asked
+          // for. The same for every word on an ordinary grid, so no
+          // effect in that case.
           language: w.language,
         }))
       : [],
@@ -4789,17 +4890,17 @@ function toggleChatbotCollapsed() {
   chatbotEl.classList.toggle("chatbot-collapsed");
 }
 chatbotToggleBtn.addEventListener("click", toggleChatbotCollapsed);
-// Icône cliquable en mode réduit (le bouton "–" lui-même est alors caché,
-// voir style.css), à la demande explicite de l'utilisateur : "En mode
-// 'réduit', le ChatBot doit afficher l'icône du site" — même fonction de
-// bascule que le bouton, réutilisée telle quelle plutôt que dupliquée.
+// Clickable icon in collapsed mode (the "–" button itself is then
+// hidden, see style.css), at the user's explicit request: "In 'collapsed'
+// mode, the ChatBot should show the site's icon" — the same toggle
+// function as the button, reused as-is rather than duplicated.
 document.getElementById("chatbot-icon").addEventListener("click", toggleChatbotCollapsed);
 
 // Reads POST /api/chat's own text/event-stream body (frontend/server.py
 // relays it chunk by chunk, backend/app.py/backend/chatbot.py's own
 // ChatBot.reply_stream() produce it) and calls `onDelta(text)` for every
 // `{"delta": ...}` event as it arrives, in order — at the user's
-// explicit request: "Le Bot doit afficher la réponse en streaming."
+// explicit request: "The Bot must display the reply as it streams in."
 // Returns the full reply once the stream ends (`data: [DONE]`), or
 // throws if the very first event is a `{"error": ...}` one (a connection
 // failure that happened before any real content was ever produced —
@@ -4891,12 +4992,11 @@ chatbotForm.addEventListener("submit", async (event) => {
   }
 });
 
-// Bouton icône "réinitialiser la conversation", à la demande explicite de
-// l'utilisateur : vide l'historique client (chatHistory), remet
-// chatUserHasSpoken à false pour que le message de bienvenue redevienne
-// re-traduisible sur changement de langue, en régénère un nouvel
-// identifiant de session (nouveau fichier LOG_CHAT côté backend) et
-// ré-affiche le message d'accueil.
+// "Reset conversation" icon button, at the user's explicit request:
+// clears the client-side history (chatHistory), resets chatUserHasSpoken
+// to false so the welcome message becomes re-translatable on a language
+// change again, regenerates a new session identifier (a new LOG_CHAT
+// file on the backend side), and re-shows the welcome message.
 if (chatbotResetBtn) {
   chatbotResetBtn.addEventListener("click", () => {
     chatHistory = [];
@@ -5014,6 +5114,175 @@ function interactiveSlots() {
   return slots;
 }
 
+// The rectangle of "row,col" strings between the drag's start and current
+// cell (inclusive both ends) — used both for the live drag preview and to
+// build the final selection once the drag ends.
+function interactiveDragRectCells() {
+  const cells = new Set();
+  if (!interactiveDragStart || !interactiveDragCurrent) return cells;
+  const r0 = Math.min(interactiveDragStart.row, interactiveDragCurrent.row);
+  const r1 = Math.max(interactiveDragStart.row, interactiveDragCurrent.row);
+  const c0 = Math.min(interactiveDragStart.col, interactiveDragCurrent.col);
+  const c1 = Math.max(interactiveDragStart.col, interactiveDragCurrent.col);
+  for (let r = r0; r <= r1; r++) {
+    for (let c = c0; c <= c1; c++) cells.add(`${r},${c}`);
+  }
+  return cells;
+}
+
+// Expands a raw set of "row,col" cells (the dragged rectangle) to every
+// FULL emplacement (across and/or down) sharing at least one cell with
+// it, at the user's explicit request: "select every slot that shares at
+// least one letter with the selected zone." A
+// single pass only — a cell added purely because it belongs to one of
+// these newly-included emplacements does NOT, in turn, pull in whichever
+// OTHER emplacement crosses it; only the originally-dragged cells decide
+// which emplacements join the selection, keeping this deterministic and
+// bounded rather than a potentially grid-wide snowball.
+function interactiveExpandZoneSelection(rawCells) {
+  const selection = new Set(rawCells);
+  for (const slot of interactiveSlots()) {
+    if (slot.cells.some(({ row, col }) => rawCells.has(`${row},${col}`))) {
+      for (const { row, col } of slot.cells) selection.add(`${row},${col}`);
+    }
+  }
+  return selection;
+}
+
+// Live, lightweight visual feedback while a drag is in progress — toggles
+// a CSS class directly on the already-rendered cell elements rather than
+// a full renderGrid() call on every mouse move, which would be needlessly
+// heavy and could disturb the typing-selection state mid-drag.
+// Live feedback while a drag is in progress, at the user's explicit
+// request: "While selecting a zone, show the grayed-out backgrounds in
+// real time." Computes the SAME whole-emplacement expansion the drag
+// will actually produce on drop (interactiveExpandZoneSelection) from the
+// current rectangle, and grays out every cell NOT in it — exactly the
+// final .zone-unselected overlay renderGrid() itself applies once
+// interactiveZoneSelection is set, just recomputed on the fly here
+// without waiting for the drag to end (and without touching
+// interactiveZoneSelection itself, which is only ever updated on
+// mouseup). A cell actually part of the raw dragged rectangle can never
+// end up grayed out (interactiveExpandZoneSelection always includes it),
+// so the two overlays below never conflict on the same cell.
+function renderInteractiveDragPreview() {
+  const rect = interactiveDragRectCells();
+  const previewSelection = interactiveExpandZoneSelection(rect);
+  cellElements.forEach((el, key) => {
+    el.classList.toggle("zone-drag-preview", rect.has(key));
+    el.classList.toggle("zone-unselected", !previewSelection.has(key));
+  });
+}
+
+// Starts/continues a click-drag zone selection on one grid cell — see
+// interactiveZoneSelection's own docstring. Mousedown begins tracking;
+// mouseenter (while a drag is already active) extends the live preview
+// rectangle to the newly-entered cell. The drag is only ever FINALIZED
+// by the single document-level "mouseup" listener registered once below
+// (not per cell), since the pointer can legitimately be released
+// anywhere on the page, not necessarily over a grid cell.
+function attachInteractiveDragHandlers(cell, r, c) {
+  cell.addEventListener("mousedown", (e) => {
+    if (!interactiveMode) return;
+    // Prevents the browser's own native text-selection drag, which would
+    // otherwise fight with this custom one (grid cells hold real text
+    // nodes for their letters/numbers).
+    e.preventDefault();
+    interactiveDragStart = { row: r, col: c };
+    interactiveDragCurrent = { row: r, col: c };
+    interactiveDragActive = true;
+    // Deliberately does NOT call renderInteractiveDragPreview() here — at
+    // the user's explicit request: "When no zone is selected, a click
+    // should not change the display... only select the word and the cell
+    // to fill in." Showing the live preview
+    // already on mousedown (before any real movement) would flash a
+    // one-cell-wide gray overlay over the WHOLE grid for every ordinary
+    // click, and could even briefly override an already-selected zone's
+    // own correct gray pattern with a bogus one-cell version. The
+    // preview only ever starts once the pointer genuinely reaches a
+    // DIFFERENT cell (see the "mouseenter" listener below) — a plain
+    // click, with no movement at all, never triggers it, so the mouseup
+    // handler below can then safely do nothing when nothing actually
+    // changed, leaving the plain "click" event's own selectCell() as the
+    // only thing that reacts to it.
+  });
+  cell.addEventListener("mouseenter", () => {
+    if (!interactiveMode || !interactiveDragActive) return;
+    interactiveDragCurrent = { row: r, col: c };
+    renderInteractiveDragPreview();
+  });
+}
+
+// Finalizes a click-drag zone selection the moment the mouse button is
+// released anywhere on the page (not only over a grid cell) — registered
+// once here rather than per cell, since interactiveDragActive/Start/
+// Current already carry every bit of state this needs. A drag that never
+// actually moved (mousedown+mouseup on the very same cell, i.e. an
+// ordinary single-cell click) is deliberately left as a no-op:
+// selectCell()'s own "click" listener already handles that case, and
+// interactiveZoneSelection is left completely untouched, so the player
+// can freely click around (type, run "Croisés"/"Mots", ...) without
+// losing an already drag-selected zone — only dragging a genuinely new
+// rectangle ever replaces it.
+document.addEventListener("mouseup", () => {
+  if (!interactiveDragActive) return;
+  interactiveDragActive = false;
+  const startCell = interactiveDragStart;
+  const moved = interactiveDragStart && interactiveDragCurrent && (
+    interactiveDragStart.row !== interactiveDragCurrent.row
+    || interactiveDragStart.col !== interactiveDragCurrent.col
+  );
+  const rect = interactiveDragRectCells();
+  interactiveDragStart = null;
+  interactiveDragCurrent = null;
+  let changed = false;
+  if (moved) {
+    interactiveZoneSelection = interactiveExpandZoneSelection(rect);
+    changed = true;
+  } else if (
+    startCell && interactiveZoneSelection
+    && !interactiveZoneSelection.has(`${startCell.row},${startCell.col}`)
+  ) {
+    // Clicking a grayed-out ("not part of the zone") cell deselects the
+    // whole zone, at the user's explicit request: "When the user clicks a
+    // grayed-out cell, deselect." — a quick, discoverable
+    // way to clear a selection without reaching for Escape or dragging a
+    // brand-new one.
+    interactiveZoneSelection = null;
+    changed = true;
+  }
+  // Only re-render when interactiveZoneSelection genuinely changed — at
+  // the user's explicit request: "When no zone is selected, a click
+  // should not change the display..., only select the word and the cell
+  // to fill in." A plain click that changes
+  // nothing here (no zone existed, or the click landed inside an already-
+  // selected zone) needs no cleanup either: renderInteractiveDragPreview()
+  // is never called for a click with no real movement (see
+  // attachInteractiveDragHandlers()'s own mousedown handler), so no
+  // .zone-drag-preview/.zone-unselected class was ever applied in the
+  // first place — the ordinary "click" event's own selectCell() remains
+  // the only thing that reacts to it, exactly like before this whole
+  // feature existed.
+  if (changed) {
+    renderInteractive();
+  }
+});
+
+// Escape clears an active drag-selected zone (Édition mode only) — the
+// only other way to clear one short of dragging a fresh replacement or
+// leaving Interactive mode entirely (see hideInteractivePanel()).
+// shouldGridIgnoreKeydown() keeps this from firing while the player is
+// typing in an unrelated text field (chat, dictionary search, ...).
+document.addEventListener("keydown", (event) => {
+  if (
+    interactiveMode && interactiveZoneSelection
+    && event.key === "Escape" && !shouldGridIgnoreKeydown()
+  ) {
+    interactiveZoneSelection = null;
+    renderInteractive();
+  }
+});
+
 // The word running through `selected` in the current activeDirection, as
 // an interactiveSlots()-shaped object, or null (black/isolated cell).
 function selectedInteractiveWord() {
@@ -5051,8 +5320,8 @@ function selectedInteractiveWord() {
   // is ALWAYS `true` for any string in JavaScript (the empty string
   // trivially matches everywhere), so that condition was always `false`
   // and `w.filled` could therefore never be `true` at all — the real
-  // cause of "Proposer" always answering "Sélectionnez un mot entièrement
-  // rempli", reported directly by the user, regardless of which word was
+  // cause of "Proposer" always answering "Select a fully filled word",
+  // reported directly by the user, regardless of which word was
   // actually selected.
   w.filled = w.answer.length === cells.length;
   return w;
@@ -5106,8 +5375,8 @@ function updateInteractiveFinishState() {
 }
 
 // Renders interactiveVerifyReport as one <p> per flagged word, below the
-// definition input, at the user's explicit request: "un rapport indiquant
-// les problèmes rencontrés sur chaque mot. Un mot par ligne." Reads the
+// definition input, at the user's explicit request: "a report showing
+// the problems found with each word. One word per line." Reads the
 // state rather than being handed it directly, and is never itself
 // responsible for clearing it (clearInteractiveDiagnostics() does that,
 // on any edit) — so calling it from renderInteractive(), including the
@@ -5132,6 +5401,40 @@ function renderInteractiveVerifyReport() {
   interactiveVerifyReportEl.hidden = false;
 }
 
+// Black-cell / white-cell-fill percentages, shown above the grid in
+// Interactive mode — at the user's explicit request. Two independent
+// denominators, not the same one: the black percentage is measured
+// against the WHOLE grid (how much of it is black at all), while the
+// fill percentage is measured against WHITE cells only (how much of the
+// actually fillable area already carries a real letter) — a plain
+// "filled / total cells" figure would understate progress on a
+// heavily-blackened grid, whereas this reads as a genuine completion
+// rate for the part of the puzzle still being worked on.
+function renderInteractiveCellStats() {
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  let blackCount = 0;
+  let whiteCount = 0;
+  let filledCount = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const ch = interactiveGrid[r][c];
+      if (ch === "#") {
+        blackCount++;
+      } else {
+        whiteCount++;
+        if (/[A-Z]/.test(ch)) filledCount++;
+      }
+    }
+  }
+  const totalCells = rows * cols;
+  const blackPercent = totalCells ? Math.round((100 * blackCount) / totalCells) : 0;
+  const fillPercent = whiteCount ? Math.round((100 * filledCount) / whiteCount) : 0;
+  interactiveBlackStat.textContent = I18N[uiLanguage].interactiveBlackPercent(blackPercent);
+  interactiveFillStat.textContent = I18N[uiLanguage].interactiveFillPercent(fillPercent);
+  interactiveCellStats.hidden = false;
+}
+
 function renderInteractive() {
   // Drop any theme-word cell that no longer carries a letter (undo, erase,
   // toggle-to-black) so the magenta mark tracks the real grid content.
@@ -5143,15 +5446,27 @@ function renderInteractive() {
   }
   syncPuzzleFromInteractive();
   renderGrid();
+  renderInteractiveCellStats();
   const w = selectedInteractiveWord();
-  interactiveDefinitionInput.value = w ? interactiveDefs.get(interactiveKey(w)) || "" : "";
+  // Falls back to the word itself when no clue has been written yet AND
+  // the word is already entirely filled in — at the user's explicit
+  // request: "Also automatically fill in the 'Proposer une définition'
+  // input field the same way." Never overwrites an existing,
+  // already-stored clue (interactiveDefs still wins whenever it has one)
+  // — this is only a convenient starting point to type a real definition
+  // from, not a value that gets silently saved on its own: setting
+  // .value here doesn't fire the field's own "input" listener, so it's
+  // never mistaken for a real clue unless the player actually edits it.
+  interactiveDefinitionInput.value = w
+    ? interactiveDefs.get(interactiveKey(w)) || (w.filled ? w.answer : "")
+    : "";
   interactiveDefinitionInput.disabled = !w;
   interactivePrevBtn.disabled = interactiveUndoStack.length <= 1;
   // The "Mots" (candidate words) panel is deliberately the one exception
   // to this function's own "clear every result panel on every render"
-  // rule below, at the user's explicit request: "'Mots' doit afficher la
-  // liste des mots sans effacer la liste précédente affichée, qui reste
-  // visible en dessous (permet de comparer plusieurs listes de mots)."
+  // rule below, at the user's explicit request: "'Mots' must show the
+  // word list without erasing the previously displayed list, which stays
+  // visible underneath (lets you compare several word lists)."
   // Each of its own stacked blocks stays bound to the exact slot/cell it
   // was fetched for regardless of the live selection (see
   // renderInteractiveWords()'s own docstring), so a later selection/grid
@@ -5160,10 +5475,10 @@ function renderInteractive() {
   // session (enterInteractiveMode()), never by an ordinary render here.
   //
   // The "Proposer" (définition) pick-list is a different case, still
-  // cleared on every render — reported live: "si on change le sens
-  // Horizontal/Vertical sans recliquer dans la grille, Suggestion de
-  // définitions continue à prendre le sens configuré avant." Root cause:
-  // setActiveDirection()
+  // cleared on every render — reported live: "if you change the
+  // Horizontal/Vertical direction without re-clicking in the grid, the
+  // Suggestion de définitions keeps using the previously configured
+  // direction." Root cause: setActiveDirection()
   // already calls renderInteractive() on every H/V toggle, which
   // correctly recomputes selectedInteractiveWord() for the NEW
   // direction — but, before this fix, never cleared the pick-list still
@@ -5197,20 +5512,25 @@ function interactivePushUndo() {
   // "Suivant" handler re-populates them from its own response afterwards.
   clearInteractiveDiagnostics();
 }
+// Advances the selection by exactly one cell in the current direction —
+// unlike play mode's own moveSelection() (which skips over black cells,
+// since those are truly fixed there), this never skips a black cell, at
+// the user's explicit request: "When a user types letters in Edition
+// mode, black cells that can be replaced must not be skipped (unlike in
+// Play mode)." A black cell in
+// Interactive mode is always directly editable (interactiveTypeLetter()
+// itself never refuses to type over one — only the Space key's own
+// toggle treats it specially), so skipping past it here would leave the
+// player unable to simply keep typing straight through it.
 function advanceInteractiveSelection() {
   if (!selected) return;
   const rows = interactiveGrid.length;
   const cols = rows ? interactiveGrid[0].length : 0;
   let { row, col } = selected;
-  while (true) {
-    if (activeDirection === "across") col += 1;
-    else row += 1;
-    if (row >= rows || col >= cols) return;
-    if (interactiveGrid[row][col] !== "#") {
-      selected = { row, col };
-      return;
-    }
-  }
+  if (activeDirection === "across") col += 1;
+  else row += 1;
+  if (row >= rows || col >= cols) return;
+  selected = { row, col };
 }
 function interactiveTypeLetter(letter) {
   if (!interactiveMode || !selected) return;
@@ -5271,7 +5591,51 @@ function interactiveArrowMove(dr, dc) {
   renderInteractive();
 }
 
+// "Suppr"/Delete with an active zone selection clears the WHOLE zone
+// instead of just the single selected cell, at the user's explicit
+// request: "When a zone is selected, the DELETE key removes the zone's
+// letters while preserving black cells. If there is no letter in the
+// zone, remove the zone's black cells." A
+// black cell is never removed while at least one letter still exists
+// anywhere in the zone (checked once, up front — a single pass, not
+// per-cell) — only once the whole zone is entirely letter-free does the
+// second pass instead clear every black cell of the zone.
+function interactiveEraseZone() {
+  if (!interactiveZoneSelection || !interactiveZoneSelection.size) return;
+  const cells = [...interactiveZoneSelection].map((key) => key.split(",").map(Number));
+  const hasLetter = cells.some(([r, c]) => /[A-Z]/.test(interactiveGrid[r][c]));
+  interactivePushUndo();
+  if (hasLetter) {
+    for (const [r, c] of cells) {
+      const ch = interactiveGrid[r][c];
+      if (ch !== "#" && ch !== "") {
+        interactiveClearDefsAt(r, c);
+        interactiveGrid[r][c] = "";
+      }
+    }
+  } else {
+    for (const [r, c] of cells) {
+      if (interactiveGrid[r][c] === "#") {
+        interactiveGrid[r][c] = "";
+      }
+    }
+  }
+  setInteractiveMessage("");
+  renderInteractive();
+}
+
 function handleInteractiveKeydown(event) {
+  // Checked before the `!selected` guard below — the zone-wide erase
+  // above works purely off interactiveZoneSelection and doesn't need any
+  // cell to be individually selected for typing. "Backspace" deliberately
+  // keeps its own, unchanged single-cell meaning (see the Backspace/
+  // Delete branch further below) even while a zone is active — only
+  // "Delete" itself switches to the zone-wide behavior.
+  if (event.key === "Delete" && interactiveZoneSelection && interactiveZoneSelection.size) {
+    event.preventDefault();
+    interactiveEraseZone();
+    return;
+  }
   if (!selected) return;
   const key = event.key;
   if (key === "ArrowUp") {
@@ -5346,8 +5710,8 @@ function renderInteractiveProposals(list) {
 }
 
 // "Proposer un titre" button's own 10-proposal list, at the user's
-// explicit request ("10 propositions affichées en dessous, comme
-// 'Proposer une définition'") — see proposeInteractiveTitle() below for
+// explicit request ("10 proposals shown below, like 'Proposer une
+// définition'") — see proposeInteractiveTitle() below for
 // how the list itself is fetched.
 function renderInteractiveTitleProposals(list) {
   renderInteractivePickList(interactiveTitleProposeResults, list, (title) => {
@@ -5358,16 +5722,16 @@ function renderInteractiveTitleProposals(list) {
 }
 
 // ---- Candidate words for the selected slot (POST /api/interactive/
-// candidates) — "Mots" button, at the user's explicit request: "ajouter
-// un bouton Mots qui liste les mots possible pour l'emplacement
-// sélectionné... En premier, les mots du glossaire thématique... en
-// magenta, puis les autres mots en noir. Quand l'utilisateur clique sur
-// un mot, ça le met en place sur l'emplacement sélectionné."
+// candidates) — "Mots" button, at the user's explicit request: "add a
+// Mots button that lists the possible words for the selected slot...
+// First, the theme glossary's own words... in magenta, then the other
+// words in black. When the user clicks a word, it places it into the
+// selected slot."
 //
 // Each call PREPENDS its own block instead of replacing the previous
-// one, at the user's explicit follow-up request: "'Mots' doit afficher
-// la liste des mots sans effacer la liste précédente affichée, qui reste
-// visible en dessous (permet de comparer plusieurs listes de mots)" — so
+// one, at the user's explicit follow-up request: "'Mots' must show the
+// word list without erasing the previously displayed list, which stays
+// visible underneath (lets you compare several word lists)" — so
 // selecting a different emplacement and clicking "Mots" again stacks a
 // new block on top of, not instead of, the earlier one(s); see
 // renderInteractive()'s own comment for why this panel is the one
@@ -5392,7 +5756,7 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   // Which position in `slot.cells` is the cell that was selected (shown
   // in blue on the grid) at the moment "Mots" was clicked — highlighted
   // in blue within every candidate below, at the user's explicit request
-  // ("permet de situer la lettre dans les combinaisons croisées"). -1
+  // ("lets you locate the letter within the crossing combinations"). -1
   // (no highlight) only if that cell can't be found — shouldn't normally
   // happen, since selectedInteractiveWord() always builds `slot.cells` by
   // walking outward from the selected cell itself.
@@ -5491,11 +5855,176 @@ interactiveWordsBtn.addEventListener("click", async () => {
   }
 });
 
+// The maximal white run through (row, col) along `direction` in the
+// CURRENT interactiveGrid — same scan as selectedInteractiveWord()'s own
+// inner logic, but reusable for an arbitrary starting cell (not just the
+// live `selected` one) — needed by "Croisés", whose own two word lists
+// each start from a cell the backend already resolved (across_start/
+// down_start), not necessarily the one currently selected for typing.
+function interactiveRunAt(row, col, direction) {
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  const isW = (r, c) => r >= 0 && r < rows && c >= 0 && c < cols && interactiveGrid[r][c] !== "#";
+  const cells = [];
+  if (direction === "across") {
+    let c = col;
+    while (isW(row, c - 1)) c--;
+    for (; isW(row, c); c++) cells.push({ row, col: c });
+  } else {
+    let r = row;
+    while (isW(r - 1, col)) r--;
+    for (; isW(r, col); r++) cells.push({ row: r, col });
+  }
+  return cells;
+}
+
+// "Croisés" button's own results block — one per click, stacked on top of
+// the previous one (never cleared by an ordinary render), same
+// convention as "Mots" (renderInteractiveWords) and for the same reason:
+// each block stays bound to the exact cell it was fetched for, regardless
+// of the live selection, so it's safe to keep several around for
+// comparison. For each letter compatible with a real word in BOTH
+// directions, lists its own horizontal and vertical candidates
+// (comma-separated) with that one letter highlighted in blue within every
+// word — at the user's explicit request: "highlight the shared letter in
+// blue (like the selected letter in the Mots function)". Every
+// listed word is clickable to place it on its own emplacement, same
+// interaction as "Mots".
+function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
+  if (!letters || !letters.length) return;
+  const t = I18N[uiLanguage];
+  const acrossCells = interactiveRunAt(acrossStart[0], acrossStart[1], "across");
+  const downCells = interactiveRunAt(downStart[0], downStart[1], "down");
+  const posAcross = acrossCells.findIndex((p) => p.row === atCell.row && p.col === atCell.col);
+  const posDown = downCells.findIndex((p) => p.row === atCell.row && p.col === atCell.col);
+  const placeWord = (cells, word) => {
+    if (word.length !== cells.length) return;
+    interactivePushUndo();
+    for (let i = 0; i < cells.length; i++) {
+      const { row, col } = cells[i];
+      interactiveGrid[row][col] = word[i];
+    }
+    setInteractiveMessage("");
+    renderInteractive();
+  };
+  const appendWordList = (parent, words, cells, highlightPos) => {
+    words.forEach((word, i) => {
+      const item = document.createElement("span");
+      item.className = "interactive-word-item";
+      item.tabIndex = 0;
+      for (let pos = 0; pos < word.length; pos++) {
+        if (pos === highlightPos) {
+          const mark = document.createElement("span");
+          mark.className = "interactive-word-highlight-letter";
+          mark.textContent = word[pos];
+          item.appendChild(mark);
+        } else {
+          item.appendChild(document.createTextNode(word[pos]));
+        }
+      }
+      const pick = () => placeWord(cells, word);
+      item.addEventListener("click", pick);
+      item.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          pick();
+        }
+      });
+      parent.appendChild(item);
+      if (i < words.length - 1) parent.appendChild(document.createTextNode(", "));
+    });
+  };
+  const block = document.createElement("div");
+  block.className = "interactive-words-block";
+  const label = document.createElement("p");
+  label.className = "interactive-words-block-label";
+  label.textContent = t.interactiveCrossingLabel(atCell.row + 1, atCell.col + 1);
+  block.appendChild(label);
+  for (const { letter, across_words: acrossWords, down_words: downWords } of letters) {
+    const group = document.createElement("div");
+    group.className = "interactive-crossing-group";
+    // The reference letter on its own line, at the user's explicit
+    // request: "put the reference letter on one line, then H and V on 2
+    // lines underneath" — previously prefixed onto the H line
+    // itself ("A : H mot1, mot2..."), now its own row above both.
+    const letterLine = document.createElement("p");
+    letterLine.className = "interactive-crossing-line interactive-crossing-letter-line";
+    const letterMark = document.createElement("span");
+    letterMark.className = "interactive-word-highlight-letter";
+    letterMark.textContent = letter;
+    letterLine.appendChild(letterMark);
+    group.appendChild(letterLine);
+    const acrossLine = document.createElement("p");
+    acrossLine.className = "interactive-crossing-line";
+    const acrossLabel = document.createElement("span");
+    acrossLabel.className = "interactive-crossing-dir-label";
+    acrossLabel.textContent = t.interactiveCrossingAcrossLabel;
+    acrossLine.appendChild(acrossLabel);
+    acrossLine.appendChild(document.createTextNode(" "));
+    appendWordList(acrossLine, acrossWords, acrossCells, posAcross);
+    group.appendChild(acrossLine);
+    const downLine = document.createElement("p");
+    downLine.className = "interactive-crossing-line interactive-crossing-line-down";
+    const downLabel = document.createElement("span");
+    downLabel.className = "interactive-crossing-dir-label";
+    downLabel.textContent = t.interactiveCrossingDownLabel;
+    downLine.appendChild(downLabel);
+    downLine.appendChild(document.createTextNode(" "));
+    appendWordList(downLine, downWords, downCells, posDown);
+    group.appendChild(downLine);
+    block.appendChild(group);
+  }
+  interactiveCrossingResults.insertBefore(block, interactiveCrossingResults.firstChild);
+  interactiveCrossingResults.hidden = false;
+}
+
+interactiveCrossingBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  if (!interactiveMode || !selected) {
+    setInteractiveMessage(t.interactiveCrossingNeedsCell, true);
+    return;
+  }
+  const atCell = { row: selected.row, col: selected.col };
+  interactiveCrossingBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/crossing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: interactiveJobId,
+        grid: wireGrid,
+        cell: [atCell.row, atCell.col],
+      }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return;
+    }
+    if (!resp.ok) throw new Error(t.interactiveCrossingError);
+    const data = await resp.json();
+    if (!data || !data.across_start || !data.down_start) {
+      setInteractiveMessage(t.interactiveCrossingNoCrossing, true);
+      return;
+    }
+    const letters = data.letters || [];
+    renderInteractiveCrossing(data.across_start, data.down_start, letters, atCell);
+    if (!letters.length) {
+      setInteractiveMessage(t.interactiveCrossingEmpty, true);
+    }
+  } catch (err) {
+    setInteractiveMessage(t.interactiveCrossingError, true);
+  } finally {
+    interactiveCrossingBtn.disabled = false;
+  }
+});
+
 // Fetches up to 10 candidate titles and shows them as a pick list (see
 // renderInteractiveTitleProposals()), at the user's explicit request:
-// "Le bouton 'Proposer un titre' doit générer 10 propositions affichées
-// en dessous (comme 'Proposer une définition'), et également utiliser
-// le champ Thématique si renseigné." Two callers, distinguished by
+// "The 'Proposer un titre' button must generate 10 proposals shown
+// below (like 'Proposer une définition'), and also use the Thématique
+// field if it's filled in." Two callers, distinguished by
 // `autoFill`: the automatic, one-time proposal fired by
 // updateInteractiveFinishState() once the grid becomes complete
 // (`autoFill=true` — also fills #interactive-title-input with the very
@@ -5535,15 +6064,15 @@ async function proposeInteractiveTitle(autoFill) {
 }
 
 // ---- Mode lifecycle ----
-function enterInteractiveMode(state, options = {}) {
+function enterInteractiveMode(state) {
   interactiveMode = true;
   interactiveJobId = currentJobId || interactiveJobId;
   interactiveGrid = state.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
   interactiveHasTheme = !!state.has_theme;
   // Re-fill the "Thématique" field from this session's own theme — ""
   // for an untouched/themeless grid — at the user's explicit request:
-  // "Quand un utilisateur réédite une grille thématique, renseigner le
-  // champ Thématique avec les mots de la grille d'origine." Covers every
+  // "When a user re-edits a themed grid, fill in the Thématique field
+  // with the origin grid's own words." Covers every
   // entry path uniformly (a fresh start, "Ouvrir en mode Interactif"
   // from the Library, resuming a "Créations" draft): backend/app.py's
   // _run_interactive_job/_run_interactive_resume_job both put the raw
@@ -5567,9 +6096,9 @@ function enterInteractiveMode(state, options = {}) {
   // them on job["result"] too, read here uniformly on every entry path.
   interactiveLanguage = state.language || interactiveLanguage;
   // Same reasoning as interactiveLanguage/interactiveDifficulty just
-  // above, at the user's explicit request: "quand une grille bilingue
-  // est chargée, configurer les langues dans celles de la grille (idem
-  // en monolingue)." `state.bilingual_language` is only ever non-null on
+  // above, at the user's explicit request: "when a bilingual grid is
+  // loaded, set the languages to those of the grid (same for
+  // monolingual)." `state.bilingual_language` is only ever non-null on
   // a genuinely bilingual session (backend/app.py's own is_bilingual
   // check already normalizes it) — a monolingual entry always resets
   // this back to "", never leaving a PREVIOUS session's own bilingual
@@ -5577,9 +6106,9 @@ function enterInteractiveMode(state, options = {}) {
   interactiveBilingualLanguage = state.bilingual_language || "";
   // Reflect the same two values onto the top-of-page generation selectors
   // themselves (#language/#bilingual-language), at the user's explicit
-  // request: "quand on charge une grille bilingue en édition, configurer
-  // les 2 langues dans les sélecteurs principaux en haut de page (idem en
-  // monolingue)." Until now, only the internal `interactiveLanguage`/
+  // request: "when loading a bilingual grid in edit mode, set both
+  // languages in the main selectors at the top of the page (same for
+  // monolingual)." Until now, only the internal `interactiveLanguage`/
   // `interactiveBilingualLanguage` variables (and, through them, `puzzle`
   // — see syncPuzzleFromInteractive()) reflected the loaded grid's own
   // language(s); the visible dropdowns kept showing whatever they were
@@ -5610,11 +6139,11 @@ function enterInteractiveMode(state, options = {}) {
   if (state.height) heightInput.value = String(state.height);
   // Reconfigure the generation-form's own Mode/Taux noir/Graines/
   // Précision thématique fields to match whatever was used to create
-  // this grid automatically, at the user's explicit request: "Quand une
-  // grille est sauvegardée après création automatique, sauvegarder tous
-  // les paramètres (Taux noir, Graines, Mode, Précision Thématique, etc)
-  // pour pouvoir les reconfigurer à l'identique quand la grille est
-  // rechargée en mode édition." `state.generation_params` is only ever
+  // this grid automatically, at the user's explicit request: "When a
+  // grid is saved after automatic creation, save all the parameters
+  // (Taux noir, Graines, Mode, Précision Thématique, etc) so they can be
+  // reconfigured identically when the grid is reloaded in edit mode."
+  // `state.generation_params` is only ever
   // set for a grid whose origin went through the automatic generator
   // (backend/app.py's _run_generate_job) — a fresh interactive session,
   // or one resumed from a Créations draft that itself started that way,
@@ -5655,13 +6184,19 @@ function enterInteractiveMode(state, options = {}) {
   interactiveProposeResults.innerHTML = "";
   interactiveTitleProposeResults.hidden = true;
   interactiveTitleProposeResults.innerHTML = "";
-  // Unlike the two panels just above, "Mots" is no longer cleared on every
-  // ordinary render (see renderInteractive()'s own comment) — its stacked
-  // blocks must still be wiped here, at the start of a genuinely new
-  // session, so a previous grid's own accumulated lists never survive
-  // into a freshly loaded/started one.
+  // Unlike the two panels just above, "Mots"/"Croisés" are no longer
+  // cleared on every ordinary render (see renderInteractive()'s own
+  // comment) — their stacked blocks must still be wiped here, at the
+  // start of a genuinely new session, so a previous grid's own
+  // accumulated lists never survive into a freshly loaded/started one.
   interactiveWordsResults.hidden = true;
   interactiveWordsResults.innerHTML = "";
+  interactiveCrossingResults.hidden = true;
+  interactiveCrossingResults.innerHTML = "";
+  // A drag-selected "zone" (see interactiveZoneSelection) is scoped to
+  // one editing session — never carried over into a freshly loaded/
+  // started one.
+  interactiveZoneSelection = null;
   interactiveTitleRow.hidden = true;
   interactiveSaveBtn.hidden = true;
   interactiveDraftSaveBtn.disabled = false;
@@ -5728,7 +6263,7 @@ function enterInteractiveMode(state, options = {}) {
       : "",
     startImpossible,
   );
-  // "En mode interactif, ouvrir automatiquement le Dictionnaire." — at
+  // "In interactive mode, automatically open the Dictionnaire." — at
   // the user's explicit request. Mirrors dictionaryBtn's own manual-open
   // logic (unhide the panel, set its language) but deliberately never
   // calls dictionaryInput.focus(): an automatic/background action must
@@ -5736,24 +6271,29 @@ function enterInteractiveMode(state, options = {}) {
   // on the button is allowed to. `interactiveLanguage` is reliably
   // correct here on every entry path (fresh start, "Ouvrir en mode
   // Interactif" from the Library, resuming a draft) — see its own
-  // assignment above, fixed for exactly this kind of use.
-  //
-  // Actively hidden instead, when `options.hideDictionary` is set — at
-  // the user's explicit request: "Quand on clique sur 'Finir la grille'
-  // masquer le Dictionnaire qui s'affiche automatiquement en mode
-  // Edition" — used only by runGeneration()'s own "Finir la grille"
-  // auto-reopen (see its resumeInteractiveWork() call): the panel was
-  // already open from when the player first entered Édition mode (this
-  // very auto-open feature), and its contents are now stale relative to
-  // the just-regenerated grid, so this reopen closes it rather than
-  // leaving it sitting open (or, worse, reopening it a second time on
-  // top of whatever the player had already closed).
-  if (options.hideDictionary) {
-    dictionaryPanel.hidden = true;
-  } else {
-    dictionaryPanel.hidden = false;
-    dictionaryLanguage.value = interactiveLanguage;
-  }
+  // assignment above, fixed for exactly this kind of use. This now
+  // applies unconditionally, including on the "Finir la grille"/"Finir
+  // la zone" auto-reopen (runGeneration()'s own resumeInteractiveWork()
+  // call, see runInteractiveFinish()) — an earlier version instead kept
+  // the Dictionnaire forcibly closed on that specific return path (via a
+  // since-removed `hideToolPanels` option), but the user explicitly
+  // corrected this: the return to Édition mode should reopen it like any
+  // other entry into this mode. The Paraphraseur needs no matching
+  // special-case here: runInteractiveFinish() already force-closes it
+  // the moment "Finir la grille"/"Finir la zone" is clicked (its own
+  // stale-content concern, unrelated to this Dictionnaire auto-open
+  // policy), and nothing in between ever reopens it — it simply stays
+  // closed until the player opens it again by hand.
+  dictionaryPanel.hidden = false;
+  dictionaryLanguage.value = interactiveLanguage;
+  // "The Library must reopen automatically when Edition mode is shown
+  // again" — at the user's explicit request. As long as
+  // `libraryReopenOnInteractive` stays true, it reopens every time this
+  // mode is (re)shown, including after a round trip through "Finir la
+  // grille"/"Finir la zone" — see this flag's own declaration (right
+  // before openLibraryGridInteractive) for when it's set to true/reset to
+  // false.
+  if (libraryReopenOnInteractive) openLibraryPanel();
   // Rebuild `puzzle` right now (normally only ever refreshed by
   // renderInteractive(), itself only reached via setActiveDirection()
   // further below) so defaultToBilingualOption()'s own currentBilingualLangs()
@@ -5777,11 +6317,15 @@ function hideInteractivePanel() {
   gridColumn.classList.remove("interactive-flank");
   interactivePrevBtn.hidden = true;
   interactiveNextBtn.hidden = true;
-  // Le compteur de temps ne concerne que le mode jeu — arrêté à chaque
-  // fois qu'on en sort ou qu'on s'apprête à en (re)démarrer un nouveau
-  // (displayFinalGrid rappelle startGridTimer juste après). Le mode
-  // "Interactif" a son propre mécanisme de sauvegarde (GRID_WORK), sans
-  // compteur.
+  interactiveCellStats.hidden = true;
+  interactiveZoneSelection = null;
+  interactiveDragStart = null;
+  interactiveDragCurrent = null;
+  interactiveDragActive = false;
+  // The time counter is only relevant to play mode — stopped every time
+  // we leave it or are about to (re)start a new one (displayFinalGrid
+  // calls startGridTimer again right after). "Interactif" mode has its
+  // own save mechanism (GRID_WORK), with no counter.
   hideGridTimer();
   // Restore the automatic-generation history-navigation controls hidden by
   // enterInteractiveMode() — only actually shown again if previewHistory
@@ -5818,13 +6362,29 @@ function interactiveDefinitionsPayload() {
   }));
 }
 
-// "Finir la grille" : every "row,col" already carrying a real letter in
-// `interactiveGrid` right now — used both as the light-green preview
-// highlight (see finishLockedCells above/renderAttemptPreview()) and,
-// implicitly, as exactly the set of cells the backend will lock forever
-// (POST /api/interactive/finish sends the whole grid; the backend derives
-// its own locked-letter set from it the same way).
-function computeFinishLockedCells() {
+// "Finir la grille"/"Finir la zone" : every "row,col" the backend will
+// lock/freeze forever (or, for "Finir la zone", revert back to its exact
+// pre-click value — see backend/app.py's `interactive_finish`/
+// `_run_generate_job`'s own `zone_revert`), used as the light-green
+// preview highlight (see finishLockedCells above/renderAttemptPreview()).
+// Every already-lettered cell of `interactiveGrid` (implicitly, and
+// exactly, the set of cells POST /api/interactive/finish itself derives
+// its own locked-letter set from — the same whole grid is sent either
+// way).
+//
+// `zoneCells` ("Finir la zone" only, `null`/omitted for "Finir la
+// grille") additionally adds every cell OUTSIDE the selected zone —
+// whether black, lettered (already covered above), or blank — at the
+// user's own explicit correction, after a version that only marked the
+// zone's own pre-existing black cells here: "at the first step, the
+// grayed-out zone... isn't shown in green... Every grayed-out cell must
+// be locked." The backend now genuinely reverts every one
+// of these cells, in every live preview AND the final saved grid, back
+// to exactly its pre-click value — so marking them green here is no
+// longer a promise the backend can't keep (unlike the very first version
+// of this feature, which forced them all black): they really do stay
+// untouched, start to finish.
+function computeFinishLockedCells(zoneCells) {
   const cells = new Set();
   for (let r = 0; r < interactiveGrid.length; r++) {
     const row = interactiveGrid[r];
@@ -5833,12 +6393,21 @@ function computeFinishLockedCells() {
       if (ch && ch !== "#") cells.add(`${r},${c}`);
     }
   }
+  if (zoneCells && zoneCells.length) {
+    const zone = new Set(zoneCells.map(([r, c]) => `${r},${c}`));
+    for (let r = 0; r < interactiveGrid.length; r++) {
+      for (let c = 0; c < interactiveGrid[r].length; c++) {
+        const key = `${r},${c}`;
+        if (!zone.has(key)) cells.add(key);
+      }
+    }
+  }
   return cells;
 }
 
 // Fired after every "Suivant"/"Précédent" click, at the user's explicit
-// request: "chaque appui sur Suivant/Précédent sauvegarde l'état en cours
-// du process de création dans le dossier GRID_WORK." Best-effort and
+// request: "every press of Suivant/Précédent saves the creation process's
+// current state into the GRID_WORK folder." Best-effort and
 // silent — a failure here (network blip, or the in-memory session having
 // since expired) must never interrupt the player's own action, which has
 // already happened client-side regardless of whether this succeeds.
@@ -5870,18 +6439,17 @@ function hideInteractiveWorkPanel() {
 // Relaunches a saved work-in-progress session exactly where it stopped —
 // reuses runInteractive()'s own full flow (hides play-mode chrome, shows
 // "Stop", polls, calls enterInteractiveMode with the result) by pointing
-// it at POST /api/interactive/resume instead of .../start. `enterOptions`
-// (empty by default) is forwarded straight through to enterInteractiveMode
-// — see its own `hideDictionary`, used by runGeneration()'s own "Finir la
-// grille" auto-reopen to close the Dictionary panel instead of leaving it
-// open (or reopening it) with stale results from before the completion.
-async function resumeInteractiveWork(workId, enterOptions = {}) {
-  await runInteractive({ work_id: workId }, "/api/interactive/resume", enterOptions);
+// it at POST /api/interactive/resume instead of .../start — including
+// runGeneration()'s own "Finir la grille"/"Finir la zone" auto-reopen,
+// which relies on this same path to bring the player straight back into
+// Édition mode (see its own comment) once the automatic fill finishes.
+async function resumeInteractiveWork(workId) {
+  await runInteractive({ work_id: workId }, "/api/interactive/resume");
 }
 
 // Deletes one saved work-in-progress file, then refreshes the list — at
-// the user's explicit request: "cliquer sur un bouton icône pour
-// supprimer la tâche." Best-effort: a failure here just leaves the list
+// the user's explicit request: "click an icon button to delete the
+// task." Best-effort: a failure here just leaves the list
 // showing what it already had (no error message — this is a minor
 // housekeeping action, not worth interrupting the player over).
 async function deleteInteractiveWork(workId) {
@@ -5933,10 +6501,9 @@ async function renderInteractiveWorkList() {
       }
     });
 
-    // Mêmes colonnes, dans le même ordre et le même format, que
-    // #library-table (renderLibraryList) — à la demande explicite de
-    // l'utilisateur : "compléter les colonnes et les placer dans le même
-    // ordre que 'Bibliothèque'."
+    // Same columns, in the same order and format, as #library-table
+    // (renderLibraryList) — at the user's explicit request: "complete the
+    // columns and place them in the same order as 'Bibliothèque'."
     const langTd = document.createElement("td");
     const languageOption = languageSelect.querySelector(`option[value="${item.language}"]`);
     langTd.textContent = languageOption ? languageOption.textContent : (item.language || "");
@@ -5963,10 +6530,9 @@ async function renderInteractiveWorkList() {
     sizeTd.textContent = item.width && item.height ? `${item.width}×${item.height}` : "";
     tr.appendChild(sizeTd);
 
-    // Propre à ce panneau (pas de colonne équivalente dans la
-    // Bibliothèque) — gardée après les colonnes communes, à la demande
-    // explicite de l'utilisateur ("Garder le titre 'Dernière
-    // modification'").
+    // Specific to this panel (no equivalent column in the Library) —
+    // kept after the shared columns, at the user's explicit request
+    // ("Keep the heading 'Dernière modification'").
     const updatedTd = document.createElement("td");
     updatedTd.textContent = item.updated_at
       ? new Date(item.updated_at).toLocaleString(uiLanguage)
@@ -6007,14 +6573,14 @@ interactiveWorkRefreshBtn.addEventListener("click", () => {
   renderInteractiveWorkList();
 });
 
-// "Quand un utilisateur ouvre l'interface (ou la recharge), si il a des
-// grilles sauvegardées dans GRID_WORK, afficher un panneau avec la
-// liste," at the user's explicit request — called once, right after the
-// current pseudo is actually known (see initUserPrefs()'s returning-user
-// branch and the welcome form's own submit handler below), never before:
-// without a pseudo there is no reliable way to know which saved sessions
-// belong to this particular player. "fermer le panneau en le laissant
-// inchangé pour la fois suivante" is already the default behaviour of
+// "When a user opens the interface (or reloads it), if they have grids
+// saved in GRID_WORK, show a panel with the list," at the user's
+// explicit request — called once, right after the current pseudo is
+// actually known (see initUserPrefs()'s returning-user branch and the
+// welcome form's own submit handler below), never before: without a
+// pseudo there is no reliable way to know which saved sessions belong to
+// this particular player. "closing the panel and leaving it unchanged
+// for next time" is already the default behaviour of
 // hideInteractiveWorkPanel() — it never touches GRID_WORK itself, so the
 // exact same check simply runs again, and can show the panel again, on
 // the next page load.
@@ -6044,7 +6610,7 @@ async function checkForSavedInteractiveWork() {
 // interactive mode with the result) is identical either way, only the
 // endpoint and the request body itself differ (resume's own body is just
 // `{work_id}` — no `mode` field to merge in, unlike a fresh start's).
-async function runInteractive(body, endpoint = "/api/interactive/start", enterOptions = {}) {
+async function runInteractive(body, endpoint = "/api/interactive/start") {
   const t = I18N[uiLanguage];
   generationInProgress = true;
   button.disabled = true;
@@ -6085,7 +6651,7 @@ async function runInteractive(body, endpoint = "/api/interactive/start", enterOp
     currentJobId = data.job_id;
     interactiveJobId = data.job_id;
     const startResult = await pollJob(data.job_id, t);
-    enterInteractiveMode(startResult, enterOptions);
+    enterInteractiveMode(startResult);
     setStatus(t.statusGenerated, false);
   } catch (err) {
     setStatus(err.message, !(err instanceof CancelledError));
@@ -6249,12 +6815,12 @@ async function runInteractiveClean(deep) {
 interactiveCleanBtn.addEventListener("click", () => runInteractiveClean(false));
 interactiveCleanDeepBtn.addEventListener("click", () => runInteractiveClean(true));
 
-// Panneau d'aide du mode Interactif (bouton "?" à gauche de "Mots") — texte
-// fixe traduit par langue (voir interactiveHelpLines dans i18n.js), à la
-// demande explicite de l'utilisateur. Reconstruit à chaque ouverture (et
-// re-rendu si la langue change pendant qu'il est ouvert, voir
-// setUiLanguage()) plutôt qu'une seule fois au chargement, pour rester
-// toujours dans la langue courante de l'interface.
+// Interactive mode's help panel ("?" button to the left of "Mots") —
+// fixed text translated per language (see interactiveHelpLines in
+// i18n.js), at the user's explicit request. Rebuilt on every opening (and
+// re-rendered if the language changes while it's open, see
+// setUiLanguage()) rather than once at load, so it always stays in the
+// interface's current language.
 function renderInteractiveHelpList() {
   const t = I18N[uiLanguage];
   // `innerHTML`, not `textContent` — each line carries a `<strong>` around
@@ -6284,9 +6850,9 @@ function closeInteractiveHelp() {
 interactiveHelpBtn.addEventListener("click", openInteractiveHelp);
 interactiveHelpCloseBtn.addEventListener("click", closeInteractiveHelp);
 
-// Fermeture au clavier (touche Echap), même convention que #rss-detail —
-// vérifie `!interactiveHelpOverlay.hidden` en premier, pas de coût ni
-// d'effet quand le panneau n'est de toute façon pas ouvert.
+// Closing via the keyboard (Escape key), same convention as #rss-detail —
+// checks `!interactiveHelpOverlay.hidden` first, no cost or effect when
+// the panel isn't open anyway.
 document.addEventListener("keydown", (event) => {
   if (!interactiveHelpOverlay.hidden && event.key === "Escape") {
     closeInteractiveHelp();
@@ -6311,9 +6877,9 @@ interactiveDefinitionInput.addEventListener("input", () => {
 // language, carrying the CURRENT "Thématique" field's value along (when
 // not blank) — shared by every interactive-mode caller of this endpoint
 // ("Proposer" below and the bulk "Définitions" button further down), at
-// the user's explicit request: "Vérifier que le bouton 'Propose une
-// définition' utilise bien le champ thématique pour les propositions
-// quand il est renseigné." `interactiveTheme` is kept current by
+// the user's explicit request: "Check that the 'Propose une définition'
+// button genuinely uses the theme field for the proposals when it's
+// filled in." `interactiveTheme` is kept current by
 // enterInteractiveMode() (re-editing/resuming a themed grid) and by the
 // generation form's own submit handler (a fresh themed session) — never
 // re-read from the DOM here, so a mid-session edit of the visible field
@@ -6359,8 +6925,8 @@ interactiveProposeBtn.addEventListener("click", async () => {
     // way at once, purely by chance of phrasing, confirmed live in
     // backend.log. Without this, the button silently did nothing at all
     // in that case (renderInteractiveProposals([]) just leaves the
-    // results block hidden), which is exactly the "tourne, mais
-    // n'affiche pas de résultat" reported directly by the user — it was
+    // results block hidden), which is exactly the "spins, but shows no
+    // result" reported directly by the user — it was
     // never actually stuck, just silently empty.
     if (!list.length) setInteractiveMessage(t.interactiveProposeEmpty, true);
   } catch (err) {
@@ -6370,8 +6936,8 @@ interactiveProposeBtn.addEventListener("click", async () => {
   }
 });
 
-// "Effacer" : réinitialise #interactive-propose-results sans relancer de
-// requête, à la demande explicite de l'utilisateur — reuses renderInteractive
+// "Effacer": resets #interactive-propose-results without re-running any
+// request, at the user's explicit request — reuses renderInteractive
 // Proposals([]) (an empty list already hides+empties the container, see
 // renderInteractivePickList) rather than touching it directly, so this stays
 // in sync with however that rendering is built.
@@ -6382,8 +6948,9 @@ interactiveProposeClearBtn.addEventListener("click", () => {
 // Shared by "Impossibles" and "Vérifier" — POST /api/interactive/impossible
 // for the CURRENT grid (read-only, no mutation, no cleanup) and update
 // interactiveImpossibleCells/interactiveLowCells from the response (see
-// setInteractiveDiagnostics). Returns the impossible-cells Set on success —
-// "Vérifier" also uses it to tell whether a given complete word's own
+// setInteractiveDiagnostics). Returns the impossible-cells Set on
+// success — "Vérifier" also uses it to tell whether a given complete
+// word's own
 // cells are entirely covered by it (see _interactive_fill_diagnostics's own
 // `_invalid_fully_known_indices` check: that's exactly what flags a
 // complete-but-unknown-to-the-dictionary word as impossible) — or `null`
@@ -6425,9 +6992,9 @@ async function fetchInteractiveImpossible(t) {
 // implementation) massively overcounted: a slot merely CROSSING one cell
 // of a genuinely impossible/low slot in the other direction would get
 // counted too, even though that crossing slot can otherwise be perfectly
-// fillable — reported directly by the user ("le bouton 'Impossibles'
-// donne un message '22 emplacements impossibles', mais ne montre que 4
-// impossibles (rouge)"): a single long impossible down-slot already
+// fillable — reported directly by the user ("the 'Impossibles' button
+// gives a message '22 impossible slots', but only shows 4 impossible
+// ones (red)"): a single long impossible down-slot already
 // contributes one cell to up to `length` separate, otherwise-healthy
 // across-slots, each wrongly counted as "impossible" on top of the one
 // slot that actually is. `.every()` is exactly the same check "Vérifier"
@@ -6444,11 +7011,10 @@ function countInteractiveFlaggedSlots(cellSet) {
   return count;
 }
 
-// "Impossibles" : vérification en lecture seule des emplacements
-// impossibles (y compris un mot entièrement posé mais absent du
-// dictionnaire — voir POST /api/interactive/impossible) et de ceux avec
-// trop peu de possibilités, sans nettoyer ni contrôler les définitions —
-// à la demande explicite de l'utilisateur.
+// "Impossibles": a read-only check of impossible slots (including a
+// fully placed word absent from the dictionary — see POST /api/
+// interactive/impossible) and of ones with too few options, without
+// cleaning up or checking definitions — at the user's explicit request.
 interactiveImpossibleBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   interactiveImpossibleBtn.disabled = true;
@@ -6479,17 +7045,17 @@ interactiveImpossibleBtn.addEventListener("click", async () => {
   }
 });
 
-// Checks the WHOLE grid at once, at the user's explicit request: "vérifier
-// toute la grille et mettre en rouge les mots complets qui posent un
-// problème, soit parce qu'ils ne sont pas des mots du dictionnaire, soit
-// parce qu'ils n'ont pas de définition." Supersedes an earlier version that
+// Checks the WHOLE grid at once, at the user's explicit request: "check
+// the whole grid and highlight in red the complete words that have a
+// problem, either because they aren't dictionary words, or because they
+// have no definition." Supersedes an earlier version that
 // only ever looked at the currently selected word (see the two prior bug
 // reports this project's own history already documents for that narrower
 // design). Now built directly on top of "Impossibles"'s own check (see
 // fetchInteractiveImpossible) instead of its own separate dictionary-only
-// round trip — at the user's explicit request: "Vérifier ajoute à ça
-// [Impossibles] le fait de contrôler qu'il ne manque pas des définitions
-// aux mots complets" — the missing-definition half still needs no round
+// round trip — at the user's explicit request: "Vérifier adds to that
+// [Impossibles] the check that complete words aren't missing a
+// definition" — the missing-definition half still needs no round
 // trip at all, since interactiveDefs already lives client-side.
 interactiveVerifyBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
@@ -6541,35 +7107,36 @@ interactiveVerifyBtn.addEventListener("click", async () => {
   }
 });
 
-// "Effacer" (à droite de la rangée de boutons) : vide la zone d'affichage
-// juste en dessous (message de statut, rapport "Vérifier", propositions
-// "Mots") sans relancer aucune requête, à la demande explicite de
-// l'utilisateur. clearInteractiveDiagnostics() retire aussi la coloration
-// correspondante sur la grille (emplacements impossibles/à faibles
-// options/invalides) et le rapport "Vérifier" — la même fonction déjà
-// utilisée par toute édition du grille pour cette même raison — puis
-// renderInteractive() applique tout ça (grille + #interactive-verify-
-// report). #interactive-words-results est vidé directement : ce n'est
-// plus renderInteractive() qui s'en charge (voir son propre commentaire —
-// "Mots" reste volontairement affiché d'un rendu à l'autre pour permettre
-// de comparer plusieurs listes).
+// "Effacer" (to the right of the button row): empties the display area
+// right below (status message, "Vérifier" report, "Mots" proposals)
+// without re-running any request, at the user's explicit request.
+// clearInteractiveDiagnostics() also removes the matching grid coloring
+// (impossible/low-option/invalid slots) and the "Vérifier" report — the
+// same function already used by any grid edit for this same reason —
+// then renderInteractive() applies all of it (grid +
+// #interactive-verify-report). #interactive-words-results is cleared
+// directly: renderInteractive() no longer does it (see its own
+// comment — "Mots" is deliberately left displayed across renders so
+// several lists can be compared).
 interactiveResultsClearBtn.addEventListener("click", () => {
   setInteractiveMessage("");
   interactiveWordsResults.hidden = true;
   interactiveWordsResults.innerHTML = "";
+  interactiveCrossingResults.hidden = true;
+  interactiveCrossingResults.innerHTML = "";
   clearInteractiveDiagnostics();
   renderInteractive();
 });
 
-// "Définitions" : génère automatiquement une définition pour chaque mot
-// entièrement rempli et valide qui n'en a pas encore, à la demande
-// explicite de l'utilisateur. Réutilise POST /api/interactive/verify (pour
-// écarter les mots absents du dictionnaire — "et valides") puis, mot par
-// mot, GET /api/dictionary/define (comme "Proposer"), en gardant la
-// première définition proposée. Séquentiel : chaque appel est un vrai
-// aller-retour LLM, potentiellement lent — la progression est affichée et
-// le traitement est au mieux (un mot dont la génération échoue est
-// simplement laissé sans définition).
+// "Définitions": automatically generates a definition for every fully
+// filled and valid word that doesn't have one yet, at the user's
+// explicit request. Reuses POST /api/interactive/verify (to discard
+// words absent from the dictionary — "and valid") then, word by word,
+// GET /api/dictionary/define (like "Proposer"), keeping the first
+// proposed definition. Sequential: each call is a real LLM round trip,
+// potentially slow — progress is shown and the whole thing is
+// best-effort (a word whose generation fails is simply left with no
+// definition).
 interactiveDefinitionsBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   const filled = interactiveSlots().filter((s) => s.filled);
@@ -6654,22 +7221,40 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
   }
 });
 
-// "Finir la grille": permanently locks every letter already placed and
-// starts a brand-new automatic generation from that state, at the user's
-// explicit request — "en verrouillant définitivement les lettres déjà
-// positionnées..., y compris la génération des définitions manquantes
-// (mais pas celles déjà définies)." Reuses runGeneration() (the same
-// mechanism as "Continuer"): leaves Interactive mode and shows the exact
-// same attempt-preview grids / final grid as an ordinary automatic
-// generation. See POST /api/interactive/finish (backend/app.py) for the
-// letter-locking and the reuse of already-typed definitions.
-interactiveFinishBtn.addEventListener("click", async () => {
+// Shared by "Finir la grille" and "Finir la zone" (see both click
+// handlers below) — the two only differ in whether `zoneCells` is `null`
+// (whole grid, "Finir la grille") or the current drag-selected zone's own
+// cell list ("Finir la zone", at the user's explicit request: "locking
+// every slot that isn't part of the selection"). Reuses
+// runGeneration() (the same mechanism as "Continuer"): leaves Interactive
+// mode and shows the exact same attempt-preview grids / final grid as an
+// ordinary automatic generation. See POST /api/interactive/finish
+// (backend/app.py) for the letter-locking (and, for "Finir la zone", the
+// out-of-zone freezing) and the reuse of already-typed definitions.
+async function runInteractiveFinish(zoneCells) {
   if (!interactiveMode || !interactiveJobId) return;
   // Captured now, while Interactive mode is still active — interactiveGrid
   // itself is never wiped by hideInteractivePanel()/runGeneration() anyway,
   // but pin down the "before" state unambiguously before anything else
-  // happens.
-  finishLockedCells = computeFinishLockedCells();
+  // happens. `zoneCells` (null for "Finir la grille") makes every cell
+  // outside the selection green-framed too, not just already-lettered
+  // ones — see computeFinishLockedCells()'s own docstring.
+  finishLockedCells = computeFinishLockedCells(zoneCells);
+  // Close the Dictionnaire/Paraphraseur RIGHT NOW, at the user's explicit
+  // correction: "It must no longer be visible during the following fill
+  // phase" — closing them only once the whole job is done
+  // (see runGeneration()'s own resumeInteractiveWork() reopen below) would
+  // leave either panel sitting open, showing stale content, for the entire
+  // duration of the search/optimization/clue-writing phase that's about to
+  // start — runGeneration()'s own hideInteractivePanel() call hides the
+  // interactive EDITING controls but never touches these two panels at
+  // all, so nothing else was ever going to close them this early. Once the
+  // fill finishes and Édition mode reopens, enterInteractiveMode()'s own
+  // auto-open policy brings the Dictionnaire back (fresh, no longer
+  // stale); the Paraphraseur, which that policy never manages, simply
+  // stays closed until the player reopens it by hand.
+  dictionaryPanel.hidden = true;
+  paraphrasePanel.hidden = true;
   await runGeneration(async (t) => {
     const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
     // #mode's own current value is "interactive" as long as this button is
@@ -6694,6 +7279,7 @@ interactiveFinishBtn.addEventListener("click", async () => {
           black_enrichment_percent: Number(blackEnrichmentInput.value),
           force_letters_percent: Number(document.getElementById("force-letters").value),
           pseudo: userPseudo || undefined,
+          zone_cells: zoneCells || undefined,
         }),
       }, FETCH_TIMEOUT_MS);
     } catch (err) {
@@ -6705,6 +7291,27 @@ interactiveFinishBtn.addEventListener("click", async () => {
     }
     return data.job_id;
   });
+}
+
+// "Finir la zone": to the left of "Finir la grille", at the user's
+// explicit request — the same mechanism, but restricted to the zone
+// currently selected by click-drag (interactiveZoneSelection).
+// Refuses to start as long as no zone is selected.
+interactiveFinishZoneBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  if (!interactiveZoneSelection || !interactiveZoneSelection.size) {
+    setInteractiveMessage(t.interactiveFinishZoneNeedsSelection, true);
+    return;
+  }
+  const zoneCells = [...interactiveZoneSelection].map((key) => key.split(",").map(Number));
+  await runInteractiveFinish(zoneCells);
+});
+
+// "Finir la grille": permanently locks every letter already placed and
+// starts a brand-new automatic generation from that state — see
+// runInteractiveFinish() above for the shared mechanism.
+interactiveFinishBtn.addEventListener("click", async () => {
+  await runInteractiveFinish(null);
 });
 
 interactiveTitleProposeBtn.addEventListener("click", async () => {
@@ -6721,10 +7328,10 @@ interactiveTitleProposeBtn.addEventListener("click", async () => {
   }
 });
 
-// "Effacer" : réinitialise #interactive-title-propose-results sans
-// relancer de requête, à la demande explicite de l'utilisateur — même
-// principe que interactiveProposeClearBtn ci-dessus, pour la liste de
-// titres proposés cette fois.
+// "Effacer": resets #interactive-title-propose-results without
+// re-running any request, at the user's explicit request — the same
+// principle as interactiveProposeClearBtn above, for the list of
+// proposed titles this time.
 interactiveTitleProposeClearBtn.addEventListener("click", () => {
   renderInteractiveTitleProposals([]);
 });
@@ -6854,20 +7461,24 @@ async function runGeneration(startJob) {
       // publishes to the Bibliothèque — the finished grid is a brand-new
       // "Créations" draft instead (backend/app.py's _run_generate_job,
       // `publish=False`), reopened directly in Édition mode here, at the
-      // user's explicit request: "ne pas publier la grille. Ajouter la
-      // nouvelle version aux Créations de l'auteur. Réouvrir la grille
-      // automatiquement en mode édition." Reuses the exact same
+      // user's explicit request: "don't publish the grid. Add the new
+      // version to the author's Créations. Reopen the grid automatically
+      // in edit mode." Reuses the exact same
       // POST /api/interactive/resume mechanism the "Créations" panel
       // itself already uses (resumeInteractiveWork()) — its own call to
       // runInteractive() handles every bit of UI setup/teardown (hiding
       // #result, the "Stop" button, enterInteractiveMode(), the final
-      // status text) on its own, so nothing further is needed here.
-      // `hideDictionary`, at the user's explicit follow-up request:
-      // "masquer le Dictionnaire qui s'affiche automatiquement en mode
-      // Edition" specifically for this reopen — it was already open from
-      // when Édition mode was first entered, and its results are now
-      // stale relative to the just-regenerated grid.
-      await resumeInteractiveWork(gridData.grid_work_id, { hideDictionary: true });
+      // status text) on its own, so nothing further is needed here. The
+      // Dictionnaire panel this reopen brings back is opened automatically
+      // by enterInteractiveMode() itself (its own long-standing auto-open
+      // policy for Édition mode) — an earlier version forced it to stay
+      // closed here instead, but the user explicitly corrected that: the
+      // return to Édition mode should reopen it like any other entry into
+      // this mode. The Paraphraseur is unaffected by any of this — it was
+      // already force-closed the moment "Finir la grille"/"Finir la zone"
+      // was clicked (see runInteractiveFinish()), and stays that way until
+      // the player reopens it by hand.
+      await resumeInteractiveWork(gridData.grid_work_id);
     } else {
       displayFinalGrid(gridData);
       setStatus(t.statusGenerated, false);
@@ -6902,12 +7513,12 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const language = languageSelect.value;
-  // Grille bilingue, à la demande explicite de l'utilisateur : omis
-  // (`undefined`, donc absent du JSON envoyé) quand le sélecteur
-  // "Bilingue" est resté identique à la langue principale — c'est le
-  // Back (GenerateRequest.bilingual_language) qui traite déjà `None`/une
-  // valeur identique comme "grille monolingue ordinaire" de toute façon,
-  // mais autant ne pas envoyer un champ sans effet réel.
+  // Bilingual grid, at the user's explicit request: omitted
+  // (`undefined`, so absent from the sent JSON) when the "Bilingue"
+  // selector stayed identical to the primary language — the backend
+  // (GenerateRequest.bilingual_language) already treats `None`/an
+  // identical value as "ordinary monolingual grid" regardless, but there's
+  // no reason to send a field with no real effect.
   const bilingualLanguage = bilingualLanguageSelect.value;
   // Off localhost, width/height are capped at REMOTE_MAX_DIMENSION (see
   // restrictOptionsToLocalhost above) — clamp here too, as a last line
@@ -6920,12 +7531,12 @@ form.addEventListener("submit", async (event) => {
   const mode = document.getElementById("mode").value;
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
   const forceLettersPercent = Number(document.getElementById("force-letters").value);
-  // Thématique optionnelle (liste de mots) — omise si vide.
+  // Optional Thématique (word list) — omitted if empty.
   const theme = themeInput.value.trim();
-  // "Précision thématique" : seuil de similarité Qdrant minimal du
-  // glossaire thématique (voir backend/app.py's THEME_MIN_SCORE). Point
-  // forcé comme séparateur décimal, borné [0,1] ; undefined si vide -> le
-  // back applique sa valeur par défaut.
+  // "Précision thématique": the theme glossary's own minimal Qdrant
+  // similarity threshold (see backend/app.py's THEME_MIN_SCORE). Dot
+  // forced as the decimal separator, clamped to [0,1]; undefined if
+  // empty -> the backend applies its own default value.
   const themePrecision = readThemePrecision();
 
   if (mode === "interactive") {
@@ -6966,15 +7577,16 @@ form.addEventListener("submit", async (event) => {
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
           force_letters_percent: forceLettersPercent,
-          // Thématique : liste de mots orientant sémantiquement la grille
-          // (pré-recherche Qdrant côté back — voir backend/app.py's
-          // THEME_PRESEARCH_LIMIT). Omise si vide.
+          // Thématique: a word list semantically steering the grid
+          // (a backend-side Qdrant pre-search — see backend/app.py's
+          // THEME_PRESEARCH_LIMIT). Omitted if empty.
           theme: theme || undefined,
-          // Seuil de similarité du glossaire thématique (voir
-          // backend/app.py's THEME_MIN_SCORE) — omis si le champ est vide.
+          // The theme glossary's own similarity threshold (see
+          // backend/app.py's THEME_MIN_SCORE) — omitted if the field is
+          // empty.
           theme_precision: themePrecision,
-          // Pseudo de l'auteur, enregistré dans le JSON de la grille (voir
-          // backend/grid_store.py's save_grid_json) — omis s'il est vide.
+          // The author's pseudo, stored in the grid's own JSON (see
+          // backend/grid_store.py's save_grid_json) — omitted if empty.
           pseudo: userPseudo || undefined,
         }),
       }, FETCH_TIMEOUT_MS);
@@ -7094,12 +7706,12 @@ recomputeBtn.addEventListener("click", async () => {
   }
 });
 
-// Lien partageable de la Bibliothèque : si l'URL porte "?grid=<id>" (voir
-// SHARE_BASE_URL / la colonne "Lien" du tableau), charger cette grille
-// pour la jouer dès l'ouverture de la page. Lit le paramètre quel que
-// soit l'hôte (le lien du tableau vise le domaine public, mais un
-// "?grid=" collé sur http://127.0.0.1:3000/ marche tout autant).
-// loadLibraryGrid() gère seul l'erreur (id inconnu -> #status).
+// The Library's own shareable link: if the URL carries "?grid=<id>" (see
+// SHARE_BASE_URL / the table's own "Lien" column), load that grid to
+// play it as soon as the page opens. Reads the parameter regardless of
+// the host (the table's own link targets the public domain, but a
+// "?grid=" tacked onto http://127.0.0.1:3000/ works just as well).
+// loadLibraryGrid() handles the error on its own (unknown id -> #status).
 function maybeLoadGridFromUrl() {
   let gridId = null;
   try {

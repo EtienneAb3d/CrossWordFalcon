@@ -16,16 +16,27 @@ project's engineering language.
 
 ## Permanent rules
 
-1. **Keep this SKILL current, not historical.** Whenever an important
-   project-management decision is made (architecture choice, convention
-   change, scope decision, tooling choice, etc.), update the "Decisions"
-   section below to reflect the new state — as a present-tense fact
-   ("X does Y", "the default is Z"), never as a narrated change ("X was
-   changed from A to B because..."). This SKILL is a timeless reference of
-   *current* conventions, not a changelog: when a new decision supersedes
-   an old one, replace the old fact in place instead of appending a new
-   entry next to it. Drop a fact entirely once it no longer describes the
-   current codebase, rather than keeping it as history.
+1. **Keep this SKILL current, not historical — and this applies just as
+   absolutely to `DOC_ALGO/FR/ReadMe.md`, `DOC_DIC/FR/ReadMe.md`, and
+   `DOC_USER/EN/ReadMe.md`** (see rules 11, 18, 19, 20 for each of those
+   individually). All four of these documents are timeless references
+   meant to let a reader understand the *current* state of the code and
+   the project without needing to read the code itself — never notes
+   about the history of the decisions that led there. Whenever an
+   important project-management decision is made (architecture choice,
+   convention change, scope decision, tooling choice, etc.), update this
+   SKILL's "Decisions" section (and, symmetrically, whichever of the three
+   `DOC_*` files documents the affected area) to reflect the new state —
+   as a present-tense fact ("X does Y", "the default is Z"), never as a
+   narrated change ("X was changed from A to B because...", "at the
+   user's explicit request", "found live", "previously..."). None of these
+   four documents is a changelog: when a new decision supersedes an old
+   one, replace the old fact in place instead of appending a new entry
+   next to it. Drop a fact entirely once it no longer describes the
+   current codebase, rather than keeping it as history. `CLAUDE.md` is the
+   one place in this project where that narrative — the *why* and the
+   *how it came to be* — belongs; it is deliberately exempt from this
+   rule.
 
 2. **Update `requirements.txt`** (project root) whenever a Python package is
    installed (`pip install ...`), added, upgraded, or removed. The file must
@@ -155,18 +166,30 @@ project's engineering language.
     file's pre-existing sections have not all been retrofitted with
     citations yet.
 
-14. **Code and code comments must be written in English** — at the user's
-    explicit request. Applies to source files (`.py`/`.js`/`.css`/`.html`)
-    and their inline comments/docstrings going forward; it does not apply
-    to product content the app itself displays (crossword words, clues, UI
-    labels — see this SKILL's own convention of English code identifiers
-    with translated UI text) or to reports/summaries sent to the user,
-    which stay in French (see the user's own persistent instruction on
-    report language). Not retroactive: this codebase's existing files
-    (`backend/crossword_gen.py` most of all) carry an extensive history of
-    French comments predating this rule — they are not being retrofitted
-    to English as part of this decision, the same "applies going forward,
-    not retrofitted" stance already taken for rule 13's citations.
+14. **Code and code comments must be written in English, with no
+    exception for pre-existing content — every source file must actually
+    be converted, not just new comments going forward.** At the user's
+    explicit, repeated request. Applies to source files
+    (`.py`/`.js`/`.css`/`.html`) and their inline comments/docstrings; it
+    does not apply to product content the app itself displays (crossword
+    words, clues, UI labels — see this SKILL's own convention of English
+    code identifiers with translated UI text) or to reports/summaries
+    sent to the user, which stay in French (see the user's own persistent
+    instruction on report language). This rule originally carried a
+    "going forward, not retrofitted" exemption for this codebase's
+    existing French comments (`backend/crossword_gen.py` most of all,
+    with an extensive history of them). The user found that exemption
+    kept letting French narrative slip back into fresh edits of an
+    already-French comment block (new text added in the same paragraph's
+    existing language, to stay stylistically consistent with it) and
+    revoked it outright, asking directly for every remaining French
+    comment/docstring across the whole codebase to be found (grep for
+    French marker phrases such as "la demande") and converted. Check for
+    this whenever editing a file that still has French comments nearby —
+    don't let a new edit's own language choice be dictated by an
+    old paragraph's, and treat a French comment noticed anywhere in a
+    touched file as a defect to fix, not a pre-existing condition to
+    leave alone.
 
 15. **Every new `backend/app.py` endpoint needs a matching proxy route in
     `frontend/server.py`, added in the same change** — `frontend/server.py`

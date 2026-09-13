@@ -36,10 +36,10 @@ LINE_HEIGHT = 16
 MARGIN = 16
 MIN_CANVAS_WIDTH = 720
 HEADER_LOGO_SIZE = 48
-# +18 (une ligne de texte supplémentaire) à la demande explicite de
-# l'utilisateur — la 3e ligne d'information (mode + durées, voir
-# render_grid_svg) fait désormais dépasser la hauteur du texte au-delà de
-# celle du logo lui-même (48px), qui dictait seule HEADER_HEIGHT jusqu'ici.
+# +18 (one extra line of text) at the user's explicit request — the 3rd
+# info line (mode + durations, see render_grid_svg) now makes the text
+# height exceed that of the logo itself (48px), which alone used to
+# dictate HEADER_HEIGHT.
 HEADER_HEIGHT = HEADER_LOGO_SIZE + 16 + 18
 # Layout mirroring the web UI's own #board (frontend/static/style.css), at
 # the user's explicit request: the across clues sit in a sidebar to the
@@ -54,9 +54,9 @@ HEADER_HEIGHT = HEADER_LOGO_SIZE + 16 + 18
 # rendered width (see render_grid_svg), not a separately-chosen constant.
 GRID_SIDEBAR_GAP = 24
 DOWN_COLUMN_GAP = 24
-# Utilisé par render_puzzle_svg (le PDF imprimable) uniquement — voir sa
-# propre docstring/commentaire de mise en page ; render_grid_svg garde
-# volontairement le partage 50/50 documenté ci-dessus.
+# Used only by render_puzzle_svg (the printable PDF) — see its own
+# docstring/layout comment; render_grid_svg deliberately keeps the 50/50
+# split documented above.
 MAX_GRID_WIDTH_FRACTION = 0.6
 # rsvg-convert defaults to 96 DPI (screen resolution) when the source SVG has
 # no physical units — GRID_PNG/ is a print-quality visual record (see
@@ -152,8 +152,8 @@ _DURATION_LABELS = {
 # Mirrors frontend/static/i18n.js's attemptPreviewStats own "XX % noir"/
 # "XX% black"/etc. wording (same per-language spacing before "%") — added
 # to the same 3rd header line, right after the 3 durations, at the user's
-# explicit request: "après la liste des temps de traitement, sur la même
-# ligne, afficher le taux de cases noires de la grille." `{p}` is replaced
+# explicit request: "after the list of processing times, on the same
+# line, show the grid's black-cell ratio." `{p}` is replaced
 # with the rounded black-cell percentage.
 _BLACK_RATIO_LABELS = {
     "fr": "{p} % noir",
@@ -164,9 +164,9 @@ _BLACK_RATIO_LABELS = {
     "pt": "{p}% preto",
 }
 
-# Base publique pour le lien "jouer en ligne" imprimé en pied du PDF
-# (render_puzzle_svg). Doit rester alignée sur SHARE_BASE_URL dans
-# frontend/static/script.js (la colonne "Lien" de la Bibliothèque).
+# Public base for the "play online" link printed in the PDF's footer
+# (render_puzzle_svg). Must stay aligned with SHARE_BASE_URL in
+# frontend/static/script.js (the Library's "Link" column).
 PLAY_ONLINE_BASE_URL = "https://falcon.cubaix.com/"
 
 _PLAY_ONLINE_LABELS = {
@@ -384,17 +384,17 @@ def render_grid_svg(result, language, difficulty=None, mode=None):
     date, language, difficulty), the empty grid + clue lists, then the
     solved grid.
 
-    `mode` (`None` par défaut — le CLI/toute génération sans budget choisi
-    n'affiche alors pas cette 3e ligne du tout), à la demande explicite de
-    l'utilisateur : la clé interne du sélecteur "Mode" de l'interface web
-    (voir backend/app.py's BUDGET_MODES), affichée avec les 3 durées déjà
-    présentes sur `result` (`generation_duration_seconds`/
-    `optimization_duration_seconds`/`clues_duration_seconds`, ajoutées par
-    backend/app.py — absentes pour tout appelant qui ne les fournit pas,
-    auquel cas cette ligne entière est omise plutôt que d'afficher des
-    zéros trompeurs), suivies du taux de cases noires de la grille
-    (`result["black_ratio"]`, toujours présent — CLI compris — donc
-    toujours affiché, à la demande explicite de l'utilisateur)."""
+    `mode` (`None` by default — the CLI/any generation with no chosen
+    budget then shows no 3rd line at all), at the user's explicit
+    request: the web UI's "Mode" selector's own internal key (see
+    backend/app.py's BUDGET_MODES), shown alongside the 3 durations
+    already present on `result` (`generation_duration_seconds`/
+    `optimization_duration_seconds`/`clues_duration_seconds`, added by
+    backend/app.py — absent for any caller that doesn't supply them, in
+    which case this whole line is omitted rather than showing misleading
+    zeros), followed by the grid's black-cell ratio
+    (`result["black_ratio"]`, always present — CLI included — so always
+    shown, at the user's explicit request)."""
     words = result["words"]
     across_heading, down_heading, solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
     across_lines = _group_clue_lines(words, "across", "row", language)
@@ -434,11 +434,10 @@ def render_grid_svg(result, language, difficulty=None, mode=None):
         f'fill="#4b5563">v{escape(version)} — {escape(date_str)} — {escape(language_name)} — '
         f'{escape(difficulty_label)} : {escape(difficulty_name)}</text>'
     )
-    # 3e ligne : mode choisi + les 3 durées, à la demande explicite de
-    # l'utilisateur — omise entièrement si l'appelant n'a fourni ni `mode`
-    # ni les durées sur `result` (le CLI, qui ne connaît ni l'un ni les
-    # autres), plutôt que d'afficher une ligne à moitié vide ou des zéros
-    # trompeurs.
+    # 3rd line: chosen mode + the 3 durations, at the user's explicit
+    # request — omitted entirely if the caller supplied neither `mode`
+    # nor the durations on `result` (the CLI, which knows neither),
+    # rather than showing a half-empty line or misleading zeros.
     mode_label, mode_names = _MODE_LABELS.get(language, _MODE_LABELS["en"])
     grid_label, optimization_label, clues_label = _DURATION_LABELS.get(
         language, _DURATION_LABELS["en"]
@@ -544,22 +543,22 @@ def render_grid_svg(result, language, difficulty=None, mode=None):
 
 def render_puzzle_svg(result, language, title="", difficulty=None):
     """Like render_grid_svg but for a *printable, answer-free* puzzle, at
-    the user's explicit request ("un lien permettant de télécharger la
-    grille en PDF (sans les réponses, seulement la grille vide, les
-    définitions, et le titre de la grille)") — used by GET /api/library/
-    {grid_id}/pdf. Same overall pieces as render_grid_svg (empty grid +
-    across sidebar + 2-column down clues) minus the "=== Solution ==="
-    grid at the bottom, plus the grid's own `title` in the header. No
-    mode/durations line: irrelevant on a puzzle sheet.
+    the user's explicit request ("a link to download the grid as a PDF
+    (without the answers, only the empty grid, the clues, and the
+    grid's title)") — used by GET /api/library/{grid_id}/pdf. Same
+    overall pieces as render_grid_svg (empty grid + across sidebar +
+    2-column down clues) minus the "=== Solution ===" grid at the
+    bottom, plus the grid's own `title` in the header. No mode/durations
+    line: irrelevant on a puzzle sheet.
 
     Its own layout is deliberately NOT the 50/50 split render_grid_svg
     uses (see GRID_SIDEBAR_GAP's own comment) — at the user's explicit
-    request: "placer la grille tout à droite de la page (actuellement
-    elle est mise plutôt à gauche en tassant les définitions
-    Horizontales). Elle ne doit pas occuper plus de 60% en largeur de
-    page. Utiliser l'espace restant à gauche pour les définitions
-    Horizontales, et l'espace en dessous (pleine largeur) pour les
-    définitions Verticales." Root cause of the reported "stuck on the
+    request: "put the grid all the way to the right of the page
+    (currently it's placed rather to the left, cramping the Across
+    clues). It must never take up more than 60% of the page's width.
+    Use the space remaining on the left for the Across clues, and the
+    space below (full width) for the Down clues." Root cause of the
+    reported "stuck on the
     left" symptom: `canvas_width` is often floored by MIN_CANVAS_WIDTH
     (a small grid's own natural `2*grid_width_px + gap` can fall well
     short of it) — the old 50/50 split still sized the grid+sidebar row

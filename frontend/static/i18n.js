@@ -34,6 +34,8 @@ const I18N = {
     statusInteractiveBuilding: "Construction de la grille interactive…",
     interactivePrevBtn: "Précédent",
     interactiveNextBtn: "Suivant",
+    interactiveBlackPercent: (p) => `${p} % noir`,
+    interactiveFillPercent: (p) => `${p} % rempli`,
     interactiveHelpBtn: "Aide",
     interactiveHelpTitle: "Aide — Édition de grille",
     interactiveHelpCloseBtn: "Fermer l'aide",
@@ -82,6 +84,8 @@ const I18N = {
       return `${parts.join(", ")} (mis en couleur).`;
     },
     interactiveDefinitionsBtn: "Définitions",
+    interactiveFinishZoneBtn: "Finir la zone",
+    interactiveFinishZoneNeedsSelection: "Sélectionnez d'abord une zone (cliquer-glisser sur la grille).",
     interactiveFinishBtn: "Finir la grille",
     interactiveDefinitionsNothing: "Aucun mot à définir.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -94,6 +98,14 @@ const I18N = {
     interactiveWordsNeedsSlot: "Sélectionnez d'abord un emplacement.",
     interactiveWordsEmpty: "Aucun mot possible pour cet emplacement.",
     interactiveWordsError: "Impossible de lister les mots pour l'instant.",
+    interactiveCrossingBtn: "Croisés",
+    interactiveCrossingLabel: (row, col) => `Croisés (${row}, ${col})`,
+    interactiveCrossingAcrossLabel: "H :",
+    interactiveCrossingDownLabel: "V :",
+    interactiveCrossingNeedsCell: "Sélectionnez d'abord une case.",
+    interactiveCrossingNoCrossing: "Cette case n'a pas d'emplacement dans les deux sens.",
+    interactiveCrossingEmpty: "Aucune lettre commune trouvée pour cette case.",
+    interactiveCrossingError: "Impossible de calculer les croisements pour l'instant.",
     interactiveComplete: "Grille complète : proposez un titre puis sauvegardez.",
     interactiveTitleLabel: "Titre de la grille",
     interactiveTitleProposeBtn: "Proposer un titre",
@@ -116,11 +128,10 @@ const I18N = {
     interactiveWorkDeleteBtn: "Supprimer cette création",
     interactiveBlackKey: "Case noire",
     libraryCreationTag: "(Création)",
-    // Grille créée en modifiant une grille existante de la Bibliothèque
-    // ("Ouvrir en mode Interactif" — voir backend/grid_store.py's
-    // save_grid_json's `origin`), à la demande explicite de l'utilisateur :
-    // mentionne la grille d'origine (nom, auteur, date) sous le titre de la
-    // nouvelle grille dans la liste.
+    // A grid created by editing an existing Library grid ("Ouvrir en mode
+    // Interactif" — see backend/grid_store.py's save_grid_json's
+    // `origin`): names the origin grid (title, author, date) under the
+    // new grid's own title in the list.
     libraryOriginTag: (title, author, date) => `(créée depuis ${title} / ${author} ${date})`,
     themePrecisionLabel: "Précision thématique",
     themePrecisionTitle: "Seuil de similarité minimal du glossaire thématique (0 à 1) : plus haut = glossaire plus resserré. Sans effet si le champ Thématique est vide.",
@@ -309,12 +320,11 @@ const I18N = {
     githubLinkLabel: "Code source sur GitHub",
     discussionsLinkLabel: "Discussions GitHub",
     onlineCount: (n) => `${n} en ligne`,
-    // Un GPU par ligne (0, 1, ... — la machine peut en avoir plusieurs,
-    // voir backend/system_info.py), suivi d'une ligne par rôle qui y est
-    // assigné (LLM automatique/interactif, modèle d'embedding) — à la
-    // demande explicite de l'utilisateur. `systemInfoComputeCpu` sert de
-    // repli quand aucun GPU n'est détecté du tout (LLAMA_FORCE_CPU, ou une
-    // machine sans GPU).
+    // One GPU per line (0, 1, ... — the machine may have several, see
+    // backend/system_info.py), followed by one line per role assigned to
+    // it (automatic/interactive LLM, embedding model). `systemInfoComputeCpu`
+    // is the fallback when no GPU is detected at all (LLAMA_FORCE_CPU, or
+    // a machine with no GPU).
     systemInfoComputeCpu: "Calcul : CPU",
     systemInfoGpuLine: (index, name, gb) => `GPU ${index} : ${name} (${gb} Go)`,
     systemInfoGpuLineUnified: (index, name, gb) => `GPU ${index} : ${name} (mémoire unifiée, ${gb} Go)`,
@@ -354,6 +364,8 @@ const I18N = {
     statusInteractiveBuilding: "Building the interactive grid…",
     interactivePrevBtn: "Back",
     interactiveNextBtn: "Next",
+    interactiveBlackPercent: (p) => `${p}% black`,
+    interactiveFillPercent: (p) => `${p}% filled`,
     interactiveHelpBtn: "Help",
     interactiveHelpTitle: "Help — Building a grid",
     interactiveHelpCloseBtn: "Close help",
@@ -400,6 +412,8 @@ const I18N = {
       return `${parts.join(", ")} (highlighted).`;
     },
     interactiveDefinitionsBtn: "Definitions",
+    interactiveFinishZoneBtn: "Finish the zone",
+    interactiveFinishZoneNeedsSelection: "Select a zone first (click-drag on the grid).",
     interactiveFinishBtn: "Finish the grid",
     interactiveDefinitionsNothing: "No word to define.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -412,6 +426,14 @@ const I18N = {
     interactiveWordsNeedsSlot: "Select a slot first.",
     interactiveWordsEmpty: "No possible word for this slot.",
     interactiveWordsError: "Cannot list words right now.",
+    interactiveCrossingBtn: "Crossings",
+    interactiveCrossingLabel: (row, col) => `Crossings (${row}, ${col})`,
+    interactiveCrossingAcrossLabel: "Across:",
+    interactiveCrossingDownLabel: "Down:",
+    interactiveCrossingNeedsCell: "Select a cell first.",
+    interactiveCrossingNoCrossing: "This cell has no slot in both directions.",
+    interactiveCrossingEmpty: "No common letter found for this cell.",
+    interactiveCrossingError: "Cannot compute crossings right now.",
     interactiveComplete: "Grid complete: suggest a title, then save.",
     interactiveTitleLabel: "Grid title",
     interactiveTitleProposeBtn: "Suggest a title",
@@ -661,6 +683,8 @@ const I18N = {
     statusInteractiveBuilding: "Interaktives Gitter wird erstellt…",
     interactivePrevBtn: "Zurück",
     interactiveNextBtn: "Weiter",
+    interactiveBlackPercent: (p) => `${p}% schwarz`,
+    interactiveFillPercent: (p) => `${p}% gefüllt`,
     interactiveHelpBtn: "Hilfe",
     interactiveHelpTitle: "Hilfe — Gitter bearbeiten",
     interactiveHelpCloseBtn: "Hilfe schließen",
@@ -709,6 +733,8 @@ const I18N = {
       return `${parts.join(", ")} (farblich markiert).`;
     },
     interactiveDefinitionsBtn: "Definitionen",
+    interactiveFinishZoneBtn: "Bereich fertigstellen",
+    interactiveFinishZoneNeedsSelection: "Wählen Sie zuerst einen Bereich aus (auf dem Gitter klicken und ziehen).",
     interactiveFinishBtn: "Gitter fertigstellen",
     interactiveDefinitionsNothing: "Kein Wort zu definieren.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -721,6 +747,14 @@ const I18N = {
     interactiveWordsNeedsSlot: "Wählen Sie zuerst ein Feld aus.",
     interactiveWordsEmpty: "Kein mögliches Wort für dieses Feld.",
     interactiveWordsError: "Wörter können derzeit nicht aufgelistet werden.",
+    interactiveCrossingBtn: "Kreuzungen",
+    interactiveCrossingLabel: (row, col) => `Kreuzungen (${row}, ${col})`,
+    interactiveCrossingAcrossLabel: "Waagerecht:",
+    interactiveCrossingDownLabel: "Senkrecht:",
+    interactiveCrossingNeedsCell: "Wählen Sie zuerst ein Feld aus.",
+    interactiveCrossingNoCrossing: "Dieses Feld hat kein Feld in beiden Richtungen.",
+    interactiveCrossingEmpty: "Kein gemeinsamer Buchstabe für dieses Feld gefunden.",
+    interactiveCrossingError: "Kreuzungen können derzeit nicht berechnet werden.",
     interactiveComplete: "Gitter vollständig: Titel vorschlagen, dann speichern.",
     interactiveTitleLabel: "Gittertitel",
     interactiveTitleProposeBtn: "Titel vorschlagen",
@@ -970,6 +1004,8 @@ const I18N = {
     statusInteractiveBuilding: "Creando el crucigrama interactivo…",
     interactivePrevBtn: "Atrás",
     interactiveNextBtn: "Siguiente",
+    interactiveBlackPercent: (p) => `${p}% negro`,
+    interactiveFillPercent: (p) => `${p}% relleno`,
     interactiveHelpBtn: "Ayuda",
     interactiveHelpTitle: "Ayuda — Edición de la cuadrícula",
     interactiveHelpCloseBtn: "Cerrar la ayuda",
@@ -1018,6 +1054,8 @@ const I18N = {
       return `${parts.join(", ")} (resaltados).`;
     },
     interactiveDefinitionsBtn: "Definiciones",
+    interactiveFinishZoneBtn: "Terminar la zona",
+    interactiveFinishZoneNeedsSelection: "Seleccione primero una zona (haga clic y arrastre sobre la cuadrícula).",
     interactiveFinishBtn: "Terminar el crucigrama",
     interactiveDefinitionsNothing: "No hay ninguna palabra que definir.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -1030,6 +1068,14 @@ const I18N = {
     interactiveWordsNeedsSlot: "Seleccione primero una casilla.",
     interactiveWordsEmpty: "Ninguna palabra posible para esta casilla.",
     interactiveWordsError: "No se pueden listar palabras por ahora.",
+    interactiveCrossingBtn: "Cruces",
+    interactiveCrossingLabel: (row, col) => `Cruces (${row}, ${col})`,
+    interactiveCrossingAcrossLabel: "Horizontal:",
+    interactiveCrossingDownLabel: "Vertical:",
+    interactiveCrossingNeedsCell: "Seleccione primero una casilla.",
+    interactiveCrossingNoCrossing: "Esta casilla no tiene emplazamiento en ambos sentidos.",
+    interactiveCrossingEmpty: "No se encontró ninguna letra común para esta casilla.",
+    interactiveCrossingError: "No se pueden calcular los cruces por ahora.",
     interactiveComplete: "Crucigrama completo: proponga un título y guarde.",
     interactiveTitleLabel: "Título del crucigrama",
     interactiveTitleProposeBtn: "Proponer un título",
@@ -1279,6 +1325,8 @@ const I18N = {
     statusInteractiveBuilding: "Costruzione della griglia interattiva…",
     interactivePrevBtn: "Indietro",
     interactiveNextBtn: "Avanti",
+    interactiveBlackPercent: (p) => `${p}% nero`,
+    interactiveFillPercent: (p) => `${p}% riempito`,
     interactiveHelpBtn: "Aiuto",
     interactiveHelpTitle: "Aiuto — Modifica della griglia",
     interactiveHelpCloseBtn: "Chiudi l'aiuto",
@@ -1327,6 +1375,8 @@ const I18N = {
       return `${parts.join(", ")} (evidenziate).`;
     },
     interactiveDefinitionsBtn: "Definizioni",
+    interactiveFinishZoneBtn: "Completa la zona",
+    interactiveFinishZoneNeedsSelection: "Seleziona prima una zona (clic e trascinamento sulla griglia).",
     interactiveFinishBtn: "Completa la griglia",
     interactiveDefinitionsNothing: "Nessuna parola da definire.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -1339,6 +1389,14 @@ const I18N = {
     interactiveWordsNeedsSlot: "Seleziona prima una casella.",
     interactiveWordsEmpty: "Nessuna parola possibile per questa casella.",
     interactiveWordsError: "Impossibile elencare le parole al momento.",
+    interactiveCrossingBtn: "Incroci",
+    interactiveCrossingLabel: (row, col) => `Incroci (${row}, ${col})`,
+    interactiveCrossingAcrossLabel: "Orizzontale:",
+    interactiveCrossingDownLabel: "Verticale:",
+    interactiveCrossingNeedsCell: "Seleziona prima una casella.",
+    interactiveCrossingNoCrossing: "Questa casella non ha una parola in entrambi i sensi.",
+    interactiveCrossingEmpty: "Nessuna lettera comune trovata per questa casella.",
+    interactiveCrossingError: "Impossibile calcolare gli incroci al momento.",
     interactiveComplete: "Griglia completa: proponi un titolo e salva.",
     interactiveTitleLabel: "Titolo della griglia",
     interactiveTitleProposeBtn: "Proponi un titolo",
@@ -1589,6 +1647,8 @@ const I18N = {
     statusInteractiveBuilding: "A construir a grelha interativa…",
     interactivePrevBtn: "Anterior",
     interactiveNextBtn: "Seguinte",
+    interactiveBlackPercent: (p) => `${p}% preto`,
+    interactiveFillPercent: (p) => `${p}% preenchido`,
     interactiveHelpBtn: "Ajuda",
     interactiveHelpTitle: "Ajuda — Editar a grelha",
     interactiveHelpCloseBtn: "Fechar a ajuda",
@@ -1637,6 +1697,8 @@ const I18N = {
       return `${parts.join(", ")} (destacados).`;
     },
     interactiveDefinitionsBtn: "Definições",
+    interactiveFinishZoneBtn: "Terminar a zona",
+    interactiveFinishZoneNeedsSelection: "Selecione primeiro uma zona (clique e arraste na grelha).",
     interactiveFinishBtn: "Terminar a grelha",
     interactiveDefinitionsNothing: "Nenhuma palavra para definir.",
     interactiveDefinitionsWorking: (done, total) =>
@@ -1649,6 +1711,14 @@ const I18N = {
     interactiveWordsNeedsSlot: "Selecione primeiro uma casa.",
     interactiveWordsEmpty: "Nenhuma palavra possível para esta casa.",
     interactiveWordsError: "Não é possível listar palavras neste momento.",
+    interactiveCrossingBtn: "Cruzamentos",
+    interactiveCrossingLabel: (row, col) => `Cruzamentos (${row}, ${col})`,
+    interactiveCrossingAcrossLabel: "Horizontal:",
+    interactiveCrossingDownLabel: "Vertical:",
+    interactiveCrossingNeedsCell: "Selecione primeiro uma casa.",
+    interactiveCrossingNoCrossing: "Esta casa não tem palavra em ambos os sentidos.",
+    interactiveCrossingEmpty: "Nenhuma letra comum encontrada para esta casa.",
+    interactiveCrossingError: "Não é possível calcular os cruzamentos neste momento.",
     interactiveComplete: "Grelha completa: proponha um título e guarde.",
     interactiveTitleLabel: "Título da grelha",
     interactiveTitleProposeBtn: "Propor um título",

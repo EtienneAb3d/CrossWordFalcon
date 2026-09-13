@@ -520,7 +520,9 @@ to the left of **Mots / Words** to open it as an overlay panel.
   a step (for example so Next generates a different word).
 - Use the tools to help you: **Dictionnaire / Dictionary**, **Paraphraseur
   / Paraphraser**, the **Mots / Words** button lists the words compatible
-  with the selected slot.
+  with the selected slot, and **Croisés / Crossings** lists, for the
+  selected cell, every letter that fits a real word in BOTH directions at
+  once, together with the matching words in each direction.
 - Two buttons clean up the grid's impossible zones, with or without
   removing black cells.
 - The **Impossibles / Impossible** button identifies zones where no word
@@ -531,6 +533,12 @@ to the left of **Mots / Words** to open it as an overlay panel.
 - The **Proposer une définition / Suggest a definition** and **Proposer un
   titre / Suggest a title** buttons help you with several proposals.
 - Make sure every placed word has a definition.
+- Click and drag over the grid to select a zone (every emplacement sharing
+  a cell with the dragged area is added in full); the rest of the grid is
+  shaded gray. **Finir la zone / Finish the zone** then runs the same
+  automatic fill as "Finir la grille" below, but only inside that zone —
+  everything outside it, letters and black cells alike, is frozen exactly
+  as it stands.
 - Click **Finir la grille / Finish the grid** so Falcon fills in the cells
   that are still empty.
 - At the end of the automatic process, delete any words you don't like,
@@ -569,6 +577,12 @@ grid keeps steering both "Suggest a definition"/"Suggest a title" (see
 below) toward its own theme once you start editing it, with no need to
 retype it by hand.
 
+Two small percentages sit above the grid throughout the session
+(`#interactive-cell-stats`, `renderInteractiveCellStats`), stacked one
+above the other and left-aligned: the share of the whole grid that is
+currently black, and the share of the white cells that already carry a
+real letter. Both update after every edit.
+
 **Building the grid**
 
 - **Suivant / Next** (`#interactive-next-btn`, `POST /api/interactive/
@@ -592,6 +606,42 @@ retype it by hand.
   Shift/Caps Lock, and the **Ctrl** key (each Ctrl tap flips this
   direction, `toggleDirectionOnCtrl`). They do **not** influence which
   word "Suivant" places.
+- **Mots / Words** (`#interactive-words-btn`, `POST /api/interactive/
+  candidates`) — lists every real dictionary word compatible with the
+  currently selected slot's own already-placed letters (a theme word, if
+  any fit, always shown first); the letter matching the selected cell is
+  highlighted in blue within each word. Click a word to place it.
+- **Croisés / Crossings** (`#interactive-crossing-btn`, `POST /api/
+  interactive/crossing`) — for the selected cell, computes both the
+  horizontal AND the vertical emplacement crossing there and lists every
+  letter that a real word can take in BOTH of them at once, restricted by
+  whatever letters are already in place elsewhere on the grid. For each
+  such letter, it lists the matching horizontal words and the matching
+  vertical words (comma-separated, click one to place it), with that
+  common letter highlighted in blue within every listed word — the same
+  blue highlight as "Mots". Useful when a cell has no letter yet and you
+  want to see, at a glance, which choices actually keep both crossing
+  words real. Nothing is listed for a cell that has no real emplacement
+  in one of the two directions (a run shorter than 2 cells).
+- **Nettoyer / Clean up** (`#interactive-clean-btn`, `POST /api/
+  interactive/clean`) — for every emplacement that has become impossible
+  (no real dictionary word fits its already-placed letters any more, or
+  it's already entirely filled in but spells something that isn't a real
+  word), removes every word crossing it and clears its own letters too,
+  falling back to turning one of its cells black when removing words
+  alone wouldn't be enough. Leaves the grid unchanged if nothing is
+  actually impossible. **Nettoyer (+noires) / Clean up (+black cells)**
+  (`#interactive-clean-deep-btn`) does the same, then additionally tries
+  removing every black cell in the grid one by one, keeping a removal
+  only when it doesn't make anything worse.
+- **Click and drag** over the grid to select a zone: release the mouse
+  and every emplacement (across or down) that shares at least one cell
+  with the dragged rectangle is added to the selection in full — every
+  other cell of the grid is then shaded gray. A single click (no
+  dragging) never changes an already-selected zone, so you can keep
+  working inside it (typing, "Mots", "Croisés", ...); dragging a new
+  rectangle replaces it, and the **Escape** key clears it. See "Finir la
+  zone" below for what this selection is actually used for.
 
 **Writing the definitions**
 
@@ -617,6 +667,21 @@ retype it by hand.
   remaining word and keeps the first suggestion. It works through the
   words one at a time and shows its progress; a word whose definition
   could not be produced is simply left blank.
+- **Finir la zone / Finish the zone** (`#interactive-finish-zone-btn`,
+  `POST /api/interactive/finish` with `zone_cells`) — the same automatic
+  completion as "Finir la grille" right below, but restricted to the zone
+  you last drag-selected on the grid (see "Click and drag" above);
+  refuses to start if no zone is currently selected. Every cell already
+  carrying a letter is permanently locked exactly like "Finir la grille"
+  already does, wherever it is — but, in addition, every cell OUTSIDE the
+  selected zone that isn't a letter — empty, or already a black cell — is
+  permanently frozen black before the automatic engine even starts and
+  for as long as it runs, so nothing outside the zone can ever be
+  touched: it stays exactly as you left it, black cells and letters
+  alike, all the way to the very end (including the final optimization
+  pass that can otherwise remove a black cell elsewhere on the grid).
+  Only the zone itself can receive new letters or see its own black cells
+  change.
 - **Finir la grille / Finish the grid** (`#interactive-finish-btn`,
   `POST /api/interactive/finish`) — permanently locks every letter
   already placed and hands the grid off to the automatic generation

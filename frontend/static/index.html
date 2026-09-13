@@ -11,20 +11,20 @@
     <header id="page-header">
       <img src="logo.svg" alt="CrossWordFalcon" id="logo">
       <h1 data-i18n="pageTitle">CrossWordFalcon — générateur de grilles de mots croisés</h1>
-      <!-- Pseudo de l'utilisateur, centré entre le titre et les
-           boutons/icônes à droite (deux `margin-right: auto` sur le
-           header, un sur h1 un ici, qui se partagent l'espace libre) —
-           à la demande explicite de l'utilisateur. Un clic rouvre le
-           panneau d'accueil (#welcome-overlay) pour changer pseudo/langue.
-           Affiché après acceptation ; montre un libellé "définir un
-           pseudo" traduit tant qu'aucun pseudo n'est saisi. -->
+      <!-- User pseudo, centered between the title and the
+           buttons/icons on the right (two `margin-right: auto`, one on
+           the header, one on h1, one here, sharing the free space) —
+           at the user's explicit request. A click reopens the
+           welcome panel (#welcome-overlay) to change pseudo/language.
+           Shown once accepted; shows a translated "set a
+           nickname" label as long as no pseudo has been entered. -->
       <button type="button" id="user-pseudo" data-i18n-aria="userPseudoLabel"
               data-i18n-title="userPseudoLabel" hidden></button>
-      <!-- Compteur "x en ligne" — nombre d'utilisateurs actifs distincts
-           (dédoublonnés par pseudo), rafraîchi toutes les 2s via
-           POST /api/presence. À gauche du badge de version, à la demande
-           explicite de l'utilisateur. Caché jusqu'au premier battement
-           de cœur réussi. -->
+      <!-- "x online" counter — number of distinct active users
+           (deduplicated by pseudo), refreshed every 2s via
+           POST /api/presence. To the left of the version badge, at the
+           user's explicit request. Hidden until the first successful
+           heartbeat. -->
       <span id="online-count" class="badge" hidden></span>
       <span id="version-badge" class="badge" hidden></span>
       <span id="info-badge" class="info-badge" hidden tabindex="0" role="button" data-i18n-aria="infoBadgeLabel">
@@ -83,14 +83,14 @@
         <input type="number" id="width" name="width" min="5" max="30" step="1" value="15" required>
       </label>
 
-      <!-- Grille bilingue, à la demande explicite de l'utilisateur : "entre
-           les configuration Largeur et Hauteur, ajouter un second sélecteur
-           de langue 'Bilingue'." Mêmes options que #language ci-dessus —
-           script.js force ce sélecteur à la même valeur que #language à
-           chaque changement de celui-ci (donc "fr" au chargement, comme
-           #language), le joueur peut ensuite le régler sur une langue
-           différente pour une vraie grille bilingue (mots verticaux dans
-           cette seconde langue, voir crossword_gen.generate_grid). -->
+      <!-- Bilingual grid, at the user's explicit request: "between the
+           Width and Height settings, add a second language selector
+           'Bilingual'." Same options as #language above — script.js
+           forces this selector to the same value as #language on every
+           change of the latter (so "fr" on load, like #language); the
+           player can then set it to a different language for a genuine
+           bilingual grid (down words in this second language, see
+           crossword_gen.generate_grid). -->
       <label for="bilingual-language">
         <span data-i18n="bilingualLanguageLabel">Bilingue</span>
         <select id="bilingual-language" name="bilingual_language">
@@ -147,33 +147,33 @@
         </select>
       </label>
 
-      <!-- Seuil de similarité Qdrant minimal du glossaire thématique pour
-           CETTE génération (voir backend/app.py's THEME_MIN_SCORE /
-           GenerateRequest.theme_precision) — sans effet si "Thématique"
-           est vide. Saisie libre, à la demande explicite de
-           l'utilisateur ("configurer à la main"). -->
+      <!-- Minimum Qdrant similarity threshold for the theme glossary for
+           THIS generation (see backend/app.py's THEME_MIN_SCORE /
+           GenerateRequest.theme_precision) — has no effect if "Thématique"
+           is empty. Free-text field, at the user's explicit request
+           ("configure by hand"). -->
       <label for="theme-precision">
         <span data-i18n="themePrecisionLabel">Précision thématique</span>
-        <!-- type="text" (pas "number") pour maîtriser le séparateur
-             décimal : le point est forcé (une virgule saisie est
-             normalisée en point par script.js, à la demande explicite de
-             l'utilisateur) — un input "number" localisé accepterait/
-             afficherait une virgule, source de confusion. -->
+        <!-- type="text" (not "number") to control the decimal
+             separator: the dot is enforced (a typed comma is
+             normalized to a dot by script.js, at the user's explicit
+             request) — a localized "number" input could accept/
+             display a comma, a source of confusion. -->
         <input type="text" id="theme-precision" name="theme_precision"
                inputmode="decimal" autocomplete="off" spellcheck="false"
                pattern="[0-9]*([.,][0-9]+)?" value="0.68"
                data-i18n-title="themePrecisionTitle">
       </label>
 
-      <!-- Boutons d'action sur leur propre ligne, sous les combos d'options,
-           à la demande explicite de l'utilisateur — #form-actions prend
-           toute la largeur (flex-basis: 100%) donc passe à la ligne
-           suivante dans le flex-wrap du formulaire. -->
+      <!-- Action buttons on their own row, below the option combos, at
+           the user's explicit request — #form-actions takes the full
+           width (flex-basis: 100%) so it wraps onto the next line in
+           the form's own flex-wrap. -->
       <div id="form-actions">
-        <!-- Thématique optionnelle (liste de mots) — à côté de "Générer la
-             grille", à la demande explicite de l'utilisateur. Non vide ->
-             pré-recherche Qdrant des 5000 mots les plus proches, priorisés
-             par le solveur (voir backend/app.py's THEME_PRESEARCH_LIMIT et
+        <!-- Optional theme (word list) — next to "Générer la grille", at
+             the user's explicit request. Non-empty -> a Qdrant
+             pre-search of the 5000 closest words, prioritized by the
+             solver (see backend/app.py's THEME_PRESEARCH_LIMIT and
              crossword_gen.py's priority_words). -->
         <label id="theme-field" for="theme">
           <span data-i18n="themeLabel">Thématique</span>
@@ -192,36 +192,36 @@
         <button type="button" id="recompute-btn" data-i18n="recomputeBtn" hidden>Recalculer</button>
         <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
         <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
-        <!-- "Paraphraseur" : demande au LLM 5 reformulations du texte saisi
-             (voir backend/clues.py, LLMClueGenerator.generate_paraphrases) —
-             à la demande explicite de l'utilisateur, placé juste à côté de
-             "Dictionnaire". Même panneau bilingue/50-50 que le Dictionnaire
-             (voir refreshBilingualOption()/buildBilingualResultBlock() dans
+        <!-- "Paraphraseur": asks the LLM for 5 rewordings of the typed
+             text (see backend/clues.py, LLMClueGenerator.generate_paraphrases) —
+             at the user's explicit request, placed right next to
+             "Dictionnaire". Same bilingual/50-50 panel as the Dictionary
+             (see refreshBilingualOption()/buildBilingualResultBlock() in
              script.js). -->
         <button type="button" id="paraphrase-btn" data-i18n="paraphraseBtn">Paraphraseur</button>
-        <!-- "Créations" : liste les sessions "Interactif" en cours sauvegardées
-             automatiquement dans GRID_WORK/ (voir plus bas et backend/
-             grid_store.py) — à la demande explicite de l'utilisateur. -->
+        <!-- "Créations": lists the "Interactif" sessions in progress,
+             autosaved to GRID_WORK/ (see further below and backend/
+             grid_store.py) — at the user's explicit request. -->
         <button type="button" id="interactive-work-btn" data-i18n="interactiveWorkBtn">Créations</button>
-        <!-- Panneau d'administration Qdrant : rendu visible uniquement quand
-             la page est ouverte en localhost (script.js,
-             showQdrantAdminOnLocalhost) ; le proxy (frontend/server.py,
-             _require_localhost) refuse aussi les routes /api/qdrant/admin/*
-             pour tout client/Host non-loopback. -->
+        <!-- Qdrant admin panel: only rendered visible when the page is
+             opened on localhost (script.js,
+             showQdrantAdminOnLocalhost); the proxy (frontend/server.py,
+             _require_localhost) also refuses the /api/qdrant/admin/*
+             routes for any non-loopback client/Host. -->
         <button type="button" id="qdrant-admin-btn" data-i18n="qdrantAdminBtn" hidden>Qdrant (admin)</button>
       </div>
     </form>
 
-    <!-- Panneau "Actu Croisée" : toujours visible, jamais masqué par les
-         sections centrales (#library/#attempt-preview/#result) qui se
-         basculent entre elles — à la demande explicite de l'utilisateur
-         ("la liste des flux RSS disparaît de l'interface quand quelque
-         chose d'autre doit être affiché dans le panneau central"), donc
-         placé comme sa propre section persistante, hors de ce groupe.
-         Positionné juste en dessous des boutons de l'application, sur
-         l'espace de fenêtre restant (voir #rss-panel dans style.css,
-         `flex: 1` sur un `main` devenu colonne flexible), à la demande
-         explicite de l'utilisateur. -->
+    <!-- "Actu Croisée" panel: always visible, never hidden by the
+         central sections (#library/#attempt-preview/#result), which
+         toggle between each other — at the user's explicit request
+         ("the RSS feed list disappears from the interface whenever
+         something else needs to be shown in the central panel"), so
+         placed as its own persistent section, outside that group.
+         Positioned right below the app's own buttons, over the
+         remaining window space (see #rss-panel in style.css, `flex: 1`
+         on a `main` that became a flex column), at the user's
+         explicit request. -->
     <section id="rss-panel">
       <div id="rss-panel-header">
         <h2 data-i18n="rssPanelTitle">Actu Croisée</h2>
@@ -253,12 +253,13 @@
         <p id="library-label" data-i18n="libraryLabel"></p>
         <select id="library-language-filter" data-i18n-aria="libraryLanguageFilterLabel">
           <option value="all" data-i18n="libraryLanguageFilterAll">Toutes les langues</option>
-          <!-- Grilles bilingues (GRID_STORE/bilingual/, voir backend/
-               grid_store.py), à la demande explicite de l'utilisateur —
-               placée juste après "Toutes les langues" (position explicitement
-               demandée) — ne matche aucune clé de WORDLISTS, filtré
-               séparément côté Back (backend/app.py's _library_page) sur le
-               champ `bilingual` de chaque grille plutôt que sur sa langue. -->
+          <!-- Bilingual grids (GRID_STORE/bilingual/, see backend/
+               grid_store.py), at the user's explicit request — placed
+               right after "Toutes les langues" (position explicitly
+               requested) — matches no WORDLISTS key at all, filtered
+               separately on the backend (backend/app.py's _library_page)
+               on each grid's own `bilingual` field rather than its
+               language. -->
           <option value="bilingual" data-i18n="libraryLanguageFilterBilingual">Bilingue</option>
           <option value="fr">Français</option>
           <option value="en">English</option>
@@ -271,16 +272,15 @@
           <option value="all" data-i18n="librarySeenFilterAll">Toutes les grilles</option>
           <option value="unseen" data-i18n="librarySeenFilterUnseen">Non vues</option>
           <option value="seen" data-i18n="librarySeenFilterSeen">Déjà vues</option>
-          <!-- "Mes grilles" : filtre sur le pseudo de l'utilisateur
-               courant (script.js envoie `pseudo` dans le corps POST,
-               backend/app.py's _library_page filtre sur le champ
-               `pseudo` de chaque grille) — à la demande explicite de
-               l'utilisateur. -->
+          <!-- "Mes grilles": filters on the current user's own pseudo
+               (script.js sends `pseudo` in the POST body,
+               backend/app.py's _library_page filters on each grid's
+               own `pseudo` field) — at the user's explicit request. -->
           <option value="mine" data-i18n="librarySeenFilterMine">Mes grilles</option>
         </select>
-        <!-- Filtre de niveau, à la demande explicite de l'utilisateur.
-             "Tous les niveaux" par défaut ; les libellés easy/medium/hard
-             réutilisent les clés difficultyEasy/Medium/Hard existantes. -->
+        <!-- Difficulty filter, at the user's explicit request.
+             "Tous les niveaux" by default; the easy/medium/hard labels
+             reuse the existing difficultyEasy/Medium/Hard keys. -->
         <select id="library-difficulty-filter" data-i18n-aria="libraryDifficultyFilterLabel">
           <option value="all" data-i18n="libraryDifficultyFilterAll">Tous les niveaux</option>
           <option value="easy" data-i18n="difficultyEasy">Facile</option>
@@ -299,24 +299,26 @@
               <th data-i18n="libraryColLanguage"></th>
               <th data-i18n="libraryColDate"></th>
               <th data-i18n="libraryColTitle"></th>
-              <!-- Thématique saisie à la génération (champ `theme` du JSON,
-                   vide si aucune) — à la demande explicite de l'utilisateur. -->
+              <!-- Theme typed in at generation time (`theme` field of the
+                   JSON record, empty if none) — at the user's explicit
+                   request. -->
               <th data-i18n="libraryColTheme"></th>
               <th data-i18n="libraryColDifficulty"></th>
               <th data-i18n="libraryColSize"></th>
-              <!-- Auteur de la grille (champ `pseudo` du JSON, vide si
-                   non défini) — à la demande explicite de l'utilisateur. -->
+              <!-- Grid author (`pseudo` field of the JSON record, empty
+                   if unset) — at the user's explicit request. -->
               <th data-i18n="libraryColAuthor"></th>
-              <!-- Lien partageable vers la grille (SHARE_BASE_URL + ?grid=<id>)
-                   — à la demande explicite de l'utilisateur. -->
+              <!-- Shareable link to the grid (SHARE_BASE_URL + ?grid=<id>)
+                   — at the user's explicit request. -->
               <th data-i18n="libraryColLink"></th>
-              <!-- Bouton icône ouvrant la grille en mode "Interactif" (crée
-                   une nouvelle tâche GRID_WORK) — à la demande explicite de
-                   l'utilisateur, à côté de "Jouer". En-tête sans libellé. -->
+              <!-- Icon button opening the grid in "Interactif" mode
+                   (creates a new GRID_WORK task) — at the user's
+                   explicit request, next to "Jouer". Header with no
+                   label. -->
               <th data-i18n="libraryColInteractive"></th>
-              <!-- Téléchargement PDF imprimable (grille vide + définitions +
-                   titre, sans réponses) — dernière colonne, à la demande
-                   explicite de l'utilisateur. -->
+              <!-- Printable PDF download (empty grid + clues + title, no
+                   answers) — last column, at the user's explicit
+                   request. -->
               <th data-i18n="libraryColPdf"></th>
             </tr>
           </thead>
@@ -333,12 +335,12 @@
       </div>
     </section>
 
-    <!-- Panneau "Créations" : sessions "Interactif" en cours, sauvegardées
-         automatiquement dans GRID_WORK/ après chaque Suivant/Précédent — à
-         la demande explicite de l'utilisateur. Ouvert soit par le bouton
-         "Créations" ci-dessus, soit automatiquement au chargement de la
-         page si l'utilisateur a des créations en cours (voir script.js's
-         checkForSavedInteractiveWork()). Même groupe basculant que
+    <!-- "Créations" panel: "Interactif" sessions in progress, autosaved
+         to GRID_WORK/ after every Suivant/Précédent click — at the
+         user's explicit request. Opened either by the "Créations"
+         button above, or automatically on page load if the user has
+         creations in progress (see script.js's
+         checkForSavedInteractiveWork()). Same toggling group as
          #library/#dictionary/#attempt-preview/#result. -->
     <section id="interactive-work" hidden>
       <div id="interactive-work-header">
@@ -348,12 +350,12 @@
         <button type="button" id="interactive-work-close-btn" class="nav-btn"
                 data-i18n-aria="interactiveWorkCloseBtn">✕</button>
       </div>
-      <!-- Mêmes colonnes, dans le même ordre, que #library-table (Langue,
-           Date, Titre, Thématique, Difficulté, Taille — voir libraryCol*
-           dans i18n.js, réutilisées telles quelles ici puisque ce sont
-           exactement les mêmes notions) — à la demande explicite de
-           l'utilisateur. "Dernière modification" et le bouton de
-           suppression, propres à ce panneau, restent après. -->
+      <!-- Same columns, in the same order, as #library-table (Langue,
+           Date, Titre, Thématique, Difficulté, Taille — see libraryCol*
+           in i18n.js, reused as-is here since these are exactly the
+           same concepts) — at the user's explicit request.
+           "Dernière modification" and the delete button, specific to
+           this panel, still come after. -->
       <div class="table-scroll">
         <table id="interactive-work-table">
           <thead>
@@ -374,9 +376,9 @@
       <p id="interactive-work-empty" data-i18n="interactiveWorkEmpty" hidden></p>
     </section>
 
-    <!-- Panneau "Dictionnaire" : recherche accent/casse-insensible dans
-         <lang>_glosses.jsonl, liste les mots de la même racine. À la
-         demande explicite de l'utilisateur. Même groupe basculant que
+    <!-- "Dictionnaire" panel: accent/case-insensitive search in
+         <lang>_glosses.jsonl, lists words sharing the same root. At the
+         user's explicit request. Same toggling group as
          #library / #attempt-preview / #result. -->
     <section id="dictionary" hidden>
       <div id="dictionary-header">
@@ -393,49 +395,51 @@
                  data-i18n-placeholder="dictionaryInputPlaceholder">
           <button type="submit" id="dictionary-search-btn"
                   data-i18n="dictionarySearchBtn">Chercher</button>
-          <!-- "Synonymes" : recherche Qdrant directe sur le mot/l'expression
-               saisi(e), SANS appel au LLM pour étendre la recherche
-               (contrairement à "Thématique") — à la demande explicite de
-               l'utilisateur. Placé entre "Chercher" et "Thématique", à la
-               demande explicite de l'utilisateur. -->
+          <!-- "Synonymes": direct Qdrant search on the typed word/
+               expression, with NO LLM call to expand the search
+               (unlike "Thématique") — at the user's explicit request.
+               Placed between "Chercher" and "Thématique", at the
+               user's explicit request. -->
           <button type="button" id="dictionary-synonyms-btn"
                   data-i18n="dictionarySynonymsBtn">Synonymes</button>
           <button type="button" id="dictionary-similar-btn"
                   data-i18n="dictionarySimilarBtn">Thématique</button>
-          <!-- Demande au LLM jusqu'à 10 définitions indépendantes de
-               l'expression saisie (comme pour un mot de grille — voir
+          <!-- Asks the LLM for up to 10 independent definitions of the
+               typed expression (like for a grid word — see
                backend/clues.py, LLMClueGenerator.generate_definitions),
-               à la demande explicite de l'utilisateur. -->
+               at the user's explicit request. -->
           <button type="button" id="dictionary-define-btn"
                   data-i18n="dictionaryDefineBtn">Définir</button>
-          <!-- Caractère éponge U+1F9FD plutôt que le texte "Effacer", à la
-               demande explicite de l'utilisateur (remplace une première
-               version en icône SVG dessinée à la main) — nom accessible/
-               infobulle via aria-label/title, sur la même clé i18n que le
-               texte qu'il remplace (déjà traduite dans les 6 langues).
-               `aria-hidden` sur le caractère lui-même : il est purement
-               décoratif, le nom accessible reste porté par aria-label/
-               title. Même convention réutilisée par tous les autres
-               boutons "Effacer" ci-dessous. -->
+          <!-- Sponge character U+1F9FD instead of the text "Effacer", at
+               the user's explicit request (replaces an earlier
+               hand-drawn SVG icon version) — accessible name/tooltip via
+               aria-label/title, on the same i18n key as the text it
+               replaces (already translated in all 6 languages).
+               `aria-hidden` on the character itself: it is purely
+               decorative, the accessible name is still carried by
+               aria-label/title. Same convention reused by every other
+               "Effacer" button below. -->
           <button type="button" id="dictionary-clear-btn" class="nav-btn clear-icon-btn"
                   data-i18n-aria="dictionaryClearBtn" data-i18n-title="dictionaryClearBtn">
             <span class="clear-icon" aria-hidden="true">🧽</span>
           </button>
-          <!-- Ouvre Perplexity, dans un nouvel onglet, avec une requête
-               ("Faire 5 propositions de définitions pour les mots croisés,
-               puis définir tous les sens possibles du mot <langue> : <mot>",
-               adaptée à la langue du sélecteur #dictionary-language, y
-               compris quand deux langues y sont combinées) portant sur le
-               mot saisi dans #dictionary-input — à la demande explicite de
-               l'utilisateur. Texte "Perplexity" non traduit (nom propre du
-               service, comme "Falcon Auto Bot" ailleurs dans ce fichier) ;
-               icône "lien externe" en SVG inline (aucune police/lib
-               d'icônes externe dans ce projet) signalant l'ouverture hors
-               site. Même forme que les boutons bleus (l'élément button de
-               base : padding/rayon/graisse), mais en violet (classe
-               .external-link-btn, voir style.css) — à la demande explicite
-               de l'utilisateur, pour renforcer visuellement le fait que ce
-               bouton ouvre une URL externe plutôt qu'une action interne. -->
+          <!-- Opens Perplexity, in a new tab, with a query ("Faire 5
+               propositions de définitions pour les mots croisés, puis
+               définir tous les sens possibles du mot <langue> : <mot>",
+               adapted to the language of the #dictionary-language
+               selector, including when two languages are combined
+               there) about the word typed in #dictionary-input — at
+               the user's explicit request. "Perplexity" text left
+               untranslated (a proper noun, the service's own name,
+               like "Falcon Auto Bot" elsewhere in this file); an
+               "external link" icon as inline SVG (no external icon
+               font/library in this project) signaling that this leaves
+               the site. Same shape as the blue buttons (the base
+               button element: padding/radius/weight), but violet
+               (class .external-link-btn, see style.css) — at the
+               user's explicit request, to visually reinforce that this
+               button opens an external URL rather than an internal
+               action. -->
           <button type="button" id="dictionary-perplexity-btn" class="external-link-btn"
                   data-i18n-aria="dictionaryPerplexityTitle"
                   data-i18n-title="dictionaryPerplexityTitle">Perplexity
@@ -456,12 +460,12 @@
       <div id="dictionary-results"></div>
     </section>
 
-    <!-- Panneau "Paraphraseur" : demande au LLM 5 reformulations du texte
-         saisi (backend/clues.py's LLMClueGenerator.generate_paraphrases),
-         à la demande explicite de l'utilisateur — même structure que
-         #dictionary juste au-dessus (sélecteur de langue, éventuellement
-         complété d'une paire "<lang1>/<lang2>", champ de saisie, bouton
-         d'action, Effacer, Perplexity). Même groupe basculant que
+    <!-- "Paraphraseur" panel: asks the LLM for 5 rewordings of the typed
+         text (backend/clues.py's LLMClueGenerator.generate_paraphrases),
+         at the user's explicit request — same structure as #dictionary
+         right above (language selector, possibly extended with a
+         "<lang1>/<lang2>" pair, input field, action button, Effacer,
+         Perplexity). Same toggling group as
          #library / #dictionary / #attempt-preview / #result. -->
     <section id="paraphrase" hidden>
       <div id="paraphrase-header">
@@ -478,17 +482,17 @@
                  data-i18n-placeholder="paraphraseInputPlaceholder">
           <button type="submit" id="paraphrase-generate-btn"
                   data-i18n="paraphraseGenerateBtn">Paraphraser</button>
-          <!-- Caractère éponge (voir la note de #dictionary-clear-btn
-               plus haut dans ce fichier) — même caractère, même clé i18n
-               comme nom accessible/infobulle. -->
+          <!-- Sponge character (see the note on #dictionary-clear-btn
+               earlier in this file) — same character, same i18n key
+               as accessible name/tooltip. -->
           <button type="button" id="paraphrase-clear-btn" class="nav-btn clear-icon-btn"
                   data-i18n-aria="paraphraseClearBtn" data-i18n-title="paraphraseClearBtn">
             <span class="clear-icon" aria-hidden="true">🧽</span>
           </button>
-          <!-- Même icône "lien externe" et même forme/couleur (classe
-               .external-link-btn, violet) que #dictionary-perplexity-btn,
-               "Perplexity" non traduit (nom propre du service) — voir sa
-               propre note plus haut dans ce fichier. -->
+          <!-- Same "external link" icon and same shape/color (class
+               .external-link-btn, violet) as #dictionary-perplexity-btn,
+               "Perplexity" left untranslated (the service's own proper
+               noun) — see its own note earlier in this file. -->
           <button type="button" id="paraphrase-perplexity-btn" class="external-link-btn"
                   data-i18n-aria="paraphrasePerplexityTitle"
                   data-i18n-title="paraphrasePerplexityTitle">Perplexity
@@ -509,11 +513,11 @@
       <div id="paraphrase-results"></div>
     </section>
 
-    <!-- Panneau "Qdrant (admin)" : état lecture seule de la base vectorielle
-         + deux actions rapides (recréer la collection, vider une langue) +
-         lien vers le tableau de bord natif de Qdrant. Bouton masqué hors
-         localhost (script.js) ; routes proxy refusées hors loopback
-         (frontend/server.py). Même groupe basculant que #library /
+    <!-- "Qdrant (admin)" panel: read-only state of the vector store +
+         two quick actions (recreate the collection, wipe a language) +
+         a link to Qdrant's own native dashboard. Button hidden off
+         localhost (script.js); proxy routes refused off-loopback
+         (frontend/server.py). Same toggling group as #library /
          #dictionary / #attempt-preview / #result. -->
     <section id="qdrant-admin" hidden>
       <div id="qdrant-admin-header">
@@ -563,16 +567,17 @@
     </section>
 
     <section id="result" hidden>
-      <!-- #grid-timer : compteur de temps (s'incrémente toutes les
-           secondes, script.js's startGridTimer()), à la demande explicite
-           de l'utilisateur. Historique de placement : d'abord à gauche du
-           titre (en ligne), puis "aligné à droite de l'écran" (position
-           fixe, coin de la fenêtre), puis — signalé "trop haut, pas assez
-           lié au titre" — de retour en ligne ici, sur la même ligne que
-           #grid-title mais alignée à droite de cette ligne (voir
-           #grid-title-row ci-dessous, margin-left: auto sur #grid-timer).
-           Masqué par défaut (mode "Interactif", ou avant qu'une grille
-           jouable existe) — voir hideInteractivePanel()/startGridTimer(). -->
+      <!-- #grid-timer: elapsed-time counter (ticks once a second,
+           script.js's startGridTimer()), at the user's explicit
+           request. Placement history: first to the left of the title
+           (inline), then "aligned to the right of the screen" (fixed
+           position, corner of the window), then — reported as "too
+           high up, not tied enough to the title" — back inline here,
+           on the same row as #grid-title but aligned to the right of
+           that row (see #grid-title-row below, margin-left: auto on
+           #grid-timer). Hidden by default ("Interactif" mode, or
+           before a playable grid exists) — see
+           hideInteractivePanel()/startGridTimer(). -->
       <div id="grid-title-row">
         <h2 id="grid-title" hidden><span id="grid-title-text"></span><span id="grid-difficulty" hidden></span></h2>
         <span id="grid-timer" hidden></span>
@@ -601,17 +606,35 @@
                never shows them. -->
           <button type="button" id="interactive-prev-btn" class="interactive-flank-btn" hidden
                   data-i18n="interactivePrevBtn" disabled>Précédent</button>
-          <div id="grid"></div>
+          <!-- Black-cell / white-cell-fill percentages — a small,
+               viewport-fixed floating card (see style.css), not an
+               in-flow sibling of #grid, so it neither shifts with
+               #grid's own horizontal offset (flanked by "Précédent" in
+               Interactive mode) nor pushes #grid itself down. script.js's
+               renderInteractive() keeps both lines current on every
+               edit. -->
+          <div id="interactive-cell-stats" hidden>
+            <p id="interactive-black-stat"></p>
+            <p id="interactive-fill-stat"></p>
+          </div>
+          <!-- #grid wrapped in its own column purely so #grid-column can
+               become a horizontal row in Interactive mode (see
+               .interactive-flank below) with the Précédent/#grid/Suivant
+               trio side by side — harmless outside Interactive mode,
+               rendering identically to a bare #grid. -->
+          <div id="interactive-grid-wrap">
+            <div id="grid"></div>
+          </div>
           <button type="button" id="interactive-next-btn" class="interactive-flank-btn" hidden
                   data-i18n="interactiveNextBtn">Suivant</button>
-          <!-- Sélecteur de sens dupliqué du clavier virtuel, à droite de
-               la zone de définition permanente (jamais masquée par le
-               bouton "définitions", contrairement à #clues/#down-clues-
-               section) — à la demande explicite de l'utilisateur.
-               Mêmes boutons .toggle-btn, même comportement (voir
-               script.js's setActiveDirection()) — les deux exemplaires
-               restent en permanence synchronisés l'un avec l'autre, avec
-               SHIFT/CAPSLOCK, et avec le survol de la grille. -->
+          <!-- Direction selector duplicated from the virtual keyboard,
+               to the right of the permanent definition area (never
+               hidden by the "définitions" button, unlike #clues/#down-
+               clues-section) — at the user's explicit request. Same
+               .toggle-btn buttons, same behavior (see script.js's
+               setActiveDirection()) — the two instances stay
+               permanently in sync with each other, with SHIFT/CAPSLOCK,
+               and with hovering over the grid. -->
           <div id="hover-definition-row">
             <p id="hover-definition"></p>
             <div id="clues-direction-col">
@@ -623,20 +646,20 @@
           </div>
         </div>
       </div>
-      <!-- Contrôles du mode "Interactif" (voir script.js) — insérés dans
-           #result pour réutiliser #grid/renderGrid() ; masqués pour une
-           génération normale. -->
+      <!-- "Interactif" mode controls (see script.js) — inserted inside
+           #result to reuse #grid/renderGrid(); hidden for an ordinary
+           generation. -->
       <div id="interactive-controls" hidden>
         <div id="interactive-arrows">
-          <!-- Bouton icône "aide" ouvrant #interactive-help-overlay (texte
-               fixe expliquant le mode Interactif, traduit dans chaque
-               langue — voir interactiveHelpLines dans i18n.js) — à la
-               demande explicite de l'utilisateur, placé à gauche de
-               "Mots". Réutilise .nav-btn (déjà utilisé par l'éponge
-               "Effacer" voisine) plutôt qu'un nouveau style de bouton ;
-               icône SVG inline "?" en cercle (aucune police/lib d'icône
-               externe, même convention que le badge PDF/le badge "i" de
-               l'en-tête). -->
+          <!-- "Help" icon button opening #interactive-help-overlay
+               (fixed text explaining Interactif mode, translated in
+               every language — see interactiveHelpLines in i18n.js) —
+               at the user's explicit request, placed to the left of
+               "Mots". Reuses .nav-btn (already used by the neighboring
+               "Effacer" sponge) rather than a new button style; an
+               inline SVG "?" icon in a circle (no external icon
+               font/library, same convention as the PDF badge/the "i"
+               badge in the header). -->
           <button type="button" id="interactive-help-btn" class="nav-btn"
                   data-i18n-aria="interactiveHelpBtn" data-i18n-title="interactiveHelpBtn">
             <svg class="help-icon" viewBox="0 0 24 24" width="16" height="16"
@@ -647,57 +670,74 @@
               <circle cx="12" cy="16.6" r="0.9" fill="currentColor"/>
             </svg>
           </button>
-          <!-- "Mots" : liste les mots réels du dictionnaire compatibles
-               avec l'emplacement sélectionné (voir POST /api/interactive/
-               candidates) — à la demande explicite de l'utilisateur. Le
-               résultat s'affiche dans #interactive-words-results, sous la
-               rangée de boutons (au-dessus de "Proposer une définition").
-               Placé à gauche des flèches à la demande explicite de
-               l'utilisateur. -->
+          <!-- "Mots": lists the real dictionary words compatible with
+               the selected slot (see POST /api/interactive/
+               candidates) — at the user's explicit request. The
+               result is shown in #interactive-words-results, below the
+               button row (above "Proposer une définition"). Placed to
+               the left of the arrows at the user's explicit request. -->
           <button type="button" id="interactive-words-btn"
                   data-i18n="interactiveWordsBtn">Mots</button>
+          <!-- "Croisés": to the right of "Mots", at the user's explicit
+               request — identifies, for the selected cell, the letters
+               compatible with a word in both directions at once
+               (across AND down), and lists, for each, the matching
+               across/down words (see POST /api/interactive/crossing).
+               Result shown in #interactive-crossing-results, below
+               #interactive-words-results. -->
+          <button type="button" id="interactive-crossing-btn"
+                  data-i18n="interactiveCrossingBtn">Croisés</button>
           <button type="button" id="interactive-dir-across-btn" class="toggle-btn active"
                   data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
           <button type="button" id="interactive-dir-down-btn" class="toggle-btn"
                   data-i18n-aria="virtualKeyboardDownBtn">↓</button>
-          <!-- "Nettoyer" : déclenche le nettoyage complet des zones
-               impossibles (retrait des mots croisants / case noire, comme
-               la génération automatique), à la demande explicite de
-               l'utilisateur — placé à droite des flèches. -->
+          <!-- "Nettoyer": triggers a full cleanup of the impossible
+               zones (removes crossing words / black cell, like the
+               automatic generation), at the user's explicit request —
+               placed to the right of the arrows. -->
           <button type="button" id="interactive-clean-btn"
                   data-i18n="interactiveCleanBtn">Nettoyer</button>
-          <!-- "Nettoyer (+noires)" : nettoyage approfondi — en plus des
-               zones impossibles, essaie de retirer chaque case noire de
-               la grille elle-même, pas seulement celles liées à un
-               emplacement impossible — à la demande explicite de
-               l'utilisateur. -->
+          <!-- "Nettoyer (+noires)": a deeper cleanup — on top of the
+               impossible zones, also tries removing every black cell
+               of the grid itself, not just the ones tied to an
+               impossible slot — at the user's explicit request. -->
           <button type="button" id="interactive-clean-deep-btn"
                   data-i18n="interactiveCleanDeepBtn">Nettoyer (+noires)</button>
-          <!-- "Impossibles" : vérification en lecture seule (sans
-               nettoyage) des emplacements impossibles (y compris un mot
-               entièrement posé mais absent du dictionnaire) et de ceux
-               avec trop peu de possibilités — à la demande explicite de
-               l'utilisateur, placé à gauche de "Vérifier". Voir
+          <!-- "Impossibles": a read-only check (no cleanup) of the
+               impossible slots (including a fully-filled word absent
+               from the dictionary) and of the ones with too few real
+               candidates — at the user's explicit request, placed to
+               the left of "Vérifier". See
                POST /api/interactive/impossible. -->
           <button type="button" id="interactive-impossible-btn"
                   data-i18n="interactiveImpossibleBtn">Impossibles</button>
-          <!-- "Vérifier" déplacé ici, à côté de "Nettoyer", à la demande
-               explicite de l'utilisateur (hors de #interactive-definition-
-               row, qui ne garde plus que le champ de définition et
-               "Proposer"). Réutilise désormais le même contrôle que
-               "Impossibles" (POST /api/interactive/impossible), en y
-               ajoutant la vérification des définitions manquantes. -->
+          <!-- "Vérifier" moved here, next to "Nettoyer", at the user's
+               explicit request (out of #interactive-definition-row,
+               which now only keeps the definition field and
+               "Proposer"). Now reuses the same control as
+               "Impossibles" (POST /api/interactive/impossible), adding
+               the check for missing definitions on top. -->
           <button type="button" id="interactive-verify-btn"
                   data-i18n="interactiveVerifyBtn">Vérifier</button>
-          <!-- "Définitions" : génère automatiquement une définition pour
-               chaque mot entièrement rempli et valide qui n'en a pas
-               encore — à la demande explicite de l'utilisateur, à droite
-               de "Vérifier". Réutilise POST /api/interactive/verify (comme
-               "Vérifier", pour écarter les mots absents du dictionnaire)
-               puis GET /api/dictionary/define (comme "Proposer") pour
-               chacun, en gardant la première proposition. -->
+          <!-- "Définitions": automatically generates a definition for
+               every fully-filled, valid word that doesn't have one yet
+               — at the user's explicit request, to the right of
+               "Vérifier". Reuses POST /api/interactive/verify (like
+               "Vérifier", to discard words absent from the
+               dictionary), then GET /api/dictionary/define (like
+               "Proposer") for each, keeping the first proposal. -->
           <button type="button" id="interactive-definitions-btn"
                   data-i18n="interactiveDefinitionsBtn">Définitions</button>
+          <!-- "Finir la zone": to the left of "Finir la grille", at the
+               user's explicit request — same mechanism as "Finir la
+               grille", but restricted to the zone currently selected
+               by click-and-drag (see interactiveZoneSelection): every
+               slot outside that zone is locked (a permanent black cell
+               for a still-empty cell, a locked letter as usual for an
+               already-filled one). See POST /api/interactive/finish
+               (zone_cells). -->
+          <button type="button" id="interactive-finish-zone-btn"
+                  data-i18n="interactiveFinishZoneBtn">Finir la zone</button>
           <!-- "Finir la grille": permanently locks every letter already
                placed and starts a brand-new automatic generation from
                that state (new black cells/words added as needed),
@@ -706,36 +746,34 @@
                POST /api/interactive/finish. -->
           <button type="button" id="interactive-finish-btn"
                   data-i18n="interactiveFinishBtn">Finir la grille</button>
-          <!-- Vide la zone d'affichage juste en dessous (message de
-               statut, rapport "Vérifier", propositions "Mots") sans rien
-               recalculer — à la demande explicite de l'utilisateur,
-               placé à droite de la rangée de boutons. Retire aussi la
-               coloration correspondante sur la grille (emplacements
-               impossibles/à faibles options/invalides), puisqu'elle
-               provient des mêmes diagnostics. -->
-          <!-- Caractère éponge (voir la note de #dictionary-clear-btn
-               plus haut dans ce fichier) — même caractère, même clé i18n
-               comme nom accessible/infobulle. -->
+          <!-- Clears the display area right below (status message,
+               "Vérifier" report, "Mots" proposals) without recomputing
+               anything — at the user's explicit request, placed to
+               the right of the button row. Also clears the matching
+               highlight on the grid (impossible/low-option/invalid
+               slots), since it comes from the same diagnostics. -->
+          <!-- Sponge character (see the note on #dictionary-clear-btn
+               earlier in this file) — same character, same i18n key
+               as accessible name/tooltip. -->
           <button type="button" id="interactive-results-clear-btn" class="nav-btn clear-icon-btn"
                   data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
             <span class="clear-icon" aria-hidden="true">🧽</span>
           </button>
         </div>
-        <!-- Panneau d'aide, ouvert par le bouton "?" ci-dessus — à la
-             demande explicite de l'utilisateur. Même structure de
-             recouvrement que #rss-detail (bouton fermer toujours
-             visible, seul le corps défile), même correction de
-             spécificité pour l'attribut `hidden` (voir
-             #interactive-help-overlay[hidden] dans style.css) — la
-             liste (#interactive-help-list) est construite dynamiquement
-             depuis interactiveHelpLines (i18n.js), voir
-             renderInteractiveHelpList() dans script.js. -->
+        <!-- Help panel, opened by the "?" button above — at the user's
+             explicit request. Same overlay structure as #rss-detail
+             (close button always visible, only the body scrolls), same
+             specificity fix for the `hidden` attribute (see
+             #interactive-help-overlay[hidden] in style.css) — the list
+             (#interactive-help-list) is built dynamically from
+             interactiveHelpLines (i18n.js), see
+             renderInteractiveHelpList() in script.js. -->
         <div id="interactive-help-overlay" hidden role="dialog" aria-modal="true">
-          <!-- Icône croix plutôt qu'un texte "Fermer" — à la demande
-               explicite de l'utilisateur — même convention que tous les
-               autres boutons de fermeture de ce fichier (#library-close-btn,
-               #dictionary-close-btn, etc : .nav-btn + le caractère "✕", nom
-               accessible/infobulle via data-i18n-aria/data-i18n-title). -->
+          <!-- A cross icon rather than a "Fermer" text — at the user's
+               explicit request — same convention as every other close
+               button in this file (#library-close-btn,
+               #dictionary-close-btn, etc.: .nav-btn + the "✕" character,
+               accessible name/tooltip via data-i18n-aria/data-i18n-title). -->
           <button type="button" id="interactive-help-close-btn" class="nav-btn"
                   data-i18n-aria="interactiveHelpCloseBtn" data-i18n-title="interactiveHelpCloseBtn">✕</button>
           <div id="interactive-help-body">
@@ -743,30 +781,33 @@
             <ul id="interactive-help-list"></ul>
           </div>
         </div>
-        <!-- Message de statut (Mots/Impossibles/Vérifier/Nettoyer/...) et
-             rapport détaillé "Vérifier" — sous la rangée de boutons,
-             au-dessus de "Proposer une définition", à la demande
-             explicite de l'utilisateur. Voir
-             renderInteractiveVerifyReport(). -->
+        <!-- Status message (Mots/Impossibles/Vérifier/Nettoyer/...) and
+             detailed "Vérifier" report — below the button row, above
+             "Proposer une définition", at the user's explicit request.
+             See renderInteractiveVerifyReport(). -->
         <span id="interactive-message" role="status"></span>
         <div id="interactive-verify-report" hidden></div>
-        <!-- "Mots" : liste les mots réels du dictionnaire compatibles avec
-             l'emplacement sélectionné (voir POST /api/interactive/
-             candidates) — sous la rangée de boutons, au-dessus de
-             "Proposer une définition", à la demande explicite de
-             l'utilisateur. -->
+        <!-- "Mots": lists the real dictionary words compatible with the
+             selected slot (see POST /api/interactive/candidates) —
+             below the button row, above "Proposer une définition", at
+             the user's explicit request. -->
         <div id="interactive-words-results" hidden></div>
+        <!-- "Croisés": lists, for the selected cell, the letters
+             compatible with a word in both directions at once (see
+             POST /api/interactive/crossing) — at the user's explicit
+             request. -->
+        <div id="interactive-crossing-results" hidden></div>
         <div id="interactive-definition-row">
           <input type="text" id="interactive-definition-input" autocomplete="off"
                  data-i18n-placeholder="interactiveDefinitionPlaceholder">
           <button type="button" id="interactive-propose-btn"
                   data-i18n="interactiveProposeBtn">Proposer une définition</button>
-          <!-- Réinitialise #interactive-propose-results sans relancer de
-               requête — à la demande explicite de l'utilisateur. Même
-               formatage que le bouton "Effacer" du Dictionnaire
-               (#dictionary-clear-btn, classe .nav-btn), y compris son
-               caractère éponge (voir la note de #dictionary-clear-btn plus
-               haut dans ce fichier). -->
+          <!-- Resets #interactive-propose-results without re-running a
+               request — at the user's explicit request. Same styling
+               as the Dictionary's own "Effacer" button
+               (#dictionary-clear-btn, class .nav-btn), including its
+               sponge character (see the note on #dictionary-clear-btn
+               earlier in this file). -->
           <button type="button" id="interactive-propose-clear-btn" class="nav-btn clear-icon-btn"
                   data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
             <span class="clear-icon" aria-hidden="true">🧽</span>
@@ -778,30 +819,29 @@
           <input type="text" id="interactive-title-input" autocomplete="off">
           <button type="button" id="interactive-title-propose-btn"
                   data-i18n="interactiveTitleProposeBtn">Proposer un titre</button>
-          <!-- Réinitialise #interactive-title-propose-results sans
-               relancer de requête — à la demande explicite de
-               l'utilisateur, même bouton (caractère éponge inclus) que
-               "Proposer une définition"'s propre "Effacer". -->
+          <!-- Resets #interactive-title-propose-results without
+               re-running a request — at the user's explicit request,
+               the same button (sponge character included) as
+               "Proposer une définition"'s own "Effacer". -->
           <button type="button" id="interactive-title-propose-clear-btn" class="nav-btn clear-icon-btn"
                   data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
             <span class="clear-icon" aria-hidden="true">🧽</span>
           </button>
         </div>
-        <!-- 10 propositions de titre affichées ici, comme
-             #interactive-propose-results (une ligne par proposition,
-             cliquable pour remplir #interactive-title-input) — à la
-             demande explicite de l'utilisateur : "Le bouton 'Proposer un
-             titre' doit générer 10 propositions affichées en dessous
-             (comme 'Proposer une définition')." Voir
-             renderInteractiveTitleProposals(). -->
+        <!-- 10 title proposals shown here, like
+             #interactive-propose-results (one line per proposal,
+             clickable to fill #interactive-title-input) — at the
+             user's explicit request: "The 'Proposer un titre' button
+             should generate 10 proposals shown below (like 'Proposer
+             une définition')." See renderInteractiveTitleProposals(). -->
         <div id="interactive-title-propose-results" hidden></div>
         <div id="interactive-save-row">
-          <!-- "Sauvegarder" : enregistre l'état complet de la grille dans
-               GRID_WORK (brouillon "Créations") SANS la publier — à la
-               demande explicite de l'utilisateur, à gauche de "Publier".
-               Toujours visible en mode Interactif ; "Publier"
-               (#interactive-save-btn) n'apparaît qu'une fois la grille
-               terminée. -->
+          <!-- "Sauvegarder": saves the grid's entire state to GRID_WORK
+               ("Créations" draft) WITHOUT publishing it — at the
+               user's explicit request, to the left of "Publier".
+               Always visible in Interactif mode; "Publier"
+               (#interactive-save-btn) only appears once the grid is
+               complete. -->
           <button type="button" id="interactive-draft-save-btn"
                   data-i18n="interactiveSaveBtn">Sauvegarder</button>
           <button type="button" id="interactive-save-btn" hidden
@@ -844,46 +884,42 @@
     </div>
   </div>
 
-  <!-- Clavier virtuel, à la demande explicite de l'utilisateur : "En bas
-       à gauche de l'interface, au même niveau que le ChatBot, ajouter un
-       bouton permettant de monter/cacher un clavier virtuel." Même
-       structure que #chatbot ci-dessus (en-tête toujours visible +
-       bouton replier/déplier, corps qui se cache) mais repliée par
-       défaut — contrairement au Bot, ouvert par défaut, un clavier
-       virtuel n'est utile qu'à une minorité de joueurs (écran tactile,
-       absence de clavier physique pratique), pas la peine de l'imposer
-       ouvert à tout le monde. -->
+  <!-- Virtual keyboard, at the user's explicit request: "Bottom left of
+       the interface, at the same level as the ChatBot, add a button to
+       show/hide a virtual keyboard." Same structure as #chatbot above
+       (header always visible + collapse/expand button, body that
+       hides) but collapsed by default — unlike the Bot, open by
+       default, a virtual keyboard is only useful to a minority of
+       players (touch screen, no convenient physical keyboard), not
+       worth forcing it open for everyone. -->
   <div id="virtual-keyboard" class="virtual-keyboard-collapsed">
-    <!-- Plus de bandeau de titre ("Clavier virtuel") ni de rangée dédiée
-         aux flèches de direction, à la demande explicite de
-         l'utilisateur : "Ne pas mettre un titre 'Clavier virtuel' qui
-         prend aussi de la place en hauteur. Mettre simplement l'icône de
-         fermeture en petit au dessus des flèches" + "mettre les flèches
-         de direction sur la droite des lettres, pour gagner en hauteur."
-         Le bouton replier/déplier vit maintenant seul, directement
-         au-dessus de la colonne de flèches (#virtual-keyboard-side
-         ci-dessous), plutôt que dans un en-tête pleine largeur — visible
-         aussi bien replié (seule icône affichée, voir style.css) que
-         déplié. -->
+    <!-- No more title bar ("Clavier virtuel") nor a dedicated row for
+         the direction arrows, at the user's explicit request: "Don't
+         put a 'Clavier virtuel' title that also takes up vertical
+         space. Just put the small close icon above the arrows" +
+         "put the direction arrows to the right of the letters, to gain
+         height." The collapse/expand button now lives alone, right
+         above the arrow column (#virtual-keyboard-side below), rather
+         than in a full-width header — visible whether collapsed (only
+         the icon shown, see style.css) or expanded. -->
     <button type="button" id="virtual-keyboard-toggle-btn" class="nav-btn"
             data-i18n-aria="virtualKeyboardToggleBtn">⌨</button>
     <div id="virtual-keyboard-body">
-      <!-- Les 26 lettres, en majuscules, dans l'ordre alphabétique
-           naturel sur 2 lignes (voir script.js's buildVirtualKeyboard()
-           pour la génération réelle des boutons — un rang de 13 lettres
-           chacun, A-M puis N-Z). -->
+      <!-- The 26 letters, uppercase, in natural alphabetical order over
+           2 rows (see script.js's buildVirtualKeyboard() for the
+           actual button generation — one row of 13 letters each, A-M
+           then N-Z). -->
       <div id="virtual-keyboard-rows"></div>
-      <!-- Bascule du sens de saisie, à la demande explicite de
-           l'utilisateur : "une flèche vers le bas pour configurer le sens
-           vertical (similaire à SHIFT/CAPS LOCK) et une flèche vers la
-           droite pour configurer le sens horizontalement." Deux boutons
-           mutuellement exclusifs (.toggle-btn, même convention que
-           Solution/Vérification) plutôt qu'un vrai Shift (maintenu) —
-           un clic bascule un mode persistant, plus proche d'un
-           comportement CAPS LOCK que SHIFT pour un bouton cliqué, comme
-           le nom même de la demande le suggère. Placées à droite des
-           lettres (colonne, pas rangée) plutôt qu'au-dessus, pour gagner
-           en hauteur. -->
+      <!-- Toggle for the typing direction, at the user's explicit
+           request: "a down arrow to configure the vertical direction
+           (similar to SHIFT/CAPS LOCK) and a right arrow to configure
+           the horizontal direction." Two mutually exclusive buttons
+           (.toggle-btn, same convention as Solution/Vérification)
+           rather than a real (held) Shift — a click toggles a
+           persistent mode, closer to CAPS LOCK behavior than SHIFT for
+           a clicked button, as the request's own wording itself
+           suggests. Placed to the right of the letters (a column, not
+           a row) rather than above, to gain height. -->
       <div id="virtual-keyboard-direction-col">
         <button type="button" id="virtual-keyboard-across-btn" class="toggle-btn active"
                 data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
@@ -893,16 +929,16 @@
     </div>
   </div>
 
-  <!-- Panneau d'accueil, à la demande explicite de l'utilisateur : au
-       premier affichage (aucun cookie de préférences), on détecte la
-       langue du navigateur et on affiche ce formulaire en overlay. Il ne
-       peut se fermer qu'en cliquant "Accepter" (aucun bouton de
-       fermeture, pas de <dialog> — donc ni ESC ni clic sur le fond ne le
-       ferment). Changer le sélecteur de langue reconfigure tout de suite
-       le formulaire ET la page dans cette langue (les deux sélecteurs de
-       langue, celui-ci et #language, restent synchronisés). Le pseudo est
-       facultatif (moins de 15 lettres). Rouvert plus tard via le bouton
-       #user-pseudo de l'en-tête. -->
+  <!-- Welcome panel, at the user's explicit request: on the very first
+       display (no preferences cookie), the browser language is
+       detected and this form is shown as an overlay. It can only be
+       closed by clicking "Accepter" (no close button, no <dialog> — so
+       neither ESC nor a click on the background closes it). Changing
+       the language selector immediately reconfigures both the form AND
+       the page in that language (the two language selectors, this one
+       and #language, stay in sync). The pseudo is optional (under 15
+       letters). Reopened later via the header's own #user-pseudo
+       button. -->
   <div id="welcome-overlay" role="dialog" aria-modal="true"
        aria-labelledby="welcome-title" hidden>
     <form id="welcome-form">
@@ -920,21 +956,22 @@
       </label>
       <label for="welcome-pseudo">
         <span data-i18n="welcomePseudoLabel">Pseudo</span>
-        <!-- Requis : à la demande explicite de l'utilisateur, le panneau
-             ne se ferme pas tant que le pseudo est vide (validation
-             native `required`, + garde JS contre les espaces seuls). -->
+        <!-- Required: at the user's explicit request, the panel does
+             not close as long as the pseudo is empty (native
+             `required` validation, + a JS guard against whitespace-
+             only input). -->
         <input type="text" id="welcome-pseudo" maxlength="15" required
                autocomplete="nickname" autocapitalize="off"
                data-i18n-placeholder="welcomePseudoPlaceholder">
       </label>
       <label for="welcome-secret">
         <span data-i18n="welcomeSecretLabel">Mot secret</span>
-        <!-- Requis, même mécanisme que le pseudo ci-dessus : le panneau
-             ne se ferme pas tant qu'il est vide (validation native
-             `required` + garde JS contre les espaces seuls). Sert à
-             prouver que le pseudo saisi appartient bien à cet
-             utilisateur (voir POST /api/pseudo/claim, backend/
-             secret_store.py) — à la demande explicite de l'utilisateur. -->
+        <!-- Required, same mechanism as the pseudo above: the panel
+             does not close as long as it is empty (native `required`
+             validation + a JS guard against whitespace-only input).
+             Serves to prove that the typed pseudo genuinely belongs to
+             this user (see POST /api/pseudo/claim, backend/
+             secret_store.py) — at the user's explicit request. -->
         <input type="password" id="welcome-secret" maxlength="60" required
                autocomplete="off" autocapitalize="off"
                data-i18n-placeholder="welcomeSecretPlaceholder">

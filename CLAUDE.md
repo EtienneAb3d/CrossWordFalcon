@@ -11011,6 +11011,111 @@ of that kind ships here.
   browser** — the same tooling limitation noted throughout this project's
   UI work.
 
+- **Interactive mode shows a live black-cell / white-cell-fill status
+  above the grid**, at the user's explicit request: "afficher en haut de
+  la grille un état des pourcentage de cases noires et du taux de
+  remplissage des cases blanches. Aligner ces 2 chiffres l'un au-dessus
+  de l'autre sur le bord gauche de la fenêtre." A new `#interactive-cell-
+  stats` (two `<p>` lines, `#interactive-black-stat`/`#interactive-fill-
+  stat`) sits inside a new `#interactive-grid-wrap` that now wraps `#grid`
+  itself (`frontend/static/index.html`) — needed because `#grid-column`
+  turns into a horizontal row in Interactive mode (`.interactive-flank`,
+  flanking `#grid` with the Précédent/Suivant buttons), so the two stats
+  lines have to live in their own vertical sub-column alongside `#grid`
+  rather than as plain siblings in `#grid-column` directly, or they'd
+  render beside the grid instead of above it. `#interactive-grid-wrap` is
+  a harmless no-op outside Interactive mode (`display:flex; flex-
+  direction:column`, `#interactive-cell-stats` stays `hidden`), so a
+  normal generated grid renders identically to before.
+
+  `frontend/static/script.js`'s `renderInteractiveCellStats()` (called
+  from `renderInteractive()`, so it refreshes on every edit) recomputes
+  both figures straight from `interactiveGrid` — deliberately two
+  **different** denominators, not the same one twice: the black
+  percentage is black cells / the whole grid (how much of the grid is
+  black at all), while the fill percentage is filled white cells / white
+  cells only (how much of the still-fillable area is actually done) —
+  the latter chosen over a flat "filled / total cells" figure (the
+  convention `renderAttemptPreview`'s own `fillPercent` already uses for
+  the automatic-generation preview) specifically because it reads as a
+  genuine completion rate for the part of the puzzle still being worked
+  on, unaffected by how many cells happen to be black. `hideInteractive
+  Panel()` hides the container again on exit. New `interactiveBlackPercent`/
+  `interactiveFillPercent` i18n keys in all 6 languages (fr "23 % noir"/
+  "77 % rempli", en "23% black"/"77% filled", de "23% schwarz"/"77%
+  gefüllt", es "23% negro"/"77% relleno", it "23% nero"/"77% riempito",
+  pt "23% preto"/"77% preenchido").
+
+  A direct consequence of the new wrapper, disclosed rather than silently
+  left unnoticed: `#grid-column.interactive-flank`'s own "Précédent"/
+  "Suivant" buttons used to center vertically against `#grid`'s own exact
+  height (`align-items: center` on the row, with `#grid` as the row's only
+  tall child) — they now center against `#interactive-grid-wrap`'s height
+  instead (stats + gap + `#grid`), landing slightly below `#grid`'s own
+  true midpoint by roughly half the stats block's height. Accepted as a
+  small, disclosed approximation rather than a JS-measured offset, per
+  this file's own existing "no JS measurement needed" comment on that
+  rule, now updated to note the new approximation.
+
+  Verified: a real JS syntax check (`esprima`, temporarily installed and
+  removed again afterward) confirmed `script.js`/`i18n.js` still parse
+  correctly; a CSS brace-balance check and an HTML `<div>`-tag-count check
+  confirmed `style.css`/`index.html` stay structurally sound after the
+  edit. **Not yet visually confirmed in an actual browser** — the same
+  tooling limitation noted throughout this project's UI work.
+
+- **"Nettoyer"/"Nettoyer (+noires)" now also clear the impossible slot's
+  own letters, not just the words crossing it**, reported directly by the
+  user: "ils retirent les mots qui croisent les emplacements impossibles.
+  Ils doivent aussi retirer les emplacements impossibles eux-mêmes." Since
+  "Nettoyer (+noires)" always runs `interactive_clean_impossible_zones`
+  first (see `backend/app.py`'s `interactive_clean`) before its own
+  black-cell pass, the bug and its fix live entirely in that one function
+  — both buttons are fixed by the same change.
+
+  Root cause, confirmed by re-reading `_clean_blocked_slots` (already
+  shared with automatic generation): its removal loop only ever clears a
+  *crossing* slot `j`'s own entry (`assignment[j] = None` for `j != i`) —
+  it never touches `assignment[i]`, the impossible slot itself. For
+  automatic generation this is a harmless no-op: a slot only ever becomes
+  "fully known but invalid" there through crossing letters `Filler`
+  itself never explicitly validated, so `assignment[i]` is already `None`
+  in `Filler`'s own bookkeeping — nothing to clear. `interactive_clean_
+  impossible_zones` builds its own `assignment` differently, though —
+  directly from whatever letters already sit in the grid (`known`),
+  regardless of source (a hand-typed letter counts exactly like one
+  supplied by a crossing word) — so an impossible slot flagged by
+  `_invalid_fully_known_indices` genuinely does carry its own non-`None`
+  (but invalid) string there, and that string survived "Nettoyer"
+  untouched even after every word that used to justify it was removed.
+
+  Fixed by explicitly setting `cleaned_assignment[i] = None` for every `i`
+  in the computed `impossible` set, right after `_clean_blocked_slots`
+  returns, and rebuilding `confirmed` from this corrected list rather than
+  reusing `_clean_blocked_slots`'s own (now-stale) return value — the
+  `removed_words`/`cleared_count` accounting naturally picks this up too,
+  since it already compares `assignment` against `cleaned_assignment`
+  before/after. `interactive_minimize_black_cells` needed no change at
+  all — it only ever operates on whatever grid `interactive_clean_
+  impossible_zones` hands it.
+
+  Verified with two isolated, hand-built scenarios (a small `DualIndex`
+  built from `build_index` on a tiny 3-word/3-letter dictionary, `XAA`/
+  `YAA`/`ZAA`, deliberately excluding the invalid combination `XYZ`).
+  First, a scenario with no crossing content at all (only row 0 lettered,
+  `X`/`Y`/`Z`, its own crossing columns left blank so no crossing slot is
+  ever "fully assigned") isolates the fix precisely: confirmed, via a
+  `git stash` A/B on the exact same input, that the pre-fix code reported
+  `changed: False, cleared_count: 0` (the invalid "XYZ" survived
+  untouched) while the fixed code reports `changed: True, cleared_count:
+  1` and correctly blanks the row. Second, a fully-crossed scenario (the
+  same `XYZ` row, each of its 3 letters individually supplied by a real,
+  fully-known down word) confirmed the pre-existing crossing-removal
+  behavior still works correctly alongside the new fix, with every
+  affected slot — the impossible row and its now-redundant crossing
+  words alike — ending up cleared. `python3 -m py_compile backend/
+  crossword_gen.py` passed.
+
 ## Commands
 
 Run everything with the venv's Python (`.venv`, Python 3.14). `pip install -r
@@ -20698,6 +20803,27 @@ the same reasoning, flagged the same way as "not yet visually confirmed."
   no regression on its own (0 mismatches, 0 empty white cells each,
   19.5s/15.4s — comfortably faster than the pre-change baseline of
   28.1s/21.5s on the same seeds).
+
+  **The tier-4 window itself (`SLOT_SELECTION_WINDOW_FRACTION`, a
+  proportion of `selection_pool`) was replaced with a fixed count**, at
+  the user's explicit request: "prendre les 10 premiers (et non une
+  proportion de 1/10)." `SLOT_SELECTION_WINDOW_FRACTION`/its own
+  `max(5, int(len(selection_pool) * SLOT_SELECTION_WINDOW_FRACTION))`
+  computation are gone — a new constant, `SLOT_SELECTION_WINDOW_SIZE =
+  10`, and `window = sorted(shuffled_pool, key=lambda i: scores[i])
+  [:SLOT_SELECTION_WINDOW_SIZE]` replace them: the window is always at
+  most 10 entries regardless of `selection_pool`'s own size (never fewer
+  only because the pool itself is smaller than 10 — Python slicing
+  already handles that for free, no `min()`/floor needed). Every
+  surrounding mechanic (the shuffle-before-sort tie-breaking, the
+  geometric top-left score feeding it, `SLOT_SELECTION_REFINE_FRACTION`'s
+  own second-stage reduction right after it) is untouched — only how the
+  first window's own size is derived changed, from proportional-with-a-
+  5-floor to a flat 10.
+
+  Verified: `python3 -m py_compile backend/crossword_gen.py` passed; a
+  `grep` confirmed no reference to the retired `SLOT_SELECTION_WINDOW_
+  FRACTION` name remains anywhere in the file.
 
   **A repeated-grid infeasibility check was added on top of the full-
   nettoyage fixed-point mechanism above**, at the user's explicit

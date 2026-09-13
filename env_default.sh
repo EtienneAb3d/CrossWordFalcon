@@ -104,6 +104,16 @@ export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_P
 # a specific number regardless of core count:
 # export CROSSWORDFALCON_PARALLEL_ATTEMPTS=10
 
+# crossword_gen.py's own CSP-search worker processes run at a lower OS
+# scheduling priority by default (a niceness increment of 10, applied via
+# os.nice() once per worker — see GENERATION_PROCESS_NICE_INCREMENT), at
+# the user's explicit request, so a quick interface request (ChatBot,
+# Dictionnaire, Paraphraseur — anything that only needs a brief round-trip
+# to the LLM/embedding server) isn't left waiting behind a generation's own
+# CPU-heavy search when every core is busy. Uncomment to change it, or set
+# to 0 to disable entirely and restore the OS default priority:
+# export CROSSWORDFALCON_GENERATION_NICE=10
+
 # run_llm.sh uses a GPU by default when one is detected (Metal on Apple
 # Silicon, CUDA on Linux with an NVIDIA card — see run_llm.sh's own
 # detection/rebuild logic). To always run on CPU instead — e.g. to free up

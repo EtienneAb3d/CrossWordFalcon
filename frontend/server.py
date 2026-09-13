@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Serveur middleware : sert la page HTML+JS du générateur de grilles et relaie
-les appels /api/* vers le serveur back (backend/app.py). Le navigateur ne
-parle qu'à ce serveur — pas de CORS, pas d'exposition directe du back.
+Middleware server: serves the crossword generator's HTML+JS page and
+relays /api/* calls to the backend server (backend/app.py). The browser
+only ever talks to this server — no CORS, no direct exposure of the
+backend.
 
-Seuls les fichiers du dossier `static/` (HTML, JS, CSS...) et les routes
-/api/* sont servis : toute autre requête reçoit un 404 (comportement par
-défaut de StaticFiles pour les fichiers absents, et de FastAPI pour les
-routes inconnues).
+Only the files under the `static/` folder (HTML, JS, CSS...) and the
+/api/* routes are served: any other request gets a 404 (StaticFiles'
+own default behavior for a missing file, and FastAPI's for an unknown
+route).
 
-Usage :
+Usage:
     uvicorn frontend.server:app --port 3000
 """
 import json
@@ -26,21 +27,20 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 VERSION_PATH = Path(__file__).resolve().parent.parent / "VERSION.txt"
 BACKEND_URL = os.environ.get("CROSSWORDFALCON_BACKEND_URL", "http://127.0.0.1:3001")
 
-# Délai maximal accordé à un appel proxy vers le back avant d'abandonner et de
-# renvoyer un 502 au navigateur — à la demande explicite de l'utilisateur,
-# suite à un rapport de 502 sporadiques sur /api/generate/status sans aucune
-# trace correspondante dans le log du back (voir CLAUDE.md / le
-# project-best-practices SKILL) : rien dans le log applicatif signifie que la
-# connexion n'a jamais atteint la couche FastAPI, ce qui pointe soit vers un
-# redémarrage du process back, soit vers son event-loop ponctuellement trop
-# chargé pour accepter une nouvelle connexion à temps (une génération peut
-# lancer jusqu'à PARALLEL_ATTEMPTS processus CSP en parallèle — voir
-# crossword_gen.py) — relevé à 30s (contre 10s/5s selon l'endpoint
-# auparavant) pour laisser de la marge dans les deux cas, la même valeur pour
-# tous les appels proxy plutôt que des délais différents sans raison claire.
-# Voir aussi FETCH_TIMEOUT_MS dans frontend/static/script.js, qui doit rester
-# strictement supérieur pour ne jamais expirer côté navigateur avant ce
-# délai-ci côté proxy.
+# Maximum delay granted to a proxy call to the backend before giving up and
+# returning a 502 to the browser — at the user's explicit request, after a
+# report of sporadic 502s on /api/generate/status with no matching trace at
+# all in the backend's own log (see CLAUDE.md / the project-best-practices
+# SKILL): nothing in the application log means the connection never reached
+# the FastAPI layer at all, which points either to a backend process restart
+# or to its event loop being occasionally too busy to accept a new
+# connection in time (a generation can launch up to PARALLEL_ATTEMPTS CSP
+# processes in parallel — see crossword_gen.py) — raised to 30s (from a
+# previous 10s/5s split depending on the endpoint) to leave margin either
+# way, one shared value for every proxy call rather than different delays
+# with no clear reason. See also FETCH_TIMEOUT_MS in
+# frontend/static/script.js, which must stay strictly greater so it never
+# times out on the browser side before this delay does on the proxy side.
 PROXY_TIMEOUT_S = 30.0
 
 # Loopback names accepted by _require_localhost() below. This middleware
@@ -112,9 +112,9 @@ async def proxy_generate(request: Request):
 
 @app.get("/api/rss")
 async def proxy_rss():
-    """Relaie le panneau "Actu Croisée" de la page d'accueil (voir
-    backend/app.py/script.js) vers le back — même schéma que les autres
-    routes GET simples de ce proxy."""
+    """Relays the "Actu Croisée" panel on the home page (see
+    backend/app.py/script.js) to the back end — same pattern as this
+    proxy's other simple GET routes."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/rss")
@@ -125,8 +125,8 @@ async def proxy_rss():
 
 @app.post("/api/presence")
 async def proxy_presence(request: Request):
-    """Relaie le battement de cœur "x en ligne" (toutes les 2s) vers le
-    back — voir backend/app.py's POST /api/presence."""
+    """Relays the "x online" heartbeat (every 2s) to the back end — see
+    backend/app.py's POST /api/presence."""
     body = await request.body()
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
@@ -141,9 +141,9 @@ async def proxy_presence(request: Request):
 
 @app.post("/api/pseudo/claim")
 async def proxy_pseudo_claim(request: Request):
-    """Relaie la vérification/revendication du couple pseudo/mot secret
-    soumise à la fermeture du panneau d'accueil vers le back — voir
-    backend/app.py's POST /api/pseudo/claim et backend/secret_store.py."""
+    """Relays the pseudo/secret-word verification/claim submitted when
+    the welcome overlay closes to the back end — see backend/app.py's
+    POST /api/pseudo/claim and backend/secret_store.py."""
     body = await request.body()
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
@@ -158,10 +158,9 @@ async def proxy_pseudo_claim(request: Request):
 
 @app.get("/api/scrapp")
 async def proxy_scrapp():
-    """Miroir exact de proxy_rss ci-dessus, pour l'agrégation de grilles
-    (SCRAPP/, voir scrapper/fetch_grid_links.py) — même panneau "Actu Croisée",
-    à la demande explicite de l'utilisateur : "Ajoute les entrées de
-    SCRAPP aux journal de la première page." """
+    """Exact mirror of proxy_rss above, for the grid-link aggregation
+    (SCRAPP/, see scrapper/fetch_grid_links.py) — the same "Actu Croisée"
+    panel merges entries from both sources into a single journal."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/scrapp")
@@ -192,8 +191,8 @@ async def proxy_generate_phase(job_id: str):
 
 @app.post("/api/generate/cancel/{job_id}")
 async def proxy_generate_cancel(job_id: str):
-    """Relaie le bouton "Stop" de l'interface (voir script.js) vers le
-    back — même schéma que les autres routes de ce proxy."""
+    """Relays the UI's "Stop" button (see script.js) to the back end —
+    same pattern as this proxy's other routes."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(f"{BACKEND_URL}/api/generate/cancel/{job_id}")
@@ -217,11 +216,10 @@ async def proxy_chat(request: Request):
     the backend's own streamed `text/event-stream` response chunk by
     chunk as it arrives, rather than buffering the whole reply and
     returning it in one piece like every other route here: streaming the
-    reply is the whole point of this endpoint, at the user's explicit
-    request ("Le Bot doit afficher la réponse en streaming"), and
-    buffering it here would silently defeat that the moment it crosses
-    this proxy hop. Still uses CHAT_PROXY_TIMEOUT_S (see its own comment)
-    as the connection's own overall timeout.
+    reply is the whole point of this endpoint, and buffering it here
+    would silently defeat that the moment it crosses this proxy hop.
+    Still uses CHAT_PROXY_TIMEOUT_S (see its own comment) as the
+    connection's own overall timeout.
 
     Unlike every other route here, a connection failure to the back end
     can't be turned into a clean 502 the usual way: by the time
@@ -254,12 +252,13 @@ async def proxy_chat(request: Request):
 
 @app.post("/api/generate/continue/{job_id}")
 async def proxy_generate_continue(job_id: str):
-    """Relaie le bouton "Continuer" de l'interface (voir script.js) vers le
-    back — même schéma que les autres routes de ce proxy. Sans cette route
-    explicite, une requête POST vers ce chemin tombait dans le `app.mount`
-    `StaticFiles` monté en dernier (aucune route déclarée ne correspondait),
-    qui ne répond qu'en GET/HEAD — d'où le "Method Not Allowed" (405)
-    signalé en direct plutôt qu'un vrai relais vers le back."""
+    """Relays the UI's "Continuer" button (see script.js) to the back
+    end — same pattern as this proxy's other routes. Without this
+    explicit route, a POST request to this path used to fall through to
+    the `app.mount` `StaticFiles` mounted at the very end (no declared
+    route matched it), which only ever answers GET/HEAD — hence a
+    reported "Method Not Allowed" (405) instead of a real relay to the
+    back end."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(f"{BACKEND_URL}/api/generate/continue/{job_id}")
@@ -270,9 +269,9 @@ async def proxy_generate_continue(job_id: str):
 
 @app.post("/api/recompute")
 async def proxy_recompute(request: Request):
-    """Relaie le bouton "Recalculer" de l'interface (voir script.js) vers le
-    back — même schéma que proxy_generate : le back répond immédiatement
-    avec un job_id, que le navigateur sonde ensuite via
+    """Relays the UI's "Recalculer" button (see script.js) to the back
+    end — same pattern as proxy_generate: the back end answers
+    immediately with a job_id, which the browser then polls via
     /api/generate/status/{job_id}."""
     body = await request.body()
     try:
@@ -317,13 +316,13 @@ async def proxy_system_info():
 
 @app.get("/api/library")
 async def proxy_library_list(request: Request):
-    """Relaie le bouton "Bibliothèque" de l'interface (voir script.js) vers
-    le back — même schéma que les autres routes de ce proxy. La query
-    string (`preferred_language`) est transmise telle quelle : sans route
-    explicite ici, une requête vers ce chemin tomberait dans le
-    `app.mount` `StaticFiles` monté en dernier, exactement le bug déjà
-    rencontré une fois pour /api/generate/continue/{job_id} (voir son
-    propre commentaire ci-dessus)."""
+    """Relays the UI's "Bibliothèque" button (see script.js) to the back
+    end — same pattern as this proxy's other routes. The query string
+    (`preferred_language`) is passed through verbatim: without an
+    explicit route here, a request to this path would fall through to
+    the `app.mount` `StaticFiles` mounted at the very end — the exact
+    same bug already hit once for /api/generate/continue/{job_id} (see
+    its own comment above)."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library", params=request.query_params)
@@ -334,10 +333,10 @@ async def proxy_library_list(request: Request):
 
 @app.post("/api/library")
 async def proxy_library_list_filtered(request: Request):
-    """Variante POST : le corps JSON porte `seen_filter` + `seen_ids` (les
-    grilles déjà vues par ce client — voir script.js, qui garde
-    l'ensemble en localStorage) pour que le back filtre/annote la liste.
-    Corps relayé tel quel."""
+    """POST variant: the JSON body carries `seen_filter` + `seen_ids`
+    (the grids this client has already seen — see script.js, which keeps
+    the set in localStorage) so the back end can filter/annotate the
+    list. Body relayed verbatim."""
     try:
         body = await request.body()
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
@@ -353,11 +352,10 @@ async def proxy_library_list_filtered(request: Request):
 
 @app.get("/api/library/{grid_id}")
 async def proxy_library_get(grid_id: str, request: Request):
-    """Relaie le chargement d'une grille de la bibliothèque (voir
-    script.js) vers le back — même schéma que les autres routes de ce
-    proxy. La query string (`pseudo`, voir backend/app.py's library_get —
-    fait chercher une partie déjà sauvegardée dans GRID_GAME) est
-    transmise telle quelle."""
+    """Relays loading a library grid (see script.js) to the back end —
+    same pattern as this proxy's other routes. The query string
+    (`pseudo`, see backend/app.py's library_get — looks up an already-
+    saved game state in GRID_GAME) is passed through verbatim."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(
@@ -370,11 +368,10 @@ async def proxy_library_get(grid_id: str, request: Request):
 
 @app.get("/api/library/{grid_id}/pdf")
 async def proxy_library_get_pdf(grid_id: str):
-    """Relaie le téléchargement PDF d'une grille de la bibliothèque (grille
-    vide + définitions + titre, sans réponses — voir backend/app.py's
-    library_get_pdf). Passe-plat binaire : renvoie les octets PDF tels
-    quels avec le Content-Disposition du back ; un échec du back (JSON)
-    est relayé en JSON."""
+    """Relays downloading a library grid's PDF (empty grid + clues +
+    title, no answers — see backend/app.py's library_get_pdf). A binary
+    passthrough: returns the PDF bytes as-is with the back end's own
+    Content-Disposition; a back-end failure (JSON) is relayed as JSON."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/pdf")
@@ -396,9 +393,9 @@ async def proxy_library_get_pdf(grid_id: str):
 
 @app.post("/api/game/save")
 async def proxy_game_save(request: Request):
-    """Relaie l'autosauvegarde de la partie en cours (voir script.js's
-    scheduleGridGameSave, backend/app.py's game_save) vers le back — corps
-    JSON relayé tel quel, même schéma que proxy_recompute."""
+    """Relays the current game's autosave (see script.js's
+    scheduleGridGameSave, backend/app.py's game_save) to the back end —
+    JSON body relayed verbatim, same pattern as proxy_recompute."""
     body = await request.body()
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
@@ -414,9 +411,9 @@ async def proxy_game_save(request: Request):
 
 @app.get("/api/dictionary")
 async def proxy_dictionary(request: Request):
-    """Relaie le bouton "Dictionnaire" de l'interface (voir script.js) vers
-    le back — la query string (`q`, `lang`) transmise telle quelle, même
-    schéma que proxy_library_list."""
+    """Relays the UI's "Dictionnaire" button (see script.js) to the back
+    end — the query string (`q`, `lang`) passed through verbatim, same
+    pattern as proxy_library_list."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/dictionary", params=request.query_params)
@@ -437,10 +434,10 @@ DEFINE_PROXY_TIMEOUT_S = 100.0
 
 @app.get("/api/dictionary/define")
 async def proxy_dictionary_define(request: Request):
-    """Relaie le bouton "Définir" du panneau Dictionnaire (voir script.js)
-    vers le back — query string (`q`, `lang`) transmise telle quelle,
-    même schéma que proxy_dictionary, mais avec DEFINE_PROXY_TIMEOUT_S
-    (voir sa propre note) au lieu de PROXY_TIMEOUT_S."""
+    """Relays the Dictionary panel's "Définir" button (see script.js) to
+    the back end — query string (`q`, `lang`) passed through verbatim,
+    same pattern as proxy_dictionary, but with DEFINE_PROXY_TIMEOUT_S
+    (see its own note) instead of PROXY_TIMEOUT_S."""
     try:
         async with httpx.AsyncClient(timeout=DEFINE_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/dictionary/define", params=request.query_params)
@@ -454,12 +451,12 @@ SIMILAR_PROXY_TIMEOUT_S = 60.0
 
 @app.get("/api/similar_words")
 async def proxy_similar_words(request: Request):
-    """Relaie le bouton "Thématique" du panneau Dictionnaire (voir
-    script.js) vers le back — query string (`q`, `lang`, `min_score`)
-    transmise telle quelle. Timeout élargi (SIMILAR_PROXY_TIMEOUT_S) :
-    le back fait maintenant une expansion LLM du terme avant les
-    recherches Qdrant (voir _similar_words_impl), donc l'appel n'est plus
-    "rapide ou 503" comme avant — même schéma que proxy_define."""
+    """Relays the Dictionary panel's "Thématique" button (see script.js)
+    to the back end — query string (`q`, `lang`, `min_score`) passed
+    through verbatim. Widened timeout (SIMILAR_PROXY_TIMEOUT_S): the back
+    end now runs an LLM expansion of the term before the Qdrant searches
+    (see _similar_words_impl), so the call is no longer "quick or 503"
+    the way it used to be — same pattern as proxy_define."""
     try:
         async with httpx.AsyncClient(timeout=SIMILAR_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/similar_words", params=request.query_params)
@@ -470,10 +467,10 @@ async def proxy_similar_words(request: Request):
 
 @app.get("/api/synonyms")
 async def proxy_synonyms(request: Request):
-    """Relaie le bouton "Synonymes" du panneau Dictionnaire — recherche
-    Qdrant directe, sans appel LLM (voir backend/app.py's `_synonyms_
-    impl`), donc le timeout générique (PROXY_TIMEOUT_S) suffit, pas besoin
-    du timeout élargi de "Thématique"."""
+    """Relays the Dictionary panel's "Synonymes" button — a direct
+    Qdrant search, no LLM call (see backend/app.py's `_synonyms_impl`),
+    so the generic timeout (PROXY_TIMEOUT_S) is enough — no need for
+    "Thématique"'s own widened one."""
     try:
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/synonyms", params=request.query_params)
@@ -491,9 +488,9 @@ PARAPHRASE_PROXY_TIMEOUT_S = 100.0
 
 @app.get("/api/paraphrase")
 async def proxy_paraphrase(request: Request):
-    """Relaie le bouton "Paraphraser" du panneau "Paraphraseur" (voir
-    script.js) vers le back — query string (`q`, `lang`) transmise telle
-    quelle, même schéma que proxy_dictionary_define."""
+    """Relays the "Paraphraseur" panel's "Paraphraser" button (see
+    script.js) to the back end — query string (`q`, `lang`) passed
+    through verbatim, same pattern as proxy_dictionary_define."""
     try:
         async with httpx.AsyncClient(timeout=PARAPHRASE_PROXY_TIMEOUT_S) as client:
             resp = await client.get(f"{BACKEND_URL}/api/paraphrase", params=request.query_params)
@@ -605,6 +602,24 @@ async def proxy_interactive_candidates(request: Request):
         async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
             resp = await client.post(
                 f"{BACKEND_URL}/api/interactive/candidates",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
+@app.post("/api/interactive/crossing")
+async def proxy_interactive_crossing(request: Request):
+    """"Croisés" button of the "Interactif" mode — for the selected cell,
+    lists every letter compatible with a real dictionary word in both the
+    horizontal and the vertical emplacement crossing there."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/crossing",
                 content=body,
                 headers={"content-type": "application/json"},
             )

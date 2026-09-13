@@ -129,17 +129,17 @@ def fetch_all():
                     "link": link,
                     "pub_date": pub_dt.isoformat() if pub_dt else None,
                     "content_html": content_encoded or description,
-                    # Discriminant ajouté à la demande de l'utilisateur pour
-                    # fusionner ce journal avec celui de fetch_grid_links.py
-                    # (SCRAPP/) dans le même panneau "Actu Croisée" — un clic
-                    # sur une entrée "rss" ouvre l'aperçu interne existant,
-                    # un clic sur une entrée "grid" (voir ce module) ouvre
-                    # directement l'URL externe, sans aperçu du tout.
+                    # Discriminant used to merge this feed with
+                    # fetch_grid_links.py's own (SCRAPP/) into the same
+                    # "Actu Croisée" panel — clicking an "rss" entry opens
+                    # the existing in-page preview, clicking a "grid" entry
+                    # (see that module) opens the external URL directly,
+                    # with no preview at all.
                     "kind": "rss",
                 })
-    # Un item sans date valide (pub_date=None) trie en dernier (chaine
-    # vide < toute vraie date ISO 8601) plutot que de faire planter le tri
-    # ou de finir arbitrairement en tete.
+    # An item with no valid date (pub_date=None) sorts last (an empty
+    # string < any real ISO 8601 date) rather than crashing the sort or
+    # ending up arbitrarily at the front.
     combined.sort(key=lambda it: it["pub_date"] or "", reverse=True)
     combined_path = os.path.join(RSS_DIR, "combined.json")
     with open(combined_path, "w", encoding="utf-8") as f:

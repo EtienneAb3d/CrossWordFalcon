@@ -2,10 +2,10 @@
 """Persists every finished grid as a durable, self-contained JSON record
 under GRID_STORE/<language>/ (project root, gitignored — a generated
 artifact, not source content, the same convention as GRID_SVG/GRID_PNG,
-see backend/svg_export.py), at the user's explicit request: "Génère un
-fichier JSON dans GRID_STORE/<lang> décrivant toute la configuration de
-la grille, son titre, ses définitions et les infos de création (date,
-mode, langue, etc, comme sur la sauvegarde SVG)."
+see backend/svg_export.py), at the user's explicit request: "Generate a
+JSON file in GRID_STORE/<lang> describing the grid's entire
+configuration, its title, its definitions and the creation info (date,
+mode, language, etc., like the SVG save)."
 
 Feeds the web UI's "Bibliothèque" button (see frontend/static/script.js):
 a stored record IS a generate_grid() result dict (pattern/solution/words
@@ -16,10 +16,10 @@ difficulty/mode/created_at) — so loading a past grid back into the
 player renders it through the exact same code path as a grid that just
 finished generating, with no special-casing needed on the frontend.
 
-Filenames, at the user's own explicit follow-up request ("les noms de
-fichiers sont préfixés par la date, puis le titre de la grille, et
-finalement un code sur 4 chiffres aléatoire pour éviter que 2 mêmes
-titres à la même date ne s'écrasent l'un l'autre"):
+Filenames, at the user's own explicit follow-up request ("filenames are
+prefixed with the date, then the grid's title, and finally a random
+4-digit code so that 2 identical titles on the same date don't
+overwrite each other"):
 `<timestamp>_<title-slug>_<4-digit code>.json` — the timestamp alone
 (unlike svg_export.py's own `<timestamp>_<language>.json`, which never
 needed more than that) isn't a safe-enough uniqueness guarantee once the
@@ -74,9 +74,9 @@ def _slugify_title(title):
     non-alphanumeric characters (including plain spaces between words)
     collapsed to a single underscore, capped at MAX_SLUG_LENGTH —
     underscore rather than hyphen, at the user's explicit request:
-    "Les titres des grilles étant ajoutées aux noms de fichiers, remplace
-    les caractères spéciaux du titre, y compris les espaces, par des '_'
-    pour la sauvegarde." (a plain hyphen was already what the very first
+    "Since grid titles are added to filenames, replace the title's
+    special characters, including spaces, with '_' for saving." (a plain
+    hyphen was already what the very first
     version of this function used — this only changes which character,
     never whether non-alphanumeric runs get collapsed at all). Falls back
     to the generic "grille" for an empty/unusable title (title generation
@@ -102,9 +102,9 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     ordinary monolingual grid, unaffected) is the grid's own second
     language (its vertical words' language — see crossword_gen.py's
     `generate_grid`'s own `bilingual_language`), at the user's explicit
-    request: "les grilles sont sauvegardées avec la configuration des
-    deux langues 'language' et 'bilingual'. Les grilles bilingues vont
-    dans le STORE bilingual." A grid is only ever treated as genuinely
+    request: "grids are saved with the 'language' and 'bilingual'
+    language configuration. Bilingual grids go into the bilingual
+    STORE." A grid is only ever treated as genuinely
     bilingual when `bilingual` is both given AND different from
     `language` — the record's own `language` field always stays the
     grid's primary (horizontal-words) language either way, matching
@@ -118,8 +118,8 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     `pseudo` (`None` by default — every pre-existing caller, and every
     grid saved by a user who never set one, unaffected) is the nickname
     of whoever generated the grid, at the user's explicit request:
-    "Quand une grille est sauvegardée, si un pseudo est défini,
-    sauvegarder le pseudo dans le JSON de la grille." Stored verbatim in
+    "When a grid is saved, if a nickname is set, save the nickname in
+    the grid's JSON." Stored verbatim in
     the record's own `pseudo` field (blank/whitespace normalised to
     `None`) so the web UI can show an author column and offer a "Mes
     grilles" filter (see backend/app.py's `_library_page`).
@@ -129,10 +129,9 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     existing library grid (the "Ouvrir en mode Interactif" icon button —
     see backend/app.py's `_library_record_to_interactive`/POST
     `/api/interactive/from-library`), at the user's explicit request:
-    "Quand un utilisateur modifie une grille sélectionnée dans la
-    Bibliothèque, conserver dans la sauvegarde de la nouvelle grille, les
-    information sur la grille d'origine : nom de la grille, date de
-    création de la grille, auteur de la grille, ID de la grille." A plain
+    "When a user edits a grid selected from the Library, keep in the new
+    grid's save the information about the origin grid: the grid's name,
+    its creation date, its author, its ID." A plain
     `{"id", "title", "pseudo", "created_at"}` dict, a straight snapshot of
     the origin grid's own record at the moment editing started — never
     re-read from the origin grid later (which may itself since have been
@@ -150,10 +149,10 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     unaffected) is a plain `{black_enrichment_percent, force_letters_
     percent, mode, theme_precision}` dict — the generation-form knobs
     tuning the automatic search itself, at the user's explicit request:
-    "Quand une grille est sauvegardée après création automatique,
-    sauvegarder tous les paramètres (Taux noir, Graines, Mode, Précision
-    Thématique, etc) pour pouvoir les reconfigurer à l'identique quand la
-    grille est rechargée en mode édition." `mode` is also already stored
+    "When a grid is saved after automatic creation, save every parameter
+    (Black rate, Seeds, Mode, Thematic precision, etc.) so they can be
+    reconfigured identically when the grid is reloaded in edit mode."
+    `mode` is also already stored
     as its own top-level field (see the `mode` parameter above) — kept
     here too so the frontend's own restore logic (see `frontend/static/
     script.js`'s `enterInteractiveMode()`) can read every one of these
@@ -178,13 +177,12 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     untouched."""
     is_bilingual = bool(bilingual) and bilingual != language
     pseudo = (pseudo or "").strip() or None
-    # Thématique saisie par l'utilisateur (liste de mots), à la demande
-    # explicite : "Lors de la sauvegarde de la grille, enregistrer les
-    # mots de la thématique si il y en a." Stockée telle quelle (la
-    # chaîne saisie, pas les ~5000 mots présélectionnés par la
-    # pré-recherche Qdrant) dans le champ `theme` du record ;
-    # blanc/espaces -> None. Affichée dans la colonne "Thématique" de la
-    # Bibliothèque (voir _iter_stored_grids et frontend/static/script.js).
+    # The theme typed by the user (a word list), at the user's explicit
+    # request: "When the grid is saved, record the theme words if there
+    # are any." Stored verbatim (the typed string, not the ~5000 words
+    # preselected by the Qdrant pre-search) in the record's `theme`
+    # field; blank/whitespace -> None. Shown in the Library's "Theme"
+    # column (see _iter_stored_grids and frontend/static/script.js).
     theme = (theme or "").strip() or None
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     slug = _slugify_title(title)
@@ -270,10 +268,10 @@ def _iter_stored_grids():
             # Drives the "(créée depuis ...)" provenance tag next to the
             # title in the library list (frontend/static/script.js).
             "origin": record.get("origin"),
-            # Thématique saisie à la génération (voir save_grid_json) —
-            # `None`/absent pour une grille sans thématique ou d'avant ce
-            # champ. Affichée dans la colonne "Thématique" de la
-            # Bibliothèque (frontend/static/script.js, renderLibraryList).
+            # Theme typed at generation time (see save_grid_json) —
+            # `None`/absent for a grid with no theme or predating this
+            # field. Shown in the Library's "Theme" column
+            # (frontend/static/script.js, renderLibraryList).
             "theme": record.get("theme"),
             "difficulty": record.get("difficulty"),
             "title": record.get("title"),
@@ -342,13 +340,13 @@ def get_grid(grid_id):
 # GRID_WORK — autosaved, in-progress "Interactif" authoring sessions (project
 # root, gitignored, same convention as GRID_STORE — a generated work-in-
 # progress artifact, not source content), at the user's explicit request:
-# "chaque appui sur Suivant/Précédent sauvegarde l'état en cours du process
-# de création dans le dossier GRID_WORK. Préfixer le fichier avec un
-# timestamp, puis le nom de l'auteur. Quand un utilisateur ouvre l'interface
-# (ou la recharge), si il a des grilles sauvegardées dans GRID_WORK, afficher
-# un panneau avec la liste. Il peut cliquer pour relancer sa session
-# interactive où elle s'était arrêtée, cliquer sur un bouton icône pour
-# supprimer la tâche." See backend/app.py's POST /api/interactive/save_work
+# "every press of Next/Previous saves the current state of the creation
+# process into the GRID_WORK folder. Prefix the file with a timestamp,
+# then the author's name. When a user opens the interface (or reloads
+# it), if they have grids saved in GRID_WORK, show a panel with the
+# list. They can click to resume their interactive session where it
+# left off, click an icon button to delete the task." See
+# backend/app.py's POST /api/interactive/save_work
 # (autosave), GET /api/interactive/work (the "Créations" panel's own list),
 # POST /api/interactive/work/delete, and POST /api/interactive/resume.
 #
@@ -597,12 +595,11 @@ def delete_grid_work(work_id):
 # GRID_GAME — a player's own in-progress PLAY state for one library grid
 # (project root, gitignored, same convention as GRID_STORE/GRID_WORK — a
 # generated artifact, not source content), at the user's explicit request:
-# "A chaque modification de la grille, sauvegarder l'état de la grille dans
-# GRID_GAME avec le nom de l'utilisateur pour pouvoir la recharger plus
-# tard. Inclure l'état du compteur temps. Dans la Librairie, quand un
-# utilisateur clique pour jouer sur une grille, chercher si cette grille
-# existe dans GRID_GAME pour la recharger et relancer le compteur de temps
-# là où il était à la sauvegarde."
+# "Every time the grid is modified, save the grid's state in GRID_GAME
+# along with the user's name so it can be reloaded later. Include the
+# timer's state. In the Library, when a user clicks to play a grid,
+# check whether this grid exists in GRID_GAME to reload it and resume
+# the timer where it was at save time."
 #
 # Unlike GRID_STORE (one brand-new, never-touched-again file per finished
 # grid) or GRID_WORK (one file per in-progress "Interactif" *authoring*
@@ -637,9 +634,9 @@ def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds):
     the wire) and the elapsed-time counter shown to the left of the grid's
     title. Returns True on success; False (a pure no-op, nothing written)
     if `grid_id` doesn't match the expected shape (see _GRID_ID_RE) or
-    `pseudo` is blank — a game state is only ever saved "avec le nom de
-    l'utilisateur", per the user's own explicit request, never for an
-    anonymous player.
+    `pseudo` is blank — a game state is only ever saved "with the user's
+    name", per the user's own explicit request, never for an anonymous
+    player.
 
     `created_at` is preserved across updates (read from the existing file,
     if any, before it gets overwritten) the same way save_grid_work already

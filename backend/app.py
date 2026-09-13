@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-Serveur back : expose le générateur de grilles de mots croisés (crossword_gen.py,
-toute la logique métier de génération vit dans backend/) via une API JSON. Ne sert
-aucun fichier statique — uniquement les routes listées ci-dessous. Toute autre
-requête reçoit la réponse 404 par défaut de FastAPI (la documentation interactive
-/docs, /redoc et /openapi.json est désactivée : ce ne sont pas des routes
-nécessaires au fonctionnement).
+Backend server: exposes the crossword grid generator (crossword_gen.py,
+all the generation business logic lives in backend/) via a JSON API. Serves
+no static files — only the routes listed below. Any other request gets
+FastAPI's default 404 response (the interactive documentation /docs, /redoc
+and /openapi.json is disabled: these aren't routes needed for the app to
+function).
 
-Génération asynchrone avec suivi d'avancement : POST /api/generate ne bloque pas
-jusqu'à la fin (génération de grille + définitions peut prendre de la dizaine de
-secondes à plusieurs minutes) — il démarre un job en tâche de fond et répond
-immédiatement avec un job_id ; le client interroge ensuite
-GET /api/generate/status/{job_id} (polling) pour suivre l'avancement étape par
-étape puis récupérer le résultat final. Chaque étape est aussi tracée dans
-backend.log via le module `logging` standard (capturé par uvicorn -> voir
-run_Falcon.sh).
+Asynchronous generation with progress tracking: POST /api/generate does not
+block until completion (generating a grid + definitions can take anywhere
+from a few seconds to several minutes) — it starts a background job and
+responds immediately with a job_id; the client then polls
+GET /api/generate/status/{job_id} to follow progress step by step and
+retrieve the final result. Every step is also logged to backend.log via the
+standard `logging` module (captured by uvicorn -> see run_Falcon.sh).
 
-Usage :
+Usage:
     uvicorn backend.app:app --port 3001
 """
 import asyncio
@@ -49,8 +48,9 @@ from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
-    build_word_entries, extract_slots, generate_grid, _interactive_fill_diagnostics,
-    _serialize_resume_state, interactive_clean_impossible_zones, interactive_minimize_black_cells,
+    build_word_entries, extract_slots, generate_grid, slot_direction, _interactive_fill_diagnostics,
+    _serialize_resume_state, interactive_clean_impossible_zones, interactive_crossing_words,
+    interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
 )
 from .grid_store import (
@@ -73,11 +73,10 @@ clue_generator = LLMClueGenerator()
 chatbot = ChatBot()
 
 # Optional SECOND local LLM instance, dedicated to interactive/on-demand
-# requests, on a second GPU — at the user's explicit request: "Toutes les
-# requêtes de génération automatique, en provenance de Populate ou de
-# l'interface, sont affectée à la première carte. Toutes les requêtes
-# interactives (interface d'édition interactive, ChatBot, Dictionnaire,
-# Paraphraser, etc) sont affectés à la seconde carte." `clue_generator`/
+# requests, on a second GPU — at the user's explicit request: "All automatic
+# generation requests, coming from Populate or from the UI, are assigned to
+# the first card. All interactive requests (the interactive edit UI, ChatBot,
+# Dictionary, Paraphraser, etc.) are assigned to the second card." `clue_generator`/
 # `chatbot` above (reading the plain LLM_BASE_URL/LLM_MODEL/LLM_API_KEY —
 # see env.sh) always drive the AUTOMATIC path: _run_generate_job (full-
 # grid CSP fill + clue/title writing, whether started from the web UI's
@@ -149,51 +148,47 @@ _SIMILAR_DESCRIBE_TIMEOUT_S = 45.0
 _similar_qdrant = QdrantStore(timeout=_SIMILAR_TIMEOUT_S)
 _similar_embedder = Embedder(timeout=_SIMILAR_TIMEOUT_S)
 
-# Les scripts de récupération vivent dans le paquet `scrapper/` à la racine
-# du projet (déplacés là à la demande explicite de l'utilisateur, avec
-# data_builder/ pour les scripts de construction de dictionnaires), pas
-# dans backend/ lui-même. Le chemin racine est ajouté à sys.path pour que
-# `from scrapper import ...` résolve quel que soit le répertoire de
-# lancement, plutôt que de dupliquer ici leur logique de récupération : à
-# la demande explicite de l'utilisateur, "Configure un demon qui lit tous
-# ces flux RSS une fois par jour... et sauvegarde chaque flux RSS dans un
-# dossier RSS."
+# The scraper scripts live in the `scrapper/` package at the project root
+# (moved there at the user's explicit request, together with data_builder/
+# for the dictionary-building scripts), not in backend/ itself. The project
+# root is added to sys.path so that `from scrapper import ...` resolves
+# regardless of the launch directory, rather than duplicating their
+# scraping logic here: at the user's explicit request, "Configure a daemon
+# that reads all these RSS feeds once a day... and saves each RSS feed in
+# an RSS folder."
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
-from scrapper import fetch_rss_feeds  # noqa: E402  (import après la manipulation de sys.path, volontaire)
-from scrapper import fetch_grid_links  # noqa: E402  (meme raison)
+from scrapper import fetch_rss_feeds  # noqa: E402  (import after the sys.path manipulation, deliberate)
+from scrapper import fetch_grid_links  # noqa: E402  (same reason)
 
 RSS_DIR = _PROJECT_ROOT / "RSS"
 SCRAPP_DIR = _PROJECT_ROOT / "SCRAPP"
-# Heure locale (24h) à laquelle le flux est rafraîchi chaque jour, à la
-# demande explicite de l'utilisateur : "une fois par jour (par exemple, le
-# matin à 8H)."
+# Local time (24h) at which the feed is refreshed every day, at the user's
+# explicit request: "once a day (e.g. in the morning at 8am)."
 RSS_FETCH_HOUR = 8
 
-# Journal des conversations du chatbot "David FALCON", à la demande
-# explicite de l'utilisateur : "Pour chaque discussion dans le ChatBot,
-# crée un LOG des questions/réponses dans un dossier LOG_CHAT. Chaque log
-# est préfixé par un timestamp permettant de voir les fichiers dans
-# l'ordre temporel. Un fichier par session utilisateur." Dossier à la
-# racine du projet, gitignored — un journal généré, pas du contenu
-# source, la même convention que LOG_LLM/ (backend/clues.py) pour les
-# journaux d'appels LLM des définitions.
+# Log of the "David FALCON" chatbot's conversations, at the user's explicit
+# request: "For each conversation in the ChatBot, create a LOG of the
+# questions/answers in a LOG_CHAT folder. Each log is prefixed by a
+# timestamp so the files can be seen in chronological order. One file per
+# user session." Folder at the project root, gitignored — a generated log,
+# not source content, the same convention as LOG_LLM/ (backend/clues.py)
+# for the definitions' own LLM call logs.
 CHAT_LOG_DIR = _PROJECT_ROOT / "LOG_CHAT"
 
-# Journal de la pré-recherche thématique (voir THEME_LENGTH_MIN/MAX/
-# THEME_MIN_SCORE et _run_generate_job) : un fichier
-# `LOG_THEME/<timestamp>_<short_id>.log` par génération thématique, le
-# nom préfixé par un timestamp complet (comme pour LOG_LLM/), à la
-# demande explicite de l'utilisateur ("Montre la réponse LLM en première
-# ligne du fichier de sortie" ; "Préfixer les sauvegarde dans LOG_THEME
-# avec un timestamp, comme pour LOG_LLM"). Première ligne = la phrase
-# ~50 mots produite par le LLM (ou le thème brut si l'appel LLM a
-# échoué), puis le thème saisi et le glossaire complet des mots
-# présélectionnés par Qdrant, un mot par ligne. Best-effort : un échec
-# d'écriture est journalisé mais n'interrompt jamais la génération.
-# Racine du projet, gitignored — un journal généré, pas du contenu source, la même
-# convention que LOG_CHAT/ / LOG_USERS/ / LOG_LLM/.
+# Log of the theme pre-search (see THEME_LENGTH_MIN/MAX/
+# THEME_MIN_SCORE and _run_generate_job): one
+# `LOG_THEME/<timestamp>_<short_id>.log` file per themed generation, the
+# name prefixed with a full timestamp (like LOG_LLM/), at the user's
+# explicit request ("Show the LLM response on the output file's first
+# line"; "Prefix the LOG_THEME saves with a timestamp, like LOG_LLM").
+# First line = the ~50-word sentence produced by the LLM (or the raw theme
+# if the LLM call failed), then the typed theme and the full glossary of
+# words preselected by Qdrant, one word per line. Best-effort: a write
+# failure is logged but never interrupts the generation.
+# Project root, gitignored — a generated log, not source content, the same
+# convention as LOG_CHAT/ / LOG_USERS/ / LOG_LLM/.
 THEME_LOG_DIR = _PROJECT_ROOT / "LOG_THEME"
 
 # "chat debug" option (CHATBOT_DEBUG in env.sh/env_default.sh) — when on,
@@ -204,34 +199,33 @@ THEME_LOG_DIR = _PROJECT_ROOT / "LOG_THEME"
 # analysis. Off unless the value is one of 1/true/yes/on (case-
 # insensitive) — so CHATBOT_DEBUG=0 stays off.
 CHATBOT_DEBUG = os.environ.get("CHATBOT_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
-# session_id (fourni par le frontend, voir ChatRequest) -> chemin du
-# fichier de log de cette session, déjà créé. Un dict en mémoire, comme
-# JOBS/CANCEL_EVENTS ci-dessus — un seul processus uvicorn, pas de
-# --workers (voir run_Falcon.sh), donc pas de verrou ni de store externe
-# nécessaire. Le TIMESTAMP du nom de fichier est celui du tout PREMIER
-# message de cette session (calculé une seule fois, ici, jamais
-# recalculé) — c'est ce qui permet de voir les fichiers dans l'ordre
-# temporel de démarrage de chaque session, chaque tour suivant de la même
-# session étant simplement ajouté (append) au même fichier.
+# session_id (supplied by the frontend, see ChatRequest) -> path of this
+# session's log file, already created. An in-memory dict, like
+# JOBS/CANCEL_EVENTS above — a single uvicorn process, no --workers (see
+# run_Falcon.sh), so no lock or external store is needed. The TIMESTAMP in
+# the filename is that of this session's very FIRST message (computed once,
+# here, never recomputed) — this is what lets the files be seen in
+# chronological order of each session's start, every later turn of the
+# same session simply being appended to the same file.
 _CHAT_LOG_PATHS = {}
 
 
 def _chat_log_path_for_session(session_id):
-    """Renvoie le chemin du fichier de log pour cette session, le créant
-    (et l'enregistrant dans `_CHAT_LOG_PATHS`) au tout premier appel pour
-    ce `session_id`. `session_id` manquant/vide (un appel antérieur à
-    cette fonctionnalité, ou un client qui n'en fournirait pas) reçoit un
-    identifiant de repli généré ici (`uuid.uuid4()`) — jamais silencieusement
-    ignoré, cette conversation est quand même journalisée, juste sans lien
-    avec une session frontend précise."""
+    """Returns the log file path for this session, creating it
+    (and registering it in `_CHAT_LOG_PATHS`) on the very first call for
+    this `session_id`. A missing/empty `session_id` (a call predating this
+    feature, or a client that doesn't supply one) gets a fallback
+    identifier generated here (`uuid.uuid4()`) — never silently
+    dropped, this conversation is still logged, just with no link
+    to a specific frontend session."""
     if not session_id:
         session_id = f"sans-session-{uuid.uuid4().hex[:8]}"
     if session_id not in _CHAT_LOG_PATHS:
         CHAT_LOG_DIR.mkdir(parents=True, exist_ok=True)
         timestamp = time.strftime("%Y%m%d-%H%M%S")
-        # session_id peut contenir des caractères non sûrs pour un nom de
-        # fichier (le frontend peut envoyer n'importe quelle chaîne) — on
-        # ne garde que les caractères alphanumériques/tiret/underscore.
+        # session_id can contain characters unsafe for a filename (the
+        # frontend can send any string) — only alphanumeric/dash/underscore
+        # characters are kept.
         safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)[:64]
         _CHAT_LOG_PATHS[session_id] = CHAT_LOG_DIR / f"{timestamp}_{safe_id}.md"
     return _CHAT_LOG_PATHS[session_id]
@@ -252,11 +246,10 @@ def _format_prompt_messages(messages):
 
 def _append_chat_log(session_id, language, message, reply, first_token_s=None, total_s=None,
                      prompt_messages=None):
-    """Ajoute un tour de conversation (question + réponse complète) au
-    fichier de log de cette session — best-effort, comme toute autre
-    écriture de journal de ce projet (SVG/PNG, LOG_LLM/) : une erreur
-    d'écriture est journalisée mais ne doit jamais faire échouer la
-    réponse au joueur.
+    """Appends one conversation turn (question + full reply) to
+    this session's log file — best-effort, like every other log write in
+    this project (SVG/PNG, LOG_LLM/): a write failure is logged but must
+    never make the response to the player fail.
 
     `first_token_s`/`total_s` (both `None` by default, for a hypothetical
     future caller that doesn't measure timing) — at the user's explicit
@@ -312,16 +305,16 @@ WORDLISTS = {
     "pt": DATA_DIR / "wordlist_pt_full.tsv",
 }
 
-# Sélecteur "Mode" de l'interface web (voir frontend/static/index.html), à
-# la demande explicite de l'utilisateur : "Flash/1000 Turbo/10000
-# Rapide/100000 Moyen/500000 Ultra/5000000" — fixe directement le budget
-# de recherche par tentative (`crossword_gen.try_fill`'s `deadline_checks`,
-# voir sa propre docstring pour d'où vient ce paramètre), sans rapport avec
-# la taille de la grille, contrairement à la formule par défaut (largeur ×
-# hauteur × 2000) qu'un mode choisi ici remplace entièrement pour cette
-# requête. Clé interne en anglais, comme toute autre valeur envoyée par
-# l'interface (voir "difficulty") — seul le libellé affiché est traduit par
-# langue (voir frontend/static/i18n.js's modeLabel*).
+# "Mode" selector of the web UI (see frontend/static/index.html), at the
+# user's explicit request: "Flash/1000 Turbo/10000
+# Fast/100000 Medium/500000 Ultra/5000000" — directly sets the
+# search budget per attempt (`crossword_gen.try_fill`'s `deadline_checks`,
+# see its own docstring for where this parameter comes from), unrelated to
+# the grid size, unlike the default formula (width ×
+# height × 2000) which a mode chosen here entirely replaces for this
+# request. Internal key in English, like every other value sent by
+# the frontend (see "difficulty") — only the displayed label is translated per
+# language (see frontend/static/i18n.js's modeLabel*).
 BUDGET_MODES = {
     "flash": 1_000,
     "turbo": 10_000,
@@ -330,76 +323,75 @@ BUDGET_MODES = {
     "ultra": 5_000_000,
 }
 
-# Champ "Thématique" optionnel du formulaire de génération, à la demande
-# explicite de l'utilisateur : si la liste de mots de la thématique est
-# non vide, une pré-recherche vectorielle Qdrant construit un glossaire de
-# mots proches de la thématique, que le solveur CSP tente alors en
-# priorité pour chaque emplacement (voir crossword_gen.py's
-# `generate_grid`'s `priority_words` / `Filler._backtrack`). Best-effort :
-# si Qdrant ou le serveur d'embeddings est indisponible, ou si la
-# collection n'a pas encore été alimentée pour cette langue, la
-# génération se poursuit simplement sans thématique.
+# Optional "Theme" field on the generation form, at the user's explicit
+# request: if the theme's word list is non-empty, a Qdrant vector
+# pre-search builds a glossary of words close to the theme, which the CSP
+# solver then tries in priority for every slot (see crossword_gen.py's
+# `generate_grid`'s `priority_words` / `Filler._backtrack`). Best-effort:
+# if Qdrant or the embedding server is unavailable, or the
+# collection hasn't been populated yet for that language, the
+# generation simply proceeds without a theme.
 #
-# La description LLM du thème (describe_theme) est une liste télégraphique
-# d'environ 30 mots-clefs séparés par des virgules. On ne l'embed PAS
-# telle quelle : elle est découpée en mots-clefs individuels
-# (_split_keywords), et CHAQUE mot-clef fait sa propre recherche Qdrant du
-# plus-proche-voisin — _compiled_theme_words_by_length fusionne ensuite
-# tous les résultats (meilleur score par mot). Une recherche par mot-clef
-# unique donne un vecteur de requête bien plus net qu'un seul embedding
-# moyenné sur ~30 mots. Chaque recherche est faite PAR LONGUEUR
-# (THEME_LENGTH_MIN..THEME_LENGTH_MAX lettres) — plutôt qu'un simple top-N
-# global (l'ancien THEME_PRESEARCH_LIMIT), qui pouvait laisser une
-# longueur d'emplacement entière sans aucun mot thématique si les voisins
-# les plus proches se trouvaient surtout à d'autres longueurs. Il n'y a
-# aucun plafond par longueur (voir THEME_MIN_SCORE plus bas) : TOUS les
-# mots dont le score dépasse ce seuil sont pris. Voir
+# The LLM's own theme description (describe_theme) is a telegraphic list
+# of about 30 comma-separated keywords. It is NOT embedded as-is: it is
+# split into individual keywords
+# (_split_keywords), and EACH keyword runs its own Qdrant nearest-
+# neighbor search — _compiled_theme_words_by_length then merges
+# every result (best score per word). A search on a single keyword gives
+# a much sharper query vector than a single embedding averaged over ~30
+# words. Each search is done PER LENGTH
+# (THEME_LENGTH_MIN..THEME_LENGTH_MAX letters) — rather than a plain
+# global top-N (the old THEME_PRESEARCH_LIMIT), which could leave an
+# entire slot length with no theme word at all if the nearest
+# neighbors happened to fall mostly at other lengths. There is no
+# per-length cap at all (see THEME_MIN_SCORE below): ALL
+# words whose score exceeds this threshold are kept. See
 # _theme_words_by_length.
 THEME_LENGTH_MIN = 3
 THEME_LENGTH_MAX = 15
-# Taille de chaque page Qdrant lue en itérant (voir _theme_words_by_length) :
-# assez grande pour amortir l'aller-retour réseau, assez petite pour
-# s'arrêter tôt une fois le seuil de score franchi.
+# Size of each Qdrant page read while iterating (see _theme_words_by_length):
+# large enough to amortize the network round trip, small enough to
+# stop early once the score threshold is crossed.
 THEME_LENGTH_SEARCH_PAGE = 1000
-# Il n'y a AUCUN plafond de profondeur / de nombre de mots renvoyés, à la
-# demande explicite de l'utilisateur : "Ne pas limiter le nombre de mots
-# renvoyés par le dictionnaire Thématique. Faire confiance au seuil."
-# _theme_words_by_length pagine jusqu'à ce que le score passe sous
-# THEME_MIN_SCORE (arrêt garanti et rapide vu que les résultats Qdrant
-# sont classés par score décroissant) ou que le tenant soit épuisé.
-# Seuil de score Qdrant COMMUN (similarité cosinus — les vecteurs sont
-# normalisés, voir backend/embedder.py) : la variable unique qui gouverne
-# À LA FOIS la construction du glossaire par longueur (_theme_words_by_
-# length) ET chacune des recherches thématiques par mot-clef qui
-# l'appellent (_compiled_theme_words_by_length). À la demande explicite de
-# l'utilisateur : "lister tous les mots avec un seuil identique à la
-# construction du glossaire (nommer la variable commune)". Les résultats
-# Qdrant étant déjà classés par score décroissant, dès qu'un score sous ce
-# seuil est rencontré, tous les suivants (dans la page courante ET dans
-# toute page ultérieure) le sont aussi — _theme_words_by_length arrête
-# donc complètement d'itérer, pas seulement d'accepter, dès ce point.
+# There is NO depth/word-count cap at all, at the user's explicit
+# request: "Do not limit the number of words returned by the Thematic
+# dictionary. Trust the threshold." _theme_words_by_length paginates
+# until the score drops below THEME_MIN_SCORE (a guaranteed, fast stop
+# since Qdrant results are ranked by decreasing score) or the tenant is
+# exhausted.
+# COMMON Qdrant score threshold (cosine similarity — vectors are
+# normalized, see backend/embedder.py): the single variable that governs
+# BOTH the per-length glossary construction (_theme_words_by_
+# length) AND every per-keyword theme search that calls it
+# (_compiled_theme_words_by_length). At the user's explicit request:
+# "list every word with an identical threshold to the glossary
+# construction (name the shared variable)". Since Qdrant results are
+# already ranked by decreasing score, as soon as a score below this
+# threshold is encountered, every following one (both in the current page AND
+# any later page) is too — _theme_words_by_length therefore
+# stops iterating entirely, not just accepting, from that point on.
 #
-# C'est la VALEUR PAR DÉFAUT : le champ "Précision thématique" du
-# formulaire de génération (à la suite de "Mode", à la demande explicite
-# de l'utilisateur) permet de la régler à la main pour une génération
-# donnée (GenerateRequest.theme_precision -> paramètre `min_score` de
-# _compiled_theme_words_by_length / _theme_words_by_length). Le bouton
-# "Thématique" du panneau Dictionnaire, lui, utilise toujours cette
-# constante.
+# This is the DEFAULT VALUE: the "Précision thématique" field on the
+# generation form (right after "Mode", at the user's explicit
+# request) lets it be tuned by hand for a given generation
+# (GenerateRequest.theme_precision -> `min_score` parameter of
+# _compiled_theme_words_by_length / _theme_words_by_length). The
+# Dictionary panel's "Thématique" button, meanwhile, always uses this
+# constant.
 THEME_MIN_SCORE = 0.68
 
-# Construction du glossaire de grille UNIQUEMENT (pas le bouton
-# "Thématique" du panneau Dictionnaire), à la demande explicite de
-# l'utilisateur : "augmenter la température du LLM à 0.9, itérer au plus
-# 3 fois pour essayer d'obtenir 300 mots à chercher dans Qdrant." Après
-# le premier passage (thème entier + un appel par mot pour un thème
-# multi-mots), si l'ensemble dédoublonné des mots-clefs à chercher compte
-# moins de THEME_MIN_KEYWORDS entrées, _run_generate_job relance
-# describe_theme (avec THEME_KEYWORD_LLM_TEMPERATURE = 0.9 pour maximiser
-# la variété) jusqu'à THEME_KEYWORD_LLM_MAX_LOOPS fois de plus, en
-# s'arrêtant dès qu'un appel n'apporte aucun mot-clef nouveau. La
-# température 0.9 est aussi utilisée pour le premier passage. Objectif
-# indicatif, pas une garantie.
+# Grid glossary construction ONLY (not the Dictionary panel's
+# "Thématique" button), at the user's explicit request: "raise the LLM's
+# temperature to 0.9, iterate at most
+# 3 times to try to get 300 words to search in Qdrant." After
+# the first pass (whole theme + one call per word for a
+# multi-word theme), if the deduplicated set of keywords to search has
+# fewer than THEME_MIN_KEYWORDS entries, _run_generate_job re-runs
+# describe_theme (with THEME_KEYWORD_LLM_TEMPERATURE = 0.9 to maximize
+# variety) up to THEME_KEYWORD_LLM_MAX_LOOPS more times,
+# stopping as soon as a call brings in no new keyword. The
+# 0.9 temperature is also used for the first pass. An
+# indicative target, not a guarantee.
 THEME_MIN_KEYWORDS = 300
 THEME_KEYWORD_LLM_MAX_LOOPS = 3
 THEME_KEYWORD_LLM_TEMPERATURE = 0.9
@@ -408,46 +400,46 @@ app = FastAPI(title="CrossWordFalcon API", docs_url=None, redoc_url=None, openap
 
 
 async def _rss_daily_scheduler():
-    """Tourne en tâche de fond pour toute la durée du processus : rafraîchit
-    les flux RSS (fetch_rss_feeds.fetch_all) une fois par jour, à
-    RSS_FETCH_HOUR (8h par défaut, heure locale) — à la demande explicite
-    de l'utilisateur. Un simple `asyncio.sleep` jusqu'au prochain 8h plutôt
-    qu'un vrai ordonnanceur système (cron/launchd) : ce projet n'a jamais
-    eu d'infrastructure de service système, tout tourne déjà comme un
-    processus Python lancé à la main (voir run_Falcon.sh) — ce mécanisme
-    ne rafraîchit donc que tant que le back tourne, ce qui correspond déjà
-    à la réalité opérationnelle de ce projet (aucune fonctionnalité
-    n'attend de continuer à tourner serveur éteint).
+    """Runs as a background task for the whole lifetime of the process: refreshes
+    the RSS feeds (fetch_rss_feeds.fetch_all) once a day, at
+    RSS_FETCH_HOUR (8am by default, local time) — at the user's explicit
+    request. A plain `asyncio.sleep` until the next 8am rather than
+    a real system scheduler (cron/launchd): this project has never
+    had any system-service infrastructure, everything already runs as a
+    manually-launched Python process (see run_Falcon.sh) — this mechanism
+    therefore only refreshes as long as the backend is running, which already
+    matches this project's operational reality (no feature
+    expects to keep running with the server off).
 
-    `fetch_all()` est bloquant (httpx synchrone) — exécuté via
-    `asyncio.to_thread`, comme tout autre appel bloquant de ce fichier
-    (génération de grille, appels LLM), pour ne jamais geler la boucle
-    d'événements FastAPI pendant le téléchargement des flux.
+    `fetch_all()` is blocking (synchronous httpx) — run via
+    `asyncio.to_thread`, like every other blocking call in this file
+    (grid generation, LLM calls), so it never freezes the FastAPI
+    event loop while the feeds download.
 
-    Ne lève jamais d'exception vers l'appelant : une erreur de
-    téléchargement/écriture est déjà gérée à l'intérieur de `fetch_all()`
-    elle-même (best-effort par flux) ; toute erreur inattendue ici est
-    seulement journalisée, jamais laissée à interrompre la boucle — un
-    échec de rafraîchissement un jour donné ne doit jamais empêcher les
-    suivants.
+    Never raises an exception to the caller: a download/write error
+    is already handled inside `fetch_all()`
+    itself (best-effort per feed); any unexpected error here is
+    only logged, never left to interrupt the loop — a
+    refresh failure on a given day must never prevent the
+    following ones.
 
-    Rafraîchit aussi `fetch_grid_links.fetch_all()` (l'agrégation de
-    grilles/SCRAPP, voir ce module), dans le même tick quotidien, à la
-    demande explicite de l'utilisateur : "Reproduit l'agrégation que fait
-    le site ci-dessus, pour récupérer les liens et descriptions une fois
-    par jour (comme les flux RSS)." Un `try/except` propre à chacun des
-    deux appels (factorisés dans _refresh_rss/_refresh_scrapp ci-dessous,
-    partagés avec _rss_startup_catchup) — l'échec de l'un ne doit jamais
-    empêcher l'autre de tourner ce même jour, exactement le même principe
-    déjà appliqué en interne à chaque flux RSS pris individuellement.
+    Also refreshes `fetch_grid_links.fetch_all()` (the grid
+    aggregation/SCRAPP, see that module), in the same daily tick, at the
+    user's explicit request: "Reproduce the aggregation the
+    site above does, to fetch links and descriptions once
+    a day (like the RSS feeds)." A `try/except` specific to each of the
+    two calls (factored into _refresh_rss/_refresh_scrapp below,
+    shared with _rss_startup_catchup) — a failure of one must never
+    prevent the other from running that same day, exactly the same principle
+    already applied internally to each RSS feed taken individually.
 
-    Ce mécanisme n'a lui-même AUCUN rattrapage : s'il ne tourne pas
-    exactement à RSS_FETCH_HOUR un jour donné (ex. un redémarrage du
-    processus survenu entre les deux appels, un incident réel constaté le
-    2026-09-11 où SCRAPP était resté daté de la veille malgré un RSS
-    fraîchement à jour), rien ne retente avant le tick du lendemain —
-    voir _rss_startup_catchup, qui comble exactement ce trou au
-    démarrage du processus."""
+    This mechanism itself has NO catch-up of its own: if it doesn't run
+    exactly at RSS_FETCH_HOUR on a given day (e.g. a process restart
+    happening between the two calls, a real incident observed on
+    2026-09-11 where SCRAPP had stayed dated to the previous day despite RSS
+    being freshly up to date), nothing retries before the next day's
+    tick — see _rss_startup_catchup, which fills exactly this gap at
+    process startup."""
     while True:
         now = datetime.datetime.now()
         next_run = now.replace(hour=RSS_FETCH_HOUR, minute=0, second=0, microsecond=0)
@@ -459,11 +451,11 @@ async def _rss_daily_scheduler():
 
 
 async def _refresh_rss():
-    """Un appel à fetch_rss_feeds.fetch_all(), journalisé dans tous les
-    cas — factorisé pour être partagé entre le tick quotidien ci-dessus
-    et le rattrapage au démarrage ci-dessous (_rss_startup_catchup), pour
-    qu'ils ne puissent jamais diverger dans la façon de rapporter un
-    succès/échec."""
+    """A single call to fetch_rss_feeds.fetch_all(), logged in every
+    case — factored out so it can be shared between the daily tick above
+    and the startup catch-up below (_rss_startup_catchup), so
+    the two can never diverge in how they report
+    success/failure."""
     try:
         items = await asyncio.to_thread(fetch_rss_feeds.fetch_all)
         logger.info("rss: %d articles rafraichis", len(items))
@@ -472,7 +464,7 @@ async def _refresh_rss():
 
 
 async def _refresh_scrapp():
-    """Même rôle que _refresh_rss ci-dessus, pour fetch_grid_links.
+    """Same role as _refresh_rss above, for fetch_grid_links.
     fetch_all()."""
     try:
         grids = await asyncio.to_thread(fetch_grid_links.fetch_all)
@@ -482,12 +474,12 @@ async def _refresh_scrapp():
 
 
 def _combined_json_is_fresh(path):
-    """True si `path` (RSS/combined.json ou SCRAPP/combined.json) existe
-    et que son propre `fetched_at` date d'aujourd'hui (date locale) —
-    utilisé par _rss_startup_catchup ci-dessous. False dans tout autre
-    cas (fichier absent, illisible, ou daté d'un jour antérieur), sans
-    jamais lever — un fichier corrompu/absent doit simplement déclencher
-    un rafraîchissement, pas faire planter le démarrage du serveur."""
+    """True if `path` (RSS/combined.json or SCRAPP/combined.json) exists
+    and its own `fetched_at` is dated today (local date) —
+    used by _rss_startup_catchup below. False in every other
+    case (file missing, unreadable, or dated an earlier day), without
+    ever raising — a corrupt/missing file should simply trigger
+    a refresh, not crash the server's startup."""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         fetched_at = datetime.datetime.fromisoformat(data["fetched_at"])
@@ -499,23 +491,23 @@ def _combined_json_is_fresh(path):
 
 
 async def _rss_startup_catchup():
-    """Rattrapage exécuté une seule fois, au démarrage du processus (pas
-    sur le cycle quotidien de RSS_FETCH_HOUR) — à la suite d'un incident
-    réel constaté le 2026-09-11 : RSS/combined.json s'était bien
-    rafraîchi à 8h ce matin-là, mais SCRAPP/combined.json était resté
-    daté de la veille. _rss_daily_scheduler() lui-même est pourtant
-    correct (chacun des deux appels a son propre try/except indépendant,
-    l'échec de l'un ne peut jamais empêcher l'autre de tourner dans le
-    même tick) — le scénario le plus probable est qu'un redémarrage du
-    processus (pour une raison sans rapport) est survenu exactement entre
-    les deux appels ce matin-là, avant que fetch_grid_links.fetch_all()
-    n'ait eu le temps d'écrire son fichier. Dans ce cas, sans ce
-    rattrapage, plus aucun rafraîchissement n'aurait eu lieu avant le
-    tick du lendemain 8h — jusqu'à 24h de retard, exactement ce qui a été
-    signalé. Relance chacun des deux fetch, indépendamment, seulement si
-    son propre fichier n'est pas déjà daté d'aujourd'hui — ne fait donc
-    rien du tout au démarrage un jour où les deux se sont déjà bien
-    rafraîchis normalement."""
+    """A one-off catch-up run at process startup (not
+    on the daily RSS_FETCH_HOUR cycle) — following a real incident
+    observed on 2026-09-11: RSS/combined.json had indeed
+    refreshed at 8am that morning, but SCRAPP/combined.json had stayed
+    dated to the previous day. _rss_daily_scheduler() itself is
+    correct though (each of the two calls has its own independent try/except,
+    one failing can never prevent the other from running in the
+    same tick) — the most likely scenario is that a process restart
+    (for an unrelated reason) happened exactly between
+    the two calls that morning, before fetch_grid_links.fetch_all()
+    had time to write its own file. In that case,
+    without this catch-up, no further refresh would have happened before
+    the next day's 8am tick — up to 24h of delay, exactly what was
+    reported. Reruns each of the two fetches, independently, only if
+    its own file isn't already dated today — so it does
+    nothing at all at startup on a day when both already refreshed
+    normally."""
     if not _combined_json_is_fresh(RSS_DIR / "combined.json"):
         await _refresh_rss()
     if not _combined_json_is_fresh(SCRAPP_DIR / "combined.json"):
@@ -526,8 +518,8 @@ async def _rss_startup_catchup():
 async def _start_rss_scheduler():
     asyncio.create_task(_rss_daily_scheduler())
     asyncio.create_task(_rss_startup_catchup())
-    # Balayage périodique de la présence : capte une baisse d'effectif
-    # (LOG_USERS/) même quand plus aucun battement n'arrive — voir
+    # Periodic presence sweep: catches a drop in headcount
+    # (LOG_USERS/) even once no more heartbeat arrives — see
     # _presence_sweep_scheduler.
     asyncio.create_task(_presence_sweep_scheduler())
     # Periodic CPU/GPU occupancy sampling for the info-panel meters — see
@@ -554,11 +546,11 @@ LIBRARY_PAGE_SIZE = 20
 # rejected, so a stray extra character can't block a generation.
 MAX_PSEUDO_LENGTH = 15
 
-# Longueur max du mot secret associé à un pseudo (backend/secret_store.py),
-# à la demande explicite de l'utilisateur — permet à un utilisateur de
-# prouver qu'un pseudo choisi lui appartient bien. Même convention
-# défensive que MAX_PSEUDO_LENGTH : borné côté serveur, jamais rejeté pour
-# une longueur excessive avant troncature.
+# Max length of the secret word associated with a pseudo (backend/secret_store.py),
+# at the user's explicit request — lets a user
+# prove a chosen pseudo genuinely belongs to them. Same defensive
+# convention as MAX_PSEUDO_LENGTH: bounded server-side, never rejected for
+# an excessive length before truncation.
 MAX_SECRET_LENGTH = 60
 
 # "x en ligne" counter, at the user's explicit request. Each open web-UI
@@ -575,50 +567,50 @@ PRESENCE_TTL_S = 60
 MAX_PRESENCE_ENTRIES = 5000
 _PRESENCE = {}  # session_id -> {"last_seen": monotonic float, "pseudo": str}
 
-# Journal du nombre de visiteurs en ligne, à la demande explicite de
-# l'utilisateur : "le Back doit générer un fichier par jour dans le dossier
-# LOG_USERS, avec consigné dans ce fichier une nouvelle ligne avec la date
-# et l'heure d'un changement dans le nombre des visiteurs, le nombre de
-# visiteurs, puis la liste des pseudos actifs après changement de ce
-# nombre." Un fichier `LOG_USERS/<AAAA-MM-JJ>.log` par jour (racine du
-# projet, gitignoré — artefact généré, même convention que LOG_LLM/,
-# LOG_CHAT/), une ligne ajoutée uniquement quand le *nombre* d'utilisateurs
-# distincts change (jamais quand seule la composition des pseudos change à
-# effectif constant — c'est bien "un changement dans le nombre" qui est
-# demandé). Écriture best-effort : un échec est seulement journalisé,
-# jamais laissé casser un battement de présence.
+# Log of the number of online visitors, at the user's explicit
+# request: "the backend must generate one file per day in the
+# LOG_USERS folder, recording in this file a new line with the date
+# and time of a change in the number of visitors, the number of
+# visitors, then the list of active pseudos after this number
+# changes." One `LOG_USERS/<YYYY-MM-DD>.log` file per day (project
+# root, gitignored — a generated artifact, the same convention as LOG_LLM/,
+# LOG_CHAT/), a line added only when the distinct-user *count*
+# changes (never when only the composition of pseudos changes at a
+# constant headcount — it really is "a change in the count" that is
+# asked for). Best-effort write: a failure is only logged,
+# never left to break a presence heartbeat.
 USERS_LOG_DIR = _PROJECT_ROOT / "LOG_USERS"
 
-# Un `threading.Lock` protège maintenant `_PRESENCE` et
-# `_last_logged_pseudos` : `POST /api/presence` (fonction `def`
-# synchrone, exécutée dans le pool de threads de Starlette) et le balayage
-# périodique `_presence_sweep_scheduler` (coroutine sur la boucle
-# d'événements) peuvent tous deux recalculer l'effectif — sans verrou, la
-# purge des sessions expirées d'un côté pourrait lever pendant une écriture
-# de l'autre, et deux appelants pourraient voir simultanément « l'effectif
-# a changé » et écrire une ligne en double. Le verrou ne couvre que le
-# recalcul en mémoire ; l'écriture disque se fait toujours en dehors.
+# A `threading.Lock` now protects `_PRESENCE` and
+# `_last_logged_pseudos`: `POST /api/presence` (a synchronous `def`
+# function, run in Starlette's own thread pool) and the periodic
+# sweep `_presence_sweep_scheduler` (a coroutine on the event
+# loop) can both recompute the headcount — without a lock, one side purging
+# expired sessions could race a write on the
+# other side, and two callers could simultaneously see "the headcount
+# changed" and both write a duplicate line. The lock only covers the
+# in-memory recomputation; the disk write always happens outside it.
 _PRESENCE_LOCK = threading.Lock()
 
-# Dernière LISTE d'utilisateurs distincte consignée dans LOG_USERS (None au
-# démarrage, si bien que le tout premier battement après lancement/
-# redémarrage du serveur consigne une ligne — ce qui marque aussi un
-# redémarrage dans la chronologie). À la demande explicite de
-# l'utilisateur ("LOG_USERS doit se mettre à jour à chaque fois que la
-# liste des utilisateurs change") : suivi par LISTE complète (le `pseudos`
-# que _write_users_log consigne), pas seulement par effectif total — un
-# simple compteur ne capte jamais qu'un utilisateur est passé d'anonyme à
-# nommé, ou qu'un pseudo a changé, tant que le nombre total reste
-# identique, ce qui laissait justement le journal figé sur un
-# "(anonyme)" périmé une fois le panneau d'accueil validé.
+# Last distinct user LIST logged to LOG_USERS (None at
+# startup, so the very first heartbeat after the server launches/
+# restarts logs a line — which also marks a
+# restart in the timeline). At the user's explicit
+# request ("LOG_USERS must update every time the
+# user list changes"): tracked by the full LIST (the `pseudos`
+# that _write_users_log records), not just by total headcount — a
+# plain counter never catches a user going from anonymous to
+# named, or a pseudo changing, as long as the total count stays
+# the same, which is exactly what left the log stuck on a
+# stale "(anonymous)" once the welcome panel was accepted.
 _last_logged_pseudos = None
 
-# Le balayage périodique existe pour capter une *baisse* d'effectif quand
-# les battements s'arrêtent (tout le monde a quitté) : sans lui, la purge
-# ne tourne que dans `POST /api/presence`, donc le passage à 0 ne serait
-# jamais consigné avant qu'un nouveau visiteur ne se connecte. 10s est
-# assez fin devant PRESENCE_TTL_S (60s) et coûte quasiment rien (itération
-# d'un dict d'au plus MAX_PRESENCE_ENTRIES entrées).
+# The periodic sweep exists to catch a *drop* in headcount when
+# heartbeats stop arriving (everyone has left): without it, the purge
+# only ever runs inside `POST /api/presence`, so the drop to 0 would
+# never be logged until a new visitor connects. 10s is
+# fine-grained enough compared to PRESENCE_TTL_S (60s) and costs almost nothing
+# (iterating a dict of at most MAX_PRESENCE_ENTRIES entries).
 PRESENCE_SWEEP_INTERVAL_S = 10
 
 # Small CPU/GPU occupancy meters in the top-right info panel, at the
@@ -699,136 +691,136 @@ _BACKGROUND_TASKS = set()
 
 
 class GenerateRequest(BaseModel):
-    language: str = Field(default="fr", description="fr, en, de, es ou it")
-    # `None` par défaut (une grille ordinaire, monolingue), à la demande
-    # explicite de l'utilisateur : "Ajouter la possibilité de générer des
-    # grille bilingue... toutes les étapes utilisent la première langue
-    # pour les mots horizontaux, et la seconde langue pour les mots
-    # verticaux." L'interface web force ce champ à la même valeur que
-    # `language` dès que celui-ci change (voir frontend/static/script.js),
-    # mais le joueur peut ensuite le régler sur une langue différente pour
-    # obtenir une vraie grille bilingue — `None`, ou une valeur identique
-    # à `language`, dégradent tous deux proprement en génération
-    # monolingue ordinaire (voir crossword_gen.generate_grid's propre
-    # `bilingual_wordlist_path`), donc Automation/Populate.py (qui
-    # n'envoie jamais ce champ) continue de générer des grilles purement
-    # monolingues sans aucun changement de son côté.
+    language: str = Field(default="fr", description="fr, en, de, es or it")
+    # `None` by default (an ordinary, monolingual grid), at the user's
+    # explicit request: "Add the ability to generate a
+    # bilingual grid... every step uses the first language
+    # for the across words, and the second language for the
+    # down words." The web UI forces this field to the same value as
+    # `language` the moment that one changes (see frontend/static/script.js),
+    # but the player can then set it to a different language to
+    # get a genuinely bilingual grid — `None`, or a value identical
+    # to `language`, both degrade cleanly to ordinary
+    # monolingual generation (see crossword_gen.generate_grid's own
+    # `bilingual_wordlist_path`), so Automation/Populate.py (which
+    # never sends this field) keeps generating purely
+    # monolingual grids with no change on its own side.
     bilingual_language: Optional[str] = Field(
         default=None,
         description=(
-            "Langue des mots verticaux pour une grille bilingue (fr, en, de, es, "
-            "it ou pt) ; None ou identique à `language` = grille monolingue ordinaire"
+            "Language of the down words for a bilingual grid (fr, en, de, es, "
+            "it or pt); None or identical to `language` = ordinary monolingual grid"
         ),
     )
-    # Pas de borne haute, à la demande explicite de l'utilisateur (le
-    # plafond précédent, 25, a été retiré) — seule une borne basse reste,
-    # une grille plus petite que ça n'a plus vraiment de sens comme mots
-    # croisés. Le CLI (`crossword_gen.py`'s `main()`) n'a jamais eu de
-    # plafond du tout ; cette Field est donc désormais alignée sur lui.
-    width: int = Field(default=DEFAULT_WIDTH, ge=5, le=30, description="Largeur de la grille (horizontal)")
-    height: int = Field(default=DEFAULT_HEIGHT, ge=5, le=30, description="Hauteur de la grille (vertical)")
-    difficulty: str = Field(default="easy", description="easy, medium ou hard")
+    # No upper bound, at the user's explicit request (the
+    # previous cap, 25, was removed) — only a lower bound remains,
+    # a grid smaller than that no longer really makes sense as a crossword.
+    # The CLI (`crossword_gen.py`'s `main()`) never had a
+    # cap at all; this Field is therefore now aligned with it.
+    width: int = Field(default=DEFAULT_WIDTH, ge=5, le=30, description="Grid width (horizontal)")
+    height: int = Field(default=DEFAULT_HEIGHT, ge=5, le=30, description="Grid height (vertical)")
+    difficulty: str = Field(default="easy", description="easy, medium or hard")
     seed: Optional[int] = None
-    # 1 par défaut (relevé de 0, à la demande explicite de l'utilisateur) —
-    # le sondage statistique de "graines" (voir crossword_gen.py's
-    # sample_letter_biases/generate_grid — anciennement appelées "lettres
-    # forcées", renommées à la demande explicite de l'utilisateur : "des
-    # emplacements qui initient les premiers placements, ou les influencent
-    # quand il y a déjà d'autres lettres") était auparavant appliqué
-    # systématiquement à une fraction fixe (5 %) ; c'est désormais un champ
-    # de saisie libre de l'interface (un entier entre 0 et 100, plutôt
-    # qu'une liste de pourcentages prédéfinis — à la demande explicite de
-    # l'utilisateur, voir frontend/static/index.html), convertie en
-    # fraction (`percent / 100`) juste avant d'appeler generate_grid.
+    # 1 by default (raised from 0, at the user's explicit request) —
+    # the statistical "seed" sampling (see crossword_gen.py's
+    # sample_letter_biases/generate_grid — formerly called "forced
+    # letters", renamed at the user's explicit request: "slots
+    # that initiate the first placements, or influence them
+    # once other letters already exist") used to be applied
+    # systematically at a fixed fraction (5%); it is now a free-form
+    # input field on the UI (an integer between 0 and 100, rather
+    # than a list of predefined percentages — at the user's explicit
+    # request, see frontend/static/index.html), converted to a
+    # fraction (`percent / 100`) right before calling generate_grid.
     force_letters_percent: int = Field(
         default=1, ge=0, le=100,
-        description="Pourcentage de graines en début de remplissage (entier, 0 à 100)",
+        description="Percentage of seeds at the start of filling (integer, 0 to 100)",
     )
-    # 14 % par défaut côté API (l'interface utilise cette même valeur fixe
-    # comme valeur initiale, voir frontend/static/index.html — remplace
-    # une formule dépendante de la taille de la grille utilisée
-    # auparavant, à la demande explicite de l'utilisateur) — remplace
-    # POST_PREFILL_BLACK_FRACTION (crossword_gen.py), auparavant une
-    # constante fixe à 10 % non réglable depuis l'interface. Appliqué à
-    # chaque palier qui part d'une grille vierge ou d'un nettoyage
-    # (`_build_retry_seed`) — jamais à un palier de reprise "telle-quelle"
-    # (`_pattern_continue`), qui ne repose sur aucun nouvel appel à
-    # make_pattern et ne peut donc ajouter aucune case noire de toute
-    # façon. Champ de saisie libre depuis l'interface (un entier entre 0
-    # et 100), à la demande explicite de l'utilisateur, plutôt qu'une
-    # liste de pourcentages prédéfinis. Le pourcentage est calculé sur le
-    # nombre de cases blanches *avant* le pré-remplissage de ce palier
-    # (`make_pattern`'s `initial_white_count`), pas sur ce qu'il en reste
-    # une fois le pré-remplissage terminé — à la demande explicite de
-    # l'utilisateur ("les cases noires ajoutées en pré-remplissage
-    # comptent pour l'objectif de remplissage en noir") : si le
-    # pré-remplissage a déjà posé plus de cases que ce pourcentage n'en
-    # réclame, aucune case supplémentaire n'est ajoutée pour cette raison.
+    # 14% by default on the API side (the UI uses this same fixed
+    # value as its initial value, see frontend/static/index.html — replaces
+    # a formula that depended on the grid size, used
+    # before, at the user's explicit request) — replaces
+    # POST_PREFILL_BLACK_FRACTION (crossword_gen.py), previously a
+    # constant fixed at 10%, not adjustable from the UI. Applied to
+    # every palier that starts from a blank grid or a cleanup
+    # (`_build_retry_seed`) — never to a "reprise telle-quelle" (as-is
+    # resume) palier (`_pattern_continue`), which never calls
+    # make_pattern again and therefore can never add any black cell
+    # either way. Free-form input field from the UI (an integer between 0
+    # and 100), at the user's explicit request, rather than a
+    # list of predefined percentages. The percentage is computed on the
+    # number of white cells *before* this palier's pre-fill
+    # (`make_pattern`'s `initial_white_count`), not on what's left of it
+    # once pre-fill is finished — at the user's explicit
+    # request ("the black cells added during pre-fill
+    # count toward the black-fill target"): if
+    # pre-fill has already placed more cells than this percentage
+    # asks for, no further cell is added for this reason.
     # Removed once (mistakenly, alongside the unrelated per-cycle
     # single-cell lock), then restored — only that separate lock was ever
     # meant to go, not this percentage mechanism (see CLAUDE.md).
     black_enrichment_percent: int = Field(
         default=17, ge=0, le=100,
         description=(
-            "Pourcentage de cases blanches (avant pré-remplissage) transformées "
-            "en cases noires à chaque palier, pré-remplissage inclus (entier, 0 à 100)"
+            "Percentage of white cells (before pre-fill) turned "
+            "into black cells at every palier, pre-fill included (integer, 0 to 100)"
         ),
     )
-    # Sélecteur "Mode" (voir BUDGET_MODES ci-dessus), à la demande explicite
-    # de l'utilisateur — fixe directement le budget de recherche par
-    # tentative, remplaçant pour cette requête la formule par défaut de
-    # `crossword_gen.try_fill` (largeur × hauteur × 2000). "medium" par
-    # défaut, le mode le plus proche en ordre de grandeur de cette même
-    # formule sur la grille de référence 15×10 (300 000).
+    # "Mode" selector (see BUDGET_MODES above), at the user's explicit
+    # request — directly sets the search budget per
+    # attempt, replacing for this request the default formula of
+    # `crossword_gen.try_fill` (width × height × 2000). "medium" by
+    # default, the mode closest in order of magnitude to that same
+    # formula on the 15×10 reference grid (300,000).
     mode: str = Field(
         default="medium",
-        description=f"Mode de budget de recherche : {sorted(BUDGET_MODES)}",
+        description=f"Search-budget mode: {sorted(BUDGET_MODES)}",
     )
-    # Pseudo (nickname) de l'utilisateur qui génère la grille, à la
-    # demande explicite de l'utilisateur : "Quand une grille est
-    # sauvegardée, si un pseudo est défini, sauvegarder le pseudo dans le
-    # JSON de la grille." `None`/vide = pas d'auteur enregistré (le
-    # comportement d'avant cette fonctionnalité). Non borné ici par une
-    # contrainte pydantic qui renverrait un 422 : `_run_generate_job` le
-    # nettoie et le tronque à MAX_PSEUDO_LENGTH, pour qu'un caractère en
-    # trop ne bloque jamais une génération.
+    # Nickname (pseudo) of the user generating the grid, at the
+    # user's explicit request: "When a grid is
+    # saved, if a pseudo is set, save the pseudo in the
+    # grid's JSON." `None`/empty = no author recorded (the
+    # behavior before this feature). Not bounded here by a
+    # pydantic constraint that would return a 422: `_run_generate_job`
+    # cleans it up and truncates it to MAX_PSEUDO_LENGTH, so a stray
+    # extra character never blocks a generation.
     pseudo: Optional[str] = None
-    # Thématique optionnelle : une liste de mots (texte libre) donnant une
-    # orientation sémantique à la grille, à la demande explicite de
-    # l'utilisateur. Non vide -> `_run_generate_job` fait une pré-recherche
-    # Qdrant par mot-clef, par longueur (voir THEME_LENGTH_MIN/MAX/
-    # THEME_MIN_SCORE), et passe le glossaire obtenu à
-    # generate_grid(priority_words=...). `None`/vide = grille ordinaire,
-    # aucune pré-recherche. Non borné par une contrainte pydantic (comme
-    # `pseudo`) : nettoyé dans _run_generate_job.
+    # Optional theme: a list of words (free text) giving a
+    # semantic orientation to the grid, at the user's explicit
+    # request. Non-empty -> `_run_generate_job` runs a Qdrant
+    # pre-search per keyword, per length (see THEME_LENGTH_MIN/MAX/
+    # THEME_MIN_SCORE), and passes the resulting glossary to
+    # generate_grid(priority_words=...). `None`/empty = ordinary grid,
+    # no pre-search. Not bounded by a pydantic constraint (like
+    # `pseudo`): cleaned up in _run_generate_job.
     theme: Optional[str] = None
-    # Champ "Précision thématique" du formulaire (à la suite de "Mode"), à
-    # la demande explicite de l'utilisateur : "permettant de configurer à
-    # la main THEME_MIN_SCORE". Seuil de similarité Qdrant minimal pour
-    # qu'un mot entre dans le glossaire thématique de CETTE génération —
-    # passé comme `min_score` à _compiled_theme_words_by_length /
-    # _theme_words_by_length. Par défaut la constante module
-    # THEME_MIN_SCORE (0.68). Sans effet si `theme` est vide.
+    # "Précision thématique" (theme precision) form field (right after "Mode"), at
+    # the user's explicit request: "to be able to configure
+    # THEME_MIN_SCORE by hand". Minimum Qdrant similarity threshold for
+    # a word to enter THIS generation's theme glossary —
+    # passed as `min_score` to _compiled_theme_words_by_length /
+    # _theme_words_by_length. Defaults to the module
+    # constant THEME_MIN_SCORE (0.68). Has no effect if `theme` is empty.
     theme_precision: float = Field(
         default=THEME_MIN_SCORE, ge=0.0, le=1.0,
-        description="Seuil de similarité Qdrant minimal du glossaire thématique (0.0 à 1.0)",
+        description="Minimum Qdrant similarity threshold for the theme glossary (0.0 to 1.0)",
     )
-    # Origine de la requête, à la demande explicite de l'utilisateur :
-    # "Populate : quand une demande vient de Populate, générer les
-    # définitions sans paralléliser plusieurs requêtes en parallèle, pour
-    # ne pas surcharger le GPU pour les utilisateurs." `None` (une requête
-    # ordinaire du web UI) par défaut — `Automation/Populate.py` est le
-    # seul appelant à envoyer `"populate"` ici (voir sa propre
-    # `_build_request()`). `_run_generate_job` lit ce champ pour forcer
-    # `clue_generator.generate(batch_parallelism=1)` (voir backend/
-    # clues.py's own docstring) uniquement pour ce cas — CLUES_QUEUE
-    # sérialise déjà les jobs entre eux, mais un seul job peut encore
-    # tirer jusqu'à CLUE_BATCH_PARALLELISM requêtes LLM concurrentes, ce
-    # qui pouvait ralentir un vrai utilisateur appelant en parallèle un
-    # endpoint hors file (ex. "Proposer une définition"/"Proposer un
-    # titre"). Non borné par une contrainte pydantic : une valeur
-    # inconnue est simplement ignorée (traitée comme une requête
-    # ordinaire), jamais un 422.
+    # Origin of the request, at the user's explicit request:
+    # "Populate: when a request comes from Populate, generate the
+    # definitions without parallelizing several requests at once, so as
+    # not to overload the GPU for real users." `None` (an ordinary
+    # web UI request) by default — `Automation/Populate.py` is the
+    # only caller that ever sends `"populate"` here (see its own
+    # `_build_request()`). `_run_generate_job` reads this field to force
+    # `clue_generator.generate(batch_parallelism=1)` (see backend/
+    # clues.py's own docstring) only for this case — CLUES_QUEUE
+    # already serializes jobs against each other, but a single job can
+    # still fire up to CLUE_BATCH_PARALLELISM concurrent LLM requests, which
+    # could slow down a real user calling in parallel an
+    # out-of-queue endpoint (e.g. "Proposer une définition"/"Proposer un
+    # titre"). Not bounded by a pydantic constraint: an
+    # unknown value is simply ignored (treated as an
+    # ordinary request), never a 422.
     source: Optional[str] = None
 
 
@@ -887,6 +879,23 @@ class InteractiveCandidatesRequest(BaseModel):
     job_id: str
     grid: list[list[str]]
     cells: list[list[int]]
+
+
+class InteractiveCrossingRequest(BaseModel):
+    """Body of POST /api/interactive/crossing — the "Croisés" button, at
+    the user's explicit request: "à droite du bouton Mots, ajouter un
+    bouton Croisés : identifie les lettres compatibles avec un mot dans
+    chaque sens (peut être restreint par les lettres en place)... pour
+    chaque lettre compatible avec un mot dans chaque sens, lister les
+    mots horizontaux..., et les mots verticaux..." Unlike
+    `InteractiveCandidatesRequest` (a whole slot's own `cells`), this
+    button reasons about the crossing of TWO emplacements (horizontal AND
+    vertical) through a single cell — so it only ever needs that one
+    `cell`, never a pre-resolved cell list; the backend derives both
+    emplacements itself (see `interactive_crossing_words`)."""
+    job_id: str
+    grid: list[list[str]]
+    cell: list[int]
 
 
 class InteractiveImpossibleRequest(BaseModel):
@@ -1028,6 +1037,19 @@ class InteractiveFinishRequest(BaseModel):
     # derived from the session) — this is who's using the browser right
     # now, not necessarily tracked anywhere on the session itself.
     pseudo: Optional[str] = None
+    # "Finir la zone" — `None`/empty (the default) is plain "Finir la
+    # grille", completely unaffected. When given, this is the ALREADY
+    # whole-emplacement-expanded selection the player drag-selected
+    # client-side (script.js's interactiveZoneSelection — every [row, col]
+    # of it, not just the raw dragged rectangle), at the user's explicit
+    # request: "lance un processus de remplissage automatique similaire à
+    # 'Finir la grille', mais en verrouillant tous les emplacements qui ne
+    # font pas partie de la sélection (en plus des lettres et cases noires
+    # déjà en place)." Every currently-blank cell NOT in this list gets
+    # permanently frozen black (see `interactive_finish`) — a cell already
+    # carrying a letter is locked exactly like "Finir la grille" already
+    # does, regardless of whether it's inside or outside the zone.
+    zone_cells: Optional[list[list[int]]] = None
 
 
 class InteractiveWorkIdRequest(BaseModel):
@@ -1221,52 +1243,49 @@ def health():
 
 
 class PresenceRequest(BaseModel):
-    """Corps de POST /api/presence — battement de cœur d'un onglet de
-    l'interface web (toutes les 2s). `session_id` : identifiant opaque
-    stable pour ce chargement de page ; `pseudo` : pseudo courant de
-    l'utilisateur (vide tant que le panneau d'accueil n'est pas validé).
-    Bornés défensivement — ce sont des chaînes fournies par le client,
-    utilisées uniquement comme clés en mémoire, jamais sur disque."""
+    """Body of POST /api/presence — a heartbeat from one web UI tab
+    (every 2s). `session_id`: a stable opaque id for this page load;
+    `pseudo`: the user's current pseudo (empty until the welcome panel is
+    validated). Defensively bounded — these are client-supplied strings,
+    used only as in-memory keys, never written to disk."""
     session_id: str = Field(..., min_length=1, max_length=200)
     pseudo: Optional[str] = None
 
 
 def _presence_snapshot(record=None):
-    """Sous `_PRESENCE_LOCK` : enregistre éventuellement un battement
-    (`record` = `(session_id, entry)`), purge les sessions expirées,
-    applique le plafond anti-abus, puis renvoie
-    `(count, pseudos, changed)` :
+    """Under `_PRESENCE_LOCK`: optionally records a heartbeat (`record` =
+    `(session_id, entry)`), purges expired sessions, applies the anti-abuse
+    cap, then returns `(count, pseudos, changed)`:
 
-    - `count`  : nombre d'utilisateurs actifs distincts — dédoublonné par
-      pseudo (deux onglets d'une même personne = un utilisateur), une
-      session encore sans pseudo comptant pour elle-même ;
-    - `pseudos`: la liste à consigner — les pseudos distincts triés
-      (insensible à la casse), suivis d'un `(anonyme)` par session encore
-      sans pseudo, de sorte que `len(pseudos) == count` ;
-    - `changed`: `True` si et seulement si `pseudos` (la LISTE complète,
-      pas seulement sa longueur) diffère de la dernière liste consignée
-      dans LOG_USERS — et, dans ce cas, met à jour ce marqueur ici même
-      (sous le verrou), de sorte qu'un seul appelant voit jamais une
-      transition donnée et écrit une seule ligne. Un utilisateur passant
-      d'anonyme à nommé, ou changeant de pseudo, déclenche donc une
-      nouvelle ligne même quand l'effectif total, lui, ne bouge pas.
+    - `count`  : the number of distinct active users — de-duplicated by
+      pseudo (two tabs of the same person = one user), a session still
+      without a pseudo counting on its own;
+    - `pseudos`: the list to log — the distinct pseudos, sorted
+      case-insensitively, followed by one `(anonyme)` per session still
+      without a pseudo, so `len(pseudos) == count`;
+    - `changed`: `True` if and only if `pseudos` (the WHOLE list, not
+      just its length) differs from the last list logged to LOG_USERS —
+      and, in that case, updates that marker right here (under the lock),
+      so exactly one caller ever sees a given transition and writes a
+      single line. A user going from anonymous to named, or changing
+      pseudo, therefore triggers a new line even when the total headcount
+      itself doesn't move.
 
-    Le verrou ne couvre que ce recalcul en mémoire ; l'appelant fait
-    l'écriture disque (`_write_users_log`) en dehors."""
+    The lock only covers this in-memory recomputation; the caller does
+    the disk write (`_write_users_log`) outside of it."""
     global _last_logged_pseudos
     with _PRESENCE_LOCK:
         now = time.monotonic()
         if record is not None:
             sid, entry = record
             _PRESENCE[sid] = entry
-        # Purge des sessions expirées — garde le dict borné à « ce qui a
-        # émis un battement dans les PRESENCE_TTL_S (60s) dernières
-        # secondes ».
+        # Purges expired sessions — keeps the dict bounded to "whatever
+        # sent a heartbeat within the last PRESENCE_TTL_S (60s) seconds".
         for sid in [s for s, e in _PRESENCE.items()
                     if now - e["last_seen"] > PRESENCE_TTL_S]:
             del _PRESENCE[sid]
-        # Filet de sécurité contre un client abusif : si malgré la purge
-        # le dict dépasse le plafond, on retire les plus anciens.
+        # A safety net against an abusive client: if the dict is still
+        # over the cap despite the purge, drop the oldest entries.
         if len(_PRESENCE) > MAX_PRESENCE_ENTRIES:
             for sid, _ in sorted(_PRESENCE.items(),
                                  key=lambda kv: kv[1]["last_seen"])[
@@ -1289,10 +1308,10 @@ def _presence_snapshot(record=None):
 
 
 def _write_users_log(count, pseudos):
-    """Ajoute une ligne à `LOG_USERS/<AAAA-MM-JJ>.log` :
-    `AAAA-MM-JJ HH:MM:SS | <count> | <pseudo1, pseudo2, ...>`. Best-effort
-    — un échec est seulement journalisé, jamais laissé remonter (même
-    convention que toute autre écriture de journal de ce projet)."""
+    """Appends a line to `LOG_USERS/<YYYY-MM-DD>.log`:
+    `YYYY-MM-DD HH:MM:SS | <count> | <pseudo1, pseudo2, ...>`. Best-effort
+    — a failure is only logged, never let to propagate (the same
+    convention as every other log write in this project)."""
     try:
         USERS_LOG_DIR.mkdir(parents=True, exist_ok=True)
         now = datetime.datetime.now()
@@ -1307,44 +1326,40 @@ def _write_users_log(count, pseudos):
 
 def _write_theme_log(short_id, theme, description, words,
                      keyword_lists=None, searched_keywords=None, min_score=None):
-    """Écrit `LOG_THEME/<timestamp>_<short_id>.log`, le nom préfixé par un
-    timestamp complet (`%Y%m%d-%H%M%S-%f`) comme pour `LOG_LLM/`
-    (`backend/clues.py`, `_write_call_log`) — à la demande explicite de
-    l'utilisateur ("Préfixer les sauvegarde dans LOG_THEME avec un
-    timestamp, comme pour LOG_LLM") — plutôt que la simple date utilisée
-    jusque-là, pour que les fichiers se trient chronologiquement à la
-    seconde/microseconde près, cohérent avec les autres journaux de ce
-    projet. À la demande explicite de l'utilisateur, la PREMIÈRE ligne du
-    fichier est la phrase produite par le LLM pour décrire la thématique
-    (`description`) — ou le thème brut si l'appel LLM a échoué ; suivent
-    le thème saisi, le nombre de mots présélectionnés et un échantillon.
-    Best-effort — un échec est seulement journalisé. À la demande
-    explicite de l'utilisateur ("Lister le glossaire produit dans le
-    LOG_THEME (un mot par ligne)"), le glossaire complet des mots
-    présélectionnés par Qdrant est listé intégralement, un mot par ligne,
-    à la suite de l'en-tête.
+    """Writes `LOG_THEME/<timestamp>_<short_id>.log`, the filename prefixed
+    with a full timestamp (`%Y%m%d-%H%M%S-%f`) like `LOG_LLM/`
+    (`backend/clues.py`, `_write_call_log`) — at the user's explicit
+    request ("Préfixer les sauvegarde dans LOG_THEME avec un timestamp,
+    comme pour LOG_LLM") — rather than the plain date used until then, so
+    files sort chronologically down to the second/microsecond, consistent
+    with this project's other logs. At the user's explicit request, the
+    FIRST line of the file is the sentence the LLM produced to describe
+    the theme (`description`) — or the raw theme if the LLM call failed;
+    then come the typed theme, the number of preselected words, and a
+    sample. Best-effort — a failure is only logged. At the user's explicit
+    request ("Lister le glossaire produit dans le LOG_THEME (un mot par
+    ligne)"), the entire glossary of words preselected by Qdrant is listed
+    in full, one word per line, right after the header.
 
-    `words` : liste de couples `(mot, score)`, déjà triée par longueur de
-    mot croissante par l'appelant (`_theme_words_by_length`) — à la demande
-    explicite de l'utilisateur ("continuer à les lister par taille de mots
-    croissante"). Le score de similarité Qdrant (cosinus, plus haut = plus
-    proche de la thématique) est affiché à côté de chaque mot, à la demande
-    explicite de l'utilisateur ("afficher les scores de chaque mot produit
-    par Qdrant"), et — à la demande explicite de l'utilisateur ("en
-    indiquant le nombre de lettres en plus du score") — le nombre de
-    lettres du mot est affiché entre les deux, chaque champ séparé par une
-    tabulation pour rester facile à parser/aligner.
+    `words`: a list of `(word, score)` pairs, already sorted by increasing
+    word length by the caller (`_theme_words_by_length`) — at the user's
+    explicit request ("continuer à les lister par taille de mots
+    croissante"). The Qdrant similarity score (cosine, higher = closer to
+    the theme) is shown next to each word, at the user's explicit request
+    ("afficher les scores de chaque mot produit par Qdrant"), and — at the
+    user's explicit request ("en indiquant le nombre de lettres en plus du
+    score") — the word's own letter count is shown between the two, each
+    field separated by a tab so the file stays easy to parse/align.
 
-    `keyword_lists` : les listes de mots-clefs produites par le LLM, sous
-    la forme `[(label_ou_None, [mot_clef, ...]), ...]` — `None` pour la
-    liste du thème entier, le mot du thème pour chacune des listes par mot
-    (voir le bloc thématique de `_run_generate_job`). `searched_keywords` :
-    l'ensemble à plat, dédoublonné, des mots-clefs qui ont réellement fait
-    une recherche Qdrant (voir `_split_keywords` /
-    `_compiled_theme_words_by_length`). `min_score` : le seuil de score
-    Qdrant utilisé pour cette génération (champ "Précision thématique",
-    GenerateRequest.theme_precision). Tous journalisés dans l'en-tête pour
-    garder la trace de ce qui a été compilé."""
+    `keyword_lists`: the keyword lists produced by the LLM, shaped as
+    `[(label_or_None, [keyword, ...]), ...]` — `None` for the whole-theme
+    list, the theme's own word for each per-word list (see
+    `_run_generate_job`'s own theme block). `searched_keywords`: the flat,
+    deduplicated set of keywords that actually triggered a Qdrant search
+    (see `_split_keywords`/`_compiled_theme_words_by_length`). `min_score`:
+    the Qdrant score threshold used for this generation (the "Précision
+    thématique" field, `GenerateRequest.theme_precision`). All logged in
+    the header to keep track of what was compiled."""
     try:
         THEME_LOG_DIR.mkdir(parents=True, exist_ok=True)
         now = datetime.datetime.now()
@@ -1415,34 +1430,34 @@ def presence(req: PresenceRequest):
 
 
 class PseudoClaimRequest(BaseModel):
-    """Corps de POST /api/pseudo/claim — soumis à la fermeture du panneau
-    d'accueil (voir frontend/static/script.js, `welcomeForm`), à la
-    demande explicite de l'utilisateur : "ajouter une entrée 'Mot secret'
-    permettant à l'utilisateur de prouver que le pseudo lui appartient."
-    Contrairement à tout autre champ `pseudo` de ce fichier (toujours
-    `Optional[str] = None`, tronqué en silence à MAX_PSEUDO_LENGTH),
-    celui-ci est ici obligatoire (`min_length=1`) — mais volontairement
-    sans `max_length` : une valeur trop longue est tronquée en silence
-    par le corps de la route ci-dessous, jamais rejetée, même convention
-    que partout ailleurs dans ce fichier pour MAX_PSEUDO_LENGTH."""
+    """Body of POST /api/pseudo/claim — submitted when the welcome panel
+    closes (see frontend/static/script.js, `welcomeForm`), at the user's
+    explicit request: "ajouter une entrée 'Mot secret' permettant à
+    l'utilisateur de prouver que le pseudo lui appartient." Unlike every
+    other `pseudo` field in this file (always `Optional[str] = None`,
+    silently truncated to MAX_PSEUDO_LENGTH), this one is required here
+    (`min_length=1`) — but deliberately with no `max_length`: an
+    over-long value is silently truncated by the route body below, never
+    rejected, the same convention used everywhere else in this file for
+    MAX_PSEUDO_LENGTH."""
     pseudo: str = Field(..., min_length=1)
     secret: str = Field(..., min_length=1)
 
 
 @app.post("/api/pseudo/claim")
 def pseudo_claim(req: PseudoClaimRequest):
-    """Vérifie que `secret` correspond au mot secret déjà associé à
-    `pseudo` (backend/secret_store.py), ou l'enregistre si ce pseudo n'a
-    jamais été revendiqué (première utilisation = revendication).
+    """Checks that `secret` matches the secret word already associated
+    with `pseudo` (backend/secret_store.py), or registers it if this
+    pseudo has never been claimed before (first use = claim).
 
-    Renvoie `{"ok": true}` en cas de succès (mot secret correct, ou
-    pseudo tout juste revendiqué) ; `{"ok": false, "code": "pseudo_taken"}`
-    si ce pseudo existe déjà sous un autre mot secret — à la demande
-    explicite de l'utilisateur : "si le Pseudo saisi existe déjà et que
-    le Mot secret ne correspond pas, signaler à l'utilisateur que ce
-    Pseudo est déjà pris, ne pas fermer la boite." Toujours un 200 dans
-    les deux cas : ce n'est pas une erreur de requête, seulement un
-    résultat métier normal que le client doit distinguer lui-même."""
+    Returns `{"ok": true}` on success (correct secret word, or a pseudo
+    just claimed); `{"ok": false, "code": "pseudo_taken"}` if this pseudo
+    already exists under a different secret word — at the user's explicit
+    request: "si le Pseudo saisi existe déjà et que le Mot secret ne
+    correspond pas, signaler à l'utilisateur que ce Pseudo est déjà pris,
+    ne pas fermer la boite." Always a 200 either way: this isn't a request
+    error, only a normal business-logic outcome the client itself must
+    distinguish."""
     pseudo = req.pseudo.strip()[:MAX_PSEUDO_LENGTH]
     secret = req.secret.strip()[:MAX_SECRET_LENGTH]
     if not pseudo or not secret:
@@ -1453,14 +1468,13 @@ def pseudo_claim(req: PseudoClaimRequest):
 
 
 async def _presence_sweep_scheduler():
-    """Tourne en tâche de fond pour toute la durée du processus : toutes
-    les PRESENCE_SWEEP_INTERVAL_S (10s), recalcule l'effectif de présence
-    et consigne une ligne dans LOG_USERS/ s'il a baissé parce que des
-    battements se sont arrêtés (tout le monde a quitté). Sans ce balayage,
-    la purge ne tourne que dans `POST /api/presence`, donc le passage à 0
-    ne serait jamais consigné avant qu'un nouveau visiteur ne se connecte.
-    Ne lève jamais vers l'appelant — toute erreur est seulement
-    journalisée, jamais laissée interrompre la boucle."""
+    """Runs in the background for the whole life of the process: every
+    PRESENCE_SWEEP_INTERVAL_S (10s), recomputes the presence headcount and
+    logs a line to LOG_USERS/ if it dropped because heartbeats stopped
+    (everyone left). Without this sweep, the purge only ever runs inside
+    `POST /api/presence`, so the drop to 0 would never be logged until a
+    new visitor connects. Never raises to the caller — any error is only
+    logged, never allowed to interrupt the loop."""
     while True:
         await asyncio.sleep(PRESENCE_SWEEP_INTERVAL_S)
         try:
@@ -1499,17 +1513,16 @@ async def _resource_usage_sampler():
 
 @app.get("/api/rss")
 def rss_feed():
-    """Renvoie le contenu déjà agrégé/trié de RSS/combined.json (voir
-    fetch_rss_feeds.py), à la demande explicite de l'utilisateur — le
-    panneau "Actu Croisée" de la page d'accueil (frontend/static/script.js)
-    l'appelle une fois au chargement de la page. Aucun parsing XML ici :
-    fetch_rss_feeds.py a déjà fait tout le travail au moment du
-    rafraîchissement quotidien (voir _rss_daily_scheduler ci-dessus) —
-    cette route se contente de relire un fichier JSON déjà prêt. Si ce
-    fichier n'existe pas encore (aucun rafraîchissement n'a encore eu lieu
-    sur cette installation), renvoie une liste vide plutôt qu'une erreur —
-    un panneau vide est un état parfaitement normal et attendu avant la
-    toute première exécution."""
+    """Returns the already-aggregated/sorted content of RSS/combined.json
+    (see fetch_rss_feeds.py), at the user's explicit request — the "Actu
+    Croisée" panel on the home page (frontend/static/script.js) calls it
+    once when the page loads. No XML parsing here: fetch_rss_feeds.py
+    already did all the work at the time of the daily refresh (see
+    _rss_daily_scheduler above) — this route just re-reads an already-
+    ready JSON file. If that file doesn't exist yet (no refresh has ever
+    run on this installation), returns an empty list rather than an
+    error — an empty panel is a perfectly normal, expected state before
+    the very first run."""
     combined_path = RSS_DIR / "combined.json"
     if not combined_path.exists():
         return {"fetched_at": None, "items": []}
@@ -1522,13 +1535,13 @@ def rss_feed():
 
 @app.get("/api/scrapp")
 def scrapp_links():
-    """Miroir exact de `rss_feed()` ci-dessus, pour SCRAPP/combined.json
-    (voir fetch_grid_links.py) au lieu de RSS/combined.json — à la
-    demande explicite de l'utilisateur : "Ajoute les entrées de SCRAPP
-    aux journal de la première page." Même route "lecture seule d'un JSON
-    déjà prêt" (aucune re-requête vers grillesdujour.fr à chaque appel),
-    même dégradation gracieuse (liste vide) si le fichier n'existe pas
-    encore ou est illisible."""
+    """Exact mirror of `rss_feed()` above, for SCRAPP/combined.json (see
+    fetch_grid_links.py) instead of RSS/combined.json — at the user's
+    explicit request: "Ajoute les entrées de SCRAPP aux journal de la
+    première page." Same "read-only from an already-ready JSON file"
+    approach (no re-request to grillesdujour.fr on every call), same
+    graceful degradation (empty list) if the file doesn't exist yet or
+    can't be read."""
     combined_path = SCRAPP_DIR / "combined.json"
     if not combined_path.exists():
         return {"fetched_at": None, "items": []}
@@ -1576,16 +1589,15 @@ _LIBRARY_DIFFICULTY_FILTERS = ("easy", "medium", "hard")
 
 
 class GridGameSaveRequest(BaseModel):
-    """Corps de POST /api/game/save — autosauvegarde de la partie en cours
-    d'un joueur sur une grille de la bibliothèque (voir grid_store.
-    save_grid_game), à la demande explicite de l'utilisateur : "A chaque
-    modification de la grille, sauvegarder l'état de la grille dans
-    GRID_GAME avec le nom de l'utilisateur... Inclure l'état du compteur
-    temps." `grid_id` doit correspondre à une grille réellement stockée
-    (id de GRID_STORE, voir grid_store._GRID_ID_RE) ; `pseudo` est
-    obligatoire — le frontend ne déclenche cet appel que si un pseudo est
-    déjà défini (voir script.js's scheduleGridGameSave), mais l'endpoint
-    le revalide quand même côté serveur."""
+    """Body of POST /api/game/save — autosave of a player's in-progress
+    game on a library grid (see grid_store.save_grid_game), at the user's
+    explicit request: "A chaque modification de la grille, sauvegarder
+    l'état de la grille dans GRID_GAME avec le nom de l'utilisateur...
+    Inclure l'état du compteur temps." `grid_id` must match a genuinely
+    stored grid (a GRID_STORE id, see grid_store._GRID_ID_RE); `pseudo`
+    is required — the frontend only ever fires this call once a pseudo
+    is already set (see script.js's scheduleGridGameSave), but the
+    endpoint still revalidates it server-side."""
     grid_id: str
     pseudo: str
     user_letters: list[list[str]]
@@ -1593,96 +1605,92 @@ class GridGameSaveRequest(BaseModel):
 
 
 class LibraryListRequest(BaseModel):
-    """Corps de POST /api/library — même rôle que les paramètres de query
-    de la route GET, mais en POST pour pouvoir transporter `seen_ids`, qui
-    peut compter des milliers d'identifiants (bien au-delà de ce qu'une
-    query string, ou un cookie, encaisse raisonnablement — voir
-    frontend/static/script.js, qui garde l'ensemble en localStorage)."""
+    """Body of POST /api/library — the same role as the GET route's query
+    parameters, but as a POST so it can carry `seen_ids`, which can hold
+    thousands of ids (well past what a query string, or a cookie, can
+    reasonably take — see frontend/static/script.js, which keeps the
+    whole set in localStorage)."""
     preferred_language: str = "fr"
     page: int = 1
-    # Filtre de langue, à la demande explicite de l'utilisateur ("Par
-    # défaut, n'afficher que les grilles dans la langue de l'interface") :
-    # "all" -> toutes langues ; un code (fr/en/de/es/it) -> seulement
-    # cette langue. `preferred_language` continue de piloter l'ordre de
-    # tri (cette langue d'abord), indépendamment de ce filtre. Le
-    # frontend l'initialise à la langue de l'interface (voir
-    # #library-language-filter).
+    # Language filter, at the user's explicit request ("Par défaut,
+    # n'afficher que les grilles dans la langue de l'interface"): "all" ->
+    # every language; a code (fr/en/de/es/it) -> only that language.
+    # `preferred_language` still drives the sort order (that language
+    # first) independently of this filter. The frontend initializes it
+    # to the interface language (see #library-language-filter).
     language_filter: str = "all"
-    # Filtre de niveau, à la demande explicite de l'utilisateur : "all"
-    # (défaut, "Tous les niveaux") -> tous ; "easy"/"medium"/"hard" ->
-    # seulement les grilles de ce niveau. Le frontend l'initialise à
-    # "all" et ne le fait pas suivre la langue de l'interface.
+    # Difficulty filter, at the user's explicit request: "all" (default,
+    # "Tous les niveaux") -> every grid; "easy"/"medium"/"hard" -> only
+    # grids of that level. The frontend initializes it to "all" and does
+    # not tie it to the interface language.
     difficulty_filter: str = "all"
-    # "all" (défaut) : liste complète, chaque grille juste annotée seen=…
-    # "unseen" : seulement les grilles absentes de seen_ids
-    # "seen"   : seulement celles présentes dans seen_ids
-    # "mine"   : seulement les grilles dont le champ `pseudo` correspond à
-    #            `pseudo` ci-dessous (rien si `pseudo` est vide), à la
-    #            demande explicite de l'utilisateur ("ajouter une entrée
-    #            'Mes grilles'").
+    # "all" (default): the full list, every grid just annotated seen=…
+    # "unseen": only grids absent from seen_ids
+    # "seen"  : only ones present in seen_ids
+    # "mine"  : only grids whose `pseudo` field matches `pseudo` below
+    #           (nothing if `pseudo` is empty), at the user's explicit
+    #           request ("ajouter une entrée 'Mes grilles'").
     seen_filter: str = "all"
-    # Identifiants (champ `id` d'un fichier GRID_STORE) des grilles que ce
-    # client a déjà vues. Borné défensivement — un client normal en a au
-    # plus quelques milliers ; au-delà c'est du bruit qu'on ignore.
+    # Ids (a GRID_STORE file's own `id` field) of the grids this client
+    # has already seen. Defensively bounded — a normal client has at most
+    # a few thousand; beyond that it's noise we ignore.
     seen_ids: list[str] = Field(default_factory=list, max_length=100_000)
-    # Pseudo de l'utilisateur courant — utilisé seulement quand
-    # `seen_filter == "mine"`. `None`/vide : le filtre "Mes grilles" ne
-    # renvoie rien.
+    # The current user's pseudo — only used when `seen_filter == "mine"`.
+    # `None`/empty: the "Mes grilles" filter returns nothing.
     pseudo: Optional[str] = None
 
 
 def _library_page(preferred_language, page, seen_filter, seen_ids,
                   language_filter="all", difficulty_filter="all", pseudo=None):
-    """Coeur partagé de GET et POST /api/library — la liste (métadonnées
-    seulement, jamais la grille entière : voir backend/grid_store.py's
-    list_grids) des grilles de GRID_STORE/, triées langue configurée
-    d'abord puis anglais puis le reste, plus récente en premier dans
-    chaque groupe, filtrée par `language_filter`, `difficulty_filter` puis
-    par `seen_filter`/`seen_ids` (ou `seen_filter=="mine"` : seulement les
-    grilles dont `pseudo` correspond au `pseudo` passé), puis paginée par
-    `LIBRARY_PAGE_SIZE` (20).
+    """Shared core of GET and POST /api/library — the list (metadata only,
+    never the whole grid: see backend/grid_store.py's list_grids) of
+    GRID_STORE/'s grids, sorted with the configured language first, then
+    English, then the rest, most recent first within each group, filtered
+    by `language_filter`, `difficulty_filter`, then `seen_filter`/
+    `seen_ids` (or, for `seen_filter=="mine"`: only grids whose `pseudo`
+    matches the given `pseudo`), then paginated by `LIBRARY_PAGE_SIZE`
+    (20).
 
-    `list_grids()` elle-même reste inchangée (toujours la liste complète
-    triée, toutes langues) ; le filtrage par langue ("all" ou un code) et
-    "déjà vue / pas encore vue" et la pagination sont des préoccupations
-    de cette route. `preferred_language` pilote seulement l'ordre de tri,
-    pas le filtrage. Exception : avec `language_filter=="all"`, le
-    regroupement par langue de list_grids() est annulé et la liste
-    repasse en ordre purement chronologique inverse. Les filtrages se font AVANT la pagination pour que
-    `total`/le nombre de pages reflètent la liste réellement montrée.
-    Chaque grille renvoyée porte en plus `seen` (bool) pour que le
-    frontend puisse la griser sans re-consulter son propre stockage.
-    `page` bornée à 1 au minimum ; une page au-delà de la dernière renvoie
-    une liste vide, pas une erreur.
+    `list_grids()` itself stays unchanged (always the full sorted list,
+    every language); the language filter ("all" or a code), "already
+    seen / not yet seen", and pagination are all this route's own
+    concern. `preferred_language` only drives the sort order, never the
+    filtering. Exception: with `language_filter=="all"`, list_grids()'s
+    own language grouping is undone and the list falls back to pure
+    reverse-chronological order. Filtering happens BEFORE pagination so
+    `total`/the page count reflect the list actually shown. Every
+    returned grid also carries `seen` (bool) so the frontend can grey it
+    out without re-consulting its own storage. `page` is floored to 1; a
+    page past the last one returns an empty list, not an error.
 
-    Le filtre "bilingual" subit la même annulation du regroupement que
-    "all", à la demande explicite de l'utilisateur : "La liste des
-    grilles de la Bibliothèque Bilingue doit être classée dans l'ordre
-    chronologique inverse (et non regroupé par langues)." Le regroupement
-    de list_grids() se fait sur le champ `language` (la langue primaire)
-    de chaque grille — pour une grille bilingue, ce champ varie d'une
-    grille à l'autre (fr/en, es/it, ...), donc ce regroupement n'est
-    JAMAIS un no-op ici, contrairement au cas d'une langue précise (où
-    toutes les lignes partagent déjà la même langue)."""
+    The "bilingual" filter gets the same grouping cancellation as "all",
+    at the user's explicit request: "La liste des grilles de la
+    Bibliothèque Bilingue doit être classée dans l'ordre chronologique
+    inverse (et non regroupé par langues)." list_grids()'s own grouping
+    works on each grid's `language` field (its primary language) — for a
+    bilingual grid, that field varies from one grid to the next (fr/en,
+    es/it, ...), so this grouping is NEVER a no-op here, unlike the case
+    of one specific language (where every row already shares the same
+    language)."""
     if seen_filter not in _LIBRARY_SEEN_FILTERS:
         seen_filter = "all"
-    # "bilingual" (voir GRID_STORE/bilingual/, backend/grid_store.py's
-    # save_grid_json) n'est jamais une vraie clé de WORDLISTS — filtré
-    # séparément, sur le champ `bilingual` de chaque grille plutôt que sur
-    # son `language` (qui reste toujours sa langue primaire), à la
-    # demande explicite de l'utilisateur : "ajouter Bilingue dans le
-    # sélecteur de langue de la Bibliothèque."
+    # "bilingual" (see GRID_STORE/bilingual/, backend/grid_store.py's
+    # save_grid_json) is never a real WORDLISTS key — filtered
+    # separately, on each grid's own `bilingual` field rather than its
+    # `language` (which always stays its primary language), at the
+    # user's explicit request: "ajouter Bilingue dans le sélecteur de
+    # langue de la Bibliothèque."
     only_bilingual = language_filter == "bilingual"
     only_language = language_filter if language_filter in WORDLISTS else None
-    # Filtre de niveau (easy/medium/hard) — "all"/toute valeur inconnue
-    # laisse tout passer, à la demande explicite de l'utilisateur.
+    # Difficulty filter (easy/medium/hard) — "all"/any unknown value lets
+    # everything through, at the user's explicit request.
     only_difficulty = (
         difficulty_filter if difficulty_filter in _LIBRARY_DIFFICULTY_FILTERS else None
     )
     seen = set(seen_ids or ())
-    # "Mes grilles" : filtre sur le champ `pseudo` de chaque grille, à la
-    # demande explicite de l'utilisateur. Un `pseudo` vide ne matche
-    # rien (le sélecteur "Mes grilles" est alors sans objet).
+    # "Mes grilles": filters on each grid's own `pseudo` field, at the
+    # user's explicit request. An empty `pseudo` matches nothing (the
+    # "Mes grilles" filter is then moot).
     my_pseudo = (pseudo or "").strip()
     rows = []
     for g in list_grids(preferred_language):
@@ -1692,14 +1700,14 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
             if not g.get("bilingual"):
                 continue
         elif only_language is not None:
-            # Une langue précise (jamais "all"/"bilingual" — only_language
-            # n'est posé que pour une vraie clé de WORDLISTS) exclut aussi
-            # les grilles bilingues dont `language` correspond, à la
-            # demande explicite de l'utilisateur : "quand une seule langue
-            # est sélectionnée, ne pas afficher les grilles bilingues" —
-            # une grille bilingue ne se montre alors que via le filtre
-            # "Bilingue" lui-même, jamais mélangée dans la liste d'une
-            # seule langue même si celle-ci est sa langue primaire.
+            # A specific language (never "all"/"bilingual" — only_language
+            # is only ever set for a real WORDLISTS key) also excludes a
+            # bilingual grid whose `language` matches, at the user's
+            # explicit request: "quand une seule langue est sélectionnée,
+            # ne pas afficher les grilles bilingues" — a bilingual grid
+            # then only ever shows through the "Bilingue" filter itself,
+            # never mixed into a single-language list even if that
+            # language is its own primary one.
             if g.get("language") != only_language or g.get("bilingual"):
                 continue
         is_seen = g.get("id") in seen
@@ -1712,15 +1720,14 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         ):
             continue
         rows.append({**g, "seen": is_seen})
-    # "Toutes les langues" ET "Bilingue" (ni l'un ni l'autre n'est une
-    # vraie clé de WORDLISTS) : ordre purement chronologique inverse, sans
-    # le regroupement par langue que list_grids() applique pour la vue par
-    # défaut — à la demande explicite de l'utilisateur, y compris pour
-    # "Bilingue" spécifiquement : "La liste des grilles de la Bibliothèque
-    # Bilingue doit être classé dans l'ordre chronologique inverse (et non
-    # regroupé par langues)." Un filtre sur une langue précise rend ce
-    # regroupement inopérant de toute façon (toutes les lignes partagent la
-    # même langue), donc on ne re-trie que dans ce seul cas-là.
+    # "Toutes les langues" AND "Bilingue" (neither is a real WORDLISTS
+    # key): pure reverse-chronological order, without the language
+    # grouping list_grids() applies for the default view — at the user's
+    # explicit request, "Bilingue" specifically included: "La liste des
+    # grilles de la Bibliothèque Bilingue doit être classé dans l'ordre
+    # chronologique inverse (et non regroupé par langues)." A filter on a
+    # specific language makes this grouping moot anyway (every row already
+    # shares the same language), so we only re-sort in this one case.
     if only_language is None:
         rows.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     page = max(1, page)
@@ -1735,22 +1742,22 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
 
 @app.get("/api/library")
 def library_list(preferred_language: str = "fr", page: int = 1):
-    """Bouton "Bibliothèque" de l'interface — voir _library_page. Cette
-    variante GET (sans filtre langue ni notion de grilles vues) est
-    conservée pour un accès simple ; le frontend utilise POST /api/library
-    pour transmettre le filtre de langue et la liste des grilles déjà vues
-    (voir LibraryListRequest)."""
+    """"Bibliothèque" button of the interface — see _library_page. This
+    GET variant (no language filter, no notion of already-seen grids) is
+    kept for simple access; the frontend uses POST /api/library to
+    transmit the language filter and the list of already-seen grids
+    (see LibraryListRequest)."""
     return _library_page(preferred_language, page, "all", (), "all")
 
 
 @app.post("/api/library")
 def library_list_filtered(req: LibraryListRequest):
-    """Comme GET /api/library, mais le corps porte `language_filter`,
-    `seen_filter` + `seen_ids` (voir LibraryListRequest) : le back filtre
-    la liste par langue et par "déjà vue", l'annote, puis la pagine, à la
-    demande explicite de l'utilisateur ("Passer les grilles déjà vues au
-    Back pour qu'il sache comment gérer la liste à transmettre au
-    Front")."""
+    """Like GET /api/library, but the body carries `language_filter`,
+    `seen_filter` + `seen_ids` (see LibraryListRequest): the backend
+    filters the list by language and by "already seen", annotates it,
+    then paginates it, at the user's explicit request ("Passer les
+    grilles déjà vues au Back pour qu'il sache comment gérer la liste à
+    transmettre au Front")."""
     return _library_page(
         req.preferred_language, req.page, req.seen_filter, req.seen_ids,
         req.language_filter, req.difficulty_filter, req.pseudo,
@@ -1759,25 +1766,24 @@ def library_list_filtered(req: LibraryListRequest):
 
 @app.get("/api/library/{grid_id}")
 def library_get(grid_id: str, pseudo: str = ""):
-    """Charge une grille précédemment sauvegardée pour la rejouer —
-    renvoie exactement la même forme qu'un job terminé (`result`, voir
-    _run_generate_job), avec en plus les métadonnées de la bibliothèque
-    (id/titre/langue/difficulté/mode/date), pour que le frontend puisse
-    l'afficher via le même chemin de code qu'une génération qui vient de
-    se terminer (voir frontend/static/script.js's displayFinalGrid).
+    """Loads a previously saved grid to play again — returns exactly the
+    same shape as a finished job's own `result` (see _run_generate_job),
+    plus the library's own metadata (id/title/language/difficulty/mode/
+    date), so the frontend can display it through the same code path as a
+    generation that just finished (see frontend/static/script.js's
+    displayFinalGrid).
 
-    `pseudo` (optionnel) : si renseigné, cherche aussi dans GRID_GAME
-    (voir grid_store.get_grid_game) une partie déjà sauvegardée par ce
-    joueur pour cette grille précise, et l'ajoute au résultat sous
-    `saved_game` (`{user_letters, elapsed_seconds}`, ou absent/None si
-    rien n'a été trouvé) — à la demande explicite de l'utilisateur :
-    "Dans la Librairie, quand un utilisateur clique pour jouer sur une
-    grille, chercher si cette grille existe dans GRID_GAME pour la
-    recharger et relancer le compteur de temps là où il était à la
-    sauvegarde." Le frontend (loadLibraryGrid) transmet le pseudo courant
-    à chaque appel ; omis, ce champ est simplement absent, sans erreur —
-    une génération fraîchement terminée n'a jamais de partie sauvegardée
-    à chercher (son grid_id vient d'être créé)."""
+    `pseudo` (optional): when given, also looks in GRID_GAME (see
+    grid_store.get_grid_game) for a game this player already saved for
+    this exact grid, and adds it to the result under `saved_game`
+    (`{user_letters, elapsed_seconds}`, or absent/None if nothing was
+    found) — at the user's explicit request: "Dans la Librairie, quand un
+    utilisateur clique pour jouer sur une grille, chercher si cette grille
+    existe dans GRID_GAME pour la recharger et relancer le compteur de
+    temps là où il était à la sauvegarde." The frontend (loadLibraryGrid)
+    sends the current pseudo on every call; omitted, this field is simply
+    absent, with no error — a freshly finished generation never has a
+    saved game to look for (its grid_id was just created)."""
     record = get_grid(grid_id)
     if record is None:
         raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
@@ -1797,10 +1803,10 @@ def library_get(grid_id: str, pseudo: str = ""):
 
 @app.get("/api/library/{grid_id}/pdf")
 async def library_get_pdf(grid_id: str):
-    """Télécharge une grille de la bibliothèque en PDF imprimable — grille
-    VIDE, définitions et titre uniquement, jamais les réponses — à la
-    demande explicite de l'utilisateur. Rendu SVG (render_puzzle_svg) puis
-    converti en PDF via `rsvg-convert -f pdf` (svg_to_pdf_bytes)."""
+    """Downloads a library grid as a printable PDF — an EMPTY grid,
+    definitions and title only, never the answers — at the user's
+    explicit request. Rendered as SVG (render_puzzle_svg) then converted
+    to PDF via `rsvg-convert -f pdf` (svg_to_pdf_bytes)."""
     record = get_grid(grid_id)
     if record is None:
         raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
@@ -1811,8 +1817,8 @@ async def library_get_pdf(grid_id: str):
         )
         pdf_bytes = await asyncio.to_thread(svg_to_pdf_bytes, svg)
     except OSError as exc:
-        # `rsvg-convert` manquant ou en échec — même famille de dépendance
-        # que la génération PNG (voir svg_export.save_grid_png).
+        # `rsvg-convert` missing or failing — the same dependency family
+        # as the PNG generation (see svg_export.save_grid_png).
         raise HTTPException(status_code=503, detail=str(exc))
     slug = _slugify_title(title) if title else "grille"
     return Response(
@@ -1824,15 +1830,14 @@ async def library_get_pdf(grid_id: str):
 
 @app.post("/api/game/save")
 def game_save(req: GridGameSaveRequest):
-    """Autosauvegarde de la partie en cours (voir GridGameSaveRequest /
-    grid_store.save_grid_game) — appelée par le frontend à chaque
-    modification de la grille en mode jeu (lettre tapée ou effacée), tant
-    qu'un pseudo est défini. Toujours un simple accusé de réception
-    (`{"ok": True}`) ; jamais d'erreur si aucune grille GRID_STORE ne
-    correspond réellement à `grid_id` — un game state reste valable même
-    pour une grille qui ne serait, hypothétiquement, plus référencée
-    ailleurs (il n'existe aujourd'hui aucun mécanisme de suppression de
-    grille de la bibliothèque)."""
+    """Autosave of the in-progress game (see GridGameSaveRequest /
+    grid_store.save_grid_game) — called by the frontend on every grid
+    change in play mode (a letter typed or erased), as long as a pseudo
+    is set. Always a plain acknowledgement (`{"ok": True}`); never an
+    error if no GRID_STORE grid genuinely matches `grid_id` — a game
+    state stays valid even for a grid that would, hypothetically, no
+    longer be referenced anywhere else (there is no mechanism today to
+    delete a grid from the library)."""
     if not save_grid_game(req.grid_id, req.pseudo, req.user_letters, req.elapsed_seconds):
         raise HTTPException(status_code=400, detail="identifiant de grille ou pseudo invalide")
     return {"ok": True}
@@ -1840,14 +1845,14 @@ def game_save(req: GridGameSaveRequest):
 
 @app.get("/api/dictionary")
 async def dictionary_search(q: str, lang: str = "fr"):
-    """Recherche de dictionnaire pour le panneau "Dictionnaire" de
-    l'interface, à la demande explicite de l'utilisateur : à partir d'un
-    mot (accents et casse ignorés), liste tous les mots de la même racine
-    tirés de data/wordlist_<lang>_full.tsv, chacun avec ses définitions
-    réelles de data/gloss_dictionary/<lang>_glosses.jsonl. Voir
-    backend/dictionary_lookup.search — l'index par langue est construit une
-    seule fois puis mis en cache (le wordlist fr fait ~200k lignes), d'où
-    l'exécution via asyncio.to_thread."""
+    """Dictionary lookup for the interface's "Dictionnaire" panel, at the
+    user's explicit request: given a word (accents and case ignored),
+    lists every word sharing the same root drawn from
+    data/wordlist_<lang>_full.tsv, each with its real definitions from
+    data/gloss_dictionary/<lang>_glosses.jsonl. See
+    backend/dictionary_lookup.search — the per-language index is built
+    once and then cached (the French wordlist runs to ~200k lines), hence
+    running it via asyncio.to_thread."""
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
     return await asyncio.to_thread(dictionary_search_impl, q, lang)
@@ -1864,24 +1869,24 @@ DEFINE_COUNT = 10
 
 @app.get("/api/dictionary/define")
 async def dictionary_define(q: str, lang: str = "fr", theme: str = ""):
-    """"Définir" bouton du panneau Dictionnaire (voir frontend/static/
-    script.js) : demande au LLM jusqu'à DEFINE_COUNT (10) définitions
-    indépendantes de l'expression saisie, comme pour un mot de grille
-    (backend/clues.py, LLMClueGenerator.generate_definitions — même
-    ancrage réel dictionnaire/exemples, même filtre de contenu — mais un
-    seul appel best-effort, sans la boucle de relance par mot d'une
-    génération de grille). Un ClueGenerationError (LLM injoignable)
-    devient un 503 propre ; le reste de l'UI n'est pas affecté.
+    """"Définir" button of the Dictionnaire panel (see frontend/static/
+    script.js): asks the LLM for up to DEFINE_COUNT (10) independent
+    definitions of the typed expression, the same way as a grid word
+    (backend/clues.py, LLMClueGenerator.generate_definitions — the same
+    real dictionary/example grounding, the same content filter — but a
+    single best-effort call, with none of a grid generation's own
+    per-word retry loop). A ClueGenerationError (LLM unreachable) becomes
+    a clean 503; the rest of the UI is unaffected.
 
-    `theme` (optionnel, "" par défaut) est le contenu actuel du champ
-    "Thématique" du mode Interactif — à la demande explicite de
-    l'utilisateur ("Vérifier que le bouton 'Propose une définition'
-    utilise bien le champ thématique pour les propositions quand il est
-    renseigné") — le bouton "Proposer" (et "Définitions") de ce mode
-    l'envoie systématiquement quand ce champ n'est pas vide (voir
-    frontend/static/script.js's `dictionaryDefineUrl`). Le panneau
-    Dictionnaire générique, lui, n'envoie jamais ce paramètre : sans
-    grille en cours, il n'y a pas de thématique à transmettre."""
+    `theme` (optional, "" by default) is the current content of the
+    "Thématique" field of Interactive mode — at the user's explicit
+    request ("Vérifier que le bouton 'Propose une définition' utilise
+    bien le champ thématique pour les propositions quand il est
+    renseigné") — that mode's "Proposer" (and "Définitions") button
+    always sends it whenever this field isn't empty (see
+    frontend/static/script.js's `dictionaryDefineUrl`). The generic
+    Dictionnaire panel itself never sends this parameter: with no grid in
+    progress, there's no theme to pass along."""
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
     text = q.strip()
@@ -1910,13 +1915,13 @@ PARAPHRASE_TIMEOUT_S = 90.0
 
 @app.get("/api/paraphrase")
 async def paraphrase(q: str, lang: str = "fr"):
-    """"Paraphraser" bouton du panneau "Paraphraseur" (voir frontend/
-    static/script.js), à la demande explicite de l'utilisateur : demande
-    au LLM PARAPHRASE_COUNT (5) reformulations indépendantes du texte
-    saisi (backend/clues.py, LLMClueGenerator.generate_paraphrases — un
-    seul appel best-effort, sans ancrage dictionnaire/exemples, sans la
-    boucle de relance par mot d'une génération de grille). Un
-    ClueGenerationError (LLM injoignable) devient un 503 propre."""
+    """"Paraphraser" button of the "Paraphraseur" panel (see frontend/
+    static/script.js), at the user's explicit request: asks the LLM for
+    PARAPHRASE_COUNT (5) independent rewordings of the typed text
+    (backend/clues.py, LLMClueGenerator.generate_paraphrases — a single
+    best-effort call, with no dictionary/example grounding and none of a
+    grid generation's own per-word retry loop). A ClueGenerationError
+    (LLM unreachable) becomes a clean 503."""
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
     text = q.strip()
@@ -1973,16 +1978,15 @@ def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
 
 def _compiled_similar_words(keywords: list[str], lang: str,
                             min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
-    """Comme `_compiled_theme_words_by_length` mais pour le panneau
-    Dictionnaire : lance une recherche Qdrant du plus-proche-voisin pour
-    CHAQUE mot-clef de `keywords` (embedding + `_iter_scored_words`) et
-    fusionne — chaque mot garde son MEILLEUR score. Deux différences avec
-    la version "glossaire de grille" : (1) aucun filtre de longueur 3-15
-    (une recherche de dictionnaire ne doit pas écarter les mots longs) ;
-    (2) tri par score DÉCROISSANT (l'ordre "plus similaires d'abord" du
-    panneau), pas par longueur. Un mot-clef dont la recherche Qdrant
-    échoue est ignoré ; l'erreur ne se propage que tant qu'aucune
-    recherche n'a abouti (Qdrant/embedder réellement indisponible ->
+    """Like `_compiled_theme_words_by_length` but for the Dictionnaire
+    panel: runs a Qdrant nearest-neighbor search for EVERY keyword in
+    `keywords` (embedding + `_iter_scored_words`) and merges them — each
+    word keeps its BEST score. Two differences from the "grid glossary"
+    version: (1) no 3-15 length filter (a dictionary lookup shouldn't
+    drop long words); (2) sorted by DESCENDING score (the panel's own
+    "most similar first" order), not by length. A keyword whose Qdrant
+    search fails is skipped; the error only propagates as long as no
+    search has succeeded yet (Qdrant/embedder genuinely unavailable ->
     503)."""
     merged: dict[str, float] = {}
     any_ok = False
@@ -2005,22 +2009,21 @@ def _compiled_similar_words(keywords: list[str], lang: str,
 
 def _synonyms_impl(query: str, lang: str,
                     min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
-    """Bouton "Synonymes" du panneau Dictionnaire, à la demande explicite
-    de l'utilisateur : "un bouton 'Synonymes' qui lance une recherche
+    """"Synonymes" button of the Dictionnaire panel, at the user's
+    explicit request: "un bouton 'Synonymes' qui lance une recherche
     Qdrant avec le mot ou l'expression saisie (sans faire appel au LLM
-    pour étendre la recherche, comme le fait Thématique)." Contrairement
-    à `_similar_words_impl` juste en dessous (qui demande d'abord à
-    `describe_theme` une liste d'une trentaine de mots-clefs avant de
-    lancer une recherche Qdrant par mot-clef), cette fonction réutilise
-    directement `_compiled_similar_words` avec la requête brute comme
-    UNIQUE mot-clef — pour une seule entrée, cette fonction se réduit
-    exactement à "embedder la requête telle quelle, chercher dans Qdrant,
-    trier par score décroissant" : aucune expansion, aucun appel LLM,
-    donc aucun risque de dérive thématique (une recherche "chat" reste
-    une recherche du mot "chat" lui-même, jamais élargie à son champ
-    lexical). Même seuil `min_score`/mêmes conventions de tri que
-    `_similar_words_impl`, pour que le panneau puisse réutiliser le même
-    rendu (`renderSimilarWordsResult`) sans distinction."""
+    pour étendre la recherche, comme le fait Thématique)." Unlike
+    `_similar_words_impl` right below (which first asks `describe_theme`
+    for a list of about thirty keywords before running a Qdrant search
+    per keyword), this function directly reuses `_compiled_similar_words`
+    with the raw query as the SOLE keyword — for a single entry, this
+    function reduces exactly to "embed the query as typed, search Qdrant,
+    sort by descending score": no expansion, no LLM call, so no risk of
+    thematic drift at all (a "cat" search stays a search for the word
+    "cat" itself, never widened to its own lexical field). Same
+    `min_score` threshold/same sort convention as `_similar_words_impl`,
+    so the panel can reuse the exact same rendering (`renderSimilarWords
+    Result`) with no distinction."""
     return _compiled_similar_words([query], lang, min_score)
 
 
@@ -2111,15 +2114,13 @@ def _theme_words_by_length(query: str, lang: str,
 
 
 def _split_keywords(text: str) -> list[str]:
-    """Découpe une réponse de `describe_theme` (une liste télégraphique
-    d'environ 30 mots-clefs séparés par des virgules) en mots-clefs
-    individuels — chacun fera ensuite sa propre recherche Qdrant du
-    plus-proche-voisin (voir le bloc thématique de `_run_generate_job` et
-    `_compiled_theme_words_by_length`). Découpe sur les virgules, points-
-    virgules et retours à la ligne ; nettoie chaque morceau ; écarte tout
-    ce qui fait moins de 2 caractères. L'ordre est conservé, aucun
-    dédoublonnage ici (l'appelant met à plat et dédoublonne sur toutes les
-    listes)."""
+    """Splits a `describe_theme` reply (a telegraphic list of about 30
+    comma-separated keywords) into individual keywords — each will then
+    run its own Qdrant nearest-neighbor search (see `_run_generate_job`'s
+    own theme block and `_compiled_theme_words_by_length`). Splits on
+    commas, semicolons and newlines; trims each piece; drops anything
+    under 2 characters. Order is kept, no de-duplication here (the caller
+    flattens and de-duplicates across every list)."""
     out: list[str] = []
     for piece in re.split(r"[,;\n]+", text or ""):
         kw = piece.strip().strip(".").strip()
@@ -2128,20 +2129,20 @@ def _split_keywords(text: str) -> list[str]:
     return out
 
 
-# Un "mot" significatif du champ "Thématique" : une suite de lettres (avec
-# apostrophe/tiret internes tolérés — "l'agriculture", "mots-croisés"
-# comptent chacun pour un seul mot), d'au moins 2 lettres.
+# A significant "word" of the "Thématique" field: a run of letters (an
+# internal apostrophe/hyphen tolerated — "l'agriculture", "mots-croisés"
+# each count as a single word), at least 2 letters long.
 _THEME_TOKEN_RE = re.compile(r"[^\W\d_]+(?:['’\-][^\W\d_]+)*", re.UNICODE)
 
 
 def _theme_tokens(theme: str) -> list[str]:
-    """Les mots distincts de la définition thématique saisie par
-    l'utilisateur — dédoublonnés sans tenir compte de la casse (première
-    graphie conservée), au moins 2 lettres chacun. À la demande explicite
-    de l'utilisateur : "Lorsqu'il y a plusieurs mots dans la définition
-    thématique donnée par l'utilisateur, compiler les glossaires
-    thématiques pour chacun des mots" — voir `_compiled_theme_words_by_
-    length` et le bloc thématique de `_run_generate_job`."""
+    """The distinct words of the theme description the user typed —
+    case-insensitively de-duplicated (first spelling kept), at least 2
+    letters each. At the user's explicit request: "Lorsqu'il y a
+    plusieurs mots dans la définition thématique donnée par l'utilisateur,
+    compiler les glossaires thématiques pour chacun des mots" — see
+    `_compiled_theme_words_by_length` and `_run_generate_job`'s own theme
+    block."""
     seen: set[str] = set()
     out: list[str] = []
     for tok in _THEME_TOKEN_RE.findall(theme or ""):
@@ -2157,26 +2158,25 @@ def _theme_tokens(theme: str) -> list[str]:
 
 def _compiled_theme_words_by_length(keywords: list[str], lang: str,
                                     min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
-    """Exécute `_theme_words_by_length` pour CHAQUE mot-clef de `keywords`
-    et fusionne les glossaires obtenus — chaque mot garde le MEILLEUR
-    score (le plus élevé) vu sur l'ensemble des recherches. À la demande
-    explicite de l'utilisateur : "Compiler toutes les recherches dans
-    Qdrant pour tous les mots de ces listes (dédoublonner les mots)."
-    `keywords` est la liste à plat, déjà dédoublonnée, des mots-clefs
-    extraits des listes produites par le LLM (voir `_split_keywords` et le
-    bloc thématique de `_run_generate_job`) : un mot-clef unique est une
-    requête bien plus nette qu'un seul embedding moyenné sur une phrase de
-    ~30 mots. Chaque recherche applique le seuil `min_score` (le champ
-    "Précision thématique" du formulaire — GenerateRequest.theme_precision
-    —, par défaut la constante THEME_MIN_SCORE) via `_theme_words_by_
-    length`.
+    """Runs `_theme_words_by_length` for EVERY keyword in `keywords` and
+    merges the resulting glossaries — each word keeps the BEST (highest)
+    score seen across every search. At the user's explicit request:
+    "Compiler toutes les recherches dans Qdrant pour tous les mots de ces
+    listes (dédoublonner les mots)." `keywords` is the flat, already
+    de-duplicated list of keywords extracted from the LLM-produced lists
+    (see `_split_keywords` and `_run_generate_job`'s own theme block): a
+    single keyword is a much sharper query than one embedding averaged
+    over a ~30-word sentence. Each search applies the `min_score`
+    threshold (the form's "Précision thématique" field —
+    GenerateRequest.theme_precision —, defaulting to the THEME_MIN_SCORE
+    constant) via `_theme_words_by_length`.
 
-    Le résultat est re-trié par longueur de mot croissante puis score
-    décroissant — exactement l'ordre que renvoie déjà un appel unique à
-    `_theme_words_by_length` (voir `_write_theme_log`). Un mot-clef dont la
-    recherche Qdrant échoue est ignoré ; l'erreur ne se propage que tant
-    qu'aucune recherche n'a encore abouti (Qdrant/embedder réellement
-    indisponible → la génération se fait alors sans thématique)."""
+    The result is re-sorted by increasing word length then descending
+    score — exactly the order a single call to `_theme_words_by_length`
+    already returns (see `_write_theme_log`). A keyword whose Qdrant
+    search fails is skipped; the error only propagates as long as no
+    search has succeeded yet (Qdrant/embedder genuinely unavailable →
+    generation then proceeds with no theme)."""
     merged: dict[str, float] = {}
     any_ok = False
     for kw in keywords:
@@ -2197,20 +2197,19 @@ def _compiled_theme_words_by_length(keywords: list[str], lang: str,
 
 @app.get("/api/similar_words")
 async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_SCORE):
-    """Bouton "Thématique" du panneau Dictionnaire (voir frontend/static/
-    script.js) : TOUS les mots de la collection Qdrant "words" dont le
-    score de similarité avec l'expression saisie atteint `min_score` —
-    la valeur courante du champ "Précision thématique" du formulaire,
-    transmise par le front, à la demande explicite de l'utilisateur
-    ("Dictionnaire / Thématique ... doit être sensible à la modification
-    du paramètre Précision thématique") ; par défaut la constante
-    THEME_MIN_SCORE quand le champ est vide. Restreints au tenant de la
-    langue du panneau, les plus similaires d'abord. Aucun plafond de
-    nombre : le seuil de score est la seule limite. L'embedding et la
-    recherche vectorielle sont bloquants, d'où asyncio.to_thread. Renvoie
-    un 503 propre (code "similar_unavailable") si Qdrant ou le serveur
-    d'embeddings n'est pas lancé, ou si la collection n'a pas encore été
-    alimentée (python -m data_builder.qdrant_populate --all)."""
+    """"Thématique" button of the Dictionnaire panel (see frontend/static/
+    script.js): EVERY word of the Qdrant "words" collection whose
+    similarity score with the typed expression reaches `min_score` — the
+    current value of the form's "Précision thématique" field, sent by the
+    frontend, at the user's explicit request ("Dictionnaire / Thématique
+    ... doit être sensible à la modification du paramètre Précision
+    thématique"); defaults to the THEME_MIN_SCORE constant when the field
+    is empty. Restricted to the panel's own language tenant, most similar
+    first. No count cap at all: the score threshold is the only limit.
+    Embedding and vector search are blocking, hence asyncio.to_thread.
+    Returns a clean 503 (code "similar_unavailable") if Qdrant or the
+    embedding server isn't running, or if the collection hasn't been
+    populated yet (python -m data_builder.qdrant_populate --all)."""
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
     query = q.strip()
@@ -2225,21 +2224,21 @@ async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_S
             status_code=503,
             detail={"code": "similar_unavailable", "message": str(exc)},
         )
-    # `words` : un objet {word, score} par entrée (le score Qdrant est
-    # affiché entre parenthèses à côté de chaque mot dans le panneau
-    # Dictionnaire, à la demande explicite de l'utilisateur).
+    # `words`: one {word, score} object per entry (the Qdrant score is
+    # shown in parentheses next to each word in the Dictionnaire panel,
+    # at the user's explicit request).
     words = [{"word": w, "score": s} for w, s in scored]
     return {"query": query, "lang": lang, "words": words}
 
 
 @app.get("/api/synonyms")
 async def synonyms(q: str, lang: str = "fr", min_score: float = THEME_MIN_SCORE):
-    """Bouton "Synonymes" du panneau Dictionnaire : recherche Qdrant
-    directe sur `q` (embedding brut, aucun appel LLM), contrairement au
-    bouton "Thématique" (`/api/similar_words`) qui étend d'abord la
-    recherche via `describe_theme` — voir `_synonyms_impl`. Même forme de
-    requête/réponse que `/api/similar_words`, réutilisable telle quelle
-    par le même rendu côté frontend."""
+    """"Synonymes" button of the Dictionnaire panel: a direct Qdrant
+    search on `q` (a raw embedding, no LLM call), unlike the "Thématique"
+    button (`/api/similar_words`) which first expands the search via
+    `describe_theme` — see `_synonyms_impl`. Same request/response shape
+    as `/api/similar_words`, reusable as-is by the same frontend
+    rendering."""
     if lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
     query = q.strip()
@@ -2312,10 +2311,10 @@ def _qdrant_admin_impl() -> dict:
 
 @app.get("/api/qdrant/admin")
 async def qdrant_admin():
-    """État lecture seule de la base vectorielle Qdrant, pour le panneau
-    "Qdrant (admin)" de l'interface (visible uniquement en localhost — cf.
-    frontend/server.py). Renvoie toujours 200 : un Qdrant injoignable ou
-    une collection absente sont indiqués par `reachable`/`exists`."""
+    """Read-only state of the Qdrant vector store, for the interface's
+    "Qdrant (admin)" panel (localhost-only — see frontend/server.py).
+    Always returns 200: an unreachable Qdrant or a missing collection are
+    both reported via `reachable`/`exists`."""
     return await asyncio.to_thread(_qdrant_admin_impl)
 
 
@@ -2325,9 +2324,9 @@ class QdrantTenantRequest(BaseModel):
 
 @app.post("/api/qdrant/admin/recreate")
 async def qdrant_admin_recreate():
-    """Supprime puis recrée la collection "words" (+ réindexe le tenant
-    `lang`). Rapide, mais destructif : vide toutes les langues.
-    L'alimentation se relance ensuite via
+    """Drops then recreates the "words" collection (+ re-indexes the
+    `lang` tenant). Fast, but destructive: empties every language.
+    Populating it again is then done via
     `python -m data_builder.qdrant_populate --all`."""
     try:
         info = await asyncio.to_thread(
@@ -2344,8 +2343,8 @@ async def qdrant_admin_recreate():
 
 @app.post("/api/qdrant/admin/delete-tenant")
 async def qdrant_admin_delete_tenant(req: QdrantTenantRequest):
-    """Supprime tous les vecteurs d'une langue (un tenant) de la
-    collection "words". Rapide."""
+    """Deletes every vector of one language (a tenant) from the "words"
+    collection. Fast."""
     if req.lang not in WORDLISTS:
         raise HTTPException(status_code=400, detail=f"langue inconnue : {req.lang!r}")
     try:
@@ -2571,16 +2570,15 @@ def _build_word_verification_table(words, language, bilingual_language=None):
     `w["direction"]` (see crossword_gen.py's `build_word_entries`) so the
     frontend can prefix each coordinate with H/V (frontend/static/
     script.js's `renderWordTable()`)."""
-    # Sur une grille bilingue, `bilingual_language` désigne la langue des
-    # mots verticaux (voir crossword_gen.generate_grid's own `bilingual_
-    # language`) — chaque mot est donc vérifié contre LE DICTIONNAIRE DE
-    # SA PROPRE LANGUE (`w.get("language", language)`, déjà posé par
-    # generate_grid sur chaque entrée), jamais toujours le même. Les deux
-    # paires {wordlist,gloss}_lines sont préchargées une seule fois
-    # chacune (jamais reconstruites par mot) ; `wordlist_lines`/
-    # `gloss_lines` restent les noms utilisés plus bas pour la langue
-    # primaire, avec un second jeu chargé seulement si une grille bilingue
-    # est effectivement en jeu.
+    # On a bilingual grid, `bilingual_language` is the language of the
+    # down words (see crossword_gen.generate_grid's own `bilingual_
+    # language`) — so each word is checked against ITS OWN LANGUAGE'S
+    # dictionary (`w.get("language", language)`, already set by
+    # generate_grid on every entry), never always the same one. Both
+    # {wordlist,gloss}_lines pairs are preloaded exactly once each (never
+    # rebuilt per word); `wordlist_lines`/`gloss_lines` remain the names
+    # used below for the primary language, with a second set loaded only
+    # when a bilingual grid is actually in play.
     wordlist_lines_by_lang = {language: _load_wordlist_raw_lines(language)}
     gloss_lines_by_lang = {language: _load_gloss_raw_lines(language)}
     if bilingual_language and bilingual_language != language:
@@ -2663,39 +2661,38 @@ def _new_job():
 async def _build_theme_glossary(theme, language, theme_precision, short_id,
                                 cancel_event, log_tag, theme_language=None,
                                 clue_gen=clue_generator):
-    """Pré-recherche thématique complète pour UNE langue : expansion LLM en
-    mots-clefs (describe_theme, + une liste par mot du thème + top-ups),
-    puis une recherche Qdrant du plus-proche-voisin par mot-clef dans le
-    tenant de cette langue, puis compilation (_compiled_theme_words_by_
-    length). Renvoie `(priority_words | None, theme_description)`. Appelée
-    une fois pour la langue principale et, sur une grille bilingue, une
-    seconde fois pour la langue des mots verticaux, à la demande explicite
-    de l'utilisateur : "Quand une grille est bilingue, il faut générer un
-    glossaire thématique par langue [...] demander au LLM de générer des
-    mots dans la langue de la grille, en tenant compte du fait que les
-    grilles peuvent être bilingues (une langue différente par sens, mais
-    avec les mêmes mots Thématiques en entrée)." `log_tag` distingue les
-    lignes de journal et le nom du fichier LOG_THEME/ des deux appels.
+    """Complete themed pre-search for ONE language: LLM expansion into
+    keywords (describe_theme, + a list per theme word + top-ups), then a
+    Qdrant nearest-neighbor search per keyword in that language's tenant,
+    then compilation (_compiled_theme_words_by_length). Returns
+    `(priority_words | None, theme_description)`. Called once for the
+    primary language and, on a bilingual grid, a second time for the
+    down-words language, at the user's explicit request: "Quand une
+    grille est bilingue, il faut générer un glossaire thématique par
+    langue [...] demander au LLM de générer des mots dans la langue de la
+    grille, en tenant compte du fait que les grilles peuvent être
+    bilingues (une langue différente par sens, mais avec les mêmes mots
+    Thématiques en entrée)." `log_tag` distinguishes the log lines and the
+    LOG_THEME/ filename of the two calls.
 
-    `theme_language` (`None` par défaut — aucun effet) est la langue dans
-    laquelle `theme` a probablement été tapé, quand elle est CONNUE et
-    DIFFÉRENTE de `language` — c'est-à-dire uniquement pour le second
-    appel (bilingue), dont la langue cible diffère par construction de la
-    langue principale. Passé tel quel à chaque appel `describe_theme(...,
-    verify_translation=...)` de cette fonction (l'appel du thème entier,
-    chaque appel par mot, et les top-ups) — voir ce paramètre pour la
-    raison de ne l'activer QUE lorsqu'un décalage de langue est
-    réellement probable (un faux positif sur le cas courant, même
-    langue, coûterait des tentatives inutiles pour rien).
+    `theme_language` (`None` by default — no effect) is the language
+    `theme` was probably typed in, when it is KNOWN and DIFFERENT from
+    `language` — i.e. only for the second (bilingual) call, whose target
+    language differs by construction from the primary one. Passed as-is
+    to every `describe_theme(..., verify_translation=...)` call this
+    function makes (the whole-theme call, each per-word call, and the
+    top-ups) — see that parameter for why it's only ever enabled when a
+    language mismatch is genuinely likely (a false positive on the common,
+    same-language case would cost useless retries for nothing).
 
-    `clue_gen` (le `clue_generator` module-niveau — l'instance AUTOMATIQUE
-    — par défaut) est l'instance `LLMClueGenerator` dont `describe_theme`
-    est appelé pour toute la fonction : `_run_generate_job` (génération
-    automatique, Populate/interface) laisse la valeur par défaut, tandis
-    que `_run_interactive_job` (mode Interactif) passe explicitement
-    `interactive_clue_generator` — voir la répartition carte 1/carte 2 à
-    la demande explicite de l'utilisateur, documentée juste au-dessus de
-    la construction de ces deux instances en tête de fichier."""
+    `clue_gen` (the module-level `clue_generator` — the AUTOMATIC instance
+    — by default) is the `LLMClueGenerator` instance whose `describe_theme`
+    is called throughout this function: `_run_generate_job` (automatic
+    generation, Populate/the web UI) leaves the default value, while
+    `_run_interactive_job` (Interactive mode) explicitly passes
+    `interactive_clue_generator` — see the card-1/card-2 split at the
+    user's explicit request, documented right above where these two
+    instances are built at the top of the file."""
     verify_translation = theme_language is not None and theme_language != language
     theme_priority_words = None
     theme_description = ""
@@ -2708,7 +2705,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
         )
     except GenerationCancelled:
         raise
-    except Exception as exc:  # noqa: BLE001 — best-effort, on retombe sur les mots bruts
+    except Exception as exc:  # noqa: BLE001 — best-effort, falls back to the raw words
         logger.warning(
             "[%s] theme description failed (%s) — searching the raw theme words instead",
             log_tag, exc,
@@ -2717,15 +2714,14 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
     logger.info(
         "[%s] theme %r -> description %r", log_tag, theme, theme_description,
     )
-    # À la demande explicite de l'utilisateur : "demander au LLM de
-    # générer des listes de 30 mots clefs séparés par des virgules
-    # ... Compiler toutes les recherches dans Qdrant pour tous les
-    # mots de ces listes (dédoublonner les mots)." La première
-    # liste est toujours celle du thème ENTIER (sa description
-    # LLM) ; s'y ajoute, quand le thème compte plus d'un mot, une
-    # liste par mot — chacune passée elle aussi par describe_theme,
-    # avec repli sur le mot brut si l'appel LLM échoue. Chaque
-    # liste est ensuite découpée en mots-clefs (_split_keywords).
+    # At the user's explicit request: "demander au LLM de générer des
+    # listes de 30 mots clefs séparés par des virgules ... Compiler toutes
+    # les recherches dans Qdrant pour tous les mots de ces listes
+    # (dédoublonner les mots)." The first list is always the WHOLE theme's
+    # own (its LLM description); when the theme has more than one word,
+    # one list per word is added — each also passed through
+    # describe_theme, falling back to the bare word if the LLM call
+    # fails. Every list is then split into keywords (_split_keywords).
     keyword_lists: list[tuple[Optional[str], list[str]]] = [
         (None, _split_keywords(theme_description) or _theme_tokens(theme) or [theme])
     ]
@@ -2753,9 +2749,8 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
             "[%s] theme has %d words -> %d keyword lists",
             log_tag, len(tokens), len(keyword_lists),
         )
-    # Met à plat toutes les listes en un seul ensemble de recherche
-    # dédoublonné sans tenir compte de la casse (première graphie
-    # conservée).
+    # Flattens every list into one search set, case-insensitively
+    # de-duplicated (first spelling kept).
     searched_keywords: list[str] = []
     _seen_kw: set[str] = set()
 
@@ -2771,11 +2766,11 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
 
     for _label, _kws in keyword_lists:
         _add_keywords(_kws)
-    # À la demande explicite de l'utilisateur (glossaire de grille
-    # UNIQUEMENT, pas le Dictionnaire) : relancer describe_theme
-    # jusqu'à THEME_KEYWORD_LLM_MAX_LOOPS fois de plus tant qu'on a
-    # moins de THEME_MIN_KEYWORDS mots-clefs distincts à chercher.
-    # Arrêt anticipé dès qu'un appel n'ajoute rien de neuf.
+    # At the user's explicit request (grid glossary ONLY, never the
+    # Dictionnaire panel): re-run describe_theme up to THEME_KEYWORD_
+    # LLM_MAX_LOOPS more times as long as we have fewer than THEME_MIN_
+    # KEYWORDS distinct keywords to search. Stops early the moment a call
+    # adds nothing new.
     for _loop in range(1, THEME_KEYWORD_LLM_MAX_LOOPS + 1):
         if len(searched_keywords) >= THEME_MIN_KEYWORDS:
             break
@@ -2834,8 +2829,16 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
 
 async def _run_generate_job(job_id, req, resume_state=None, override_priority_words=None,
                              override_theme_description="", preserved_clues=None,
-                             permanent_locked_letters=None, publish=True, origin=None):
-    """`publish` (`True` by default — every pre-existing caller unaffected)
+                             permanent_locked_letters=None, permanent_black_cells=None,
+                             publish=True, origin=None, zone_revert=None):
+    """`permanent_black_cells` (`None` by default — no effect for any
+    other caller) is "Finir la zone"'s own set of cells frozen black
+    because they lie outside the selected zone — passed straight through
+    to `generate_grid(permanent_black_cells=...)`, see that function's own
+    docstring and `interactive_finish`'s `zone_cells` for the full
+    reasoning.
+
+    `publish` (`True` by default — every pre-existing caller unaffected)
     controls what happens to the finished grid once it's ready: `True`
     saves it to the Bibliothèque (GRID_STORE, plus a durable SVG/PNG copy)
     exactly as before this parameter existed. `False` — used only by
@@ -2896,7 +2899,44 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     the very first palier, then recomputed/replaced palier after palier
     by the ordinary cross-palier retry machinery — see `generate_grid`'s
     own docstring), this one stays identical and hard for the WHOLE
-    generation, however many paliers it takes."""
+    generation, however many paliers it takes.
+
+    `zone_revert` (`None` by default — no effect for any pre-existing
+    caller, including plain "Finir la grille") is "Finir la zone"'s own
+    `{(row, col): original_char}` map — every cell OUTSIDE the selected
+    zone, at its exact pre-click value ("#", ".", or a real letter) —
+    applied right after `generate_grid()` succeeds, before anything else
+    (clue generation included) ever reads `result`. REDESIGNED at the
+    user's explicit request, after two earlier designs both turned out
+    wrong once seen live (see `interactive_finish`'s own docstring for the
+    full trail — first forcing every outside-zone blank cell black, then
+    letting the search complete outside the zone freely): "'Finir la
+    zone' ne doit toucher qu'aux cases strictement laissées non
+    grisées..., ET ne pas toucher aux lettres et cases noires déjà en
+    place dans la zone non grisée." The search itself still runs over the
+    WHOLE grid as before (the CSP model has no native notion of "this
+    region doesn't exist for this call" — every cell must resolve to a
+    real letter or black to be searchable at all) — but its own answer for
+    every cell in `zone_revert` is simply discarded afterward, overwritten
+    back to exactly what it was before "Finir la zone" was ever clicked,
+    cell by cell, on both `result["pattern"]` and `result["solution"]`.
+    Only a word that ends up with at least one cell reverted back to
+    BLANK — genuinely losing content, not just lying outside the zone — is
+    dropped from `result["words"]` entirely: a word entirely outside the
+    zone that was ALREADY fully lettered before the click reverts every
+    one of its cells to that same letter (a no-op) and stays in `result
+    ["words"]`, definition and all, exactly as the player left it; only a
+    word touching a cell that was genuinely blank outside the zone (the
+    search's own new letter there now discarded) is actually incomplete
+    and gets dropped — sending an incomplete word to clue generation or
+    the word-verification table would be actively wrong.
+    The end result is never a "finished, playable" grid in the usual
+    sense — only the selected zone is ever truly complete — which is
+    exactly why this endpoint already returns a "Créations" (GRID_WORK)
+    draft (`publish=False`) reopened in the editor, never a Bibliothèque
+    entry: the player is expected to keep working on whatever's still
+    blank outside the zone, by hand or with another "Finir la zone"
+    call."""
     job = JOBS[job_id]
     short_id = job_id[:8]
     cancel_event = CANCEL_EVENTS[job_id]
@@ -2907,37 +2947,65 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     job["request"] = req.model_dump()
     task = GenerationTask(job_id=job_id, req=req, resume_state=resume_state)
 
-    # Horodatages des deux frontières internes de generate_grid() dont
-    # progress() ci-dessous a besoin pour séparer la durée de génération
-    # de celle d'optimisation (voir grid_start plus bas) — à la demande
-    # explicite de l'utilisateur : "Optimisation en XhXmnXs" entre
-    # "Grille générée en..." et "Définitions générées en...". Un dict
-    # plutôt que des variables locales séparées : muté depuis l'intérieur
-    # de `progress()` (une closure), pas besoin d'un `nonlocal` par clé.
-    # `generate_grid()` émet "minimizing" juste avant `minimize_black_
-    # squares()` (fin de la recherche/remplissage) et "grid_ready" juste
-    # après (fin de l'optimisation) — voir crossword_gen.py.
+    # Timestamps of generate_grid()'s two internal boundaries that
+    # progress() below needs to split generation duration from
+    # optimization duration (see grid_start further below) — at the
+    # user's explicit request: "Optimisation en XhXmnXs" between "Grille
+    # générée en..." and "Définitions générées en...". A dict rather than
+    # separate local variables: mutated from inside `progress()` (a
+    # closure), no need for a `nonlocal` per key. `generate_grid()` emits
+    # "minimizing" right before `minimize_black_squares()` (end of
+    # search/fill) and "grid_ready" right after (end of optimization) —
+    # see crossword_gen.py.
     phase_times = {}
 
     def progress(step, **data):
         if step == "budget_progress":
-            # Enrichit le statut déjà affiché (ex. "Tentative N/200...")
-            # d'un pourcentage de budget de vérifications consommé, à la
-            # demande explicite de l'utilisateur : "sur la ligne de statut
-            # de l'interface, ajouter le pourcentage du budget déjà
-            # consommé par la phase de remplissage en cours." Ne remplace
-            # jamais `job["step"]` en entier comme les autres étapes le
-            # font juste en dessous — ce signal est republié toutes les
-            # `BUDGET_PROGRESS_REPORT_INTERVAL_S` secondes pendant qu'une
-            # recherche est en cours (voir crossword_gen.py), et
-            # l'écraser remplacerait le statut réel (numéro de tentative,
-            # etc.) par un pourcentage nu. Le prochain événement "normal"
-            # (`pattern`/`pattern_attempt_failed`/...) remplace `job
-            # ["step"]` en entier comme d'habitude, faisant naturellement
-            # disparaître ce `budget_percent` devenu obsolète jusqu'à ce
-            # qu'un nouveau rapport arrive pour la tentative suivante.
+            # Enriches the status already shown (e.g. "Tentative
+            # N/200...") with a percentage of the checks budget already
+            # consumed, at the user's explicit request: "sur la ligne de
+            # statut de l'interface, ajouter le pourcentage du budget
+            # déjà consommé par la phase de remplissage en cours." Never
+            # replaces `job["step"]` wholesale the way the other steps do
+            # right below — this signal is republished every
+            # `BUDGET_PROGRESS_REPORT_INTERVAL_S` seconds while a search
+            # is running (see crossword_gen.py), and overwriting it would
+            # replace the real status (attempt number, etc.) with a bare
+            # percentage. The next "normal" event (`pattern`/
+            # `pattern_attempt_failed`/...) replaces `job["step"]`
+            # wholesale as usual, naturally making this now-stale
+            # `budget_percent` disappear until a new report arrives for
+            # the next attempt.
             job["step"] = {**job["step"], "budget_percent": data.get("percent")}
             return
+        # "Finir la zone" (`zone_revert`) — applied here too, not just to
+        # the FINAL result (see below), at the user's explicit correction:
+        # "il met des lettres dans la zone qui était grisée, qui n'a pas
+        # été verrouillée" — the live attempt-preview shown DURING the
+        # search is exactly as visible to the player as the final saved
+        # grid, so every `example_grid` the search publishes gets the same
+        # cell-by-cell revert applied to it, right here, before it's ever
+        # stored into `job["step"]`/`job["examples_history"]` — the search
+        # still explores the whole grid underneath (unavoidable — see
+        # `_run_generate_job`'s own docstring), but the player never sees
+        # any of its temporary answers outside the zone, at any point in
+        # the process, not only in the end. Every one of these cells is
+        # also added to `locked_cells` (merged, not replaced) so the
+        # existing green `.locked` highlight covers the whole zone
+        # boundary from the very first preview onward, not just the
+        # already-typed letters.
+        if zone_revert and data.get("examples"):
+            for ex in data["examples"]:
+                eg = ex.get("example_grid")
+                if not eg:
+                    continue
+                for (r, c), original in zone_revert.items():
+                    eg[r][c] = original if original not in ("#", ".") else (
+                        "#" if original == "#" else "."
+                    )
+                ex["locked_cells"] = sorted(
+                    {tuple(cell) for cell in ex.get("locked_cells", [])} | set(zone_revert)
+                )
         job["step"] = {"code": step, **data}
         if step in ("minimizing", "grid_ready"):
             phase_times[step] = time.monotonic()
@@ -3056,31 +3124,29 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # compute time (excluding time spent merely queued) so the final
         # `generation_duration_seconds` still reflects the true total
         # work done, not just the last turn's own duration.
-        # Pré-recherche thématique (voir THEME_LENGTH_MIN/MAX/THEME_MIN_
-        # SCORE) : si le champ "Thématique" est non vide, on demande
-        # D'ABORD au LLM une liste télégraphique d'environ 30 mots-clefs
-        # décrivant la thématique (describe_theme) — une liste par mot du
-        # thème quand il en compte plusieurs. Chaque liste est découpée en
-        # mots-clefs individuels (_split_keywords), tous mis à plat et
-        # dédoublonnés ; CHAQUE mot-clef fait alors sa propre recherche
-        # Qdrant du plus-proche-voisin, et _compiled_theme_words_by_length
-        # fusionne tous les résultats (meilleur score par mot) en un
-        # glossaire que generate_grid() tentera en priorité pour chaque
-        # emplacement. La ou les listes de mots-clefs du LLM sont écrites
-        # en tête d'un fichier LOG_THEME/. Best-effort et fait une seule
-        # fois (pas à chaque reprise après une pause de file) : un échec de
-        # l'appel LLM fait simplement retomber sur les mots bruts du
-        # thème ; une indisponibilité de Qdrant/embedder ou une collection
-        # non alimentée pour cette langue n'empêche jamais la génération,
-        # elle se fait alors sans thématique.
+        # Themed pre-search (see THEME_LENGTH_MIN/MAX/THEME_MIN_SCORE): if
+        # the "Thématique" field is non-empty, we FIRST ask the LLM for a
+        # telegraphic list of about 30 keywords describing the theme
+        # (describe_theme) — one list per theme word when it has more
+        # than one. Each list is split into individual keywords
+        # (_split_keywords), all flattened and de-duplicated; EVERY
+        # keyword then runs its own Qdrant nearest-neighbor search, and
+        # _compiled_theme_words_by_length merges every result (best score
+        # per word) into a glossary generate_grid() will try in priority
+        # for every slot. The LLM's own keyword list(s) are written at
+        # the top of a LOG_THEME/ file. Best-effort and done only once
+        # (not on every resume after a queue pause): a failed LLM call
+        # simply falls back to the theme's own raw words; Qdrant/embedder
+        # unavailability or a collection not populated for this language
+        # never blocks generation — it just proceeds with no theme.
         theme = (req.theme or "").strip()
         theme_priority_words = None
         bilingual_theme_priority_words = None
-        # Reste "" si `theme` est vide, ou si describe_theme échoue — lu
-        # plus bas par le seul autre consommateur de cette variable, le
-        # titre de la grille (voir clue_generator.generate_title(...,
-        # theme_description=...) et son propre commentaire), qui doit
-        # rester défini même sans thématique.
+        # Stays "" if `theme` is empty, or if describe_theme fails — read
+        # further below by the only other consumer of this variable, the
+        # grid's own title (see clue_generator.generate_title(...,
+        # theme_description=...) and its own comment), which must stay
+        # defined even with no theme.
         theme_description = ""
         if override_priority_words is not None:
             # "Finir la grille" (see POST /api/interactive/finish): reuses
@@ -3090,36 +3156,35 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             theme_priority_words = override_priority_words
             theme_description = override_theme_description
         elif theme:
-            # Étape de statut dédiée, à la demande explicite de
-            # l'utilisateur ("indiquer la phase de génération du
-            # glossaire thématique") : cette phase (appel LLM +
-            # pagination Qdrant par longueur, voir _theme_words_by_
-            # length) peut prendre plusieurs secondes et ne se
-            # signalait par rien de particulier jusque-là — le statut
-            # affiché restait "starting" (ou l'étape précédente, sur une
-            # reprise) tout du long. Un seul événement, sans progression
-            # chiffrée (contrairement à "pattern"/"clues"/etc.) : tout ce
-            # bloc s'exécute d'un bloc, sans sous-étapes à rapporter.
+            # A dedicated status step, at the user's explicit request
+            # ("indiquer la phase de génération du glossaire
+            # thématique"): this phase (the LLM call + Qdrant pagination
+            # by length, see _theme_words_by_length) can take several
+            # seconds and used to signal nothing at all — the displayed
+            # status stayed "starting" (or the previous step, on a
+            # resume) throughout. A single event, with no numeric
+            # progress (unlike "pattern"/"clues"/etc.): this whole block
+            # runs as one unit, with no sub-steps to report.
             progress("theme", theme=theme)
-            # Grille bilingue : un second glossaire pour la langue des mots
-            # verticaux (voir _build_theme_glossary), à la demande explicite
-            # de l'utilisateur. `theme_description` reste celle de la langue
-            # principale (titre + orientation des définitions). Les deux
-            # appels sont lancés en parallèle via asyncio.gather (à la
-            # demande explicite de l'utilisateur : "paralléliser la
-            # génération des deux langues") plutôt que l'un après l'autre —
-            # chacun n'est qu'un enchaînement d'appels déjà enveloppés dans
-            # asyncio.to_thread (l'appel LLM describe_theme, la recherche
-            # Qdrant), donc les deux tournent réellement en même temps sur
-            # le thread pool sans jamais se bloquer mutuellement ni bloquer
-            # la boucle asyncio elle-même. `return_exceptions=True` : les
-            # deux résultats sont d'abord récupérés avant qu'une éventuelle
-            # exception (typiquement GenerationCancelled, si l'utilisateur
-            # clique Stop pendant que les deux tournent) ne soit relevée
-            # explicitement — sans ça, l'exception de la tâche la plus
-            # rapide serait levée immédiatement par gather() sans jamais
-            # attendre/consommer le résultat (ou l'exception) de l'autre,
-            # ce qu'asyncio journalise comme "exception never retrieved".
+            # Bilingual grid: a second glossary for the down-words
+            # language (see _build_theme_glossary), at the user's
+            # explicit request. `theme_description` stays the primary
+            # language's own (the title + the clues' own steering). Both
+            # calls are launched in parallel via asyncio.gather (at the
+            # user's explicit request: "paralléliser la génération des
+            # deux langues") rather than one after the other — each is
+            # only ever a chain of calls already wrapped in
+            # asyncio.to_thread (the describe_theme LLM call, the Qdrant
+            # search), so both genuinely run at the same time on the
+            # thread pool with neither ever blocking the other nor the
+            # asyncio loop itself. `return_exceptions=True`: both results
+            # are collected first, before any exception (typically
+            # GenerationCancelled, if the user clicks Stop while both are
+            # running) is explicitly re-raised — without this, the
+            # faster task's own exception would be raised immediately by
+            # gather() without ever awaiting/consuming the other's own
+            # result (or exception), which asyncio logs as "exception
+            # never retrieved".
             if req.bilingual_language and req.bilingual_language != req.language:
                 primary_result, bilingual_result = await asyncio.gather(
                     _build_theme_glossary(
@@ -3156,14 +3221,16 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             grid_paused_compute_s = 0.0
             while True:
                 await _wait_in_queue(GRID_QUEUE, task, job, cancel_event, "queued_grid")
-                # Durées affichées au-dessus de la grille finale (`#generation-times`
-                # côté frontend), à la demande explicite de l'utilisateur — mesurées
-                # ici plutôt que côté client, qui n'a aucun moyen fiable de savoir
-                # quand chaque phase a réellement commencé/fini (seul ce process
-                # voit directement les deux appels bloquants ci-dessous). `time.
-                # monotonic()`, pas `time.time()` : une horloge murale peut reculer
-                # (ajustement NTP, changement d'heure), ce qui fausserait une durée
-                # calculée par simple soustraction — `monotonic()` ne recule jamais.
+                # Durations shown above the final grid (`#generation-times`
+                # on the frontend), at the user's explicit request —
+                # measured here rather than client-side, which has no
+                # reliable way to know when each phase genuinely started/
+                # finished (only this process directly sees the two
+                # blocking calls below). `time.monotonic()`, not
+                # `time.time()`: a wall clock can jump backward (an NTP
+                # adjustment, a DST change), which would corrupt a
+                # duration computed by plain subtraction — `monotonic()`
+                # never goes backward.
                 grid_start = time.monotonic()
                 try:
                     result = await asyncio.to_thread(
@@ -3188,6 +3255,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         priority_words=theme_priority_words,
                         bilingual_priority_words=bilingual_theme_priority_words,
                         permanent_locked_letters=permanent_locked_letters,
+                        permanent_black_cells=permanent_black_cells,
                     )
                     break
                 except GenerationPaused as p:
@@ -3214,12 +3282,62 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             )
             logger.warning("[%s] no fillable grid found", short_id)
             return
-        # "minimizing"/"grid_ready" toujours présents ici (result n'est
-        # jamais None sans être passé par toute la pipeline) — `.get(...,
-        # grid_start)` reste une protection défensive, pas un cas normal :
-        # sans elle, l'absence improbable de l'un des deux ferait échouer
-        # tout le job juste pour ce calcul de durée, alors que la grille
-        # elle-même est déjà prête.
+        # "Finir la zone" (`zone_revert`, see this function's own docstring
+        # above) — undo, cell by cell, whatever the search decided outside
+        # the selected zone, before anything else ever reads `result`: no
+        # clue generation, no word-verification table, no theme-cells
+        # computation should ever see the search's own outside-zone answer
+        # at all. `pattern`/`solution` are both mutated in place — both are
+        # freshly built by this exact `generate_grid()` call, never shared
+        # with anything else that might still need the pre-revert version.
+        if zone_revert:
+            pattern = result["pattern"]
+            solution = result["solution"]
+            # `reverted_pattern` mirrors what each reverted cell now looks
+            # like on the black/white pattern ("#" for a cell that was
+            # already black, "." for a cell that was blank) — kept
+            # separately from `zone_revert` itself (which still holds the
+            # RAW original character, letter included) so the word filter
+            # just below can tell "reverted to blank" (a real content
+            # loss) apart from "reverted to its own already-black/already-
+            # lettered value" (a no-op, nothing actually lost).
+            reverted_pattern = {}
+            for (r, c), original in zone_revert.items():
+                reverted = "#" if original == "#" else "."
+                pattern[r][c] = reverted
+                solution[r][c] = original if original not in ("#", ".") else reverted
+                reverted_pattern[(r, c)] = reverted
+            # Drop a word only if the revert actually left one of its cells
+            # BLANK (its content genuinely lost) — never merely for having
+            # a cell outside the zone: a word entirely outside the zone
+            # that was ALREADY fully lettered before "Finir la zone" was
+            # even clicked (so every one of its cells reverts right back to
+            # the exact letter it already had — a no-op) must stay in
+            # `result["words"]`, definition and all, exactly as the player
+            # left it. Only a word touching a cell that was blank outside
+            # the zone (the search's own new letter there now discarded)
+            # is genuinely incomplete and gets dropped.
+            result["words"] = [
+                w for w in result["words"]
+                if not any(
+                    reverted_pattern.get((
+                        w["row"] + (dk if w["direction"] != "across" else 0),
+                        w["col"] + (dk if w["direction"] == "across" else 0),
+                    )) == "."
+                    for dk in range(len(w["answer"]))
+                )
+            ]
+            logger.info(
+                "[%s] zone_revert: %d cell(s) reverted outside the selected zone, "
+                "%d word(s) kept",
+                short_id, len(zone_revert), len(result["words"]),
+            )
+        # "minimizing"/"grid_ready" are always present here (result is
+        # never None without going through the whole pipeline) —
+        # `.get(..., grid_start)` stays a defensive safeguard, not a
+        # normal case: without it, the unlikely absence of either one
+        # would fail the whole job just for this duration calculation,
+        # even though the grid itself is already ready.
         search_done = phase_times.get("minimizing", grid_start)
         optimization_done = phase_times.get("grid_ready", search_done)
         # `grid_paused_compute_s` (0.0 for the overwhelmingly common case
@@ -3230,38 +3348,38 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # duration — see the pause/resume loop above.
         result["generation_duration_seconds"] = grid_paused_compute_s + (search_done - grid_start)
         result["optimization_duration_seconds"] = optimization_done - search_done
-        # Niveau de difficulté renvoyé sur le result du job, à la demande
-        # explicite de l'utilisateur (affiché à droite du titre de la
-        # grille à jouer, voir frontend/static/script.js). Un
-        # enregistrement GRID_STORE (grille rechargée depuis la
-        # bibliothèque) porte déjà ce champ ; ici on l'ajoute pour une
-        # grille fraîchement générée.
+        # Difficulty level returned on the job's result, at the user's
+        # explicit request (shown to the right of the playable grid's
+        # title, see frontend/static/script.js). A GRID_STORE record (a
+        # grid reloaded from the library) already carries this field;
+        # here it's added for a freshly generated grid.
         result["difficulty"] = req.difficulty
-        # Thématique saisie (chaîne de mots) portée sur le result du job et
-        # enregistrée dans la grille sauvegardée — `None` si le champ était
-        # vide. Voir GenerateRequest.theme / grid_store.save_grid_json /
-        # la colonne "Thématique" de la Bibliothèque.
+        # The typed theme (a word string) carried on the job's result and
+        # saved into the stored grid — `None` if the field was empty. See
+        # GenerateRequest.theme / grid_store.save_grid_json / the
+        # library's "Thématique" column.
         result["theme"] = theme or None
 
-        # Aperçu de la grille finale (déjà minimisée), au tout début de la
-        # génération des définitions — à la demande explicite de
-        # l'utilisateur, réutilisant exactement le même mécanisme que
-        # l'aperçu de crossword_gen.py's "minimizing" (voir progress()
-        # ci-dessus). `result["solution"]` (pas `result["pattern"]`, qui ne
-        # contient que le motif noir/blanc nu) contient déjà les vraies
-        # lettres — construite par build_letters_grid, exactement le même
-        # format que `example_grid` attend (case noire ou lettre, jamais de
-        # "."). Montrer les lettres ici ne les affiche pas pour autant :
-        # `renderAttemptPreview()` (frontend/static/script.js) les masque
-        # déjà par défaut et ne les révèle que si l'utilisateur active
-        # #attempt-preview-reveal-btn, exactement comme pour l'aperçu
-        # "minimizing" de crossword_gen.py (voir CLAUDE.md) — un revirement
-        # analogue au sien, à la demande explicite de l'utilisateur, par
-        # rapport à la toute première version de cet aperçu qui montrait
-        # volontairement `result["pattern"]` sans aucune lettre.
-        # `impossible_cells`/`forced_cells`/`locked_cells` vides : cette
-        # grille est déjà remplie et minimisée avec succès, il n'y a ni case
-        # impossible, ni lettre forcée, ni case verrouillée à signaler.
+        # Preview of the final (already minimized) grid, right at the
+        # very start of clue generation — at the user's explicit request,
+        # reusing the exact same mechanism as crossword_gen.py's
+        # "minimizing" preview (see progress() above). `result["solution"]`
+        # (not `result["pattern"]`, which only holds the bare black/white
+        # pattern) already carries the real letters — built by
+        # build_letters_grid, in exactly the shape `example_grid` expects
+        # (a black cell or a letter, never a "."). Showing the letters
+        # here doesn't actually reveal them, though:
+        # `renderAttemptPreview()` (frontend/static/script.js) already
+        # hides them by default and only reveals them if the player turns
+        # on #attempt-preview-reveal-btn, exactly like crossword_gen.py's
+        # own "minimizing" preview (see CLAUDE.md) — a similar reversal to
+        # its own, at the user's explicit request, from this preview's
+        # very first version, which deliberately showed `result["pattern"]`
+        # with no letters at all.
+        # `impossible_cells`/`forced_cells`/`locked_cells` empty: this
+        # grid is already filled and successfully minimized, so there's
+        # no impossible cell, no forced letter, and no locked cell to
+        # report.
         # word_table (see _build_word_verification_table above), at the
         # user's explicit request: a verification table, one grid word per
         # row, shown right below this final-grid preview on the frontend
@@ -3279,12 +3397,12 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             _build_word_verification_table, result["words"], req.language,
             result.get("bilingual_language"),
         )
-        # Cases des mots issus du glossaire thématique, à afficher en lettres
-        # vertes dans l'aperçu (voir crossword_gen.py's `_theme_word_cells` /
-        # renderAttemptPreview) — recalculées ici depuis `result["words"]`
-        # (chaque mot porte `answer`/`row`/`col`/`direction`), la génération
-        # `generate_grid` ne renvoyant pas de liste `theme_cells` de haut
-        # niveau. Vide s'il n'y a pas de thématique.
+        # Cells of the words drawn from the theme glossary, shown in green
+        # letters in the preview (see crossword_gen.py's
+        # `_theme_word_cells`/renderAttemptPreview) — recomputed here from
+        # `result["words"]` (each word carries `answer`/`row`/`col`/
+        # `direction`), since `generate_grid` doesn't return a top-level
+        # `theme_cells` list. Empty when there's no theme.
         _theme_set = set(theme_priority_words or ())
         theme_cells = sorted({
             (w["row"] + (dk if w["direction"] != "across" else 0),
@@ -3318,11 +3436,11 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 "forced_cells": [],
                 "locked_cells": [],
                 "theme_cells": theme_cells,
-                # Numéro du process qui a réellement produit cette grille
-                # gagnante (backend/crossword_gen.py's own `winning_
+                # The number of the process that genuinely produced this
+                # winning grid (backend/crossword_gen.py's own `winning_
                 # process_number`, threaded through the result dict — see
-                # its own docstring for the full "numéro du process"
-                # feature), à la demande explicite de l'utilisateur.
+                # its own docstring for the full "process number"
+                # feature), at the user's explicit request.
                 "process_number": result.get("winning_process_number"),
                 "is_best": True,
             }],
@@ -3353,14 +3471,14 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # jump backward every time this job resumes after a pause.
         CLUES_QUEUE.append(task)
         try:
-            # 4e élément (langue) au lieu de 3, à la demande explicite de
-            # l'utilisateur pour une grille bilingue : chaque mot porte
-            # déjà sa propre langue (crossword_gen.generate_grid's own
-            # per-word `language`, selon sa direction) — LLMClueGenerator.
-            # generate() résout cette langue par mot (repli sur `req.
-            # language`, l'argument positionnel ci-dessous, pour un mot
-            # qui n'en porterait pas) plutôt qu'une seule langue pour tout
-            # l'appel comme avant cette fonctionnalité.
+            # A 4th element (language) instead of 3, at the user's
+            # explicit request for a bilingual grid: each word already
+            # carries its own language (crossword_gen.generate_grid's own
+            # per-word `language`, based on its direction) —
+            # LLMClueGenerator.generate() resolves this language per word
+            # (falling back to `req.language`, the positional argument
+            # below, for a word that carries none) instead of a single
+            # language for the whole call as before this feature.
             # `words_needing_clue`/`preserved_by_key` already computed above
             # (see the very first "clues" progress event, right before this
             # queue wait) — reused here so the two never disagree.
@@ -3399,28 +3517,26 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         ),
                         cancel_event=cancel_event,
                         should_pause=_make_should_pause(CLUES_QUEUE, task),
-                        # Pour une grille thématique, indique au LLM la
-                        # LISTE DE MOTS-CLEFS DU THÈME ENTIER (la sortie de
-                        # describe_theme(theme) — la liste `[(whole
-                        # theme)]`, JAMAIS une liste par mot ni de
-                        # complétion) comme thématique dont il doit très
-                        # fortement s'inspirer pour toutes les définitions,
-                        # à la demande explicite de l'utilisateur : "il est
-                        # important, quand il y a une thématique, que les
-                        # définitions respectent au mieux cette
-                        # thématique." La section THEME est ajoutée au
-                        # message utilisateur de chaque mot (voir
-                        # _build_user_message), pas au prompt système.
-                        # Reste "" pour une grille non thématique (voir
-                        # plus haut) : aucun effet.
+                        # For a themed grid, tells the LLM the WHOLE
+                        # THEME'S OWN KEYWORD LIST (describe_theme(theme)'s
+                        # own output — the `[(whole theme)]` list, NEVER a
+                        # per-word or top-up list) as the theme it must
+                        # strongly draw on for every definition, at the
+                        # user's explicit request: "il est important,
+                        # quand il y a une thématique, que les définitions
+                        # respectent au mieux cette thématique." The THEME
+                        # section is appended to each word's own user
+                        # message (see _build_user_message), not the
+                        # system prompt. Stays "" for a non-themed grid
+                        # (see above): no effect.
                         theme_description=theme_description,
-                        # 1 seule requête LLM à la fois pour une grille
-                        # venant de Populate, à la demande explicite de
-                        # l'utilisateur ("ne pas surcharger le GPU pour
-                        # les utilisateurs") — voir GenerateRequest.source
-                        # et LLMClueGenerator.generate's own docstring.
-                        # `None` (le comportement par défaut, parallèle)
-                        # pour toute autre requête.
+                        # Only 1 LLM request at a time for a grid coming
+                        # from Populate, at the user's explicit request
+                        # ("ne pas surcharger le GPU pour les
+                        # utilisateurs") — see GenerateRequest.source and
+                        # LLMClueGenerator.generate's own docstring. `None`
+                        # (the default, parallel behavior) for every other
+                        # request.
                         batch_parallelism=(1 if req.source == "populate" else None),
                     )
                     accumulated_clues.update(new_clues)
@@ -3472,16 +3588,15 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 CLUES_QUEUE.remove(task)
 
         progress("saving")
-        # Les paramètres du moteur de recherche automatique (voir
-        # grid_store.save_grid_json's own `generation_params` docstring),
-        # à la demande explicite de l'utilisateur : "sauvegarder tous les
-        # paramètres... pour pouvoir les reconfigurer à l'identique quand
-        # la grille est rechargée en mode édition." `mode` est déjà son
-        # propre champ de premier niveau (voir juste au-dessus) — dupliqué
-        # ici aussi pour que le Front n'ait qu'un seul objet à lire pour
-        # reconfigurer les 4 champs du formulaire à la fois. Calculé
-        # inconditionnellement (avant le `if publish:` ci-dessous) car les
-        # deux branches en ont besoin.
+        # The automatic search engine's own parameters (see grid_store.
+        # save_grid_json's own `generation_params` docstring), at the
+        # user's explicit request: "sauvegarder tous les paramètres...
+        # pour pouvoir les reconfigurer à l'identique quand la grille est
+        # rechargée en mode édition." `mode` already has its own top-level
+        # field (see right above) — duplicated here too so the frontend
+        # only needs to read one object to reconfigure all 4 form fields
+        # at once. Computed unconditionally (before the `if publish:`
+        # below) since both branches need it.
         pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
         generation_params = {
             "black_enrichment_percent": req.black_enrichment_percent,
@@ -3518,12 +3633,12 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                     generation_params=generation_params,
                 )
                 logger.info("[%s] saved to library: %s (pseudo=%r)", short_id, grid_id, pseudo)
-                # L'identifiant du fichier GRID_STORE de cette grille, pour que
-                # le frontend puisse la marquer "déjà vue" (localStorage) dès
-                # qu'il l'affiche — à la demande explicite de l'utilisateur
-                # ("y compris la grille qu'il vient de générer"). Même clé
-                # (`id`) que GET /api/library/{grid_id} renvoie pour une grille
-                # rechargée, donc le frontend traite les deux cas pareil.
+                # This grid's own GRID_STORE file id, so the frontend can
+                # mark it "already seen" (localStorage) the moment it's
+                # shown — at the user's explicit request ("y compris la
+                # grille qu'il vient de générer"). The same key (`id`) that
+                # GET /api/library/{grid_id} returns for a reloaded grid,
+                # so the frontend handles both cases the same way.
                 result["id"] = grid_id
             except OSError as e:
                 logger.warning("[%s] failed to save grid to library: %s", short_id, e)
@@ -3564,11 +3679,11 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         job["result"] = result
         logger.info("[%s] done", short_id)
     except GenerationCancelled:
-        # Interruption demandée par l'utilisateur (bouton "Stop", voir
-        # POST /api/generate/cancel/{job_id} plus bas) — un statut à part,
-        # jamais "error" : ce n'est pas un échec, juste un arrêt volontaire,
-        # et le frontend l'affiche donc sans le style d'erreur (voir
-        # frontend/static/script.js's pollJob()).
+        # An interruption requested by the user (the "Stop" button, see
+        # POST /api/generate/cancel/{job_id} further below) — its own
+        # separate status, never "error": this isn't a failure, just a
+        # voluntary stop, and the frontend shows it without the error
+        # styling (see frontend/static/script.js's pollJob()).
         job["status"] = "cancelled"
         logger.info("[%s] cancelled by user", short_id)
     except ClueGenerationError as e:
@@ -3872,10 +3987,10 @@ async def _run_recompute_job(job_id, grid_id):
                 "impossible_cells": [],
                 "forced_cells": [],
                 "locked_cells": [],
-                # Un recalcul de définitions ne rejoue pas la pré-recherche
-                # thématique (la phrase de thème n'est pas persistée sur la
-                # grille — voir grid_store), donc pas de mot thématique à
-                # signaler ici.
+                # A definitions recompute never replays the themed
+                # pre-search (the theme sentence isn't persisted on the
+                # grid — see grid_store), so there's no theme word to
+                # report here.
                 "theme_cells": [],
                 "process_number": result.get("winning_process_number"),
                 "is_best": True,
@@ -3945,18 +4060,18 @@ async def _run_recompute_job(job_id, grid_id):
             logger.warning("[%s] recompute failed to save grid SVG: %s", short_id, e)
 
         try:
-            # Un recalcul crée une nouvelle entrée "même grille, autres
-            # définitions" — on conserve le pseudo de l'auteur d'origine
-            # (déjà présent dans `result`, hérité du record rechargé)
-            # plutôt que d'y mettre celui de qui lance le recalcul.
+            # A recompute creates a new "same grid, different definitions"
+            # entry — the original author's own pseudo is kept (already
+            # present in `result`, inherited from the reloaded record)
+            # rather than replaced with whoever triggered the recompute.
             new_grid_id = await asyncio.to_thread(
                 save_grid_json, result, language, difficulty, mode, new_title,
                 bilingual_language, result.get("pseudo"), result.get("theme"),
-                # Un recalcul ne touche jamais la mise en page de la grille,
-                # seulement ses définitions — les paramètres du moteur de
-                # recherche qui l'ont produite restent donc valables et sont
-                # simplement reconduits (`result` est déjà le record d'origine
-                # minus id/created_at/bilingual, voir plus haut).
+                # A recompute never touches the grid's own layout, only
+                # its definitions — so the search-engine parameters that
+                # produced it are still valid and are simply carried
+                # through (`result` is already the original record minus
+                # id/created_at/bilingual, see above).
                 generation_params=result.get("generation_params"),
             )
             logger.info("[%s] recompute saved to library: %s", short_id, new_grid_id)
@@ -4005,12 +4120,11 @@ def _validate_generate_request(req):
             detail=f"le dictionnaire pour {req.language!r} n'est pas encore "
                    "construit sur ce serveur — réessayez plus tard.",
         )
-    # `bilingual_language` (voir GenerateRequest) subit exactement les
-    # mêmes vérifications que `language` ci-dessus — mais seulement quand
-    # une vraie grille bilingue est demandée (une valeur fournie ET
-    # différente de `language`) ; `None` ou une valeur identique dégrade
-    # déjà proprement en génération monolingue et n'a donc besoin d'aucune
-    # validation supplémentaire.
+    # `bilingual_language` (see GenerateRequest) undergoes exactly the
+    # same checks as `language` above — but only when a genuinely
+    # bilingual grid is requested (a value given AND different from
+    # `language`); `None` or an identical value already degrades cleanly
+    # to a monolingual generation and so needs no further validation.
     if req.bilingual_language is not None and req.bilingual_language != req.language:
         if req.bilingual_language not in WORDLISTS:
             raise HTTPException(
@@ -4188,6 +4302,33 @@ async def interactive_candidates(req: InteractiveCandidatesRequest):
     return {"theme_words": theme_words, "other_words": other_words}
 
 
+@app.post("/api/interactive/crossing")
+async def interactive_crossing(req: InteractiveCrossingRequest):
+    """"Croisés" button: for the selected cell, list every letter
+    compatible with a real dictionary word in BOTH the horizontal AND the
+    vertical emplacement crossing there (restricted by whatever letters
+    are already in place elsewhere on the grid), each paired with its own
+    matching horizontal/vertical candidate words — see
+    `interactive_crossing_words`."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    if len(req.cell) != 2:
+        raise HTTPException(status_code=400, detail="case invalide")
+    cell = (req.cell[0], req.cell[1])
+    if not (0 <= cell[0] < rows and 0 <= cell[1] < cols):
+        raise HTTPException(status_code=400, detail="case hors grille")
+    across_start, down_start, letters = await asyncio.to_thread(
+        interactive_crossing_words,
+        [list(row) for row in req.grid], rows, cols, sess["index"], cell,
+    )
+    return {"across_start": across_start, "down_start": down_start, "letters": letters}
+
+
 @app.post("/api/interactive/impossible")
 async def interactive_impossible(req: InteractiveImpossibleRequest):
     """"Impossibles" button: recompute `_interactive_fill_diagnostics` for
@@ -4363,12 +4504,12 @@ async def interactive_save(req: InteractiveSaveRequest):
         save_grid_json, result, req.language, req.difficulty, "interactive",
         req.title, req.bilingual_language if is_bilingual else None, pseudo,
         (req.theme or "").strip() or None, True, meta.get("origin"),
-        # Voir grid_store.save_grid_json's own `generation_params`
-        # docstring — reconduit tel quel (None pour une session
-        # démarrée à la main, les vraies valeurs pour une grille
-        # rééditée depuis une création automatique via "Ouvrir en mode
-        # Interactif"), pour que la provenance des réglages survive la
-        # publication comme "origin"/"theme" ci-dessus.
+        # See grid_store.save_grid_json's own `generation_params`
+        # docstring — carried through as-is (None for a session started
+        # by hand, the real values for a grid re-edited from an
+        # automatic generation via "Ouvrir en mode Interactif"), so the
+        # settings' own provenance survives publication just like
+        # "origin"/"theme" above.
         generation_params=meta.get("generation_params"),
     )
     # Also refresh this session's own GRID_WORK snapshot to the final,
@@ -4518,15 +4659,15 @@ async def _run_interactive_resume_job(job_id, record):
         )
         seed = record.get("seed", 0)
         rng = random.Random(seed)
-        # Voir grid_store.save_grid_json's own `generation_params`
-        # docstring — les paramètres du moteur de recherche automatique
-        # (Taux noir/Graines/Mode/Précision thématique) qui ont produit
-        # cette grille, None pour une grille jamais issue d'une création
-        # automatique. Mirroré à la fois sur job["interactive"] et
-        # job["result"] (pollJob() ne renvoie jamais que ce dernier),
-        # même convention que "theme"/"origin" ci-dessous, pour que
-        # enterInteractiveMode() puisse reconfigurer les champs Mode/Taux
-        # noir/Graines/Précision thématique du formulaire à l'identique.
+        # See grid_store.save_grid_json's own `generation_params`
+        # docstring — the automatic search engine's own parameters (Taux
+        # noir/Graines/Mode/Précision thématique) that produced this
+        # grid, None for a grid never derived from an automatic
+        # generation. Mirrored onto both job["interactive"] and
+        # job["result"] (pollJob() only ever returns the latter), the
+        # same convention as "theme"/"origin" below, so
+        # enterInteractiveMode() can reconfigure the form's own Mode/Taux
+        # noir/Graines/Précision thématique fields identically.
         generation_params = record.get("generation_params")
         grid = record.get("grid") or []
         rows = len(grid)
@@ -4685,10 +4826,10 @@ def _library_record_to_interactive(record):
         "definitions": definitions,
         "title": record.get("title") or "",
         "theme": record.get("theme"),
-        # Voir grid_store.save_grid_json's own `generation_params`
-        # docstring — None pour une grille jamais issue d'une création
-        # automatique (ex. une grille elle-même construite à la main en
-        # mode Interactif, puis publiée).
+        # See grid_store.save_grid_json's own `generation_params`
+        # docstring — None for a grid never derived from an automatic
+        # generation (e.g. a grid itself built by hand in Interactive
+        # mode, then published).
         "generation_params": record.get("generation_params"),
         "priority_words": [],
         "seed": 0,
@@ -4759,7 +4900,45 @@ async def interactive_finish(req: InteractiveFinishRequest):
     see its own docstring). The originating session's own `origin`
     snapshot (if any — e.g. this session was itself opened from an
     existing library/GRID_WORK grid) is carried through so the new draft
-    keeps the same provenance."""
+    keeps the same provenance.
+
+    "Finir la zone" (`req.zone_cells`, `None`/empty by default — a plain
+    "Finir la grille" run otherwise) is the same underlying mechanism,
+    restricted to a player-selected sub-region — went through two earlier
+    designs, both rejected once seen live, before landing on this one, at
+    the user's own explicit, precise correction each time:
+
+    1. First: every blank cell OUTSIDE the selection forced permanently
+       black, synchronously, before generation even started. Rejected:
+       "'Finir la zone' ne doit ABSOLUMENT PAS toucher aux cases
+       verrouillées ! Il me met des noires partout !", confirmed to be
+       "des cases blanches (et quelques noires) avant de lancer le
+       process" turning solid black — on anything but a tiny selection,
+       most of the grid, not something the search itself ever decided.
+    2. Then: outside the selection left completely free, exactly like
+       plain "Finir la grille" (the engine could add real letters OR new
+       black cells there). Also rejected, directly and precisely: "'Finir
+       la grille' ne doit toucher qu'aux cases strictement laissées non
+       grisées (qui peuvent sortir de la zone carrée de sélection) ET ne
+       pas toucher aux lettres et cases noires déjà en place dans la zone
+       non grisée" — the search was still writing new LETTERS into cells
+       the player considers off-limits, which is exactly as unwanted as
+       turning them black.
+
+    Final design: the search still runs over the WHOLE grid as before (the
+    CSP model has no way to "skip" a region — every cell must resolve to a
+    real letter or black to be searchable at all), completing freely
+    everywhere exactly like design 2 — but its own answer for every cell
+    OUTSIDE the zone is discarded afterward and reverted back to EXACTLY
+    its pre-click value (`zone_revert`, built below, passed to
+    `_run_generate_job` — see its own docstring for where/how the revert
+    itself happens). Only the selected zone ever ends up genuinely
+    complete; anything the player hasn't finished outside it stays exactly
+    as they left it, to keep working on by hand or with another "Finir la
+    zone" call — which is also why "Finir la grille"/"Finir la zone" have
+    never published to the Bibliothèque (`publish=False` above): the
+    result was always meant to be an intermediate editable draft, not a
+    guaranteed-finished playable grid."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     job = JOBS.get(req.job_id)
     if sess is None or job is None or job.get("interactive") is None:
@@ -4781,6 +4960,31 @@ async def interactive_finish(req: InteractiveFinishRequest):
         for c, ch in enumerate(row)
         if ch not in ("#", ".")
     }
+    # "Finir la zone" — see this endpoint's own docstring above for the
+    # full design history. Final design: the zone's own already-black
+    # cells stay fixed during the search (`permanent_black_cells`, same
+    # protection mechanism as before, just still scoped to the zone
+    # itself); every cell OUTSIDE the zone is recorded here, at its exact
+    # current value, in `zone_revert` — `_run_generate_job` applies it
+    # (overwriting the search's own answer back to this exact value) right
+    # after `generate_grid()` returns, before anything else reads
+    # `result` — see its own docstring.
+    permanent_black_cells = None
+    zone_revert = None
+    if req.zone_cells:
+        zone = {(c[0], c[1]) for c in req.zone_cells}
+        permanent_black_cells = {
+            (r, c)
+            for r, row in enumerate(req.grid)
+            for c, ch in enumerate(row)
+            if ch == "#" and (r, c) in zone
+        }
+        zone_revert = {
+            (r, c): ch
+            for r, row in enumerate(req.grid)
+            for c, ch in enumerate(row)
+            if (r, c) not in zone
+        }
     resume_state = _serialize_resume_state(seed_grid, locked_letters, None, None)
     # {(row, col, direction): clue} for every definition already typed —
     # this is `interactive_finish`'s own preserved-clues map; an empty
@@ -4791,6 +4995,47 @@ async def interactive_finish(req: InteractiveFinishRequest):
         for d in req.definitions
         if (d.get("clue") or "").strip()
     }
+    # A word that already carries a preserved clue must keep its own exact
+    # shape too, not merely its letters — `locked_letters` above already
+    # stops the search from ever blackening one of ITS OWN cells, but
+    # nothing stopped `minimize_black_squares`'s own final optimization
+    # pass (or, on a "reprise telle quelle" palier, `_optimize_before_
+    # cleanup`/`_lengthen_impossible_zones`) from removing/moving the
+    # black cell bounding it — silently extending or merging that word
+    # with whatever sits just beyond it, which leaves `preserved_clues`'s
+    # own (row, col, direction) key stale (or, worse, still matching but
+    # now pointing at a longer word than the one the clue was actually
+    # written for). Reported directly by the user: "il ne faut pas
+    # re-générer des définitions pour des emplacements qui en ont déjà
+    # une." Fixed by reusing the exact same `permanent_black_cells`
+    # mechanism already built for "Finir la zone" (see generate_grid's own
+    # docstring) — every one of the 3 removal-capable functions it's
+    # threaded through already refuses to touch a cell listed there, so
+    # widening this one set (rather than any new mechanism in the solver
+    # itself) is enough: for each preserved-clue word, its own immediate
+    # boundary cell(s) — right before its first cell, right after its
+    # last, in its own direction — join the set whenever they're already
+    # black, so they can never be reopened out from under it.
+    slots = extract_slots(seed_grid, rows, cols)
+    slot_by_key = {
+        (cells[0][0], cells[0][1], slot_direction(cells)): cells
+        for cells in slots
+    }
+    protected_black_cells = set()
+    for key in preserved_clues:
+        cells = slot_by_key.get(key)
+        if not cells:
+            continue
+        (r0, c0), (r1, c1) = cells[0], cells[-1]
+        if key[2] == "across":
+            boundary_cells = ((r0, c0 - 1), (r1, c1 + 1))
+        else:
+            boundary_cells = ((r0 - 1, c0), (r1 + 1, c1))
+        for (br, bc) in boundary_cells:
+            if 0 <= br < rows and 0 <= bc < cols and seed_grid[br][bc] == "#":
+                protected_black_cells.add((br, bc))
+    if protected_black_cells:
+        permanent_black_cells = (permanent_black_cells or set()) | protected_black_cells
     genreq = GenerateRequest(
         language=meta["language"],
         bilingual_language=meta.get("bilingual_language"),
@@ -4813,7 +5058,9 @@ async def interactive_finish(req: InteractiveFinishRequest):
             override_theme_description=meta.get("theme_description") or "",
             preserved_clues=preserved_clues,
             permanent_locked_letters=locked_letters,
+            permanent_black_cells=permanent_black_cells,
             publish=False, origin=meta.get("origin"),
+            zone_revert=zone_revert,
         )
     )
     _BACKGROUND_TASKS.add(task)
@@ -4821,14 +5068,14 @@ async def interactive_finish(req: InteractiveFinishRequest):
     return {"job_id": new_job_id}
 
 
-# Les cinq phases exposées par GET /api/generate/phase/{job_id}, à la
-# demande explicite de l'utilisateur ("file d'attente grille, génération
-# de la grille, file d'attente définition, génération des définitions,
-# grille terminée") — plus "error"/"cancelled" pour un job qui ne finira
-# jamais normalement. Un condensé stable de `job["step"]["code"]` (voir
-# _run_generate_job's own progress() closure), pensé pour un client
-# d'automatisation (Automation/Populate.py) qui veut juste savoir "où en
-# est ce job" sans avoir à connaître la dizaine de codes internes
+# The five phases exposed by GET /api/generate/phase/{job_id}, at the
+# user's explicit request ("file d'attente grille, génération de la
+# grille, file d'attente définition, génération des définitions, grille
+# terminée") — plus "error"/"cancelled" for a job that will never finish
+# normally. A stable summary of `job["step"]["code"]` (see
+# _run_generate_job's own progress() closure), meant for an automation
+# client (Automation/Populate.py) that just wants to know "where is this
+# job at" without needing to know the dozen or so internal codes
 # (pattern, pattern_attempt_failed, minimizing, pre_cleanup_optimized...).
 _GRID_GENERATION_STEPS = frozenset({
     "starting", "theme", "interactive_building", "pattern", "pattern_generated",
@@ -4839,12 +5086,11 @@ _CLUES_GENERATION_STEPS = frozenset({"clues", "saving"})
 
 
 def _job_phase(job):
-    """Réduit l'état interne d'un job à l'une des cinq phases publiques
-    (+ error/cancelled). `queued_grid`/`queued_clues` ne sont posés par
-    _wait_in_queue que tant qu'il y a réellement de la contention ; sans
-    file d'attente, un job passe directement de `starting` à la
-    génération, donc `grid_queue`/`clues_queue` peuvent tout simplement
-    ne jamais apparaître — c'est normal."""
+    """Reduces a job's internal state down to one of the five public
+    phases (+ error/cancelled). `queued_grid`/`queued_clues` are only ever
+    set by _wait_in_queue while there's genuine contention; with no
+    queue, a job goes straight from `starting` to actually generating, so
+    `grid_queue`/`clues_queue` can simply never appear — that's normal."""
     status = job.get("status")
     if status in ("done", "error", "cancelled"):
         return status
@@ -4855,21 +5101,18 @@ def _job_phase(job):
         return "clues_queue"
     if code in _CLUES_GENERATION_STEPS:
         return "clues_generation"
-    # `starting`, tous les codes de recherche de grille, et tout code
-    # inattendu tant que le job tourne encore.
+    # `starting`, every grid-search code, and any unexpected code as long
+    # as the job is still running.
     return "grid_generation"
 
 
 @app.get("/api/generate/phase/{job_id}")
 def generate_phase(job_id: str):
-    """Code de phase d'un job de génération, à la demande explicite de
-    l'utilisateur. `phase` vaut l'une de : "grid_queue" (file d'attente
-    grille), "grid_generation" (génération de la grille), "clues_queue"
-    (file d'attente définitions), "clues_generation" (génération des
-    définitions), "done" (grille terminée), ou "error"/"cancelled". Les
-    autres champs (step_code brut, position/longueur de file, avancement
-    des définitions) sont là pour le confort d'un client d'automatisation
-    et peuvent être ignorés."""
+    """A generation job's phase code, at the user's explicit request.
+    `phase` is one of: "grid_queue", "grid_generation", "clues_queue",
+    "clues_generation", "done", or "error"/"cancelled". The other fields
+    (the raw step_code, queue position/length, clue progress) are there
+    for an automation client's own convenience and can be ignored."""
     job = JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
@@ -4897,14 +5140,14 @@ def generate_phase(job_id: str):
 
 @app.post("/api/generate/cancel/{job_id}")
 def generate_cancel(job_id: str):
-    """Déclenche le `cancel_event` du job (bouton "Stop" de l'interface,
-    voir CANCEL_EVENTS) — un simple signal, jamais un arrêt forcé : le job
-    continue de tourner jusqu'à son prochain point de contrôle coopératif
-    (voir crossword_gen.GenerationCancelled), après quoi son statut passe
-    à "cancelled" (visible au prochain sondage de GET /api/generate/status/
-    {job_id}, pas immédiatement ici). Sans effet si le job est déjà
-    terminé — `.set()` sur un événement déjà positionné, ou sur un job qui
-    a déjà fini par une autre voie, ne fait rien de mal."""
+    """Sets the job's `cancel_event` (the interface's own "Stop" button,
+    see CANCEL_EVENTS) — a plain signal, never a forced stop: the job
+    keeps running until its next cooperative checkpoint (see
+    crossword_gen.GenerationCancelled), after which its status turns to
+    "cancelled" (visible on the next poll of GET /api/generate/status/
+    {job_id}, not immediately here). No effect if the job is already
+    finished — `.set()` on an already-set event, or on a job that already
+    finished some other way, does no harm."""
     job = JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
@@ -4914,18 +5157,18 @@ def generate_cancel(job_id: str):
 
 @app.post("/api/generate/continue/{job_id}", status_code=202)
 async def generate_continue(job_id: str):
-    """Bouton "Continuer" de l'interface web, à la demande explicite de
-    l'utilisateur : affiché quand un job se termine en `status: "error"`
-    avec `error_code: "no_fillable_grid"` (voir _run_generate_job) —
-    relance un nouveau job, avec les mêmes paramètres que l'original
-    (`job["request"]`), mais en reprenant depuis l'état exact où la
-    génération précédente s'est arrêtée (`job["resume_state"]`, voir
-    crossword_gen.py's `_serialize_resume_state`) au lieu de repartir d'une
-    grille vierge — un nouveau budget complet de `attempts` (200 par
-    défaut) paliers, pas une poursuite du même job. Renvoie un job_id
-    distinct du job d'origine (le job d'origine reste consultable tel
-    quel), exactement comme POST /api/generate : le client se contente
-    d'interroger ce nouveau job_id de la même façon."""
+    """"Continuer" button of the web UI, at the user's explicit request:
+    shown when a job ends in `status: "error"` with `error_code:
+    "no_fillable_grid"` (see _run_generate_job) — starts a new job, with
+    the same parameters as the original (`job["request"]`), but resuming
+    from the exact state the previous generation stopped at
+    (`job["resume_state"]`, see crossword_gen.py's
+    `_serialize_resume_state`) instead of starting over from a blank
+    grid — a brand new full budget of `attempts` (200 by default)
+    paliers, not a continuation of the same job. Returns a job_id
+    distinct from the original job's own (the original job stays
+    inspectable as-is), exactly like POST /api/generate: the client
+    simply polls this new job_id the same way."""
     job = JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")

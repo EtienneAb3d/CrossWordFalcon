@@ -3280,3 +3280,39 @@ end through the real running API (interactive start/step/save,
   all contain the new markup/functions/rules/translations. **Not yet
   visually confirmed in an actual browser** — same tooling limitation
   noted throughout this file.
+
+- **Interactive mode shows a black-cell / white-cell-fill status above the
+  grid** (`#interactive-cell-stats`, two stacked `<p>` lines, left-aligned),
+  at the user's explicit request: "afficher en haut de la grille un état des
+  pourcentage de cases noires et du taux de remplissage des cases blanches.
+  Aligner ces 2 chiffres l'un au-dessus de l'autre sur le bord gauche de la
+  fenêtre." Styled like `.attempt-preview-stats` (`0.7rem`, `var(--fg)` at
+  `opacity: 0.7`) rather than inventing a new dimmed-text convention. A new
+  `#interactive-grid-wrap` now wraps `#grid` (with the stats above it,
+  `display: flex; flex-direction: column; gap: 0.35rem`) — needed because
+  `#grid-column` itself turns into a horizontal row in Interactive mode
+  (`.interactive-flank`, flanking `#grid` with the Précédent/Suivant
+  buttons), so the two stats lines need their own vertical sub-column
+  alongside `#grid` rather than sitting as plain siblings that would render
+  beside it instead of above it. `#interactive-grid-wrap`'s own `align-
+  items: flex-start` keeps it (and `#grid`'s own pre-existing `align-self:
+  flex-start`) at their natural width rather than stretching; harmless
+  outside Interactive mode, since `#interactive-cell-stats` stays hidden
+  there and the wrapper renders identically to a bare `#grid`.
+
+  A direct, disclosed consequence: `#grid-column.interactive-flank`'s own
+  "Précédent"/"Suivant" buttons used to center vertically against `#grid`'s
+  own exact height (`align-items: center` on the row, with `#grid` as the
+  row's only tall child, per that rule's own long-standing comment); they
+  now center against `#interactive-grid-wrap`'s height instead (stats +
+  gap + `#grid`), landing slightly below `#grid`'s own true midpoint by
+  roughly half the stats block's height. Accepted as a small approximation
+  rather than a JS-measured offset — that rule's own comment was updated to
+  say so directly instead of still claiming exact centering.
+
+  Verified: a real JS syntax check (`esprima`, temporarily installed and
+  removed again afterward) confirmed `script.js`/`i18n.js` still parse
+  correctly; a CSS brace-balance check and an HTML `<div>`-tag-count check
+  confirmed `style.css`/`index.html` stay structurally sound. **Not yet
+  visually confirmed in an actual browser** — same tooling limitation noted
+  throughout this file.
