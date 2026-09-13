@@ -5,8 +5,11 @@ explicit request: "En bas à droite de l'interface, ajoute un ChatBot
 LLM pour répondre à l'utilisateur. Il s'appelle David FALCON." Talks to
 the exact same OpenAI-compatible chat-completions endpoint as
 backend/clues.py's LLMClueGenerator (same LLM_BASE_URL/LLM_MODEL/
-LLM_API_KEY environment configuration — there is only ever one local/
-remote LLM server configured for this whole app) — deliberately its own,
+LLM_API_KEY environment configuration by default — on a single-GPU
+machine there is only ever one local/remote LLM server configured for
+this whole app; on a dual-GPU one, backend/app.py builds this class'
+own second instance pointed at a second, interactive-dedicated LLM
+server instead — see this class' own __init__) — deliberately its own,
 separate class rather than reusing LLMClueGenerator directly: clue/title
 generation and chatting are different enough concerns (retry loops and
 per-call LOG_LLM/ records make no sense for a live conversation) that
@@ -252,12 +255,19 @@ def _resolve_selection(ui_context):
 class ChatBot:
     """One instance is enough for the process's lifetime — construct once
     (e.g. at module level in backend/app.py) and call `reply()` per
-    message, the same usage convention as LLMClueGenerator."""
+    message, the same usage convention as LLMClueGenerator.
 
-    def __init__(self):
-        self.base_url = os.environ.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
-        self.model = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
-        self.api_key = os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
+    base_url/model/api_key mirror LLMClueGenerator's own optional
+    constructor overrides (`None` by default, i.e. no effect for
+    `ChatBot()` — falls back to the environment exactly as before): used
+    by backend/app.py to point this one instance at a second, dual-GPU
+    LLM server dedicated to interactive requests, without this class ever
+    reading a second set of environment variables itself."""
+
+    def __init__(self, base_url=None, model=None, api_key=None):
+        self.base_url = base_url or os.environ.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
+        self.model = model or os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
+        self.api_key = api_key or os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
         self.think_filter = os.environ.get("CHATBOT_THINK_FILTER", DEFAULT_CHATBOT_THINK_FILTER)
         if self.think_filter not in CHATBOT_THINK_FILTER_CHOICES:
             logger.warning(

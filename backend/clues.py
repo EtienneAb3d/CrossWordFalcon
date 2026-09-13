@@ -1044,17 +1044,29 @@ class ClueGenerationError(RuntimeError):
 class LLMClueGenerator:
     """Talks to an OpenAI-compatible chat-completions endpoint to write
     crossword clues. Endpoint configuration (LLM_BASE_URL/LLM_MODEL/
-    LLM_API_KEY) is read once, at construction time, from the environment.
+    LLM_API_KEY) is read once, at construction time, from the environment
+    — unless overridden explicitly via the constructor's own optional
+    base_url/model/api_key parameters, which take priority over the
+    environment when given (`None` by default, i.e. no effect for every
+    pre-existing caller: `LLMClueGenerator()` still resolves purely from
+    the environment exactly as before). Added so backend/app.py can build
+    a SECOND instance pointed at a different LLM server — e.g. a second
+    GPU dedicated to interactive/on-demand requests (Interactive mode,
+    Dictionary, Paraphraser) while this env-derived instance keeps serving
+    automatic full-grid generation — without a second, separate set of
+    environment variables ever being read directly by this class itself
+    (see LLM_BASE_URL_INTERACTIVE/LLM_MODEL_INTERACTIVE/LLM_API_KEY_
+    INTERACTIVE in env.sh, resolved by backend/app.py, not here).
 
     Usage: one instance is enough for the process's lifetime — construct
     once (e.g. at module level in backend/app.py) and call `generate()`
     per grid.
     """
 
-    def __init__(self):
-        self.base_url = os.environ.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
-        self.model = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
-        self.api_key = os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
+    def __init__(self, base_url=None, model=None, api_key=None):
+        self.base_url = base_url or os.environ.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
+        self.model = model or os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
+        self.api_key = api_key or os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
 
     def generate(self, word_entries, difficulty, language="fr", timeout=DEFAULT_TIMEOUT,
                  on_progress=None, cancel_event=None, should_pause=None,

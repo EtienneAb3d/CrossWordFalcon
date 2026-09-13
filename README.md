@@ -68,6 +68,14 @@ uncomment `LLAMA_FORCE_CPU=1` — useful if you'd rather keep the GPU free
 for something else. Comment it out again (or remove it) to go back to
 using the GPU.
 
+**Have two graphics cards?** `./Install.sh` detects this and can set up
+two separate copies of the language model, one per card: one handles
+grid generation (whether you start it yourself or via the automated
+batch generator), the other handles everything interactive — the chat
+assistant, the dictionary, the paraphraser, and the hands-on grid editor
+— so the two never compete for the same card. Re-run `./Install.sh` at
+any time to turn this on or change which card does what.
+
 **Have a graphics card with at least 12GB of VRAM?** The default model
 favors speed, but a larger one — `Qwen/Qwen3.8-27B`, quantized to fit that
 much VRAM — writes noticeably better clues, especially on trickier

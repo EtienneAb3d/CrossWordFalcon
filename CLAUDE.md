@@ -3097,6 +3097,135 @@ servers:
   backend port and the proxied frontend port) reports `"compute":"cpu"`, and
   cross-checked via `ps` that the actual running `llama_cpp.server` process was
   genuinely launched with `--n_gpu_layers 0` to match.
+
+  **Rewritten to report every GPU (this project's own dev host has two —
+  see `run_llm.sh`/`run_sglang.sh`'s `LLM_GPU_INDEX`/`LLM_INTERACTIVE_
+  GPU_INDEX` dual-GPU support), which model is assigned to each (the
+  automatic-generation LLM, the interactive/on-demand LLM when it's a
+  genuinely separate instance, and the embedding model from `backend/
+  embedder.py`), plus the machine's total RAM and CPU count**, at the
+  user's explicit request: "il faut lister les 2 GPUs avec leur
+  configuration et les modèles chargés (y compris le modèle
+  d'embedding). Ajouter aussi une information sur la RAM et le nombre de
+  CPUs." `_detect_nvidia_gpu()` (singular, first-card-only) became
+  `_detect_nvidia_gpus()` (plural — `nvidia-smi --query-gpu=index,name,
+  memory.total`, one entry per line) and `_detect_apple_gpu()` now
+  returns the same `{"index", "name", "vram_mb", "roles": []}` shape as a
+  single-entry list, so both probes feed one uniform `gpus` list either
+  way. A new `_detect_ram_mb()` reads `/proc/meminfo`'s `MemTotal:` line
+  on Linux, `sysctl -n hw.memsize` on macOS (the same probe `_detect_
+  apple_gpu()` already used for its own unified-memory figure) — no new
+  dependency (no `psutil` in `requirements.txt`), matching this project's
+  existing `os.cpu_count()` convention (already used by `crossword_gen.
+  py`'s `PARALLEL_ATTEMPTS` default) for the CPU count.
+
+  `get_system_info(llm_model, interactive_llm_model=None, embed_model=
+  None, embed_on_gpu=False)` maps each of up to three "roles" (the
+  automatic LLM, the interactive LLM, the embedding model) onto a GPU
+  index read from `LLM_GPU_INDEX`/`LLM_INTERACTIVE_GPU_INDEX` (falling
+  back to the first detected card for an index that matches no real one,
+  e.g. the "0" default on a machine whose sole card enumerates
+  differently) — `interactive_llm_model` is only ever passed by `backend/
+  app.py` when it's genuinely a separate instance (`interactive_clue_
+  generator is not clue_generator`, the same check that module's own
+  dual-GPU setup already uses), so a single-instance machine never
+  double-reports one model as if it were two. `embed_on_gpu` mirrors
+  `EMBED_N_GPU_LAYERS > 0` directly (see `run_embed.sh`) rather than
+  probing the embed server itself — same "known-in-advance config, not a
+  hardware guess" reasoning as `LLAMA_FORCE_CPU`; since `run_embed.sh`
+  never pins a card via `CUDA_VISIBLE_DEVICES` when GPU mode is on, a
+  GPU-backed embedding model always lands on whichever card CUDA treats
+  as device 0 (this project's own real deployment keeps it there
+  deliberately — see `env.sh`'s "GPU cohabitation" section), so it's
+  always assigned to `gpus[0]` rather than a configurable index of its
+  own. `LLAMA_FORCE_CPU` no longer skips GPU *detection* at all (the
+  cards are still physically there regardless) — it now only keeps both
+  LLM roles off every GPU (never the embedding model, which `run_embed.
+  sh` controls completely independently and never even reads this flag),
+  a deliberate correction from the single-GPU version's own coarser
+  "skip detection entirely" behavior, verified directly: a real call with
+  `LLAMA_FORCE_CPU=1` *and* `embed_on_gpu=True` correctly reported the
+  LLM under `cpu_roles` while the embedding model still landed on the
+  real, detected GPU.
+
+  A role is returned as a plain `{"kind": "llm_auto"|"llm_interactive"|
+  "embedding", "model": str}` dict, never pre-translated text — matching
+  this project's own established convention (English/plain codes from the
+  backend, `frontend/static/i18n.js` does the localizing) already used
+  elsewhere for difficulty/mode codes. The old single-GPU response shape
+  (`compute`/`gpu_name`/`gpu_vram_mb`) is gone outright, replaced by
+  `{gpus: [{index, name, vram_mb, roles}], cpu_roles: [...], unified_
+  memory, cpu_count, ram_total_mb, llm_model, interactive_llm_model,
+  embed_model}` — no backward-compatibility shim, since this is an
+  internal-only endpoint feeding the one frontend rewritten in the same
+  change (`renderSystemInfoTooltip()` in `frontend/static/script.js`,
+  which now renders one line per GPU followed by one line per role
+  assigned to it, a "CPU:" section for any role that landed there
+  instead, then RAM and CPU-count lines — 10 new `systemInfo*` i18n keys
+  replace the 6 retired ones, in all 6 UI languages). `backend/app.py`'s
+  `GET /api/system_info` route builds the three new arguments from its
+  own existing module-level singletons (`clue_generator`/`interactive_
+  clue_generator`/`_similar_embedder`) and a freshly-parsed `EMBED_N_
+  GPU_LAYERS`.
+
+  Verified live against the real dual-GPU dev host (2× RTX 3060, per
+  `env.sh`'s own "GPU cohabitation" section): a real call with
+  `LLM_GPU_INDEX=0`/`LLM_INTERACTIVE_GPU_INDEX=1`/a real `interactive_
+  llm_model`/`embed_model="bge-m3"`/`embed_on_gpu=True` correctly
+  produced GPU 0 carrying both the automatic LLM and the embedding model,
+  GPU 1 carrying only the interactive LLM, `cpu_count: 16`, `ram_total_
+  mb: 128710` — matching this machine's own real `nvidia-smi`/`/proc/
+  meminfo` output exactly; a real, non-mocked `backend.app.system_info()`
+  call (the actual FastAPI route function, module fully imported) ran
+  without error and returned the same well-formed shape. `python3 -m
+  py_compile`/a real JS syntax check (`esprima`, temporarily installed
+  and removed again afterward) both passed. **Not yet visually confirmed
+  in an actual browser** — the same tooling limitation noted throughout
+  this project's UI work — verified structurally and via the real data
+  reaching the frontend correctly instead.
+
+  `sample_resource_usage()` — a second, much lighter probe, separate from
+  `get_system_info()` above, added at the user's explicit request: "un
+  petit vu-mètre indiquant le taux d'occupation de chaque ressource (GPUs
+  / CPU). Un seul vu-mètre pour l'ensemble des CPUs." Returns
+  `{"cpu_percent": float|None, "gpu_percent": [{"index", "percent"},
+  ...]}` — `cpu_percent` a single figure for every CPU combined (never
+  per-core), `gpu_percent` one entry per NVIDIA GPU (`nvidia-smi
+  --query-gpu=index,utilization.gpu`, a real instantaneous reading — no
+  priming needed, unlike CPU below); empty on Apple Silicon (no
+  equivalent quick per-GPU utilization query exists there) or a machine
+  with no GPU. CPU occupancy is delta-based, computed without ever
+  sleeping to force a measurement (which would make this a blocking
+  call, unacceptable for something meant to be sampled every couple of
+  seconds): `_cpu_percent_linux()` reads `/proc/stat`'s aggregate `cpu`
+  line and compares it against whatever the *previous* call (from
+  anywhere in this process) last saw, stored in a module-level `_prev_
+  cpu_times` — the same self-priming technique `psutil`'s own non-
+  blocking `cpu_percent()` uses, reimplemented here with no new
+  dependency (this project already reads `/proc/meminfo`/`sysctl` the
+  same way for `_detect_ram_mb()`). Returns `None` on the very first
+  sample after process start (no baseline yet) — a real, harmless
+  consequence of this design, not a bug. `_cpu_percent_macos()` is a
+  disclosed approximation: no `/proc/stat` equivalent exists on macOS
+  without a new dependency, so it falls back to `os.getloadavg()[0]`
+  normalized by core count — a real measure of demand, but not the same
+  thing as instantaneous occupancy (it can read higher than true CPU
+  occupancy on a machine with many I/O-waiting, not actually running,
+  processes).
+
+  This function is deliberately never called per-request — see `backend/
+  app.py`'s own periodic sampler and dedicated single-thread executor
+  below for why (a real GPU query is a subprocess spawn, too costly to
+  pay for every `POST /api/presence` heartbeat of every connected tab,
+  and — found live — sharing the event loop's default thread-pool
+  executor with this app's other long-running blocking calls, like a
+  full grid generation, can starve it for many seconds at exactly the
+  moment its own reading would matter most).
+
+  Verified live: two consecutive calls half a second apart correctly
+  returned `cpu_percent: None` then a real delta-based percentage; real
+  `nvidia-smi` output on this project's own dual-GPU dev host correctly
+  produced two `gpu_percent` entries.
 - `backend/clues.py` — `LLMClueGenerator`, the one class that owns all LLM handling
   (endpoint config, prompt text, the HTTP call, response parsing); `backend/app.py`
   builds a single instance at module scope and calls `.generate()` per grid. Talks to
@@ -7583,6 +7712,112 @@ servers:
   browser** — the same tooling limitation noted throughout this
   project's UI work.
 
+- **Interactive mode's own in-app help panel** (`#interactive-help-btn`,
+  a "?" icon button right to the left of "Mots"), at the user's explicit
+  request, with the exact help text supplied directly: a step-by-step
+  checklist covering typing letters/toggling black cells, "Suivant"/
+  "Précédent", the Dictionnaire/Paraphraseur/"Mots" tools, the two
+  cleanup buttons, "Impossibles"/"Vérifier", "Définitions", "Proposer une
+  définition"/"Proposer un titre", "Finir la grille", the iterate-then-
+  refine loop after an automatic finish, saving, and "Publier". Reuses
+  `#rss-detail`'s own established overlay shape (`frontend/static/
+  style.css`) rather than inventing a new one: `position: fixed`, a
+  close button that stays outside the scrollable body so it's always
+  reachable regardless of content length, and the same `#interactive-
+  help-overlay[hidden] { display: none; }` override this project has
+  already had to add once before for `#rss-detail` (a bare `display:
+  flex` on an ID selector otherwise beats the browser's own `[hidden]`
+  rule outright). `#interactive-help-btn` itself reuses `.nav-btn` (the
+  same class already on the neighboring "Effacer" sponge button) plus a
+  small inline SVG "?" glyph — no external icon font/library, same
+  convention as every other icon button in this project.
+
+  `interactiveHelpLines` (a plain array of strings, one per bullet, in
+  `frontend/static/i18n.js`) is rendered into `<li>` elements by a new
+  `renderInteractiveHelpList()`, called both when the panel opens
+  (`openInteractiveHelp()`) and, if it's already open, from `setUiLanguage()`
+  on a language switch — the same "re-render dynamic content on language
+  change" pattern already established there for `renderAttemptPreview`/
+  `renderPreviewStatus`/`renderInteractive`/etc. `hideInteractivePanel()`
+  also force-closes the overlay on the way out of Interactive mode, so a
+  `position: fixed` sibling element can never survive stuck open after
+  the mode itself (and its own "?" button) has already disappeared.
+  Escape-to-close mirrors `#rss-detail`'s own convention exactly (`if
+  (!interactiveHelpOverlay.hidden && event.key === "Escape")`).
+
+  The same content was also added to `DOC_USER/EN/ReadMe.md` (a new
+  "## Building a grid" section, right before "## Interactive authoring
+  mode", which it introduces and links to for the full reference) and,
+  translated to French, to `DOC_ALGO/FR/ReadMe.md` as two distinct
+  sections — "## Construire une grille (mode manuel avec assistant)" (this
+  same checklist, preceded by the 4-step "how to even get into Interactive
+  mode from the home page" preamble the user asked for explicitly: set up
+  the form, choose Mode "Interactif", optionally list Thématique words,
+  click "Générer la grille") and a new, separate "## Construire une grille
+  (tout automatique)" describing the ordinary non-Interactive path instead
+  — pick a Mode among Flash/Turbo/Rapide/Moyen/Ultra (never "Interactif"),
+  optionally set a Thématique, click "Générer la grille", and everything
+  else (the three algorithm steps this whole document describes, the live
+  attempt-preview, the LLM-written definitions, the automatic save to the
+  Library with no "Publier" click needed, "Continuer" on total failure,
+  "Recalculer" to rewrite just the definitions) happens with no further
+  manual action. `DOC_USER/EN/ReadMe.md` is what `backend/chatbot.py`
+  actually feeds to the LLM (see that file's own entry above) — so David
+  FALCON can now answer "how do I build a grid myself" questions directly
+  from this same content, in whichever language the interface is in, not
+  only a player reading the overlay panel by hand.
+
+  Verified: a real JS syntax check (`esprima`, temporarily installed and
+  removed again afterward) confirmed `script.js`/`i18n.js` still parse
+  correctly; CSS brace-balance and HTML tag-count checks (`div`/`section`/
+  `button`/`ul`/`h3`) confirmed `style.css`/`index.html` stayed
+  structurally sound after the edits. **Not yet visually confirmed in an
+  actual browser** — the same tooling limitation noted throughout this
+  project's UI work — verified structurally instead.
+
+  **Two follow-up refinements, both at the user's explicit request.**
+  First: "mettre le nom des boutons en gras" — every real button name
+  mentioned in this help content is now wrapped in `<strong>`, everywhere
+  it appears: the in-app overlay (`interactiveHelpLines` in all 6
+  languages, each line now containing literal `<strong>...</strong>`
+  markup rather than plain text), `DOC_USER/EN/ReadMe.md`'s "Building a
+  grid" section, and both of `DOC_ALGO/FR/ReadMe.md`'s "Construire une
+  grille" sections (the two ReadMe files already used Markdown `**bold**`
+  for most button names from their own first draft — this pass also
+  caught and fixed two names it had missed the first time, "Library"/
+  "Bibliothèque", in the closing sentence of each). `renderInteractiveHelpList()`
+  switched from `li.textContent = line` to `li.innerHTML = line` to let
+  this markup actually render — safe specifically because `interactiveHelpLines`
+  is 100% static, developer-authored content, never user/LLM input, unlike
+  `renderMarkdown()`/`sanitizeRssHtml()` elsewhere in this same file, which
+  exist precisely because *their* content isn't. Verified: every one of
+  the 6 language arrays has exactly 14 `<strong>`/14 `</strong>` (a
+  balanced, identical count across all 6, confirming no language was
+  missed or double-tagged) via a direct regex count, plus the existing
+  JS-parse/tag-balance checks re-run clean.
+
+  Second: "remplacer le bouton 'Fermer l'aide' par une icône croix" —
+  `#interactive-help-close-btn` switched from a visible-text button
+  (`data-i18n="interactiveHelpCloseBtn"`, showing "Fermer"/"Close"/etc.)
+  to the exact same icon-only convention every other closing button in
+  this project already uses (`#library-close-btn`, `#dictionary-close-btn`,
+  `#paraphrase-close-btn`, `#qdrant-admin-close-btn`, `#interactive-work-close-btn`):
+  `class="nav-btn"`, the literal "✕" character as its only visible
+  content, and `data-i18n-aria`/`data-i18n-title` (instead of `data-i18n`)
+  so the same `interactiveHelpCloseBtn` string still reaches the player,
+  now as the accessible name/tooltip rather than as visible text. The
+  button's own CSS rule (`#interactive-help-close-btn` in `style.css`)
+  was trimmed down to only its positioning declarations (`align-self:
+  flex-end; flex-shrink: 0; margin-bottom: 0.5rem;`) — border/background/
+  padding/font-size/cursor are now inherited from `.nav-btn` itself,
+  the same base look already shared by every other "✕" button, rather
+  than a second, near-duplicate hand-written copy of it.
+
+  Verified: CSS brace-balance and HTML tag-balance checks both passed
+  after this change too. **Not yet visually confirmed in an actual
+  browser** — the same tooling limitation noted throughout this
+  project's UI work.
+
 - `backend/gloss_lookup.py` — `find_glosses_for_canonicals()`, looks up real
   definitions in the per-language gloss dictionary built by `build_gloss_dictionary.py`
   (`data/gloss_dictionary/<lang>_glosses.jsonl`, checked into the repo — unlike most
@@ -10214,6 +10449,73 @@ servers:
   for `1 → 2 → (unchanged, skipped) → 3`, `Zoé`/`marc` sorted case-
   insensitively, anonymous session shown as `(anonyme)`); `py_compile` on
   `backend/app.py`.
+
+  **`POST /api/presence` now also carries a `resource_usage` field**, at
+  the user's explicit request: "Dans le panneau d'information en haut à
+  droite, ajouter un petit vu-mètre indiquant le taux d'occupation de
+  chaque ressource (GPUs / CPU)... Transmettre ces information au Front
+  dans les appels automatiques signalant la présence en ligne de
+  l'utilisateur." Response shape is now `{"count": N, "resource_usage":
+  {"cpu_percent": float|None, "gpu_percent": [{"index", "percent"},
+  ...]}}` — `resource_usage` is never recomputed inside `presence()`
+  itself, only read straight from a module-level `_LATEST_RESOURCE_USAGE`
+  cache, kept current by a new background task, `_resource_usage_
+  sampler()` (registered in `_start_rss_scheduler`'s `@app.on_event
+  ("startup")` hook alongside `_presence_sweep_scheduler`), which calls
+  `backend/system_info.py`'s `sample_resource_usage()` every
+  `RESOURCE_USAGE_SAMPLE_INTERVAL_S` (2.0s, matching the frontend's own
+  `POST /api/presence` polling cadence) and replaces the cache dict
+  wholesale (a plain reference reassignment, atomic in CPython, so every
+  concurrent `presence()` call can read it with no lock needed).
+
+  **A real starvation bug was found and fixed while verifying this
+  live**: the very first version called `sample_resource_usage()` via a
+  plain `asyncio.to_thread(...)` — which runs on the event loop's own
+  *default*, shared thread-pool executor, the exact same pool every
+  `_run_generate_job` call already uses for its own long-running,
+  synchronous `generate_grid()` work (up to several minutes per grid).
+  Measured live, right after a restart with a real generation already in
+  flight (`Automation/Populate.py` running against the server): the
+  sampler's own quick `/proc/stat`/`nvidia-smi` read sat queued behind
+  that other work for over 15 seconds before ever running a second time
+  — `cpu_percent` stayed stuck at `None` and `gpu_percent` frozen at its
+  very first reading the whole time, silently defeating the entire
+  feature at exactly the moment (heavy load) it exists to show. Fixed
+  with a dedicated `_RESOURCE_USAGE_EXECUTOR` (`concurrent.futures.
+  ThreadPoolExecutor(max_workers=1)`), used via `loop.run_in_executor
+  (_RESOURCE_USAGE_EXECUTOR, sample_resource_usage)` instead of the
+  shared default pool — a single worker thread reserved for this one
+  lightweight, frequent task, immune to contention from any other
+  blocking call this app makes. Verified live, before and after: the
+  same real, loaded machine (Populate.py generating grids continuously)
+  showed `cpu_percent` stuck at a single value for 15+ seconds with the
+  shared-pool version, and updating live, correctly reflecting the real
+  ~99-100% CPU load, every single 2s poll with the dedicated-executor
+  fix — through both the backend's own port and the frontend proxy.
+  `frontend/static/script.js`'s `pingPresence()` reads the new field into
+  a `lastResourceUsage` variable and calls a new `renderResourceMeters()`
+  — see the `style-guide` SKILL for the meter markup/CSS itself.
+
+  **`POST /api/presence` also carries the two background queues' current
+  length**, at the user's explicit request: "ajouter une indication sur la
+  longueur des 2 files d'attente : Grille (CPU) et Définition (GPU)."
+  Response shape gained one more field: `"queue_lengths": {"grid":
+  len(GRID_QUEUE), "clues": len(CLUES_QUEUE)}` — unlike `resource_usage`,
+  this is computed fresh on every single call, never cached by a
+  background task: `len()` on a plain in-memory Python list costs nothing
+  (no subprocess, no network call), and `GRID_QUEUE`/`CLUES_QUEUE` are
+  already the exact live lists `_wait_in_queue` mutates, so there's no
+  staleness risk to guard against the way there is for a GPU reading.
+  `frontend/static/script.js`'s `pingPresence()` reads it into a
+  `lastQueueLengths` variable and calls a new `renderQueueLengths()`,
+  which renders two plain label/value rows (no bar — a queue length is an
+  unbounded count, not a percentage of a known maximum) in a new
+  `#queue-lengths` div, sitting right below `#resource-meters` inside the
+  same info tooltip — see the `style-guide` SKILL for the markup/CSS.
+  Verified live: a real `POST /api/presence` call, through both the
+  backend's own port and the frontend proxy, returned `queue_lengths:
+  {"grid": 1, "clues": 0}` while a real generation job (`Automation/
+  Populate.py`) was actively running against the server.
 
 `data/wordlist_fr_full.tsv` is the CLI's default dictionary (`--wordlist`); the backend
 picks among `data/wordlist_{fr,en,de,es,it,pt}_full.tsv` per the request's `language` (see

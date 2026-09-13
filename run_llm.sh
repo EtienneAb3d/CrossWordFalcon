@@ -16,6 +16,47 @@ MODELS_DIR="models"
 LOG_DIR="logs"
 LLM_LOG="$LOG_DIR/llm.log"
 
+# Dual-GPU support, at the user's explicit request ("Cette machine a
+# maintenant 2 GPUs... Configurer les lanceurs run_llm.sh et run_sglang.sh
+# pour lancer 2 instances du modele LLM, un par carte"). Two INDEPENDENT
+# instances of the SAME model/quant, each pinned to its own card via
+# CUDA_VISIBLE_DEVICES (a real NVIDIA-runtime env var, silently unused on
+# a CPU-only or Metal machine, so it's harmless to always set) — never
+# two different models. Routing which request goes to which instance is
+# entirely backend/app.py's job (LLM_BASE_URL vs. LLM_BASE_URL_INTERACTIVE,
+# see that file's own module-level singletons): this script only ever
+# launches the server process(es), it never decides what traffic reaches
+# them.
+#
+#   - LLM_GPU_INDEX (default "0"): which card the PRIMARY instance (port
+#     LLM_PORT) binds to — this is the one every AUTOMATIC generation
+#     request uses (Populate.py, and the web UI's "Generer la grille"
+#     form/Interactive mode's "Finir la grille" button, both of which go
+#     through the exact same _run_generate_job — see backend/app.py).
+#     Harmless to leave at its default on a single-GPU machine (there is
+#     only ever device 0 to select) or on a multi-GPU one that never
+#     configures the second instance below (CUDA already defaults to
+#     device 0 as the first visible one anyway).
+#   - LLM_INTERACTIVE_GPU_INDEX (default unset/empty): when set to a
+#     SECOND, DIFFERENT card index, this script ALSO launches a second,
+#     independent server process bound to it, listening on
+#     LLM_PORT_INTERACTIVE — every INTERACTIVE/on-demand request
+#     (Interactive/Edition mode, the ChatBot, the Dictionary panel's
+#     Definir/Thematique/Synonymes, the Paraphraseur) is then routed to it
+#     instead (see LLM_BASE_URL_INTERACTIVE in env.sh/env_default.sh,
+#     read by backend/app.py — never by this script). Left unset (the
+#     default), this script behaves exactly as it always has: ONE
+#     instance, ONE port, and backend/app.py's own interactive_clue_
+#     generator/interactive_chatbot degrade to sharing the primary
+#     instance with every automatic request.
+# Install.sh can configure both of these for you when it detects more
+# than one NVIDIA GPU; see env_default.sh's own "Dual-GPU LLM" section for
+# how to set them by hand instead.
+LLM_GPU_INDEX="${LLM_GPU_INDEX:-0}"
+LLM_INTERACTIVE_GPU_INDEX="${LLM_INTERACTIVE_GPU_INDEX:-}"
+LLM_PORT_INTERACTIVE="${LLM_PORT_INTERACTIVE:-3004}"
+LLM_INTERACTIVE_LOG="$LOG_DIR/llm_interactive.log"
+
 mkdir -p "$MODELS_DIR" "$LOG_DIR"
 
 # Which GGUF to serve is entirely env.sh's (or, absent that, env_default.sh's)
@@ -65,14 +106,26 @@ FORCE_CPU="${LLAMA_FORCE_CPU:-}"
 # only for that model) — env_default.sh's DeepSeek block sets
 # LLAMA_CHAT_TEMPLATE_KWARGS to `{}` accordingly.
 
-pids=$(lsof -ti tcp:"$LLM_PORT" 2>/dev/null || true)
-if [ -n "$pids" ]; then
-    echo "Stopping LLM server already running on port $LLM_PORT (pid: $pids)"
-    kill $pids 2>/dev/null || true
-    sleep 1
-    pids=$(lsof -ti tcp:"$LLM_PORT" 2>/dev/null || true)
-    [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
-fi
+stop_port() {
+    local port="$1"
+    local pids
+    pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "Stopping LLM server already running on port $port (pid: $pids)"
+        kill $pids 2>/dev/null || true
+        sleep 1
+        pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
+        [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+    fi
+}
+
+# Always stop both ports, regardless of whether LLM_INTERACTIVE_GPU_INDEX
+# is currently set — a machine that previously ran in dual-instance mode
+# and has since been reconfigured back to a single instance would
+# otherwise leave an orphaned second process listening on LLM_PORT_
+# INTERACTIVE forever.
+stop_port "$LLM_PORT"
+stop_port "$LLM_PORT_INTERACTIVE"
 
 source .venv/bin/activate
 
@@ -161,7 +214,6 @@ if [ ! -f "$MODEL_PATH" ]; then
     mv "$MODEL_PATH.part" "$MODEL_PATH"
 fi
 
-echo "Starting LLM server: model=$MODEL_PATH, port=$LLM_PORT"
 # `nohup` + `disown` + stdin from /dev/null, same as run_Falcon.sh — so this
 # keeps running after the launching shell/terminal closes, not just across a
 # background `&` (nohup alone only ignores SIGHUP, it doesn't detach from
@@ -179,14 +231,23 @@ echo "Starting LLM server: model=$MODEL_PATH, port=$LLM_PORT"
 # own defensive fix for the same incident). The model itself
 # (n_ctx_train, confirmed live in logs/llm.log) supports far more than
 # either value, so this is purely a `--n_ctx` choice, not a model limit.
-nohup python3 -m llama_cpp.server \
-    --model "$MODEL_PATH" \
-    --host "$LLM_HOST" --port "$LLM_PORT" \
-    --n_ctx 32768 --n_gpu_layers "$N_GPU_LAYERS" \
-    --chat_template_kwargs "$CHAT_TEMPLATE_KWARGS" \
-    < /dev/null > "$LLM_LOG" 2>&1 &
-LLM_PID=$!
-disown "$LLM_PID"
+start_llama_instance() {
+    local gpu_index="$1" port="$2" log_file="$3" label="$4"
+    echo "Starting LLM server ($label): model=$MODEL_PATH, port=$port, GPU index=$gpu_index"
+    CUDA_VISIBLE_DEVICES="$gpu_index" nohup python3 -m llama_cpp.server \
+        --model "$MODEL_PATH" \
+        --host "$LLM_HOST" --port "$port" \
+        --n_ctx 32768 --n_gpu_layers "$N_GPU_LAYERS" \
+        --chat_template_kwargs "$CHAT_TEMPLATE_KWARGS" \
+        < /dev/null > "$log_file" 2>&1 &
+    local pid=$!
+    disown "$pid"
+    echo "LLM server ($label) started (pid $pid, log: $log_file)"
+    echo "Endpoint: http://$LLM_HOST:$port/v1/chat/completions"
+}
 
-echo "LLM server started (pid $LLM_PID, log: $LLM_LOG)"
-echo "Endpoint: http://$LLM_HOST:$LLM_PORT/v1/chat/completions"
+start_llama_instance "$LLM_GPU_INDEX" "$LLM_PORT" "$LLM_LOG" "automatic generation"
+if [ -n "$LLM_INTERACTIVE_GPU_INDEX" ]; then
+    start_llama_instance "$LLM_INTERACTIVE_GPU_INDEX" "$LLM_PORT_INTERACTIVE" \
+        "$LLM_INTERACTIVE_LOG" "interactive requests"
+fi

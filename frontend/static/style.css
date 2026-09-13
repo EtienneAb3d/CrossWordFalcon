@@ -20,6 +20,16 @@
   --best: #16a34a;
   --theme-fg: #ff00fb;
   --finish-locked: #4ade80;
+  /* Track (background) of the small CPU/GPU occupancy meters in the info
+     tooltip (#resource-meters) — a semi-transparent white overlay, since
+     the tooltip's own background (--fg, near-black) is fixed regardless
+     of theme; the fill itself reuses --accent, no new token needed. */
+  --meter-track: rgba(255, 255, 255, 0.25);
+  /* Boutons "Perplexity" (Dictionnaire/Paraphraseur) — même forme que les
+     boutons bleus, mais en violet, à la demande explicite de
+     l'utilisateur, pour renforcer l'indication qu'ils ouvrent une URL
+     externe plutôt qu'une action interne à l'application. */
+  --external-link: #7c3aed;
 }
 
 * {
@@ -196,6 +206,96 @@ h1 {
   display: block;
 }
 
+/* Small CPU/GPU occupancy meters at the bottom of the info tooltip, at
+   the user's explicit request: "un petit vu-mètre indiquant le taux
+   d'occupation de chaque ressource (GPUs / CPU). Un seul vu-mètre pour
+   l'ensemble des CPUs." Updated live via POST /api/presence (every 2s,
+   see script.js's renderResourceMeters()) rather than the one-time
+   /api/system_info fetch that fills #info-tooltip-lines above it — kept
+   as its own sibling div specifically so the two never wipe each other
+   out (renderSystemInfoTooltip() replaces #info-tooltip-lines wholesale
+   on every UI-language change). Empty/hidden until the first heartbeat
+   with real data arrives (script.js only renders a resource's own row
+   once its percentage is a real number, never a placeholder "-"). */
+#resource-meters {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+#resource-meters:not(:empty) {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--meter-track);
+}
+
+.resource-meter {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.resource-meter-label {
+  flex-shrink: 0;
+  min-width: 2.4rem;
+  font-size: 0.7rem;
+}
+
+.resource-meter-track {
+  flex: 1 1 auto;
+  width: 4rem;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: var(--meter-track);
+  overflow: hidden;
+}
+
+.resource-meter-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.resource-meter-value {
+  flex-shrink: 0;
+  min-width: 2.4rem;
+  text-align: right;
+  font-size: 0.7rem;
+}
+
+/* Two more rows in the info tooltip, at the user's explicit request:
+   "ajouter une indication sur la longueur des 2 files d'attente : Grille
+   (CPU) et Définition (GPU)." A plain label/value pair, not a bar meter
+   like .resource-meter above it — a queue length is an unbounded count,
+   not a percentage of some known maximum, so a proportional bar would be
+   misleading here. Same "own div, never wiped by #info-tooltip-lines"
+   placement and :not(:empty) border treatment as #resource-meters. */
+#queue-lengths {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+#queue-lengths:not(:empty) {
+  margin-top: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--meter-track);
+}
+
+.queue-length-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+}
+
+.queue-length-value {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
 form {
   display: flex;
   flex-wrap: wrap;
@@ -293,6 +393,19 @@ button:disabled {
 #stop-btn {
   background: var(--error);
   border-color: var(--error);
+}
+
+/* "Perplexity" buttons (Dictionnaire/Paraphraseur) — same base <button>
+   shape as every blue action button (padding/radius/font-weight all
+   inherited, unlike .nav-btn's smaller neutral look this class replaces),
+   but in violet (--external-link) — at the user's explicit request, to
+   reinforce that these two buttons open an external URL rather than an
+   in-app action, the same "distinct color, same shape" convention already
+   used by #stop-btn above. */
+.external-link-btn {
+  background: var(--external-link);
+  color: var(--accent-fg);
+  border-color: var(--external-link);
 }
 
 /* "Bibliothèque" is the one button in #generate-form that's never hidden
@@ -911,6 +1024,51 @@ button:disabled {
   cursor: default;
 }
 
+/* Caractère éponge (U+1F9FD) remplaçant le texte "Effacer" sur tous les
+   boutons "Effacer" de l'application (Dictionnaire, Paraphraseur, mode
+   Interactif) — à la demande explicite de l'utilisateur (une première
+   version, en icône SVG dessinée à la main, a été essayée puis remplacée
+   par ce caractère). `font-size` légèrement au-dessus du texte du bouton
+   pour rester lisible à cette taille — les émojis rendent souvent un peu
+   petits à `font-size` hérité (0.8rem sur un .nav-btn). */
+.clear-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* Applied alongside .nav-btn on every "Effacer" (sponge) button, at the
+   user's explicit request ("Mettre les boutons icônes 'éponge' au format
+   carré") — .nav-btn's own asymmetric padding (0.1rem top/bottom, 0.5rem
+   left/right, tuned for a short text label) produced a visibly wider-
+   than-tall box once every one of these buttons held nothing but a single
+   icon glyph. Fixed width/height + centered flex overrides that padding
+   uniformly across every sponge button in the app (Dictionnaire,
+   Paraphraseur, mode Interactif) without touching .nav-btn itself, which
+   every other (non-square, text-bearing) button still relies on. */
+.clear-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+}
+
+/* Bouton icône "aide" du mode Interactif (voir index.html) — un .nav-btn
+   comme l'éponge "Effacer" voisine, mais avec une icône SVG "?" en cercle
+   au lieu d'un caractère : centrage flex explicite (le même que
+   .chatbot-icon-btn/.library-interactive-btn ailleurs dans ce fichier),
+   puisqu'un .nav-btn "texte" n'a jamais eu besoin de cette règle. */
+#interactive-help-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#interactive-help-btn .help-icon {
+  display: block;
+}
+
 /* Position readout ("Étape 5/13", script.js's renderPreviewPosition())
    between the ◀/▶ buttons and the ⏮/⏭ jump-to-start/end buttons flanking
    them — at the user's explicit request, so the player always knows
@@ -1305,8 +1463,9 @@ button:disabled {
 }
 
 /* Bouton "Perplexity" (script.js) : label + icône "lien externe" côte à
-   côte, comme un .nav-btn ordinaire mais avec un petit espacement pour
-   l'icône. */
+   côte — forme/couleur (bleu -> violet) fournies par .external-link-btn
+   (voir plus haut dans ce fichier), ce bloc ne gère que la mise en page
+   interne (icône + texte, petit espacement entre les deux). */
 #dictionary-perplexity-btn {
   display: inline-flex;
   align-items: center;
@@ -1828,6 +1987,67 @@ button:disabled {
   max-width: 100%;
 }
 
+/* Panneau d'aide du mode Interactif (ouvert par #interactive-help-btn) —
+   même recouvrement/structure que #rss-detail juste au-dessus (bouton
+   fermer toujours visible en haut, seul le corps défile), y compris le
+   même correctif `[hidden]` que celui-ci a nécessité (voir le
+   commentaire de #rss-detail[hidden]) : la règle `display: flex`
+   ci-dessous, fixée sans condition sur cet ID (spécificité 100),
+   l'emporterait sinon sur la règle par défaut du navigateur pour
+   l'attribut `hidden` (`[hidden] { display: none }`, spécificité 10). */
+#interactive-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  margin: 3rem auto;
+  max-width: 640px;
+  max-height: calc(100vh - 6rem);
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white-cell);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+#interactive-help-overlay[hidden] {
+  display: none;
+}
+
+/* Positioning only — the button's own visual look (border/background/
+   padding/cursor) now comes from .nav-btn (see index.html), the same
+   class every other closing "✕" button of this project already uses. */
+#interactive-help-close-btn {
+  align-self: flex-end;
+  flex-shrink: 0;
+  margin-bottom: 0.5rem;
+}
+
+#interactive-help-body {
+  overflow-y: auto;
+  min-height: 0;
+}
+
+#interactive-help-body h3 {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+}
+
+#interactive-help-list {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+#interactive-help-list li {
+  margin-bottom: 0.55rem;
+  line-height: 1.4;
+}
+
+#interactive-help-list li:last-child {
+  margin-bottom: 0;
+}
+
 /* A word absent from the wordlist file — the one directly visible symptom
    of the rare "invented word" edge case documented in CLAUDE.md — is
    shown in the page's own error color rather than the normal text color,
@@ -2009,11 +2229,13 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
+  align-items: center;
 }
 #interactive-definition-row {
   display: flex;
   gap: 0.4rem;
   width: 100%;
+  align-items: center;
 }
 #interactive-save-row {
   display: flex;
@@ -2062,15 +2284,38 @@ button:disabled {
   font-size: 0.9rem;
   color: var(--incorrect-fg);
 }
-/* "Mots" button results — a single comma-separated, wrapping line (each
-   word individually clickable), at the user's explicit request: "La
-   liste s'affiche en dessous du champ des définitions (liste séparée par
-   des virgules)." Unlike #interactive-propose-results (one <p> per
-   definition, stacked), every word here is an inline <span> plus a plain
-   ", " text node between them, all inside one wrapping block. */
+/* "Mots" button results — each click's own comma-separated, wrapping
+   line (every word individually clickable) stacks as its own
+   .interactive-words-block, newest on top, at the user's explicit
+   request: "'Mots' doit afficher la liste des mots sans effacer la liste
+   précédente affichée, qui reste visible en dessous" (see
+   renderInteractiveWords() in script.js — it prepends, never replaces).
+   Within one block, every word is an inline <span> plus a plain ", "
+   text node between them, same as #interactive-propose-results' own
+   sibling lines. */
 #interactive-words-results {
   width: 100%;
   line-height: 1.6;
+}
+/* A thin top border/margin separates one click's own block from the
+   previous one still stacked below it — never drawn above the very
+   first (newest) block. */
+.interactive-words-block + .interactive-words-block {
+  border-top: 1px solid var(--border);
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+}
+/* Which emplacement a given stacked block was fetched for — the same
+   small/dim treatment as .attempt-preview-stats, and the same H/V +
+   1-based (row, col) convention already used by
+   #interactive-verify-report (renderInteractiveVerifyReport) — at the
+   user's explicit request, so several stacked blocks can actually be
+   told apart while comparing them. */
+.interactive-words-block-label {
+  margin: 0 0 0.15rem;
+  font-size: 0.7rem;
+  color: var(--fg);
+  opacity: 0.7;
 }
 .interactive-word-item {
   cursor: pointer;
@@ -2090,6 +2335,18 @@ button:disabled {
    consistent with those other two rules. */
 .interactive-word-theme {
   color: var(--theme-fg);
+  font-weight: 700;
+}
+/* The one letter, within each candidate, matching the cell selected (in
+   blue, --selected) at the moment "Mots" was clicked — at the user's
+   explicit request: "la lettre correspondant à la case sélectionnée...
+   doit s'afficher en bleu (permet de situer la lettre dans les
+   combinaisons croisées)." The app's own accent blue as a TEXT colour
+   here, not --selected itself (a pastel meant specifically for
+   background fills — see .cell.white.selected) — same reasoning already
+   used for .attempt-preview-grid .cell.white.forced's border. */
+.interactive-word-highlight-letter {
+  color: var(--accent);
   font-weight: 700;
 }
 #interactive-title-row {

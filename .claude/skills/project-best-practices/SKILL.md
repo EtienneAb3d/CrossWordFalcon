@@ -472,6 +472,44 @@ project's engineering language.
   `backend/system_info.py`'s `get_system_info()` checks this flag first and
   reports `compute: "cpu"` unconditionally when set, before any hardware
   probing.
+- **Dual-GPU LLM routing**: on a machine with two or more NVIDIA GPUs,
+  `run_llm.sh` (llama.cpp) and `run_sglang.sh` (CUDA path only — Apple
+  Silicon has a single integrated GPU) can each launch TWO independent
+  instances of the same model, one per card (`CUDA_VISIBLE_DEVICES`),
+  instead of one. `LLM_GPU_INDEX` (default `"0"`) is the primary card;
+  `LLM_INTERACTIVE_GPU_INDEX` (default unset — single-instance mode)
+  is the second card, which also needs `LLM_PORT_INTERACTIVE` (default
+  `3004`) and, for `backend/app.py` to actually route traffic to it,
+  `LLM_BASE_URL_INTERACTIVE` (`LLM_MODEL_INTERACTIVE`/`LLM_API_KEY_
+  INTERACTIVE` are optional, falling back to the primary instance's own
+  `LLM_MODEL`/`LLM_API_KEY` — both instances are always the same model,
+  only the endpoint differs). `backend/clues.py`'s `LLMClueGenerator`
+  and `backend/chatbot.py`'s `ChatBot` both take optional `base_url`/
+  `model`/`api_key` constructor overrides for this (falling back to the
+  environment when omitted, unchanged for every other caller);
+  `backend/app.py` builds a second `interactive_clue_generator`/
+  `interactive_chatbot` pair whenever `LLM_BASE_URL_INTERACTIVE` is set
+  and differs from the primary, otherwise both aliases point at the same
+  primary instance. Routing: the **primary** instance serves every
+  automatic full-grid generation request — `Automation/Populate.py`,
+  the web UI's "Générer la grille" form, Interactive mode's "Finir la
+  grille" (all funnel into `_run_generate_job`), and "Recalculer"
+  (`_run_recompute_job`); the **interactive** instance serves everything
+  else that calls the LLM — Interactive/Edition mode's own theme-glossary
+  build and "Proposer un titre", the ChatBot (`POST /api/chat`), and the
+  Dictionary panel's "Définir"/"Thématique" plus the Paraphraseur ("
+  Synonymes" makes no LLM call at all, pure Qdrant, so it's unaffected
+  either way). `_build_theme_glossary` (`backend/app.py`) takes a
+  `clue_gen` parameter (defaulting to the primary `clue_generator`) so
+  its two call sites can each pass the right instance.
+  `Install.sh` detects the GPU count (`nvidia-smi -L`) and, only when
+  ≥2 NVIDIA GPUs are found and the chosen engine is `llamacpp` or
+  `sglang_cuda`, asks interactively whether to dedicate a second card to
+  interactive requests, writing the right env vars into the managed
+  `env.sh` block. `stop_running_llm_server` (`Install.sh`) and both
+  launcher scripts' own stop-existing-server logic always stop *both*
+  ports unconditionally, so switching back to a single instance never
+  leaves the second process orphaned.
 - `run_llm.sh` auto-detects whether `llama-cpp-python` was actually built
   with GPU support (`llama_cpp.llama_supports_gpu_offload()`) versus what
   hardware is present (macOS → Metal; `nvidia-smi -L` → CUDA), and

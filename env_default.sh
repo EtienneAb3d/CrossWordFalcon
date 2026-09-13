@@ -22,6 +22,11 @@ export CROSSWORDFALCON_FRONTEND_PORT="${CROSSWORDFALCON_FRONTEND_PORT:-3000}"
 export CROSSWORDFALCON_BACKEND_PORT="${CROSSWORDFALCON_BACKEND_PORT:-3001}"
 export LLM_PORT="${LLM_PORT:-3002}"
 export EMBED_PORT="${EMBED_PORT:-3003}"
+# Port for the SECOND, interactive-dedicated LLM instance on a dual-GPU
+# machine (run_llm.sh/run_sglang.sh) — see the "Dual-GPU LLM" section
+# further below. Always defined, harmless when unused: nothing ever binds
+# to it unless LLM_INTERACTIVE_GPU_INDEX is also set.
+export LLM_PORT_INTERACTIVE="${LLM_PORT_INTERACTIVE:-3004}"
 
 # Local, CPU-only multilingual text-embedding server (run_embed.sh),
 # consumed by backend/embedder.py's Embedder class. Default model:
@@ -245,6 +250,53 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export SGLANG_MEM_FRACTION_STATIC="0.78"
 # export SGLANG_NVCC_CC="/usr/bin/gcc-12"
 # export CHATBOT_THINK_FILTER="close_only"
+
+# ============================================================================
+# Dual-GPU LLM — TWO independent server instances, one per card, at the
+# user's explicit request ("Cette machine a maintenant 2 GPUs... Toutes
+# les requêtes de génération automatique... sont affectée à la première
+# carte. Toutes les requêtes interactives... sont affectés à la seconde
+# carte."). Both instances run the exact SAME model/quant (whichever
+# block above/below is active) — this section only ever adds a SECOND
+# process bound to a second card, never a different model.
+# ============================================================================
+# What counts as "automatic generation" (stays on the PRIMARY instance,
+# LLM_BASE_URL/LLM_MODEL/LLM_API_KEY above, unaffected by this section):
+# Automation/Populate.py, the web UI's own "Générer la grille" form, and
+# Interactive/Edition mode's own "Finir la grille" button (all of them
+# funnel into backend/app.py's _run_generate_job) plus "Recalculer"
+# (_run_recompute_job).
+#
+# What counts as "interactive" (moved to the SECOND instance below, once
+# configured — see backend/app.py's own interactive_clue_generator/
+# interactive_chatbot): the Interactive/Edition mode's own theme-glossary
+# build and "Proposer un titre", the ChatBot, and the Dictionary panel's
+# "Définir"/"Thématique" plus the Paraphraseur panel ("Synonymes" makes no
+# LLM call at all — a pure Qdrant lookup — so it's unaffected either way).
+#
+# Applies to BOTH run_llm.sh (llama.cpp) and run_sglang.sh (SGLang/CUDA
+# only — Apple Silicon has a single integrated GPU, so this is a no-op
+# there): each script launches a second, independent server process bound
+# to LLM_INTERACTIVE_GPU_INDEX (CUDA_VISIBLE_DEVICES), listening on
+# LLM_PORT_INTERACTIVE, whenever that variable is set. Install.sh detects
+# more than one NVIDIA GPU and can configure all of this for you
+# interactively; to do it by hand instead, uncomment ALL of:
+# export LLM_GPU_INDEX="0"
+# export LLM_INTERACTIVE_GPU_INDEX="1"
+# export LLM_BASE_URL_INTERACTIVE="http://127.0.0.1:${LLM_PORT_INTERACTIVE}/v1/chat/completions"
+#
+# LLM_MODEL_INTERACTIVE/LLM_API_KEY_INTERACTIVE (both optional, left unset
+# above on purpose): backend/app.py falls back to the primary instance's
+# own LLM_MODEL/LLM_API_KEY when these are unset — the two instances are
+# always the same model/quant, only the endpoint genuinely differs, so
+# there's normally no reason to set either of these two.
+#
+# On SGLang specifically, if the primary card also cohabits with the
+# embed server (see "GPU cohabitation" further below) and its own lowered
+# SGLANG_MEM_FRACTION_STATIC, the SECOND card (nothing else sharing it)
+# can usually be left at SGLang's own auto-computed default — only set
+# SGLANG_MEM_FRACTION_STATIC_INTERACTIVE if something else ever needs to
+# share that second card too (see run_sglang.sh's own declaration of it).
 
 # Mistral cloud API — the best possible result, no local hardware needed,
 # but requires a paid API key (console.mistral.ai). To use it, comment out

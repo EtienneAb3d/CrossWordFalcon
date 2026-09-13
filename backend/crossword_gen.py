@@ -1616,7 +1616,20 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         grid = [[WHITE] * cols for _ in range(rows)]
         row_black = [0] * rows
         col_black = [0] * cols
-        candidates = [(r, c) for r in range(rows) for c in range(cols)]
+        # Exclut `locked_letters` du pool de candidates même sans
+        # `seed_grid` — sans effet pour tout appelant existant avant
+        # "Finir la grille" (aucun ne passait `locked_letters` sans
+        # `seed_grid` du tout), mais nécessaire pour un worker "réinitialisé"
+        # (`FULL_RESET_ATTEMPT_COUNT`, motif entièrement neuf) sur une
+        # génération où des lettres restent verrouillées de façon
+        # permanente (`permanent_locked_letters`, voir generate_grid) :
+        # celles-ci ne doivent jamais recevoir de case noire, même sur un
+        # motif reparti de zéro.
+        locked = set(locked_letters) if locked_letters else set()
+        candidates = [
+            (r, c) for r in range(rows) for c in range(cols)
+            if (r, c) not in locked
+        ]
         placed = 0
     rng.shuffle(candidates)
     # Count of white cells *before* pre-fill — the base for the
@@ -3963,7 +3976,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
 
 def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks=6_000,
                             cancel_event=None, proper_noun_words=None, max_proper_nouns=None,
-                            non_gloss_words=None, max_non_gloss=None, priority_words=None):
+                            non_gloss_words=None, max_non_gloss=None, priority_words=None,
+                            permanent_locked_letters=None):
     """Retire itérativement des cases noires une par une (indépendamment,
     sans les apparier avec une case miroir — cohérent avec make_pattern,
     qui ne pose plus les cases noires par paires symétriques) tant que la
@@ -4031,7 +4045,18 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
     inversement, donc la validation ci-dessous doit vérifier chaque mot
     contre le dictionnaire de SA PROPRE direction, jamais l'autre. Même
     dictionnaire des deux côtés (donc même comportement qu'avant cette
-    fonctionnalité) sur une grille monolingue."""
+    fonctionnalité) sur une grille monolingue.
+
+    `permanent_locked_letters` (`None` par défaut — aucun effet pour tout
+    appelant existant avant "Finir la grille", voir la docstring de
+    `generate_grid`) : un mot entièrement couvert par ces cases est
+    toujours accepté par la validation ci-dessous, quel que soit son
+    contenu réel — sans cette exception, un seul mot posé par
+    l'utilisateur lui-même en mode Interactif et absent du dictionnaire
+    (probablement un nom propre) empêcherait cette optimisation de
+    retirer la moindre case noire de toute la grille, puisque cette
+    validation porte sur TOUS les mots de la grille, pas seulement ceux
+    affectés par la case noire retirée."""
     word_sets = DualSet(
         across={length: set(data["words"]) for length, data in index.across.items()},
         down={length: set(data["words"]) for length, data in index.down.items()},
@@ -4050,17 +4075,47 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
             saved = grid[r][c]
             grid[r][c] = WHITE
             if is_structurally_valid(grid, rows, cols, min_interior_free=1):
+                # `permanent_locked_letters` (voir la docstring ci-dessus) doit
+                # aussi contraindre la recherche elle-même, pas seulement la
+                # validation après coup — sans quoi cette étape, qui relance
+                # un `try_fill` entièrement neuf (sans aucun préremplissage) à
+                # chaque case noire candidate, serait libre de remplacer le
+                # mot posé par l'utilisateur lui-même en mode Interactif par
+                # un tout autre mot, réel celui-là. `locked_letters` fournit
+                # la contrainte dure (`Filler.locked_letters`, consultée pour
+                # toute case qu'elle couvre, y compris un emplacement qui n'en
+                # est que partiellement couvert) ; `preseed_assignment`
+                # promeut en plus tel quel, sans jamais le revalider auprès du
+                # dictionnaire, tout emplacement ENTIÈREMENT couvert par ces
+                # cases — recalculé ici sur `grid`, le motif que ce `try_fill`
+                # va lui-même réinterroger via `extract_slots`, pour rester
+                # aligné avec la structure qu'il va effectivement utiliser.
+                permanent_preseed = None
+                if permanent_locked_letters:
+                    trial_slots = extract_slots(grid, rows, cols)
+                    permanent_preseed = [
+                        "".join(permanent_locked_letters[cell] for cell in cells)
+                        if all(cell in permanent_locked_letters for cell in cells) else None
+                        for cells in trial_slots
+                    ]
                 new_result = try_fill(grid, rows, cols, index, rng, deadline_checks,
                                        cancel_event=cancel_event,
                                        proper_noun_words=proper_noun_words,
                                        max_proper_nouns=max_proper_nouns,
                                        non_gloss_words=non_gloss_words,
                                        max_non_gloss=max_non_gloss,
-                                       priority_words=priority_words)
+                                       priority_words=priority_words,
+                                       locked_letters=permanent_locked_letters or None,
+                                       preseed_assignment=permanent_preseed)
                 if new_result is not None:
                     new_slots, new_assignment = new_result
                     if all(
-                        w is not None and w in word_sets.for_cells(new_slots[i]).get(len(w), ())
+                        w is not None and (
+                            w in word_sets.for_cells(new_slots[i]).get(len(w), ())
+                            or (permanent_locked_letters and all(
+                                cell in permanent_locked_letters for cell in new_slots[i]
+                            ))
+                        )
                         for i, w in enumerate(new_assignment)
                     ):
                         slots, assignment = new_slots, new_assignment
@@ -5046,7 +5101,7 @@ def _impossible_indices(slots_list, index, known):
     return result
 
 
-def _invalid_fully_known_indices(slots_list, index, known):
+def _invalid_fully_known_indices(slots_list, index, known, exempt=None):
     """Indices des emplacements de `slots_list` entièrement couverts par
     `known` — chacune de leurs cases fixée, directement ou indirectement,
     par un mot croisant — mais dont la combinaison de lettres ne
@@ -5063,11 +5118,28 @@ def _invalid_fully_known_indices(slots_list, index, known):
     endroit pour effectuer ce même contrôle — bug réel constaté en
     direct : un mot inventé ("ATEIRS", "TENLES"...), jamais réellement
     choisi par personne, simplement recomposé tel quel à partir de lettres
-    individuellement correctes mais jamais vérifiées ensemble."""
+    individuellement correctes mais jamais vérifiées ensemble.
+
+    `exempt` (`None` par défaut — aucun effet pour tout appelant existant
+    avant cette fonctionnalité) : un dict/ensemble de cases — typiquement
+    `permanent_locked_letters`, voir la docstring de `generate_grid` — dont
+    un emplacement entièrement couvert n'est JAMAIS signalé ici, quelle que
+    soit sa validité réelle au sens du dictionnaire, à la demande explicite
+    de l'utilisateur : "Les lettres posées en mode interactif sont à
+    considérer comme bonnes, même si un emplacement contient un mot
+    impossible (probablement un nom propre voulu par l'utilisateur)... ne
+    doivent pas être remis en cause par la génération de la grille 'Finir
+    la grille'." Seul le mode "Interactif" (Impossibles/Vérifier) doit
+    encore signaler un tel mot au joueur — cette fonction n'y est jamais
+    appelée avec `exempt`, seuls ses appelants internes à `generate_grid`
+    (`_shorten_impossible_zones`/`_lengthen_impossible_zones`/
+    `_optimize_before_cleanup`/`_clean_continue_candidate`) le font."""
     result = []
     for j, cells in enumerate(slots_list):
         length = len(cells)
         if length != sum(1 for c in cells if c in known):
+            continue
+        if exempt and all(c in exempt for c in cells):
             continue
         known_full = {c: known[c] for c in cells}
         if not _slot_candidates(index, length, cells, known_full):
@@ -5450,7 +5522,8 @@ PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50
 
 
 def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
-                              deadline_checks=6_000, cancel_event=None):
+                              deadline_checks=6_000, cancel_event=None,
+                              permanent_locked_letters=None):
     """Nouvelle étape insérée AVANT même `_shorten_impossible_zones`/
     `_clean_blocked_slots` (donc avant tout nettoyage), à la demande
     explicite de l'utilisateur : "verrouiller tous les emplacements
@@ -5573,7 +5646,8 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
         }
         return try_fill(g, rows, cols, index, rng, deadline_checks,
                          preseed_assignment=preseed, excluded_slots=excluded,
-                         cancel_event=cancel_event)
+                         cancel_event=cancel_event,
+                         locked_letters=permanent_locked_letters or None)
 
     def _absorb(result):
         result_slots, result_assignment = result
@@ -5662,7 +5736,9 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
     # docstring, où un retrait de case noire débloque légitimement un
     # emplacement autrefois impossible : ni l'une ni l'autre fonction ne le
     # signale alors, il disparaît naturellement de `final_impossible`.
-    invalid_fully_known = set(_invalid_fully_known_indices(final_slots, index, confirmed))
+    invalid_fully_known = set(
+        _invalid_fully_known_indices(final_slots, index, confirmed, exempt=permanent_locked_letters)
+    )
     for j in invalid_fully_known:
         final_assignment[j] = None
     final_impossible = sorted(
@@ -5715,7 +5791,7 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
 
 
 def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
-                               index, rng):
+                               index, rng, permanent_locked_letters=None):
     """Nouvelle étape insérée AVANT le nettoyage habituel des emplacements
     bloqués (`_clean_blocked_slots` ci-dessous), à la demande explicite de
     l'utilisateur, réservée à la reprise "telle quelle" (voir
@@ -5833,7 +5909,9 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
         return grid, slots, assignment, impossible_slots
 
     final_slots = extract_slots(new_grid, rows, cols)
-    invalid_full = set(_invalid_fully_known_indices(final_slots, index, known))
+    invalid_full = set(
+        _invalid_fully_known_indices(final_slots, index, known, exempt=permanent_locked_letters)
+    )
     final_assignment = [
         "".join(known[c] for c in cells)
         if all(c in known for c in cells) and j not in invalid_full else None
@@ -5844,7 +5922,7 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
 
 
 def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
-                                index, rng):
+                                index, rng, permanent_locked_letters=None):
     """Nouvelle étape, complément exact de `_shorten_impossible_zones`
     ci-dessus, à la demande explicite de l'utilisateur : "si un
     emplacement ne trouve pas de mot dans le glossaire thématique (ou le
@@ -5944,7 +6022,9 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
         return grid, slots, assignment, impossible_slots
 
     final_slots = extract_slots(new_grid, rows, cols)
-    invalid_full = set(_invalid_fully_known_indices(final_slots, index, known))
+    invalid_full = set(
+        _invalid_fully_known_indices(final_slots, index, known, exempt=permanent_locked_letters)
+    )
     final_assignment = [
         "".join(known[c] for c in cells)
         if all(c in known for c in cells) and j not in invalid_full else None
@@ -5956,7 +6036,7 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
 
 def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=None,
                           exclude_impossible_locked=False, index=None, rng=None,
-                          grid=None, rows=None, cols=None):
+                          grid=None, rows=None, cols=None, permanent_locked_letters=None):
     """Étapes 1 et 2 de `_build_retry_seed` (voir sa propre docstring pour
     l'historique complet), extraites dans leur propre fonction à la demande
     explicite de l'utilisateur : "à la fin d'un tour, nettoyer
@@ -6065,6 +6145,16 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     jamais un passe-droit), plutôt que de la laisser resurgir identique à
     chaque nettoyage futur.
 
+    `permanent_locked_letters` (`None` par défaut — aucun effet pour tout
+    appelant existant avant "Finir la grille", voir la docstring de
+    `generate_grid`) : ni la recomposition ci-dessus, ni l'alternative
+    case noire, ni la case noire de la "zone sans issue" ne touchent
+    jamais une case qu'il couvre — ces lettres, posées par l'utilisateur
+    lui-même en mode Interactif, ne sont jamais remises en cause ni
+    jamais noircies, quel que soit le mot qu'elles épellent ou la
+    situation de l'emplacement (à `i`, ou d'un autre emplacement qui le
+    croise) censé les concerner.
+
     Retourne `(cleaned_assignment, confirmed, new_black_cells)` —
     `cleaned_assignment` est une nouvelle liste (jamais une mutation de
     `assignment` reçu), avec un `None` explicite pour chaque emplacement
@@ -6083,8 +6173,18 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                 and i not in impossible_set
                 and all(cell in locked_letters for cell in cells)
             ):
-                if index is not None and not _slot_candidates(
-                    index, len(cells), cells, locked_letters
+                # Un emplacement entièrement couvert par `permanent_locked_
+                # letters` (voir la docstring de `generate_grid`) est
+                # toujours recomposé, sans jamais interroger le
+                # dictionnaire — ces lettres sont posées par l'utilisateur
+                # lui-même en mode Interactif et doivent être considérées
+                # comme bonnes, quel que soit le mot qu'elles épellent.
+                if (
+                    index is not None
+                    and not (permanent_locked_letters and all(
+                        cell in permanent_locked_letters for cell in cells
+                    ))
+                    and not _slot_candidates(index, len(cells), cells, locked_letters)
                 ):
                     continue
                 assignment[i] = "".join(locked_letters[cell] for cell in cells)
@@ -6124,8 +6224,23 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                         if j != i and assignment[j] is not None:
                             known[cell] = assignment[j][slots[j].index(cell)]
                             break
-                blank_candidates = [cell for cell in slots[i] if cell not in known]
-                known_candidates = [cell for cell in slots[i] if cell in known]
+                # Une case de `permanent_locked_letters` (voir la docstring
+                # de `generate_grid`) n'est jamais candidate à cette
+                # alternative — la noircir détruirait un mot posé par
+                # l'utilisateur lui-même en mode Interactif, y compris
+                # quand elle n'appartient à l'emplacement impossible `i`
+                # que par croisement avec un autre emplacement, réellement
+                # verrouillé, qui la partage.
+                blank_candidates = [
+                    cell for cell in slots[i]
+                    if cell not in known
+                    and not (permanent_locked_letters and cell in permanent_locked_letters)
+                ]
+                known_candidates = [
+                    cell for cell in slots[i]
+                    if cell in known
+                    and not (permanent_locked_letters and cell in permanent_locked_letters)
+                ]
                 rng.shuffle(blank_candidates)
                 rng.shuffle(known_candidates)
                 for (br, bc) in blank_candidates + known_candidates:
@@ -6165,6 +6280,8 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                     for (br, bc) in slots[i]:
                         if working_grid[br][bc] == BLACK:
                             continue
+                        if permanent_locked_letters and (br, bc) in permanent_locked_letters:
+                            continue
                         working_grid[br][bc] = BLACK
                         if is_structurally_valid(working_grid, rows, cols, min_interior_free=1):
                             new_black_cells.add((br, bc))
@@ -6190,7 +6307,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     return assignment, confirmed, new_black_cells
 
 
-def _plug_isolated_cells(grid, rows, cols, slots, assignment, index):
+def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_locked_letters=None):
     """Dernier recours tenté à la fin d'un palier en échec, à la demande
     explicite de l'utilisateur : "Lorsque toutes les recherches échouent en
     laissant une grille avec [ne reste] plus que des cases blanches
@@ -6263,6 +6380,14 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index):
     for cells in new_slots:
         if any(cell not in known for cell in cells):
             return None
+        # Un emplacement entièrement couvert par `permanent_locked_letters`
+        # (voir la docstring de generate_grid) est toujours accepté tel
+        # quel — ces lettres sont posées par l'utilisateur lui-même en
+        # mode Interactif et doivent être considérées comme bonnes, quel
+        # que soit le mot qu'elles épellent (probablement un nom propre).
+        if permanent_locked_letters and all(cell in permanent_locked_letters for cell in cells):
+            new_assignment.append("".join(known[cell] for cell in cells))
+            continue
         candidates = _slot_candidates(index, len(cells), cells, known)
         if not candidates:
             return None
@@ -6281,7 +6406,8 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index):
 
 
 def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, locked_letters=None,
-                       exclude_impossible_locked=False, seed_grid=None, index=None, rng=None):
+                       exclude_impossible_locked=False, seed_grid=None, index=None, rng=None,
+                       permanent_locked_letters=None):
     """Construit le point de départ du palier suivant à partir de la
     meilleure tentative échouée du palier courant, à la demande explicite de
     l'utilisateur — nouvel algorithme de reprise entre paliers, distinct du
@@ -6487,6 +6613,7 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
     assignment, confirmed, _ = _clean_blocked_slots(
         slots, assignment, impossible_slots, locked_letters=locked_letters,
         exclude_impossible_locked=exclude_impossible_locked, index=index, rng=rng,
+        permanent_locked_letters=permanent_locked_letters,
     )
 
     def _direction_has_confirmed_letter(r, c, dr, dc):
@@ -6761,12 +6888,20 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # `cand_diag["assignment"]`/`cand_diag["impossible_slots"]` pour le reste
 # de cette fonction — un no-op complet (mêmes objets, mêmes indices) tant
 # qu'aucune des deux n'a rien pu changer.
-def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
+def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
+                               permanent_locked_letters=None):
     """Nettoie une seule tentative échouée d'un palier "reprise telle
     quelle" (voir `_continue_seed_pool`) — retire ce qui croise un
     emplacement impossible (`_clean_blocked_slots`), après avoir d'abord
     tenté de raccourcir (`_shorten_impossible_zones`) puis d'allonger
     (`_lengthen_impossible_zones`) ces mêmes emplacements.
+
+    `permanent_locked_letters` (`None` par défaut — aucun effet pour tout
+    appelant existant avant "Finir la grille") est transmis tel quel à
+    chacune de ces trois fonctions, pour qu'aucune case qu'il couvre ne
+    soit jamais noircie ni jamais signalée "impossible" au seul motif
+    qu'elle ne correspond à aucun mot réel du dictionnaire — voir la
+    docstring de `generate_grid`.
 
     Quand `_clean_blocked_slots` a, en plus, posé une nouvelle case noire
     (son alternative à 1/10 — `new_black_cells`), le motif change de
@@ -6787,13 +6922,16 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
     cand_grid, cand_slots, cand_assignment, cand_impossible = _shorten_impossible_zones(
         cand_grid, rows, cols, cand_slots, cand_diag["assignment"],
         cand_diag["impossible_slots"], index, rng,
+        permanent_locked_letters=permanent_locked_letters,
     )
     cand_grid, cand_slots, cand_assignment, cand_impossible = _lengthen_impossible_zones(
         cand_grid, rows, cols, cand_slots, cand_assignment, cand_impossible, index, rng,
+        permanent_locked_letters=permanent_locked_letters,
     )
     cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
         cand_slots, cand_assignment, cand_impossible,
         index=index, rng=rng, grid=cand_grid, rows=rows, cols=cols,
+        permanent_locked_letters=permanent_locked_letters,
     )
     if new_black_cells:
         cand_seed_grid = [row[:] for row in cand_grid]
@@ -6805,7 +6943,9 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng):
             if all(cell in confirmed for cell in cells) else None
             for cells in new_slots
         ]
-        for j in _invalid_fully_known_indices(new_slots, index, confirmed):
+        for j in _invalid_fully_known_indices(
+            new_slots, index, confirmed, exempt=permanent_locked_letters
+        ):
             cand_preseed_assignment[j] = None
         old_impossible_cell_tuples = {
             tuple(cand_slots[i]) for i in cand_impossible
@@ -7073,7 +7213,7 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
 def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                       seed_grid=None, locked_letters=None,
                       black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
-                      deadline_checks=None):
+                      deadline_checks=None, permanent_locked_letters=None):
     """Une tentative indépendante (motif + remplissage CSP complet), exécutée
     dans un processus worker séparé — voir PARALLEL_ATTEMPTS/generate_grid().
     Chaque tentative a son propre `random.Random(seed)`, dérivé du seed
@@ -7127,6 +7267,15 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     depuis l'interface web (voir generate_grid), à la demande explicite de
     l'utilisateur.
 
+    `permanent_locked_letters` (`None` par défaut — aucun effet pour tout
+    appelant existant avant "Finir la grille", voir la docstring de
+    `generate_grid`) est fusionné dans `locked_letters` avant même
+    `make_pattern`, indépendamment de ce que `carry_locked_letters`
+    contient par ailleurs pour ce palier (potentiellement `None`, ou déjà
+    différent — voir la branche "reprise telle quelle" de generate_grid) :
+    ces cases n'obtiennent jamais de case noire, et leur mot n'est jamais
+    revalidé auprès du dictionnaire lors du pré-remplissage.
+
     `make_pattern` elle-même reçoit `available_lengths` (les longueurs ayant
     au moins `PREFILL_MIN_WORD_COUNT` mots dans `_worker_index`, pas
     seulement un seul — voir sa propre définition) pour sa propre phase
@@ -7151,6 +7300,17 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
             if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
         },
     )
+    # `permanent_locked_letters` (`None` par défaut — aucun effet pour tout
+    # appelant existant avant "Finir la grille", voir la docstring de
+    # generate_grid) fusionné ici, AVANT `make_pattern`, pour qu'aucun
+    # placement de case noire de CE palier ne puisse jamais recouvrir une
+    # case posée par l'utilisateur lui-même en mode Interactif — quel que
+    # soit l'état de `carry_locked_letters` transmis par le palier
+    # précédent, potentiellement `None` ou déjà différent (voir generate_
+    # grid, la branche "reprise telle quelle" qui la réinitialise à
+    # chaque palier).
+    if permanent_locked_letters:
+        locked_letters = {**(locked_letters or {}), **permanent_locked_letters}
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
                          black_enrichment_fraction=black_enrichment_fraction)
@@ -7207,7 +7367,21 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
         for i, cells in enumerate(slots):
             if all(cell in locked_letters for cell in cells):
                 word = "".join(locked_letters[cell] for cell in cells)
-                if _slot_candidate_count(_worker_index, len(cells), cells, locked_letters) > 0:
+                # Un emplacement entièrement couvert par `permanent_locked_
+                # letters` (voir la docstring de generate_grid) est toujours
+                # pré-assigné tel quel, sans jamais interroger le
+                # dictionnaire — ces lettres, posées par l'utilisateur
+                # lui-même en mode Interactif, doivent être considérées
+                # comme bonnes quel que soit le mot qu'elles épellent
+                # (probablement un nom propre) : le laisser à `None` ici
+                # ferait échouer `truly_complete` pour toujours sur cette
+                # grille, puisque cet emplacement ne serait alors plus
+                # jamais réellement assigné par `_backtrack`.
+                if permanent_locked_letters and all(
+                    cell in permanent_locked_letters for cell in cells
+                ):
+                    preseed_assignment[i] = word
+                elif _slot_candidate_count(_worker_index, len(cells), cells, locked_letters) > 0:
                     preseed_assignment[i] = word
                 else:
                     locked_impossible_slots.add(i)
@@ -7264,7 +7438,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
 
 
 def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_slots,
-                       force_letters_fraction=0.0, deadline_checks=None):
+                       force_letters_fraction=0.0, deadline_checks=None,
+                       permanent_locked_letters=None):
     """Tentative de la mécanique de reprise « telle-quelle » entre paliers, à
     la demande explicite de l'utilisateur ("Nouvelle version") — exécutée
     dans un processus worker séparé, comme _pattern_attempt, mais qui n'appelle
@@ -7337,6 +7512,17 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
         if word is not None
         for cell, letter in zip(cells, word)
     }
+    # `permanent_locked_letters` (`None` par défaut — aucun effet pour tout
+    # appelant existant avant "Finir la grille", voir la docstring de
+    # generate_grid) toujours fusionné ici, INCONDITIONNELLEMENT — même si
+    # le nettoyage du palier précédent a laissé `preseed_assignment[i]` à
+    # `None` pour l'emplacement qu'elles couvrent (ce qui est sans
+    # conséquence : la case reste de toute façon verrouillée par ce
+    # dict), pour que ces lettres restent une contrainte dure de CETTE
+    # recherche aussi, quel que soit ce que `preseed_assignment` en dit
+    # par ailleurs.
+    if permanent_locked_letters:
+        known_letters = {**known_letters, **permanent_locked_letters}
     # Avant le sondage statistique des graines, à la demande explicite de
     # l'utilisateur (voir _force_single_candidate_slots) : force les
     # emplacements dont les lettres déjà connues ne laissent plus qu'une
@@ -7369,7 +7555,17 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
             continue
         if all(cell in known_letters for cell in cells):
             word = "".join(known_letters[cell] for cell in cells)
-            if _slot_candidate_count(_worker_index, len(cells), cells, known_letters) > 0:
+            # Même exemption que _pattern_attempt : un emplacement
+            # entièrement couvert par `permanent_locked_letters` est
+            # toujours promu tel quel, jamais revalidé auprès du
+            # dictionnaire — ces lettres sont posées par l'utilisateur
+            # lui-même en mode Interactif et doivent être considérées
+            # comme bonnes.
+            if permanent_locked_letters and all(
+                cell in permanent_locked_letters for cell in cells
+            ):
+                preseed_assignment[i] = word
+            elif _slot_candidate_count(_worker_index, len(cells), cells, known_letters) > 0:
                 preseed_assignment[i] = word
     forced_letters, letter_scores = sample_letter_biases(
         seed_grid, rows, cols, _worker_index, rng, force_fraction=force_letters_fraction,
@@ -7482,8 +7678,33 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
                    deadline_checks=None, resume_state=None, should_pause=None,
                    bilingual_wordlist_path=None, priority_words=None,
-                   bilingual_priority_words=None):
+                   bilingual_priority_words=None, permanent_locked_letters=None):
     """Génère une grille remplie de bout en bout (motif + CSP + minimisation).
+
+    `permanent_locked_letters` (`None`/vide par défaut — aucun effet pour
+    tout appelant existant, y compris le CLI et un "Continuer" ordinaire) —
+    un dict `{(row, col): lettre}`, à la demande explicite de l'utilisateur
+    pour le bouton "Finir la grille" (voir backend/app.py's
+    `interactive_finish`) : "la génération ne doit pas toucher aux lettres
+    verrouillées, y compris ne pas poser de case noire sur ces lettres."
+    Complété par : "Les lettres posées en mode interactif sont à
+    considérer comme bonnes, même si un emplacement contient un mot
+    impossible (probablement un nom propre voulu par l'utilisateur)... ne
+    doivent pas être remis en cause par la génération." Contrairement à
+    `resume_state`'s propre `locked_letters` (une image de départ,
+    seulement du tout premier palier, ensuite recalculée/remplacée palier
+    après palier par la progression normale de la recherche —
+    `carry_locked_letters`, voir plus bas), celui-ci reste identique,
+    fusionné dans le `locked_letters`/`known_letters` réellement transmis
+    à CHAQUE worker de CHAQUE palier (`_pattern_attempt`/`_pattern_
+    continue`), quel que soit l'état de `carry_locked_letters`/
+    `carry_preseed_assignment` à ce moment précis — ces cases n'obtiennent
+    donc jamais de case noire (make_pattern les exclut systématiquement de
+    son pool de candidates) et leur mot n'est jamais revalidé auprès du
+    dictionnaire ni jamais retiré par un nettoyage, quelle que soit sa
+    validité réelle (voir `_invalid_fully_known_indices`'s propre
+    paramètre `exempt`, et l'exemption équivalente dans
+    `minimize_black_squares`/`_clean_blocked_slots`).
 
     `priority_words` (`None`/vide par défaut — aucun effet pour tout
     appelant existant, notamment le CLI), à la demande explicite de
@@ -7632,6 +7853,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     def progress(step, **data):
         if on_progress:
             on_progress(step, **data)
+
+    # Normalisé une bonne fois pour toutes en un dict réel (jamais `None`)
+    # — chaque site qui le fusionne plus bas (`if permanent_locked_letters:
+    # ...`) reste inchangé pour tout appelant qui ne le fournit pas du
+    # tout, un dict vide étant tout aussi "faux" que `None` dans ce
+    # contexte.
+    permanent_locked_letters = dict(permanent_locked_letters) if permanent_locked_letters else {}
 
     rng = random.Random(seed)
     mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
@@ -8333,6 +8561,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             _pattern_attempt, rows, cols, ratio, s, force_letters_fraction,
                             None, None,
                             black_enrichment_fraction, deadline_checks,
+                            permanent_locked_letters,
                         ))
                     else:
                         task_seed_grid, task_preseed_assignment, task_excluded_slots = (
@@ -8342,6 +8571,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             _pattern_continue, rows, cols, s, task_seed_grid,
                             task_preseed_assignment, task_excluded_slots,
                             force_letters_fraction, deadline_checks,
+                            permanent_locked_letters,
                         ))
             else:
                 # A fraction of this palier's own workers start from a
@@ -8454,7 +8684,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         early_pattern = make_pattern(
                             rows, cols, ratio, random.Random(s),
                             available_lengths=available_lengths_preview,
-                            seed_grid=None, locked_letters=None,
+                            seed_grid=None, locked_letters=permanent_locked_letters or None,
                             index=index, black_enrichment_fraction=black_enrichment_fraction,
                         )
                         pattern_key = tuple(tuple(row) for row in early_pattern)
@@ -8521,7 +8751,11 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             rows, cols, ratio,
                             random.Random(seeds[min(reset_count + p, len(seeds) - 1)]),
                             available_lengths=available_lengths_preview,
-                            seed_grid=pool_grid, locked_letters=pool_locked,
+                            seed_grid=pool_grid,
+                            locked_letters=(
+                                {**(pool_locked or {}), **permanent_locked_letters}
+                                if permanent_locked_letters else pool_locked
+                            ),
                             index=index, black_enrichment_fraction=black_enrichment_fraction,
                         )
                         pattern_key = tuple(tuple(row) for row in early_pattern)
@@ -8583,6 +8817,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         _pattern_attempt, rows, cols, ratio, s, force_letters_fraction,
                         task_seed_grid, task_locked_letters,
                         black_enrichment_fraction, deadline_checks,
+                        permanent_locked_letters,
                     ))
             # Récupérés dans l'ordre d'achèvement (`as_completed`), pas
             # l'ordre de soumission, à la demande explicite de l'utilisateur
@@ -8843,6 +9078,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             non_gloss_words=non_gloss_words,
                             max_non_gloss=max_non_gloss,
                             priority_words=priority_words,
+                            permanent_locked_letters=permanent_locked_letters,
                         )
                         opt_black = sum(row.count(BLACK) for row in opt_grid)
                         # Tie-break, at the user's explicit request: "au
@@ -9191,6 +9427,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 selected_grid, rows, cols,
                 extract_slots(selected_grid, rows, cols),
                 selected_diag["assignment"], index,
+                permanent_locked_letters=permanent_locked_letters,
             )
             if plugged is not None:
                 new_grid, new_slots, new_assignment = plugged
@@ -9292,7 +9529,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                      total_attempts=total_attempts_tried)
             optimized_pairs = [
                 _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
-                                          cancel_event=cancel_event)
+                                          cancel_event=cancel_event,
+                                          permanent_locked_letters=permanent_locked_letters)
                 for cand_grid, cand_diag in failed_pairs
             ]
             # Aperçu "avant" : déjà `last_examples`/`pattern_attempt_failed`
@@ -9375,7 +9613,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # une fois par tentative au lieu d'une seule fois sur le
                 # vainqueur.
                 cleaned_continue_candidates = _sorted_by_score(
-                    _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng)
+                    _clean_continue_candidate(
+                        cand_grid, cand_diag, rows, cols, index, rng,
+                        permanent_locked_letters=permanent_locked_letters,
+                    )
                     for cand_grid, cand_diag in optimized_pairs
                 )
                 carry_seed_pool_continue = _continue_seed_pool(cleaned_continue_candidates)
@@ -9461,6 +9702,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             locked_letters=carry_locked_letters,
                             exclude_impossible_locked=force_exclude,
                             seed_grid=carry_seed_grid, index=index, rng=rng,
+                            permanent_locked_letters=permanent_locked_letters,
                         )
                         result.append((cand_seed, cand_confirmed, cand_slots,
                                         cand_diag.get("process_number")))
@@ -9722,7 +9964,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         best, best_result, rows, cols, index, rng, cancel_event=cancel_event,
         proper_noun_words=proper_noun_words, max_proper_nouns=max_proper_nouns,
         non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
-        priority_words=priority_words,
+        priority_words=priority_words, permanent_locked_letters=permanent_locked_letters,
     )
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)

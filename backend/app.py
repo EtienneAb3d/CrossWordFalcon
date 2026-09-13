@@ -20,6 +20,7 @@ Usage :
     uvicorn backend.app:app --port 3001
 """
 import asyncio
+import concurrent.futures
 import datetime
 import json
 import logging
@@ -63,13 +64,63 @@ from .svg_export import (
     save_grid_svg,
     svg_to_pdf_bytes,
 )
-from .system_info import get_system_info
+from .system_info import get_system_info, sample_resource_usage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("crosswordfalcon")
 
 clue_generator = LLMClueGenerator()
 chatbot = ChatBot()
+
+# Optional SECOND local LLM instance, dedicated to interactive/on-demand
+# requests, on a second GPU — at the user's explicit request: "Toutes les
+# requêtes de génération automatique, en provenance de Populate ou de
+# l'interface, sont affectée à la première carte. Toutes les requêtes
+# interactives (interface d'édition interactive, ChatBot, Dictionnaire,
+# Paraphraser, etc) sont affectés à la seconde carte." `clue_generator`/
+# `chatbot` above (reading the plain LLM_BASE_URL/LLM_MODEL/LLM_API_KEY —
+# see env.sh) always drive the AUTOMATIC path: _run_generate_job (full-
+# grid CSP fill + clue/title writing, whether started from the web UI's
+# own "Générer la grille" form, Automation/Populate.py, or Interactive
+# mode's own "Finir la grille" button, which hands off to this exact same
+# job) and _run_recompute_job ("Recalculer"). `interactive_clue_generator`/
+# `interactive_chatbot` below drive every INTERACTIVE call instead: the
+# Interactive/Edition mode's own theme-glossary build (_run_interactive_job,
+# never _run_interactive_resume_job — see its own docstring for why a
+# themed grid's own resume path never recomputes one) and "Proposer un
+# titre" (interactive_title), the Dictionary panel's "Définir"/
+# "Thématique" (dictionary_define/_similar_words_impl — "Synonymes" is a
+# pure Qdrant lookup, no LLM call at all, see _synonyms_impl), the
+# Paraphraseur panel (paraphrase), and the ChatBot (chat).
+#
+# See env.sh/env_default.sh's own "Dual-GPU LLM" section and run_llm.sh/
+# run_sglang.sh (LLM_INTERACTIVE_GPU_INDEX) for how the second server
+# process itself gets launched, bound to the second card. Deliberately a
+# plain runtime env-var check here, not a second hardcoded singleton pair:
+# LLM_BASE_URL_INTERACTIVE is only ever set (by Install.sh, or by hand in
+# env.sh) once a genuine second GPU/second server is actually configured
+# — left unset (the default, every single-GPU machine), this whole block
+# degrades to `interactive_clue_generator is clue_generator` and
+# `interactive_chatbot is chatbot`, i.e. every interactive call keeps
+# sharing the one automatic instance exactly as it always has, with zero
+# behavior change for a machine that never opts into this feature.
+_interactive_llm_base_url = os.environ.get("LLM_BASE_URL_INTERACTIVE", "").strip()
+if _interactive_llm_base_url and _interactive_llm_base_url != clue_generator.base_url:
+    _interactive_llm_model = os.environ.get("LLM_MODEL_INTERACTIVE", "").strip() or clue_generator.model
+    _interactive_llm_api_key = os.environ.get("LLM_API_KEY_INTERACTIVE", "").strip() or clue_generator.api_key
+    interactive_clue_generator = LLMClueGenerator(
+        base_url=_interactive_llm_base_url, model=_interactive_llm_model, api_key=_interactive_llm_api_key,
+    )
+    interactive_chatbot = ChatBot(
+        base_url=_interactive_llm_base_url, model=_interactive_llm_model, api_key=_interactive_llm_api_key,
+    )
+    logger.info(
+        "Second LLM instance for interactive requests: base_url=%s model=%s",
+        _interactive_llm_base_url, _interactive_llm_model,
+    )
+else:
+    interactive_clue_generator = clue_generator
+    interactive_chatbot = chatbot
 
 # "Thématique" button in the Dictionary panel (see frontend/static/
 # script.js and GET /api/similar_words): mirrors themed-grid glossary
@@ -479,6 +530,9 @@ async def _start_rss_scheduler():
     # (LOG_USERS/) même quand plus aucun battement n'arrive — voir
     # _presence_sweep_scheduler.
     asyncio.create_task(_presence_sweep_scheduler())
+    # Periodic CPU/GPU occupancy sampling for the info-panel meters — see
+    # _resource_usage_sampler.
+    asyncio.create_task(_resource_usage_sampler())
 
 # In-memory job store: job_id -> {status, step, result, error}. A single
 # uvicorn process (no --workers, see run_Falcon.sh) is all this app ever
@@ -566,6 +620,43 @@ _last_logged_pseudos = None
 # assez fin devant PRESENCE_TTL_S (60s) et coûte quasiment rien (itération
 # d'un dict d'au plus MAX_PRESENCE_ENTRIES entrées).
 PRESENCE_SWEEP_INTERVAL_S = 10
+
+# Small CPU/GPU occupancy meters in the top-right info panel, at the
+# user's explicit request: "ajouter un petit vu-mètre indiquant le taux
+# d'occupation de chaque ressource (GPUs / CPU). Un seul vu-mètre pour
+# l'ensemble des CPUs." Sent to the frontend in the same calls as the
+# online-presence heartbeat (POST /api/presence), also at the user's
+# explicit request, rather than through a separate call — an open tab
+# therefore gets an occupancy update at the same cadence as its own
+# presence heartbeat (every 2s), with no extra HTTP request.
+#
+# Sampled on its own timer (_resource_usage_sampler below), never per
+# request: a GPU read (nvidia-smi) is a real subprocess spawn, far too
+# costly to redo on every heartbeat of every connected tab.
+# `_LATEST_RESOURCE_USAGE` is a plain module dict — updating it is a
+# whole-reference reassignment (never an in-place mutation), atomic in
+# CPython, so `POST /api/presence` can read it with no lock despite the
+# concurrent write from the background task.
+RESOURCE_USAGE_SAMPLE_INTERVAL_S = 2.0
+_LATEST_RESOURCE_USAGE = {"cpu_percent": None, "gpu_percent": []}
+
+# A dedicated single-thread executor for _resource_usage_sampler below,
+# rather than the event loop's own shared default executor (what a plain
+# `asyncio.to_thread` call uses) — deliberately, since that shared pool is
+# also where every generation job's own blocking `asyncio.to_thread(
+# generate_grid, ...)` call runs for however long that generation takes
+# (up to several minutes), and this app can have several such jobs queued
+# at once. Found live: right after a restart with a generation already in
+# flight, the sampler's own `asyncio.to_thread` call sat queued behind
+# that other work for over 15s before ever running a second time — the
+# one moment a real load meter most needs to stay responsive is exactly
+# when the machine is under real load, so this queue contention would
+# have silently defeated the whole feature. A dedicated single worker
+# thread means this sampler's own quick /proc/stat read + nvidia-smi call
+# never waits on anything else this app is doing.
+_RESOURCE_USAGE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="resource-usage"
+)
 
 # job_id -> multiprocessing.Event, kept *separate* from JOBS itself, at the
 # user's explicit request (bouton "Stop") — neither a threading.Event nor a
@@ -796,6 +887,24 @@ class InteractiveCandidatesRequest(BaseModel):
     job_id: str
     grid: list[list[str]]
     cells: list[list[int]]
+
+
+class InteractiveImpossibleRequest(BaseModel):
+    """Body of POST /api/interactive/impossible — the "Impossibles" button
+    of the "Interactif" authoring mode, at the user's explicit request:
+    "à gauche de 'Vérifier', ajouter un bouton 'Impossibles' qui ne
+    vérifie que les emplacements impossibles (y compris les mots posés
+    inconnus) et les emplacements avec trop peu de possibilités." A
+    read-only diagnostic — never mutates the grid, unlike "Nettoyer" —
+    reusing `_interactive_fill_diagnostics` exactly as `/step`/`/clean`
+    already do internally: `impossible_cells` already covers both a
+    still-open slot with zero real candidates AND an already-fully-typed
+    word that isn't a real dictionary word (`_invalid_fully_known_
+    indices`), matching "y compris les mots posés inconnus" with no
+    separate mechanism needed. "Vérifier" reuses this exact same check
+    and additionally verifies every complete word has a definition."""
+    job_id: str
+    grid: list[list[str]]
 
 
 class InteractiveVerifyWord(BaseModel):
@@ -1271,15 +1380,26 @@ def _write_theme_log(short_id, theme, description, words,
 
 @app.post("/api/presence")
 def presence(req: PresenceRequest):
-    """Enregistre/rafraîchit ce battement de cœur et renvoie
-    `{"count": N}` où N est le nombre d'utilisateurs actifs distincts (voir
-    `_presence_snapshot`). Consigne une ligne dans LOG_USERS/ si la LISTE
-    des utilisateurs (pas seulement l'effectif total) a changé depuis la
-    dernière ligne écrite — à la demande explicite de l'utilisateur
+    """Records/refreshes this heartbeat and returns `{"count": N,
+    "resource_usage": {...}, "queue_lengths": {"grid": ..., "clues":
+    ...}}` — N is the number of distinct active users (see
+    `_presence_snapshot`), `resource_usage` is the last CPU/GPU occupancy
+    sampled by `_resource_usage_sampler` (`_LATEST_RESOURCE_USAGE`, never
+    recomputed here — see that module-level dict for why), and
+    `queue_lengths` is the *current* length of GRID_QUEUE/CLUES_QUEUE, at
+    the user's explicit request: "ajouter une indication sur la longueur
+    des 2 files d'attente : Grille (CPU) et Définition (GPU)." Unlike
+    `resource_usage`, this one is recomputed on every call rather than
+    cached by a background task: `len()` on a plain in-memory Python list
+    (never a subprocess/network call) costs nothing, and GRID_QUEUE/
+    CLUES_QUEUE are already the real lists `_wait_in_queue` mutates — no
+    staleness risk to avoid here the way there is for GPU occupancy.
+    Logs a line to LOG_USERS/ if the user LIST (not just the total count)
+    changed since the last line written — at the user's explicit request
     ("LOG_USERS doit se mettre à jour à chaque fois que la liste des
-    utilisateurs change") : un utilisateur passant d'anonyme à nommé, ou
-    changeant de pseudo, déclenche donc une nouvelle ligne même quand
-    l'effectif total, lui, ne bouge pas."""
+    utilisateurs change"): a user going from anonymous to named, or
+    changing pseudo, therefore triggers a new line even when the total
+    count itself doesn't move."""
     record = (req.session_id, {
         "last_seen": time.monotonic(),
         "pseudo": (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH],
@@ -1287,7 +1407,11 @@ def presence(req: PresenceRequest):
     count, pseudos, changed = _presence_snapshot(record)
     if changed:
         _write_users_log(count, pseudos)
-    return {"count": count}
+    return {
+        "count": count,
+        "resource_usage": _LATEST_RESOURCE_USAGE,
+        "queue_lengths": {"grid": len(GRID_QUEUE), "clues": len(CLUES_QUEUE)},
+    }
 
 
 class PseudoClaimRequest(BaseModel):
@@ -1347,6 +1471,32 @@ async def _presence_sweep_scheduler():
             logger.exception("presence: echec du balayage periodique")
 
 
+async def _resource_usage_sampler():
+    """Runs in the background for the whole life of the process: every
+    RESOURCE_USAGE_SAMPLE_INTERVAL_S (2s), samples CPU/GPU occupancy
+    (backend/system_info.py, sample_resource_usage()) and replaces
+    `_LATEST_RESOURCE_USAGE` wholesale. Samples right at startup (no wait
+    before the first round), so the very first presence heartbeat already
+    has a real GPU value available (CPU only gets one starting from the
+    second sample — see sample_resource_usage()). Goes through
+    `_RESOURCE_USAGE_EXECUTOR` (its own dedicated thread, never the event
+    loop's default pool — see its own docstring) rather than a plain
+    `asyncio.to_thread`, precisely so it never blocks the event loop nor
+    gets queued behind some other blocking call this app makes. Never
+    raises to its caller — any error is only logged, never left to break
+    the loop."""
+    global _LATEST_RESOURCE_USAGE
+    loop = asyncio.get_running_loop()
+    while True:
+        try:
+            _LATEST_RESOURCE_USAGE = await loop.run_in_executor(
+                _RESOURCE_USAGE_EXECUTOR, sample_resource_usage
+            )
+        except Exception:
+            logger.exception("resource usage: echec de l'echantillonnage")
+        await asyncio.sleep(RESOURCE_USAGE_SAMPLE_INTERVAL_S)
+
+
 @app.get("/api/rss")
 def rss_feed():
     """Renvoie le contenu déjà agrégé/trié de RSS/combined.json (voir
@@ -1398,8 +1548,27 @@ def system_info():
     of subprocess probes, see backend/system_info.py) and a user could
     plausibly ask about a machine's hardware changing (e.g. hot-swapped
     external GPU) across the lifetime of one long-running server
-    process."""
-    return get_system_info(clue_generator.model)
+    process. `interactive_llm_model` is only passed when a genuinely
+    separate second instance is actually configured (LLM_BASE_URL_
+    INTERACTIVE, see this module's own dual-GPU setup above) — the same
+    `interactive_clue_generator is not clue_generator` check already used
+    there, so a single-instance machine never double-reports one model as
+    if it were two. `embed_on_gpu` mirrors EMBED_N_GPU_LAYERS (see
+    run_embed.sh) directly rather than probing the embed server itself,
+    same "known-in-advance config, not a hardware guess" reasoning as
+    LLAMA_FORCE_CPU in backend/system_info.py."""
+    try:
+        _embed_gpu_layers = int(os.environ.get("EMBED_N_GPU_LAYERS", "0").strip() or "0")
+    except ValueError:
+        _embed_gpu_layers = 0
+    return get_system_info(
+        clue_generator.model,
+        interactive_llm_model=(
+            interactive_clue_generator.model if interactive_clue_generator is not clue_generator else None
+        ),
+        embed_model=_similar_embedder.model,
+        embed_on_gpu=_embed_gpu_layers > 0,
+    )
 
 
 _LIBRARY_SEEN_FILTERS = ("all", "unseen", "seen", "mine")
@@ -1720,7 +1889,7 @@ async def dictionary_define(q: str, lang: str = "fr", theme: str = ""):
         raise HTTPException(status_code=400, detail="expression vide")
     try:
         definitions = await asyncio.to_thread(
-            clue_generator.generate_definitions, text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT,
+            interactive_clue_generator.generate_definitions, text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT,
             timeout=90.0, theme_description=theme.strip() or None,
         )
     except ClueGenerationError as exc:
@@ -1755,7 +1924,7 @@ async def paraphrase(q: str, lang: str = "fr"):
         raise HTTPException(status_code=400, detail="texte vide")
     try:
         paraphrases = await asyncio.to_thread(
-            clue_generator.generate_paraphrases, text, lang, PARAPHRASE_COUNT,
+            interactive_clue_generator.generate_paraphrases, text, lang, PARAPHRASE_COUNT,
             timeout=PARAPHRASE_TIMEOUT_S,
         )
     except ClueGenerationError as exc:
@@ -1878,7 +2047,7 @@ def _similar_words_impl(query: str, lang: str,
     in the panel."""
     desc = ""
     try:
-        desc = clue_generator.describe_theme(
+        desc = interactive_clue_generator.describe_theme(
             query, lang, timeout=_SIMILAR_DESCRIBE_TIMEOUT_S,
         )
     except Exception as exc:  # noqa: BLE001 — best-effort, on retombe sur le mot brut
@@ -2279,7 +2448,7 @@ async def chat(req: ChatRequest):
             captured_prompt[:] = messages
 
         try:
-            async for chunk in chatbot.reply_stream(
+            async for chunk in interactive_chatbot.reply_stream(
                 [m.model_dump() for m in req.history], req.message, req.language, req.ui_context,
                 on_prompt=_capture_prompt if CHATBOT_DEBUG else None,
             ):
@@ -2492,7 +2661,8 @@ def _new_job():
 
 
 async def _build_theme_glossary(theme, language, theme_precision, short_id,
-                                cancel_event, log_tag, theme_language=None):
+                                cancel_event, log_tag, theme_language=None,
+                                clue_gen=clue_generator):
     """Pré-recherche thématique complète pour UNE langue : expansion LLM en
     mots-clefs (describe_theme, + une liste par mot du thème + top-ups),
     puis une recherche Qdrant du plus-proche-voisin par mot-clef dans le
@@ -2516,13 +2686,22 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
     chaque appel par mot, et les top-ups) — voir ce paramètre pour la
     raison de ne l'activer QUE lorsqu'un décalage de langue est
     réellement probable (un faux positif sur le cas courant, même
-    langue, coûterait des tentatives inutiles pour rien)."""
+    langue, coûterait des tentatives inutiles pour rien).
+
+    `clue_gen` (le `clue_generator` module-niveau — l'instance AUTOMATIQUE
+    — par défaut) est l'instance `LLMClueGenerator` dont `describe_theme`
+    est appelé pour toute la fonction : `_run_generate_job` (génération
+    automatique, Populate/interface) laisse la valeur par défaut, tandis
+    que `_run_interactive_job` (mode Interactif) passe explicitement
+    `interactive_clue_generator` — voir la répartition carte 1/carte 2 à
+    la demande explicite de l'utilisateur, documentée juste au-dessus de
+    la construction de ces deux instances en tête de fichier."""
     verify_translation = theme_language is not None and theme_language != language
     theme_priority_words = None
     theme_description = ""
     try:
         theme_description = await asyncio.to_thread(
-            clue_generator.describe_theme,
+            clue_gen.describe_theme,
             theme, language, cancel_event=cancel_event,
             temperature=THEME_KEYWORD_LLM_TEMPERATURE,
             verify_translation=verify_translation,
@@ -2556,7 +2735,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
             tok_desc = ""
             try:
                 tok_desc = await asyncio.to_thread(
-                    clue_generator.describe_theme,
+                    clue_gen.describe_theme,
                     tok, language, cancel_event=cancel_event,
                     temperature=THEME_KEYWORD_LLM_TEMPERATURE,
                     verify_translation=verify_translation,
@@ -2603,7 +2782,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
         _more = ""
         try:
             _more = await asyncio.to_thread(
-                clue_generator.describe_theme,
+                clue_gen.describe_theme,
                 theme, language, cancel_event=cancel_event,
                 temperature=THEME_KEYWORD_LLM_TEMPERATURE,
                 verify_translation=verify_translation,
@@ -2654,8 +2833,35 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
 
 
 async def _run_generate_job(job_id, req, resume_state=None, override_priority_words=None,
-                             override_theme_description="", preserved_clues=None):
-    """`override_priority_words`/`override_theme_description` (`None`/`""`
+                             override_theme_description="", preserved_clues=None,
+                             permanent_locked_letters=None, publish=True, origin=None):
+    """`publish` (`True` by default — every pre-existing caller unaffected)
+    controls what happens to the finished grid once it's ready: `True`
+    saves it to the Bibliothèque (GRID_STORE, plus a durable SVG/PNG copy)
+    exactly as before this parameter existed. `False` — used only by
+    POST /api/interactive/finish ("Finir la grille") — skips the
+    Bibliothèque/SVG/PNG entirely and instead saves the finished grid as a
+    brand-new "Créations" (GRID_WORK) draft under THIS job's own id, at
+    the user's explicit request: "ne pas publier la grille. Ajouter la
+    nouvelle version aux Créations de l'auteur. Réouvrir la grille
+    automatiquement en mode édition." Never `resume_state`'s ORIGINAL
+    interactive job_id — this is deliberately a genuinely NEW entry,
+    never a rename/overwrite of whatever the originating interactive
+    session had already autosaved on its own. `result["grid_work_id"]` is
+    set to the new draft's id so `frontend/static/script.js`'s
+    `runGeneration()` can detect this case and reopen it in Édition mode
+    automatically instead of showing it as an ordinary finished/playable
+    grid, via the exact same `POST /api/interactive/resume` mechanism the
+    "Créations" panel itself already uses.
+
+    `origin` (`None` by default) is `interactive_finish`'s own originating
+    interactive session's `job["interactive"]["origin"]` snapshot (see
+    `_run_interactive_resume_job`) — carried straight through to
+    `grid_store.save_grid_work` so a session that started from an existing
+    library/GRID_WORK grid keeps that same provenance across a "Finir la
+    grille" completion, exactly like an ordinary autosave already does.
+
+    `override_priority_words`/`override_theme_description` (`None`/`""`
     by default — no effect for any pre-existing caller) let a caller hand
     in an ALREADY-RESOLVED theme glossary instead of having this function
     recompute one itself via `_build_theme_glossary` (an LLM call + a
@@ -2673,10 +2879,24 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     explicit request for "Finir la grille" ("génération des définitions
     manquantes... mais pas celles déjà définies"): a word whose exact
     (row, col, direction) is in this map already has a clue — its letters
-    were locked into the search as hard constraints (see `resume_state`),
-    so its position/spelling can't have changed — and is excluded from
-    the LLM clue-generation batch entirely, keeping that clue text
-    verbatim instead of asking the LLM for a new one."""
+    were locked into the search as hard constraints (see
+    `permanent_locked_letters` below), so its position/spelling can't
+    have changed — and is excluded from the LLM clue-generation batch
+    entirely, keeping that clue text verbatim instead of asking the LLM
+    for a new one.
+
+    `permanent_locked_letters` (`None` by default — no effect for any
+    other caller) is `interactive_finish`'s own `locked_letters` — passed
+    straight through to `generate_grid(permanent_locked_letters=...)`, at
+    the user's explicit request: "la génération ne doit pas toucher aux
+    lettres verrouillées, y compris ne pas poser de case noire sur ces
+    lettres... [même si un emplacement contient] un mot impossible
+    (probablement un nom propre voulu par l'utilisateur)." Unlike
+    `resume_state`'s own `locked_letters` (only ever the STARTING point of
+    the very first palier, then recomputed/replaced palier after palier
+    by the ordinary cross-palier retry machinery — see `generate_grid`'s
+    own docstring), this one stays identical and hard for the WHOLE
+    generation, however many paliers it takes."""
     job = JOBS[job_id]
     short_id = job_id[:8]
     cancel_event = CANCEL_EVENTS[job_id]
@@ -2967,6 +3187,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         should_pause=_make_should_pause(GRID_QUEUE, task),
                         priority_words=theme_priority_words,
                         bilingual_priority_words=bilingual_theme_priority_words,
+                        permanent_locked_letters=permanent_locked_letters,
                     )
                     break
                 except GenerationPaused as p:
@@ -3251,59 +3472,92 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 CLUES_QUEUE.remove(task)
 
         progress("saving")
-        try:
-            svg_path = await asyncio.to_thread(
-                save_grid_svg, result, req.language, req.difficulty, req.mode
-            )
-            logger.info("[%s] saved %s", short_id, svg_path)
+        # Les paramètres du moteur de recherche automatique (voir
+        # grid_store.save_grid_json's own `generation_params` docstring),
+        # à la demande explicite de l'utilisateur : "sauvegarder tous les
+        # paramètres... pour pouvoir les reconfigurer à l'identique quand
+        # la grille est rechargée en mode édition." `mode` est déjà son
+        # propre champ de premier niveau (voir juste au-dessus) — dupliqué
+        # ici aussi pour que le Front n'ait qu'un seul objet à lire pour
+        # reconfigurer les 4 champs du formulaire à la fois. Calculé
+        # inconditionnellement (avant le `if publish:` ci-dessous) car les
+        # deux branches en ont besoin.
+        pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
+        generation_params = {
+            "black_enrichment_percent": req.black_enrichment_percent,
+            "force_letters_percent": req.force_letters_percent,
+            "mode": req.mode,
+            "theme_precision": req.theme_precision,
+        }
+        if publish:
             try:
-                png_path = await asyncio.to_thread(save_grid_png, svg_path)
-                logger.info("[%s] saved %s", short_id, png_path)
+                svg_path = await asyncio.to_thread(
+                    save_grid_svg, result, req.language, req.difficulty, req.mode
+                )
+                logger.info("[%s] saved %s", short_id, svg_path)
+                try:
+                    png_path = await asyncio.to_thread(save_grid_png, svg_path)
+                    logger.info("[%s] saved %s", short_id, png_path)
+                except OSError as e:
+                    logger.warning("[%s] failed to save grid PNG sample: %s", short_id, e)
             except OSError as e:
-                logger.warning("[%s] failed to save grid PNG sample: %s", short_id, e)
-        except OSError as e:
-            # A durable copy of the grid is a nice-to-have, not the point
-            # of the request — never fail the user's grid over it.
-            logger.warning("[%s] failed to save grid SVG: %s", short_id, e)
+                # A durable copy of the grid is a nice-to-have, not the point
+                # of the request — never fail the user's grid over it.
+                logger.warning("[%s] failed to save grid SVG: %s", short_id, e)
 
-        # Bibliothèque (see GET /api/library, GET /api/library/{grid_id}
-        # below, and frontend/static/script.js's "Bibliothèque" button),
-        # at the user's explicit request — same best-effort treatment as
-        # the SVG/PNG saves just above: a failure to persist this grid
-        # for later browsing is logged, never allowed to fail the request
-        # the player is actually waiting on.
-        try:
-            pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
-            # Les paramètres du moteur de recherche automatique (voir
-            # grid_store.save_grid_json's own `generation_params`
-            # docstring), à la demande explicite de l'utilisateur :
-            # "sauvegarder tous les paramètres... pour pouvoir les
-            # reconfigurer à l'identique quand la grille est rechargée en
-            # mode édition." `mode` est déjà son propre champ de premier
-            # niveau (voir juste au-dessus) — dupliqué ici aussi pour que
-            # le Front n'ait qu'un seul objet à lire pour reconfigurer les
-            # 4 champs du formulaire à la fois.
-            generation_params = {
-                "black_enrichment_percent": req.black_enrichment_percent,
-                "force_letters_percent": req.force_letters_percent,
-                "mode": req.mode,
-                "theme_precision": req.theme_precision,
-            }
-            grid_id = await asyncio.to_thread(
-                save_grid_json, result, req.language, req.difficulty, req.mode, title,
-                result.get("bilingual_language"), pseudo, theme or None,
-                generation_params=generation_params,
-            )
-            logger.info("[%s] saved to library: %s (pseudo=%r)", short_id, grid_id, pseudo)
-            # L'identifiant du fichier GRID_STORE de cette grille, pour que
-            # le frontend puisse la marquer "déjà vue" (localStorage) dès
-            # qu'il l'affiche — à la demande explicite de l'utilisateur
-            # ("y compris la grille qu'il vient de générer"). Même clé
-            # (`id`) que GET /api/library/{grid_id} renvoie pour une grille
-            # rechargée, donc le frontend traite les deux cas pareil.
-            result["id"] = grid_id
-        except OSError as e:
-            logger.warning("[%s] failed to save grid to library: %s", short_id, e)
+            # Bibliothèque (see GET /api/library, GET /api/library/{grid_id}
+            # below, and frontend/static/script.js's "Bibliothèque" button),
+            # at the user's explicit request — same best-effort treatment as
+            # the SVG/PNG saves just above: a failure to persist this grid
+            # for later browsing is logged, never allowed to fail the request
+            # the player is actually waiting on.
+            try:
+                grid_id = await asyncio.to_thread(
+                    save_grid_json, result, req.language, req.difficulty, req.mode, title,
+                    result.get("bilingual_language"), pseudo, theme or None,
+                    generation_params=generation_params,
+                )
+                logger.info("[%s] saved to library: %s (pseudo=%r)", short_id, grid_id, pseudo)
+                # L'identifiant du fichier GRID_STORE de cette grille, pour que
+                # le frontend puisse la marquer "déjà vue" (localStorage) dès
+                # qu'il l'affiche — à la demande explicite de l'utilisateur
+                # ("y compris la grille qu'il vient de générer"). Même clé
+                # (`id`) que GET /api/library/{grid_id} renvoie pour une grille
+                # rechargée, donc le frontend traite les deux cas pareil.
+                result["id"] = grid_id
+            except OSError as e:
+                logger.warning("[%s] failed to save grid to library: %s", short_id, e)
+        else:
+            # "Finir la grille" (see this function's own docstring for
+            # `publish`) — no SVG/PNG, no Bibliothèque record. Saved as a
+            # brand-new "Créations" (GRID_WORK) draft instead, under THIS
+            # job's own id — never `resume_state`'s ORIGINAL interactive
+            # job_id, so this is genuinely a new entry, never a rename of
+            # whatever the originating session had already autosaved on
+            # its own.
+            try:
+                definitions = [
+                    {
+                        "row": w["row"], "col": w["col"], "direction": w["direction"],
+                        "clue": w.get("clue", ""),
+                    }
+                    for w in result["words"]
+                ]
+                work_id = await asyncio.to_thread(
+                    save_grid_work, job_id, result["solution"], definitions, title,
+                    req.language, req.difficulty, theme or None,
+                    theme_priority_words or (), req.seed or 0, pseudo,
+                    None, origin, result.get("bilingual_language"),
+                    generation_params=generation_params,
+                )
+                logger.info("[%s] saved to Créations: %s (pseudo=%r)", short_id, work_id, pseudo)
+                # Read by frontend/static/script.js's runGeneration(), which
+                # reopens this draft in Édition mode automatically instead
+                # of showing it as an ordinary finished/playable grid — see
+                # this function's own docstring for `publish`.
+                result["grid_work_id"] = work_id
+            except Exception as e:
+                logger.warning("[%s] failed to save grid to Créations: %s", short_id, e)
 
         progress("done")
         job["status"] = "done"
@@ -3397,9 +3651,14 @@ async def _run_interactive_job(job_id, req):
         theme_description = ""
         if theme:
             progress("theme", theme=theme)
+            # clue_gen=interactive_clue_generator: Interactive/Edition
+            # mode's own theme-glossary build is an interactive request
+            # (card 2, see the module-level singletons' own comment),
+            # unlike _run_generate_job's two calls to this same helper
+            # (automatic generation, card 1) further above in this file.
             theme_priority_words, theme_description = await _build_theme_glossary(
                 theme, req.language, req.theme_precision, short_id, cancel_event,
-                short_id,
+                short_id, clue_gen=interactive_clue_generator,
             )
 
         progress("interactive_building")
@@ -3929,6 +4188,24 @@ async def interactive_candidates(req: InteractiveCandidatesRequest):
     return {"theme_words": theme_words, "other_words": other_words}
 
 
+@app.post("/api/interactive/impossible")
+async def interactive_impossible(req: InteractiveImpossibleRequest):
+    """"Impossibles" button: recompute `_interactive_fill_diagnostics` for
+    the grid exactly as given (no cleanup, no mutation) — see
+    InteractiveImpossibleRequest's own docstring."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    imp, low = await asyncio.to_thread(
+        _interactive_fill_diagnostics, [list(row) for row in req.grid], rows, cols, sess["index"],
+    )
+    return {"impossible_cells": imp, "low_candidate_cells": low}
+
+
 @app.post("/api/interactive/verify")
 async def interactive_verify(req: InteractiveVerifyRequest):
     """"Vérifier" button: check every currently complete word of the whole
@@ -4003,7 +4280,7 @@ async def interactive_title(req: InteractiveTitleRequest):
     )
     try:
         titles = await asyncio.to_thread(
-            clue_generator.generate_titles, entries, req.language,
+            interactive_clue_generator.generate_titles, entries, req.language,
             count=TITLE_PROPOSALS_COUNT, theme_description=theme_description,
         )
     except Exception:
@@ -4473,7 +4750,16 @@ async def interactive_finish(req: InteractiveFinishRequest):
     generation (GET /api/generate/status/{job_id}) — the interactive
     session itself (`req.job_id`) is left completely untouched, the same
     "never mutate the job it's derived from" convention already
-    established for "Continuer"."""
+    established for "Continuer".
+
+    Never publishes to the Bibliothèque, at the user's explicit request:
+    "à la fin du processus, ne pas publier la grille. Ajouter la nouvelle
+    version aux Créations de l'auteur. Réouvrir la grille automatiquement
+    en mode édition." (`_run_generate_job(publish=False, origin=...)` —
+    see its own docstring). The originating session's own `origin`
+    snapshot (if any — e.g. this session was itself opened from an
+    existing library/GRID_WORK grid) is carried through so the new draft
+    keeps the same provenance."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     job = JOBS.get(req.job_id)
     if sess is None or job is None or job.get("interactive") is None:
@@ -4526,6 +4812,8 @@ async def interactive_finish(req: InteractiveFinishRequest):
             override_priority_words=sess["priority_words"],
             override_theme_description=meta.get("theme_description") or "",
             preserved_clues=preserved_clues,
+            permanent_locked_letters=locked_letters,
+            publish=False, origin=meta.get("origin"),
         )
     )
     _BACKGROUND_TASKS.add(task)

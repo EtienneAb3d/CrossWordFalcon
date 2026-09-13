@@ -613,6 +613,24 @@ async def proxy_interactive_candidates(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/interactive/impossible")
+async def proxy_interactive_impossible(request: Request):
+    """"Impossibles" button of the "Interactif" mode — read-only check of
+    which slots are impossible (including a complete word unknown to the
+    dictionary) or have too few candidates, with no mutation of the grid."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/impossible",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.post("/api/interactive/verify")
 async def proxy_interactive_verify(request: Request):
     """"Vérifier" button of the "Interactif" mode — checks every complete

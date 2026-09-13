@@ -154,6 +154,7 @@ IS_APPLE_SILICON=false
 HAS_NVIDIA_GPU=false
 GPU_NAME=""
 GPU_VRAM_MB=0
+GPU_COUNT=0
 if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
     IS_APPLE_SILICON=true
 elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
@@ -161,6 +162,12 @@ elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; the
     GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)"
     GPU_VRAM_MB="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -cd '0-9' || true)"
     if [ -z "$GPU_VRAM_MB" ]; then GPU_VRAM_MB=0; fi
+    # Dual-GPU support, at the user's explicit request ("Cette machine a
+    # maintenant 2 GPUs... Prevoir cette possibilite dans Install.sh").
+    # Only meaningful on CUDA (Apple Silicon has a single integrated GPU,
+    # the elif above already excludes it from this branch entirely).
+    GPU_COUNT="$(nvidia-smi -L 2>/dev/null | grep -c '^GPU ' || true)"
+    if [ -z "$GPU_COUNT" ]; then GPU_COUNT=0; fi
 fi
 
 if [ ! -f env.sh ]; then
@@ -189,6 +196,28 @@ append_llm_block() {
     } >> env.sh
 }
 
+# Dual-GPU support, at the user's explicit request — see env_default.sh's
+# own "Dual-GPU LLM" section for the full explanation of the two env vars
+# below. $2 (interactive index) empty means "not configured" — emits
+# nothing, so a single-GPU/no-dual-choice install behaves exactly as
+# before this feature (run_llm.sh/run_sglang.sh's own LLM_GPU_INDEX/LLM_
+# INTERACTIVE_GPU_INDEX defaults, "0"/unset, already match). Written with
+# an unquoted heredoc (`$1`/`$2` genuinely expanded here, to embed the
+# actual chosen indices) but `\${LLM_PORT_INTERACTIVE}` backslash-escaped
+# so it lands LITERALLY in env.sh, to be expanded later when env.sh
+# itself is sourced — same convention as every other `\${...}`-escaped
+# line already in this file (e.g. configure_llamacpp's own LLM_BASE_URL).
+build_dual_gpu_lines() {
+    local primary="$1" interactive="$2"
+    if [ -n "$interactive" ]; then
+        cat <<INNER
+export LLM_GPU_INDEX="$primary"
+export LLM_INTERACTIVE_GPU_INDEX="$interactive"
+export LLM_BASE_URL_INTERACTIVE="http://127.0.0.1:\${LLM_PORT_INTERACTIVE}/v1/chat/completions"
+INNER
+    fi
+}
+
 configure_llamacpp() {
     key="$1"; model=""; repo=""; file=""
     case "$key" in
@@ -199,6 +228,7 @@ configure_llamacpp() {
         27b)  model="Qwen/Qwen3.8-27B";  repo="unsloth/Qwen3.8-27B-GGUF";         file="Qwen3.8-27B-UD-Q2_K_XL.gguf" ;;
         *)    model="Qwen/Qwen3.5-4B";   repo="bartowski/Qwen_Qwen3.5-4B-GGUF";   file="Qwen_Qwen3.5-4B-bf16.gguf" ;;
     esac
+    gpu_lines="$(build_dual_gpu_lines "${2:-0}" "${3:-}")"
     append_llm_block <<EOF
 export LLM_ENGINE="llama_cpp"
 export LLM_MODEL="$model"
@@ -207,8 +237,12 @@ export LLM_API_KEY="EMPTY"
 export LLAMA_GGUF_REPO="$repo"
 export LLAMA_GGUF_FILE="$file"
 export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
+$gpu_lines
 EOF
     echo "  env.sh configure : moteur=llama.cpp, modele=$model"
+    if [ -n "${3:-}" ]; then
+        echo "  Deuxieme instance interactive : carte ${3} (carte ${2:-0} pour la generation automatique)."
+    fi
 }
 
 configure_sglang_cuda() {
@@ -223,6 +257,7 @@ configure_sglang_cuda() {
     if [ -n "$old_gcc" ]; then
         gcc_line="export SGLANG_NVCC_CC=\"$old_gcc\""
     fi
+    gpu_lines="$(build_dual_gpu_lines "${1:-0}" "${2:-}")"
     append_llm_block <<EOF
 export LLM_ENGINE="sglang"
 export SGLANG_MODEL_PATH="bartowski/Qwen_Qwen3-4B-GGUF/Qwen_Qwen3-4B-Q4_K_M.gguf"
@@ -234,6 +269,7 @@ export SGLANG_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'
 export SGLANG_REASONING_PARSER="qwen3"
 export SGLANG_MEM_FRACTION_STATIC="0.78"
 $gcc_line
+$gpu_lines
 export CHATBOT_THINK_FILTER="close_only"
 EOF
     echo "  env.sh configure : moteur=sglang (CUDA), modele=Qwen3-4B-Q4_K_M.gguf"
@@ -310,28 +346,39 @@ install_sglang() {
 
 stop_running_llm_server() {
     port="3002"
+    port_interactive="3004"
     if [ -f env.sh ]; then
         port="$(source env.sh >/dev/null 2>&1; echo "${LLM_PORT:-3002}")"
+        port_interactive="$(source env.sh >/dev/null 2>&1; echo "${LLM_PORT_INTERACTIVE:-3004}")"
     fi
-    pids="$(lsof -ti tcp:"$port" 2>/dev/null || true)"
-    if [ -n "$pids" ]; then
-        echo "  Arret du serveur LLM en cours (port $port) — la reconfiguration necessite un redemarrage."
-        kill $pids 2>/dev/null || true
-        sleep 1
-        pids="$(lsof -ti tcp:"$port" 2>/dev/null || true)"
-        [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
-    fi
+    # Both ports, always — the second (interactive) instance's own port
+    # too, even when the just-applied choice doesn't configure dual-GPU:
+    # otherwise reconfiguring away from a previous dual-GPU setup would
+    # leave that second server process orphaned, still listening.
+    for p in "$port" "$port_interactive"; do
+        pids="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+        if [ -n "$pids" ]; then
+            echo "  Arret du serveur LLM en cours (port $p) — la reconfiguration necessite un redemarrage."
+            kill $pids 2>/dev/null || true
+            sleep 1
+            pids="$(lsof -ti tcp:"$p" 2>/dev/null || true)"
+            [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+        fi
+    done
 }
 
 apply_choice() {
-    # $1 = id du choix moteur ; $2 = cle modele llama.cpp ; $3 = cle API Mistral
+    # $1 = id du choix moteur ; $2 = cle modele llama.cpp ; $3 = cle API Mistral ;
+    # $4 = index GPU pour la generation automatique (defaut "0") ;
+    # $5 = index GPU pour les requetes interactives (vide = pas de
+    #      deuxieme instance — voir env_default.sh's "Dual-GPU LLM")
     case "$1" in
         sglang_cuda)
             if install_sglang; then
-                configure_sglang_cuda
+                configure_sglang_cuda "${4:-0}" "${5:-}"
             else
                 echo "  -> repli sur llama.cpp (Qwen3.5-4B)."
-                configure_llamacpp 4b
+                configure_llamacpp 4b "${4:-0}" "${5:-}"
             fi
             ;;
         sglang_mlx)
@@ -342,7 +389,7 @@ apply_choice() {
                 configure_llamacpp 4b
             fi
             ;;
-        llamacpp) configure_llamacpp "${2:-4b}" ;;
+        llamacpp) configure_llamacpp "${2:-4b}" "${4:-0}" "${5:-}" ;;
         mistral)  configure_mistral "${3:-}" ;;
         keep)     echo "  env.sh laisse tel quel." ;;
     esac
@@ -462,8 +509,30 @@ else
         read -rp "Cle API Mistral (laisser vide pour l'ajouter plus tard dans env.sh) : " mistral_key || mistral_key=""
     fi
 
+    # Dual-GPU support, at the user's explicit request — only offered for
+    # the two engines that actually run on this machine's own NVIDIA
+    # card(s) (llamacpp, sglang_cuda); sglang_mlx (Apple Silicon, a single
+    # integrated GPU) and mistral (a cloud API, no local GPU at all) never
+    # need it. See env_default.sh's own "Dual-GPU LLM" section for what
+    # this splits between the two cards.
+    gpu_primary="0"
+    gpu_interactive=""
+    if [ "$GPU_COUNT" -ge 2 ] && { [ "$choice" = "llamacpp" ] || [ "$choice" = "sglang_cuda" ]; }; then
+        echo
+        echo "Plusieurs GPU NVIDIA detectes ($GPU_COUNT cartes)."
+        dual_ans=""
+        read -rp "Dedier une seconde carte aux requetes interactives (mode Edition, ChatBot, Dictionnaire, Paraphraseur) ? [o/N] : " dual_ans || dual_ans=""
+        case "$dual_ans" in
+            o|O|oui|Oui|OUI|y|Y|yes|Yes)
+                echo "Generation automatique (Populate + interface) -> carte 0 ; requetes interactives -> carte 1."
+                gpu_interactive="1"
+                ;;
+            *) ;;
+        esac
+    fi
+
     echo
-    apply_choice "$choice" "$model_key" "$mistral_key"
+    apply_choice "$choice" "$model_key" "$mistral_key" "$gpu_primary" "$gpu_interactive"
     if [ "$choice" != "keep" ]; then
         stop_running_llm_server
     fi

@@ -58,6 +58,21 @@ elif [ -f env_default.sh ]; then
     source env_default.sh
 fi
 
+# Dual-GPU support — CUDA only (a real NVIDIA machine can hold two
+# independent SGLang server processes, one per card; a single Apple
+# Silicon machine has exactly one integrated GPU, so this is a no-op
+# there, see the CUDA-only guard further below). Same meaning/defaults as
+# run_llm.sh's own identical variables — see that script's header for the
+# full explanation: LLM_GPU_INDEX (default "0") is the PRIMARY/AUTOMATIC-
+# generation instance's card; LLM_INTERACTIVE_GPU_INDEX (default unset)
+# is the SECOND card, when configured, hosting a second, independent
+# SGLang process dedicated to interactive/on-demand requests, listening
+# on LLM_PORT_INTERACTIVE.
+LLM_GPU_INDEX="${LLM_GPU_INDEX:-0}"
+LLM_INTERACTIVE_GPU_INDEX="${LLM_INTERACTIVE_GPU_INDEX:-}"
+LLM_PORT_INTERACTIVE="${LLM_PORT_INTERACTIVE:-3004}"
+LLM_INTERACTIVE_LOG="$LOG_DIR/sglang_interactive.log"
+
 SGLANG_MODEL_PATH="${SGLANG_MODEL_PATH:?SGLANG_MODEL_PATH not set — check env.sh (or env_default.sh)}"
 # Empty by default (an MLX-community pre-quantized repo needs no explicit
 # --quantization flag at all — see the header comment above); set to
@@ -144,6 +159,17 @@ SGLANG_REASONING_PARSER="${SGLANG_REASONING_PARSER:-}"
 # way once actually reached with the variable unset.
 SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-}"
 
+# Empty by default — the SECOND (interactive) instance's own --mem-
+# fraction-static, applied only to it, never to the primary instance
+# above. Left unset on a dual-GPU machine where the interactive card
+# hosts nothing else (unlike the primary card, which may also cohabit
+# with the embed server — see env.sh's own "GPU cohabitation" section),
+# so SGLang's own auto-computed fraction for that otherwise-empty card is
+# already the right default; set it the same way as SGLANG_MEM_FRACTION_
+# STATIC (read the minimum straight off a real OOM error message) only if
+# something else ever needs to share that second card too.
+SGLANG_MEM_FRACTION_STATIC_INTERACTIVE="${SGLANG_MEM_FRACTION_STATIC_INTERACTIVE:-}"
+
 if [ ! -d .venv-sglang ]; then
     echo "Error: .venv-sglang not found — SGLang isn't installed. See CLAUDE.md's"
     echo "run_sglang.sh entry for the install steps (Python 3.12 venv + editable"
@@ -151,14 +177,25 @@ if [ ! -d .venv-sglang ]; then
     exit 1
 fi
 
-pids=$(lsof -ti tcp:"$LLM_PORT" 2>/dev/null || true)
-if [ -n "$pids" ]; then
-    echo "Stopping LLM server already running on port $LLM_PORT (pid: $pids)"
-    kill $pids 2>/dev/null || true
-    sleep 1
-    pids=$(lsof -ti tcp:"$LLM_PORT" 2>/dev/null || true)
-    [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
-fi
+stop_port() {
+    local port="$1"
+    local pids
+    pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
+    if [ -n "$pids" ]; then
+        echo "Stopping LLM server already running on port $port (pid: $pids)"
+        kill $pids 2>/dev/null || true
+        sleep 1
+        pids=$(lsof -ti tcp:"$port" 2>/dev/null || true)
+        [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+    fi
+}
+
+# Always stop both ports regardless of whether LLM_INTERACTIVE_GPU_INDEX
+# is currently set — same reasoning as run_llm.sh's identical stop_port
+# calls: never leave an orphaned second process behind after switching
+# back to a single-instance configuration.
+stop_port "$LLM_PORT"
+stop_port "$LLM_PORT_INTERACTIVE"
 
 # Built as a single string, not a bash array, deliberately: macOS's own
 # default /bin/bash is 3.2.57 (Apple has never shipped a newer one, for
@@ -233,6 +270,13 @@ if [ -n "$SGLANG_MEM_FRACTION_STATIC" ]; then
     MEM_FRACTION_ARGS="--mem-fraction-static $SGLANG_MEM_FRACTION_STATIC"
 fi
 
+# Same convention, for the SECOND (interactive) instance only — see
+# SGLANG_MEM_FRACTION_STATIC_INTERACTIVE's own declaration above.
+MEM_FRACTION_ARGS_INTERACTIVE=""
+if [ -n "$SGLANG_MEM_FRACTION_STATIC_INTERACTIVE" ]; then
+    MEM_FRACTION_ARGS_INTERACTIVE="--mem-fraction-static $SGLANG_MEM_FRACTION_STATIC_INTERACTIVE"
+fi
+
 # Prepend the venv's own bin/ to PATH — this script always invokes
 # .venv-sglang/bin/python3 by its full path (never via `source .../
 # activate`), so a subprocess SGLang itself spawns by bare name (e.g.
@@ -282,8 +326,16 @@ if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
     IS_APPLE_SILICON=true
 fi
 
-echo "Starting SGLang server: model=$SGLANG_MODEL_PATH, port=$LLM_PORT, apple_silicon=$IS_APPLE_SILICON"
-if [ "$IS_APPLE_SILICON" = true ]; then
+if [ "$IS_APPLE_SILICON" = true ] && [ -n "$LLM_INTERACTIVE_GPU_INDEX" ]; then
+    echo "Warning: LLM_INTERACTIVE_GPU_INDEX is set but this is Apple Silicon —"
+    echo "there is only ever one integrated GPU here (and this project's own"
+    echo "history found running two SGLang/MLX servers at once causes a real"
+    echo "Metal OOM). Ignoring LLM_INTERACTIVE_GPU_INDEX, starting a single"
+    echo "instance only."
+fi
+
+start_mlx_instance() {
+    echo "Starting SGLang server (MLX): model=$SGLANG_MODEL_PATH, port=$LLM_PORT"
     SGLANG_USE_MLX=1 nohup .venv-sglang/bin/python3 -m sglang.launch_server \
         --model-path "$SGLANG_MODEL_PATH" \
         --host "$LLM_HOST" --port "$LLM_PORT" \
@@ -295,20 +347,41 @@ if [ "$IS_APPLE_SILICON" = true ]; then
         $REASONING_ARGS \
         $MEM_FRACTION_ARGS \
         < /dev/null > "$LLM_LOG" 2>&1 &
-else
-    nohup .venv-sglang/bin/python3 -m sglang.launch_server \
+    LLM_PID=$!
+    disown "$LLM_PID"
+    echo "SGLang server (MLX) started (pid $LLM_PID, log: $LLM_LOG)"
+    echo "Endpoint: http://$LLM_HOST:$LLM_PORT/v1/chat/completions"
+}
+
+# CUDA path only — see run_llm.sh's header for the full dual-GPU
+# reasoning, mirrored here: CUDA_VISIBLE_DEVICES pins each independent
+# SGLang process to its own card, same model/quant on both, only the
+# port/GPU index/mem-fraction differ.
+start_cuda_instance() {
+    local gpu_index="$1" port="$2" log_file="$3" mem_args="$4" label="$5"
+    echo "Starting SGLang server ($label): model=$SGLANG_MODEL_PATH, port=$port, GPU index=$gpu_index"
+    CUDA_VISIBLE_DEVICES="$gpu_index" nohup .venv-sglang/bin/python3 -m sglang.launch_server \
         --model-path "$SGLANG_MODEL_PATH" \
-        --host "$LLM_HOST" --port "$LLM_PORT" \
+        --host "$LLM_HOST" --port "$port" \
         $QUANT_ARGS \
         $THINK_ARGS \
         $OVERRIDE_ARGS \
         $TOKENIZER_ARGS \
         $REASONING_ARGS \
-        $MEM_FRACTION_ARGS \
-        < /dev/null > "$LLM_LOG" 2>&1 &
-fi
-LLM_PID=$!
-disown "$LLM_PID"
+        $mem_args \
+        < /dev/null > "$log_file" 2>&1 &
+    local pid=$!
+    disown "$pid"
+    echo "SGLang server ($label) started (pid $pid, log: $log_file)"
+    echo "Endpoint: http://$LLM_HOST:$port/v1/chat/completions"
+}
 
-echo "SGLang server started (pid $LLM_PID, log: $LLM_LOG)"
-echo "Endpoint: http://$LLM_HOST:$LLM_PORT/v1/chat/completions"
+if [ "$IS_APPLE_SILICON" = true ]; then
+    start_mlx_instance
+else
+    start_cuda_instance "$LLM_GPU_INDEX" "$LLM_PORT" "$LLM_LOG" "$MEM_FRACTION_ARGS" "automatic generation"
+    if [ -n "$LLM_INTERACTIVE_GPU_INDEX" ]; then
+        start_cuda_instance "$LLM_INTERACTIVE_GPU_INDEX" "$LLM_PORT_INTERACTIVE" \
+            "$LLM_INTERACTIVE_LOG" "$MEM_FRACTION_ARGS_INTERACTIVE" "interactive requests"
+    fi
+fi

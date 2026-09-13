@@ -36,6 +36,11 @@ function applyTranslations() {
   // "x en ligne" — texte paramétré (voir i18n.js), à ré-appliquer au
   // changement de langue à partir de la dernière valeur connue.
   renderOnlineCount();
+  // CPU/GPU meters — same reason: the labels ("CPU"/"GPU N") are
+  // translated, so re-render from the last known value on a language switch.
+  renderResourceMeters();
+  // Queue-length rows — same reason: their labels are translated too.
+  renderQueueLengths();
 }
 
 // Idle state for #hover-definition (see the style-guide SKILL) — shown
@@ -127,6 +132,9 @@ const versionBadge = document.getElementById("version-badge");
 const onlineCountEl = document.getElementById("online-count");
 const infoBadge = document.getElementById("info-badge");
 const infoTooltip = document.getElementById("info-tooltip");
+const infoTooltipLines = document.getElementById("info-tooltip-lines");
+const resourceMetersEl = document.getElementById("resource-meters");
+const queueLengthsEl = document.getElementById("queue-lengths");
 const attemptPreview = document.getElementById("attempt-preview");
 const attemptPreviewGrids = document.getElementById("attempt-preview-grids");
 const attemptPreviewRevealBtn = document.getElementById("attempt-preview-reveal-btn");
@@ -238,9 +246,16 @@ const interactiveCleanBtn = document.getElementById("interactive-clean-btn");
 const interactiveCleanDeepBtn = document.getElementById("interactive-clean-deep-btn");
 const interactiveDefinitionInput = document.getElementById("interactive-definition-input");
 const interactiveProposeBtn = document.getElementById("interactive-propose-btn");
+const interactiveProposeClearBtn = document.getElementById("interactive-propose-clear-btn");
+const interactiveImpossibleBtn = document.getElementById("interactive-impossible-btn");
 const interactiveVerifyBtn = document.getElementById("interactive-verify-btn");
 const interactiveDefinitionsBtn = document.getElementById("interactive-definitions-btn");
 const interactiveFinishBtn = document.getElementById("interactive-finish-btn");
+const interactiveResultsClearBtn = document.getElementById("interactive-results-clear-btn");
+const interactiveHelpBtn = document.getElementById("interactive-help-btn");
+const interactiveHelpOverlay = document.getElementById("interactive-help-overlay");
+const interactiveHelpCloseBtn = document.getElementById("interactive-help-close-btn");
+const interactiveHelpList = document.getElementById("interactive-help-list");
 const interactiveWordsBtn = document.getElementById("interactive-words-btn");
 const interactiveWordsResults = document.getElementById("interactive-words-results");
 const interactiveProposeResults = document.getElementById("interactive-propose-results");
@@ -248,6 +263,7 @@ const interactiveVerifyReportEl = document.getElementById("interactive-verify-re
 const interactiveTitleRow = document.getElementById("interactive-title-row");
 const interactiveTitleInput = document.getElementById("interactive-title-input");
 const interactiveTitleProposeBtn = document.getElementById("interactive-title-propose-btn");
+const interactiveTitleProposeClearBtn = document.getElementById("interactive-title-propose-clear-btn");
 const interactiveTitleProposeResults = document.getElementById("interactive-title-propose-results");
 const interactiveDraftSaveBtn = document.getElementById("interactive-draft-save-btn");
 const interactiveSaveBtn = document.getElementById("interactive-save-btn");
@@ -277,19 +293,55 @@ fetch("/api/version")
 // second network round-trip.
 let systemInfo = null;
 
+// Localizes one {kind, model} role entry (see backend/system_info.py —
+// "llm_auto"/"llm_interactive"/"embedding") into its display label. The
+// backend never returns pre-translated text, only these plain kind codes,
+// so every UI language renders its own wording from the same raw data.
+function systemInfoRoleLabel(t, role) {
+  if (role.kind === "llm_auto") return t.systemInfoRoleLlmAuto(role.model);
+  if (role.kind === "llm_interactive") return t.systemInfoRoleLlmInteractive(role.model);
+  if (role.kind === "embedding") return t.systemInfoRoleEmbedding(role.model);
+  return role.model;
+}
+
+// One line per detected GPU (0, 1, ... — this project's own dev host has
+// two, see backend/system_info.py), each followed by one line per model
+// role assigned to it (automatic-generation LLM, interactive/on-demand
+// LLM, the embedding model) — plus a RAM and a CPU-count line, and a
+// "CPU:" section for any role that isn't on a GPU at all — at the user's
+// explicit request. Replaces the single "Modèle LLM: X" + "GPU: Y" pair
+// this tooltip originally showed for one card only.
 function renderSystemInfoTooltip() {
   if (!systemInfo) return;
   const t = I18N[uiLanguage];
-  const lines = [t.systemInfoModel(systemInfo.llm_model)];
-  lines.push(systemInfo.compute === "gpu" ? t.systemInfoComputeGpu : t.systemInfoComputeCpu);
-  if (systemInfo.compute === "gpu" && systemInfo.gpu_name) {
-    lines.push(t.systemInfoGpuName(systemInfo.gpu_name));
-    if (systemInfo.gpu_vram_mb) {
-      const gb = Math.round(systemInfo.gpu_vram_mb / 1024);
-      lines.push(systemInfo.unified_memory ? t.systemInfoUnifiedMemory(gb) : t.systemInfoVram(gb));
-    }
+  const lines = [];
+  const gpus = systemInfo.gpus || [];
+  if (gpus.length) {
+    gpus.forEach((gpu) => {
+      const gb = gpu.vram_mb ? Math.round(gpu.vram_mb / 1024) : null;
+      lines.push(
+        gb === null
+          ? t.systemInfoGpuLineNoVram(gpu.index, gpu.name)
+          : systemInfo.unified_memory
+            ? t.systemInfoGpuLineUnified(gpu.index, gpu.name, gb)
+            : t.systemInfoGpuLine(gpu.index, gpu.name, gb),
+      );
+      (gpu.roles || []).forEach((role) => lines.push(`- ${systemInfoRoleLabel(t, role)}`));
+    });
+  } else {
+    lines.push(t.systemInfoComputeCpu);
   }
-  infoTooltip.replaceChildren(
+  if ((systemInfo.cpu_roles || []).length) {
+    lines.push(t.systemInfoCpuHeading);
+    systemInfo.cpu_roles.forEach((role) => lines.push(`- ${systemInfoRoleLabel(t, role)}`));
+  }
+  if (systemInfo.ram_total_mb) {
+    lines.push(t.systemInfoRam(Math.round(systemInfo.ram_total_mb / 1024)));
+  }
+  if (systemInfo.cpu_count) {
+    lines.push(t.systemInfoCpuCount(systemInfo.cpu_count));
+  }
+  infoTooltipLines.replaceChildren(
     ...lines.map((line) => {
       const div = document.createElement("div");
       div.textContent = line;
@@ -2216,6 +2268,99 @@ function renderOnlineCount() {
   onlineCountEl.hidden = false;
 }
 
+// Small CPU/GPU occupancy meters in the info tooltip, at the user's
+// explicit request: "un petit vu-mètre indiquant le taux d'occupation de
+// chaque ressource (GPUs / CPU). Un seul vu-mètre pour l'ensemble des
+// CPUs." Fed by the same POST /api/presence heartbeat as the online-
+// count above (backend/app.py's presence(), resource_usage field —
+// sampled server-side on its own timer, never recomputed per request),
+// rather than a separate fetch, per the user's own explicit request.
+// `lastResourceUsage` is kept raw (not pre-rendered) so a UI-language
+// change can redraw the labels without waiting for the next heartbeat —
+// the same pattern already used for `systemInfo`/renderSystemInfoTooltip().
+let lastResourceUsage = null;
+
+function renderResourceMeters() {
+  const usage = lastResourceUsage;
+  if (!usage) {
+    resourceMetersEl.replaceChildren();
+    return;
+  }
+  const t = I18N[uiLanguage];
+  const rows = [];
+  if (typeof usage.cpu_percent === "number") {
+    rows.push({ label: t.resourceMeterCpuLabel, percent: usage.cpu_percent });
+  }
+  // Sorted by index defensively — the backend already emits them in
+  // order (backend/system_info.py's _nvidia_gpu_utilization()), but
+  // nothing here should silently depend on that staying true.
+  (usage.gpu_percent || [])
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .forEach((gpu) => {
+      if (typeof gpu.percent === "number") {
+        rows.push({ label: t.resourceMeterGpuLabel(gpu.index), percent: gpu.percent });
+      }
+    });
+  resourceMetersEl.replaceChildren(
+    ...rows.map((row) => {
+      const percent = Math.max(0, Math.min(100, row.percent));
+      const wrap = document.createElement("span");
+      wrap.className = "resource-meter";
+      const label = document.createElement("span");
+      label.className = "resource-meter-label";
+      label.textContent = row.label;
+      const track = document.createElement("span");
+      track.className = "resource-meter-track";
+      const fill = document.createElement("span");
+      fill.className = "resource-meter-fill";
+      fill.style.width = `${Math.round(percent)}%`;
+      track.appendChild(fill);
+      const value = document.createElement("span");
+      value.className = "resource-meter-value";
+      value.textContent = `${Math.round(percent)}%`;
+      wrap.append(label, track, value);
+      return wrap;
+    })
+  );
+}
+
+// The two background queues' current length (backend/app.py's GRID_QUEUE/
+// CLUES_QUEUE — index 0 is whichever task is running or about to start,
+// so a length of 1 means "one active, nothing waiting"), at the user's
+// explicit request: "ajouter une indication sur la longueur des 2 files
+// d'attente : Grille (CPU) et Définition (GPU)." Fed by the same
+// POST /api/presence heartbeat as the resource meters above — see
+// `lastQueueLengths`' own "kept raw, redrawn on language switch" pattern,
+// identical to `lastResourceUsage`.
+let lastQueueLengths = null;
+
+function renderQueueLengths() {
+  const lengths = lastQueueLengths;
+  if (!lengths) {
+    queueLengthsEl.replaceChildren();
+    return;
+  }
+  const t = I18N[uiLanguage];
+  const rows = [
+    { label: t.queueLengthGridLabel, value: lengths.grid },
+    { label: t.queueLengthCluesLabel, value: lengths.clues },
+  ].filter((row) => typeof row.value === "number");
+  queueLengthsEl.replaceChildren(
+    ...rows.map((row) => {
+      const wrap = document.createElement("div");
+      wrap.className = "queue-length-row";
+      const label = document.createElement("span");
+      label.textContent = row.label;
+      const value = document.createElement("span");
+      value.className = "queue-length-value";
+      value.textContent = String(row.value);
+      wrap.append(label, value);
+      return wrap;
+    })
+  );
+}
+
 // Le back (backend/app.py's presence()/_presence_snapshot) décide seul
 // s'il écrit une ligne LOG_USERS, en comparant la LISTE d'utilisateurs
 // (pas seulement l'effectif total) à la dernière consignée — à la
@@ -2244,6 +2389,14 @@ async function pingPresence() {
     if (typeof data.count === "number") {
       lastOnlineCount = data.count;
       renderOnlineCount();
+    }
+    if (data.resource_usage) {
+      lastResourceUsage = data.resource_usage;
+      renderResourceMeters();
+    }
+    if (data.queue_lengths) {
+      lastQueueLengths = data.queue_lengths;
+      renderQueueLengths();
     }
   } catch (err) {
     // Transient failure — keep showing the last known count; the next
@@ -2290,6 +2443,10 @@ function setUiLanguage(lang) {
   renderGridDifficulty();
   // Le panneau du mode "Interactif" porte des libellés/messages traduits.
   if (interactiveMode) renderInteractive();
+  // Le panneau d'aide du mode "Interactif" construit sa liste dynamiquement
+  // (voir renderInteractiveHelpList()) — à re-rendre s'il est ouvert au
+  // moment du changement de langue.
+  if (!interactiveHelpOverlay.hidden) renderInteractiveHelpList();
   // Pseudo de l'en-tête : le libellé "définir un pseudo" (quand aucun
   // pseudo n'est saisi) est traduit, donc à ré-appliquer.
   if (!userPseudoBtn.hidden) renderUserPseudo();
@@ -3773,14 +3930,17 @@ function splitLanguageValue(langValue) {
 // de la première (`langCodes[0]`, celle des mots horizontaux — voir
 // currentBilingualLangs()) mais l'adjectif de langue devient
 // "<adj1>/<adj2>" (perplexityLanguageAdjective ci-dessus), à la demande
-// explicite de l'utilisateur.
+// explicite de l'utilisateur. Gabarit lui-même repris tel quel de la
+// demande explicite de l'utilisateur : "Faire 5 propositions de
+// définitions pour les mots croisés, puis définir tous les sens
+// possibles du mot <lang> : <texte>."
 const PERPLEXITY_DEFINE_QUERY_TEMPLATES = {
-  fr: (adj, word) => `Définir le mot ${adj} : ${word}`,
-  en: (adj, word) => `Define the ${adj} word: ${word}`,
-  de: (adj, word) => `Definiere das ${adj} Wort: ${word}`,
-  es: (adj, word) => `Definir la palabra ${adj} : ${word}`,
-  it: (adj, word) => `Definisci la parola ${adj} : ${word}`,
-  pt: (adj, word) => `Definir a palavra ${adj} : ${word}`,
+  fr: (adj, word) => `Faire 5 propositions de définitions pour les mots croisés, puis définir tous les sens possibles du mot ${adj} : ${word}`,
+  en: (adj, word) => `Give 5 crossword-puzzle definition suggestions, then define every possible meaning of the ${adj} word: ${word}`,
+  de: (adj, word) => `Mach 5 Vorschläge für Kreuzworträtsel-Definitionen, definiere dann alle möglichen Bedeutungen für das ${adj} Wort: ${word}`,
+  es: (adj, word) => `Haz 5 propuestas de definiciones para crucigramas, y luego define todos los significados posibles de la palabra ${adj}: ${word}`,
+  it: (adj, word) => `Fai 5 proposte di definizioni per il cruciverba, poi definisci tutti i possibili significati della parola ${adj}: ${word}`,
+  pt: (adj, word) => `Faça 5 propostas de definições para palavras cruzadas, depois defina todos os significados possíveis da palavra ${adj}: ${word}`,
 };
 
 dictionaryPerplexityBtn.addEventListener("click", () => {
@@ -4987,16 +5147,23 @@ function renderInteractive() {
   interactiveDefinitionInput.value = w ? interactiveDefs.get(interactiveKey(w)) || "" : "";
   interactiveDefinitionInput.disabled = !w;
   interactivePrevBtn.disabled = interactiveUndoStack.length <= 1;
-  // The "Mots" candidate list is only ever valid for the exact grid state
-  // it was computed from — any render (selection change, typed letter,
-  // undo, clean, ...) can make it stale, so it's cleared here rather than
-  // left showing outdated candidates; the player just clicks "Mots" again.
-  interactiveWordsResults.hidden = true;
-  interactiveWordsResults.innerHTML = "";
-  // Same reasoning applies to the "Proposer" (définition) pick-list —
-  // reported live: "si on change le sens Horizontal/Vertical sans
-  // recliquer dans la grille, Suggestion de définitions continue à
-  // prendre le sens configuré avant." Root cause: setActiveDirection()
+  // The "Mots" (candidate words) panel is deliberately the one exception
+  // to this function's own "clear every result panel on every render"
+  // rule below, at the user's explicit request: "'Mots' doit afficher la
+  // liste des mots sans effacer la liste précédente affichée, qui reste
+  // visible en dessous (permet de comparer plusieurs listes de mots)."
+  // Each of its own stacked blocks stays bound to the exact slot/cell it
+  // was fetched for regardless of the live selection (see
+  // renderInteractiveWords()'s own docstring), so a later selection/grid
+  // change can never make an already-shown block misleading or unsafe to
+  // click — it's only ever reset wholesale by a genuinely new interactive
+  // session (enterInteractiveMode()), never by an ordinary render here.
+  //
+  // The "Proposer" (définition) pick-list is a different case, still
+  // cleared on every render — reported live: "si on change le sens
+  // Horizontal/Vertical sans recliquer dans la grille, Suggestion de
+  // définitions continue à prendre le sens configuré avant." Root cause:
+  // setActiveDirection()
   // already calls renderInteractive() on every H/V toggle, which
   // correctly recomputes selectedInteractiveWord() for the NEW
   // direction — but, before this fix, never cleared the pick-list still
@@ -5053,10 +5220,22 @@ function interactiveTypeLetter(letter) {
   setInteractiveMessage("");
   renderInteractive();
 }
+// A letter at (row, col) is about to be removed (erased, or blackened) —
+// drop the saved definition of every word (across and/or down) crossing
+// that cell, since it risks no longer matching the word's content.
+function interactiveClearDefsAt(row, col) {
+  for (const s of interactiveSlots()) {
+    if (s.cells.some((p) => p.row === row && p.col === col)) {
+      interactiveDefs.delete(interactiveKey(s));
+    }
+  }
+}
+
 function interactiveToggleBlack() {
   if (!interactiveMode || !selected) return;
   interactivePushUndo();
   const cur = interactiveGrid[selected.row][selected.col];
+  if (cur !== "" && cur !== "#") interactiveClearDefsAt(selected.row, selected.col);
   interactiveGrid[selected.row][selected.col] = cur === "#" ? "" : "#";
   setInteractiveMessage("");
   renderInteractive();
@@ -5064,6 +5243,8 @@ function interactiveToggleBlack() {
 function interactiveErase() {
   if (!interactiveMode || !selected) return;
   interactivePushUndo();
+  const cur = interactiveGrid[selected.row][selected.col];
+  if (cur !== "" && cur !== "#") interactiveClearDefsAt(selected.row, selected.col);
   interactiveGrid[selected.row][selected.col] = "";
   setInteractiveMessage("");
   renderInteractive();
@@ -5181,35 +5362,76 @@ function renderInteractiveTitleProposals(list) {
 // un bouton Mots qui liste les mots possible pour l'emplacement
 // sélectionné... En premier, les mots du glossaire thématique... en
 // magenta, puis les autres mots en noir. Quand l'utilisateur clique sur
-// un mot, ça le met en place sur l'emplacement sélectionné." ----
-function renderInteractiveWords(themeWords, otherWords) {
-  interactiveWordsResults.innerHTML = "";
+// un mot, ça le met en place sur l'emplacement sélectionné."
+//
+// Each call PREPENDS its own block instead of replacing the previous
+// one, at the user's explicit follow-up request: "'Mots' doit afficher
+// la liste des mots sans effacer la liste précédente affichée, qui reste
+// visible en dessous (permet de comparer plusieurs listes de mots)" — so
+// selecting a different emplacement and clicking "Mots" again stacks a
+// new block on top of, not instead of, the earlier one(s); see
+// renderInteractive()'s own comment for why this panel is the one
+// exception to its usual "clear every result panel on every render"
+// staleness rule.
+//
+// `slot`/`atCell` are the emplacement/cell this SPECIFIC call was fetched
+// for — the click handler's own frozen snapshot, taken before the async
+// round trip — captured into this block's own click handlers and
+// highlight computation rather than re-read from the live selection: a
+// later block can sit on screen long after the player has moved on to a
+// different emplacement, so re-deriving "the selected word" at click time
+// would silently place a stale block's word onto the WRONG, now-current
+// slot — the exact staleness bug class already found and fixed once for
+// the "Proposer" pick-list, avoided here up front instead of retrofitted.
+function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   const all = [
     ...(themeWords || []).map((word) => ({ word, theme: true })),
     ...(otherWords || []).map((word) => ({ word, theme: false })),
   ];
-  if (!all.length) {
-    interactiveWordsResults.hidden = true;
-    return;
-  }
+  if (!all.length) return;
+  // Which position in `slot.cells` is the cell that was selected (shown
+  // in blue on the grid) at the moment "Mots" was clicked — highlighted
+  // in blue within every candidate below, at the user's explicit request
+  // ("permet de situer la lettre dans les combinaisons croisées"). -1
+  // (no highlight) only if that cell can't be found — shouldn't normally
+  // happen, since selectedInteractiveWord() always builds `slot.cells` by
+  // walking outward from the selected cell itself.
+  const highlightIndex = atCell
+    ? slot.cells.findIndex(({ row, col }) => row === atCell.row && col === atCell.col)
+    : -1;
   const placeWord = (word) => {
-    const w = selectedInteractiveWord();
-    if (!w || word.length !== w.cells.length) return;
+    if (word.length !== slot.cells.length) return;
     interactivePushUndo();
-    for (let i = 0; i < w.cells.length; i++) {
-      const { row, col } = w.cells[i];
+    for (let i = 0; i < slot.cells.length; i++) {
+      const { row, col } = slot.cells[i];
       interactiveGrid[row][col] = word[i];
     }
     setInteractiveMessage("");
     renderInteractive();
   };
+  const block = document.createElement("div");
+  block.className = "interactive-words-block";
+  const label = document.createElement("p");
+  label.className = "interactive-words-block-label";
+  const dirPrefix = slot.direction === "across" ? "H" : "V";
+  label.textContent = `${dirPrefix} (${slot.startRow + 1}, ${slot.startCol + 1})`;
+  block.appendChild(label);
   all.forEach(({ word, theme }, i) => {
     const item = document.createElement("span");
     item.className = theme
       ? "interactive-word-item interactive-word-theme"
       : "interactive-word-item";
     item.tabIndex = 0;
-    item.textContent = word;
+    for (let pos = 0; pos < word.length; pos++) {
+      if (pos === highlightIndex) {
+        const mark = document.createElement("span");
+        mark.className = "interactive-word-highlight-letter";
+        mark.textContent = word[pos];
+        item.appendChild(mark);
+      } else {
+        item.appendChild(document.createTextNode(word[pos]));
+      }
+    }
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -5218,11 +5440,12 @@ function renderInteractiveWords(themeWords, otherWords) {
         pick();
       }
     });
-    interactiveWordsResults.appendChild(item);
+    block.appendChild(item);
     if (i < all.length - 1) {
-      interactiveWordsResults.appendChild(document.createTextNode(", "));
+      block.appendChild(document.createTextNode(", "));
     }
   });
+  interactiveWordsResults.insertBefore(block, interactiveWordsResults.firstChild);
   interactiveWordsResults.hidden = false;
 }
 
@@ -5233,6 +5456,9 @@ interactiveWordsBtn.addEventListener("click", async () => {
     setInteractiveMessage(t.interactiveWordsNeedsSlot, true);
     return;
   }
+  // Frozen now, not re-read after the await — see renderInteractiveWords()'s
+  // own docstring for why.
+  const atCell = selected ? { row: selected.row, col: selected.col } : null;
   interactiveWordsBtn.disabled = true;
   setInteractiveMessage("");
   try {
@@ -5254,7 +5480,7 @@ interactiveWordsBtn.addEventListener("click", async () => {
     const data = await resp.json();
     const themeWords = (data && data.theme_words) || [];
     const otherWords = (data && data.other_words) || [];
-    renderInteractiveWords(themeWords, otherWords);
+    renderInteractiveWords(themeWords, otherWords, w, atCell);
     if (!themeWords.length && !otherWords.length) {
       setInteractiveMessage(t.interactiveWordsEmpty, true);
     }
@@ -5309,7 +5535,7 @@ async function proposeInteractiveTitle(autoFill) {
 }
 
 // ---- Mode lifecycle ----
-function enterInteractiveMode(state) {
+function enterInteractiveMode(state, options = {}) {
   interactiveMode = true;
   interactiveJobId = currentJobId || interactiveJobId;
   interactiveGrid = state.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
@@ -5429,6 +5655,13 @@ function enterInteractiveMode(state) {
   interactiveProposeResults.innerHTML = "";
   interactiveTitleProposeResults.hidden = true;
   interactiveTitleProposeResults.innerHTML = "";
+  // Unlike the two panels just above, "Mots" is no longer cleared on every
+  // ordinary render (see renderInteractive()'s own comment) — its stacked
+  // blocks must still be wiped here, at the start of a genuinely new
+  // session, so a previous grid's own accumulated lists never survive
+  // into a freshly loaded/started one.
+  interactiveWordsResults.hidden = true;
+  interactiveWordsResults.innerHTML = "";
   interactiveTitleRow.hidden = true;
   interactiveSaveBtn.hidden = true;
   interactiveDraftSaveBtn.disabled = false;
@@ -5504,8 +5737,23 @@ function enterInteractiveMode(state) {
   // correct here on every entry path (fresh start, "Ouvrir en mode
   // Interactif" from the Library, resuming a draft) — see its own
   // assignment above, fixed for exactly this kind of use.
-  dictionaryPanel.hidden = false;
-  dictionaryLanguage.value = interactiveLanguage;
+  //
+  // Actively hidden instead, when `options.hideDictionary` is set — at
+  // the user's explicit request: "Quand on clique sur 'Finir la grille'
+  // masquer le Dictionnaire qui s'affiche automatiquement en mode
+  // Edition" — used only by runGeneration()'s own "Finir la grille"
+  // auto-reopen (see its resumeInteractiveWork() call): the panel was
+  // already open from when the player first entered Édition mode (this
+  // very auto-open feature), and its contents are now stale relative to
+  // the just-regenerated grid, so this reopen closes it rather than
+  // leaving it sitting open (or, worse, reopening it a second time on
+  // top of whatever the player had already closed).
+  if (options.hideDictionary) {
+    dictionaryPanel.hidden = true;
+  } else {
+    dictionaryPanel.hidden = false;
+    dictionaryLanguage.value = interactiveLanguage;
+  }
   // Rebuild `puzzle` right now (normally only ever refreshed by
   // renderInteractive(), itself only reached via setActiveDirection()
   // further below) so defaultToBilingualOption()'s own currentBilingualLangs()
@@ -5544,6 +5792,11 @@ function hideInteractivePanel() {
   updatePreviewNavButtons();
   applyDefinitionsVisibility(); // restore normal #clues/#hover-definition-row rules
   syncRssPanelVisibility();
+  // Never leave the help overlay stuck open once Interactive mode itself
+  // is exited (its own "?" button disappears along with #interactive-
+  // controls, but the overlay is a sibling `position: fixed` element that
+  // would otherwise still be visible).
+  closeInteractiveHelp();
 }
 
 function exitInteractiveMode() {
@@ -5617,9 +5870,13 @@ function hideInteractiveWorkPanel() {
 // Relaunches a saved work-in-progress session exactly where it stopped —
 // reuses runInteractive()'s own full flow (hides play-mode chrome, shows
 // "Stop", polls, calls enterInteractiveMode with the result) by pointing
-// it at POST /api/interactive/resume instead of .../start.
-async function resumeInteractiveWork(workId) {
-  await runInteractive({ work_id: workId }, "/api/interactive/resume");
+// it at POST /api/interactive/resume instead of .../start. `enterOptions`
+// (empty by default) is forwarded straight through to enterInteractiveMode
+// — see its own `hideDictionary`, used by runGeneration()'s own "Finir la
+// grille" auto-reopen to close the Dictionary panel instead of leaving it
+// open (or reopening it) with stale results from before the completion.
+async function resumeInteractiveWork(workId, enterOptions = {}) {
+  await runInteractive({ work_id: workId }, "/api/interactive/resume", enterOptions);
 }
 
 // Deletes one saved work-in-progress file, then refreshes the list — at
@@ -5676,13 +5933,26 @@ async function renderInteractiveWorkList() {
       }
     });
 
+    // Mêmes colonnes, dans le même ordre et le même format, que
+    // #library-table (renderLibraryList) — à la demande explicite de
+    // l'utilisateur : "compléter les colonnes et les placer dans le même
+    // ordre que 'Bibliothèque'."
+    const langTd = document.createElement("td");
+    const languageOption = languageSelect.querySelector(`option[value="${item.language}"]`);
+    langTd.textContent = languageOption ? languageOption.textContent : (item.language || "");
+    tr.appendChild(langTd);
+
+    const dateTd = document.createElement("td");
+    dateTd.textContent = item.created_at ? new Date(item.created_at).toLocaleString(uiLanguage) : "";
+    tr.appendChild(dateTd);
+
     const titleTd = document.createElement("td");
     titleTd.textContent = item.title || t.interactiveWorkUntitled;
     tr.appendChild(titleTd);
 
-    const langTd = document.createElement("td");
-    langTd.textContent = item.language || "";
-    tr.appendChild(langTd);
+    const themeTd = document.createElement("td");
+    themeTd.textContent = item.theme || "";
+    tr.appendChild(themeTd);
 
     const diffTd = document.createElement("td");
     const diffKey = difficultyKeys[item.difficulty];
@@ -5690,9 +5960,13 @@ async function renderInteractiveWorkList() {
     tr.appendChild(diffTd);
 
     const sizeTd = document.createElement("td");
-    sizeTd.textContent = item.width && item.height ? `${item.width} × ${item.height}` : "";
+    sizeTd.textContent = item.width && item.height ? `${item.width}×${item.height}` : "";
     tr.appendChild(sizeTd);
 
+    // Propre à ce panneau (pas de colonne équivalente dans la
+    // Bibliothèque) — gardée après les colonnes communes, à la demande
+    // explicite de l'utilisateur ("Garder le titre 'Dernière
+    // modification'").
     const updatedTd = document.createElement("td");
     updatedTd.textContent = item.updated_at
       ? new Date(item.updated_at).toLocaleString(uiLanguage)
@@ -5770,7 +6044,7 @@ async function checkForSavedInteractiveWork() {
 // interactive mode with the result) is identical either way, only the
 // endpoint and the request body itself differ (resume's own body is just
 // `{work_id}` — no `mode` field to merge in, unlike a fresh start's).
-async function runInteractive(body, endpoint = "/api/interactive/start") {
+async function runInteractive(body, endpoint = "/api/interactive/start", enterOptions = {}) {
   const t = I18N[uiLanguage];
   generationInProgress = true;
   button.disabled = true;
@@ -5811,7 +6085,7 @@ async function runInteractive(body, endpoint = "/api/interactive/start") {
     currentJobId = data.job_id;
     interactiveJobId = data.job_id;
     const startResult = await pollJob(data.job_id, t);
-    enterInteractiveMode(startResult);
+    enterInteractiveMode(startResult, enterOptions);
     setStatus(t.statusGenerated, false);
   } catch (err) {
     setStatus(err.message, !(err instanceof CancelledError));
@@ -5975,6 +6249,50 @@ async function runInteractiveClean(deep) {
 interactiveCleanBtn.addEventListener("click", () => runInteractiveClean(false));
 interactiveCleanDeepBtn.addEventListener("click", () => runInteractiveClean(true));
 
+// Panneau d'aide du mode Interactif (bouton "?" à gauche de "Mots") — texte
+// fixe traduit par langue (voir interactiveHelpLines dans i18n.js), à la
+// demande explicite de l'utilisateur. Reconstruit à chaque ouverture (et
+// re-rendu si la langue change pendant qu'il est ouvert, voir
+// setUiLanguage()) plutôt qu'une seule fois au chargement, pour rester
+// toujours dans la langue courante de l'interface.
+function renderInteractiveHelpList() {
+  const t = I18N[uiLanguage];
+  // `innerHTML`, not `textContent` — each line carries a `<strong>` around
+  // the real button names it mentions (see interactiveHelpLines in
+  // i18n.js), at the user's explicit request. Safe here specifically
+  // because these lines are 100% static, developer-authored strings, never
+  // user/LLM content — unlike renderMarkdown()/sanitizeRssHtml() elsewhere
+  // in this file, no sanitization step is needed for this one.
+  interactiveHelpList.replaceChildren(
+    ...t.interactiveHelpLines.map((line) => {
+      const li = document.createElement("li");
+      li.innerHTML = line;
+      return li;
+    }),
+  );
+}
+
+function openInteractiveHelp() {
+  renderInteractiveHelpList();
+  interactiveHelpOverlay.hidden = false;
+}
+
+function closeInteractiveHelp() {
+  interactiveHelpOverlay.hidden = true;
+}
+
+interactiveHelpBtn.addEventListener("click", openInteractiveHelp);
+interactiveHelpCloseBtn.addEventListener("click", closeInteractiveHelp);
+
+// Fermeture au clavier (touche Echap), même convention que #rss-detail —
+// vérifie `!interactiveHelpOverlay.hidden` en premier, pas de coût ni
+// d'effet quand le panneau n'est de toute façon pas ouvert.
+document.addEventListener("keydown", (event) => {
+  if (!interactiveHelpOverlay.hidden && event.key === "Escape") {
+    closeInteractiveHelp();
+  }
+});
+
 interactiveDirAcrossBtn.addEventListener("mousedown", (e) => e.preventDefault());
 interactiveDirDownBtn.addEventListener("mousedown", (e) => e.preventDefault());
 interactiveDirAcrossBtn.addEventListener("click", () => setActiveDirection("across"));
@@ -6052,15 +6370,127 @@ interactiveProposeBtn.addEventListener("click", async () => {
   }
 });
 
+// "Effacer" : réinitialise #interactive-propose-results sans relancer de
+// requête, à la demande explicite de l'utilisateur — reuses renderInteractive
+// Proposals([]) (an empty list already hides+empties the container, see
+// renderInteractivePickList) rather than touching it directly, so this stays
+// in sync with however that rendering is built.
+interactiveProposeClearBtn.addEventListener("click", () => {
+  renderInteractiveProposals([]);
+});
+
+// Shared by "Impossibles" and "Vérifier" — POST /api/interactive/impossible
+// for the CURRENT grid (read-only, no mutation, no cleanup) and update
+// interactiveImpossibleCells/interactiveLowCells from the response (see
+// setInteractiveDiagnostics). Returns the impossible-cells Set on success —
+// "Vérifier" also uses it to tell whether a given complete word's own
+// cells are entirely covered by it (see _interactive_fill_diagnostics's own
+// `_invalid_fully_known_indices` check: that's exactly what flags a
+// complete-but-unknown-to-the-dictionary word as impossible) — or `null`
+// on failure, with the error already reported via setInteractiveMessage.
+async function fetchInteractiveImpossible(t) {
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/impossible", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: interactiveJobId, grid: wireGrid }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return null;
+    }
+    const data = await resp.json();
+    if (!resp.ok) {
+      setInteractiveMessage(describeErrorCode(t, data.detail && data.detail.code, data.detail), true);
+      return null;
+    }
+    setInteractiveDiagnostics(data);
+    return interactiveImpossibleCells;
+  } catch (err) {
+    setInteractiveMessage(t.errorConnectionLost, true);
+    return null;
+  }
+}
+
+// How many interactiveSlots() are THEMSELVES genuinely flagged in
+// `cellSet` — used to summarize the impossible/low-candidate cell sets
+// (backend's own per-cell unit) as a word/emplacement count for the
+// "Impossibles" button's own status message. Requires EVERY cell of the
+// slot to be in `cellSet`, not just one — matching exactly how the
+// backend builds these sets (`_interactive_fill_diagnostics`:
+// `impossible.update(cells)`/`low.update(cells)` always adds the WHOLE
+// cell list of the one slot that is itself flagged, never a single
+// marker cell). A `.some(...)` version (this function's own original
+// implementation) massively overcounted: a slot merely CROSSING one cell
+// of a genuinely impossible/low slot in the other direction would get
+// counted too, even though that crossing slot can otherwise be perfectly
+// fillable — reported directly by the user ("le bouton 'Impossibles'
+// donne un message '22 emplacements impossibles', mais ne montre que 4
+// impossibles (rouge)"): a single long impossible down-slot already
+// contributes one cell to up to `length` separate, otherwise-healthy
+// across-slots, each wrongly counted as "impossible" on top of the one
+// slot that actually is. `.every()` is exactly the same check "Vérifier"
+// already uses to flag a completed word as invalid (see its own
+// `isInvalidWord` computation) — this brings the summary count in line
+// with that established, correct convention instead of inventing a
+// second, looser one.
+function countInteractiveFlaggedSlots(cellSet) {
+  if (!cellSet.size) return 0;
+  let count = 0;
+  for (const s of interactiveSlots()) {
+    if (s.cells.every(({ row, col }) => cellSet.has(`${row},${col}`))) count++;
+  }
+  return count;
+}
+
+// "Impossibles" : vérification en lecture seule des emplacements
+// impossibles (y compris un mot entièrement posé mais absent du
+// dictionnaire — voir POST /api/interactive/impossible) et de ceux avec
+// trop peu de possibilités, sans nettoyer ni contrôler les définitions —
+// à la demande explicite de l'utilisateur.
+interactiveImpossibleBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  interactiveImpossibleBtn.disabled = true;
+  interactiveVerifyBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const impossibleCells = await fetchInteractiveImpossible(t);
+    if (!impossibleCells) return;
+    // "Impossibles" is a read-only check of impossible/low-option cells
+    // only — it must not leave a stale "Vérifier" overlay (invalid/
+    // missing-definition highlight + its report) drawn on top, reported
+    // directly by the user: calling "Vérifier" then "Impossibles" kept
+    // showing the earlier missing-definition highlight instead of
+    // resetting to just impossible/low cells.
+    interactiveInvalidCells = new Set();
+    interactiveVerifyReport = [];
+    renderInteractive();
+    const impossibleCount = countInteractiveFlaggedSlots(interactiveImpossibleCells);
+    const lowCount = countInteractiveFlaggedSlots(interactiveLowCells);
+    if (!impossibleCount && !lowCount) {
+      setInteractiveMessage(t.interactiveImpossibleNone, false);
+    } else {
+      setInteractiveMessage(t.interactiveImpossibleSummary(impossibleCount, lowCount), !!impossibleCount);
+    }
+  } finally {
+    interactiveImpossibleBtn.disabled = false;
+    interactiveVerifyBtn.disabled = false;
+  }
+});
+
 // Checks the WHOLE grid at once, at the user's explicit request: "vérifier
 // toute la grille et mettre en rouge les mots complets qui posent un
 // problème, soit parce qu'ils ne sont pas des mots du dictionnaire, soit
 // parce qu'ils n'ont pas de définition." Supersedes an earlier version that
 // only ever looked at the currently selected word (see the two prior bug
 // reports this project's own history already documents for that narrower
-// design). Dictionary membership is checked server-side, in one batched
-// call (POST /api/interactive/verify) — the missing-definition half needs
-// no round trip at all, since interactiveDefs already lives client-side.
+// design). Now built directly on top of "Impossibles"'s own check (see
+// fetchInteractiveImpossible) instead of its own separate dictionary-only
+// round trip — at the user's explicit request: "Vérifier ajoute à ça
+// [Impossibles] le fait de contrôler qu'il ne manque pas des définitions
+// aux mots complets" — the missing-definition half still needs no round
+// trip at all, since interactiveDefs already lives client-side.
 interactiveVerifyBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   const filled = interactiveSlots().filter((s) => s.filled);
@@ -6072,32 +6502,17 @@ interactiveVerifyBtn.addEventListener("click", async () => {
     return;
   }
   interactiveVerifyBtn.disabled = true;
+  interactiveImpossibleBtn.disabled = true;
   setInteractiveMessage("");
   try {
-    const resp = await fetchWithTimeout("/api/interactive/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        job_id: interactiveJobId,
-        words: filled.map((s) => ({ answer: s.answer, direction: s.direction })),
-      }),
-    }, FETCH_TIMEOUT_MS);
-    if (resp.status === 404) {
-      setInteractiveMessage(t.interactiveSessionLost, true);
-      return;
-    }
-    const data = await resp.json();
-    if (!resp.ok) {
-      setInteractiveMessage(describeErrorCode(t, data.detail && data.detail.code, data.detail), true);
-      return;
-    }
-    const invalidWords = new Set(data.invalid_words || []);
+    const impossibleCells = await fetchInteractiveImpossible(t);
+    if (!impossibleCells) return;
     const invalidCells = new Set();
     const report = [];
     let problemCount = 0;
     for (const s of filled) {
       const hasDef = !!(interactiveDefs.get(interactiveKey(s)) || "").trim();
-      const isInvalidWord = invalidWords.has(s.answer);
+      const isInvalidWord = s.cells.every(({ row, col }) => impossibleCells.has(`${row},${col}`));
       if (!hasDef || isInvalidWord) {
         problemCount++;
         for (const { row, col } of s.cells) invalidCells.add(`${row},${col}`);
@@ -6120,11 +6535,30 @@ interactiveVerifyBtn.addEventListener("click", async () => {
       problemCount ? t.interactiveVerifyProblems(problemCount) : t.interactiveVerifyOk,
       !!problemCount,
     );
-  } catch (err) {
-    setInteractiveMessage(t.errorConnectionLost, true);
   } finally {
     interactiveVerifyBtn.disabled = false;
+    interactiveImpossibleBtn.disabled = false;
   }
+});
+
+// "Effacer" (à droite de la rangée de boutons) : vide la zone d'affichage
+// juste en dessous (message de statut, rapport "Vérifier", propositions
+// "Mots") sans relancer aucune requête, à la demande explicite de
+// l'utilisateur. clearInteractiveDiagnostics() retire aussi la coloration
+// correspondante sur la grille (emplacements impossibles/à faibles
+// options/invalides) et le rapport "Vérifier" — la même fonction déjà
+// utilisée par toute édition du grille pour cette même raison — puis
+// renderInteractive() applique tout ça (grille + #interactive-verify-
+// report). #interactive-words-results est vidé directement : ce n'est
+// plus renderInteractive() qui s'en charge (voir son propre commentaire —
+// "Mots" reste volontairement affiché d'un rendu à l'autre pour permettre
+// de comparer plusieurs listes).
+interactiveResultsClearBtn.addEventListener("click", () => {
+  setInteractiveMessage("");
+  interactiveWordsResults.hidden = true;
+  interactiveWordsResults.innerHTML = "";
+  clearInteractiveDiagnostics();
+  renderInteractive();
 });
 
 // "Définitions" : génère automatiquement une définition pour chaque mot
@@ -6149,6 +6583,7 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
   const busyBtns = [
     interactiveDefinitionsBtn,
     interactiveProposeBtn,
+    interactiveImpossibleBtn,
     interactiveVerifyBtn,
     interactiveCleanBtn,
     interactiveCleanDeepBtn,
@@ -6237,6 +6672,15 @@ interactiveFinishBtn.addEventListener("click", async () => {
   finishLockedCells = computeFinishLockedCells();
   await runGeneration(async (t) => {
     const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    // #mode's own current value is "interactive" as long as this button is
+    // even visible (that's how the player got into this mode in the first
+    // place) — never a real budget mode POST /api/interactive/finish
+    // accepts (BUDGET_MODES has no "interactive" entry). Forward it only
+    // when the player has since changed it to a genuine budget mode;
+    // otherwise fall back to "medium", matching the backend's own default
+    // for this exact field.
+    const rawMode = document.getElementById("mode").value;
+    const finishMode = rawMode === "interactive" ? "medium" : rawMode;
     let response;
     try {
       response = await fetchWithTimeout("/api/interactive/finish", {
@@ -6246,7 +6690,7 @@ interactiveFinishBtn.addEventListener("click", async () => {
           job_id: interactiveJobId,
           grid: wireGrid,
           definitions: interactiveDefinitionsPayload(),
-          mode: document.getElementById("mode").value,
+          mode: finishMode,
           black_enrichment_percent: Number(blackEnrichmentInput.value),
           force_letters_percent: Number(document.getElementById("force-letters").value),
           pseudo: userPseudo || undefined,
@@ -6275,6 +6719,14 @@ interactiveTitleProposeBtn.addEventListener("click", async () => {
   } finally {
     interactiveTitleProposeBtn.disabled = false;
   }
+});
+
+// "Effacer" : réinitialise #interactive-title-propose-results sans
+// relancer de requête, à la demande explicite de l'utilisateur — même
+// principe que interactiveProposeClearBtn ci-dessus, pour la liste de
+// titres proposés cette fois.
+interactiveTitleProposeClearBtn.addEventListener("click", () => {
+  renderInteractiveTitleProposals([]);
 });
 
 // "Sauvegarder" — writes the whole current grid + definitions + title to
@@ -6397,8 +6849,29 @@ async function runGeneration(startJob) {
     const jobId = await startJob(t);
     currentJobId = jobId;
     const gridData = await pollJob(jobId, t);
-    displayFinalGrid(gridData);
-    setStatus(t.statusGenerated, false);
+    if (gridData.grid_work_id) {
+      // "Finir la grille" (see POST /api/interactive/finish) never
+      // publishes to the Bibliothèque — the finished grid is a brand-new
+      // "Créations" draft instead (backend/app.py's _run_generate_job,
+      // `publish=False`), reopened directly in Édition mode here, at the
+      // user's explicit request: "ne pas publier la grille. Ajouter la
+      // nouvelle version aux Créations de l'auteur. Réouvrir la grille
+      // automatiquement en mode édition." Reuses the exact same
+      // POST /api/interactive/resume mechanism the "Créations" panel
+      // itself already uses (resumeInteractiveWork()) — its own call to
+      // runInteractive() handles every bit of UI setup/teardown (hiding
+      // #result, the "Stop" button, enterInteractiveMode(), the final
+      // status text) on its own, so nothing further is needed here.
+      // `hideDictionary`, at the user's explicit follow-up request:
+      // "masquer le Dictionnaire qui s'affiche automatiquement en mode
+      // Edition" specifically for this reopen — it was already open from
+      // when Édition mode was first entered, and its results are now
+      // stale relative to the just-regenerated grid.
+      await resumeInteractiveWork(gridData.grid_work_id, { hideDictionary: true });
+    } else {
+      displayFinalGrid(gridData);
+      setStatus(t.statusGenerated, false);
+    }
   } catch (err) {
     // A user-requested stop isn't an error — no red #status.error styling
     // for it (see CancelledError above).

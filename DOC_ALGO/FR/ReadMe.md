@@ -7,6 +7,84 @@ mots, puis simplifier la grille — que ce soit une tentative bloquée qu'on
 récupère avant de continuer, ou une grille déjà réussie qu'on rend encore plus
 dense en retirant le plus de cases noires possible.
 
+## Construire une grille (mode manuel avec assistant)
+
+Pour construire soi-même une grille à la main (plutôt que de laisser une
+génération automatique la remplir), on part de la page d'accueil :
+
+1. Configurer la grille avec les options de la page d'accueil (langue,
+   taille, difficulté, taux noir, etc.).
+2. Choisir le **Mode** « Interactif ».
+3. Lister éventuellement des mots dans le champ **Thématique** pour orienter
+   la grille vers un sujet (facultatif).
+4. Cliquer sur le bouton **Générer la grille**.
+
+Le même guide est aussi disponible directement dans l'interface, une fois la
+session interactive démarrée : le bouton **?** situé à gauche de **Mots**
+l'ouvre dans un panneau.
+
+- Placer ses lettres dans la grille. La touche Espace permet d'ajouter ou de
+  supprimer une case noire.
+- Le bouton **Suivant** génère automatiquement un nouveau mot (en tenant
+  compte d'un éventuel glossaire thématique). Le bouton **Précédent** permet
+  de revenir en arrière (par exemple pour faire générer un autre mot par
+  Suivant).
+- Utiliser les outils pour s'aider : **Dictionnaire**, **Paraphraseur**, le
+  bouton **Mots** donne la liste des mots compatibles avec l'emplacement
+  sélectionné.
+- Deux boutons permettent de nettoyer la grille sur les zones impossibles,
+  avec ou sans retrait des cases noires.
+- Le bouton **Impossibles** identifie les zones où plus aucun mot n'est
+  possible. **Vérifier** permet de s'assurer que tous les mots sont bien
+  dans le dictionnaire et possèdent une définition.
+- Le bouton **Définitions** génère automatiquement les définitions
+  manquantes.
+- Les boutons **Proposer une définition** et **Proposer un titre** aident
+  avec plusieurs propositions.
+- S'assurer que tous les mots posés ont une définition.
+- Cliquer sur **Finir la grille** pour que Falcon complète les cases encore
+  vides.
+- À la fin du processus automatique, supprimer les mots qui ne conviennent
+  pas, puis recommencer à placer des lettres, des cases noires et des
+  définitions. On peut relancer **Finir la grille** autant de fois que
+  nécessaire.
+- Penser à sauvegarder.
+- Quand la grille est complète et convient, cliquer sur **Publier**. Elle se
+  retrouve alors dans la **Bibliothèque**, où l'on peut copier un lien pour la
+  jouer ou l'exporter en PDF.
+
+## Construire une grille (tout automatique)
+
+C'est le fonctionnement par défaut de la page d'accueil : Falcon construit
+toute la grille lui-même, sans aucune intervention manuelle.
+
+1. Configurer la grille avec les options de la page d'accueil (langue,
+   taille, difficulté, taux noir, graines, etc.).
+2. Choisir un **Mode** de génération parmi Flash/Turbo/Rapide/Moyen/Ultra
+   (jamais « Interactif », réservé au mode manuel ci-dessus) — ce choix ne
+   fixe qu'un budget de recherche par tentative (voir « Limites de la
+   recherche » plus bas), pas la qualité du résultat final.
+3. Lister éventuellement des mots dans le champ **Thématique** pour orienter
+   le choix des mots vers un sujet (facultatif).
+4. Cliquer sur le bouton **Générer la grille**.
+
+À partir de là, tout se déroule sans autre action : les trois étapes
+décrites dans ce document (placement des cases noires, remplissage par de
+vrais mots, simplification de la grille) s'enchaînent d'elles-mêmes, avec un
+aperçu en direct de la recherche en cours (motifs de cases noires essayés,
+tentatives échouées, grille en cours d'optimisation), puis les définitions
+de chaque mot sont écrites par le modèle de langage. La grille terminée est
+automatiquement enregistrée dans la **Bibliothèque** dès qu'elle est prête —
+contrairement au mode manuel ci-dessus, il n'y a pas de bouton **Publier** à
+cliquer.
+
+Si aucune grille remplissable n'a été trouvée au bout du nombre de tentatives
+prévu, un bouton **Continuer** permet de relancer la recherche à partir du
+dernier état atteint plutôt que de repartir de zéro. Une fois la grille
+terminée, un bouton **Recalculer** permet de générer un nouveau jeu de
+définitions pour la même grille (une copie, la grille d'origine n'est jamais
+modifiée) sans refaire tout le placement des mots.
+
 ## Grilles bilingues
 
 Une grille peut utiliser deux langues à la fois : les mots horizontaux dans

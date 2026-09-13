@@ -3180,3 +3180,103 @@ end through the real running API (interactive start/step/save,
   `resume_state`/`preserved_clues`, and the reused theme glossary all
   come out correct). **Not yet visually confirmed in an actual browser**
   — same tooling limitation noted throughout this file.
+
+- **Fixed a real bug**, reported directly by the user: "Mode édition /
+  Dictionnaire / Paraphraseur : les boutons 'éponge' n'ont pas tous la
+  même taille." All five "🧽" (Effacer) sponge buttons share the exact
+  same markup (`class="nav-btn"` + `<span class="clear-icon">🧽</span>`,
+  see `.nav-btn`/`.clear-icon`'s own entry above) and so the same
+  intrinsic size (`.nav-btn`: `padding: 0.1rem 0.5rem; font-size:
+  0.8rem`) — but two of their five parent flex rows never set
+  `align-items`, defaulting to flexbox's own `stretch`: `#interactive-
+  arrows` (holds several plain, unstyled `<button>`s — "Mots"/"Nettoyer"/
+  etc. — which are considerably taller than a `.nav-btn`, since the
+  generic `button` rule uses `padding: 0.5rem 0.6rem; font-size: 1rem`)
+  and `#interactive-definition-row` (holds `#interactive-definition-
+  input` and the plain `#interactive-propose-btn`, both taller than a
+  `.nav-btn` too). Their own sponge button (`#interactive-results-clear-
+  btn`, `#interactive-propose-clear-btn`) stretched to match that taller
+  sibling's height, growing visibly larger than the sponge buttons in
+  `#dictionary-form`/`#paraphrase-form`/`#interactive-title-row`, all
+  three of which already set `align-items: center` (so their own
+  `.nav-btn` sponge keeps its natural, small size). Fixed by adding
+  `align-items: center` to both `#interactive-arrows` and `#interactive-
+  definition-row`, matching the other three rows exactly — no change to
+  the shared `.nav-btn`/`.clear-icon` rules themselves, since the bug was
+  never in the button's own size, only in what its container let it
+  become. Verified structurally (a CSS brace-balance check — 298/298
+  before and after). **Not yet visually confirmed in an actual browser**
+  — same tooling limitation noted throughout this file.
+
+- **CPU/GPU occupancy meters** in the info tooltip (`#resource-meters`),
+  at the user's explicit request: "ajouter un petit vu-mètre indiquant le
+  taux d'occupation de chaque ressource (GPUs / CPU). Un seul vu-mètre
+  pour l'ensemble des CPUs." `#info-tooltip` was split into two sibling
+  children — `#info-tooltip-lines` (the pre-existing hardware/model
+  report, still wholesale-replaced by `renderSystemInfoTooltip()` on
+  every UI-language change) and `#resource-meters` (the new meters,
+  redrawn independently by `renderResourceMeters()`) — specifically so
+  the two never wipe each other's content. Data arrives via the existing
+  `POST /api/presence` heartbeat (every 2s) rather than a separate fetch,
+  at the user's own explicit request: "Transmettre ces information au
+  Front dans les appels automatiques signalant la présence en ligne de
+  l'utilisateur." One `.resource-meter` row per resource — a track
+  (`.resource-meter-track`, a new `--meter-track` token: a semi-
+  transparent white overlay, since the tooltip's own background is a
+  fixed dark color regardless of theme) filled proportionally
+  (`.resource-meter-fill`, `var(--accent)`, `display: block` since it's a
+  plain `<span>` inside a non-flex parent and would otherwise ignore its
+  own `width`/`height` as an inline element — the same fix already
+  applied elsewhere in this file for an inline SVG icon inside a flex-
+  centered button) plus a label and a percentage value. Rows are built
+  entirely in JS (`script.js`) since the GPU count varies per machine — a
+  CPU row appears whenever `cpu_percent` is a real number (it's `null` on
+  the very first sample after a backend restart, see CLAUDE.md), one GPU
+  row per detected card, sorted by index. `#resource-meters:not(:empty)`
+  adds a top border/margin, so the whole block collapses to nothing (no
+  stray border) before the first heartbeat ever arrives. `lastResourceUsage`
+  is kept raw (not pre-rendered), the same "fetch/compute once, redraw
+  per language" pattern already used for `systemInfo`, so a UI-language
+  switch re-translates the row labels ("CPU"/"GPU N") without waiting for
+  the next heartbeat. Verified live end to end against the real running
+  backend (restarted to pick up the change): `POST /api/presence`,
+  through both the backend's own port and the frontend proxy, returns a
+  real, live-updating `resource_usage` field, and the served
+  `index.html`/`script.js`/`style.css`/`i18n.js` all contain the new
+  markup/functions/rules/translations. **Not yet visually confirmed in an
+  actual browser** — same tooling limitation noted throughout this file.
+
+- **Every "Effacer" (sponge) icon button is now square**
+  (`.clear-icon-btn`, applied alongside `.nav-btn` on all 5 sponge
+  buttons — Dictionnaire, Paraphraseur, mode Interactif), at the user's
+  explicit request: "Mettre les boutons icônes 'éponge' au format carré."
+  `.nav-btn`'s own asymmetric padding (`0.1rem` top/bottom, `0.5rem`
+  left/right — sized for a short text label like "✕"/"◀"/"▶") produced a
+  visibly wider-than-tall box once a button held nothing but a single
+  icon glyph. `.clear-icon-btn` overrides this with a fixed `1.6rem ×
+  1.6rem` box (`padding: 0`) plus centered flex, without touching
+  `.nav-btn` itself, which every other (non-square, text-bearing) button
+  built on it still relies on unchanged. **Not yet visually confirmed in
+  an actual browser** — same tooling limitation noted throughout this
+  file.
+
+- **Queue-length rows** (`#queue-lengths`) added right below
+  `#resource-meters` inside the same info tooltip, at the user's explicit
+  request: "ajouter une indication sur la longueur des 2 files d'attente :
+  Grille (CPU) et Définition (GPU)." Two plain `.queue-length-row` lines
+  (a label and a bold value, `justify-content: space-between`) — no bar
+  meter like `.resource-meter` above them, since a queue length is an
+  unbounded count, not a percentage of some known maximum; a proportional
+  bar would misleadingly imply a ceiling that doesn't exist. Same "own
+  div, never wiped by `#info-tooltip-lines`" placement, `:not(:empty)`
+  top-border treatment, and `lastQueueLengths`/`renderQueueLengths()`
+  "keep raw, redraw on language switch" pattern as `#resource-meters`
+  right above it. Fed by the same `POST /api/presence` heartbeat (`queue_
+  lengths` field — see CLAUDE.md). Verified live end to end against the
+  real running backend: a real `POST /api/presence` call, through both
+  the backend's own port and the frontend proxy, returned `queue_lengths:
+  {"grid": 1, "clues": 0}` while a real generation job was actively
+  running, and the served `index.html`/`script.js`/`style.css`/`i18n.js`
+  all contain the new markup/functions/rules/translations. **Not yet
+  visually confirmed in an actual browser** — same tooling limitation
+  noted throughout this file.

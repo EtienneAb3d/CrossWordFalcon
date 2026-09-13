@@ -50,7 +50,17 @@ does not reappear).
   keyboard focus (`frontend/static/script.js`, `renderSystemInfoTooltip`),
   showing which LLM model writes the clues, whether it runs on CPU or
   GPU, and — when it's a GPU — its name and available memory
-  (`GET /api/system_info`).
+  (`GET /api/system_info`). Below that report, a small meter bar per
+  resource (`#resource-meters`, `renderResourceMeters`) shows how busy
+  each one currently is: one meter for every CPU combined, and one more
+  per detected GPU. Right below the meters, two more lines
+  (`#queue-lengths`, `renderQueueLengths`) show how many jobs are
+  currently in the grid-generation queue ("Grille (CPU)") and in the
+  definitions-generation queue ("Définition (GPU)") — see the "Status
+  line" section further below for what these two queues are and how a
+  generation can end up waiting in one of them. All of this updates
+  live, roughly every 2 seconds, riding along with the same background
+  heartbeat that keeps `#online-count` current (`POST /api/presence`).
 
 ## Generation form
 
@@ -165,9 +175,17 @@ when relevant.
 - **Voir / View** (`#attempt-preview-reveal-btn`, `frontend/static/
   script.js`, `togglePreviewLetters`) — while a grid is generating, shows
   or hides the actual letters inside the search-progress preview grids
-  (see "While a grid is generating" below) and the word verification
-  table underneath them. Off by default, so a generation in progress
-  never spoils the puzzle before it's ready to play.
+  (see "While a grid is generating" below) and the "grid word
+  verification" table underneath them (a dictionary/root-form lookup for
+  each placed word — see that table's own entry further below). Off by
+  default, so a generation in progress never spoils the puzzle before
+  it's ready to play. IMPORTANT — do not confuse this with the
+  "Vérification / Check" button described a few bullets below: that is a
+  COMPLETELY DIFFERENT feature (it colors the PLAYER's own typed letters
+  correct/incorrect once a grid is finished and being played) that merely
+  happens to share the word "verification" in its own name. "Voir" itself
+  never tells anyone whether an answer is right or wrong — it only
+  reveals or hides letters that are not yet the player's own.
 - **Stop** (`#stop-btn`, `frontend/static/script.js`, `stopBtn` click
   handler, `POST /api/generate/cancel/{job_id}`) — appears once a
   generation has started; asks the server to abandon it. Takes effect at
@@ -181,9 +199,15 @@ when relevant.
   starting over from a blank grid. Clicking it again after a further
   failure keeps resuming from the most recent attempt.
 - **Vérification / Check** (`#check-btn`, `frontend/static/script.js`,
-  `toggleChecking`) — while playing, colors every filled cell green
-  (correct) or red (incorrect) against the real solution. Turning it on
-  turns "Solution" off.
+  `toggleChecking`) — while playing (a finished grid, never during
+  generation), colors every filled cell green (correct) or red
+  (incorrect) against the real solution. Turning it on turns "Solution"
+  off. IMPORTANT — do not confuse this with the "Voir / View" button
+  described a few bullets above (which only reveals/hides letters in the
+  search-progress previews shown WHILE a grid is still generating, and
+  has nothing to do with whether an answer is correct): the two features
+  merely happen to share the word "verification"/"vérification" in their
+  names, they are otherwise unrelated.
 - **Solution** (`#solution-btn`, `frontend/static/script.js`,
   `toggleSolution`) — reveals every letter of the finished grid and
   stops accepting typed input; toggling it off restores exactly what the
@@ -472,6 +496,53 @@ Once generation completes, the search-progress panel disappears and
   clue, grouped by its starting cell number; hidden until "Définitions"
   is turned on. Hovering a clue line highlights its word in the grid, the
   same as hovering the grid highlights its clue.
+
+## Building a grid
+
+To hand-build a grid yourself (rather than let an automatic generation fill
+one in), start from the home page:
+
+1. Set up the grid using the options on the home page (Language, size,
+   Difficulty, Taux noir, etc. — see "Generation form" above).
+2. Choose **Interactif / Interactive** in the **Mode** selector.
+3. Optionally, list some words in the **Thématique / Theme** field to steer
+   the grid toward a topic (see "Generation form" above).
+4. Click **Générer la grille / Generate the grid**.
+
+The same guidance below is also available in-app, once the interactive
+session has started: click the **?** button (`#interactive-help-btn`) just
+to the left of **Mots / Words** to open it as an overlay panel.
+
+- Place your letters in the grid. The Space key adds or removes a black
+  cell.
+- The **Suivant / Next** button automatically generates a new word (taking
+  any theme glossary into account). The **Précédent / Back** button undoes
+  a step (for example so Next generates a different word).
+- Use the tools to help you: **Dictionnaire / Dictionary**, **Paraphraseur
+  / Paraphraser**, the **Mots / Words** button lists the words compatible
+  with the selected slot.
+- Two buttons clean up the grid's impossible zones, with or without
+  removing black cells.
+- The **Impossibles / Impossible** button identifies zones where no word
+  fits any more. **Vérifier / Check** makes sure every word is really in
+  the dictionary and has a definition.
+- The **Définitions / Definitions** button automatically generates the
+  missing definitions.
+- The **Proposer une définition / Suggest a definition** and **Proposer un
+  titre / Suggest a title** buttons help you with several proposals.
+- Make sure every placed word has a definition.
+- Click **Finir la grille / Finish the grid** so Falcon fills in the cells
+  that are still empty.
+- At the end of the automatic process, delete any words you don't like,
+  then go back to placing letters, black cells and definitions. You can run
+  **Finir la grille / Finish the grid** again as many times as needed.
+- Remember to save.
+- Once the grid is complete and you're happy with it, click **Publier /
+  Publish**. You'll find it in the **Library**, where you can copy a link to
+  play it or export it as a PDF.
+
+See "Interactive authoring mode" right below for the full, detailed
+reference of every one of these buttons.
 
 ## Interactive authoring mode
 
