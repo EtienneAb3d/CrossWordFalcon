@@ -167,24 +167,35 @@ project's engineering language.
     citations yet.
 
 14. **Code and code comments must be written in English, with no
-    exception for pre-existing content — every source file must actually
-    be converted, not just new comments going forward.** At the user's
-    explicit, repeated request. Applies to source files
-    (`.py`/`.js`/`.css`/`.html`) and their inline comments/docstrings; it
-    does not apply to product content the app itself displays (crossword
-    words, clues, UI labels — see this SKILL's own convention of English
-    code identifiers with translated UI text) or to reports/summaries
-    sent to the user, which stay in French (see the user's own persistent
-    instruction on report language). This rule originally carried a
-    "going forward, not retrofitted" exemption for this codebase's
-    existing French comments (`backend/crossword_gen.py` most of all,
-    with an extensive history of them). The user found that exemption
-    kept letting French narrative slip back into fresh edits of an
-    already-French comment block (new text added in the same paragraph's
-    existing language, to stay stylistically consistent with it) and
-    revoked it outright, asking directly for every remaining French
-    comment/docstring across the whole codebase to be found (grep for
-    French marker phrases such as "la demande") and converted. Check for
+    exception for pre-existing content — every source file of every kind
+    must actually be converted, not just new comments going forward.** At
+    the user's explicit, repeated request. Applies to EVERY source file in
+    the repository regardless of extension — not just `.py`/`.js`/`.css`/
+    `.html` (the first pass of this cleanup only searched those four and
+    missed the project's own `.sh` shell scripts, `Install.sh` in
+    particular, until the user pointed it out directly) — and their inline
+    comments/docstrings; it does not apply to product content the app
+    itself displays (crossword words, clues, UI labels — see this SKILL's
+    own convention of English code identifiers with translated UI text),
+    to a CLI's own user-facing `help=`/`print()` text, or to reports/
+    summaries sent to the user, which stay in French (see the user's own
+    persistent instruction on report language). This rule originally
+    carried a "going forward, not retrofitted" exemption for this
+    codebase's existing French comments (`backend/crossword_gen.py` most
+    of all, with an extensive history of them). The user found that
+    exemption kept letting French narrative slip back into fresh edits of
+    an already-French comment block (new text added in the same
+    paragraph's existing language, to stay stylistically consistent with
+    it) and revoked it outright, asking directly for every remaining
+    French comment/docstring across the whole codebase to be found (grep
+    for French marker phrases such as "la demande") and converted — then,
+    once the `.py`/`.js`/`.css`/`.html` pass was believed complete, found
+    a further gap in `Install.sh` that the extension-scoped search had
+    never even looked at. Whenever checking whether this rule is
+    satisfied, search the entire repository by content, not by a fixed
+    extension list — a new source-file type (a `.sh` script, a `Dockerfile`,
+    a config format that supports comments, etc.) is in scope the moment
+    it exists, with no separate decision needed to include it. Check for
     this whenever editing a file that still has French comments nearby —
     don't let a new edit's own language choice be dictated by an
     old paragraph's, and treat a French comment noticed anywhere in a

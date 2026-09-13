@@ -92,21 +92,17 @@ if [ "$found_corpus_archive" -eq 0 ]; then
     echo "reference corpus from scratch)."
 fi
 
-# Première initialisation du panneau "Actu Croisée" (flux RSS + grilles
-# scrappées), à la demande explicite de l'utilisateur : "Lors de
-# l'installation sur une nouvelle machine, il faudra automatiquement
-# initialiser une première fois les RSS et SCRAPP si ils n'existent pas
-# encore." Sans ça, une machine fraîchement installée montrerait un
-# panneau vide (voir backend/app.py's GET /api/rss et /api/scrapp,
-# tous deux dégradant gracieusement vers une liste vide si le fichier
-# combined.json n'existe pas) jusqu'au premier passage du planificateur
-# quotidien (8h, voir _rss_daily_scheduler dans backend/app.py) — ce qui
-# peut représenter jusqu'à 24h d'attente selon l'heure de l'installation.
-# Chaque fichier est vérifié indépendamment (jamais réécrit s'il existe
-# déjà, y compris sur une réinstallation) et l'échec de l'un ne bloque
-# jamais l'autre ni le reste de l'installation — un problème réseau
-# ponctuel ici ne doit pas empêcher l'installation d'aboutir ; le
-# planificateur quotidien réessaiera de toute façon le lendemain.
+# First-time initialization of the "Actu Croisée" panel (RSS feeds +
+# scraped grid links). Without this, a freshly installed machine would
+# show an empty panel (see backend/app.py's GET /api/rss and /api/scrapp,
+# both degrading gracefully to an empty list when combined.json doesn't
+# exist yet) until the daily scheduler's first run (8am, see
+# _rss_daily_scheduler in backend/app.py) — up to a 24h wait depending on
+# install time. Each file is checked independently (never rewritten if
+# it already exists, including on a reinstall), and one failing never
+# blocks the other or the rest of the install — a one-off network hiccup
+# here shouldn't prevent the install from finishing; the daily scheduler
+# will retry the next day regardless.
 if [ ! -f RSS/combined.json ]; then
     echo "Initialisation du flux RSS (première fois)..."
     python3 -c "from scrapper import fetch_rss_feeds; fetch_rss_feeds.fetch_all()" \
@@ -121,25 +117,31 @@ fi
 echo
 
 # ===========================================================================
-# Configuration du moteur LLM local (definitions de mots croises + ChatBot)
+# Local LLM engine configuration (crossword definitions + ChatBot)
 # ===========================================================================
-# Install.sh pose desormais les questions permettant de choisir le moteur
-# et le modele, en expliquant les compromis (vitesse / qualite / VRAM /
-# risques de configuration), a la demande explicite de l'utilisateur. Le
-# choix est ecrit dans env.sh entre les marqueurs BEGIN/END LLM AUTOCONFIG,
-# que ce script retire puis reecrit sans jamais toucher au reste du fichier
-# (ports, cle API personnalisee, etc.). llama.cpp est installe quoi qu'il
-# arrive (fait plus haut, requirements-llama.txt) — moteur par defaut et
-# repli portable sur tout materiel ; SGLang n'est installe que si
-# l'utilisateur choisit une option qui l'utilise.
+# Install.sh now asks the questions needed to choose the engine and the
+# model, explaining the trade-offs (speed / quality / VRAM / setup risk).
+# The choice is written to env.sh between the BEGIN/END LLM AUTOCONFIG
+# markers, which this script strips and rewrites without ever touching
+# the rest of the file (ports, a personal API key, etc.). llama.cpp is
+# always installed regardless (done above, requirements-llama.txt) — the
+# default engine and portable fallback on any hardware; SGLang is only
+# installed if the user picks an option that uses it.
 #
-# stdin non interactif (CI, `curl ... | bash`) : aucune question posee,
-# configuration llama.cpp sure appliquee automatiquement (Qwen3.5-4B si un
-# GPU est present, Qwen3.5-0.8B sinon) — relancer ./Install.sh dans un vrai
-# terminal pour choisir SGLang (plus rapide) ou un autre modele.
+# Non-interactive stdin (CI, `curl ... | bash`): no question is asked, a
+# safe llama.cpp configuration is applied automatically (Qwen3.5-4B if a
+# GPU is present, Qwen3.5-0.8B otherwise) — rerun ./Install.sh from a real
+# terminal to choose SGLang (faster) or a different model.
 
-LLM_MARKER_BEGIN="# BEGIN LLM AUTOCONFIG (gere par Install.sh — modifiez en dehors de ce bloc, jamais a l'interieur)"
+LLM_MARKER_BEGIN="# BEGIN LLM AUTOCONFIG (managed by Install.sh — edit outside this block, never inside it)"
 LLM_MARKER_END="# END LLM AUTOCONFIG"
+# These two "_LEGACY" markers are deliberately kept verbatim in their
+# original French — they exist purely to find and strip an already-
+# written block matching this exact historical text on disk (this
+# project's own real env.sh has carried this exact SGLANG-named marker
+# since before the LLM_MARKER_BEGIN rename above), not to document
+# anything going forward. Translating them would break the match against
+# real, already-existing env.sh files instead of migrating them.
 SGLANG_MARKER_BEGIN_LEGACY="# BEGIN SGLANG AUTOCONFIG (gere par Install.sh — modifiez en dehors de ce bloc, jamais a l'interieur)"
 SGLANG_MARKER_END_LEGACY="# END SGLANG AUTOCONFIG"
 SGLANG_VENV=".venv-sglang"

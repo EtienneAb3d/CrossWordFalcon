@@ -1966,14 +1966,14 @@ function renderGrid() {
       const letter = showSolution ? solution[r][c] : userLetters[r][c];
       cell.appendChild(document.createTextNode(letter || ""));
 
-      // "Interactif" : lettre magenta pour un mot posé automatiquement
-      // issu du glossaire thématique (voir interactiveThemeCells).
+      // "Interactif" mode: magenta letter for a word placed automatically
+      // from the theme glossary (see interactiveThemeCells).
       if (interactiveMode && letter && interactiveThemeCells.has(`${r},${c}`)) {
         cell.classList.add("interactive-theme");
       }
-      // "Interactif" : fond rouge/orange pour un emplacement impossible /
-      // en dessous du seuil d'options de remplissage — même sens que sur
-      // les prévisualisations (voir interactiveImpossibleCells/LowCells).
+      // "Interactif" mode: red/orange background for a slot that's
+      // impossible / below the fill-options threshold — same meaning as
+      // in the previews (see interactiveImpossibleCells/LowCells).
       if (interactiveMode) {
         const dk = `${r},${c}`;
         if (interactiveImpossibleCells.has(dk)) cell.classList.add("interactive-impossible");
@@ -2045,10 +2045,10 @@ function renderGrid() {
   hoverDefinitionRow.style.width = `${gridEl.offsetWidth}px`;
 }
 
-// Format habituel des mots croisés : les définitions horizontales sont
-// groupées ligne de grille par ligne de grille, les verticales colonne par
-// colonne (pas par numéro de case) ; plusieurs définitions d'une même
-// ligne/colonne sont enchaînées sur le même texte, sans retour à la ligne.
+// Standard crossword layout: across clues are grouped grid-row by
+// grid-row, down clues column by column (not by cell number); several
+// clues sharing the same row/column are chained onto the same line of
+// text, with no line break.
 function renderClueLines(container, words, direction, positionKey) {
   container.innerHTML = "";
   const byPosition = new Map();
@@ -2221,10 +2221,10 @@ function buildVirtualKeyboard() {
       key.type = "button";
       key.className = "virtual-keyboard-key";
       key.textContent = letter;
-      // Empêche le clic de retirer le focus d'un champ texte (le champ
-      // de recherche du dictionnaire) : sans ça, typeVirtualLetter ne
-      // verrait plus #dictionary-input comme document.activeElement.
-      // Inoffensif pour la grille, qui ne dépend pas du focus.
+      // Prevents the click from stealing focus away from a text field
+      // (the dictionary search field): without this, typeVirtualLetter
+      // would no longer see #dictionary-input as document.activeElement.
+      // Harmless for the grid, which doesn't depend on focus.
       key.addEventListener("mousedown", (e) => e.preventDefault());
       key.addEventListener("click", () => typeVirtualLetter(letter));
       rowEl.appendChild(key);
@@ -2248,12 +2248,12 @@ function buildVirtualKeyboard() {
 }
 
 buildVirtualKeyboard();
-// Comme les touches lettres : un clic sur une flèche de sens ne doit pas
-// retirer le focus du champ de recherche du dictionnaire (les flèches
-// n'ont aucun effet sur la saisie dictionnaire, mais un clic accidentel
-// ne doit pas casser la frappe en cours). Les deux paires de boutons
-// (clavier virtuel + doublon sous "Verticalement") pilotent le même
-// setActiveDirection() partagé.
+// Same as the letter keys: clicking a direction arrow must not steal
+// focus away from the dictionary search field (the arrows have no effect
+// on the dictionary input, but an accidental click must not break
+// whatever the player is currently typing there). Both button pairs
+// (the virtual keyboard's own, plus the duplicate under "Verticalement")
+// drive the same shared setActiveDirection().
 virtualKeyboardAcrossBtn.addEventListener("mousedown", (e) => e.preventDefault());
 virtualKeyboardDownBtn.addEventListener("mousedown", (e) => e.preventDefault());
 virtualKeyboardAcrossBtn.addEventListener("click", () => setActiveDirection("across"));
@@ -2262,18 +2262,17 @@ cluesDirectionAcrossBtn.addEventListener("mousedown", (e) => e.preventDefault())
 cluesDirectionDownBtn.addEventListener("mousedown", (e) => e.preventDefault());
 cluesDirectionAcrossBtn.addEventListener("click", () => setActiveDirection("across"));
 cluesDirectionDownBtn.addEventListener("click", () => setActiveDirection("down"));
-// La grille (ou tout autre contenu en bas de page) était masquée par le
-// clavier virtuel déplié, sans aucun moyen de défiler plus bas pour la
-// faire remonter au-dessus — rapporté directement par l'utilisateur.
-// #virtual-keyboard est en `position: fixed`, donc totalement indépendant
-// de la hauteur réelle de <main> : la page ne peut jamais défiler plus
-// loin que le bas naturel de <main> lui-même, qui n'a aucune raison de
-// réserver de la place pour un widget flottant qu'il ignore. Une classe
-// dédiée sur <main>, ajoutée/retirée en même temps que le clavier se
-// déplie/replie, réserve un espace supplémentaire en bas de page
-// uniquement pendant que le clavier est réellement ouvert — jamais tout
-// le temps, pour ne pas gâcher d'espace quand il est replié (repli par
-// défaut).
+// The grid (or any other content at the bottom of the page) used to get
+// hidden behind the expanded virtual keyboard, with no way to scroll
+// further down to bring it back above it — reported directly by the
+// user. #virtual-keyboard is `position: fixed`, so it's completely
+// independent of <main>'s own real height: the page can never scroll any
+// further than <main>'s own natural bottom, which has no reason to
+// reserve room for a floating widget it knows nothing about. A dedicated
+// class on <main>, added/removed in lockstep with the keyboard expanding/
+// collapsing, reserves extra space at the bottom of the page only while
+// the keyboard is genuinely open — never all the time, so it doesn't
+// waste space while it's collapsed (collapsed by default).
 const mainEl = document.querySelector("main");
 virtualKeyboardToggleBtn.addEventListener("click", () => {
   virtualKeyboardEl.classList.toggle("virtual-keyboard-collapsed");
@@ -2418,19 +2417,20 @@ function renderQueueLengths() {
   );
 }
 
-// Le back (backend/app.py's presence()/_presence_snapshot) décide seul
-// s'il écrit une ligne LOG_USERS, en comparant la LISTE d'utilisateurs
-// (pas seulement l'effectif total) à la dernière consignée — à la
-// demande explicite de l'utilisateur : "LOG_USERS doit se mettre à jour
-// à chaque fois que la liste des utilisateurs change." Un utilisateur
-// passant d'anonyme à nommé (ou changeant de pseudo) déclenche donc déjà
-// une nouvelle ligne dès ce battement-ci, même quand l'effectif total ne
-// bouge pas. Cette fonction est appelée à la fois au chargement de la
-// page et juste après la validation du formulaire d'accueil (voir
-// welcomeForm's "submit" listener) pour que ce recalcul ait lieu tout de
-// suite, sans attendre le prochain battement régulier du setInterval
-// (jusqu'à PRESENCE_INTERVAL_MS plus tard) — mais dans tous les cas,
-// c'est le back qui décide, jamais un indicateur envoyé par ce client.
+// The backend (backend/app.py's presence()/_presence_snapshot) is the
+// sole decider of whether it writes a LOG_USERS line, comparing the
+// LIST of users (not just the total count) against the last one
+// recorded — at the user's explicit request: "LOG_USERS doit se mettre
+// à jour à chaque fois que la liste des utilisateurs change." (LOG_USERS
+// must update every time the list of users changes.) A user going from
+// anonymous to named (or changing their pseudo) therefore already
+// triggers a new line on this very heartbeat, even when the total count
+// doesn't move. This function is called both on page load and right
+// after the welcome form is submitted (see welcomeForm's "submit"
+// listener) so this recomputation happens right away, without waiting
+// for the setInterval's next regular tick (up to PRESENCE_INTERVAL_MS
+// later) — but in every case, it's the backend that decides, never a
+// flag sent by this client.
 async function pingPresence() {
   try {
     const response = await fetchWithTimeout("/api/presence", {
@@ -3232,36 +3232,35 @@ async function pollJob(jobId, t) {
         recordPreviewHistory(history.slice(nextExampleIndex));
         nextExampleIndex = history.length;
       }
-      // "Comptage des définitions 0/27, alors que les définitions
-      // apparaissent en dessous de la grille" — bug déjà signalé
-      // plusieurs fois, root-causé ici : la phase de définitions n'a
-      // qu'UNE seule entrée dans examples_history/previewHistory (le tout
-      // premier progress("clues", current=0, ...), le seul appel de cette
-      // phase à porter `examples` — voir backend/app.py's progress()).
-      // Chaque mise à jour suivante (un mot de plus défini) ne porte
-      // jamais `examples`, donc n'est jamais enregistrée ; #attempt-
-      // preview-status (lastPreviewStep, alimenté uniquement par
-      // showPreviewEntry() sur une NOUVELLE entrée) restait donc figé sur
-      // "0/N" tout du long, même si la liste "Définitions générées"
-      // juste en dessous (liveClues, alimentée séparément ci-dessus)
-      // progressait bien à chaque mot. "saving" (juste après) ne porte
-      // pas non plus `examples`, donc cette entrée "clues" reste la
-      // dernière de previewHistory pendant toute la fin du job — on peut
-      // donc la retrouver et la rafraîchir en place ici, en direct,
-      // plutôt que de la laisser figée.
+      // "Definitions count stuck at 0/27, even though the definitions
+      // themselves appear right below the grid" — a bug already reported
+      // several times, root-caused here: the clue-generation phase only
+      // ever gets ONE entry in examples_history/previewHistory (the very
+      // first progress("clues", current=0, ...) call, the only call of
+      // this phase to carry `examples` — see backend/app.py's
+      // progress()). Every later update (one more word defined) never
+      // carries `examples`, so it's never recorded; #attempt-preview-
+      // status (lastPreviewStep, fed only by showPreviewEntry() on a NEW
+      // entry) therefore stayed frozen on "0/N" the whole time, even
+      // though the "Définitions générées" list right below it (liveClues,
+      // fed separately above) was genuinely progressing word by word.
+      // "saving" (right after) doesn't carry `examples` either, so this
+      // "clues" entry stays the last one in previewHistory for the whole
+      // rest of the job — so it can be found and refreshed in place
+      // here, live, instead of being left frozen.
       if (data.step && data.step.code === "clues" && previewHistory.length) {
         const cluesEntry = previewHistory[previewHistory.length - 1];
         if (cluesEntry.step && cluesEntry.step.code === "clues") {
           cluesEntry.step = {
             ...cluesEntry.step, current: data.step.current, total: data.step.total,
           };
-          // Ne redessine que si cette entrée est bien celle actuellement
-          // affichée — si le joueur a navigué en arrière dans l'historique
-          // pour revoir une étape antérieure, cette mise à jour live ne
-          // doit pas lui changer l'affichage sous le nez ; elle sera
-          // prise en compte dès qu'il reviendra sur cette entrée (voir
-          // showNextPreview()/catchUpPreviewToEnd(), qui relisent
-          // toujours `entry.step` au moment d'afficher).
+          // Only re-render if this entry is genuinely the one currently
+          // shown — if the player has navigated back in the history to
+          // review an earlier step, this live update must not change
+          // what's on screen out from under them; it will be picked up
+          // once they come back to this entry (see showNextPreview()/
+          // catchUpPreviewToEnd(), which always re-read `entry.step` at
+          // the moment of display).
           if (previewHistoryIndex === previewHistory.length - 1) {
             lastPreviewStep = cluesEntry.step;
             renderPreviewStatus();
@@ -4063,9 +4062,9 @@ dictionaryPerplexityBtn.addEventListener("click", () => {
   window.open(url, "_blank", "noopener,noreferrer");
 });
 
-// Interroge /api/dictionary pour une langue donnée et renvoie le nœud de
-// résultat déjà construit (jamais rattaché à la page) — factorisé pour
-// être appelé une ou deux fois (bilingue) par le handler ci-dessous.
+// Queries /api/dictionary for a given language and returns the already-
+// built result node (never attached to the page) — factored out so it
+// can be called once or twice (bilingual) by the handler below.
 async function fetchDictionaryResultNode(query, lang) {
   const t = I18N[uiLanguage];
   const response = await fetchWithTimeout(
@@ -5477,7 +5476,7 @@ function renderInteractive() {
   // The "Proposer" (définition) pick-list is a different case, still
   // cleared on every render — reported live: "if you change the
   // Horizontal/Vertical direction without re-clicking in the grid, the
-  // Suggestion de définitions keeps using the previously configured
+  // definition-suggestion list keeps using the previously configured
   // direction." Root cause: setActiveDirection()
   // already calls renderInteractive() on every H/V toggle, which
   // correctly recomputes selectedInteractiveWord() for the NEW
