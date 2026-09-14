@@ -2830,7 +2830,8 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
 async def _run_generate_job(job_id, req, resume_state=None, override_priority_words=None,
                              override_theme_description="", preserved_clues=None,
                              permanent_locked_letters=None, permanent_black_cells=None,
-                             publish=True, origin=None, zone_revert=None):
+                             publish=True, origin=None, zone_revert=None,
+                             required_cells=None):
     """`permanent_black_cells` (`None` by default — no effect for any
     other caller) is "Finir la zone"'s own set of cells frozen black
     because they lie outside the selected zone — passed straight through
@@ -2936,7 +2937,23 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     draft (`publish=False`) reopened in the editor, never a Bibliothèque
     entry: the player is expected to keep working on whatever's still
     blank outside the zone, by hand or with another "Finir la zone"
-    call."""
+    call.
+
+    `required_cells` (`None` by default — no effect for any pre-existing
+    caller) is passed straight through to `generate_grid(required_cells=
+    ...)` — see its own docstring — at the user's explicit request: "quand
+    toutes les cases non verrouillées sont remplies, et que les
+    emplacements complets sont des mots valides qui ne créent pas de zones
+    impossibles, la grille doit être considérée comme réussie, même si il
+    reste des emplacements non complets couvrant les cases verrouillées."
+    `interactive_finish` builds it as every currently-blank cell of the
+    selected zone (or of the whole grid for plain "Finir la grille", a
+    provable no-op there — see `generate_grid`'s own docstring). A word
+    generate_grid() itself never resolved this way is already dropped from
+    `result["words"]` before this function ever sees it, so the rest of
+    this function (`preserved_clues`/`words_needing_clue`, the word-
+    verification table, theme-cells) needs no further change at all to
+    only ever process complete words."""
     job = JOBS[job_id]
     short_id = job_id[:8]
     cancel_event = CANCEL_EVENTS[job_id]
@@ -3256,6 +3273,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         bilingual_priority_words=bilingual_theme_priority_words,
                         permanent_locked_letters=permanent_locked_letters,
                         permanent_black_cells=permanent_black_cells,
+                        required_cells=required_cells,
                     )
                     break
                 except GenerationPaused as p:
@@ -4985,6 +5003,24 @@ async def interactive_finish(req: InteractiveFinishRequest):
             for c, ch in enumerate(row)
             if (r, c) not in zone
         }
+    # `required_cells` (see generate_grid's own docstring), at the user's
+    # explicit request: "quand toutes les cases non verrouillées... sont
+    # remplies... la grille doit être considérée comme réussie, même si il
+    # reste des emplacements non complets couvrant les cases verrouillées."
+    # Every cell the search genuinely NEEDS to resolve to declare success —
+    # a still-blank cell (never "#", never already lettered) that's also
+    # inside the selected zone, or, for plain "Finir la grille" (no zone at
+    # all), any still-blank cell of the whole grid. This makes the relaxed
+    # completeness rule a provable no-op for plain "Finir la grille" (see
+    # generate_grid's own docstring for why) — computed unconditionally
+    # either way rather than only for "Finir la zone", so both code paths
+    # share the exact same mechanism instead of one being special-cased.
+    required_cells = {
+        (r, c)
+        for r, row in enumerate(req.grid)
+        for c, ch in enumerate(row)
+        if ch == "." and (not req.zone_cells or (r, c) in zone)
+    }
     resume_state = _serialize_resume_state(seed_grid, locked_letters, None, None)
     # {(row, col, direction): clue} for every definition already typed —
     # this is `interactive_finish`'s own preserved-clues map; an empty
@@ -5061,6 +5097,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
             permanent_black_cells=permanent_black_cells,
             publish=False, origin=meta.get("origin"),
             zone_revert=zone_revert,
+            required_cells=required_cells,
         )
     )
     _BACKGROUND_TASKS.add(task)

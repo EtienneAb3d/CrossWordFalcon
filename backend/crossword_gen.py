@@ -3481,7 +3481,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
              attempt_done_event=None, locked_letters=None, best_state_queue=None,
              attempt_id=None, proper_noun_words=None, max_proper_nouns=None,
-             non_gloss_words=None, max_non_gloss=None, priority_words=None):
+             non_gloss_words=None, max_non_gloss=None, priority_words=None,
+             required_cells=None):
     """`non_gloss_words`/`max_non_gloss` (both `None` by default — every
     pre-existing caller unaffected) work exactly like `proper_noun_words`/
     `max_proper_nouns` below, but count words absent from the definition
@@ -3542,6 +3543,43 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     `excluded_slots` (every pre-existing caller's case), `truly_complete`
     coincides exactly with the internal `solved` — no behavior change for
     them.
+
+    `required_cells` (`None` by default — no effect for any pre-existing
+    caller) relaxes `truly_complete` further still, at the user's explicit
+    request for "Finir la zone" (backend/app.py's `interactive_finish`):
+    "quand toutes les cases non verrouillées sont remplies, et que les
+    emplacements complets sont des mots valides qui ne créent pas de zones
+    impossibles, la grille doit être considérée comme réussie, même si il
+    reste des emplacements non complets couvrant les cases verrouillées."
+    A set of `(row, col)` cells the caller actually cares about resolving
+    — for "Finir la zone", every cell inside the selected zone that was
+    still blank when the button was clicked; for plain "Finir la grille"
+    (no zone), every blank cell of the whole grid, which makes this a
+    total no-op there (see below). When given, `truly_complete` only
+    requires `filler.assignment[i]` to be non-`None` for a slot `i` that
+    touches at least one of these cells — a slot entirely made of cells
+    OUTSIDE `required_cells` (already locked/lettered before the search
+    started, or lying outside the selected zone and reverted afterward by
+    `zone_revert`, see `_run_generate_job`) is allowed to stay unresolved
+    forever, whether it's genuinely impossible (a locked letter clashing
+    with whatever the search chose for a crossing word) or the search
+    simply never got to it. This can never make `truly_complete` weaker
+    than the strict rule above: any slot resolved under the strict rule
+    stays resolved here too, so a fully-solved grid is always accepted
+    either way. `generate_grid()`'s own final result construction drops
+    every entry of `result["words"]` whose `answer` ended up `None` this
+    way (an unresolved slot is never a genuine word — no clue is ever
+    generated for it), and `build_letters_grid` simply skips writing a
+    word it never received, leaving that word's own cells to whichever
+    crossing slot (if any) supplies them, exactly as `zone_revert` already
+    expects. For "Finir la grille" (`required_cells` = every currently
+    blank cell of the whole grid), a slot with zero `required_cells` cells
+    can only be one entirely covered by already-locked letters — already
+    unconditionally promoted as-is elsewhere in this file regardless of
+    dictionary validity (see `_pattern_attempt`/`_pattern_continue`'s own
+    "promoted as-is" comment) — so this parameter is provably a no-op
+    there: nothing this rule would otherwise exempt was ever capable of
+    staying unresolved under the strict rule in the first place.
 
     `diagnostics`, if given a dict, is filled in with data useful to
     understand *why* a fill attempt failed (see generate_grid's
@@ -3776,6 +3814,17 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     # Without `excluded_slots` (every pre-existing caller), the two always
     # coincide exactly.
     truly_complete = all(w is not None for w in filler.assignment)
+    # `required_cells` (see this function's own docstring): relaxes the
+    # strict rule above — only a slot touching at least one of these cells
+    # must be resolved. Provably never stricter than the rule above (every
+    # slot resolved there is trivially resolved here too), so this can
+    # only ever turn a `False` into a `True`, never the reverse.
+    if required_cells is not None:
+        truly_complete = all(
+            w is not None
+            for i, w in enumerate(filler.assignment)
+            if any(cell in required_cells for cell in slots[i])
+        )
     # Final "proper noun quota" safety net (see MAX_PROPER_NOUNS/this
     # function's own docstring): a grid otherwise complete but containing
     # too many words present in `proper_noun_words` is NOT accepted as a
@@ -3929,7 +3978,19 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
     noun) would prevent this optimization from removing even a single
     black cell anywhere in the grid, since this validation covers EVERY
     word of the grid, not only the ones affected by the removed black
-    cell."""
+    cell.
+
+    Deliberately never receives `required_cells` (see `try_fill`'s own
+    docstring, "Finir la zone"): its own internal `try_fill` calls below
+    always require FULL, strict completeness for the candidate grid being
+    tried, never the relaxed rule. A genuinely optional slot left
+    unresolved by the original search is therefore simply never re-solved
+    correctly here either — every candidate black-cell removal near it
+    fails this strict re-check and is reverted, so this whole function
+    quietly skips optimizing that area rather than risking a crash or an
+    incorrect result. A safe, accepted trade-off: the grid `minimize_
+    black_squares` receives is returned unchanged wherever it can't find
+    a valid improvement, never corrupted."""
     word_sets = DualSet(
         across={length: set(data["words"]) for length, data in index.across.items()},
         down={length: set(data["words"]) for length, data in index.down.items()},
@@ -4594,6 +4655,13 @@ def print_grid(grid):
 def build_letters_grid(rows, cols, slots, assignment):
     letters = [[BLACK] * cols for _ in range(rows)]
     for cells, word in zip(slots, assignment):
+        # `word` can be `None` here — a slot `try_fill` left unresolved
+        # under its own `required_cells`-relaxed completeness rule (see
+        # its docstring, "Finir la zone"). Its own cells, if they carry a
+        # real letter at all, get it from whichever CROSSING slot was
+        # actually assigned instead — nothing to write for this one.
+        if word is None:
+            continue
         for (r, c), ch in zip(cells, word):
             letters[r][c] = ch
     return letters
@@ -7219,7 +7287,7 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                       seed_grid=None, locked_letters=None,
                       black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
                       deadline_checks=None, permanent_locked_letters=None,
-                      permanent_black_cells=None):
+                      permanent_black_cells=None, required_cells=None):
     """Une tentative indépendante (motif + remplissage CSP complet), exécutée
     dans un processus worker séparé — voir PARALLEL_ATTEMPTS/generate_grid().
     Each attempt has its own `random.Random(seed)`, derived from the
@@ -7471,13 +7539,14 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                        max_proper_nouns=_worker_max_proper_nouns,
                        non_gloss_words=_worker_non_gloss_words,
                        max_non_gloss=_worker_max_non_gloss,
-                       priority_words=_worker_priority_words)
+                       priority_words=_worker_priority_words,
+                       required_cells=required_cells)
     return grid, result, diag
 
 
 def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_slots,
                        force_letters_fraction=0.0, deadline_checks=None,
-                       permanent_locked_letters=None):
+                       permanent_locked_letters=None, required_cells=None):
     """Attempt at the "reprise telle quelle" (carry-forward-as-is) mechanism
     between paliers, at the user's explicit request ("New version") —
     runs in its own separate worker process, like _pattern_attempt, but
@@ -7522,11 +7591,21 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     only an *individual* attempt (a single call to this function) keeps a
     fixed starting point for itself.
 
+    `required_cells` (`None` by default — no effect for any pre-existing
+    caller) is passed straight through to `try_fill`, see its own
+    docstring: for "Finir la zone", this lets a "reprise telle quelle"
+    palier ALSO succeed directly, the moment every cell of the selected
+    zone is genuinely resolved — the excluded/still-`None` slots reported
+    below then simply stay as they are, exempt from ever needing to be
+    "closed" by a further palier.
+
     A complete `try_fill` (`truly_complete`, see its docstring) implies
     here that even the excluded slots ended up filled — impossible as
     long as they stay in `excluded_slots` (never assigned by
-    construction), so `result` is always None here: this function's only
-    useful output is `diag` (up-to-date assignment/impossible_slots),
+    construction), so `result` is always None here UNLESS `required_cells`
+    is given and every excluded (or otherwise unresolved) slot happens to
+    touch none of it (see below) — this function's only other useful
+    output is `diag` (up-to-date assignment/impossible_slots),
     which generate_grid re-examines to decide whether a slot still
     remains where a word could be added (in which case "reprise telle-
     quelle" continues at the next palier, with a possibly widened
@@ -7646,7 +7725,8 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        max_proper_nouns=_worker_max_proper_nouns,
                        non_gloss_words=_worker_non_gloss_words,
                        max_non_gloss=_worker_max_non_gloss,
-                       priority_words=_worker_priority_words)
+                       priority_words=_worker_priority_words,
+                       required_cells=required_cells)
     return seed_grid, result, diag
 
 
@@ -7711,8 +7791,22 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    deadline_checks=None, resume_state=None, should_pause=None,
                    bilingual_wordlist_path=None, priority_words=None,
                    bilingual_priority_words=None, permanent_locked_letters=None,
-                   permanent_black_cells=None):
-    """`permanent_black_cells` (`None`/empty by default — no effect for
+                   permanent_black_cells=None, required_cells=None):
+    """`required_cells` (`None`/empty by default — no effect for any
+    pre-existing caller) is passed straight through to every `_pattern_
+    attempt`/`_pattern_continue` call (see `try_fill`'s own docstring for
+    the full reasoning): the set of cells "Finir la zone" (backend/app.py's
+    `interactive_finish`) actually needs resolved — every still-blank cell
+    of the selected zone — to accept a palier as a genuine success, even
+    while some OTHER slot elsewhere (entirely outside this set) stays
+    unresolved. `result["words"]` never carries an entry for such an
+    unresolved slot (`answer` would be `None` — never a genuine word, so
+    it's dropped outright below, right after `build_word_entries`) —
+    consistent with `_run_generate_job`'s own `preserved_clues`/
+    `words_needing_clue`, which never sends anything but a real, complete
+    word to the LLM.
+
+    `permanent_black_cells` (`None`/empty by default — no effect for
     any pre-existing caller) — for the "Finir la zone" button (backend/
     app.py's `interactive_finish`), the set of cells converted to a
     permanent black cell because they're outside the selected zone.
@@ -8627,6 +8721,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             None, None,
                             black_enrichment_fraction, deadline_checks,
                             permanent_locked_letters, permanent_black_cells,
+                            required_cells=required_cells,
                         ))
                     else:
                         task_seed_grid, task_preseed_assignment, task_excluded_slots = (
@@ -8637,6 +8732,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             task_preseed_assignment, task_excluded_slots,
                             force_letters_fraction, deadline_checks,
                             permanent_locked_letters,
+                            required_cells=required_cells,
                         ))
             else:
                 # A fraction of this palier's own workers start from a
@@ -8883,6 +8979,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         task_seed_grid, task_locked_letters,
                         black_enrichment_fraction, deadline_checks,
                         permanent_locked_letters, permanent_black_cells,
+                        required_cells=required_cells,
                     ))
             # Collected in completion order (`as_completed`), not
             # submission order, at the user's explicit request ("le
@@ -10017,6 +10114,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     )
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)
+    # `required_cells` (see this function's own docstring/try_fill's own)
+    # — "Finir la zone" — can leave a slot genuinely unresolved
+    # (`answer` is `None`) as long as it never touched a required cell.
+    # Such a slot is never a real word: no clue could ever be generated
+    # for it, and the word-verification table/theme-cells computation
+    # downstream (backend/app.py) must never see it either — dropped here,
+    # once and for all, rather than relying on every caller to filter it
+    # out itself. A complete no-op whenever `required_cells` was never
+    # given (every `answer` is already non-`None` in that case).
+    words = [w for w in words if w["answer"] is not None]
     # On a bilingual grid, every vertical ("down") word receives its own
     # accented spelling/canonical root(s) IN THE SECOND LANGUAGE rather
     # than the first, and now carries its own `language` — the code of
@@ -10037,11 +10144,25 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             w["canonical"] = canonicals.get(w["answer"], [w["accented"]])
             w["language"] = language
     progress("grid_ready", word_count=len(slots), black_count=n_black)
+    solution = build_letters_grid(rows, cols, slots, assignment)
+    # Safety net for `required_cells`/"Finir la zone": a locked cell whose
+    # BOTH crossing slots end up unresolved (an edge case — one of the two
+    # is virtually always assigned in practice, but never guaranteed once
+    # a slot can legitimately stay `None` forever) would otherwise show up
+    # as a stray black cell in `solution`, silently losing a letter the
+    # player typed themselves. `permanent_locked_letters` is always
+    # correct regardless of how the search went, so it's reapplied here
+    # unconditionally — a genuine no-op whenever every one of these cells
+    # was already covered by a real assignment (the overwhelmingly common
+    # case, and the ONLY case for every pre-existing caller).
+    if permanent_locked_letters:
+        for (r, c), ch in permanent_locked_letters.items():
+            solution[r][c] = ch
     return {
         "width": cols,
         "height": rows,
         "pattern": grid,
-        "solution": build_letters_grid(rows, cols, slots, assignment),
+        "solution": solution,
         "words": words,
         "word_count": len(slots),
         "black_count": n_black,

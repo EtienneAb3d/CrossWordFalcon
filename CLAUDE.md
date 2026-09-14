@@ -21723,3 +21723,150 @@ in the full pipeline, not just in the isolated tier-selection test.
   single-language filter (`"fr"`) still correctly excludes every
   bilingual grid outright (a separate, unrelated, already-existing rule),
   confirming this fix didn't disturb either of those two other cases.
+
+- **"Finir la zone" can now succeed even while a slot elsewhere in the
+  grid stays genuinely unresolved**, at the user's explicit request: "En
+  mode 'Finir une zone', quand toutes les cases non verrouillées (non
+  encadrées de vert) sont remplies, et que les emplacements complets sont
+  des mots valides qui ne créent pas de zones impossibles, la grille doit
+  être considérée comme réussie, même si il reste des emplacements non
+  complets couvrant les cases verouillées (en vert)." Before this, `try_
+  fill`'s own `truly_complete` check required literally EVERY slot of the
+  WHOLE grid to be resolved (`all(w is not None for w in filler.
+  assignment)`) — since design 3 of "Finir la zone" (see `interactive_
+  finish`'s own docstring) runs the search over the whole grid regardless
+  of the selection, a single genuinely impossible slot ANYWHERE outside
+  the zone (a locked letter clashing with whatever a crossing word ends
+  up choosing) made the ENTIRE "Finir la zone" call fail outright, even
+  though that slot's own cells would be discarded by `zone_revert` a
+  moment later anyway (if outside the zone) or were never the player's
+  concern in the first place (already locked/lettered).
+
+  `try_fill`/`_pattern_attempt`/`_pattern_continue`/`generate_grid` all
+  gained a new `required_cells=None` parameter (no effect for any
+  pre-existing caller), threaded the exact same way as the existing
+  "Finir la zone" parameters (`permanent_locked_letters`/`permanent_
+  black_cells` — explicit kwargs at every `_pattern_attempt`/`_pattern_
+  continue` call site, never the `_init_worker` global-variable
+  mechanism, matching this exact feature's own established convention).
+  `try_fill`'s `truly_complete` is relaxed to only require `filler.
+  assignment[i]` non-`None` for a slot `i` that touches at least one cell
+  of `required_cells` — a slot entirely made of cells OUTSIDE this set
+  (already locked, or lying outside the selected zone) can stay
+  unresolved forever, whatever the reason. Provably never stricter than
+  the original rule (any fully-resolved grid trivially satisfies it too),
+  so this can only turn a `False` into a `True`, never the reverse — and,
+  since a slot only ever gets an explicit, non-`None` assignment once
+  it's genuinely validated against the real dictionary (the one exception,
+  a slot 100% covered by `permanent_locked_letters`, is already
+  unconditionally "promoted as-is" elsewhere in this file, and can
+  therefore never touch a required — i.e. still-blank — cell in the first
+  place), this directly satisfies "les emplacements complets sont des
+  mots valides" for free, with no separate validity check needed.
+
+  `interactive_finish` (`backend/app.py`) computes `required_cells` as
+  every still-blank cell of the selected zone (`req.zone_cells`), or —
+  for plain "Finir la grille" (no zone at all) — every still-blank cell
+  of the WHOLE grid, which makes the whole feature a provable no-op there:
+  the only slots a "zero required cells" classification could ever exempt
+  in that case are ones 100% covered by already-locked letters, which
+  were already unconditionally promoted before this change existed.
+
+  Two further fixes were needed once a "successful" result could contain
+  `None` entries for the first time ever: `build_letters_grid` used to
+  crash outright (`zip(cells, None)`, `TypeError`) on such an entry — now
+  skips a `None` word, leaving that slot's own cells to whichever crossing
+  slot (if any) supplies them, consistent with `zone_revert`'s own
+  cell-by-cell revert right afterward. And `generate_grid()`'s own final
+  result construction now drops every `result["words"]` entry whose
+  `answer` ended up `None` (a slot that was never resolved is never a
+  genuine word — no clue should ever be written for it), directly
+  satisfying the user's separate, related request: "Le processus de
+  génération des définitions d'une grille ne doit pas recalculer les
+  définitions des mots qui en ont dejà une... Vérifier que la génération
+  des définitions ne calcule que des définitions pour des mots complets
+  (ces modes peuvent laisser des emplacements incomplets)." The other half
+  of that same request (never recomputing an already-defined word's own
+  clue) was already correctly handled by the pre-existing `preserved_
+  clues`/`protected_black_cells` mechanism (see `interactive_finish`'s own
+  docstring) — confirmed by re-reading it, not re-implemented — and
+  `_run_generate_job`'s own `words_needing_clue`/`remaining_entries`
+  already derive exclusively from `result["words"]`, so both halves of the
+  request are satisfied with no further change needed there. A last
+  safety net: `generate_grid()` now also re-overlays `permanent_locked_
+  letters` onto the final `solution` grid unconditionally (a genuine no-op
+  whenever every one of those cells was already covered by a real
+  assignment, the case for every pre-existing caller) — guarding the
+  narrow edge case where NEITHER of a locked cell's own two crossing slots
+  ever gets resolved, which would otherwise silently show that cell as
+  black instead of the player's own typed letter.
+
+  Verified in stages. Isolated (`try_fill` called directly, a tiny 3x3
+  grid split into two disconnected 3-letter rows by a fully black middle
+  row, a 1-word dictionary so the locked row is genuinely impossible):
+  without `required_cells`, the call correctly fails; with `required_
+  cells` scoped to the OTHER (resolvable) row only, the call succeeds,
+  the impossible row stays `None`, `build_letters_grid` no longer crashes
+  and renders the resolvable row correctly, and the `permanent_locked_
+  letters` overlay correctly restores the locked row's own letter even
+  though its slot was never resolved; a fifth case confirmed the
+  relaxation does NOT tolerate an invalid slot when `required_cells`
+  itself covers it too (the call still correctly fails) — directly
+  proving "les emplacements complets sont des mots valides" is enforced,
+  not silently dropped. A real, non-mocked `generate_grid()` call (the
+  real French wordlist, a 6x5 grid) confirmed the "Finir la grille" shape
+  (`required_cells` = every blank cell of the whole grid) succeeds
+  through the full real pipeline (process pool included) with every
+  returned word carrying a real, non-`None` answer, at the same real-world
+  timing as an ordinary call with no `required_cells` at all. A full
+  end-to-end regression check on both reference seeds of the standard
+  15x10 benchmark (Flash mode, no `required_cells` at all — the ordinary,
+  by-far-most-common path) confirmed zero regression to every function
+  touched by this change: 0 mismatches between placed words and the
+  solution grid, 0 empty white cells, for both seed 2 (274.1s, 48 words)
+  and seed 7 (46.2s, 53 words). **Not verified**: a live, full-pipeline
+  reproduction of the RELAXATION's own benefit (a genuinely impossible
+  outside-zone slot surviving past `make_pattern`'s own pre-fill, using
+  the real dictionary rather than a hand-built one) — the isolated
+  `try_fill`-level test already gives direct, conclusive proof of the
+  mechanism itself; building an equivalent real-wordlist reproduction
+  would need considerably more work to reliably engineer a slot that
+  stays impossible in the DYNAMIC, mid-search sense (a crossing word's
+  own eventual choice, not a static locked-letter clash) without being
+  eliminated by pre-fill first, and was judged out of proportion to what
+  this specific verification needed to establish.
+
+- **In "Interactif" (Édition de grille) mode, clicking a grid cell now
+  reclaims keyboard focus for the grid**, at the user's explicit request:
+  "En mode interactif, quand on clique sur une case, la grille doit
+  récupérer le focus (qui peut être dans un champ de saisie de
+  l'interface)." Root cause: `selectCell(r, c)`'s interactive-mode branch
+  only ever updated the `selected` cell state and re-rendered — a click on
+  a plain, non-focusable grid-cell `<div>` never moves `document.
+  activeElement` on its own, so if the player had last typed into some
+  other interface field (Dictionnaire, Paraphraseur, ChatBot, the
+  definition/title inputs, ...), that field stayed focused even after
+  clicking a cell — every following letter keystroke kept going to that
+  field instead of the grid, silently swallowed by the pre-existing
+  `isTextInputFocused()`/`shouldGridIgnoreKeydown()` guard (see the
+  "crossword grid no longer intercepts a keystroke" entry above), which
+  is correct in general but meant the grid could never win focus back on
+  its own once lost. Fixed with a single `document.activeElement.blur()`
+  call (guarded against blurring `document.body` itself, a harmless but
+  pointless no-op) added right at the top of `selectCell`'s interactive-
+  mode branch — covers both the white-cell and black-cell click handlers
+  in Interactive mode alike, since both already funnel through this one
+  function. Deliberately scoped to Interactive mode only, matching the
+  request's own literal wording, and leaves every other guard
+  (`isTextInputFocused`/`hasActiveTextSelection`) completely untouched —
+  a real text selection elsewhere on the page, or an input the player is
+  still actively typing into without having clicked the grid, are both
+  unaffected.
+
+  Verified: a real JS syntax check (`esprima`, already available in this
+  environment) confirmed `script.js`/`i18n.js` still parse correctly
+  after the change. **Not yet visually confirmed in an actual browser**
+  — the same tooling limitation noted throughout this project's UI work
+  — verified by tracing the exact fix against the reported symptom
+  instead.
+  confirming this fix didn't disturb either of those two other cases.

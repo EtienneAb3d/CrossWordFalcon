@@ -1788,6 +1788,21 @@ function selectCell(r, c) {
   // In interactive authoring mode ANY cell is selectable (black cells
   // included — the user edits them too); no showSolution/isWhite guard.
   if (interactiveMode) {
+    // Reported live by the user: clicking a grid cell right after typing
+    // in an interface field (Dictionnaire, Paraphraseur, ChatBot, the
+    // definition/title inputs, ...) left that field focused — a plain
+    // click on a non-focusable grid cell never moves `document.
+    // activeElement` on its own — so every following letter keystroke
+    // still went to that field instead of the grid (see
+    // isTextInputFocused()/shouldGridIgnoreKeydown(), which handleKeydown
+    // already consults). Explicitly reclaiming focus here, the moment a
+    // cell is actually clicked, makes the grid the keystroke target again
+    // without touching that guard itself — it stays correct for every
+    // other case (a real text selection elsewhere, an input the player
+    // is still actively using without having clicked the grid).
+    if (document.activeElement && document.activeElement !== document.body) {
+      document.activeElement.blur();
+    }
     selected = { row: r, col: c };
     renderInteractive();
     return;
