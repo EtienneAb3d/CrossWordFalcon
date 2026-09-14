@@ -262,9 +262,10 @@ const interactiveHelpOverlay = document.getElementById("interactive-help-overlay
 const interactiveHelpCloseBtn = document.getElementById("interactive-help-close-btn");
 const interactiveHelpList = document.getElementById("interactive-help-list");
 const interactiveWordsBtn = document.getElementById("interactive-words-btn");
-const interactiveWordsResults = document.getElementById("interactive-words-results");
 const interactiveCrossingBtn = document.getElementById("interactive-crossing-btn");
-const interactiveCrossingResults = document.getElementById("interactive-crossing-results");
+// Shared "Mots"/"Croisés" answer zone — see renderInteractiveWords()/
+// renderInteractiveCrossing() below, both prepend their own block here.
+const interactiveAnswers = document.getElementById("interactive-answers");
 const interactiveProposeResults = document.getElementById("interactive-propose-results");
 const interactiveVerifyReportEl = document.getElementById("interactive-verify-report");
 const interactiveTitleRow = document.getElementById("interactive-title-row");
@@ -4158,6 +4159,59 @@ function buildSimilarWordsResultNode(query, words) {
   return block;
 }
 
+// "Thématique": unlike buildSimilarWordsResultNode() above (reused as-is
+// by "Synonymes", a single-stage direct Qdrant search), this button's
+// search runs in two stages — see backend/app.py's _similar_words_impl —
+// and both are shown, stacked in the same result block, at the user's
+// explicit request: the LLM's own raw keyword expansion first, under
+// "Champ lexical", then the Qdrant-compiled word list (scores included,
+// same rendering as buildSimilarWordsResultNode) under "Glossaire
+// thématique". Returns the node without attaching it to the page — same
+// reason as buildDictionaryResultNode() above.
+function buildThematicResultNode(query, keywords, words) {
+  const t = I18N[uiLanguage];
+  const block = document.createElement("div");
+  block.className = "dictionary-result";
+
+  const lexicalHeading = document.createElement("h3");
+  lexicalHeading.textContent = `${t.dictionaryLexicalFieldHeading} « ${query} »`;
+  block.appendChild(lexicalHeading);
+
+  if (!keywords || !keywords.length) {
+    const empty = document.createElement("p");
+    empty.className = "dictionary-empty";
+    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
+    block.appendChild(empty);
+  } else {
+    const lexicalLine = document.createElement("p");
+    lexicalLine.className = "dictionary-similar-line";
+    lexicalLine.textContent = keywords.join(", ");
+    block.appendChild(lexicalLine);
+  }
+
+  const glossaryHeading = document.createElement("h3");
+  glossaryHeading.textContent = `${t.dictionaryThematicGlossaryHeading} « ${query} »`;
+  block.appendChild(glossaryHeading);
+
+  if (!words || !words.length) {
+    const empty = document.createElement("p");
+    empty.className = "dictionary-empty";
+    empty.textContent = `${t.dictionaryNoResults} « ${query} »`;
+    block.appendChild(empty);
+  } else {
+    const glossaryLine = document.createElement("p");
+    glossaryLine.className = "dictionary-similar-line";
+    glossaryLine.textContent = words
+      .map((x) => {
+        const s = typeof x.score === "number" ? ` (${x.score.toFixed(2)})` : "";
+        return `${x.word}${s}`;
+      })
+      .join(", ");
+    block.appendChild(glossaryLine);
+  }
+  return block;
+}
+
 // #theme-precision is an <input type="text"> (see index.html): its value
 // is read while FORCING the dot as the decimal separator (a typed comma
 // is normalized to a dot, at the user's explicit request — a comma
@@ -4189,6 +4243,11 @@ function readThemePrecision() {
 // Queries /api/similar_words or /api/synonyms for a given language and
 // returns the already-built result node — factored out so it can be
 // called once or twice (bilingual) by "Thématique"/"Synonymes" below.
+// "Thématique" (similar_words) additionally returns the LLM's own raw
+// keyword expansion (`data.keywords`), rendered as its own "Champ
+// lexical" section ahead of the Qdrant-compiled one — see
+// buildThematicResultNode(); "Synonymes" (synonyms) has no such stage,
+// so it keeps the plain single-list rendering.
 async function fetchSimilarWordsResultNode(query, lang, endpoint, timeoutMs, errorMessage) {
   const prec = readThemePrecision();
   let url = `/api/${endpoint}?q=${encodeURIComponent(query)}&lang=${encodeURIComponent(lang)}`;
@@ -4196,6 +4255,9 @@ async function fetchSimilarWordsResultNode(query, lang, endpoint, timeoutMs, err
   const response = await fetchWithTimeout(url, {}, timeoutMs);
   if (!response.ok) throw new Error(errorMessage);
   const data = await response.json();
+  if (endpoint === "similar_words") {
+    return buildThematicResultNode(query, (data && data.keywords) || [], (data && data.words) || []);
+  }
   return buildSimilarWordsResultNode(query, (data && data.words) || []);
 }
 
@@ -5476,11 +5538,12 @@ function renderInteractive() {
     : "";
   interactiveDefinitionInput.disabled = !w;
   interactivePrevBtn.disabled = interactiveUndoStack.length <= 1;
-  // The "Mots" (candidate words) panel is deliberately the one exception
-  // to this function's own "clear every result panel on every render"
-  // rule below, at the user's explicit request: "'Mots' must show the
-  // word list without erasing the previously displayed list, which stays
-  // visible underneath (lets you compare several word lists)."
+  // The shared "Mots"/"Croisés" answer zone (#interactive-answers) is
+  // deliberately the one exception to this function's own "clear every
+  // result panel on every render" rule below, at the user's explicit
+  // request: "'Mots' must show the word list without erasing the
+  // previously displayed list, which stays visible underneath (lets you
+  // compare several word lists)."
   // Each of its own stacked blocks stays bound to the exact slot/cell it
   // was fetched for regardless of the live selection (see
   // renderInteractiveWords()'s own docstring), so a later selection/grid
@@ -5823,8 +5886,8 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
       block.appendChild(document.createTextNode(", "));
     }
   });
-  interactiveWordsResults.insertBefore(block, interactiveWordsResults.firstChild);
-  interactiveWordsResults.hidden = false;
+  interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
+  interactiveAnswers.hidden = false;
 }
 
 interactiveWordsBtn.addEventListener("click", async () => {
@@ -5988,8 +6051,8 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
     group.appendChild(downLine);
     block.appendChild(group);
   }
-  interactiveCrossingResults.insertBefore(block, interactiveCrossingResults.firstChild);
-  interactiveCrossingResults.hidden = false;
+  interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
+  interactiveAnswers.hidden = false;
 }
 
 interactiveCrossingBtn.addEventListener("click", async () => {
@@ -6198,15 +6261,14 @@ function enterInteractiveMode(state) {
   interactiveProposeResults.innerHTML = "";
   interactiveTitleProposeResults.hidden = true;
   interactiveTitleProposeResults.innerHTML = "";
-  // Unlike the two panels just above, "Mots"/"Croisés" are no longer
-  // cleared on every ordinary render (see renderInteractive()'s own
-  // comment) — their stacked blocks must still be wiped here, at the
-  // start of a genuinely new session, so a previous grid's own
-  // accumulated lists never survive into a freshly loaded/started one.
-  interactiveWordsResults.hidden = true;
-  interactiveWordsResults.innerHTML = "";
-  interactiveCrossingResults.hidden = true;
-  interactiveCrossingResults.innerHTML = "";
+  // Unlike the two panels just above, "Mots"/"Croisés" (a single shared
+  // #interactive-answers zone) are no longer cleared on every ordinary
+  // render (see renderInteractive()'s own comment) — its stacked blocks
+  // must still be wiped here, at the start of a genuinely new session,
+  // so a previous grid's own accumulated answers never survive into a
+  // freshly loaded/started one.
+  interactiveAnswers.hidden = true;
+  interactiveAnswers.innerHTML = "";
   // A drag-selected "zone" (see interactiveZoneSelection) is scoped to
   // one editing session — never carried over into a freshly loaded/
   // started one.
@@ -7122,22 +7184,20 @@ interactiveVerifyBtn.addEventListener("click", async () => {
 });
 
 // "Effacer" (to the right of the button row): empties the display area
-// right below (status message, "Vérifier" report, "Mots" proposals)
-// without re-running any request, at the user's explicit request.
-// clearInteractiveDiagnostics() also removes the matching grid coloring
-// (impossible/low-option/invalid slots) and the "Vérifier" report — the
-// same function already used by any grid edit for this same reason —
-// then renderInteractive() applies all of it (grid +
-// #interactive-verify-report). #interactive-words-results is cleared
+// right below (status message, "Vérifier" report, "Mots"/"Croisés"
+// answers) without re-running any request, at the user's explicit
+// request. clearInteractiveDiagnostics() also removes the matching grid
+// coloring (impossible/low-option/invalid slots) and the "Vérifier"
+// report — the same function already used by any grid edit for this
+// same reason — then renderInteractive() applies all of it (grid +
+// #interactive-verify-report). #interactive-answers is cleared
 // directly: renderInteractive() no longer does it (see its own
-// comment — "Mots" is deliberately left displayed across renders so
-// several lists can be compared).
+// comment — "Mots"/"Croisés" are deliberately left displayed across
+// renders so several answers can be compared).
 interactiveResultsClearBtn.addEventListener("click", () => {
   setInteractiveMessage("");
-  interactiveWordsResults.hidden = true;
-  interactiveWordsResults.innerHTML = "";
-  interactiveCrossingResults.hidden = true;
-  interactiveCrossingResults.innerHTML = "";
+  interactiveAnswers.hidden = true;
+  interactiveAnswers.innerHTML = "";
   clearInteractiveDiagnostics();
   renderInteractive();
 });

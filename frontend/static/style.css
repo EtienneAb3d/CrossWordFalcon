@@ -2277,7 +2277,7 @@ button:disabled {
    SKILL for the same trap. */
 #interactive-controls[hidden],
 #interactive-propose-results[hidden],
-#interactive-words-results[hidden],
+#interactive-answers[hidden],
 #interactive-verify-report[hidden],
 #interactive-title-row[hidden],
 #interactive-title-propose-results[hidden] {
@@ -2379,16 +2379,20 @@ button:disabled {
   font-size: 0.9rem;
   color: var(--incorrect-fg);
 }
-/* "Mots" button results — each click's own comma-separated, wrapping
-   line (every word individually clickable) stacks as its own
-   .interactive-words-block, newest on top, at the user's explicit
-   request: "'Mots' doit afficher la liste des mots sans effacer la liste
-   précédente affichée, qui reste visible en dessous" (see
-   renderInteractiveWords() in script.js — it prepends, never replaces).
+/* "Mots"/"Croisés" buttons' shared answer zone — each click's own
+   comma-separated, wrapping line (every word individually clickable)
+   stacks as its own .interactive-words-block, newest on top, at the
+   user's explicit request: "'Mots' doit afficher la liste des mots sans
+   effacer la liste précédente affichée, qui reste visible en dessous"
+   (see renderInteractiveWords()/renderInteractiveCrossing() in
+   script.js — both prepend into this one shared zone, never replace).
    Within one block, every word is an inline <span> plus a plain ", "
    text node between them, same as #interactive-propose-results' own
-   sibling lines. */
-#interactive-words-results {
+   sibling lines. 100% width + naturally 0-height/hidden when empty, at
+   the user's explicit request — no padding/border/min-height set here,
+   so an empty zone (no stacked block yet) already collapses to nothing
+   on its own, same as every other [hidden] panel in this file. */
+#interactive-answers {
   width: 100%;
   line-height: 1.6;
 }

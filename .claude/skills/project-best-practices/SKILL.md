@@ -17,26 +17,47 @@ project's engineering language.
 ## Permanent rules
 
 1. **Keep this SKILL current, not historical — and this applies just as
-   absolutely to `DOC_ALGO/FR/ReadMe.md`, `DOC_DIC/FR/ReadMe.md`, and
-   `DOC_USER/EN/ReadMe.md`** (see rules 11, 18, 19, 20 for each of those
-   individually). All four of these documents are timeless references
-   meant to let a reader understand the *current* state of the code and
-   the project without needing to read the code itself — never notes
-   about the history of the decisions that led there. Whenever an
-   important project-management decision is made (architecture choice,
-   convention change, scope decision, tooling choice, etc.), update this
-   SKILL's "Decisions" section (and, symmetrically, whichever of the three
-   `DOC_*` files documents the affected area) to reflect the new state —
-   as a present-tense fact ("X does Y", "the default is Z"), never as a
-   narrated change ("X was changed from A to B because...", "at the
-   user's explicit request", "found live", "previously..."). None of these
-   four documents is a changelog: when a new decision supersedes an old
-   one, replace the old fact in place instead of appending a new entry
-   next to it. Drop a fact entirely once it no longer describes the
-   current codebase, rather than keeping it as history. `CLAUDE.md` is the
-   one place in this project where that narrative — the *why* and the
-   *how it came to be* — belongs; it is deliberately exempt from this
-   rule.
+   absolutely to `CLAUDE.md`, `DOC_ALGO/FR/ReadMe.md`, `DOC_DIC/FR/
+   ReadMe.md`, and `DOC_USER/EN/ReadMe.md`** (see rules 11, 18, 19, 20 for
+   the three `DOC_*` files individually). All five of these documents are
+   timeless references meant to let a reader understand the *current*
+   state of the code and the project without needing to read the code
+   itself — never notes about the history of the decisions that led
+   there. Whenever an important project-management decision is made
+   (architecture choice, convention change, scope decision, tooling
+   choice, etc.), update this SKILL's "Decisions" section (and,
+   symmetrically, whichever of the other four documents covers the
+   affected area) to reflect the new state — as a present-tense fact ("X
+   does Y", "the default is Z"), never as a narrated change ("X was
+   changed from A to B because...", "at the user's explicit request",
+   "found live", "previously..."). None of these five documents is a
+   changelog: when a new decision supersedes an old one, replace the old
+   fact in place instead of appending a new entry next to it. Drop a fact
+   entirely once it no longer describes the current codebase, rather than
+   keeping it as history.
+
+   `CLAUDE.md` was, for a long stretch of this project's history,
+   deliberately exempt from this rule — the one place the narrative (the
+   *why* and the *how it came to be*, including reverted experiments and
+   bug-fix war stories) was allowed to accumulate. That narrative grew the
+   file to ~22,000 lines, at which point it was saturating every
+   conversation's own context on its own (the file is loaded in full,
+   automatically, at the start of every session) — the user then had it
+   rewritten from scratch as a compact, current-state-only technical
+   reference (architecture, API surface, algorithm/prompt behavior),
+   explicitly discarding the narrative rather than archiving it elsewhere
+   (git history still has the full old version, at the commit right
+   before this rewrite, if a past decision's exact reasoning is ever
+   needed). **The exemption is gone — `CLAUDE.md` is now held to the
+   exact same current-state-only discipline as the other four documents,
+   permanently.** Do not let it regrow into a changelog: when documenting
+   a change to `CLAUDE.md`, replace the affected fact in place, and
+   resist the pull (especially strong for a fix motivated by a subtle,
+   hard-won bug) to also narrate *why* or *how it was found* — that
+   reasoning either becomes a one-clause justification woven into the
+   present-tense fact itself (when it's load-bearing enough that a future
+   reader needs it to avoid repeating the mistake) or it doesn't belong
+   in this file at all.
 
 2. **Update `requirements.txt`** (project root) whenever a Python package is
    installed (`pip install ...`), added, upgraded, or removed. The file must
@@ -125,10 +146,11 @@ project's engineering language.
     account, "Vérifié en direct...", a bug report/incident narrative (a
     user quote, a screenshot reference, a root-cause trace, before/after
     measurements), or any other trace of *how* the current state was
-    reached. That narrative belongs in `CLAUDE.md` alone, which both this
-    file and `CLAUDE.md` must stay in sync with in terms of *current*
-    algorithm facts (dual-write the fact; the story stays CLAUDE.md-only).
-    If a change makes an old explanation wrong, replace it in place rather
+    reached. That narrative doesn't belong in any maintained document —
+    git history is where it lives if ever needed. Both this file and
+    `CLAUDE.md` must stay in sync on *current* algorithm facts (dual-write
+    the fact, narrate in neither). If a change makes an old explanation
+    wrong, replace it in place rather
     than layering a correction on top. Found live drifting from this rule
     despite it already existing: small, single-fact edits (bump a
     constant, change a formula) kept slipping in a one-clause "à la
@@ -420,7 +442,7 @@ project's engineering language.
        **every** merged word whose score reaches `min_score` — the current
        value of the generation form's "Précision thématique" field,
        forwarded as a query param so the panel reacts to it live (default
-       `THEME_MIN_SCORE` = 0.68 when blank, clamped `[0,1]`) —
+       `THEME_MIN_SCORE` = 0.76 when blank, clamped `[0,1]`) —
        most-similar-first, no count limit and no length filter; a clean
        503 `similar_unavailable` when Qdrant / the embed server is down or
        the collection is unpopulated, so the rest of the UI is
@@ -1081,9 +1103,9 @@ the current defaults/behavior to know before touching this code.
   pages through the Qdrant tenant's own
   ranked nearest-neighbor list (`QdrantStore.search`'s `offset`)
   collecting **every** word whose own length falls between
-  `THEME_LENGTH_MIN` and `THEME_LENGTH_MAX` (2-15) and whose Qdrant
+  `THEME_LENGTH_MIN` and `THEME_LENGTH_MAX` (3-15) and whose Qdrant
   cosine-similarity score is at least the threshold — `THEME_MIN_SCORE`
-  (0.68) is the *default*, overridable by the "Précision thématique" form
+  (0.76) is the *default*, overridable by the "Précision thématique" form
   field (`GenerateRequest.theme_precision`, a 0-1 float threaded as
   `min_score` through `_compiled_theme_words_by_length`/`_theme_words_by_
   length`/`_iter_scored_words`); the same field's value is also forwarded
@@ -1382,8 +1404,9 @@ the current defaults/behavior to know before touching this code.
     `DOC_ALGO/FR/ReadMe.md` apply here identically: no narrative ("à la
     demande explicite de l'utilisateur", "précédemment", a changed-N-times
     account, a bug-fix/incident trace — see permanent rule 11, which that
-    narrative belongs in `CLAUDE.md` alone), every point cites its source
-    file and function (see permanent rule 13, no line numbers), and the
+    narrative belongs in no maintained document at all), every point
+    cites its source file and function (see permanent rule 13, no line
+    numbers), and the
     file must always stay tracked in git, never gitignored (see permanent
     rule 16). Both `DOC_DIC/FR/ReadMe.md` and `CLAUDE.md` must stay in
     sync on *current* facts about these three scripts, exactly as already
@@ -1408,8 +1431,8 @@ the current defaults/behavior to know before touching this code.
     already governing `DOC_ALGO/FR/ReadMe.md` apply here identically: no
     narrative ("à la demande explicite de l'utilisateur", "previously", a
     changed-N-times account, a bug-fix/incident trace — see permanent
-    rule 11, which that narrative belongs in `CLAUDE.md` alone), every
-    point cites its source location (see permanent rule 13, no line
+    rule 11, which that narrative belongs in no maintained document at
+    all), every point cites its source location (see permanent rule 13, no line
     numbers — e.g. "(`frontend/static/script.js`, `renderLibraryList`)"),
     and the file must always stay tracked in git, never gitignored (see
     permanent rule 16). Both `DOC_USER/EN/ReadMe.md` and `CLAUDE.md` must
@@ -1448,3 +1471,11 @@ the current defaults/behavior to know before touching this code.
     demande explicite de l'utilisateur," no changed-N-times account — this
     summary describes the *current* algorithm as if it had always worked
     this way, the story stays `CLAUDE.md`-only.
+
+21. **Always reply to the user in French**, regardless of the language of
+    their own message — at the user's explicit request. This is about the
+    conversational language only, distinct from the project's own
+    engineering-language rule (permanent rule 14: code/comments/this
+    SKILL/README.md stay in English) and from product-content language
+    (crossword words/clues and UI strings, each in whichever of the six
+    supported languages applies) — neither of those changes.

@@ -50,6 +50,41 @@ export EMBED_API_KEY="${EMBED_API_KEY:-EMPTY}"
 # on llama.cpp (run_llm.sh), which shares VRAM more gracefully.
 export EMBED_N_GPU_LAYERS="${EMBED_N_GPU_LAYERS:-0}"
 
+# --- Alternative embed model: Qwen/Qwen3-Embedding-0.6B ------------------
+# A newer, decoder-only multilingual embedder (100+ languages), similar
+# size to bge-m3 (~609 MB Q8_0 GGUF — no smaller official quant exists yet)
+# but a real, measured quality edge: a live cross-lingual FR/EN A/B on this
+# project's own dev host scored 0.873 (same-meaning FR/EN) vs. 0.543
+# (unrelated) here, against bge-m3's own historical 0.90/0.48 — comparable,
+# slightly cleaner separation. Uses LAST-token pooling (not bge-m3's CLS) —
+# the official GGUF already carries the right pooling_type in its own
+# metadata, so llama_cpp.server (which never passes an explicit override)
+# picks it up automatically with zero extra flags; no run_embed.sh change
+# needed to switch. Measured noticeably SLOWER than bge-m3 on this same
+# GPU, though: ~66/s single-request, ~162/s batched (batch=16) — vs.
+# bge-m3's own ~124/s / ~465/s — a real trade-off (quality/recency vs.
+# throughput), not a strict improvement. Verified live to load and embed
+# correctly on GPU at the same time as this project's own SGLang LLM
+# instance(s), no OOM, on a 12 GB card already running a 4B LLM (see the
+# "GPU cohabitation" section further below — the same VRAM headroom that
+# makes bge-m3 fit alongside the LLM comfortably fits this too).
+#
+# To switch (either on top of the CPU default above, or the GPU
+# cohabitation block below): uncomment and place AFTER the active
+# EMBED_MODEL/EMBED_GGUF_REPO/EMBED_GGUF_FILE exports above (last export
+# wins, this file is sourced top-to-bottom) — no other file needs editing.
+# Switching embedders ALWAYS requires a full Qdrant rebuild regardless of
+# whether the vector dimension happens to match (it does here, 1024 both
+# ways) — the vector *space* itself is model-specific, so old and new
+# vectors can never be mixed: run, after restarting run_embed.sh,
+#   python -m data_builder.qdrant_populate --all --recreate
+# (a multi-hour job for the full ~2.7M-word, 6-language corpus at this
+# model's own slower batched throughput — launch it detached, e.g.
+# `nohup ... & disown`, per this project's own established convention).
+# export EMBED_MODEL="Qwen3-Embedding-0.6B"
+# export EMBED_GGUF_REPO="Qwen/Qwen3-Embedding-0.6B-GGUF"
+# export EMBED_GGUF_FILE="Qwen3-Embedding-0.6B-Q8_0.gguf"
+
 # Number of uvicorn worker processes for the MIDDLEWARE (front) server,
 # read by run_Falcon.sh. Only the front end takes this — it's a stateless
 # proxy + static-file server, so independent workers just add capacity.

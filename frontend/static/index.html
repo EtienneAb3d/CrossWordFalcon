@@ -161,7 +161,7 @@
              display a comma, a source of confusion. -->
         <input type="text" id="theme-precision" name="theme_precision"
                inputmode="decimal" autocomplete="off" spellcheck="false"
-               pattern="[0-9]*([.,][0-9]+)?" value="0.68"
+               pattern="[0-9]*([.,][0-9]+)?" value="0.76"
                data-i18n-title="themePrecisionTitle">
       </label>
 
@@ -673,9 +673,10 @@
           <!-- "Mots": lists the real dictionary words compatible with
                the selected slot (see POST /api/interactive/
                candidates) — at the user's explicit request. The
-               result is shown in #interactive-words-results, below the
-               button row (above "Proposer une définition"). Placed to
-               the left of the arrows at the user's explicit request. -->
+               result is shown in the shared #interactive-answers zone,
+               below the button row (above "Proposer une définition").
+               Placed to the left of the arrows at the user's explicit
+               request. -->
           <button type="button" id="interactive-words-btn"
                   data-i18n="interactiveWordsBtn">Mots</button>
           <!-- "Croisés": to the right of "Mots", at the user's explicit
@@ -683,8 +684,8 @@
                compatible with a word in both directions at once
                (across AND down), and lists, for each, the matching
                across/down words (see POST /api/interactive/crossing).
-               Result shown in #interactive-crossing-results, below
-               #interactive-words-results. -->
+               Result shown in the same shared #interactive-answers zone
+               as "Mots" (see below), most recent block first. -->
           <button type="button" id="interactive-crossing-btn"
                   data-i18n="interactiveCrossingBtn">Croisés</button>
           <button type="button" id="interactive-dir-across-btn" class="toggle-btn active"
@@ -787,16 +788,18 @@
              See renderInteractiveVerifyReport(). -->
         <span id="interactive-message" role="status"></span>
         <div id="interactive-verify-report" hidden></div>
-        <!-- "Mots": lists the real dictionary words compatible with the
-             selected slot (see POST /api/interactive/candidates) —
-             below the button row, above "Proposer une définition", at
-             the user's explicit request. -->
-        <div id="interactive-words-results" hidden></div>
-        <!-- "Croisés": lists, for the selected cell, the letters
-             compatible with a word in both directions at once (see
-             POST /api/interactive/crossing) — at the user's explicit
-             request. -->
-        <div id="interactive-crossing-results" hidden></div>
+        <!-- Combined "Mots"/"Croisés" answer zone, at the user's explicit
+             request: a single response display area below the button
+             row, 100% width, 0% height when empty (the same [hidden]
+             no-content convention every other stacked block here
+             already uses — see #interactive-answers in style.css).
+             "Mots" (POST /api/interactive/candidates) and "Croisés"
+             (POST /api/interactive/crossing) both prepend their own new
+             block here (most recent first — see renderInteractiveWords()/
+             renderInteractiveCrossing()), instead of two separate lists.
+             Cleared by the sponge button below
+             (#interactive-results-clear-btn). -->
+        <div id="interactive-answers" hidden></div>
         <div id="interactive-definition-row">
           <input type="text" id="interactive-definition-input" autocomplete="off"
                  data-i18n-placeholder="interactiveDefinitionPlaceholder">

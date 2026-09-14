@@ -882,10 +882,10 @@ def _title_grid_word_reuse(title, grid_norm, hollow):
 # without worrying about overlap by hand (see the auto-dedup below).
 _LANGUAGE_STOPWORDS_RAW = {
     "fr": {
-        "le", "la", "les", "de", "des", "un", "une", "et", "que", "qui",
-        "est", "dans", "pour", "avec", "sur", "cette", "ne", "pas", "plus",
-        "vous", "nous", "elle", "il", "être", "leur", "alors", "aussi",
-        "mais", "donc", "était", "sont",
+        "le", "la", "les", "de", "des", "du", "un", "une", "et", "que", "qui",
+        "est", "dans", "pour", "avec", "sur", "ce", "cette", "cela", "ne",
+        "pas", "plus", "vous", "nous", "elle", "il", "être", "leur", "alors",
+        "aussi", "mais", "donc", "était", "sont",
     },
     "en": {
         "the", "a", "an", "is", "are", "of", "and", "to", "that", "in",

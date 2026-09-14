@@ -40,7 +40,10 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .chatbot import ChatBot, ChatError
-from .clues import ClueGenerationError, LLMClueGenerator, TITLE_PROPOSALS_COUNT
+from .clues import (
+    ClueGenerationError, LLMClueGenerator, TITLE_PROPOSALS_COUNT,
+    _LANGUAGE_STOPWORDS_RAW,
+)
 from .dictionary_lookup import search as dictionary_search_impl
 from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError
@@ -135,7 +138,7 @@ else:
 # importing this with Qdrant / the embed server down is harmless — the
 # endpoint just returns a clean 503. The Qdrant/embed timeouts stay short
 # (10s each — a per-keyword search pages the ranking only until the score
-# drops below the threshold, fast around THEME_MIN_SCORE = 0.68), but the
+# drops below the threshold, fast around THEME_MIN_SCORE = 0.76), but the
 # added LLM expansion makes the whole call slower than before, so the
 # frontend/proxy timeouts for this route are widened (see
 # SIMILAR_*_TIMEOUT in script.js / frontend/server.py, and
@@ -339,7 +342,11 @@ BUDGET_MODES = {
 # neighbor search — _compiled_theme_words_by_length then merges
 # every result (best score per word). A search on a single keyword gives
 # a much sharper query vector than a single embedding averaged over ~30
-# words. Each search is done PER LENGTH
+# words. Each keyword is embedded together with the complete theme text
+# as typed by the user ("<theme> / <keyword>", see _keyword_search_text),
+# at the user's explicit request, so a keyword that drifts far from the
+# original input still gets pulled back toward it. Each search is done
+# PER LENGTH
 # (THEME_LENGTH_MIN..THEME_LENGTH_MAX letters) — rather than a plain
 # global top-N (the old THEME_PRESEARCH_LIMIT), which could leave an
 # entire slot length with no theme word at all if the nearest
@@ -378,7 +385,7 @@ THEME_LENGTH_SEARCH_PAGE = 1000
 # _compiled_theme_words_by_length / _theme_words_by_length). The
 # Dictionary panel's "Thématique" button, meanwhile, always uses this
 # constant.
-THEME_MIN_SCORE = 0.68
+THEME_MIN_SCORE = 0.76
 
 # Grid glossary construction ONLY (not the Dictionary panel's
 # "Thématique" button), at the user's explicit request: "raise the LLM's
@@ -1977,22 +1984,27 @@ def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
 
 
 def _compiled_similar_words(keywords: list[str], lang: str,
-                            min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+                            min_score: float = THEME_MIN_SCORE,
+                            context: Optional[str] = None) -> list[tuple[str, float]]:
     """Like `_compiled_theme_words_by_length` but for the Dictionnaire
     panel: runs a Qdrant nearest-neighbor search for EVERY keyword in
     `keywords` (embedding + `_iter_scored_words`) and merges them — each
     word keeps its BEST score. Two differences from the "grid glossary"
     version: (1) no 3-15 length filter (a dictionary lookup shouldn't
     drop long words); (2) sorted by DESCENDING score (the panel's own
-    "most similar first" order), not by length. A keyword whose Qdrant
-    search fails is skipped; the error only propagates as long as no
-    search has succeeded yet (Qdrant/embedder genuinely unavailable ->
-    503)."""
+    "most similar first" order), not by length. `context` (the complete
+    expression as typed in the search box, forwarded from `_similar_words_
+    impl`) is embedded together with each keyword rather than the keyword
+    alone — see `_keyword_search_text`; left `None` by `_synonyms_impl`
+    (whose sole "keyword" already IS the raw query, so there is nothing
+    to add). A keyword whose Qdrant search fails is skipped; the error
+    only propagates as long as no search has succeeded yet (Qdrant/
+    embedder genuinely unavailable -> 503)."""
     merged: dict[str, float] = {}
     any_ok = False
     for kw in keywords:
         try:
-            vec = _similar_embedder.embed(kw)
+            vec = _similar_embedder.embed(_keyword_search_text(kw, context))
             pairs = list(_iter_scored_words(vec, lang, min_score))
         except (QdrantStoreError, EmbedderError):
             if not any_ok:
@@ -2028,7 +2040,7 @@ def _synonyms_impl(query: str, lang: str,
 
 
 def _similar_words_impl(query: str, lang: str,
-                        min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+                        min_score: float = THEME_MIN_SCORE) -> tuple[list[str], list[tuple[str, float]]]:
     """Blocking. Applies the themed-grid-glossary principle to the
     Dictionary panel, at the user's explicit request ("appliquer le même
     principe que pour la génération du glossaire thématique : demander au
@@ -2038,16 +2050,25 @@ def _similar_words_impl(query: str, lang: str,
     keyword list spanning every part of speech, split into individual
     keywords (`_split_keywords`, case-insensitively de-duplicated), and
     `_compiled_similar_words` runs one Qdrant nearest-words search per
-    keyword and merges (best score per word). Falls back to the raw
-    `query` as the sole keyword if the LLM call fails or returns nothing
-    (same fallback shape as `_run_generate_job`'s own theme block).
+    keyword and merges (best score per word) — each keyword is embedded
+    together with the raw `query` (`"<query> / <keyword>"`, see
+    `_keyword_search_text`), not alone, so the search stays grounded in
+    what the user actually typed. Falls back to the raw `query` as the
+    sole keyword if the LLM call fails or returns nothing (same fallback
+    shape as `_run_generate_job`'s own theme block).
 
     Every kept `(word, score)` has a similarity >= `min_score` (the
     "Précision thématique" form field's current value, forwarded as the
     `min_score` query param; default THEME_MIN_SCORE). No count limit and
     no length filter (unlike the grid glossary's 3-15 bound). Returned
     most-similar-first; the score is shown to 2 decimals next to each word
-    in the panel."""
+    in the panel.
+
+    Returns `(keywords, scored_words)`: `keywords` is the LLM's own raw
+    expansion list, shown in the panel under "Champ lexical" ahead of the
+    Qdrant-compiled `scored_words`, shown under "Glossaire thématique" —
+    at the user's explicit request to surface both stages of the search
+    rather than only the final compiled list."""
     desc = ""
     try:
         desc = interactive_clue_generator.describe_theme(
@@ -2060,7 +2081,7 @@ def _similar_words_impl(query: str, lang: str,
         desc = ""
     keywords: list[str] = []
     seen: set[str] = set()
-    for kw in _split_keywords(desc):
+    for kw in _split_keywords(desc, lang):
         k = kw.lower()
         if k not in seen:
             seen.add(k)
@@ -2070,17 +2091,37 @@ def _similar_words_impl(query: str, lang: str,
     logger.info(
         "similar_words: %r -> %d keywords (min_score=%s)", query, len(keywords), min_score,
     )
-    return _compiled_similar_words(keywords, lang, min_score)
+    return keywords, _compiled_similar_words(keywords, lang, min_score, context=query)
+
+
+def _keyword_search_text(keyword: str, context: Optional[str] = None) -> str:
+    """Builds the text actually embedded for one keyword's Qdrant search:
+    `"<context> / <keyword>"` when `context` (the complete, as-typed user
+    input — the Dictionnaire panel's search box, or the generation form's
+    "Thématique" field) is given and differs from `keyword` itself, at the
+    user's explicit request: "au lieu d'envoyer chaque mot seul, envoyer la
+    saisie complète donnée par l'utilisateur, puis le mot thématique"
+    (example: input "loisir plage", LLM keyword "ballon" -> "loisir plage /
+    ballon"). Keeps the search grounded in the user's original intent
+    instead of drifting with each individual LLM-proposed keyword. Falls
+    back to the bare `keyword` when there is no context, or when the
+    keyword IS the context (the query-as-sole-keyword fallback/`_synonyms_
+    impl` case), to avoid a pointless "x / x" embedding."""
+    if context and context.strip().lower() != keyword.strip().lower():
+        return f"{context} / {keyword}"
+    return keyword
 
 
 def _theme_words_by_length(query: str, lang: str,
-                           min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+                           min_score: float = THEME_MIN_SCORE,
+                           context: Optional[str] = None) -> list[tuple[str, float]]:
     """Blocking: builds the themed-generation glossary (see
-    THEME_LENGTH_MIN/MAX/THEME_MIN_SCORE above) by embedding `query` once,
-    then walking the `lang` tenant's own ranked nearest-neighbor list via
-    `_iter_scored_words` — the shared threshold/pagination helper, which
-    stops the moment a hit's score drops below `min_score` (the
-    per-generation GenerateRequest.theme_precision, defaulting to the
+    THEME_LENGTH_MIN/MAX/THEME_MIN_SCORE above) by embedding `query` once
+    (prefixed with `context` via `_keyword_search_text` when given — see
+    there), then walking the `lang` tenant's own ranked nearest-neighbor
+    list via `_iter_scored_words` — the shared threshold/pagination
+    helper, which stops the moment a hit's score drops below `min_score`
+    (the per-generation GenerateRequest.theme_precision, defaulting to the
     THEME_MIN_SCORE constant) or the tenant is exhausted, with no depth
     cap and no count cap. This
     function then keeps only the words whose length falls within
@@ -2104,7 +2145,7 @@ def _theme_words_by_length(query: str, lang: str,
     set of *words*, so neither the score nor the length-sorted order is
     a ranking guarantee there — both exist purely for LOG_THEME/'s own
     readability."""
-    vec = _similar_embedder.embed(query)
+    vec = _similar_embedder.embed(_keyword_search_text(query, context))
     words = [
         (word, score)
         for word, score in _iter_scored_words(vec, lang, min_score)
@@ -2113,20 +2154,43 @@ def _theme_words_by_length(query: str, lang: str,
     return sorted(words, key=lambda pair: len(pair[0]))
 
 
-def _split_keywords(text: str) -> list[str]:
+def _split_keywords(text: str, lang: Optional[str] = None) -> list[str]:
     """Splits a `describe_theme` reply (a telegraphic list of about 30
     comma-separated keywords) into individual keywords — each will then
     run its own Qdrant nearest-neighbor search (see `_run_generate_job`'s
     own theme block and `_compiled_theme_words_by_length`). Splits on
     commas, semicolons and newlines; trims each piece; drops anything
     under 2 characters. Order is kept, no de-duplication here (the caller
-    flattens and de-duplicates across every list)."""
-    out: list[str] = []
-    for piece in re.split(r"[,;\n]+", text or ""):
-        kw = piece.strip().strip(".").strip()
-        if len(kw) >= 2:
-            out.append(kw)
-    return out
+    flattens and de-duplicates across every list).
+
+    At the user's explicit request ("si le LLM ne met pas de virgule,
+    découpe tous les mots"): the small local models occasionally ignore
+    the comma-separated-list instruction entirely and reply with one
+    space-separated blob instead — left as-is, that blob would become a
+    single ~30-word "keyword" (the exact dilution problem splitting
+    exists to avoid, see the module comment above THEME_LENGTH_MIN). When
+    no comma/semicolon/newline was found at all, this falls back to
+    splitting the whole reply into individual words (`_THEME_TOKEN_RE`,
+    the same tokenizer used on the user's own typed theme).
+
+    `lang` (also at the user's explicit request: "supprime les mots creux
+    : le, la, les, de, du, ce, cela, etc.") drops any resulting piece that
+    IS one of that language's stopwords (`clues._LANGUAGE_STOPWORDS_RAW`
+    — the same function-word lists `LLMClueGenerator` uses to detect a
+    reply written in the wrong language), a pure noise word that would
+    otherwise run its own, useless Qdrant search. `None` (the default)
+    applies no filtering — every call site passes its own `lang`/
+    `language`."""
+    pieces = [
+        kw for piece in re.split(r"[,;\n]+", text or "")
+        if len(kw := piece.strip().strip(".").strip()) >= 2
+    ]
+    if len(pieces) <= 1:
+        pieces = _THEME_TOKEN_RE.findall(text or "")
+    stopwords = _LANGUAGE_STOPWORDS_RAW.get(lang) if lang else None
+    if stopwords:
+        pieces = [kw for kw in pieces if kw.lower() not in stopwords]
+    return pieces
 
 
 # A significant "word" of the "Thématique" field: a run of letters (an
@@ -2157,7 +2221,8 @@ def _theme_tokens(theme: str) -> list[str]:
 
 
 def _compiled_theme_words_by_length(keywords: list[str], lang: str,
-                                    min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+                                    min_score: float = THEME_MIN_SCORE,
+                                    context: Optional[str] = None) -> list[tuple[str, float]]:
     """Runs `_theme_words_by_length` for EVERY keyword in `keywords` and
     merges the resulting glossaries — each word keeps the BEST (highest)
     score seen across every search. At the user's explicit request:
@@ -2169,7 +2234,12 @@ def _compiled_theme_words_by_length(keywords: list[str], lang: str,
     over a ~30-word sentence. Each search applies the `min_score`
     threshold (the form's "Précision thématique" field —
     GenerateRequest.theme_precision —, defaulting to the THEME_MIN_SCORE
-    constant) via `_theme_words_by_length`.
+    constant) via `_theme_words_by_length`. `context` (the complete
+    theme text as typed by the user, forwarded from `_build_theme_
+    glossary`) is passed through to every keyword search unchanged — see
+    `_keyword_search_text` for why: each keyword is embedded together
+    with the user's own full input rather than alone, so the search stays
+    grounded even for a keyword the LLM invented far afield.
 
     The result is re-sorted by increasing word length then descending
     score — exactly the order a single call to `_theme_words_by_length`
@@ -2181,7 +2251,7 @@ def _compiled_theme_words_by_length(keywords: list[str], lang: str,
     any_ok = False
     for kw in keywords:
         try:
-            pairs = _theme_words_by_length(kw, lang, min_score)
+            pairs = _theme_words_by_length(kw, lang, min_score, context=context)
         except (QdrantStoreError, EmbedderError):
             if not any_ok:
                 raise
@@ -2217,7 +2287,7 @@ async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_S
         raise HTTPException(status_code=400, detail="expression vide")
     min_score = max(0.0, min(1.0, min_score))
     try:
-        scored = await asyncio.to_thread(_similar_words_impl, query, lang, min_score)
+        keywords, scored = await asyncio.to_thread(_similar_words_impl, query, lang, min_score)
     except (QdrantStoreError, EmbedderError) as exc:
         logger.warning("similar_words unavailable: %s", exc)
         raise HTTPException(
@@ -2226,9 +2296,11 @@ async def similar_words(q: str, lang: str = "fr", min_score: float = THEME_MIN_S
         )
     # `words`: one {word, score} object per entry (the Qdrant score is
     # shown in parentheses next to each word in the Dictionnaire panel,
-    # at the user's explicit request).
+    # at the user's explicit request). `keywords`: the LLM's own raw
+    # expansion list ("Champ lexical" in the panel), ahead of `words`
+    # ("Glossaire thématique" — the Qdrant-compiled list).
     words = [{"word": w, "score": s} for w, s in scored]
-    return {"query": query, "lang": lang, "words": words}
+    return {"query": query, "lang": lang, "keywords": keywords, "words": words}
 
 
 @app.get("/api/synonyms")
@@ -2723,7 +2795,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
     # describe_theme, falling back to the bare word if the LLM call
     # fails. Every list is then split into keywords (_split_keywords).
     keyword_lists: list[tuple[Optional[str], list[str]]] = [
-        (None, _split_keywords(theme_description) or _theme_tokens(theme) or [theme])
+        (None, _split_keywords(theme_description, language) or _theme_tokens(theme) or [theme])
     ]
     tokens = _theme_tokens(theme)
     if len(tokens) > 1:
@@ -2744,7 +2816,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
                     log_tag, tok, exc,
                 )
                 tok_desc = ""
-            keyword_lists.append((tok, _split_keywords(tok_desc) or [tok]))
+            keyword_lists.append((tok, _split_keywords(tok_desc, language) or [tok]))
         logger.info(
             "[%s] theme has %d words -> %d keyword lists",
             log_tag, len(tokens), len(keyword_lists),
@@ -2789,7 +2861,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
                 "[%s] theme keyword top-up %d failed (%s)", log_tag, _loop, exc,
             )
             break
-        _kw_more = _split_keywords(_more)
+        _kw_more = _split_keywords(_more, language)
         _added = _add_keywords(_kw_more)
         keyword_lists.append((f"(top-up {_loop})", _kw_more))
         logger.info(
@@ -2806,7 +2878,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
     try:
         theme_scored_words = await asyncio.to_thread(
             _compiled_theme_words_by_length, searched_keywords, language,
-            theme_precision,
+            theme_precision, theme,
         )
         theme_priority_words = [w for w, _score in theme_scored_words]
         logger.info(
@@ -2878,16 +2950,19 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     session never builds a per-language glossary, see
     `_run_interactive_job`'s own docstring).
 
-    `preserved_clues` (`None` by default — a `{(row, col, direction):
-    clue}` map, no effect for any pre-existing caller), at the user's
-    explicit request for "Finir la grille" ("génération des définitions
-    manquantes... mais pas celles déjà définies"): a word whose exact
-    (row, col, direction) is in this map already has a clue — its letters
-    were locked into the search as hard constraints (see
-    `permanent_locked_letters` below), so its position/spelling can't
-    have changed — and is excluded from the LLM clue-generation batch
-    entirely, keeping that clue text verbatim instead of asking the LLM
-    for a new one.
+    `preserved_clues` (`None` by default — a `{word_answer: clue}` map,
+    no effect for any pre-existing caller), at the user's explicit request
+    for "Finir la grille" ("génération des définitions manquantes... mais
+    pas celles déjà définies"): a finished word whose exact answer text is
+    a key of this map already has a clue and is excluded from the LLM
+    clue-generation batch entirely, keeping that clue text verbatim
+    instead of asking the LLM for a new one. Deliberately keyed by the
+    word's own TEXT, not its (row, col, direction) — see
+    `interactive_finish`'s own docstring for why a position-keyed map
+    breaks the moment the search extends a word into a boundary cell that
+    wasn't yet decided black, at the user's own explicit correction: "il
+    ne faut pas se contenter de vérifier les positions : des mots ont pu
+    changer."
 
     `permanent_locked_letters` (`None` by default — no effect for any
     other caller) is `interactive_finish`'s own `locked_letters` — passed
@@ -3429,21 +3504,22 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             for dk in range(len(w["answer"]))
         })
         # "Finir la grille" (see POST /api/interactive/finish): a word
-        # whose exact (row, col, direction) already carries a preserved
-        # clue (`preserved_clues`) is never sent to the LLM — its letters
-        # were just locked as a hard constraint in the search (see
-        # `resume_state`), so its position/spelling can't have changed.
-        # `None`/empty for any pre-existing caller: `words_needing_clue`
-        # then becomes `result["words"]` in full, `total_words_for_clues`
-        # == `len(result["words"])`, unchanged behavior. Computed here
-        # (not only further below, where `remaining_entries` also needs
-        # it) so this very first "clues" event already shows the true
-        # total word count to define, consistent with the progress shown
-        # afterward.
-        preserved_by_key = preserved_clues or {}
+        # whose exact ANSWER TEXT already carries a preserved clue
+        # (`preserved_clues`, a `{word: clue}` map — deliberately never
+        # keyed by (row, col, direction), see that endpoint's own
+        # docstring for why a position-keyed match silently breaks the
+        # moment the search extends a word into an undecided boundary
+        # cell) is never sent to the LLM. `None`/empty for any
+        # pre-existing caller: `words_needing_clue` then becomes
+        # `result["words"]` in full, `total_words_for_clues` ==
+        # `len(result["words"])`, unchanged behavior. Computed here (not
+        # only further below, where `remaining_entries` also needs it) so
+        # this very first "clues" event already shows the true total word
+        # count to define, consistent with the progress shown afterward.
+        preserved_by_word = preserved_clues or {}
         words_needing_clue = [
             w for w in result["words"]
-            if not preserved_by_key.get((w["row"], w["col"], w["direction"]))
+            if not preserved_by_word.get(w["answer"])
         ]
         total_words_for_clues = len(words_needing_clue)
         progress(
@@ -3497,7 +3573,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             # (falling back to `req.language`, the positional argument
             # below, for a word that carries none) instead of a single
             # language for the whole call as before this feature.
-            # `words_needing_clue`/`preserved_by_key` already computed above
+            # `words_needing_clue`/`preserved_by_word` already computed above
             # (see the very first "clues" progress event, right before this
             # queue wait) — reused here so the two never disagree.
             remaining_entries = [
@@ -3573,8 +3649,9 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 # `preserved_clues` above) always wins — never overwritten
                 # by any entry of the same word in `accumulated_clues`
                 # (which can't hold one for this exact word anyway, since
-                # it was never part of `remaining_entries`).
-                preserved = preserved_by_key.get((w["row"], w["col"], w["direction"]))
+                # it was never part of `remaining_entries`). Matched by
+                # `w["answer"]` itself, same as `words_needing_clue` above.
+                preserved = preserved_by_word.get(w["answer"])
                 w["clue"] = preserved if preserved else accumulated_clues.get(w["answer"], "")
 
             # A short, catchy title for the whole grid, at the user's explicit
@@ -4901,9 +4978,14 @@ async def interactive_finish(req: InteractiveFinishRequest):
     verbatim (`override_priority_words`/`override_theme_description` —
     see _run_generate_job's own docstring) rather than re-running the
     LLM/Qdrant theme pre-search a second time. Every word whose exact
-    (row, col, direction) already carries a real definition
-    (`preserved_clues`) keeps that clue untouched — only a genuinely NEW
-    word (one the search itself completed) ever gets sent to the LLM.
+    TEXT (never its position — see `preserved_clues`'s own construction
+    below, and `_run_generate_job`'s docstring, for why matching by
+    (row, col, direction) alone silently breaks the moment the search
+    extends a word into a boundary cell that wasn't yet decided black)
+    already carried a real definition at the time of the click keeps that
+    clue untouched — only a genuinely NEW word (one the search itself
+    completed, or whose own final text no longer matches what was typed)
+    ever gets sent to the LLM.
 
     Returns a brand-new job_id, polled exactly like an ordinary
     generation (GET /api/generate/status/{job_id}) — the interactive
@@ -5022,46 +5104,80 @@ async def interactive_finish(req: InteractiveFinishRequest):
         if ch == "." and (not req.zone_cells or (r, c) in zone)
     }
     resume_state = _serialize_resume_state(seed_grid, locked_letters, None, None)
-    # {(row, col, direction): clue} for every definition already typed —
-    # this is `interactive_finish`'s own preserved-clues map; an empty
-    # entry (word not defined yet) is simply omitted, letting that word
-    # go through automatic clue generation like any other missing one.
-    preserved_clues = {
-        (d.get("row"), d.get("col"), d.get("direction")): (d.get("clue") or "").strip()
-        for d in req.definitions
-        if (d.get("clue") or "").strip()
-    }
-    # A word that already carries a preserved clue must keep its own exact
-    # shape too, not merely its letters — `locked_letters` above already
-    # stops the search from ever blackening one of ITS OWN cells, but
-    # nothing stopped `minimize_black_squares`'s own final optimization
-    # pass (or, on a "reprise telle quelle" palier, `_optimize_before_
-    # cleanup`/`_lengthen_impossible_zones`) from removing/moving the
-    # black cell bounding it — silently extending or merging that word
-    # with whatever sits just beyond it, which leaves `preserved_clues`'s
-    # own (row, col, direction) key stale (or, worse, still matching but
-    # now pointing at a longer word than the one the clue was actually
-    # written for). Reported directly by the user: "il ne faut pas
-    # re-générer des définitions pour des emplacements qui en ont déjà
-    # une." Fixed by reusing the exact same `permanent_black_cells`
-    # mechanism already built for "Finir la zone" (see generate_grid's own
-    # docstring) — every one of the 3 removal-capable functions it's
-    # threaded through already refuses to touch a cell listed there, so
-    # widening this one set (rather than any new mechanism in the solver
-    # itself) is enough: for each preserved-clue word, its own immediate
-    # boundary cell(s) — right before its first cell, right after its
-    # last, in its own direction — join the set whenever they're already
-    # black, so they can never be reopened out from under it.
+    # {word_answer: clue} for every definition already typed — keyed by the
+    # WORD ITSELF, never by (row, col, direction), at the user's explicit
+    # correction: "il ne faut pas se contenter de vérifier les positions :
+    # des mots ont pu changer. Il faut vérifier si un mot présent n'a pas
+    # déjà une définition, à partir du mot lui-même (peu importe où et dans
+    # quel sens)." A position-keyed map (the original design) silently
+    # broke the moment a word's own boundary cell wasn't already black at
+    # the time of the click: `locked_letters` only pins down the cells the
+    # player had already typed, never the cell(s) immediately beyond
+    # them — a very common case in practice, since manually placing every
+    # single terminating black cell defeats the whole point of "Finir la
+    # grille". Left free, the search can extend such a word straight
+    # through that still-open cell (e.g. a player-typed "CHAT" with an
+    # undecided cell right after it can resolve into a real, longer word
+    # like "CHATIE") — the (row, col, direction) key of that slot is
+    # completely unchanged (same starting cell, same direction, the
+    # ONLY thing extract_slots ever keys on), so the old code kept
+    # matching it and wrongly attached the clue written for "CHAT" to a
+    # word it was never written for — reproduced live (a hand-built grid
+    # with exactly this shape) and confirmed fixed by this rewrite.
+    # Matching by the word's own text instead is immune to this: only a
+    # definition whose slot was ALREADY fully lettered (no
+    # "." anywhere in its own maximal white run) at the moment of the
+    # click is trusted at all — an incomplete slot's clue can't reliably
+    # be attributed to any specific final word yet, so it's simply
+    # dropped rather than guessed at (matching `frontend/static/
+    # script.js`'s own `filled` convention, recomputed here server-side
+    # rather than trusted from the client) — together this is exactly
+    # "recalcule toutes les définitions, alors que certaines existaient
+    # déjà" for a grid where boundaries were left for the automatic
+    # engine to decide, as "Finir la grille" is meant to allow.
+    # `Filler.used_words` already guarantees no two slots of one finished
+    # grid ever share the same exact word, so a plain `{word: clue}` map
+    # can never misattribute one preserved clue to two different final
+    # placements.
     slots = extract_slots(seed_grid, rows, cols)
     slot_by_key = {
         (cells[0][0], cells[0][1], slot_direction(cells)): cells
         for cells in slots
     }
+    preserved_clues = {}
+    # A word that already carries a preserved clue must also keep its own
+    # exact shape, not merely its letters — `locked_letters` above already
+    # stops the search from ever blackening one of ITS OWN cells, but
+    # nothing stopped `minimize_black_squares`'s own final optimization
+    # pass (or, on a "reprise telle quelle" palier, `_optimize_before_
+    # cleanup`/`_lengthen_impossible_zones`) from removing an ALREADY-
+    # BLACK boundary cell right next to it, silently merging it with
+    # whatever sits just beyond. Reused from before this fix, still keyed
+    # off each preserved word's own CURRENT position (not its text) —
+    # unrelated to how the clue itself gets matched back afterward: every
+    # one of the 3 removal-capable functions `permanent_black_cells` is
+    # threaded through already refuses to touch a cell listed here, so
+    # widening this one set (rather than any new mechanism in the solver
+    # itself) is enough — for each preserved-clue word, its own immediate
+    # boundary cell(s) — right before its first cell, right after its
+    # last, in its own direction — join the set whenever they're already
+    # black, so they can never be reopened out from under it. This never
+    # protects against extending into a boundary that's still open ("."),
+    # which is exactly the case the word-based clue matching above exists
+    # to tolerate correctly rather than prevent.
     protected_black_cells = set()
-    for key in preserved_clues:
+    for d in req.definitions:
+        clue = (d.get("clue") or "").strip()
+        if not clue:
+            continue
+        key = (d.get("row"), d.get("col"), d.get("direction"))
         cells = slot_by_key.get(key)
         if not cells:
             continue
+        word = "".join(req.grid[r][c] for (r, c) in cells)
+        if "." in word:
+            continue  # slot not actually complete yet — nothing reliable to attribute this clue to
+        preserved_clues[word] = clue
         (r0, c0), (r1, c1) = cells[0], cells[-1]
         if key[2] == "across":
             boundary_cells = ((r0, c0 - 1), (r1, c1 + 1))
