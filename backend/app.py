@@ -339,14 +339,11 @@ BUDGET_MODES = {
 # of about 30 comma-separated keywords. It is NOT embedded as-is: it is
 # split into individual keywords
 # (_split_keywords), and EACH keyword runs its own Qdrant nearest-
-# neighbor search — _compiled_theme_words_by_length then merges
-# every result (best score per word). A search on a single keyword gives
-# a much sharper query vector than a single embedding averaged over ~30
-# words. Each keyword is embedded together with the complete theme text
-# as typed by the user ("<theme> / <keyword>", see _keyword_search_text),
-# at the user's explicit request, so a keyword that drifts far from the
-# original input still gets pulled back toward it. Each search is done
-# PER LENGTH
+# neighbor search, embedded bare (no surrounding context) — a much
+# sharper query vector than a single embedding averaged over ~30 words,
+# and undiluted by whatever other keywords the same theme produced.
+# _compiled_theme_words_by_length then merges every result (best score
+# per word). Each search is done PER LENGTH
 # (THEME_LENGTH_MIN..THEME_LENGTH_MAX letters) — rather than a plain
 # global top-N (the old THEME_PRESEARCH_LIMIT), which could leave an
 # entire slot length with no theme word at all if the nearest
@@ -1328,10 +1325,10 @@ def _write_users_log(count, pseudos):
         with path.open("a", encoding="utf-8") as fh:
             fh.write(line)
     except OSError as exc:
-        logger.warning("echec d'ecriture du journal LOG_USERS: %s", exc)
+        logger.warning("failed to write LOG_USERS journal: %s", exc)
 
 
-def _write_theme_log(short_id, theme, description, words,
+def _write_theme_log(short_id, theme, description, words, language=None,
                      keyword_lists=None, searched_keywords=None, min_score=None):
     """Writes `LOG_THEME/<timestamp>_<short_id>.log`, the filename prefixed
     with a full timestamp (`%Y%m%d-%H%M%S-%f`) like `LOG_LLM/`
@@ -1358,7 +1355,13 @@ def _write_theme_log(short_id, theme, description, words,
     score") — the word's own letter count is shown between the two, each
     field separated by a tab so the file stays easy to parse/align.
 
-    `keyword_lists`: the keyword lists produced by the LLM, shaped as
+    `language`: the target language this glossary was built for (the
+    `language` parameter of `_build_theme_glossary`, e.g. `"fr"`) — logged
+    in the header so a reader of the trace alone (without cross-
+    referencing the job/request that produced it) can tell which
+    language's Qdrant tenant and `describe_theme` calls this file
+    reflects, particularly useful for a bilingual grid's two per-direction
+    calls. `keyword_lists`: the keyword lists produced by the LLM, shaped as
     `[(label_or_None, [keyword, ...]), ...]` — `None` for the whole-theme
     list, the theme's own word for each per-word list (see
     `_run_generate_job`'s own theme block). `searched_keywords`: the flat,
@@ -1375,6 +1378,8 @@ def _write_theme_log(short_id, theme, description, words,
         with path.open("w", encoding="utf-8") as fh:
             fh.write((description or theme).strip() + "\n")
             fh.write(f"\n# generated {now:%Y-%m-%d %H:%M:%S}\n")
+            if language is not None:
+                fh.write(f"# language: {language}\n")
             fh.write(f"# theme (as typed): {theme}\n")
             if min_score is not None:
                 fh.write(f"# score threshold (theme_precision): {min_score}\n")
@@ -1397,7 +1402,7 @@ def _write_theme_log(short_id, theme, description, words,
                     for w, score in words
                 ) + "\n")
     except OSError as exc:
-        logger.warning("echec d'ecriture du journal LOG_THEME: %s", exc)
+        logger.warning("failed to write LOG_THEME journal: %s", exc)
 
 
 @app.post("/api/presence")
@@ -1948,6 +1953,74 @@ async def paraphrase(q: str, lang: str = "fr"):
     return {"query": text, "lang": lang, "paraphrases": paraphrases}
 
 
+# Length window (in letters, counted on the wordlist's own ACCENTUE
+# column) for the random "indicative word" GET /api/theme/random embeds
+# into the LLM prompt (see LLMClueGenerator.generate_random_theme's own
+# docstring for what it's for) — short enough to still read as an
+# ordinary word, long enough to skew away from bare function words.
+RANDOM_THEME_WORD_MIN_LEN = 5
+RANDOM_THEME_WORD_MAX_LEN = 10
+
+
+def _random_dictionary_word(language, min_len=RANDOM_THEME_WORD_MIN_LEN,
+                             max_len=RANDOM_THEME_WORD_MAX_LEN):
+    """One word drawn uniformly at random from data/wordlist_<language>_
+    full.tsv's own ACCENTUE column (its natural accented/inflected
+    spelling — see CLAUDE.md's data pipeline section), restricted to
+    entries whose length in letters falls in [min_len, max_len].
+    Reservoir sampling over the file — never loads the whole (up to
+    ~200k-line) file into memory — so this stays cheap even for the
+    largest wordlist. Returns None if the language is unknown, the file
+    can't be read, or no entry in range was found."""
+    wordlist_path = WORDLISTS.get(language)
+    if not wordlist_path:
+        return None
+    chosen = None
+    seen = 0
+    try:
+        with open(wordlist_path, encoding="utf-8") as f:
+            for line in f:
+                stripped = line.rstrip("\n")
+                if not stripped or stripped.startswith("#"):
+                    continue
+                columns = stripped.split("\t")
+                if len(columns) < 2:
+                    continue
+                word = columns[1]
+                if not (min_len <= len(word) <= max_len):
+                    continue
+                seen += 1
+                if random.randint(1, seen) == 1:
+                    chosen = word
+    except OSError:
+        return None
+    return chosen
+
+
+@app.get("/api/theme/random")
+async def random_theme(lang: str = "fr"):
+    """Random-theme feature backing Automation/Populate.py: picks a
+    random dictionary word (RANDOM_THEME_WORD_MIN_LEN to RANDOM_THEME_
+    WORD_MAX_LEN letters) from `lang`'s own wordlist and asks the LLM
+    (LLMClueGenerator.generate_random_theme) to invent an original
+    crossword theme, folding that word into the prompt as a randomness
+    seed. Not used by the web UI itself — Populate.py is the only
+    caller — but proxied through frontend/server.py like every other
+    backend endpoint.
+
+    Returns {language, hint_word, theme} — `theme` is "" if the LLM call
+    failed or never returned anything usable; the caller then falls back
+    to an ordinary, un-themed generation, exactly like a request with no
+    typed theme."""
+    if lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
+    hint_word = await asyncio.to_thread(_random_dictionary_word, lang)
+    theme = await asyncio.to_thread(
+        interactive_clue_generator.generate_random_theme, lang, hint_word,
+    )
+    return {"language": lang, "hint_word": hint_word, "theme": theme}
+
+
 def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
     """Yield `(word, score)` from the `lang` tenant of the Qdrant "words"
     collection, most-similar-first, stopping the moment a hit's score
@@ -1984,27 +2057,22 @@ def _iter_scored_words(vec, lang: str, min_score: float = THEME_MIN_SCORE):
 
 
 def _compiled_similar_words(keywords: list[str], lang: str,
-                            min_score: float = THEME_MIN_SCORE,
-                            context: Optional[str] = None) -> list[tuple[str, float]]:
+                            min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
     """Like `_compiled_theme_words_by_length` but for the Dictionnaire
     panel: runs a Qdrant nearest-neighbor search for EVERY keyword in
-    `keywords` (embedding + `_iter_scored_words`) and merges them — each
-    word keeps its BEST score. Two differences from the "grid glossary"
-    version: (1) no 3-15 length filter (a dictionary lookup shouldn't
-    drop long words); (2) sorted by DESCENDING score (the panel's own
-    "most similar first" order), not by length. `context` (the complete
-    expression as typed in the search box, forwarded from `_similar_words_
-    impl`) is embedded together with each keyword rather than the keyword
-    alone — see `_keyword_search_text`; left `None` by `_synonyms_impl`
-    (whose sole "keyword" already IS the raw query, so there is nothing
-    to add). A keyword whose Qdrant search fails is skipped; the error
-    only propagates as long as no search has succeeded yet (Qdrant/
-    embedder genuinely unavailable -> 503)."""
+    `keywords` (embedding the bare keyword + `_iter_scored_words`) and
+    merges them — each word keeps its BEST score. Two differences from the
+    "grid glossary" version: (1) no 3-15 length filter (a dictionary
+    lookup shouldn't drop long words); (2) sorted by DESCENDING score (the
+    panel's own "most similar first" order), not by length. A keyword
+    whose Qdrant search fails is skipped; the error only propagates as
+    long as no search has succeeded yet (Qdrant/embedder genuinely
+    unavailable -> 503)."""
     merged: dict[str, float] = {}
     any_ok = False
     for kw in keywords:
         try:
-            vec = _similar_embedder.embed(_keyword_search_text(kw, context))
+            vec = _similar_embedder.embed(kw)
             pairs = list(_iter_scored_words(vec, lang, min_score))
         except (QdrantStoreError, EmbedderError):
             if not any_ok:
@@ -2050,12 +2118,13 @@ def _similar_words_impl(query: str, lang: str,
     keyword list spanning every part of speech, split into individual
     keywords (`_split_keywords`, case-insensitively de-duplicated), and
     `_compiled_similar_words` runs one Qdrant nearest-words search per
-    keyword and merges (best score per word) — each keyword is embedded
-    together with the raw `query` (`"<query> / <keyword>"`, see
-    `_keyword_search_text`), not alone, so the search stays grounded in
-    what the user actually typed. Falls back to the raw `query` as the
-    sole keyword if the LLM call fails or returns nothing (same fallback
-    shape as `_run_generate_job`'s own theme block).
+    keyword, each embedded bare (no surrounding context — an earlier
+    version prefixed every keyword with the raw `query`, diluting a sharp
+    keyword's own embedding with the query's other words and shrinking
+    the compiled glossary; removed at the user's explicit request), and
+    merges the results (best score per word). Falls back to the raw
+    `query` as the sole keyword if the LLM call fails or returns nothing
+    (same fallback shape as `_run_generate_job`'s own theme block).
 
     Every kept `(word, score)` has a similarity >= `min_score` (the
     "Précision thématique" form field's current value, forwarded as the
@@ -2091,34 +2160,16 @@ def _similar_words_impl(query: str, lang: str,
     logger.info(
         "similar_words: %r -> %d keywords (min_score=%s)", query, len(keywords), min_score,
     )
-    return keywords, _compiled_similar_words(keywords, lang, min_score, context=query)
-
-
-def _keyword_search_text(keyword: str, context: Optional[str] = None) -> str:
-    """Builds the text actually embedded for one keyword's Qdrant search:
-    `"<context> / <keyword>"` when `context` (the complete, as-typed user
-    input — the Dictionnaire panel's search box, or the generation form's
-    "Thématique" field) is given and differs from `keyword` itself, at the
-    user's explicit request: "au lieu d'envoyer chaque mot seul, envoyer la
-    saisie complète donnée par l'utilisateur, puis le mot thématique"
-    (example: input "loisir plage", LLM keyword "ballon" -> "loisir plage /
-    ballon"). Keeps the search grounded in the user's original intent
-    instead of drifting with each individual LLM-proposed keyword. Falls
-    back to the bare `keyword` when there is no context, or when the
-    keyword IS the context (the query-as-sole-keyword fallback/`_synonyms_
-    impl` case), to avoid a pointless "x / x" embedding."""
-    if context and context.strip().lower() != keyword.strip().lower():
-        return f"{context} / {keyword}"
-    return keyword
+    return keywords, _compiled_similar_words(keywords, lang, min_score)
 
 
 def _theme_words_by_length(query: str, lang: str,
-                           min_score: float = THEME_MIN_SCORE,
-                           context: Optional[str] = None) -> list[tuple[str, float]]:
+                           min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
     """Blocking: builds the themed-generation glossary (see
-    THEME_LENGTH_MIN/MAX/THEME_MIN_SCORE above) by embedding `query` once
-    (prefixed with `context` via `_keyword_search_text` when given — see
-    there), then walking the `lang` tenant's own ranked nearest-neighbor
+    THEME_LENGTH_MIN/MAX/THEME_MIN_SCORE above) by embedding the bare
+    `query` keyword itself (no surrounding context — see
+    `_compiled_theme_words_by_length`'s own docstring for why), then
+    walking the `lang` tenant's own ranked nearest-neighbor
     list via `_iter_scored_words` — the shared threshold/pagination
     helper, which stops the moment a hit's score drops below `min_score`
     (the per-generation GenerateRequest.theme_precision, defaulting to the
@@ -2145,7 +2196,7 @@ def _theme_words_by_length(query: str, lang: str,
     set of *words*, so neither the score nor the length-sorted order is
     a ranking guarantee there — both exist purely for LOG_THEME/'s own
     readability."""
-    vec = _similar_embedder.embed(_keyword_search_text(query, context))
+    vec = _similar_embedder.embed(query)
     words = [
         (word, score)
         for word, score in _iter_scored_words(vec, lang, min_score)
@@ -2221,8 +2272,7 @@ def _theme_tokens(theme: str) -> list[str]:
 
 
 def _compiled_theme_words_by_length(keywords: list[str], lang: str,
-                                    min_score: float = THEME_MIN_SCORE,
-                                    context: Optional[str] = None) -> list[tuple[str, float]]:
+                                    min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
     """Runs `_theme_words_by_length` for EVERY keyword in `keywords` and
     merges the resulting glossaries — each word keeps the BEST (highest)
     score seen across every search. At the user's explicit request:
@@ -2231,15 +2281,16 @@ def _compiled_theme_words_by_length(keywords: list[str], lang: str,
     de-duplicated list of keywords extracted from the LLM-produced lists
     (see `_split_keywords` and `_run_generate_job`'s own theme block): a
     single keyword is a much sharper query than one embedding averaged
-    over a ~30-word sentence. Each search applies the `min_score`
-    threshold (the form's "Précision thématique" field —
-    GenerateRequest.theme_precision —, defaulting to the THEME_MIN_SCORE
-    constant) via `_theme_words_by_length`. `context` (the complete
-    theme text as typed by the user, forwarded from `_build_theme_
-    glossary`) is passed through to every keyword search unchanged — see
-    `_keyword_search_text` for why: each keyword is embedded together
-    with the user's own full input rather than alone, so the search stays
-    grounded even for a keyword the LLM invented far afield.
+    over a ~30-word sentence — each is searched bare, with no surrounding
+    context, so it stays that sharp (an earlier version prefixed every
+    keyword with the complete typed theme text, at the user's own
+    then-request, to keep a drifting keyword grounded in the original
+    input; removed at the user's later, explicit follow-up request once it
+    was found to be diluting even an on-topic keyword's own embedding and
+    shrinking the compiled glossary — see `_build_theme_glossary`). Each
+    search applies the `min_score` threshold (the form's "Précision
+    thématique" field — GenerateRequest.theme_precision —, defaulting to
+    the THEME_MIN_SCORE constant) via `_theme_words_by_length`.
 
     The result is re-sorted by increasing word length then descending
     score — exactly the order a single call to `_theme_words_by_length`
@@ -2251,7 +2302,7 @@ def _compiled_theme_words_by_length(keywords: list[str], lang: str,
     any_ok = False
     for kw in keywords:
         try:
-            pairs = _theme_words_by_length(kw, lang, min_score, context=context)
+            pairs = _theme_words_by_length(kw, lang, min_score)
         except (QdrantStoreError, EmbedderError):
             if not any_ok:
                 raise
@@ -2878,7 +2929,7 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
     try:
         theme_scored_words = await asyncio.to_thread(
             _compiled_theme_words_by_length, searched_keywords, language,
-            theme_precision, theme,
+            theme_precision,
         )
         theme_priority_words = [w for w, _score in theme_scored_words]
         logger.info(
@@ -2893,8 +2944,8 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
         theme_priority_words = None
     await asyncio.to_thread(
         _write_theme_log, log_tag, theme, theme_description,
-        theme_scored_words, keyword_lists, searched_keywords,
-        theme_precision,
+        theme_scored_words, language=language, keyword_lists=keyword_lists,
+        searched_keywords=searched_keywords, min_score=theme_precision,
     )
     return theme_priority_words, theme_description
 

@@ -126,7 +126,9 @@ added to the Library automatically. The batch runs quietly in the
 background and survives closing the terminal; its progress is written to
 `logs/populate.log`. It also writes its own definitions one at a time
 rather than several at once, so it never slows down other people using
-the app at the same time.
+the app at the same time. By default, each grid also gets a random theme
+invented by the AI, so the Library ends up with real variety rather than
+plain, unthemed grids — pass `--no-theme` to turn this off.
 
 ## Using the app
 

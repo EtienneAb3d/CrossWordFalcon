@@ -213,6 +213,12 @@ TITLE_PROPOSALS_RETRIES = 2
 # already looks fine in one attempt costs nothing extra.
 THEME_DESCRIPTION_RETRIES = 2
 
+# generate_random_theme() re-asks the model this many EXTRA times when a
+# whole response yields no usable candidate (empty reply, only a header/
+# lead-in line, or a wrong-language reply) — same small, bounded-retry
+# shape as TITLE_PROPOSALS_RETRIES/THEME_DESCRIPTION_RETRIES above.
+RANDOM_THEME_RETRIES = 2
+
 # A wrapping quote pair the model sometimes puts around a title despite
 # rule 2 explicitly forbidding it (e.g. '"Vol de Nuit"') — stripped by
 # _clean_title. Deliberately narrow (quote characters only, not general
@@ -230,6 +236,13 @@ _TITLE_QUOTES_RE = re.compile(r'^[\'"“”«»]+|[\'"“”«»]+$')
 # "1. Title: Vol de Nuit" is still fully cleaned, not just partially).
 _TITLE_LABEL_RE = re.compile(
     r"^\s*(?:title|titre|titel|título|titolo)\s*:\s*", re.IGNORECASE,
+)
+
+# Same leaked-label pattern as _TITLE_LABEL_RE, for generate_random_
+# theme()'s reply ("Theme: cuisine italienne" instead of just "cuisine
+# italienne") — stripped by _clean_theme_suggestion.
+_THEME_SUGGESTION_LABEL_RE = re.compile(
+    r"^\s*(?:theme|th[eè]me|thema|tema)\s*:\s*", re.IGNORECASE,
 )
 
 # A leading greeting / introductory phrase the small local model sometimes
@@ -339,6 +352,26 @@ def _clean_title(content):
     ."""
     titles = _clean_titles(content)
     return titles[0] if titles else ""
+
+
+def _clean_theme_suggestion(content):
+    """Cleans generate_random_theme()'s raw reply down to a bare theme
+    phrase: takes the first non-empty line, strips a leading numbered/
+    bulleted marker (_LEADING_MARKER_RE), a leaked "Theme: "-style label
+    (_THEME_SUGGESTION_LABEL_RE), a wrapping quote pair (_TITLE_QUOTES_RE)
+    and a trailing period. Returns "" if nothing usable survives (an
+    empty reply, or only a bare list-header line ending in ":")."""
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = _LEADING_MARKER_RE.sub("", line).strip()
+        line = _THEME_SUGGESTION_LABEL_RE.sub("", line).strip()
+        line = _TITLE_QUOTES_RE.sub("", line).strip()
+        line = line.rstrip(".").strip()
+        if line and not line.endswith(":"):
+            return line
+    return ""
 
 
 # A plain title reads as words separated by spaces, at most a comma —
@@ -995,6 +1028,24 @@ def _theme_echoes_input(sentence, theme_text):
     sentence_tokens = {t.lower() for t in _WORD_TOKEN_RE.findall(sentence)}
     overlap = theme_tokens & sentence_tokens
     return len(overlap) / len(theme_tokens) >= _THEME_ECHO_OVERLAP_THRESHOLD
+
+
+def _theme_is_repetitive(theme):
+    """True if `theme` (a generate_random_theme() candidate) is
+    degenerate rather than a real multi-concept phrase: a real observed
+    failure on the small local model is answering with the SAME word
+    repeated as if it were several ("socorra, socorra, socorra" for
+    Portuguese instead of an actual 2-to-5-word theme) — the system
+    prompt's shape requirements ("2 to 5 words", "one concrete subject or
+    field") are advisory text the model can satisfy word-count-wise while
+    still failing this way, so this needs its own explicit check rather
+    than trusting the count alone. Flags any candidate with fewer than
+    two distinct whole-word tokens, or where any token recurs — a
+    legitimate short theme phrase has no reason to repeat the same word."""
+    tokens = _WORD_TOKEN_RE.findall(theme.lower())
+    if len(tokens) < 2:
+        return True
+    return len(set(tokens)) < len(tokens)
 
 
 def _contains_target_word(candidate, answer, accented, canonical=()):
@@ -2039,6 +2090,107 @@ class LLMClueGenerator:
                 else "no attempts left, using it anyway",
             )
         return last_sentence
+
+    def generate_random_theme(self, language="fr", hint_word=None,
+                               timeout=DEFAULT_TIMEOUT, cancel_event=None,
+                               temperature=0.95):
+        """Invents a random, original crossword theme — a short keyword
+        phrase entirely in `language`, exactly the shape a player would
+        type into the web UI's own "Thématique" field (e.g. "cuisine
+        italienne", "exploration spatiale"), never a full sentence. Used
+        by `GET /api/theme/random` (backend/app.py), itself only called by
+        `Automation/Populate.py` to give each populated grid a random
+        theme instead of none.
+
+        `hint_word`, when given, is folded into the prompt as an
+        "(indicative word: XXX)" note purely to perturb the model into a
+        DIFFERENT answer on every call — a plain "invent a random theme"
+        prompt sent repeatedly to the same small model tends to collapse
+        onto the same few obvious answers, exactly the reason
+        generate_title() already picks among N candidates at random
+        rather than trusting the model's own claimed randomness. The
+        model is free to ignore the word's literal meaning; it is a
+        randomness seed embedded in the prompt text, not a requirement
+        that the theme relate to it.
+
+        Best-effort like generate_title(): returns "" if every attempt
+        fails (HTTP error, or an empty/unusable/wrong-language reply
+        every time) rather than raising — the caller then falls back to
+        an ordinary, theme-less generation."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelled()
+        language_name = LANGUAGE_NAMES.get(language, language)
+        system_prompt = (
+            "You invent an original THEME for a crossword puzzle's "
+            f"vocabulary, entirely in {language_name}. Reply with a "
+            "short keyword phrase (2 to 5 words) naming one concrete "
+            'subject or field (e.g. "cuisine italienne", "exploration '
+            'spatiale", "vie sous-marine") — exactly the kind of short '
+            'phrase a player would type into a crossword generator\'s '
+            "own theme field, never a full sentence, never an "
+            "explanation.\n\n"
+            "Be genuinely creative and varied: avoid the most obvious, "
+            "most commonly picked themes (cooking, animals, sports, "
+            "space) unless the indicative word below truly leads you "
+            "somewhere more specific and interesting.\n\n"
+            "Your ENTIRE reply is that short phrase and nothing else: no "
+            "preamble, no title, no quotes, no punctuation besides a "
+            f"comma, no note before or after. Write only in {language_name}."
+        )
+        hint_note = f" (indicative word: {hint_word})" if hint_word else ""
+        user_message = (
+            f"Invent one random, original crossword theme.{hint_note} "
+            "Reply with only the short theme phrase:"
+        )
+        for attempt in range(RANDOM_THEME_RETRIES + 1):
+            if cancel_event is not None and cancel_event.is_set():
+                raise GenerationCancelled()
+            try:
+                response = httpx.post(
+                    self.base_url,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_message},
+                        ],
+                        "temperature": temperature,
+                        "max_tokens": REASONING_TOKEN_BUDGET + 40,
+                        "reasoning_effort": "none",
+                    },
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"]
+            except httpx.HTTPError as e:
+                logger.warning(
+                    "random theme generation attempt %d/%d failed (%s, model=%r): %s",
+                    attempt + 1, RANDOM_THEME_RETRIES + 1, self.base_url, self.model, e,
+                )
+                continue
+            logger.info(
+                "random theme generation attempt %d/%d: raw LLM response: %r",
+                attempt + 1, RANDOM_THEME_RETRIES + 1, content,
+            )
+            theme = _clean_theme_suggestion(_strip_reasoning(content))
+            if (theme and not _detect_wrong_language(theme, language)
+                    and not _theme_is_repetitive(theme)):
+                logger.info(
+                    "random theme generation attempt %d/%d: hint_word=%r chosen=%r",
+                    attempt + 1, RANDOM_THEME_RETRIES + 1, hint_word, theme,
+                )
+                return theme
+            logger.info(
+                "random theme generation attempt %d/%d: no usable candidate "
+                "(theme=%r), retrying",
+                attempt + 1, RANDOM_THEME_RETRIES + 1, theme,
+            )
+        logger.info(
+            "random theme generation: no usable candidate after %d attempts",
+            RANDOM_THEME_RETRIES + 1,
+        )
+        return ""
 
     def generate_definitions(self, text, language="fr", difficulty="medium",
                              count=10, timeout=90.0, theme_description=None):

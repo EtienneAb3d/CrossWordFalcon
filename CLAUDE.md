@@ -165,7 +165,9 @@ json`. Holds all server-side state in plain module dicts/lists:
   `GET /api/dictionary/define` (LLM candidate definitions), `GET /api/
   paraphrase` (LLM paraphrases), `GET /api/similar_words` (LLM-expanded +
   Qdrant "Thématique"), `GET /api/synonyms` (plain Qdrant nearest-
-  neighbor, no LLM).
+  neighbor, no LLM), `GET /api/theme/random` (a random dictionary word
+  handed to the LLM as an inspiration seed, returning an invented theme
+  phrase — used by `Automation/Populate.py`, not the web UI itself).
 - *Generation lifecycle*: `POST /api/generate` (202, starts a background
   job), `GET /api/generate/status/{job_id}` (full polled state), `GET
   /api/generate/phase/{job_id}` (condensed phase code, used by Populate),
@@ -385,7 +387,11 @@ config.json`.
 Also on this class: `generate_title`/`generate_titles` (LLM grid-title
 proposals, filtered against reusing a grid word), `describe_theme`
 (expands a typed theme into a short keyword list for the Qdrant
-pre-search — see "Themed generation" above), `generate_definitions`
+pre-search — see "Themed generation" above), `generate_random_theme`
+(invents an original theme phrase from scratch, given only a language and
+an optional random "indicative word" folded into the prompt purely to
+perturb the model into a different answer each call — backs `GET /api/
+theme/random`, used by `Automation/Populate.py`), `generate_definitions`
 (free-text dictionary lookups for the "Définir" button), `generate_
 paraphrases` (the "Paraphraseur" panel). Every clue-generation call
 writes a Markdown trace to `LOG_LLM/<timestamp>_<ANSWER>_<SUCCES|
@@ -439,7 +445,10 @@ Best-effort hardware/model reporting for the info badge: GPU enumeration
 
 `Embedder` (embedder.py) is a thin `httpx` client to an OpenAI-compatible
 `/v1/embeddings` endpoint (default: a local llama.cpp server serving
-BAAI/bge-m3, CPU by default), with batch embedding and a CLI benchmark.
+BAAI/bge-m3, CPU by default — Qwen/Qwen3-Embedding-0.6B is a supported,
+GPU-friendly alternative, see `env_default.sh`), with batch embedding and
+a CLI benchmark. Switching the embed model always requires a full Qdrant
+rebuild (`python -m data_builder.qdrant_populate --all --recreate`).
 
 `QdrantStore` (qdrant_store.py) is a plain-HTTP client (no SDK) around
 one Qdrant collection (`words`), multitenant by language. `upsert_words`
@@ -507,9 +516,14 @@ state, unlike the backend).
 - **`Automation/Populate.py`** — a CLI daemon that bulk-fills the grid
   library by driving the real `POST /api/generate` + `GET /api/generate/
   phase/{job_id}` endpoints one job at a time (randomized language/
-  difficulty/size/mode by default, flags to override); `run_Populate.sh`
-  is its start/stop/restart process manager (tracked via `logs/populate.
-  pid`, since it's a background script, not a port listener).
+  difficulty/size/mode by default, flags to override). Before each grid,
+  it also calls `GET /api/theme/random` (unless `--no-theme`) to get an
+  LLM-invented theme phrase for that grid's language and sends it as
+  `GenerateRequest.theme`, so the populated grid gets a real thematic
+  glossary instead of none; a failed theme call just falls back to no
+  theme for that one grid. `run_Populate.sh` is its start/stop/restart
+  process manager (tracked via `logs/populate.pid`, since it's a
+  background script, not a port listener).
 - **`scrapper/fetch_rss_feeds.py`** — downloads a small, hand-verified
   set of crossword-specific RSS feeds daily into `RSS/combined.json`.
 - **`scrapper/fetch_grid_links.py`** — reproduces a fixed, hand-verified

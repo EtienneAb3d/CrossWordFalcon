@@ -499,6 +499,28 @@ async def proxy_paraphrase(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+# GET /api/theme/random makes one LLM round-trip (LLMClueGenerator.
+# generate_random_theme) — same "one meaningfully heavier single call"
+# reasoning as PARAPHRASE_PROXY_TIMEOUT_S above.
+RANDOM_THEME_PROXY_TIMEOUT_S = 100.0
+
+
+@app.get("/api/theme/random")
+async def proxy_random_theme(request: Request):
+    """Relays Automation/Populate.py's random-theme feature (see
+    backend/app.py's `random_theme`) to the back end — query string
+    (`lang`) passed through verbatim, same pattern as proxy_paraphrase.
+    Not called by the browser itself (Populate.py talks to the backend
+    directly on its own port), but every backend endpoint gets its own
+    proxy route regardless of caller."""
+    try:
+        async with httpx.AsyncClient(timeout=RANDOM_THEME_PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/theme/random", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # --- Qdrant admin panel (localhost only) --------------------------------
 # _require_localhost() rejects any non-loopback client / Host BEFORE the
 # request reaches the back, so the admin panel is unreachable from the LAN

@@ -1317,15 +1317,15 @@ the current defaults/behavior to know before touching this code.
 
 ### Local multilingual embeddings (`backend/embedder.py` / `run_embed.sh`)
 
-- A CPU-only multilingual text-embedding stack, server/client split like
-  the LLM one: `run_embed.sh` launches `llama_cpp.server --embedding` (no
-  new dependency — `llama-cpp-python` is already installed via
+- A multilingual text-embedding stack, server/client split like the LLM
+  one: `run_embed.sh` launches `llama_cpp.server --embedding` (no new
+  dependency — `llama-cpp-python` is already installed via
   `requirements-llama.txt`) on `EMBED_PORT` (3003); `backend/embedder.py`'s
   `Embedder` class is the HTTP client. `Embedder.embed(str) -> list[float]`
   (L2-normalized), `embed_batch(list[str])` for many at once,
   `EmbedderError` on connection failure. `python -m backend.embedder
   --benchmark 1000` is the timing harness.
-- **Model: BAAI/bge-m3, `bge-m3-Q4_K_M.gguf` from `gpustack/bge-m3-GGUF`**
+- **Default model: BAAI/bge-m3, `bge-m3-Q4_K_M.gguf` from `gpustack/bge-m3-GGUF`**
   (~418 MB, 1024-dim, CLS pooling, 100+ languages). Chosen as the smallest
   *current, working* multilingual GGUF: `multilingual-e5-small` (118M) is
   genuinely smaller but every community GGUF conversion of it fails to
@@ -1335,6 +1335,23 @@ the current defaults/behavior to know before touching this code.
   `env.sh` (`EMBED_MODEL`/`EMBED_GGUF_REPO`/`EMBED_GGUF_FILE`/
   `EMBED_BASE_URL`/`EMBED_API_KEY`); repoint `EMBED_BASE_URL` at any
   OpenAI-compatible `/v1` endpoint to swap providers with no code change.
+- **Supported alternative: Qwen/Qwen3-Embedding-0.6B**, `Qwen3-Embedding-
+  0.6B-Q8_0.gguf` from `Qwen/Qwen3-Embedding-0.6B-GGUF` (~609 MB, 1024-dim,
+  last-token pooling, decoder-only Qwen3 base — no smaller official quant
+  exists). Documented as a commented-out block in `env_default.sh`, right
+  after the active `EMBED_MODEL`/`EMBED_GGUF_REPO`/`EMBED_GGUF_FILE`
+  exports (uncomment those three to switch — `llama_cpp.server` never
+  passes an explicit `pooling_type` override, so it reads the correct
+  pooling mode straight from the GGUF's own metadata, no other file or
+  code change needed). Measured cross-lingual FR/EN cosine 0.873
+  (same-meaning) vs. 0.543 (unrelated) — a cleaner separation than
+  bge-m3's own 0.90/0.48 — traded against noticeably slower GPU throughput
+  (~66/s single-request, ~162/s batched, vs. bge-m3's ~124/s / ~465/s).
+  **Switching the embed model always requires a full Qdrant rebuild**
+  (`python -m data_builder.qdrant_populate --all --recreate`) regardless of
+  whether the vector dimension happens to match (it does here, 1024 both
+  ways) — the vector space itself is model-specific, so old and new
+  vectors can never coexist in the same tenant.
 - `run_embed.sh` is **CPU by default** (`--n_gpu_layers 0` +
   `CUDA_VISIBLE_DEVICES=""`): the request was for a CPU embedder, and on a
   machine where `llama-cpp-python` is a CUDA build (for `run_llm.sh`), not
@@ -1343,14 +1360,15 @@ the current defaults/behavior to know before touching this code.
   all layers) opts into GPU. Measured on bge-m3: **CPU ~40 ms/embedding
   p50, no batched speed-up; GPU ~8 ms single (~120/s), ~2 ms batched
   (~465/s)** — GPU is ~5-15× faster and, unlike CPU, scales with
-  batching. bge-m3 needs only ~0.4 GB VRAM so it **can cohabit with the
-  LLM on one 12 GB card**, but SGLang grabs the whole card at its default
-  `SGLANG_MEM_FRACTION_STATIC=0.78` — this project's dev-box `env.sh`
-  overrides it to `0.60` (outside the Install.sh SGLANG AUTOCONFIG block)
-  alongside `EMBED_N_GPU_LAYERS=99`. The llama.cpp LLM engine
-  (`run_llm.sh`) shares VRAM gracefully and needs no such tuning. It is
-  *not* browser-facing — no `frontend/server.py` proxy route (permanent
-  rule 15 only applies to endpoints the web UI calls).
+  batching. Either supported model needs well under 1 GB VRAM, so it
+  **can cohabit with the LLM on one 12 GB card**, but SGLang grabs the
+  whole card at its default `SGLANG_MEM_FRACTION_STATIC=0.78` — this
+  project's dev-box `env.sh` overrides it to `0.60` (outside the
+  Install.sh SGLANG AUTOCONFIG block) alongside `EMBED_N_GPU_LAYERS=99`,
+  currently serving Qwen3-Embedding-0.6B in that slot. The llama.cpp LLM
+  engine (`run_llm.sh`) shares VRAM gracefully and needs no such tuning.
+  It is *not* browser-facing — no `frontend/server.py` proxy route
+  (permanent rule 15 only applies to endpoints the web UI calls).
 
 ### Documentation
 

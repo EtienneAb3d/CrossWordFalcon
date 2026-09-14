@@ -106,12 +106,12 @@ class WordEmbeddingIndexer:
                        log_every=5000):
         path = self.wordlist_path(lang)
         if not path.exists():
-            print(f"[{lang}] SKIP — {path.name} not found")
+            print(f"[{lang}] SKIP — {path.name} not found", flush=True)
             return 0
 
         self.store.ensure_collection()  # idempotent; probes the dimension once
         if recreate:
-            print(f"[{lang}] clearing existing tenant...")
+            print(f"[{lang}] clearing existing tenant...", flush=True)
             self.store.delete_lang(lang)
 
         rows = self.iter_rows(lang, limit=limit, offset=offset)
@@ -122,7 +122,7 @@ class WordEmbeddingIndexer:
             if done - last_logged[0] >= log_every:
                 last_logged[0] = done
                 rate = done / max(time.perf_counter() - start, 1e-9)
-                print(f"  [{lang}] {done:>8d} words   {rate:6.0f}/s")
+                print(f"  [{lang}] {done:>8d} words   {rate:6.0f}/s", flush=True)
 
         total = self.store.upsert_words(
             lang, rows, embedder=self.embedder,
@@ -132,7 +132,7 @@ class WordEmbeddingIndexer:
         held = self.store.count(lang)
         print(f"[{lang}] done: {total} words sent in {elapsed:.1f}s "
               f"({total / max(elapsed, 1e-9):.0f}/s); "
-              f"tenant now holds {held}")
+              f"tenant now holds {held}", flush=True)
         return total
 
     def index_all(self, **kwargs):
@@ -189,7 +189,7 @@ def main(argv=None):
             print(f"collection '{indexer.store.collection}' ready "
                   f"(dim={vectors.get('size')}, "
                   f"distance={vectors.get('distance')}, "
-                  f"points={info.get('points_count')})")
+                  f"points={info.get('points_count')})", flush=True)
 
             if args.init_only:
                 return 0
@@ -200,7 +200,7 @@ def main(argv=None):
                     lang, limit=args.limit, offset=args.offset,
                     recreate=args.recreate)
             print(f"\nTotal: {grand_total} words indexed across "
-                  f"{len(langs)} language(s).")
+                  f"{len(langs)} language(s).", flush=True)
     except (EmbedderError, QdrantStoreError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1

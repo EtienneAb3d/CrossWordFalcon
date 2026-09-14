@@ -18,6 +18,21 @@ By default the parameters (language, difficulty, size) are drawn at
 random for every grid to populate the library with variety; any of them
 can be pinned via the command line (see --help).
 
+Each grid also gets a random theme by default: before submitting the
+generation request, this script calls `GET /api/theme/random?lang=<language>`
+(backend/app.py) — a random dictionary word (5 to 10 letters) is picked
+from that language's own wordlist and handed to the LLM as an "indicative
+word" note, which asks it to invent a short, original crossword theme
+around it (see backend/clues.py's `LLMClueGenerator.generate_random_theme`
+for why the word is there — it's a randomness seed, not a requirement
+that the theme literally use it). The resulting theme phrase is sent as
+`GenerateRequest.theme`, so the grid gets a real thematic glossary
+(Qdrant pre-search) exactly as if a user had typed it into the web UI's
+"Thématique" field. `--no-theme` disables this and generates ordinary,
+un-themed grids instead; a failure of the theme call itself (LLM/network
+unreachable) never blocks a grid — it just falls back to no theme for
+that one.
+
 Usage:
     .venv/bin/python Automation/Populate.py            # 1000 grids, random params
     .venv/bin/python Automation/Populate.py --count 50 --language fr --difficulty easy
@@ -33,11 +48,19 @@ import signal
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 LANGUAGES = ["fr", "en", "de", "es", "it", "pt"]
 DIFFICULTIES = ["easy", "medium", "hard"]
 MODES = ["flash", "turbo", "fast", "medium", "ultra"]
+
+# GET /api/theme/random makes an LLM round-trip (see backend/app.py's
+# `random_theme` / backend/clues.py's `generate_random_theme`) — generous
+# like every other LLM call in this project, but bounded so a stuck LLM
+# server can't hang the whole populate run indefinitely: a timeout here
+# just means this one grid falls back to no theme.
+THEME_FETCH_TIMEOUT_S = 90.0
 
 # Bounds for a grid's random size (width AND height), at the user's
 # explicit request: "sizes between 8 and 20 (horizontal and vertical)".
@@ -81,6 +104,21 @@ def _http_json(url, payload=None, timeout=60):
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         body = resp.read().decode("utf-8")
     return json.loads(body) if body else {}
+
+
+def _fetch_random_theme(base_url, language, timeout=THEME_FETCH_TIMEOUT_S):
+    """Asks the back end (GET /api/theme/random) for a random theme in
+    `language` — see this module's own docstring for the full mechanism.
+    Returns "" (never raises) on any network/HTTP failure, an unreachable
+    LLM, or an empty result: the caller then just submits an ordinary,
+    un-themed generation instead of losing the whole grid over it."""
+    url = f"{base_url}/api/theme/random?lang={urllib.parse.quote(language)}"
+    try:
+        resp = _http_json(url, timeout=timeout)
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
+        print(f"    thème aléatoire indisponible ({e}), grille sans thème.", flush=True)
+        return ""
+    return (resp.get("theme") or "").strip()
 
 
 def _pick(fixed, pool):
@@ -193,6 +231,10 @@ def main():
     parser.add_argument("--per-grid-timeout", type=float, default=0.0, help="Abandonne une grille après N secondes (0 = jamais).")
     parser.add_argument("--retries", type=int, default=1, help="Nouvelles tentatives si une grille finit en error (défaut 1).")
     parser.add_argument("--random-seed", type=int, default=None, help="Graine du tirage des paramètres (reproductibilité).")
+    parser.add_argument(
+        "--no-theme", dest="theme", action="store_false",
+        help="Désactive le thème aléatoire (par défaut, chaque grille reçoit un thème inventé par le LLM).",
+    )
     args = parser.parse_args()
 
     if args.random_seed is not None:
@@ -218,7 +260,8 @@ def main():
         f"difficulté={args.difficulty or 'aléatoire'}, "
         f"mode={args.mode or 'medium'}, "
         f"taille={args.width or f'aléatoire {MIN_SIZE}-{MAX_SIZE}'}"
-        f"x{args.height or f'aléatoire {MIN_SIZE}-{MAX_SIZE}'}\n",
+        f"x{args.height or f'aléatoire {MIN_SIZE}-{MAX_SIZE}'}, "
+        f"thème={'aléatoire (LLM)' if args.theme else 'aucun'}\n",
         flush=True,
     )
 
@@ -232,9 +275,14 @@ def main():
         while True:
             attempt += 1
             req = _build_request(args)
+            if args.theme:
+                theme = _fetch_random_theme(base_url, req["language"])
+                if theme:
+                    req["theme"] = theme
             label = (
                 f"[{i}/{args.count}] {req['language']}/{req['difficulty']}/"
                 f"{req['mode']} {req['width']}x{req['height']}"
+                + (f" thème=\"{req['theme']}\"" if req.get("theme") else "")
                 + (f" (tentative {attempt})" if attempt > 1 else "")
             )
             print(label, flush=True)
