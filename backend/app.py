@@ -52,8 +52,8 @@ from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
     build_word_entries, extract_slots, generate_grid, slot_direction, _interactive_fill_diagnostics,
-    _serialize_resume_state, interactive_clean_impossible_zones, interactive_crossing_words,
-    interactive_minimize_black_cells,
+    _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
+    interactive_crossing_words, interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
 )
 from .grid_store import (
@@ -900,6 +900,24 @@ class InteractiveCrossingRequest(BaseModel):
     job_id: str
     grid: list[list[str]]
     cell: list[int]
+
+
+class InteractiveBoundaryRequest(BaseModel):
+    """Body of POST /api/interactive/boundary — the "Début"/"Fin" buttons,
+    at the user's explicit request: "à côté du bouton Croisés, ajouter un
+    bouton 'Début' qui liste le mots pouvant commencer l'emplacement
+    sélectionné en tenant compte des lettres posées, même si il ne fait
+    pas la longueur totale de l'emplacement... ajouter un bouton 'Fin' qui
+    fait la même chose pour lister les mots qui peuvent terminer
+    l'emplacement." Like `InteractiveCandidatesRequest`, `cells` is the
+    selected slot's own ordered `[row, col]` list (`selectedInteractiveWord
+    ()`, script.js); `side` ("start" for "Début", "end" for "Fin") picks
+    which end of the slot the shorter candidate words anchor to — see
+    `interactive_boundary_candidates`."""
+    job_id: str
+    grid: list[list[str]]
+    cells: list[list[int]]
+    side: str
 
 
 class InteractiveImpossibleRequest(BaseModel):
@@ -4473,6 +4491,36 @@ async def interactive_crossing(req: InteractiveCrossingRequest):
         [list(row) for row in req.grid], rows, cols, sess["index"], cell,
     )
     return {"across_start": across_start, "down_start": down_start, "letters": letters}
+
+
+@app.post("/api/interactive/boundary")
+async def interactive_boundary(req: InteractiveBoundaryRequest):
+    """"Début"/"Fin" buttons: list every real dictionary word that could
+    start (`side="start"`) or end (`side="end"`) the selected slot
+    (`req.cells`), from length 2 up to the slot's own full length,
+    compatible with the letters already posed — a shorter word is only
+    offered when the cell right beyond it could actually turn black (never
+    already carrying a letter, and structurally valid) — split into theme-
+    glossary matches and every other match, both sorted by length then
+    alphabetically — see `interactive_boundary_candidates`."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    cells = [tuple(c) for c in req.cells]
+    if len(cells) < 2:
+        raise HTTPException(status_code=400, detail="emplacement invalide")
+    if req.side not in ("start", "end"):
+        raise HTTPException(status_code=400, detail="côté invalide")
+    theme_words, other_words = await asyncio.to_thread(
+        interactive_boundary_candidates,
+        [list(row) for row in req.grid], rows, cols,
+        sess["index"], cells, req.side, sess["priority_words"],
+    )
+    return {"theme_words": theme_words, "other_words": other_words}
 
 
 @app.post("/api/interactive/impossible")

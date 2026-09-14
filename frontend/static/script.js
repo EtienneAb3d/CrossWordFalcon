@@ -263,6 +263,8 @@ const interactiveHelpCloseBtn = document.getElementById("interactive-help-close-
 const interactiveHelpList = document.getElementById("interactive-help-list");
 const interactiveWordsBtn = document.getElementById("interactive-words-btn");
 const interactiveCrossingBtn = document.getElementById("interactive-crossing-btn");
+const interactiveStartBtn = document.getElementById("interactive-start-btn");
+const interactiveEndBtn = document.getElementById("interactive-end-btn");
 // Shared "Mots"/"Croisés" answer zone — see renderInteractiveWords()/
 // renderInteractiveCrossing() below, both prepend their own block here.
 const interactiveAnswers = document.getElementById("interactive-answers");
@@ -6095,6 +6097,133 @@ interactiveCrossingBtn.addEventListener("click", async () => {
   } finally {
     interactiveCrossingBtn.disabled = false;
   }
+});
+
+// "Début"/"Fin" buttons' own results block — to the right of "Croisés", at
+// the user's explicit request: "add a Début button listing the words that
+// can start the selected slot, taking the letters already placed into
+// account, even if it doesn't reach the slot's full length... add a Fin
+// button doing the same for words that can end the slot. Sort the
+// proposed words by length, then alphabetically." Same stacking
+// convention as renderInteractiveWords()/renderInteractiveCrossing()
+// (each block stays bound to the exact slot/side it was fetched for).
+// `side` is "start" (Début) or "end" (Fin) — a candidate shorter than the
+// slot occupies the first/last `word.length` cells of `slot.cells`
+// respectively; the backend (`interactive_boundary_candidates`) already
+// guarantees the single boundary cell beyond it is free to turn black
+// (never overwriting a letter, always structurally valid), so placing it
+// here is a plain, unconditional grid mutation — no extra check needed.
+function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
+  const all = [
+    ...(themeWords || []).map((word) => ({ word, theme: true })),
+    ...(otherWords || []).map((word) => ({ word, theme: false })),
+  ];
+  if (!all.length) return;
+  const placeWord = (word) => {
+    if (word.length > slot.cells.length) return;
+    const wordCells = side === "start"
+      ? slot.cells.slice(0, word.length)
+      : slot.cells.slice(slot.cells.length - word.length);
+    interactivePushUndo();
+    for (let i = 0; i < wordCells.length; i++) {
+      const { row, col } = wordCells[i];
+      interactiveGrid[row][col] = word[i];
+    }
+    if (word.length < slot.cells.length) {
+      const boundary = side === "start"
+        ? slot.cells[word.length]
+        : slot.cells[slot.cells.length - word.length - 1];
+      interactiveGrid[boundary.row][boundary.col] = "#";
+    }
+    setInteractiveMessage("");
+    renderInteractive();
+  };
+  const block = document.createElement("div");
+  block.className = "interactive-words-block";
+  const labelEl = document.createElement("p");
+  labelEl.className = "interactive-words-block-label";
+  labelEl.textContent = label;
+  block.appendChild(labelEl);
+  all.forEach(({ word, theme }, i) => {
+    const item = document.createElement("span");
+    item.className = theme
+      ? "interactive-word-item interactive-word-theme"
+      : "interactive-word-item";
+    item.tabIndex = 0;
+    item.textContent = word;
+    const pick = () => placeWord(word);
+    item.addEventListener("click", pick);
+    item.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+    block.appendChild(item);
+    if (i < all.length - 1) block.appendChild(document.createTextNode(", "));
+  });
+  interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
+  interactiveAnswers.hidden = false;
+}
+
+async function fetchInteractiveBoundary(side, btn, keys) {
+  const t = I18N[uiLanguage];
+  const w = selectedInteractiveWord();
+  if (!w) {
+    setInteractiveMessage(t[keys.needsSlot], true);
+    return;
+  }
+  btn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/boundary", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        job_id: interactiveJobId,
+        grid: wireGrid,
+        cells: w.cells.map((c) => [c.row, c.col]),
+        side,
+      }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return;
+    }
+    if (!resp.ok) throw new Error(t[keys.error]);
+    const data = await resp.json();
+    const themeWords = (data && data.theme_words) || [];
+    const otherWords = (data && data.other_words) || [];
+    const dirPrefix = w.direction === "across" ? "H" : "V";
+    const label = `${t[keys.btn]} ${dirPrefix} (${w.startRow + 1}, ${w.startCol + 1})`;
+    renderInteractiveBoundary(themeWords, otherWords, w, side, label);
+    if (!themeWords.length && !otherWords.length) {
+      setInteractiveMessage(t[keys.empty], true);
+    }
+  } catch (err) {
+    setInteractiveMessage(t[keys.error], true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+interactiveStartBtn.addEventListener("click", () => {
+  fetchInteractiveBoundary("start", interactiveStartBtn, {
+    btn: "interactiveStartBtn",
+    needsSlot: "interactiveStartNeedsSlot",
+    empty: "interactiveStartEmpty",
+    error: "interactiveStartError",
+  });
+});
+
+interactiveEndBtn.addEventListener("click", () => {
+  fetchInteractiveBoundary("end", interactiveEndBtn, {
+    btn: "interactiveEndBtn",
+    needsSlot: "interactiveEndNeedsSlot",
+    empty: "interactiveEndEmpty",
+    error: "interactiveEndError",
+  });
 });
 
 // Fetches up to 10 candidate titles and shows them as a pick list (see

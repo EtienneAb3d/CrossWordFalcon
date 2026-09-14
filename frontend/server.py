@@ -650,6 +650,24 @@ async def proxy_interactive_crossing(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/interactive/boundary")
+async def proxy_interactive_boundary(request: Request):
+    """"Début"/"Fin" buttons of the "Interactif" mode — lists every real
+    dictionary word that could start or end the selected slot, even
+    shorter than its full length."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/boundary",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.post("/api/interactive/impossible")
 async def proxy_interactive_impossible(request: Request):
     """"Impossibles" button of the "Interactif" mode — read-only check of

@@ -4437,6 +4437,85 @@ def interactive_crossing_words(grid, rows, cols, index, cell):
     return across_start, down_start, letters
 
 
+def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priority_words=None):
+    """"Début"/"Fin" buttons (mode "Interactif"), next to "Croisés", at the
+    user's explicit request: "à côté du bouton Croisés, ajouter un bouton
+    'Début' qui liste le mots pouvant commencer l'emplacement sélectionné en
+    tenant compte des lettres posées, même si il ne fait pas la longueur
+    totale de l'emplacement. Ne pas lister les mots qui écraseraient une
+    lettre existante avec une autre lettre ou une case noire obligatoire
+    pour terminer le mot... ajouter un bouton 'Fin' qui fait la même chose
+    pour lister les mots qui peuvent terminer l'emplacement. Classer les
+    mots proposés par ordre de longueur, puis alphabétique."
+
+    Unlike `interactive_slot_candidates` (exact slot length only), this
+    tries every length from 2 up to `len(cells)`, keeping only the `side`
+    ("start" or "end") portion of `cells` for each length — the first
+    `length` cells for "start", the last `length` cells for "end" — so a
+    shorter word can be proposed even while the rest of the slot stays
+    unresolved. A candidate shorter than the whole slot additionally
+    requires the single boundary cell right beyond it (the one that would
+    have to turn black to terminate the word there) to be actually free to
+    do so: not already carrying a letter (never overwrite one, whether it's
+    the player's own or a crossing word's), and structurally valid at the
+    bare `min_interior_free=1` floor (the real correctness limit — no
+    orphaned cell, no disconnection — never the aesthetic 8-cell minimum
+    `_place_black_cells` itself enforces, which never applies to a manual
+    edit). The full-length case (`length == len(cells)`) needs no such
+    check, same as `interactive_slot_candidates`.
+
+    Returns `(theme_words, other_words)` exactly like `interactive_slot_
+    candidates`, both sorted by `(length, word)` (length first, then
+    alphabetically) rather than plain alphabetical order, and mixing every
+    accepted length together — the word's own length already tells the
+    caller how many of `cells` (from `side`'s end) it covers, no separate
+    field needed. `INTERACTIVE_SLOT_CANDIDATES_LIMIT` is applied PER
+    length rather than once over the combined pool: an empty/lightly-
+    constrained slot can easily have hundreds of 2- or 3-letter matches,
+    which would otherwise fill the entire cap on their own and silently
+    hide every longer (more specific, usually more useful) length behind
+    them — including the full-length matches `interactive_slot_candidates`
+    itself would have shown. A word already used elsewhere in the grid is
+    excluded, like `interactive_slot_candidates`/`interactive_crossing_
+    words`."""
+    pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
+    slots = extract_slots(pattern, rows, cols)
+    known = {
+        (r, c): grid[r][c]
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] not in (BLACK, WHITE)
+    }
+    own_cells = set(cells)
+    used_words = {
+        "".join(known[cell] for cell in other_cells)
+        for other_cells in slots
+        if set(other_cells) != own_cells and all(cell in known for cell in other_cells)
+    }
+    full_length = len(cells)
+    theme_words = []
+    other_words = []
+    for length in range(2, full_length + 1):
+        sub_cells = cells[:length] if side == "start" else cells[-length:]
+        if length < full_length:
+            boundary_cell = cells[length] if side == "start" else cells[-(length + 1)]
+            if boundary_cell in known:
+                continue
+            br, bc = boundary_cell
+            pattern[br][bc] = BLACK
+            valid = is_structurally_valid(pattern, rows, cols, min_interior_free=1)
+            pattern[br][bc] = WHITE
+            if not valid:
+                continue
+        sub_known = {cell: known[cell] for cell in sub_cells if cell in known}
+        candidates = set(_slot_candidates(index, length, sub_cells, sub_known)) - used_words
+        themed = _priority_words_for(priority_words, sub_cells) & candidates
+        other = candidates - themed
+        theme_words.extend(sorted(themed))
+        other_words.extend(sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT])
+    return theme_words, other_words
+
+
 def interactive_clean_impossible_zones(grid, rows, cols, index, rng):
     """"Nettoyer" button (mode "Interactif") — the equivalent, for the
     manual grid, of the "full cleanup" `_build_retry_seed` automatically

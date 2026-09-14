@@ -688,6 +688,17 @@
                as "Mots" (see below), most recent block first. -->
           <button type="button" id="interactive-crossing-btn"
                   data-i18n="interactiveCrossingBtn">Croisés</button>
+          <!-- "Début"/"Fin": to the right of "Croisés", at the user's
+               explicit request — list the real dictionary words that can
+               start/end the selected slot, taking the letters already
+               placed into account, even shorter than the slot's own full
+               length (see POST /api/interactive/boundary). Result shown
+               in the same shared #interactive-answers zone as "Mots"/
+               "Croisés", most recent block first. -->
+          <button type="button" id="interactive-start-btn"
+                  data-i18n="interactiveStartBtn">Début</button>
+          <button type="button" id="interactive-end-btn"
+                  data-i18n="interactiveEndBtn">Fin</button>
           <button type="button" id="interactive-dir-across-btn" class="toggle-btn active"
                   data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
           <button type="button" id="interactive-dir-down-btn" class="toggle-btn"

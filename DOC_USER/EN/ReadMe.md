@@ -623,6 +623,17 @@ real letter. Both update after every edit.
   want to see, at a glance, which choices actually keep both crossing
   words real. Nothing is listed for a cell that has no real emplacement
   in one of the two directions (a run shorter than 2 cells).
+- **Début / Start** and **Fin / End** (`#interactive-start-btn`/
+  `#interactive-end-btn`, `POST /api/interactive/boundary`) — like "Mots",
+  but for a word that only occupies the beginning ("Début") or the end
+  ("Fin") of the selected slot, from 2 letters up to its own full length,
+  compatible with whatever letters are already placed. A word shorter
+  than the slot also turns the single cell right beyond it black when
+  clicked, to terminate it there — only offered when that cell is free to
+  become black (never one that would erase an existing letter) and doing
+  so keeps the grid valid. Results are sorted shortest first, then
+  alphabetically. Useful when no word fills the whole slot but part of it
+  still can.
 - **Nettoyer / Clean up** (`#interactive-clean-btn`, `POST /api/
   interactive/clean`) — for every emplacement that has become impossible
   (no real dictionary word fits its already-placed letters any more, or

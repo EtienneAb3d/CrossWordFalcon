@@ -178,7 +178,9 @@ json`. Holds all server-side state in plain module dicts/lists:
   interactive/start`, `/step` (place one word), `/clean` (remove/blacken
   impossible zones, optional deep mode), `/candidates` (dictionary words
   for a slot), `/crossing` (letter/word options at one cell's crossing),
-  `/impossible` (read-only diagnostic recompute), `/verify` (dictionary-
+  `/boundary` (dictionary words that can start or end a slot, even
+  shorter than its full length), `/impossible` (read-only diagnostic
+  recompute), `/verify` (dictionary-
   membership check), `/title` (LLM proposals), `/save` (publish),
   `/save_work` (autosave draft), `GET /work` + `/work/delete` (drafts
   list/delete), `/resume` (relaunch a draft), `/from-library` (reopen a
@@ -341,6 +343,13 @@ black cell outright); `interactive_slot_candidates` (dictionary words
 fitting a slot's known letters, theme matches unbounded, others capped
 at `INTERACTIVE_SLOT_CANDIDATES_LIMIT=300`); `interactive_crossing_
 words` (letter/word options at one cell, both directions at once);
+`interactive_boundary_candidates` (dictionary words that can start or end
+a slot, from length 2 up to its own full length, honoring letters already
+placed — a shorter-than-full-length candidate is only offered when the
+single boundary cell right beyond it is free to turn black: not already
+carrying a letter, and structurally valid at `min_interior_free=1`;
+`INTERACTIVE_SLOT_CANDIDATES_LIMIT` applies per length rather than once
+over the combined pool, so short lengths never crowd out longer ones);
 `_interactive_fill_diagnostics` (returns `(impossible_cells, low_
 candidate_cells)` for the live red/orange grid highlighting, also
 catching a word invented purely by crossing letters that isn't real).
