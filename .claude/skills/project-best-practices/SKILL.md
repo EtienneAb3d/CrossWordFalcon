@@ -346,7 +346,17 @@ project's engineering language.
   kept, not deleted, on publish. Deleting a "Créations" entry
   (`POST /api/interactive/work/delete` -> `grid_store.delete_grid_work`)
   only removes the `GRID_WORK/<id>.json` file and never touches the
-  published `GRID_STORE` library record.
+  published `GRID_STORE` library record. Every `save_grid_work` call also
+  stashes the record's own PRE-overwrite content under a `previous` field
+  (one step of history only, never a full chain — see CLAUDE.md's
+  `GRID_WORK/` entry), at the user's own explicit request, so a live bug
+  report against "Suivant" can be replayed straight from the saved file
+  without first asking the player to hit "Précédent" purely to hand over
+  a "before" snapshot. Every reader of the record (`get_grid_work`/
+  `_iter_stored_grid_work`/`_run_interactive_resume_job`) reads specific
+  top-level fields for the CURRENT state and must keep doing so — `previous`
+  is diagnostic-only, never itself the active state a resume rebuilds
+  from.
   **No new Python package and no new install step** — `requirements.txt`/
   `Install.sh`/`README.md`'s install section are unaffected (README's
   "Using the app" section does get a short user-facing paragraph, per rule
@@ -1201,25 +1211,49 @@ the current defaults/behavior to know before touching this code.
   pattern) to keep its cost bounded on a large theme glossary. A
   best-effort mechanic, same as the ordinary "Mots Défi"/theme placement
   it strengthens — a word too long for any available merged run, or one
-  no relocation can accommodate without corrupting something else, still
-  falls back to the ordinary geometric-fit placement (or is left
-  unplaced this round). Two callers share this one function:
-  `_pattern_attempt` runs it on a freshly generated pattern before the
-  CSP search starts (never `_pattern_continue`, whose pattern already
-  carries real placed words on some slots — every cell is still blank at
-  `_pattern_attempt`'s own call, so every check above is a trivial no-op
-  there), and `interactive_place_word` (Interactive mode's "Suivant")
-  runs it too, right before its own slot/domain computation, passing its
-  own already-placed letters (`locked_letters`) and `index` — the one
-  caller where both checks are actually load-bearing, since real letters
-  can genuinely already sit outside whichever slot ends up widened.
-  `frontend/static/script.js`'s `interactiveNextBtn` handler replaces the
-  whole `interactiveGrid` from the step response (`data.grid`) rather
-  than patching only `data.placed.cells` — a relocated black cell can
-  land outside the placed word's own cells, and patching only those
-  silently desynced the client's grid from the backend's; the existing
-  full-snapshot undo stack ("Précédent") needed no separate change to
-  correctly revert a widened black cell along with everything else.
+  no relocation can accommodate without corrupting something else, falls
+  through to the shortening fallback below before ultimately falling back
+  to the ordinary geometric-fit placement (or being left unplaced this
+  round). Once every word of one glossary group has had its own widening
+  attempt, a shortening fallback (`_shorten_one_slot_for_word`/`_try_
+  shorten_slot`) runs over whichever of that group's words are still
+  unplaced, before the next glossary group gets a turn, at the user's
+  explicit request: the mirror operation — instead of relocating an
+  existing black cell to grow a run up to the word's own length, it scans
+  existing EMPTY slots already longer than the word and casts a brand new
+  black cell into the interior, right past the word's own span, casing it
+  flush against either end (no existing black cell moves, since the space
+  was already open). Same two safety checks (`locked_letters`/
+  `_perpendicular_slot_stays_valid`) apply to the new black cell. Bounded
+  by `SHORTEN_SLOT_WINDOW` (existing slots scanned per word) — set to
+  `FALLBACK_PHASE_BUDGET_FRACTION` (10%) of `WIDEN_BLACK_CELL_WINDOW`, at
+  the user's own explicit framing of the budget as "identique aux 10%
+  déjà calculés" elsewhere in this same mechanism family, reused here
+  since no `deadline_checks`-based budget exists yet at this pre-search
+  stage — and shares `WIDEN_MAX_SUCCESSFUL` (total relocations/insertions
+  per pattern) with the widening pass above. `_pattern_attempt` is the one
+  caller of the batch orchestrator built on top of these two functions
+  (`_widen_floating_black_cells_for_priority_words`), applying it to a
+  freshly generated pattern before the CSP search starts (never
+  `_pattern_continue`, whose pattern already carries real placed words on
+  some slots — every cell is still blank at `_pattern_attempt`'s own
+  call, so every check above is a trivial no-op there) — safe to reshape
+  for its WHOLE word list in one cumulative pass, since every reshape gets
+  kept regardless of outcome (the CSP search that follows fills the whole
+  grid over many placements, never just one). `interactive_place_word`
+  (Interactive mode's "Suivant") calls the exact same two low-level
+  functions directly, but never the batch orchestrator and never on a
+  shared, cumulative pattern — see "Priority-tier search in Interactive
+  mode, fully isolated per candidate" below for why (one click only ever
+  places one word, so only one reshape may ever survive) and how.
+  `frontend/static/script.js`'s `interactiveNextBtn` handler
+  replaces the whole `interactiveGrid` from the step response
+  (`data.grid`) rather than patching only `data.placed.cells` — a
+  relocated or newly-inserted black cell can land outside the placed
+  word's own cells, and patching only those silently desynced the
+  client's grid from the backend's; the existing full-snapshot undo stack
+  ("Précédent") needed no separate change to correctly revert either kind
+  of black-cell change along with everything else.
 - **Crossing-safety retry, generalized to all three candidate tiers**: a
   candidate is never left in place once it leaves a crossing slot with no
   viable word at all (dictionary-dry AND no other unused, not-yet-
@@ -1263,31 +1297,75 @@ the current defaults/behavior to know before touching this code.
   — a narrow theme glossary routinely puts two entirely disjoint slots in
   that situation, and `interactive_place_word` has no cross-palier retry
   of its own (unlike `_backtrack`) to repair the damage afterward, so each
-  click has to get this right up front (found live: "Suivant" was placing
-  a theme word that emptied a distant, non-crossing slot's domain this
-  way). `_open_slot_baseline`, computed once per candidate slot and
-  reused across every word tried there, snapshots each other open slot's
-  own domain beforehand so a slot already impossible for an unrelated
-  reason is never blamed on whichever candidate happens to be tested —
-  without it, one pre-existing impossible zone anywhere would make every
-  candidate everywhere look unsafe. For challenge words, no search/
-  `deadline_checks` of its own to draw a budget from, so it enumerates
-  every geometrically-fitting (word, open slot) combination up front,
-  sets the same 10% budget from that total combination count, and walks
-  the ranked list (the cascade's own already-chosen target slot first)
-  skipping any combination that would break a slot this way; for the
-  theme glossary and the general dictionary, its draw at its one target
-  slot (reached once every challenge-word combination is exhausted) is
-  likewise safety-aware, ranking whichever pool applies and walking it
-  the same way — but with no separate budget of its own, since
-  exhaustively scanning one already-capped slot's candidate list
-  (`INTERACTIVE_SLOT_CANDIDATES_LIMIT`) is cheap enough to check in full.
-  Every tier falls back to accepting its best-ranked candidate anyway once
-  nothing safe is left to try. All three tiers reuse the very same
-  `Filler` field/method shape (`_active_challenge_words`/`_active_
-  priority_words_for`/`_register_challenge_word_break`/`_register_theme_
-  word_break`/`_register_domain_break`) rather than three separate
-  implementations.
+  click has to get this right up front. `_open_slot_baseline`, computed
+  once per candidate slot and reused across every word tried there,
+  snapshots each other open slot's own domain beforehand so a slot already
+  impossible for an unrelated reason is never blamed on whichever
+  candidate happens to be tested — without it, one pre-existing impossible
+  zone anywhere would make every candidate everywhere look unsafe. All
+  three tiers reuse the very same `Filler` field/method shape
+  (`_active_challenge_words`/`_active_priority_words_for`/`_register_
+  challenge_word_break`/`_register_theme_word_break`/`_register_domain_
+  break`) rather than three separate implementations.
+- **Priority-tier search in Interactive mode, fully isolated per
+  candidate**: `_word_breaks_open_slot` alone is not a sufficient safety
+  check for a candidate that needs its own black-cell reshape, because
+  reshaping changes which cells even belong to a slot (freeing/blackening
+  a cell merges/splits whatever run passes through it) — so whichever
+  `Filler` the check runs against must reflect the exact, final pattern
+  that specific candidate would leave behind, nothing else mixed in. An
+  earlier version got this wrong: it ran the batch orchestrator
+  (`_widen_floating_black_cells_for_priority_words`) once for the WHOLE
+  "Mots Défi"/theme word list, mirroring `_pattern_attempt`'s own call —
+  stacking up to `WIDEN_MAX_SUCCESSFUL` reshapes onto ONE shared pattern
+  before any word was even chosen, then running every candidate's own
+  safety check against that SAME shared, over-reshaped `Filler`. A
+  candidate could look perfectly safe there only because some UNRELATED
+  word's own, not-yet-decided reshape happened to still be propping up a
+  THIRD slot's shape for the duration of that one check; once that
+  unrelated reshape was reverted (a different word ending up being the
+  one actually placed), the third slot's real shape could turn out
+  genuinely impossible after all — found live twice, first as a "Mots
+  Défi" word (`MONTAGNE`) breaking a distant row purely because of an
+  unrelated word's own reshape sitting on the shared pattern during its
+  check, then again as a theme word (`MEMOS`) landing in a slot whose own
+  delimiting black cell had been silently stolen back by a later,
+  unrelated word's own widening scan within that same shared batch pass.
+  Fixed, at the user's own explicit framing ("chaque tentative doit être
+  considérée comme indépendante des autres... isolées sur des copies de
+  la situation"), by giving up the shared batch pattern for Interactive
+  mode entirely: `_find_priority_word_placement` (shared by the "Mots
+  Défi" and the theme tier) first tries every ordinary, already-
+  dictionary-viable slot the word pool fits, purely against the grid's own
+  untouched base `Filler` — nothing here can ever be contaminated, since
+  no reshape is involved. Only once every ordinary combo has failed does
+  it give each remaining word with no natural or ordinary slot its own,
+  fully ISOLATED widen-then-shorten attempt (`_try_reshape_for_word`, one
+  independent copy of the base pattern per word, discarded immediately if
+  unused), builds a brand-new, throwaway `Filler` from that ONE copy alone
+  (`_build_interactive_filler`), and runs `_word_breaks_open_slot` against
+  it — the real, final pattern this specific candidate would leave behind
+  if chosen, so the check can never be fooled by another word's own
+  reshape. Abandonment bookkeeping (`_register_challenge_word_break`/
+  `_register_theme_word_break`, their own budgets sized from the total
+  number of ordinary combos plus reshape attempts) is always applied to
+  the grid's own outer `Filler`, never to a per-candidate isolated one, so
+  it persists correctly regardless of which specific `Filler` ends up
+  confirming any one candidate; the exemption `_word_breaks_open_slot`
+  itself checks is likewise always drawn fresh from the outer `Filler`'s
+  own current challenge pool (that check is hard-coded to challenge words
+  specifically, regardless of which tier is running). The general-
+  dictionary tier at `target` excludes both other pools from its own
+  candidate list outright — any such word still present in `target`'s
+  domain was necessarily already tried, across every slot in the grid, by
+  one of the two tiers above — falling back to the raw, unfiltered domain
+  only if excluding both would leave nothing at all. Once a tier's search
+  returns a winner, `interactive_place_word` reconciles that winner's own
+  pattern (the base one, untouched, for an ordinary pick; the one isolated
+  reshape copy, for a pick that needed one) straight into the real letter
+  grid — no revert-unused-reshapes pass is needed any more, since nothing
+  but the eventual winner's own single reshape (if any) was ever applied
+  to begin with.
 
 ### LLM clue generation (`backend/clues.py`)
 

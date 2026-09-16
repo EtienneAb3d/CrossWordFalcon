@@ -386,8 +386,15 @@ non-dictionary word as an "invented word" bug: `_optimize_before_cleanup`/
 `_shorten_impossible_zones`/`_lengthen_impossible_zones`/`_clean_continue_
 candidate`'s own calls to `_invalid_fully_known_indices` all additionally
 exempt a challenge word's own cells (`_challenge_word_cells`), the same
-way they already exempt `permanent_locked_letters`. This remains a
-best-effort mechanic, not a hard geometry guarantee: black-cell placement
+way they already exempt `permanent_locked_letters`. The same three
+functions also never treat a still-OPEN slot as "impossible" — and so
+never shorten/lengthen/strip/blacken it — as long as an unused challenge
+word could still legally fill it (`_challenge_fillable_slot_indices`,
+subtracted from every `_impossible_indices` result they compute
+internally, including mid-loop recomputations, not just their own
+return value), the same exemption `Filler.impossible_zone_slots`/
+`interactive_clean_impossible_zones` already apply elsewhere. This
+remains a best-effort mechanic, not a hard geometry guarantee: black-cell placement
 itself (`make_pattern`/`_prefill_unfillable_slots`) knows nothing about
 challenge words, so nothing reserves a slot of the right shape ahead of
 time — see "Floating-black-cell widening" below for the mechanism that
@@ -444,29 +451,18 @@ Interactive mode's "Suivant" (`interactive_place_word`) applies a
 broadened version of this exemption (`_word_breaks_open_slot`), but runs
 no search of its own to draw a `deadline_checks`-shaped budget from: it
 instead builds every geometrically-fitting (word, open slot) combination
-for the whole challenge-word list up front (`target`'s own slot tried
-first, then every other open slot, both groups ranked by the same
-statistical score/frequency the final word draw already used), sets
-`Filler._challenge_word_budget` to 10% of that total combination count,
-and walks the ranked list skipping any combination that would break a
-slot, reusing `Filler._register_challenge_word_break`/`_challenge_
-abandoned` exactly like the automatic search does. Only once every
-combination has been tried, or every still-active word has exhausted its
-own share of the budget, does this call fall through to its theme-
-glossary/general-dictionary fallback at its one `target` slot — which is
-itself now crossing-safety-aware too: it ranks whichever pool applies
-(theme candidates first, then the general dictionary once theme is empty
-or exhausted) by the same score/frequency key and walks it with
-`_word_breaks_open_slot`, taking the first safe entry. Unlike the
-challenge-word combo search or `_backtrack`'s own per-attempt budgets,
-this scan carries no separate budget/abandon bookkeeping of its own: it
-only ever scans one slot's own, already-capped candidate list
-(`INTERACTIVE_SLOT_CANDIDATES_LIMIT`), cheap enough to check every
-candidate exhaustively. If nothing in the applicable pool is safe, it
-falls back to the top-ranked candidate anyway (preferring a themed one
-over an ordinary one, same precedence as before this crossing-safety
-check existed) — so "Suivant" can still complete a step even when no
-candidate can be placed without creating an impossible zone.
+for the whole "Mots Défi" pool up front (`target`'s own slot tried first,
+then every other open slot, all ranked by the same statistical score/
+frequency the final word draw already used), sets `Filler._challenge_
+word_budget` accordingly, and walks the ranked list skipping any
+combination that would break a slot, reusing `Filler._register_
+challenge_word_break`/`_challenge_abandoned` exactly like the automatic
+search does; only once every such combination (ordinary or, failing that,
+individually reshaped — see "Priority-tier search in Interactive mode"
+below) has been tried does the search fall through to the theme glossary,
+then the general dictionary at `target` alone — full detail, including
+why each candidate's own black-cell reshape (if any) must be evaluated in
+total isolation from every other candidate's, is in that section.
 
 `_word_breaks_open_slot`'s check is deliberately wider, here, than
 `_backtrack`'s own inline one: it rejects a candidate that empties the
@@ -489,8 +485,16 @@ would make every single candidate at every other slot look unsafe too.
 
 **Floating-black-cell widening**: `_widen_floating_black_cells_for_
 priority_words` tries to carve out a right-sized slot for every "Mots
-Défi" word, then every theme-glossary word, that has no matching-length
-empty slot anywhere in the pattern yet: for each such word it scans up to
+Défi" word, then every theme-glossary word, that has no free, letter-
+compatible empty slot of its own exact length available anywhere in the
+pattern yet (`_has_free_matching_slot`: a same-length empty slot only
+counts as "available" for a word if every cell it already carries a
+locked letter on agrees with that word, and it hasn't already been
+claimed by an earlier, same-length word of the same glossary group in
+this same pass — so two words sharing a length are never both waved
+through onto the one slot that actually exists, and a same-length slot
+whose locked letters spell something else entirely is never mistaken for
+a home either): for each still-needy word it scans up to
 `WIDEN_BLACK_CELL_WINDOW` shuffled black cells not in `permanent_black_
 cells`, and for each one computes the merged run that would result from
 relocating it (`_white_run`, walking outward in both directions from the
@@ -516,24 +520,114 @@ that candidate outright, so a relocation can never silently attach a
 stray uncloseable cell to an existing word, truncate one, or leave a
 newly-formed short crossing slot with no possible word at all. Capped by
 `WIDEN_PRIORITY_WORDS_LIMIT` (words tried per group) and `WIDEN_MAX_
-SUCCESSFUL` (total relocations per pattern) to bound its cost on a large
-theme glossary. This remains a best-effort mechanic, not a hard geometry
-guarantee: a word whose length exceeds every available merged run, or
-for which no floating black cell yields a structurally and dictionary-
-wise valid relocation, still falls back to the ordinary geometric-fit
-placement (or no placement at all) — never a corrupting one.
+SUCCESSFUL` (total relocations per pattern, shared with the shortening
+fallback below) to bound its cost on a large theme glossary. This remains
+a best-effort mechanic, not a hard geometry guarantee: a word whose
+length exceeds every available merged run, or for which no floating
+black cell yields a structurally and dictionary-wise valid relocation,
+falls through to the shortening fallback below before ultimately falling
+back to the ordinary geometric-fit placement (or no placement at all) —
+never a corrupting one.
 
-Two callers share this one function, never a second implementation:
-`_pattern_attempt` runs it on a freshly generated pattern before the CSP
-search even starts (never `_pattern_continue`, whose pattern already
-carries real placed words on some slots) — every cell is still blank at
-that point, so both the letter-preservation and perpendicular-domain
-checks above are no-ops there, trivially satisfied by construction.
-`interactive_place_word` (Interactive mode's "Suivant") runs it too,
-right before its own slot/domain computation, passing that call's own
-`known` (already-placed letters) and `index` (its own `DualIndex`) —
-here the pattern can genuinely carry real letters outside whichever slot
-ends up widened, which is exactly what both checks above protect.
+**Shortening fallback**: once every word of one glossary group ("Mots
+Défi", then the theme glossary) has had its own widening attempt above,
+`_widen_floating_black_cells_for_priority_words` runs a second pass
+(`_shorten_one_slot_for_word`) over whichever of that group's words are
+still unplaced, before moving on to the next, lower-priority group — the
+mirror operation of widening: instead of relocating an existing black
+cell to grow a run up to the word's own length, it scans up to
+`SHORTEN_SLOT_WINDOW` shuffled existing EMPTY slots already longer than
+the word (`extract_slots`, filtered to `len(cells) > len(word)`), and for
+each one tries casing the word flush against its start or its end
+(`_try_shorten_slot`) by casting a brand new black cell into the
+interior cell right past the word's own span — no existing black cell is
+touched or moved, since the whole slot was open space to begin with.
+`SHORTEN_SLOT_WINDOW` is `FALLBACK_PHASE_BUDGET_FRACTION` (10%) of
+`WIDEN_BLACK_CELL_WINDOW`, reusing the same 10%-of-budget idiom the
+crossing-safety retry mechanism already applies elsewhere (see "Crossing-
+safety retry" below), scaled onto the widening scan's own window since no
+`deadline_checks`-based budget exists yet at this pre-search stage. The
+new black cell is guarded the same way `_try_widen_black_cell`'s own
+`new_black` is: it can never land on a cell already in `locked_letters`
+(never blackening — and so destroying — an already-known letter), and
+`_perpendicular_slot_stays_valid` refuses any placement that would turn
+the PERPENDICULAR slot crossing it into one with no real dictionary
+candidate left. A word still unplaced after both the widening and the
+shortening pass for its own group simply falls back to the ordinary
+geometric-fit placement (or no placement at all this round), same as
+widening alone used to.
+
+`_pattern_attempt` (automatic generation) is the one caller of the whole
+batch orchestrator, `_widen_floating_black_cells_for_priority_words`,
+applying it to a freshly generated pattern before the CSP search even
+starts (never `_pattern_continue`, whose pattern already carries real
+placed words on some slots) — every cell is still blank at that point, so
+both the letter-preservation and perpendicular-domain checks above are
+no-ops there, trivially satisfied by construction. It reshapes for the
+WHOLE word list in one cumulative pass (up to `WIDEN_MAX_SUCCESSFUL`
+relocations stacked on one shared pattern) because every one of them gets
+kept regardless of outcome: the CSP search that follows fills the *whole*
+grid over many placements, not just one, so there is never a "pick one
+winner, discard the rest" step to get right.
+
+`interactive_place_word` (Interactive mode's "Suivant") calls the exact
+same LOW-LEVEL primitives (`_widen_one_floating_black_cell`/`_shorten_
+one_slot_for_word`, and through them `_try_widen_black_cell`/`_try_
+shorten_slot`/`_perpendicular_slot_stays_valid`) but never the batch
+orchestrator itself, and never on a shared, cumulative pattern — see
+"Priority-tier search in Interactive mode" below for why and how.
+
+**Priority-tier search in Interactive mode**: `interactive_place_word`
+tries, in order, "Mots Défi" (`Filler.challenge_words`), then the theme
+glossary (`Filler.priority_words`), then the general dictionary at
+`target` alone — the same three-tier precedence automatic generation's
+own `_backtrack` applies (see "Crossing-safety retry, all three candidate
+tiers" above), but built around one hard constraint the batch widening
+mechanism above never has to satisfy: only ONE word is ever placed per
+call, so whichever black-cell reshape (if any) ends up backing it must be
+decided *before* anything is committed, and every OTHER word's own
+would-be reshape must never touch the grid at all — every attempt is
+independent of every other, each one isolated on its own copy of the
+grid whenever more than one is under consideration at once.
+`_find_priority_word_placement` (shared by both the "Mots Défi" and the
+theme tier) is what enforces this: it first tries every ordinary,
+already-dictionary-viable slot the word pool fits, purely against the
+grid's own untouched base pattern/`Filler` (`target`'s own combos first,
+ranked by the same statistical score/frequency the final word draw uses,
+`_word_breaks_open_slot` rejecting any that breaks a crossing) — nothing
+here can ever be contaminated, since no reshape is involved at all. Only
+once every ordinary combo has failed does it give each remaining word
+with no natural or ordinary slot anywhere its own, fully ISOLATED
+widen-then-shorten attempt (`_try_reshape_for_word`, one independent copy
+of the base pattern per word, discarded immediately if unused — never a
+shared one), builds a brand-new, throwaway `Filler` from that ONE copy
+alone (`_build_interactive_filler`), and runs the exact same `_word_
+breaks_open_slot` check against it — the real, final pattern this
+specific candidate would leave behind if chosen, nothing else mixed in,
+so the check can never be fooled by another word's own reshape. `Filler.
+_register_challenge_word_break`/`_register_theme_word_break` (and their
+own `_challenge_word_budget`/`_theme_word_budget`, sized from the total
+number of ordinary combos plus reshape attempts considered) are always
+applied to the grid's own outer `Filler`, never to a per-candidate
+isolated one, so a word's abandonment bookkeeping persists correctly
+across both phases regardless of which specific `Filler` ends up
+confirming any one candidate. The exemption `_word_breaks_open_slot`
+checks (some OTHER still-active "Mots Défi" word able to bail out a slot
+this candidate would otherwise break) is always drawn fresh from the
+grid's own current challenge pool, regardless of which tier is running —
+that check is hard-coded to challenge words specifically. Once a tier's
+search returns a winner, `interactive_place_word` reconciles that
+winner's own pattern (the base one, untouched, for an ordinary pick; the
+one isolated reshape copy, for a "Mots Défi"/theme pick that needed one)
+straight into the real letter grid and writes the word's own letters in
+— no revert-unused-reshapes pass is needed any more, since nothing but
+the eventual winner's own single reshape (if any) was ever applied to
+begin with. The general-dictionary tier at `target` excludes every
+"Mots Défi"/theme word from its own candidate pool outright (any such
+word still present in `target`'s domain was necessarily already tried,
+across every slot in the grid, by one of the two tiers above) — falling
+back to the raw, unfiltered domain only if excluding both pools would
+leave nothing at all, so "Suivant" never gets stuck.
 
 On the frontend, `interactiveNextBtn`'s click handler (`script.js`)
 replaces the whole `interactiveGrid` from `POST /api/interactive/step`'s
@@ -691,7 +785,15 @@ Three independent filesystem stores, one JSON file shape shared with the
 - **`GRID_WORK/`** — one continuously-overwritten file per in-progress
   "Interactif" authoring session, named `<timestamp>_<pseudo-slug>_<job_
   id>.json`. `save_grid_work`/`get_grid_work`/`list_grid_work`/`delete_
-  grid_work`.
+  grid_work`. Every save carries a `previous` field: every top-level field
+  the record held right before this save overwrote it (minus its own,
+  now-stale `previous`, so this only ever holds one step of history, never
+  a full chain), or `None` on a session's very first save — a diagnostic-
+  only extra a bug report can be replayed from directly, without asking
+  the player to hit "Précédent" first purely to hand over a "before"
+  snapshot. Every reader of this record keeps reading the top-level fields
+  for the CURRENT state; `previous` is never itself the active session
+  state a resume rebuilds from.
 - **`GRID_GAME/<grid_id>/<pseudo-slug>.json`** — one file per (grid,
   player) pair holding that player's own typed letters + elapsed timer.
   `save_grid_game`/`get_grid_game`.
@@ -808,10 +910,13 @@ state, unlike the backend).
   (paginated/filterable listing, load-into-player, reopen-as-editable);
   the dictionary panel (root-family search, "Définir", "Thématique"/
   "Synonymes", bilingual-aware); the chatbot UI (Markdown rendering,
-  incremental streaming, live UI-context snapshot sent as grounding);
-  the RSS/SCRAPP panel; the presence counter and CPU/GPU/queue-length
-  meters; the virtual keyboard; the welcome overlay and cookie-based
-  preference storage (`cwf-prefs`).
+  incremental streaming, live UI-context snapshot sent as grounding,
+  open/collapsed state persisted in its own `cwf-chatbot-state` cookie —
+  `max-age` recomputed on every toggle down to local midnight, so a
+  reload later the same day restores the last state but a new day always
+  shows it open again); the RSS/SCRAPP panel; the presence counter and
+  CPU/GPU/queue-length meters; the virtual keyboard; the welcome overlay
+  and cookie-based preference storage (`cwf-prefs`).
 - **`style.css`** — one flat stylesheet organized by component in source
   order, IDs/classes mirroring `script.js`'s DOM references 1:1.
 - **`i18n.js`** — pure-data translation table, `I18N = {fr, en, de, es,

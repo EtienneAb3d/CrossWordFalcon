@@ -739,18 +739,34 @@ real letter. Both update after every edit.
   `_word_breaks_open_slot`) — it only ever gives up on placing any
   challenge word this click once every such combination has genuinely
   been tried. That same fallback pick (theme glossary first, then the
-  plain dictionary) is itself just as careful: among whichever list
-  applies, **Suivant** prefers a word that doesn't leave any other
-  still-open word impossible to complete, only settling for one that does
-  once nothing safer is available in that list. Before picking
-  a slot, **Suivant** also tries reshaping the black-cell layout itself —
-  nudging a black cell over to carve out a right-sized empty slot,
-  without ever disturbing an already-placed letter — for any challenge or
-  theme word with no matching-length slot anywhere yet, the same
+  plain dictionary) is itself just as careful, and never reconsiders a
+  challenge word that combination search already rejected: among
+  whichever list applies (with every "Mots Défi" entry left out, since
+  one still fitting this exact slot was necessarily already tried and
+  found unsafe above), **Suivant** prefers a word that doesn't leave any
+  other still-open word impossible to complete, only settling for the
+  best-ranked one that does once nothing safer is available in that
+  list — and only reaches for a challenge word here, as an absolute last
+  resort, on the rare slot where literally nothing else, safe or not,
+  can go at all. Only once a challenge or theme word has no existing slot
+  of its own length anywhere at all does **Suivant** try reshaping the
+  black-cell layout for it specifically — first nudging a black cell over
+  to carve out a right-sized empty slot, then, if that doesn't work,
+  looking for an existing empty slot that's already longer than the word
+  and casing the word flush against its start or end with a brand new
+  black cell — without ever disturbing an already-placed letter, the same
   best-effort mechanism automatic generation uses (see "Mots Défi
-  (personnalisation) / Challenge Words (customization)" above); a word
-  that still doesn't fit anywhere this allows simply waits for a later
-  click. A word from this list is never flagged as invalid (a red cell —
+  (personnalisation) / Challenge Words (customization)" above). Every
+  such reshape attempt happens on its own, self-contained trial copy of
+  the grid, one word at a time, never sharing that trial copy with any
+  other word's own attempt — so a word's reshape can never be quietly
+  undone by, or rely on, some unrelated word's own reshape from the same
+  click, and the safety check that follows always sees the exact, final
+  grid that specific word would really leave behind. A word that still
+  doesn't fit anywhere either way simply waits for a later click, and any
+  reshape attempt that doesn't end up backing the one word actually placed
+  is discarded outright, never touching the real grid at all. A word from
+  this list is never flagged as invalid (a red cell —
   see "Impossibles"/"Vérifier" below), whether it isn't a real dictionary
   entry or how it got into the grid — via "Suivant", a direct click, or
   typed by hand — it's considered part of the dictionary for that check
@@ -957,9 +973,16 @@ no slot of its own length anywhere yet: it looks for a black cell that
 can be nudged over to the far side of that word instead of its current
 spot — carving out a right-sized empty slot — as long as doing so keeps
 the grid's own hard rules intact and never disturbs a word that's already
-been placed. This is a best-effort adjustment, not a guarantee: a word
-too long for any nearby gap, or one for which no such move keeps the grid
-valid, simply falls back to the ordinary chances described below.
+been placed. Once every word of one group (Challenge Words, then the
+theme glossary) has had its own turn at this, a second pass looks at
+whichever of that group's own words are still without a slot and tries a
+different adjustment for them: finding an existing empty slot that's
+already longer than the word, and casing the word flush against its
+start or its end by dropping a brand new black cell right past it,
+rather than moving an existing one. Both adjustments are best-effort, not
+a guarantee: a word too long for any nearby gap or existing slot, or one
+for which neither adjustment keeps the grid valid, simply falls back to
+the ordinary chances described below.
 
 **Choosing which word slot to fill next.** Once a black-cell pattern is
 accepted, every run of at least 2 white cells (across or down) becomes a

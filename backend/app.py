@@ -3659,6 +3659,21 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             for w in result["words"] if w["answer"] in _theme_set
             for dk in range(len(w["answer"]))
         })
+        # Same computation for "Mots Défi" (`challenge_words`, already a
+        # bare-grid-form frozenset at this point — see its own definition
+        # above), at the user's explicit request: this "final grid" preview
+        # (the very last one shown, right after optimization/minimization)
+        # had never computed this at all, unlike every earlier preview in
+        # crossword_gen.py (`_challenge_word_cells_from_assignment`) — so a
+        # challenge word placed in the grid stopped showing in green the
+        # moment generation reached this step, even though it was still
+        # correctly highlighted in every preview before it.
+        challenge_cells = sorted({
+            (w["row"] + (dk if w["direction"] != "across" else 0),
+             w["col"] + (dk if w["direction"] == "across" else 0))
+            for w in result["words"] if w["answer"] in challenge_words
+            for dk in range(len(w["answer"]))
+        })
         # "Finir la grille" (see POST /api/interactive/finish): a word
         # whose exact ANSWER TEXT already carries a preserved clue
         # (`preserved_clues`, a `{word: clue}` map — deliberately never
@@ -3686,6 +3701,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 "forced_cells": [],
                 "locked_cells": [],
                 "theme_cells": theme_cells,
+                "challenge_cells": challenge_cells,
                 # The number of the process that genuinely produced this
                 # winning grid (backend/crossword_gen.py's own `winning_
                 # process_number`, threaded through the result dict — see

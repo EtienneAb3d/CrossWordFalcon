@@ -467,9 +467,18 @@ qui départage le reste du vivier (l'état brut).
 Une fois le motif de cases noires accepté pour ce palier — mais avant
 même le tout premier mot posé — une dernière passe cherche, pour chaque
 mot **Mots Défi** puis pour chaque mot du glossaire **thématique** qui n'a
-encore aucun emplacement de sa propre longueur nulle part dans la grille,
-une case noire déplaçable (`backend/crossword_gen.py`,
-`_widen_floating_black_cells_for_priority_words`) : une case noire non
+encore aucun emplacement disponible de sa propre longueur, une case noire
+déplaçable (`backend/crossword_gen.py`,
+`_widen_floating_black_cells_for_priority_words`). Un emplacement vide de
+la bonne longueur qui existe déjà ailleurs dans la grille ne suffit pas à
+écarter un mot de cette passe (`_has_free_matching_slot`) : il faut en
+plus que ses lettres déjà verrouillées concordent avec le mot, et
+qu'aucun autre mot de même longueur du même glossaire, traité plus tôt
+dans cette même passe, ne l'ait déjà revendiqué — sans quoi deux mots de
+même longueur se verraient tous deux crédités du seul emplacement
+réellement libre, ou un mot se verrait crédité d'un emplacement dont les
+lettres imposées épellent en réalité autre chose. Pour chaque mot qui a
+encore besoin d'un remaniement une fois ce tri fait : une case noire non
 protégée (absente de `permanent_black_cells`) dont le déplacement vers
 l'autre bout d'un emplacement voisin garderait la grille structurellement
 valide (`is_structurally_valid`, seuil relâché à 1, le même que celui
@@ -486,49 +495,87 @@ d'emplacement/de mot (voir "Choisir quel emplacement remplir en premier"
 plus bas) qui s'en saisit naturellement, en priorité, comme n'importe quel
 autre emplacement Mots Défi ou thématique.
 
-Deux vérifications protègent chaque déplacement contre toute corruption
-d'un mot déjà posé ailleurs dans la grille — indispensable dès lors que
-cette même passe est aussi réutilisée en mode Interactif (voir plus bas),
-où, contrairement à la génération automatique, la grille peut déjà
-contenir de vraies lettres en dehors de l'emplacement en cours
-d'élargissement. D'abord, la case qui doit absorber le déplacement (la «
-nouvelle » case noire, à l'opposé de la case libérée) ne peut jamais être
-une case déjà porteuse d'une vraie lettre. Ensuite, dans l'axe
-PERPENDICULAIRE au déplacement, ni la case libérée (une fois sa propre
-lettre du mot en cours posée) ni la case nouvellement noircie ne peuvent
-faire basculer l'emplacement perpendiculaire qui les traverse vers un état
-sans plus aucun mot réel du dictionnaire possible, compte tenu des lettres
-déjà connues à cet endroit (`_perpendicular_slot_stays_valid`/`_slot_
-has_domain`, une vérification de domaine légère, indépendante de
-`Filler`) — sans cette dernière vérification, libérer une case pourrait
-accoler discrètement une case surnuméraire à un mot perpendiculaire déjà
-posé (le laissant avec une case vide qu'aucune case noire ne referme
-jamais), et noircir une case pourrait au contraire en tronquer un. Grâce à
-ces deux vérifications, cette manipulation ne peut jamais rendre un
-emplacement impossible ailleurs dans la grille — un mot pour lequel aucun
-déplacement ne le permet est alors simplement laissé de côté ce tour-ci,
-exactement comme s'il n'y avait eu aucune zone flottante disponible du
-tout. Ce n'est là encore qu'un mécanisme du mieux possible, pas une
-garantie de résultat : un mot trop long pour la moindre zone voisine
-disponible, ou pour lequel aucun déplacement valide n'existe (structurellement
-ou du point de vue des mots perpendiculaires), retombe simplement sur les
-mêmes chances ordinaires que décrites plus bas, sans jamais corrompre quoi
-que ce soit d'autre entre-temps. Au sein de la génération automatique,
-cette passe ne s'applique qu'au tout premier motif de chaque palier
+Une fois que tous les mots d'un même glossaire (Mots Défi, puis
+thématique) ont eu leur propre tentative d'élargissement, une seconde
+passe (`_shorten_one_slot_for_word`) s'applique à ceux d'entre eux encore
+sans emplacement, avant de passer au glossaire suivant : plutôt que de
+déplacer une case noire existante pour agrandir un emplacement jusqu'à la
+longueur du mot, elle cherche un emplacement déjà vide et STRICTEMENT PLUS
+LONG que le mot, et y case le mot au début ou à la fin
+(`_try_shorten_slot`) en posant une toute nouvelle case noire juste après
+sa dernière lettre — aucune case noire existante n'est déplacée, puisque
+tout l'espace concerné était déjà ouvert. Le nombre d'emplacements
+examinés par mot est plafonné à 10 % de la fenêtre déjà utilisée par
+l'élargissement (`SHORTEN_SLOT_WINDOW`, 10 % de `WIDEN_BLACK_CELL_
+WINDOW`) — le même budget de 10 % déjà employé ailleurs dans l'algorithme
+avant d'abandonner un mot Défi ou thématique (voir "Sécurité des
+croisements et budget d'abandon, pour les trois familles de candidats"
+plus bas), repris ici faute d'un budget de recherche déjà défini à ce
+stade, puisque cette passe tourne avant même
+que le remplissage par backtracking ne commence.
+
+Deux vérifications protègent chacune de ces deux manipulations (déplacer
+une case noire existante, ou en poser une toute nouvelle) contre toute
+corruption d'un mot déjà posé ailleurs dans la grille — indispensable dès
+lors que ces mêmes passes sont aussi réutilisées en mode Interactif (voir
+plus bas), où, contrairement à la génération automatique, la grille peut
+déjà contenir de vraies lettres en dehors de l'emplacement en cours de
+remaniement. D'abord, la case qui doit absorber le changement (la «
+nouvelle » case noire) ne peut jamais être une case déjà porteuse d'une
+vraie lettre. Ensuite, dans l'axe PERPENDICULAIRE au mot, ni la case
+libérée par l'élargissement (une fois sa propre lettre du mot en cours
+posée) ni la case nouvellement noircie (par l'une ou l'autre des deux
+passes) ne peuvent faire basculer l'emplacement perpendiculaire qui les
+traverse vers un état sans plus aucun mot réel du dictionnaire possible,
+compte tenu des lettres déjà connues à cet endroit
+(`_perpendicular_slot_stays_valid`/`_slot_has_domain`, une vérification
+de domaine légère, indépendante de `Filler`) — sans cette dernière
+vérification, libérer une case pourrait accoler discrètement une case
+surnuméraire à un mot perpendiculaire déjà posé (le laissant avec une
+case vide qu'aucune case noire ne referme jamais), et noircir une case
+pourrait au contraire en tronquer un. Grâce à ces deux vérifications,
+aucune de ces deux manipulations ne peut jamais rendre un emplacement
+impossible ailleurs dans la grille — un mot pour lequel ni l'une ni
+l'autre ne fonctionne est alors simplement laissé de côté ce tour-ci,
+exactement comme s'il n'y avait eu aucune zone flottante ni aucun
+emplacement plus long disponible du tout. Ce n'est là encore qu'un
+mécanisme du mieux possible, pas une garantie de résultat : un mot trop
+long pour la moindre zone voisine disponible ou pour le moindre
+emplacement plus long existant, ou pour lequel aucune des deux
+manipulations ne reste valide (structurellement ou du point de vue des
+mots perpendiculaires), retombe simplement sur les mêmes chances
+ordinaires que décrites plus bas, sans jamais corrompre quoi que ce soit
+d'autre entre-temps. Au sein de la génération automatique, ces deux
+passes ne s'appliquent qu'au tout premier motif de chaque palier
 (`_pattern_attempt`), jamais à une reprise « telle quelle » du motif d'un
 palier précédent (`_pattern_continue`, voir plus bas), puisque cette
 dernière porte déjà des mots réellement posés sur certains de ses
 emplacements — les deux vérifications ci-dessus n'y ont d'ailleurs jamais
 d'effet, la grille étant encore entièrement vierge à ce stade. Le mode
-Interactif (`interactive_place_word`) réutilise exactement la même
-fonction avant chaque pose du bouton **Suivant**, en lui passant cette
-fois les lettres déjà posées comme verrouillées — c'est là que les deux
-vérifications jouent réellement leur rôle. Côté interface, un déplacement
-de case noire fait partie intégrante de l'étape posée par **Suivant** :
-la grille entière renvoyée par le serveur remplace l'état affiché
-côté client (pas seulement les cases du mot posé), de sorte qu'un clic
-sur **Précédent** annule aussi bien le mot posé que le déplacement de
-case noire qui l'a accompagné.
+Interactif (`interactive_place_word`) réutilise exactement les deux mêmes
+fonctions de bas niveau (`_widen_one_floating_black_cell`/`_shorten_one_
+slot_for_word`) avant chaque pose du bouton **Suivant**, en leur passant
+cette fois les lettres déjà posées comme verrouillées — c'est là que les
+deux vérifications jouent réellement leur rôle — mais jamais l'orchestre
+par lot ci-dessus (`_widen_floating_black_cells_for_priority_words`), et
+jamais sur un motif partagé entre plusieurs mots : un seul clic sur
+**Suivant** ne pose jamais qu'un seul mot, donc jamais plus d'un
+remaniement de case noire à la fois ne peut réellement subsister, et
+chaque mot encore candidat à un remaniement reçoit sa propre tentative,
+entièrement isolée sur sa propre copie indépendante du motif de base
+(`_try_reshape_for_word`) — jamais une tentative influencée par, ou
+influençant, celle d'un autre mot. Voir « Sécurité des croisements et
+budget d'abandon, pour les trois familles de candidats » plus bas pour le
+détail de cette recherche à deux phases et la raison précise de cette
+isolation stricte.
+
+Côté interface, un
+remaniement de case noire (déplacement ou pose d'une nouvelle) fait
+partie intégrante de l'étape posée par **Suivant** : la grille entière
+renvoyée par le serveur remplace l'état affiché côté client (pas
+seulement les cases du mot posé), de sorte qu'un clic sur **Précédent**
+annule aussi bien le mot posé que le remaniement de case noire qui l'a
+accompagné.
 
 ## Étape 2 — Remplir la grille avec de vrais mots
 
@@ -854,32 +901,61 @@ emplacement, faussement « dangereux ».
 
 Pour les Mots Défi : avant de retenir l'un d'eux, le programme énumère
 toutes les combinaisons (mot, emplacement encore ouvert) géométriquement
-possibles pour l'ensemble de la liste **Mots Défi** — celles de
-l'emplacement d'abord désigné par la cascade à 8 niveaux ci-dessous en
-priorité, puis celles de tout autre emplacement ouvert, chaque groupe
-classé par le même score statistique/fréquence que le tirage final — et
-les essaie une à une dans cet ordre, en écartant immédiatement
-(« backtrack immédiat ») toute combinaison qui casserait un emplacement
-au sens élargi ci-dessus. Faute de budget de vérifications propre à ce
-simple placement, le budget de 10% se calcule ici sur le nombre total de
-combinaisons envisagées pour cet appel : chaque Mot Défi est abandonné,
-pour ce seul clic sur **Suivant**, dès qu'il a lui-même cassé un
-emplacement à hauteur de 10% de ce total. Ce n'est qu'une fois toutes les
-combinaisons épuisées — ou tous les Mots Défi encore actifs abandonnés —
-que le programme se rabat sur le glossaire thématique puis le
-dictionnaire général, à ce seul emplacement choisi ; ce repli applique
-lui aussi cette même vérification élargie : il classe les candidats de la
-famille applicable (thématique en premier, puis dictionnaire général une
-fois la thématique vide ou épuisée) par le même score, et retient le
-premier qui ne casse aucun autre emplacement. À la différence des Mots
-Défi ou de la génération automatique, ce classement n'a pas de budget
-propre : ne parcourir qu'un seul emplacement, dont la liste de candidats
-est déjà plafonnée, coûte assez peu pour l'examiner en entier plutôt que
-de s'en tenir à une tranche arbitraire de 10%. Si aucun candidat de la
-famille retenue n'évite de casser un autre emplacement, le programme
-accepte quand même le mieux classé — Mots Défi ayant toujours priorité
-sur le glossaire thématique, lui-même prioritaire sur le dictionnaire
-général, à chaque étape de ce repli.
+possibles pour l'ensemble de la liste **Mots Défi**, en ne considérant
+QUE les emplacements déjà existants et déjà viables pour le dictionnaire
+(`_find_priority_word_placement`, partagée avec le glossaire thématique)
+— celles de l'emplacement d'abord désigné par la cascade à 8 niveaux
+ci-dessous en priorité, puis celles de tout autre emplacement ouvert,
+chaque groupe classé par le même score statistique/fréquence que le
+tirage final — et les essaie une à une dans cet ordre, en écartant
+immédiatement (« backtrack immédiat ») toute combinaison qui casserait un
+emplacement au sens élargi ci-dessus. Un mot qui ne correspond à AUCUN
+emplacement existant de sa longueur reçoit ensuite, mais seulement à ce
+stade, sa propre tentative de remodelage de case noire, entièrement
+ISOLÉE sur sa propre copie indépendante du motif de base — jamais sur un
+motif partagé avec les autres mots encore en lice (voir plus bas
+pourquoi). Faute de budget de vérifications propre à ce simple placement,
+le budget de 10% se calcule ici sur le nombre total de combinaisons plus
+tentatives de remodelage envisagées pour cet appel : chaque Mot Défi est
+abandonné, pour ce seul clic sur **Suivant**, dès qu'il a lui-même cassé
+un emplacement à hauteur de 10% de ce total. Ce n'est qu'une fois toutes
+les combinaisons et tentatives de remodelage épuisées — ou tous les Mots
+Défi encore actifs abandonnés — que le programme se rabat sur le
+glossaire thématique (même recherche à deux phases, restreinte aux
+candidats réellement présents dans le dictionnaire), puis, si celui-ci
+échoue à son tour, sur le dictionnaire général à ce seul emplacement
+choisi ; ce dernier repli écarte d'entrée tout Mot Défi ou mot thématique
+encore présent dans le dictionnaire de cet emplacement — un tel mot, s'il
+s'y trouve encore, a nécessairement déjà été essayé, sur TOUS les
+emplacements de la grille, par l'une des deux familles précédentes, et
+s'y est révélé cassant à chaque fois ; le laisser reviendrait à laisser
+le repli « accepter quand même » ci-dessous re-choisir ce même mot déjà
+écarté, pour la même raison. Ce dernier repli n'a pas de budget propre :
+ne parcourir qu'un seul emplacement, dont la liste de candidats est déjà
+plafonnée, coûte assez peu pour l'examiner en entier plutôt que de s'en
+tenir à une tranche arbitraire de 10%. Si aucun candidat ordinaire
+n'évite de casser un autre emplacement, le programme accepte quand même
+le mieux classé — jamais un Mot Défi ou un mot thématique à ce stade,
+sauf si exclure les deux familles ne laisse absolument rien d'autre dans
+le dictionnaire brut de cet emplacement, seul cas où l'un d'eux est posé
+en tout dernier recours plutôt que de laisser **Suivant** bloqué.
+
+Chaque tentative de remodelage de case noire (Mots Défi puis glossaire
+thématique) est strictement ISOLÉE sur sa propre copie du motif de base
+— jamais sur un motif partagé, cumulé au fil des mots. Une version
+antérieure appliquait, comme la génération automatique, TOUS les
+remodelages spéculatifs de TOUTE la liste des mots sur un même motif
+partagé avant même qu'un mot soit choisi pour ce clic — ce qui pouvait
+laisser le remodelage d'un mot totalement étranger fausser, temporairement
+et à tort, la vérification de sécurité d'un autre emplacement (en
+déplaçant la case noire qui le délimite), avant d'être lui-même annulé une
+fois le mot réellement posé déterminé — révélant alors, trop tard, un
+emplacement en réalité impossible. Chaque tentative de remodelage
+construit désormais son propre `Filler` jetable, bâti uniquement à partir
+de sa propre copie du motif — la vérification de sécurité qui s'ensuit
+porte donc toujours sur l'état réel et final que ce candidat précis
+laisserait derrière lui, jamais sur un état mélangé à celui d'un autre
+candidat.
 
 ### Choisir quel emplacement remplir en premier
 
@@ -1514,7 +1590,14 @@ destructeur qu'une case encore libre), mais aussi, en second recours,
 une case déjà connue si l'emplacement est entièrement croisé (le cas le
 plus fréquent en fin de partie, quand peu de cases restent réellement
 libres) — dans ce cas, la case noire retire alors, comme effet de bord,
-le mot croisant qui l'occupait. La case retenue doit garder la grille
+le mot croisant qui l'occupait. Au sein de chacun de ces deux groupes de
+cases, la case retenue en priorité est celle qui appartient au plus
+grand nombre d'autres emplacements également impossibles à ce même
+palier (une intersection de plusieurs impossibles plutôt qu'un
+impossible dans une seule direction) — une seule case noire a ainsi une
+chance de résoudre plusieurs emplacements impossibles à la fois ; à
+priorité égale, le choix reste un tirage au hasard sans biais de
+position. La case retenue doit garder la grille
 valide (connexe, aucune case isolée) une fois noircie ; si aucune case
 de l'emplacement (libre ou déjà connue) ne convient, on retombe sur le
 retrait de mot habituel. Poser une case noire ne libère aucune

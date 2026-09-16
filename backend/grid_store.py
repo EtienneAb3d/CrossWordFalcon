@@ -485,16 +485,33 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
     "RANDONNES"). Never re-filtered against the loaded lexicon on resume;
     `backend/crossword_gen.py`'s `challenge_word_grid_form` derives the
     bare-uppercase grid form from it on demand wherever one is actually
-    needed, rather than storing that derived form itself."""
+    needed, rather than storing that derived form itself.
+
+    `record["previous"]`: whatever this exact record held right before
+    this call overwrites it (every field except its own, now-stale
+    `previous` — never nested more than one level deep, so this only ever
+    holds the immediately-preceding save, not a full history), or `None`
+    on the very first save for a `job_id` — at the user's explicit
+    request, so a live bug report ("Suivant just placed X, breaking Y")
+    can be diagnosed straight from the on-disk file, replaying the exact
+    step that caused it, without asking the player to hit "Précédent"
+    first purely to hand over a "before" snapshot. Every reader of this
+    record (`get_grid_work`/`_iter_stored_grid_work`/`_run_interactive_
+    resume_job`) must keep reading the top-level fields for the CURRENT
+    state — `previous` is a diagnostic-only extra, never itself the
+    active session state a resume should rebuild from."""
     pseudo = (pseudo or "").strip() or None
     existing = list(GRID_WORK_DIR.glob(f"*_{job_id}.json")) if GRID_WORK_DIR.is_dir() else []
     created_at = None
+    previous = None
     if existing:
         path = existing[0]
         work_id = path.stem
         try:
             with open(path, encoding="utf-8") as f:
-                created_at = json.load(f).get("created_at")
+                old_record = json.load(f)
+            created_at = old_record.get("created_at")
+            previous = {k: v for k, v in old_record.items() if k != "previous"}
         except (OSError, json.JSONDecodeError):
             created_at = None
     elif resumed_from and _WORK_ID_RE.match(resumed_from) and (GRID_WORK_DIR / f"{resumed_from}.json").is_file():
@@ -538,6 +555,7 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
         # list shown in the order it was typed in, so that order must
         # survive a save/resume round trip unchanged.
         "challenge_words": list(challenge_words or ()),
+        "previous": previous,
         "created_at": created_at or now,
         "updated_at": now,
     }

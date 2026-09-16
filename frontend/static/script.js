@@ -5066,9 +5066,34 @@ function buildChatUiContext() {
   };
 }
 
+// Open/collapsed state, at the user's explicit request: remembered across
+// a reload for the rest of the current day only — a cookie whose max-age is
+// computed down to local midnight, rather than the `cwf-prefs` cookie's own
+// one-year lifetime, so a new day always finds the ChatBot open again, its
+// normal default.
+const CHATBOT_STATE_COOKIE = "cwf-chatbot-state";
+
+function saveChatbotStateCookie(collapsed) {
+  try {
+    const midnight = new Date();
+    midnight.setHours(24, 0, 0, 0);
+    const maxAge = Math.max(1, Math.round((midnight.getTime() - Date.now()) / 1000));
+    document.cookie = `${CHATBOT_STATE_COOKIE}=${collapsed ? "collapsed" : "open"}; path=/; max-age=${maxAge}; samesite=lax`;
+  } catch (e) {
+    // Cookies disabled — the ChatBot just reopens on the next load.
+  }
+}
+
+function loadChatbotStateCookie() {
+  const m = document.cookie.match(/(?:^|;\s*)cwf-chatbot-state=([^;]*)/);
+  return m ? m[1] : null;
+}
+
 function toggleChatbotCollapsed() {
   chatbotEl.classList.toggle("chatbot-collapsed");
+  saveChatbotStateCookie(chatbotEl.classList.contains("chatbot-collapsed"));
 }
+if (loadChatbotStateCookie() === "collapsed") chatbotEl.classList.add("chatbot-collapsed");
 chatbotToggleBtn.addEventListener("click", toggleChatbotCollapsed);
 // Clickable icon in collapsed mode (the "–" button itself is then
 // hidden, see style.css), at the user's explicit request: "In 'collapsed'
