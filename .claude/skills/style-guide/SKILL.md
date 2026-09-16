@@ -33,6 +33,30 @@ English (see `project-best-practices`).
    feedback) are overlaid on top of the white cells only, so they read as
    temporary/interactive rather than part of the puzzle's base appearance.
 
+4. **A layout/CSS change can be visually verified in a real browser on
+   this machine — do it, rather than shipping on code-reading confidence
+   alone.** `chromium`/`chromium-browser` (a snap package) is installed;
+   `playwright` (`pip install playwright`, already present in this
+   project's venv) can drive it directly via `executable_path="/usr/bin/
+   chromium-browser"` with `headless=True, args=["--no-sandbox",
+   "--disable-gpu"]` — no `playwright install` browser download needed,
+   and no separate Playwright browser binary required. Snap's own sandbox
+   refuses to write screenshots under `/tmp`; write them under `$HOME`
+   instead (e.g. `~/cwf_shots/…`) or the project's own scratchpad. A
+   generation form needs the `#welcome-overlay` dismissed first
+   (`#welcome-pseudo`/`#welcome-secret` are `required` — fill both before
+   clicking `#welcome-accept-btn`) before any other interaction works.
+   `page.evaluate(...)` returning each element's `getBoundingClientRect()`
+   / `getComputedStyle()` is far more precise than eyeballing a screenshot
+   for confirming an exact width/position (e.g. "is this panel really 25%
+   of its container"). This was found live only after two straight
+   "looks right in the code, not actually verified" round trips with the
+   user both turned out wrong in practice (see the "Mots Défi" entry
+   below) — always prefer this over guessing from source alone whenever a
+   concrete layout number (a width, an alignment, a wrap) is in question,
+   and prefer it over declaring a change impossible to verify in this
+   environment.
+
 ## Decisions
 
 - page background is a very light mauve (`--bg: #f6f0fb`);
@@ -2544,16 +2568,38 @@ English (see `project-best-practices`).
 - **"Thématique" / "Theme" field** (`#theme-field` label + `#theme`
   text input), at the user's explicit request — an optional free-text
   word list placed **inside `#form-actions`, immediately before
-  `#generate-btn`** ("à côté de Générer la grille"). Unlike every other
-  generation-form field (`label` is `flex-direction: column`, control
-  under its text), `#theme-field` overrides to `flex-direction: row`
-  (label text then input on one line) so it stays compact on the
-  buttons' row, and its input widens to `14rem` (from the shared
-  `input { width: 6rem }`) to fit a short phrase. No new color/token —
-  it's a plain text input, styled by the shared `input` rule otherwise.
-  Empty = ordinary generation; filled = the backend runs a Qdrant
-  pre-search and the words it finds are preferred by the solver (see
-  CLAUDE.md / `project-best-practices`).
+  `#generate-btn`** ("à côté de Générer la grille"). Like every other
+  generation-form field, it's a plain two-line `label` (text above,
+  `#theme` input below) — no `flex-direction` override — and its input
+  widens to `14rem` (from the shared `input { width: 6rem }`) to fit a
+  short phrase. No new color/token — it's a plain text input, styled by
+  the shared `input` rule otherwise. Empty = ordinary generation; filled
+  = the backend runs a Qdrant pre-search and the words it finds are
+  preferred by the solver (see CLAUDE.md / `project-best-practices`).
+
+  Right next to it, `#generate-challenge-panel` ("Mots Défi
+  (personnalisation)") is a plain ordinary flex item of the same
+  `#form-actions` row, no `flex-basis: 100%` — the two fields sit side
+  by side, both stacked two lines tall, for visual consistency between
+  them, at the user's explicit request ("déplace le petit formulaire
+  'Mots Défis' à droite de Thématique. Mets Thématique sur deux lignes
+  comme Mots Défi"). Its own word list, `#generate-challenge-list`, lays
+  words out horizontally (`flex-direction: row; flex-wrap: wrap`) rather
+  than one per row, so the box stays compact instead of growing tall
+  with each added word; each word's own "−" remove button sits right
+  after it, acting as the visual separator between words — no comma or
+  other separator character is added (a comma-after-word CSS `::after`
+  rule was tried first, then explicitly removed per the user's own
+  follow-up: "le bouton '-' peut servir de séparateur. Ne mets pas de
+  virgule entre les Mots Défi"). Unlike `#interactive-challenge-panel`
+  below (a side panel stretched to the grid's own height, scrollable),
+  this list is plain block flow with no fixed height/scroll — it's only
+  shown at all once non-empty, and simply grows/shrinks with the number
+  of words. `#interactive-challenge-list` (the same feature, in
+  Interactive/Edition mode's own panel — see its own entry below) now
+  uses this exact same wrapping layout too, at the user's request, but
+  its outer frame's own fixed height/scroll stays unchanged — see that
+  entry for the detail.
 - **Library "Thématique" column** — a new `<th data-i18n=
   "libraryColTheme">` in `#library-table`, inserted **after the Title
   column** (order: Language, Date, Title, Theme, Difficulty, Size,
@@ -3316,3 +3362,302 @@ end through the real running API (interactive start/step/save,
   confirmed `style.css`/`index.html` stay structurally sound. **Not yet
   visually confirmed in an actual browser** — same tooling limitation noted
   throughout this file.
+
+- **"Mots Défi" (`#interactive-challenge-panel`) is a direct flex-item
+  sibling of `#board-main` inside `#board`** — `#board-main` is a NEW
+  wrapper holding `#clues` + `#grid-column` (exactly what used to be
+  `#board`'s own direct children, with `#board`'s own former centering
+  rule — "en mode jeu, centrer le bloc grille+définition+flèches" — moved
+  onto it verbatim), so that group keeps centering together as its own
+  unit, now within whatever width `#interactive-challenge-panel` doesn't
+  claim. The panel itself uses `flex: 0 0 25%` — a flex-basis percentage
+  resolves against the flex CONTAINER (`#board`), so this is exactly 25%
+  of `#board`'s own width (= `<main>`'s content width, `main { width:
+  80% }`, i.e. this whole central page column) — with grow/shrink both
+  disabled, and `align-self: stretch` (overriding `#board`'s own
+  `align-items: flex-start`) to match `#board-main`'s own height. No JS
+  measurement of any kind — a flex-basis percentage against the container
+  is already exactly the number needed.
+
+  At the user's explicit request: "modifier la structure de la page
+  Edition pour que la boite Mots Défi soit alignée à droite de la zone
+  centrale, en faisant 25% de la largeur de la zone." Two earlier
+  versions were both reported live as still wrong before landing on this
+  one — each time verified only by reading the code, never by actually
+  looking at a rendered page (see permanent rule 4, added directly
+  because of this): (1) the panel as a plain sibling of `#grid-column`
+  inside `#board` itself, sized off `#grid`'s own pixel width via
+  `script.js` — reported as wrapping onto its own line below the grid on
+  a real viewport (`#board`'s own `flex-wrap: wrap` plus `#grid-column`'s
+  own inflated width in "Interactif" mode, see the CLAUDE.md/`crossword_
+  gen.py` entries elsewhere in this file); (2) `#grid-column` and the
+  panel isolated together inside a `#interactive-grid-row` wrapper that
+  never wraps — this DID fix the wrapping bug (confirmed with an actual
+  headless-browser screenshot at the time) but the user then clarified
+  "25% de la largeur de la zone" meant 25% of this whole wide central
+  page column, flush against ITS right edge, not 25% of the narrower
+  grid's own pixel width glued immediately behind "Suivant" with no
+  reserved space ("collée derrière le bouton Suivant, ni de la bonne
+  taille") — which is what the current `#board-main` split fixes.
+  **Visually confirmed** with Playwright/Chromium (see permanent rule 4):
+  on a 15×10 grid inside a 1248px-wide `#board`, the panel measured
+  exactly 312px (1248 × 0.25) flush against `#board`'s own right edge,
+  `#board-main` centered independently in the remaining space.
+
+  `#interactive-challenge-list` itself (the word list inside this panel)
+  now lays its words out the same wrapping-horizontal way as the main
+  generation form's own `#generate-challenge-list` (see that field's own
+  entry above) instead of one word per row — at the user's explicit
+  request, to match the main page's look ("mets les mots en ligne comme
+  sur la page d'accueil (sans virgule)"), while leaving the *frame*
+  (`#interactive-challenge-panel`'s own `flex: 0 0 25%`/`align-self:
+  stretch`/`overflow-y: auto`, described just above) untouched ("garde
+  la hauteur du cadre") — only the list's own internal flow changed, so
+  it now fits far more words per unit height than the old one-per-row
+  stack, scrolling within the same unchanged frame if it still overflows.
+
+- **"Thématique" field converted to a "+/-" chip list**
+  (`#theme-field`), at the user's explicit request — the same add/remove/
+  wrapping-horizontal mechanic already established for "Mots Défi
+  (personnalisation)" (`#generate-challenge-panel`, see its own entry
+  above): an input, a "+" button, and a `<ul>` below shown only once
+  non-empty. New shared CSS rules (`#theme-field`/`#theme-input-row`/
+  `#theme-list` combined with their `#generate-challenge-*` twins, since
+  the two are now visually and structurally identical) replace the old
+  single `#theme-field input { width: 14rem; }` rule. Word entries are
+  kept in a `themeKeywords` array (deliberately not named `themeWords` —
+  that identifier already means something else in `script.js`, a slot's
+  own candidate-word list) and joined into one space-separated string
+  only when actually building a `GenerateRequest`/`InteractiveStartRequest`
+  payload — the backend's own `theme` field stays a plain string, tokenized
+  server-side (`_theme_tokens`) exactly as before, so this is a pure
+  frontend UX change with zero API shape change.
+
+- **Automatic word validation on punctuation** for all three "Mots Défi"/
+  "Thématique" text inputs (`#generate-challenge-input`, `#interactive-
+  challenge-input`, `#theme` — see `attachPunctuationAutoAdd()` in
+  `script.js`), at the user's explicit request: typing a trailing space/
+  comma/semicolon/colon/period/!/? validates whatever word precedes it,
+  exactly as if "+" had been clicked, and clears the field — so a user can
+  type a whole list fluently ("chat, chien, oiseau ") without ever
+  touching the "+" button or pressing Enter. One shared helper attached to
+  all three inputs rather than three separate listeners, since the
+  mechanic (and its punctuation set) must stay identical everywhere it
+  appears. **Visually confirmed** with Playwright/Chromium (see permanent
+  rule 4): typing "chat " into `#generate-challenge-input` produces a
+  "chat" chip in `#generate-challenge-list` with the input cleared; same
+  for "oiseau " into `#theme` producing an "oiseau" chip in `#theme-list`;
+  clicking a chip's "−" button removes it; a real running generation
+  (`generate_grid(challenge_words=[...])`/`priority_words={...}`) also
+  confirmed the resulting words actually reach and get placed by the
+  backend.
+
+- **Red "experimental site" notice** (`#welcome-experimental-notice`,
+  `.warning-text`), at the user's explicit request after discovering this
+  session's own dev-server restart briefly took down what turned out to
+  be a real public-but-experimental deployment (falcon.cubaix.com):
+  placed right after `<h2 id="welcome-title">`, before the Pseudo/Mot
+  secret fields, so it's the very first thing a first-time visitor reads.
+  Reuses `--error` (already used for `#status.error`/`.cell.incorrect`)
+  rather than a new token, per permanent rule 2 — plain bold centered
+  text (`.warning-text`: `color: var(--error); font-weight: 700`), no
+  bordered box: this project has no established bordered-notice
+  convention, and bold colored text already reads clearly enough inside
+  the small welcome modal, consistent with every other red state in this
+  stylesheet (`#stop-btn`'s red background is the one exception, and that
+  is a button, not a text notice). Togglable via a new backend env var
+  (`CROSSWORDFALCON_EXPERIMENTAL_NOTICE`, `backend/app.py`'s
+  `EXPERIMENTAL_NOTICE`, surfaced through `GET /api/system_info`'s new
+  `experimental_notice` field) — **on by default**, the deliberately
+  fail-safe direction: the markup itself has no `hidden` attribute, and
+  `script.js` only ever hides it once a real `experimental_notice: false`
+  response confirms a stable deployment opted out; a slow/failed
+  `/api/system_info` fetch (already wrapped in a bare `.catch(() => {})`)
+  leaves the warning visible rather than silently disappearing. **Visually
+  confirmed** with Playwright/Chromium (see permanent rule 4): a real
+  screenshot of the welcome overlay against the actually-running backend
+  shows the red text rendered at `rgb(179, 38, 30)` (`--error`'s exact
+  value) directly under the title.
+
+- **`.clear-icon-btn` (the "+"/"−" theme/challenge-word buttons and every
+  "Effacer" sponge button) now sets `flex-shrink: 0`.** A real, measured
+  bug (permanent rule 4: Playwright, not code-reading): `#theme-add-btn`/
+  `#generate-challenge-add-btn` rendered as visibly non-square rectangles
+  (12-19px wide vs. the intended 1.6rem/~25.6px square) whenever their own
+  flex row (`#theme-input-row`/`#generate-challenge-input-row`) ran short
+  on space inside the crowded `#form-actions` toolbar — the class's fixed
+  `width`/`height` alone isn't enough to stop a flex item from shrinking
+  below that size once its row can't fit everything at full size; only
+  the per-word remove buttons (their own row is a wrapping `<ul>`, rarely
+  space-constrained) happened to already render square. `flex-shrink: 0`
+  makes every button carrying this class keep its exact square footprint
+  regardless of how tight the surrounding row gets. Confirmed live at both
+  a 1400px and a 3000px viewport: every `.clear-icon-btn` now measures
+  exactly 25.59×25.59px.
+
+- **"Thématique" (`#theme`) and "Mots Défi (personnalisation)"
+  (`#generate-challenge-input`) now share `min-width: 14rem`** (replacing
+  a `min-width: 0` that, combined with `flex: 0 1 14rem`, still let the
+  two fields render at visibly different widths — a real, measured bug,
+  not a guess: 96px vs. 160px at one viewport, 109px vs. 224px at
+  another). Root cause, confirmed by isolating each element outside its
+  flex context: `flex-basis` alone does not feed into how a flex
+  container with an "auto" width sizes *itself* — that container-level
+  auto-sizing instead uses each child's own plain intrinsic size, which
+  for an empty `<input>` isn't its 14rem flex-basis at all, and happened
+  to differ between the two fields (`#generate-challenge-input` carries
+  a `maxlength="15"` attribute the `#theme` field doesn't) enough to
+  produce two differently-sized container rows before `flex: 0 1 14rem`
+  ever got a chance to distribute anything. An explicit `min-width`
+  sidesteps the whole ambiguity. Confirmed live: forcing both fields to
+  `min-width: 14rem` made them render at an identical 224px at every
+  viewport width tested.
+
+- **`#form-actions` (the "Générer la grille" toolbar row) now uses
+  `align-items: flex-start`** instead of `center`, at the user's explicit
+  request to line every element up along a shared top edge —
+  `#theme-field`/`#generate-challenge-panel` are two lines tall (label +
+  input, sometimes a word list below), taller than the plain single-line
+  buttons beside them, so `center` visibly centered those buttons against
+  the taller blocks rather than aligning tops. Confirmed live
+  (Playwright): every element's `top` in this row now measures identical
+  (was offset by ~12px for the buttons before the fix).
+
+- `#form-actions` switched again, from `align-items: flex-start` to
+  `align-items: flex-end`, at the user's explicit follow-up request:
+  "aligner les boutons bleus (Générer la grille, Bibliothèque, etc) sur
+  les champs de saisie (Thématique, Mots Défi), donc une ligne plus bas
+  que l'alignement en haut." `flex-start` (the entry right above) lined
+  the single-line buttons up with the LABEL text atop `#theme-field`/
+  `#generate-challenge-panel`; `flex-end` instead lines them up with the
+  INPUT row at the bottom of those two-line blocks (their `<ul>` word
+  list only contributes height once non-empty, so the common/default
+  state's bottom edge is the input row). Confirmed live (Playwright):
+  `#generate-btn`/`#library-btn`/`#dictionary-btn`/etc. and `#theme`'s own
+  input now share an identical `top` (221px in the tested viewport),
+  whereas before the fix the buttons sat ~24px higher, level with the
+  labels instead.
+
+- Added a green highlight for "Mots Défi" words, mirroring the existing
+  magenta theme-glossary highlight throughout the app (`--theme-fg`, see
+  the "theme glossary" entries elsewhere in this file), at the user's
+  explicit request: "les Mots Défi doivent être affichés en vert (comme
+  sur la grille du mode Interactif)." Two places gained it:
+  - **Attempt-preview grids** (`.attempt-preview-grid .cell.white.challenge`,
+    `--best` green, `font-weight: 800`) — the exact same treatment as
+    `.theme` right next to it, driven by a new backend `challenge_cells`
+    field (`backend/crossword_gen.py`'s `_challenge_word_cells_from_
+    assignment`/`_challenge_cells_from_preview_state`, mirroring
+    `_theme_word_cells`/`_theme_cells_from_preview_state` exactly) wired
+    into every preview-building site that already sets `theme_cells`.
+  - **The real Interactive-mode grid** (`.cell.white.interactive-challenge`,
+    same `--best` green + `font-weight: 800`) — this one did NOT exist
+    before this change despite the request's own wording implying it
+    already did (only the candidate-word LIST already showed a challenge
+    word in green, via the pre-existing `.interactive-word-challenge`;
+    the grid's own letters only ever had the theme-word magenta,
+    `.interactive-theme`, backed by `placed.from_theme`). Added the
+    missing counterpart instead of only building the preview-grid half:
+    a new backend `placed.from_challenge` boolean (`crossword_gen.py`'s
+    `interactive_place_word`, true exactly when the crossing-safety-retry
+    branch placed the word) drives a new `interactiveChallengeCells` Set
+    in `script.js`, mirroring `interactiveThemeCells`'s own lifecycle
+    (populated on entry/resume and on every "Suivant", pruned on every
+    `renderInteractive()` to cells still carrying a letter). The two are
+    mutually exclusive by construction (a word is never placed via both
+    the theme glossary and "Mots Défi" at once), so no cascade-order
+    concern between the two color rules. Verified: a real generation with
+    `challenge_words` set produced 135 preview entries carrying non-empty
+    `challenge_cells` in one run; `_challenge_word_cells_from_assignment`/
+    `_challenge_cells_from_preview_state` unit-checked directly against
+    synthetic slot/assignment data (present when the word matches, absent
+    for `None`/unmatched/no-challenge-words); JS syntax-checked (`esprima`),
+    CSS brace-balanced, `py_compile` clean. **Visually confirmed** with
+    Playwright/Chromium (permanent rule 4) for the Interactive-mode grid
+    specifically: started a real session with "ETIENNE" as a "Mots Défi"
+    word (9×9, medium) — the word was placed automatically on entry
+    (`placed.from_challenge: true`) and every one of its 7 grid cells
+    rendered `rgb(22, 163, 74)` (`--best`'s exact value), matching the
+    green already shown for it in the "Mots Défi" side panel. The
+    attempt-preview-grid half (`.attempt-preview-grid .cell.white.
+    challenge`, automatic generation) is confirmed only by data plumbing
+    (135 real preview entries carrying non-empty `challenge_cells` in one
+    generation run) and by sharing the exact same rendering code path
+    already proven live for `.theme` (same overlay pass, same `||[]`
+    convention, only the source field/class differ) — a live screenshot
+    catching that specific overlay mid-generation is still owed (several
+    attempts to catch one in a real run didn't hit a moment where the
+    challenge word was actually present in a displayed preview attempt).
+
+- **Fixed a real bug reported directly by the user**: a "Mots Défi" word
+  not in the real dictionary was still shown in red (`.interactive-
+  impossible`/`.interactive-invalid`) as if it were an invented/impossible
+  word — in "Impossibles", "Vérifier", and even "Nettoyer", which
+  actively stripped such a word back out of the grid, treating it as a
+  bug to clean up. Root cause: `backend/crossword_gen.py`'s
+  `_interactive_fill_diagnostics`/`interactive_clean_impossible_zones`/
+  `interactive_minimize_black_cells` never received the session's current
+  "Mots Défi" list at all — only `interactive_place_word` ("Suivant") did
+  — so none of the OTHER buttons that recompute these same red/orange
+  highlights had any way to except a challenge word from them. At the
+  user's explicit request ("déjà demandé par le passé"): "Les Mots Défi
+  doivent être considérés comme faisant partie du dictionnaire." Fixed by
+  threading a `challenge_words` parameter through all three functions
+  (new `_challenge_fillable_slot_indices` helper for a still-open slot
+  only a challenge word could fill — folded into the orange "low
+  candidates" state instead of red, since the real dictionary genuinely
+  has nothing there; the existing `_challenge_word_cells` reused as the
+  `exempt` set for an already-typed slot spelling one verbatim) and
+  wiring the three matching request models/endpoints (`POST /api/
+  interactive/clean`, `/impossible`, `/verify`) plus every `script.js`
+  call site to send the live `interactiveChallengeWords` list, the same
+  convention already used by "Suivant". Also extended the identical
+  exemption to `Filler.impossible_zone_slots()` (the failed-attempt
+  preview during AUTOMATIC generation, `.attempt-preview-grid .cell.
+  white.impossible`) for consistency, reusing the Filler's own already-
+  existing `_active_challenge_words()`/`_challenge_word_fits()`. No new
+  color/CSS — this is a diagnostic-logic fix, not a new visual state: the
+  same `.interactive-impossible`/`.interactive-invalid`/`.impossible`
+  classes are simply no longer applied to a challenge word's own cells.
+  Verified with a direct backend-level reproduction (a 7-letter nonsense
+  word placed down a column, isolated by black cells): without
+  `challenge_words`, `_interactive_fill_diagnostics` flagged its 7 cells
+  red and `interactive_clean_impossible_zones` wiped the word entirely;
+  with `challenge_words` passed, zero cells flagged and the word survived
+  "Nettoyer" untouched. Also confirmed via the real running API that
+  `POST /api/interactive/verify` no longer reports such a word in
+  `invalid_words` once `challenge_words` is sent, and confirmed a full
+  `generate_grid()` run with a challenge word set still completes
+  normally (no regression in the automatic-generation retry logic that
+  also reads `Filler.impossible_zone_cells()`/`_slots`).
+
+- `#form-actions` switched a third time, from `align-items: flex-end`
+  back to `flex-start`, at the user's explicit follow-up request: "il
+  faut qu'ils restent alignés en haut, mais avec une marge top qui
+  permet à ces boutons bleus de s'aligner sur les champs de saisie
+  (Thématique et Mots Défi), et non alignés sur leurs titres."
+  `flex-end` (the entry right above) aligned every item's BOTTOM edge —
+  correct only while `#theme-field`/`#generate-challenge-panel`'s own
+  word `<ul>` stayed empty; the moment a word chip is added, that block
+  grows taller, dragging the shared bottom edge — and so every plain
+  button in the row — down with it, which is exactly the reported
+  regression ("les boutons bleus sont maintenant alignés en bas de leur
+  zone"). Fixed at the source instead of chasing bottom-alignment again:
+  `align-items: flex-start` (top edges never move regardless of list
+  height) plus a new `#form-actions > button { margin-top: 1.55rem; }`
+  — a direct-child selector that only ever matches the plain `<button>`
+  siblings (Générer la grille, Voir, Bibliothèque, …), never `#theme-
+  field`/`#generate-challenge-panel` themselves (both `<div>`s, so they
+  keep managing their own internal label/input/list layout untouched).
+  `1.55rem` is the measured height of the label line plus the column gap
+  above the input row — found and confirmed with a live Playwright
+  measurement (permanent rule 4), not guessed: before the fix the
+  buttons' `top` sat at 222.4px against `#theme-input-row`'s own 221.4px
+  (a 1px difference, well within a border-width rounding and invisible in
+  practice); after adding two word chips to grow `#theme-list`, both
+  values stayed frozen at exactly the same numbers — confirmed the
+  buttons no longer track the list's height at all. **Visually confirmed**
+  with Playwright/Chromium: a real screenshot shows "Générer la grille"/
+  "Voir"/"Bibliothèque"/"Dictionnaire" level with the "Thématique"/"Mots
+  Défi" input boxes, with "chat"/"chien" chips added below and the
+  buttons unmoved.

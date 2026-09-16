@@ -89,7 +89,8 @@ def _slugify_title(title):
 
 
 def save_grid_json(result, language, difficulty, mode, title, bilingual=None, pseudo=None,
-                   theme=None, interactive=False, origin=None, generation_params=None):
+                   theme=None, interactive=False, origin=None, generation_params=None,
+                   challenge_words=None):
     """Writes the grid to GRID_STORE/<language>/<id>.json — or, for a
     genuinely bilingual grid, GRID_STORE/bilingual/<id>.json instead — and
     returns the new record's own id (its filename stem, without the .json
@@ -174,7 +175,18 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     generation (a fresh "Interactif" session, or one resumed from a
     draft that itself started that way) simply has `None` here, exactly
     as before this feature — nothing to restore, so every field is left
-    untouched."""
+    untouched.
+
+    `challenge_words` (`None` by default — every pre-existing caller
+    unaffected): "Mots Défi (personnalisation)", the same free-form,
+    author-typed word list already supported by `save_grid_work` (see its
+    own `challenge_words` parameter) — kept exactly as typed. Stored so
+    "Ouvrir en mode Interactif"/`GET /api/library/{grid_id}` can restore
+    it into the editing panel (see `backend/app.py`'s
+    `_library_record_to_interactive`); deliberately absent from
+    `_iter_stored_grids`'s own field whitelist, so it never surfaces in
+    the Library listing itself — these words are assumed to be the
+    answers to specific locations the author doesn't want to give away."""
     is_bilingual = bool(bilingual) and bilingual != language
     pseudo = (pseudo or "").strip() or None
     # The theme typed by the user (a word list), at the user's explicit
@@ -214,6 +226,9 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
         # tuning knobs (Taux noir/Graines/Mode/Précision thématique),
         # None for a grid never derived from an automatic generation.
         "generation_params": generation_params,
+        # See this function's own docstring — "Mots Défi (personnalisation)",
+        # `None`/empty for a grid with none.
+        "challenge_words": list(challenge_words) if challenge_words else None,
         "created_at": datetime.now().isoformat(),
     }
     (directory / f"{grid_id}.json").write_text(
@@ -385,7 +400,7 @@ def _slugify_pseudo(pseudo):
 
 def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme,
                     priority_words, seed, pseudo=None, resumed_from=None, origin=None,
-                    bilingual_language=None, generation_params=None):
+                    bilingual_language=None, generation_params=None, challenge_words=None):
     """Autosaves (or updates) the in-progress state of one "Interactif"
     session. The very first call for a given `job_id` creates
     `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`; every later call
@@ -454,7 +469,23 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
     those values available across a pause/resume of the editing session
     too: `backend/app.py` reads it back from `JOBS[job_id]["interactive"]
     ["generation_params"]` and passes it straight through on every
-    autosave."""
+    autosave.
+
+    `challenge_words` (`None`/empty by default) is the "Mots Défi" list
+    (see #interactive-challenge-panel in the web UI) — at the user's
+    explicit request, so the list survives a pause/resume of the editing
+    session exactly like `priority_words`/`title`/`definitions` already
+    do. Unlike `priority_words` (a real dictionary glossary), a challenge
+    word need not be a genuine dictionary entry, so it's stored verbatim,
+    exactly as the author typed it — accents and case kept, "comme dans
+    les dictionnaires," at the user's own explicit follow-up request (an
+    earlier version stored the grid's own bare-uppercase, accent-stripped
+    form instead, which silently dropped an accented letter outright
+    rather than folding it to its base letter — "randonnées" became
+    "RANDONNES"). Never re-filtered against the loaded lexicon on resume;
+    `backend/crossword_gen.py`'s `challenge_word_grid_form` derives the
+    bare-uppercase grid form from it on demand wherever one is actually
+    needed, rather than storing that derived form itself."""
     pseudo = (pseudo or "").strip() or None
     existing = list(GRID_WORK_DIR.glob(f"*_{job_id}.json")) if GRID_WORK_DIR.is_dir() else []
     created_at = None
@@ -502,6 +533,11 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
         "pseudo": pseudo,
         "origin": origin,
         "generation_params": generation_params,
+        # List, not sorted like `priority_words` above (a plain dictionary
+        # glossary, where order is meaningless) — this is a user-curated
+        # list shown in the order it was typed in, so that order must
+        # survive a save/resume round trip unchanged.
+        "challenge_words": list(challenge_words or ()),
         "created_at": created_at or now,
         "updated_at": now,
     }

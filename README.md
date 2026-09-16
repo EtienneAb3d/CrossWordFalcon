@@ -144,7 +144,22 @@ On the page:
    ordinary, single-language grid. On a bilingual grid, definitions,
    dictionary lookups, and David FALCON's own hints all follow the
    language of the specific word they're about.
-2. Click **"Generate grid"** (the button's own label follows your chosen
+2. Two optional fields sit right above the **"Generate grid"** button,
+   both built the same way: type a word and click **+** (or just type a
+   space, comma, or other punctuation right after it) to add it to the
+   list shown below — click **−** next to a word to remove it. A
+   **"Theme"** field steers the puzzle's vocabulary and clues toward a
+   subject of your choice (leave it empty for an ordinary, unthemed grid).
+   A **"Challenge Words (customization)"** field lets you force specific
+   words into the finished grid before it's even built — the same feature
+   Interactive mode's own "Challenge Words" box offers (see below), given
+   priority over the theme and the ordinary dictionary when the grid is
+   generated; the solver will even try to reshape the black-cell pattern
+   itself to make room for one of these words (or a theme word) when no
+   slot of the right size already exists. A word you list this way never
+   shows up in the Library's own grid listing, since it's meant to stay a
+   hidden answer to a spot you chose yourself.
+3. Click **"Generate grid"** (the button's own label follows your chosen
    language). A full grid with all its definitions can take anywhere from
    a few seconds to a couple of minutes, depending on its size — the
    status line above the grid keeps updating (building the grid, then
@@ -155,7 +170,7 @@ On the page:
    found, the same preview switches to a single, letters-free view of that
    final grid for the rest of the process (optimizing it, then writing its
    definitions).
-3. An empty grid appears on the right, with row and column numbers along
+4. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
    ready to be filled in. Above it, a short generated title for the puzzle
    is shown, with the grid's difficulty next to it ("Difficulty: Medium"). Clues follow the usual crossword format:
@@ -213,6 +228,22 @@ you enter this mode, so you can look up words while you fill in the grid:
 - You can click any cell and type a letter, press **Space** to add or
   remove a black cell, or **Delete** to clear a cell. **Ctrl** flips the
   horizontal/vertical direction the cursor moves in, one tap at a time.
+- A **"Challenge Words"** box beside the grid lets you list words you
+  want to see in the finished puzzle: type one and click **+** (or just
+  type a space or other punctuation right after it) to add it, or **−**
+  next to a listed word to remove it. Any listed word that fits
+  where you're currently looking shows up first, in green, whenever you
+  ask the app for word suggestions. Within its own list, a word turns
+  green once it's actually in the grid; clicking a word there drops it
+  straight into the grid at the selected cell, replacing whatever letters
+  or black cells were already in the way. **"Next"** also tries reshaping
+  the black-cell layout itself — without ever disturbing a word you've
+  already placed — to make room for a listed word with no matching-length
+  gap anywhere yet, before falling back to its usual choices. It also
+  avoids placing a listed word wherever doing so would leave a crossing
+  word with no way to be completed — it tries another listed word or
+  another spot first, and only places an ordinary word instead once none
+  of them work.
 - Once the grid is full, write a definition for each word (a **"Suggest a
   definition"** button asks the language model for a handful of ideas you
   can click through and pick from, **"Definitions"**
@@ -227,7 +258,10 @@ you enter this mode, so you can look up words while you fill in the grid:
   grid") has something in it, both "Suggest" buttons lean their
   suggestions toward it; opening an existing themed grid for editing
   (see "Library" below) fills this field back in automatically from that
-  grid's own theme.
+  grid's own theme. The same goes for the Challenge Words box: a grid
+  generated (or published) with words listed there — whether typed on the
+  main form before generating or added here — shows that same list again
+  the moment it's reopened for editing.
 - If you don't want to place every remaining word by hand, click **"Finir
   la grille"** at any point: it permanently locks every letter you've
   already placed and lets the automatic grid generator take over from

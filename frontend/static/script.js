@@ -95,6 +95,7 @@ const form = document.getElementById("generate-form");
 const languageSelect = document.getElementById("language");
 const bilingualLanguageSelect = document.getElementById("bilingual-language");
 const welcomeOverlay = document.getElementById("welcome-overlay");
+const welcomeExperimentalNotice = document.getElementById("welcome-experimental-notice");
 const welcomeForm = document.getElementById("welcome-form");
 const welcomeLanguageSelect = document.getElementById("welcome-language");
 const welcomePseudoInput = document.getElementById("welcome-pseudo");
@@ -232,14 +233,40 @@ const blackEnrichmentInput = document.getElementById("black-enrichment");
 // "Thématique" field — shared const so both the generation form's submit
 // handler and Interactive mode's own enterInteractiveMode() (re-filling
 // it from a re-edited grid's own origin theme, at the user's explicit
-// request) can reach it without each re-querying the DOM.
+// request) can reach it without each re-querying the DOM. Same "+/-"
+// chip-list mechanic as "Mots Défi (personnalisation)" just below — see
+// #theme-field in index.html and renderThemeList()/addThemeWord() further
+// down: `themeInput` itself only ever holds the pending, not-yet-added
+// word; the real list lives in `themeKeywords` (not `themeWords` — that
+// name is already taken elsewhere for a slot's own candidate-word list,
+// e.g. renderInteractiveWords()'s own parameter), joined back into one
+// space-separated string wherever a `theme` request field is built (the
+// backend's own tokenizer, `_theme_tokens`, splits on whitespace/
+// punctuation anyway, so this round-trips losslessly).
 const themeInput = document.getElementById("theme");
+const themeAddBtn = document.getElementById("theme-add-btn");
+const themeList = document.getElementById("theme-list");
+let themeKeywords = [];
+
+// "Mots Défi (personnalisation)" mini-form on the main generation form —
+// see #generate-challenge-panel in index.html, and renderGenerateChallengeList()/
+// addGenerateChallengeWord() further down for the logic (a much simpler
+// cousin of the Interactive-mode panel below: no grid yet to color/
+// click-insert against before generation).
+const generateChallengeInput = document.getElementById("generate-challenge-input");
+const generateChallengeAddBtn = document.getElementById("generate-challenge-add-btn");
+const generateChallengeList = document.getElementById("generate-challenge-list");
+let generateChallengeWords = [];
 
 // "Interactif" authoring mode controls (see the Interactive-mode section
 // further down).
 const interactiveControls = document.getElementById("interactive-controls");
 const interactivePrevBtn = document.getElementById("interactive-prev-btn");
 const interactiveNextBtn = document.getElementById("interactive-next-btn");
+const interactiveChallengePanel = document.getElementById("interactive-challenge-panel");
+const interactiveChallengeInput = document.getElementById("interactive-challenge-input");
+const interactiveChallengeAddBtn = document.getElementById("interactive-challenge-add-btn");
+const interactiveChallengeList = document.getElementById("interactive-challenge-list");
 const interactiveCellStats = document.getElementById("interactive-cell-stats");
 const interactiveBlackStat = document.getElementById("interactive-black-stat");
 const interactiveFillStat = document.getElementById("interactive-fill-stat");
@@ -366,6 +393,16 @@ fetch("/api/system_info")
     systemInfo = data;
     renderSystemInfoTooltip();
     infoBadge.hidden = false;
+    // Red "experimental site" notice on the welcome panel — see
+    // backend/app.py's EXPERIMENTAL_NOTICE. Left visible by the markup's
+    // own default (no `hidden` attribute) and only ever hidden here, once
+    // a stable deployment's own `experimental_notice: false` is
+    // confirmed — a failed/slow fetch (the `.catch` below) never touches
+    // it, so the warning fails safe (shown) rather than silently
+    // disappearing.
+    if (data && data.experimental_notice === false) {
+      welcomeExperimentalNotice.hidden = true;
+    }
   })
   .catch(() => {});
 
@@ -700,6 +737,27 @@ let interactiveGrid = [];
 // Deep-copied snapshots of interactiveGrid; the first is pushed on entry
 // so length <= 1 means "nothing left to undo".
 let interactiveUndoStack = [];
+// "Mots Défi" — free-form list of words the author wants to force into
+// the grid (see #interactive-challenge-panel in index.html). Kept exactly
+// as typed — accents/case and all, "comme dans les dictionnaires," at the
+// user's explicit request — never reduced to interactiveGrid's own bare-
+// uppercase cell convention here; challengeWordGridForm() derives that
+// grid form on demand wherever a comparison against actual cells is
+// needed (an earlier version stripped straight to bare A-Z at input time,
+// which silently discarded an accented letter outright instead of
+// folding it to its base letter — "randonnées" ended up stored as
+// "RANDONNES"). "Mots"/"Croisés"/"Début"/"Fin" test candidates against
+// this list's own grid forms purely client-side (a challenge word need
+// not even be a real dictionary entry, so filtering the backend's own
+// theme_words/other_words arrays would silently drop it) — but the list
+// itself IS sent to the backend, verbatim, on every "Suivant" click
+// (interactive-next-btn's own handler, below) so the placed word is drawn
+// from it first, ahead of the theme glossary — the backend derives its
+// own grid form there too (`challenge_word_grid_form`), never trusting a
+// pre-stripped value — and it IS persisted to GRID_WORK on every
+// autosave/"Sauvegarder" (autosaveInteractiveWork()) and restored on
+// resume (see enterInteractiveMode()).
+let interactiveChallengeWords = [];
 let interactiveHasTheme = false;
 let interactiveLanguage = "fr";
 // The session's own second (vertical-words) language on a genuinely
@@ -720,6 +778,16 @@ let interactiveDefs = new Map();
 // Pruned on every renderInteractive() to cells that still carry a letter,
 // so undo/erase/toggle-black drop the mark naturally.
 let interactiveThemeCells = new Set();
+// Same idea, for a word placed automatically that came from "Mots Défi"
+// instead (backend's `placed.from_challenge`, crossword_gen.py's
+// interactive_place_word) — shown in green letters in renderGrid(), at
+// the user's explicit request ("les Mots Défi doivent être affichés en
+// vert, comme sur la grille du mode Interactif"). Mutually exclusive
+// with interactiveThemeCells by construction (a placed word is never
+// both at once — see backend's own `from_theme`/`from_challenge`
+// comments), maintained the same way (pruned on every renderInteractive()
+// to cells still carrying a letter).
+let interactiveChallengeCells = new Set();
 // A click-dragged "zone" of the grid (Édition mode only), at the user's
 // explicit request: "add the ability to click-and-drag to select a zone
 // of the grid: select every emplacement that shares at least one letter
@@ -1227,6 +1295,7 @@ function renderAttemptPreview(examples) {
     low_candidate_cells: lowCandidateCells,
     noise_cells: noiseCells,
     theme_cells: themeCells,
+    challenge_cells: challengeCells,
     process_number: processNumber,
     is_best: isBest,
   } of examples) {
@@ -1328,6 +1397,16 @@ function renderAttemptPreview(examples) {
     for (const [r, c] of themeCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("theme");
+    }
+    // Green letters for words coming from "Mots Défi" instead, at the
+    // user's explicit request: "les Mots Défi doivent être affichés en
+    // vert, comme sur la grille du mode Interactif." Always empty for a
+    // generation with no "Mots Défi" list (see backend/crossword_gen.py's
+    // `_challenge_word_cells_from_assignment`), so `|| []` is a no-op
+    // everywhere else, same as themeCells above.
+    for (const [r, c] of challengeCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("challenge");
     }
     // "Finir la grille": a light-green frame around every letter already
     // placed manually before this generation was launched (see style.css's
@@ -1988,6 +2067,12 @@ function renderGrid() {
       // from the theme glossary (see interactiveThemeCells).
       if (interactiveMode && letter && interactiveThemeCells.has(`${r},${c}`)) {
         cell.classList.add("interactive-theme");
+      }
+      // "Interactif" mode: green letter for a word placed automatically
+      // from "Mots Défi" (see interactiveChallengeCells) — mutually
+      // exclusive with interactive-theme above by construction.
+      if (interactiveMode && letter && interactiveChallengeCells.has(`${r},${c}`)) {
+        cell.classList.add("interactive-challenge");
       }
       // "Interactif" mode: red/orange background for a slot that's
       // impossible / below the fill-options threshold — same meaning as
@@ -3475,10 +3560,11 @@ function hideLibraryPanel() {
   syncRssPanelVisibility();
   // Generic close (the "Bibliothèque"/"X" button, or before loading a
   // normal grid) — cancels any pending automatic-reopen intent.
-  // openLibraryGridInteractive() below sets it back to true right AFTER
-  // its own call to this function, so this generic reset never overwrites
-  // it in that specific case.
+  // openLibraryGridInteractive() below sets `libraryReopenArmPending` back
+  // to true right AFTER its own call to this function, so this generic
+  // reset never overwrites it in that specific case.
   libraryReopenOnInteractive = false;
+  libraryReopenArmPending = false;
 }
 
 function openLibraryPanel() {
@@ -3489,15 +3575,28 @@ function openLibraryPanel() {
 }
 
 // The Library must reopen automatically every time Edition (Interactif)
-// mode is shown again, at the user's explicit request — including after
-// a round trip through "Finir la grille"/"Finir la zone" (which hides
-// then re-shows this mode without ever going back through
-// openLibraryGridInteractive). Set to true only when opening a Library
-// grid in Interactif mode (it was therefore necessarily shown just
-// before); reset to false by any manual/generic Library close
-// (hideLibraryPanel), so it's never forced back open after the player
-// closed it themselves.
+// mode is shown again AFTER the session has actually started — at the
+// user's explicit request — including after a round trip through "Finir
+// la grille"/"Finir la zone" (which hides then re-shows this mode
+// without ever going back through openLibraryGridInteractive) — but NOT
+// on the very first show that follows clicking the Library's own pencil
+// icon (a real, previously-reported regression: closing the Library
+// right before opening the grid for editing, then immediately reopening
+// it on that same entry, defeated the point of closing it at all).
+// `libraryReopenArmPending` carries the intent from openLibraryGridInteractive()
+// through that first, reopen-suppressed enterInteractiveMode() call;
+// `libraryReopenOnInteractive` itself only flips true once that first
+// call actually runs, so it only ever fires starting from the session's
+// SECOND show onward. Both reset to false by any manual/generic Library
+// close (hideLibraryPanel), so neither is ever forced back open after
+// the player closed it themselves — and by runInteractive() itself
+// whenever a genuinely fresh "/api/interactive/start" session begins
+// (see its own comment), so an unrelated new session started from the
+// generation form's own "Générer la grille" button while already
+// editing a from-library grid never inherits that earlier session's
+// still-armed reopen intent.
 let libraryReopenOnInteractive = false;
+let libraryReopenArmPending = false;
 
 // 1-based, reset to 1 every time the panel is (re)opened (see the
 // libraryBtn click handler below) — module-level rather than a
@@ -3816,7 +3915,10 @@ async function loadLibraryGrid(gridId) {
 // resumeInteractiveWork(), only the endpoint/body differ.
 async function openLibraryGridInteractive(gridId) {
   hideLibraryPanel();
-  libraryReopenOnInteractive = true;
+  // Arm the reopen for every entry into this mode AFTER this one — see
+  // `libraryReopenArmPending`'s own declaration above for why this isn't
+  // `libraryReopenOnInteractive` directly.
+  libraryReopenArmPending = true;
   await runInteractive({ grid_id: gridId }, "/api/interactive/from-library");
 }
 
@@ -5522,9 +5624,19 @@ function renderInteractive() {
       interactiveThemeCells.delete(key);
     }
   }
+  // Same pruning for a "Mots Défi" cell — see interactiveChallengeCells.
+  for (const key of interactiveChallengeCells) {
+    const [r, c] = key.split(",").map(Number);
+    if (!/[A-Z]/.test(interactiveGrid[r] && interactiveGrid[r][c])) {
+      interactiveChallengeCells.delete(key);
+    }
+  }
   syncPuzzleFromInteractive();
   renderGrid();
   renderInteractiveCellStats();
+  // "Mots Défi" list's own green/black coloring tracks the live grid — at
+  // the user's explicit request (see gridContainsWord()'s own docstring).
+  renderInteractiveChallengeList();
   const w = selectedInteractiveWord();
   // Falls back to the word itself when no clue has been written yet AND
   // the word is already entirely filled in — at the user's explicit
@@ -5800,6 +5912,366 @@ function renderInteractiveTitleProposals(list) {
   });
 }
 
+// Converts one "Mots Défi" entry — kept everywhere else exactly as typed,
+// accents/case and all (interactiveChallengeWords itself, the list shown
+// in #interactive-challenge-list, GRID_WORK persistence) — to the grid's
+// own bare-uppercase, accent-stripped form: the only form ever compared
+// against interactiveGrid cells or written into them, since a grid cell
+// never holds anything else (same MOT-column convention as the wordlist
+// itself, see data_builder/build_wordlist_freq.py's own strip_accents).
+// At the user's explicit request, after a live report: the previous
+// version normalized the TYPED value itself this way before ever storing
+// it, which silently dropped accented letters entirely (`[^A-Z]` strips
+// "É", it doesn't fold it to "E") instead of just stripping their accent
+// — "randonnées" became "RANDONNES", not "RANDONNEES". Normalizing to NFD
+// (accents become separate combining marks) before stripping non-A-Z
+// keeps the base letter and only discards the mark itself.
+function challengeWordGridForm(word) {
+  return word
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z]/g, "");
+}
+
+// Whether `word` (already in grid form — see challengeWordGridForm()
+// above) is actually present in the grid right now — an exact match
+// against some full across or down run (bounded by black cells or the
+// grid's own edge), not merely a substring — at the user's explicit
+// request: "when a word from the 'Mots Défi' list is actually present in
+// the grid, it shows in green in that list, otherwise in black." Reuses
+// interactiveRunAt() (defined further below — hoisted, so callable here)
+// for the run itself.
+function gridContainsWord(word) {
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  const matches = (cells) => cells.length === word.length
+    && cells.every(({ row, col }, i) => interactiveGrid[row][col] === word[i]);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (interactiveGrid[r][c] === "#") continue;
+      if ((c === 0 || interactiveGrid[r][c - 1] === "#") && matches(interactiveRunAt(r, c, "across"))) {
+        return true;
+      }
+      if ((r === 0 || interactiveGrid[r - 1][c] === "#") && matches(interactiveRunAt(r, c, "down"))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// Clicking a "Mots Défi" word inserts it into the grid starting at the
+// currently selected cell, along the current fill direction, overwriting
+// any letter or black cell already there — at the user's explicit
+// request: "an authoritative choice." Unlike every other word-list click
+// in this panel (Mots/Croisés/Début/Fin), this never checks the target
+// cells against a real slot/dictionary fit first — same raw-write
+// behavior as typing letter-by-letter (interactiveTypeLetter()), just for
+// a whole word at once starting from the selection instead of one cell.
+// `word` must already be in grid form (challengeWordGridForm()) — every
+// caller below converts its own interactiveChallengeWords entry first.
+function insertInteractiveChallengeWord(word) {
+  if (!interactiveMode || !selected) {
+    setInteractiveMessage(I18N[uiLanguage].interactiveCrossingNeedsCell, true);
+    return;
+  }
+  const rows = interactiveGrid.length;
+  const cols = rows ? interactiveGrid[0].length : 0;
+  interactivePushUndo();
+  let row = selected.row;
+  let col = selected.col;
+  for (let i = 0; i < word.length && row < rows && col < cols; i++) {
+    const cur = interactiveGrid[row][col];
+    if (cur !== "" && cur !== "#") interactiveClearDefsAt(row, col);
+    interactiveGrid[row][col] = word[i];
+    if (activeDirection === "across") col++; else row++;
+  }
+  setInteractiveMessage("");
+  renderInteractive();
+}
+
+// ---- "Mots Défi" panel — see #interactive-challenge-panel in index.html.
+// Renders the current interactiveChallengeWords list as a plain add/
+// remove list (mirrors the "Créations" drafts table's own per-row 🗑
+// delete button, see renderInteractiveWorkList() further below). Each
+// word is also clickable, like every other word list in this panel (see
+// insertInteractiveChallengeWord() above), and colored green/black
+// depending on whether it's actually present in the grid right now (see
+// gridContainsWord() above) — refreshed on every renderInteractive() call
+// so it always reflects the live grid, not just its own state at the
+// moment the word was added. The label shown is the word exactly as
+// typed (accents/case kept, "comme dans les dictionnaires" — at the
+// user's explicit request); only the grid-matching/insertion below ever
+// uses its derived bare-uppercase grid form (challengeWordGridForm()).
+function renderInteractiveChallengeList() {
+  const t = I18N[uiLanguage];
+  interactiveChallengeList.innerHTML = "";
+  for (const word of interactiveChallengeWords) {
+    const gridForm = challengeWordGridForm(word);
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = word;
+    span.tabIndex = 0;
+    span.className = gridForm && gridContainsWord(gridForm)
+      ? "interactive-word-item interactive-word-challenge"
+      : "interactive-word-item";
+    const pick = () => insertInteractiveChallengeWord(gridForm);
+    span.addEventListener("click", pick);
+    span.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        pick();
+      }
+    });
+    li.appendChild(span);
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "nav-btn clear-icon-btn";
+    removeBtn.textContent = "−";
+    removeBtn.title = t.interactiveChallengeRemoveBtn;
+    removeBtn.setAttribute("aria-label", `${t.interactiveChallengeRemoveBtn} ${word}`);
+    removeBtn.addEventListener("click", () => {
+      interactiveChallengeWords = interactiveChallengeWords.filter((w) => w !== word);
+      renderInteractiveChallengeList();
+    });
+    li.appendChild(removeBtn);
+    interactiveChallengeList.appendChild(li);
+  }
+}
+
+function addInteractiveChallengeWord() {
+  // Stored exactly as typed — accents, case, everything — "comme dans les
+  // dictionnaires," at the user's explicit request, after a live report:
+  // the previous version upper-cased and stripped straight to bare A-Z
+  // right here, so "randonnées" was saved as "RANDONNES" (the "é" simply
+  // vanished — [^A-Z] deletes an accented letter outright rather than
+  // folding it to its base letter). Only trimmed of surrounding
+  // whitespace; every place that actually needs to compare against or
+  // write into interactiveGrid derives the bare-uppercase grid form on
+  // its own, on demand (challengeWordGridForm()) — this stored value
+  // never is that form itself. Duplicates are still rejected, but by
+  // their GRID form (case/accent-insensitive) rather than by exact typed
+  // text, so "Randonnées" typed twice (or once accented, once not) still
+  // only ever adds one entry.
+  const word = interactiveChallengeInput.value.trim();
+  interactiveChallengeInput.value = "";
+  if (!word) return;
+  const gridForm = challengeWordGridForm(word);
+  if (!gridForm) return;
+  if (interactiveChallengeWords.some((w) => challengeWordGridForm(w) === gridForm)) return;
+  interactiveChallengeWords.push(word);
+  renderInteractiveChallengeList();
+}
+
+interactiveChallengeAddBtn.addEventListener("click", addInteractiveChallengeWord);
+interactiveChallengeInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addInteractiveChallengeWord();
+  }
+});
+// Automatic word validation on punctuation — see attachPunctuationAutoAdd()
+// further down (hoisted, safe to call from here) for the shared mechanic.
+attachPunctuationAutoAdd(interactiveChallengeInput, addInteractiveChallengeWord);
+
+// ---- "Mots Défi (personnalisation)" mini-form on the main generation
+// form — see #generate-challenge-panel in index.html. A much simpler
+// cousin of renderInteractiveChallengeList()/addInteractiveChallengeWord()
+// above: no grid exists yet before generation, so no green/black
+// coloring and no click-to-insert — just a plain add/remove list, sent
+// as-is (`generate_challenge_words`, see the /api/generate submit
+// handler further down) to backend/app.py's GenerateRequest.challenge_
+// words. #generate-challenge-list itself is only shown once non-empty;
+// unlike #interactive-challenge-list (one word per row), its own CSS lays
+// every <li> out in a wrapping horizontal line (see style.css) — each
+// word's own remove button already separates it from the next, so no
+// comma is added — to stay compact rather than growing tall.
+function renderGenerateChallengeList() {
+  const t = I18N[uiLanguage];
+  generateChallengeList.innerHTML = "";
+  generateChallengeList.hidden = generateChallengeWords.length === 0;
+  for (const word of generateChallengeWords) {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = word;
+    // Not `.interactive-word-item` (that class's cursor/hover styling
+    // signals a clickable, insert-into-grid word — meaningless here,
+    // there is no grid yet before generation).
+    span.className = "generate-challenge-word";
+    li.appendChild(span);
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "nav-btn clear-icon-btn";
+    removeBtn.textContent = "−";
+    removeBtn.title = t.interactiveChallengeRemoveBtn;
+    removeBtn.setAttribute("aria-label", `${t.interactiveChallengeRemoveBtn} ${word}`);
+    removeBtn.addEventListener("click", () => {
+      generateChallengeWords = generateChallengeWords.filter((w) => w !== word);
+      renderGenerateChallengeList();
+    });
+    li.appendChild(removeBtn);
+    generateChallengeList.appendChild(li);
+  }
+}
+
+function addGenerateChallengeWord() {
+  // Same "kept exactly as typed" convention as addInteractiveChallengeWord()
+  // above — see its own comment.
+  const word = generateChallengeInput.value.trim();
+  generateChallengeInput.value = "";
+  if (!word) return;
+  const gridForm = challengeWordGridForm(word);
+  if (!gridForm) return;
+  if (generateChallengeWords.some((w) => challengeWordGridForm(w) === gridForm)) return;
+  generateChallengeWords.push(word);
+  renderGenerateChallengeList();
+}
+
+generateChallengeAddBtn.addEventListener("click", addGenerateChallengeWord);
+generateChallengeInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addGenerateChallengeWord();
+  }
+});
+
+// Automatic word validation on punctuation, at the user's explicit
+// request: typing a space/comma/period/etc at the end of a "Mots Défi" or
+// "Thématique" input field validates whatever word precedes it — exactly
+// as if "+" had been clicked — and resets the field, so a user can type a
+// whole list fluently ("chat, chien, oiseau ") without ever touching the
+// "+" button. Attached to every one of this trio's input fields right
+// below their own "+"/Enter handlers.
+const CHALLENGE_WORD_AUTOADD_PUNCTUATION_RE = /[\s,;:.!?]$/;
+function attachPunctuationAutoAdd(input, addFn) {
+  input.addEventListener("input", () => {
+    if (CHALLENGE_WORD_AUTOADD_PUNCTUATION_RE.test(input.value)) {
+      input.value = input.value.replace(/[\s,;:.!?]+$/, "");
+      addFn();
+    }
+  });
+}
+attachPunctuationAutoAdd(generateChallengeInput, addGenerateChallengeWord);
+
+// ---- "Thématique" chip list — see #theme-field in index.html. Same
+// add/remove mechanic as "Mots Défi (personnalisation)" just above
+// (renderGenerateChallengeList()/addGenerateChallengeWord()), but with no
+// grid-form dedup (a theme word isn't a grid answer — dictionary
+// accents/case matter for the Qdrant pre-search) and a plain case-
+// insensitive duplicate check instead.
+function renderThemeList() {
+  const t = I18N[uiLanguage];
+  themeList.innerHTML = "";
+  themeList.hidden = themeKeywords.length === 0;
+  for (const word of themeKeywords) {
+    const li = document.createElement("li");
+    const span = document.createElement("span");
+    span.textContent = word;
+    li.appendChild(span);
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "nav-btn clear-icon-btn";
+    removeBtn.textContent = "−";
+    removeBtn.title = t.themeRemoveBtn;
+    removeBtn.setAttribute("aria-label", `${t.themeRemoveBtn} ${word}`);
+    removeBtn.addEventListener("click", () => {
+      themeKeywords = themeKeywords.filter((w) => w !== word);
+      renderThemeList();
+    });
+    li.appendChild(removeBtn);
+    themeList.appendChild(li);
+  }
+}
+
+function addThemeWord() {
+  const word = themeInput.value.trim();
+  themeInput.value = "";
+  if (!word) return;
+  if (themeKeywords.some((w) => w.toLowerCase() === word.toLowerCase())) return;
+  themeKeywords.push(word);
+  renderThemeList();
+}
+
+// Re-fills the whole chip list at once from a plain theme string (a
+// re-edited grid's own origin theme — see enterInteractiveMode() below):
+// split on whitespace, same granularity backend/app.py's own tokenizer
+// (`_theme_tokens`) already uses, so re-splitting a previously-joined
+// list round-trips losslessly.
+function setThemeWords(str) {
+  themeKeywords = (str || "").split(/\s+/).filter(Boolean);
+  themeInput.value = "";
+  renderThemeList();
+}
+
+themeAddBtn.addEventListener("click", addThemeWord);
+themeInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addThemeWord();
+  }
+});
+attachPunctuationAutoAdd(themeInput, addThemeWord);
+
+// Every distinct grid form (challengeWordGridForm()) of the current "Mots
+// Défi" list, deduplicated — the ONLY thing challengeWordsForCells()/
+// challengeWordsForBoundary() below ever test against the grid or return:
+// their results get mixed directly into the same candidate lists as real
+// dictionary words (renderInteractiveWords()/renderInteractiveBoundary())
+// and can be clicked to write straight into interactiveGrid, so they must
+// already be in the grid's own bare-uppercase form, never the accented
+// text actually typed (that form is only ever shown in this panel's own
+// #interactive-challenge-list — see renderInteractiveChallengeList()).
+function interactiveChallengeGridForms() {
+  return [...new Set(interactiveChallengeWords.map(challengeWordGridForm))].filter(Boolean);
+}
+
+// Tests every "Mots Défi" word against one exact-length run of cells
+// (used by "Mots", and by "Croisés" for each of its own across/down
+// runs) — a match requires the same length plus agreement with every
+// letter already on the grid there. `overrideIndex`/`overrideLetter`
+// force one position to a specific letter regardless of the grid's own
+// (possibly still empty) content there — "Croisés" uses this to test
+// against a hypothetical intersection letter it hasn't been placed yet.
+function challengeWordsForCells(cells, overrideIndex, overrideLetter) {
+  if (!interactiveChallengeWords.length) return [];
+  const pattern = cells.map(({ row, col }, i) => {
+    if (i === overrideIndex) return overrideLetter;
+    const ch = interactiveGrid[row][col];
+    return ch && ch !== "#" ? ch : null;
+  });
+  return interactiveChallengeGridForms().filter((word) => {
+    if (word.length !== cells.length) return false;
+    for (let i = 0; i < cells.length; i++) {
+      if (pattern[i] && word[i] !== pattern[i]) return false;
+    }
+    return true;
+  });
+}
+
+// Same idea for "Début"/"Fin", whose candidates may be shorter than the
+// slot itself — mirrors renderInteractiveBoundary()'s own placeWord()
+// rule: a shorter word only fits if the single cell right beyond it is
+// still empty (free to turn black).
+function challengeWordsForBoundary(cells, side) {
+  if (!interactiveChallengeWords.length) return [];
+  const maxLen = cells.length;
+  return interactiveChallengeGridForms().filter((word) => {
+    if (!word.length || word.length > maxLen) return false;
+    const wordCells = side === "start" ? cells.slice(0, word.length) : cells.slice(maxLen - word.length);
+    for (let i = 0; i < wordCells.length; i++) {
+      const { row, col } = wordCells[i];
+      const ch = interactiveGrid[row][col];
+      if (ch && ch !== "#" && word[i] !== ch) return false;
+    }
+    if (word.length < maxLen) {
+      const boundary = side === "start" ? cells[word.length] : cells[maxLen - word.length - 1];
+      if (interactiveGrid[boundary.row][boundary.col]) return false;
+    }
+    return true;
+  });
+}
+
 // ---- Candidate words for the selected slot (POST /api/interactive/
 // candidates) — "Mots" button, at the user's explicit request: "add a
 // Mots button that lists the possible words for the selected slot...
@@ -5827,11 +6299,20 @@ function renderInteractiveTitleProposals(list) {
 // slot — the exact staleness bug class already found and fixed once for
 // the "Proposer" pick-list, avoided here up front instead of retrofitted.
 function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
+  // "Mots Défi" matches shown first, in green, ahead of the theme
+  // glossary's own magenta words — at the user's explicit request. Any
+  // dictionary word already covered by a challenge-word match is dropped
+  // from its own bucket below to avoid listing it twice.
+  const challengeWords = challengeWordsForCells(slot.cells);
+  const challengeSet = new Set(challengeWords);
   const all = [
-    ...(themeWords || []).map((word) => ({ word, theme: true })),
-    ...(otherWords || []).map((word) => ({ word, theme: false })),
+    ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge" })),
+    ...(themeWords || []).filter((word) => !challengeSet.has(word))
+      .map((word) => ({ word, cls: "interactive-word-theme" })),
+    ...(otherWords || []).filter((word) => !challengeSet.has(word))
+      .map((word) => ({ word, cls: "" })),
   ];
-  if (!all.length) return;
+  if (!all.length) return false;
   // Which position in `slot.cells` is the cell that was selected (shown
   // in blue on the grid) at the moment "Mots" was clicked — highlighted
   // in blue within every candidate below, at the user's explicit request
@@ -5859,11 +6340,9 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   const dirPrefix = slot.direction === "across" ? "H" : "V";
   label.textContent = `${dirPrefix} (${slot.startRow + 1}, ${slot.startCol + 1})`;
   block.appendChild(label);
-  all.forEach(({ word, theme }, i) => {
+  all.forEach(({ word, cls }, i) => {
     const item = document.createElement("span");
-    item.className = theme
-      ? "interactive-word-item interactive-word-theme"
-      : "interactive-word-item";
+    item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     for (let pos = 0; pos < word.length; pos++) {
       if (pos === highlightIndex) {
@@ -5890,6 +6369,7 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   });
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
+  return true;
 }
 
 interactiveWordsBtn.addEventListener("click", async () => {
@@ -5923,8 +6403,8 @@ interactiveWordsBtn.addEventListener("click", async () => {
     const data = await resp.json();
     const themeWords = (data && data.theme_words) || [];
     const otherWords = (data && data.other_words) || [];
-    renderInteractiveWords(themeWords, otherWords, w, atCell);
-    if (!themeWords.length && !otherWords.length) {
+    const rendered = renderInteractiveWords(themeWords, otherWords, w, atCell);
+    if (!rendered) {
       setInteractiveMessage(t.interactiveWordsEmpty, true);
     }
   } catch (err) {
@@ -5986,10 +6466,17 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
     setInteractiveMessage("");
     renderInteractive();
   };
-  const appendWordList = (parent, words, cells, highlightPos) => {
-    words.forEach((word, i) => {
+  const appendWordList = (parent, words, cells, highlightPos, challengeWords) => {
+    // "Mots Défi" matches shown first, in green — at the user's explicit
+    // request. Any dictionary word already covered by a challenge-word
+    // match is dropped from `words` to avoid listing it twice.
+    const challengeSet = new Set(challengeWords);
+    const ordered = [...challengeWords, ...words.filter((word) => !challengeSet.has(word))];
+    ordered.forEach((word, i) => {
       const item = document.createElement("span");
-      item.className = "interactive-word-item";
+      item.className = challengeSet.has(word)
+        ? "interactive-word-item interactive-word-challenge"
+        : "interactive-word-item";
       item.tabIndex = 0;
       for (let pos = 0; pos < word.length; pos++) {
         if (pos === highlightPos) {
@@ -6010,7 +6497,7 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
         }
       });
       parent.appendChild(item);
-      if (i < words.length - 1) parent.appendChild(document.createTextNode(", "));
+      if (i < ordered.length - 1) parent.appendChild(document.createTextNode(", "));
     });
   };
   const block = document.createElement("div");
@@ -6040,7 +6527,8 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
     acrossLabel.textContent = t.interactiveCrossingAcrossLabel;
     acrossLine.appendChild(acrossLabel);
     acrossLine.appendChild(document.createTextNode(" "));
-    appendWordList(acrossLine, acrossWords, acrossCells, posAcross);
+    appendWordList(acrossLine, acrossWords, acrossCells, posAcross,
+      challengeWordsForCells(acrossCells, posAcross, letter));
     group.appendChild(acrossLine);
     const downLine = document.createElement("p");
     downLine.className = "interactive-crossing-line interactive-crossing-line-down";
@@ -6049,7 +6537,8 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
     downLabel.textContent = t.interactiveCrossingDownLabel;
     downLine.appendChild(downLabel);
     downLine.appendChild(document.createTextNode(" "));
-    appendWordList(downLine, downWords, downCells, posDown);
+    appendWordList(downLine, downWords, downCells, posDown,
+      challengeWordsForCells(downCells, posDown, letter));
     group.appendChild(downLine);
     block.appendChild(group);
   }
@@ -6114,11 +6603,19 @@ interactiveCrossingBtn.addEventListener("click", async () => {
 // (never overwriting a letter, always structurally valid), so placing it
 // here is a plain, unconditional grid mutation — no extra check needed.
 function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
+  // "Mots Défi" matches shown first, in green — at the user's explicit
+  // request. Any dictionary word already covered by a challenge-word
+  // match is dropped from its own bucket below to avoid listing it twice.
+  const challengeWords = challengeWordsForBoundary(slot.cells, side);
+  const challengeSet = new Set(challengeWords);
   const all = [
-    ...(themeWords || []).map((word) => ({ word, theme: true })),
-    ...(otherWords || []).map((word) => ({ word, theme: false })),
+    ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge" })),
+    ...(themeWords || []).filter((word) => !challengeSet.has(word))
+      .map((word) => ({ word, cls: "interactive-word-theme" })),
+    ...(otherWords || []).filter((word) => !challengeSet.has(word))
+      .map((word) => ({ word, cls: "" })),
   ];
-  if (!all.length) return;
+  if (!all.length) return false;
   const placeWord = (word) => {
     if (word.length > slot.cells.length) return;
     const wordCells = side === "start"
@@ -6144,11 +6641,9 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   labelEl.className = "interactive-words-block-label";
   labelEl.textContent = label;
   block.appendChild(labelEl);
-  all.forEach(({ word, theme }, i) => {
+  all.forEach(({ word, cls }, i) => {
     const item = document.createElement("span");
-    item.className = theme
-      ? "interactive-word-item interactive-word-theme"
-      : "interactive-word-item";
+    item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
     item.textContent = word;
     const pick = () => placeWord(word);
@@ -6164,6 +6659,7 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   });
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
+  return true;
 }
 
 async function fetchInteractiveBoundary(side, btn, keys) {
@@ -6197,8 +6693,8 @@ async function fetchInteractiveBoundary(side, btn, keys) {
     const otherWords = (data && data.other_words) || [];
     const dirPrefix = w.direction === "across" ? "H" : "V";
     const label = `${t[keys.btn]} ${dirPrefix} (${w.startRow + 1}, ${w.startCol + 1})`;
-    renderInteractiveBoundary(themeWords, otherWords, w, side, label);
-    if (!themeWords.length && !otherWords.length) {
+    const rendered = renderInteractiveBoundary(themeWords, otherWords, w, side, label);
+    if (!rendered) {
       setInteractiveMessage(t[keys.empty], true);
     }
   } catch (err) {
@@ -6287,7 +6783,7 @@ function enterInteractiveMode(state) {
   // "Proposer une définition"/"Proposer un titre" below (see
   // dictionaryDefineUrl()/proposeInteractiveTitle()).
   interactiveTheme = state.theme || "";
-  themeInput.value = interactiveTheme;
+  setThemeWords(interactiveTheme);
   // `interactiveLanguage`/`interactiveDifficulty` used to only ever be set
   // by the generation form's own submit handler (correct for a fresh
   // start, but left stale — whatever a PREVIOUS session set, or the "fr"/
@@ -6380,6 +6876,26 @@ function enterInteractiveMode(state) {
   if (state.placed && state.placed.from_theme && state.placed.cells) {
     for (const [r, c] of state.placed.cells) interactiveThemeCells.add(`${r},${c}`);
   }
+  interactiveChallengeCells = new Set();
+  if (state.placed && state.placed.from_challenge && state.placed.cells) {
+    for (const [r, c] of state.placed.cells) interactiveChallengeCells.add(`${r},${c}`);
+  }
+  // "Mots Défi" list restore, at the user's explicit request — only ever
+  // set on a resumed session's own result (backend/app.py's _run_
+  // interactive_resume_job), same convention as `definitions`/`title`
+  // just above; a fresh start's result carries none, so this correctly
+  // resets to an empty list on that path.
+  interactiveChallengeWords = Array.isArray(state.challenge_words)
+    ? state.challenge_words.slice() : [];
+  renderInteractiveChallengeList();
+  // Same restore onto the main generation form's own "Mots Défi
+  // (personnalisation)" mini-form (#generate-challenge-panel), at the
+  // user's explicit request — mirrors how `setThemeWords()` above
+  // already re-fills "Thématique" from this same loaded grid: reopening
+  // a library grid in edit mode should show its "Mots Défi" list at the
+  // top of the page too, not just in the Interactive-mode panel below.
+  generateChallengeWords = interactiveChallengeWords.slice();
+  renderGenerateChallengeList();
   interactiveUndoStack = [];
   interactivePushUndo();
   setInteractiveDiagnostics(state); // after pushUndo (which clears them)
@@ -6457,6 +6973,7 @@ function enterInteractiveMode(state) {
   // centered "for free", no dedicated class needed here any more.
   interactivePrevBtn.hidden = false;
   interactiveNextBtn.hidden = false;
+  interactiveChallengePanel.hidden = false;
   // A full grid reported "impossible" (e.g. a resumed session the player
   // had already finished) is complete, not a dead end — show the success
   // message instead. Validity isn't re-checked here (no round trip on
@@ -6497,8 +7014,15 @@ function enterInteractiveMode(state) {
   // mode is (re)shown, including after a round trip through "Finir la
   // grille"/"Finir la zone" — see this flag's own declaration (right
   // before openLibraryGridInteractive) for when it's set to true/reset to
-  // false.
+  // false. Deliberately checked BEFORE consuming `libraryReopenArmPending`
+  // below, so the very first entry (freshly armed by
+  // openLibraryGridInteractive(), library already closed on purpose)
+  // never reopens it — only every entry after that one does.
   if (libraryReopenOnInteractive) openLibraryPanel();
+  if (libraryReopenArmPending) {
+    libraryReopenArmPending = false;
+    libraryReopenOnInteractive = true;
+  }
   // Rebuild `puzzle` right now (normally only ever refreshed by
   // renderInteractive(), itself only reached via setActiveDirection()
   // further below) so defaultToBilingualOption()'s own currentBilingualLangs()
@@ -6522,6 +7046,7 @@ function hideInteractivePanel() {
   gridColumn.classList.remove("interactive-flank");
   interactivePrevBtn.hidden = true;
   interactiveNextBtn.hidden = true;
+  interactiveChallengePanel.hidden = true;
   interactiveCellStats.hidden = true;
   interactiveZoneSelection = null;
   interactiveDragStart = null;
@@ -6629,6 +7154,10 @@ async function autosaveInteractiveWork() {
         definitions: interactiveDefinitionsPayload(),
         title: interactiveTitleInput.value.trim(),
         pseudo: userPseudo || undefined,
+        // "Mots Défi" persisted across a pause/resume of the editing
+        // session, at the user's explicit request — see backend/app.py's
+        // InteractiveSaveWorkRequest/grid_store.save_grid_work.
+        challenge_words: interactiveChallengeWords,
       }),
     }, FETCH_TIMEOUT_MS);
   } catch (err) {
@@ -6834,6 +7363,24 @@ async function runInteractive(body, endpoint = "/api/interactive/start") {
   hideInteractivePanel();
   hideInteractiveWorkPanel();
   syncRssPanelVisibility();
+  // A genuinely fresh authoring session (the top form's own "Générer la
+  // grille" with Mode set to "Interactif", still reachable — and its
+  // Mode dropdown often still reading "interactive" — while already
+  // editing a grid opened from the Library) must never inherit that
+  // earlier session's own pending Library-reopen intent: a real,
+  // previously-reported regression, since `libraryReopenOnInteractive`/
+  // `libraryReopenArmPending` (see their own declaration) are plain
+  // module-level flags with no per-session scoping — left armed from an
+  // earlier `openLibraryGridInteractive()` call, they would otherwise
+  // reopen the Library the moment THIS unrelated new session's own
+  // enterInteractiveMode() call runs. `/api/interactive/resume` is
+  // deliberately exempt: that's the endpoint both a legitimate "Finir la
+  // grille"/"Finir la zone" round trip and a "Créations" draft resume
+  // use, and either one may legitimately need these flags to survive.
+  if (endpoint === "/api/interactive/start") {
+    libraryReopenOnInteractive = false;
+    libraryReopenArmPending = false;
+  }
 
   try {
     let response;
@@ -6887,10 +7434,17 @@ interactiveNextBtn.addEventListener("click", async () => {
   interactivePushUndo();
   try {
     const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    // "Mots Défi" sent along on every "Suivant" click, at the user's
+    // explicit request, so the backend can draw the placed word from this
+    // list first (ahead of the theme glossary) whenever one still fits —
+    // see backend/app.py's InteractiveStepRequest/interactive_step.
     const resp = await fetchWithTimeout("/api/interactive/step", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: interactiveJobId, grid: wireGrid }),
+      body: JSON.stringify({
+        job_id: interactiveJobId, grid: wireGrid,
+        challenge_words: interactiveChallengeWords,
+      }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
       interactiveUndoStack.pop();
@@ -6920,6 +7474,7 @@ interactiveNextBtn.addEventListener("click", async () => {
             body: JSON.stringify({
               job_id: interactiveJobId,
               words: interactiveSlots().map((s) => ({ answer: s.answer, direction: s.direction })),
+              challenge_words: interactiveChallengeWords,
             }),
           }, FETCH_TIMEOUT_MS);
           if (vresp.ok) {
@@ -6937,9 +7492,25 @@ interactiveNextBtn.addEventListener("click", async () => {
       renderInteractive();
       return;
     }
-    for (const [r, c] of data.placed.cells) interactiveGrid[r][c] = data.grid[r][c];
+    // The whole grid is replaced from the response, not just `placed.cells`
+    // patched in one by one: "Suivant" can now also reshape the black-cell
+    // layout itself before placing the word (see backend/crossword_gen.py's
+    // `_widen_floating_black_cells_for_priority_words`, reused by
+    // `interactive_place_word` for an over-length "Mots Défi"/theme word
+    // with no matching-length slot yet), moving a black cell to a cell
+    // that's never part of `placed.cells` — patching only the placed
+    // word's own cells silently dropped that black-cell move client-side,
+    // leaving the newly opened/closed cell showing its stale state (a
+    // slot missing the black cell that should have closed it) even though
+    // the backend's own grid was correct. Same reasoning as "Nettoyer"
+    // just below, which already replaces the whole grid for the same
+    // "can change cells outside the obvious ones" reason.
+    interactiveGrid = data.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
     if (data.placed.from_theme) {
       for (const [r, c] of data.placed.cells) interactiveThemeCells.add(`${r},${c}`);
+    }
+    if (data.placed.from_challenge) {
+      for (const [r, c] of data.placed.cells) interactiveChallengeCells.add(`${r},${c}`);
     }
     setInteractiveDiagnostics(data);
     selected = { row: data.placed.cells[0][0], col: data.placed.cells[0][1] };
@@ -6961,10 +7532,9 @@ interactiveNextBtn.addEventListener("click", async () => {
 // "Nettoyer" — full cleanup of every impossible zone (remove crossing
 // words, or blacken a cell), the same "nettoyage complet" the automatic
 // generator applies at each palier — at the user's explicit request.
-// Unlike "Suivant" (which only ever touches the cells of the one word
-// just placed), cleanup can change cells anywhere in the grid, so the
-// whole interactiveGrid is replaced from the response rather than
-// patched cell by cell.
+// Cleanup can change cells anywhere in the grid, so the whole
+// interactiveGrid is replaced from the response rather than patched cell
+// by cell — same reasoning "Suivant" itself now also follows, above.
 // Shared by "Nettoyer" and "Nettoyer (+noires)" — same request/undo/error
 // handling either way, only `deep` (sent to the backend) and the
 // resulting status message differ. Both buttons are disabled while
@@ -6981,7 +7551,10 @@ async function runInteractiveClean(deep) {
     const resp = await fetchWithTimeout("/api/interactive/clean", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: interactiveJobId, grid: wireGrid, deep }),
+      body: JSON.stringify({
+        job_id: interactiveJobId, grid: wireGrid, deep,
+        challenge_words: interactiveChallengeWords,
+      }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
       interactiveUndoStack.pop();
@@ -7158,15 +7731,21 @@ interactiveProposeClearBtn.addEventListener("click", () => {
 // word's own
 // cells are entirely covered by it (see _interactive_fill_diagnostics's own
 // `_invalid_fully_known_indices` check: that's exactly what flags a
-// complete-but-unknown-to-the-dictionary word as impossible) — or `null`
-// on failure, with the error already reported via setInteractiveMessage.
+// complete-but-unknown-to-the-dictionary word as impossible — except a
+// "Mots Défi" word, sent here as `challenge_words` and considered part of
+// the dictionary for this check, at the user's explicit request) — or
+// `null` on failure, with the error already reported via
+// setInteractiveMessage.
 async function fetchInteractiveImpossible(t) {
   try {
     const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
     const resp = await fetchWithTimeout("/api/interactive/impossible", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id: interactiveJobId, grid: wireGrid }),
+      body: JSON.stringify({
+        job_id: interactiveJobId, grid: wireGrid,
+        challenge_words: interactiveChallengeWords,
+      }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
       setInteractiveMessage(t.interactiveSessionLost, true);
@@ -7372,6 +7951,7 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
         body: JSON.stringify({
           job_id: interactiveJobId,
           words: pending.map((s) => ({ answer: s.answer, direction: s.direction })),
+          challenge_words: interactiveChallengeWords,
         }),
       }, FETCH_TIMEOUT_MS);
       if (resp.status === 404) {
@@ -7561,6 +8141,7 @@ interactiveDraftSaveBtn.addEventListener("click", async () => {
         definitions: interactiveDefinitionsPayload(),
         title: interactiveTitleInput.value.trim(),
         pseudo: userPseudo || undefined,
+        challenge_words: interactiveChallengeWords,
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -7601,6 +8182,14 @@ interactiveSaveBtn.addEventListener("click", async () => {
         difficulty: interactiveDifficulty,
         theme: interactiveTheme || undefined,
         pseudo: userPseudo || undefined,
+        // Without this, "Publier" never told the backend about the
+        // session's current "Mots Défi" list at all — the endpoint used
+        // to fall back to a stale job["interactive"] snapshot that's only
+        // ever populated at session start/resume, never kept in sync with
+        // edits made mid-session (see InteractiveSaveRequest.challenge_
+        // words' own docstring, and the identical existing convention on
+        // the "Sauvegarder"/save_work call just above).
+        challenge_words: interactiveChallengeWords,
       }),
     }, FETCH_TIMEOUT_MS);
     const data = await resp.json();
@@ -7715,6 +8304,16 @@ async function runGeneration(startJob) {
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
 
+  // Close the Dictionnaire panel if it's open, at the user's explicit
+  // request — typically still open from Édition mode (which auto-opens
+  // it, see enterInteractiveMode()) when the player relaunches an
+  // automatic generation with the same settings straight from there; its
+  // content would otherwise sit stale once the interactive session it was
+  // opened for is gone. Applies to every submission, not just this one
+  // path — nothing calls hideDictionaryPanel() elsewhere in either
+  // generation branch below.
+  if (!dictionaryPanel.hidden) hideDictionaryPanel();
+
   const language = languageSelect.value;
   // Bilingual grid, at the user's explicit request: omitted
   // (`undefined`, so absent from the sent JSON) when the "Bilingue"
@@ -7734,8 +8333,12 @@ form.addEventListener("submit", async (event) => {
   const mode = document.getElementById("mode").value;
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
   const forceLettersPercent = Number(document.getElementById("force-letters").value);
-  // Optional Thématique (word list) — omitted if empty.
-  const theme = themeInput.value.trim();
+  // Optional Thématique (word list, "+/-" chip list — see themeKeywords/
+  // renderThemeList() above) — joined back into one space-separated
+  // string, omitted if empty. Whatever is still pending, untyped-in
+  // `themeInput` (never clicked "+"/hit Enter/typed a punctuation) is not
+  // included, same convention as "Mots Défi (personnalisation)" above.
+  const theme = themeKeywords.join(" ");
   // "Précision thématique": the theme glossary's own minimal Qdrant
   // similarity threshold (see backend/app.py's THEME_MIN_SCORE). Dot
   // forced as the decimal separator, clamped to [0,1]; undefined if
@@ -7759,6 +8362,13 @@ form.addEventListener("submit", async (event) => {
       theme: theme || undefined,
       theme_precision: themePrecision,
       pseudo: userPseudo || undefined,
+      // "Mots Défi (personnalisation)" typed on this same main form
+      // (#generate-challenge-panel) before switching to "Interactif" —
+      // same convention as the automatic-generation POST /api/generate
+      // body just below (omitted rather than an empty array when
+      // untouched), reused as-is by POST /api/interactive/start's own
+      // GenerateRequest.challenge_words.
+      challenge_words: generateChallengeWords.length ? generateChallengeWords : undefined,
     });
     return;
   }
@@ -7791,6 +8401,11 @@ form.addEventListener("submit", async (event) => {
           // The author's pseudo, stored in the grid's own JSON (see
           // backend/grid_store.py's save_grid_json) — omitted if empty.
           pseudo: userPseudo || undefined,
+          // "Mots Défi (personnalisation)" — see #generate-challenge-panel
+          // above and backend/app.py's GenerateRequest.challenge_words.
+          // Omitted (rather than an empty array) on the same "no-op ->
+          // no field" convention as `theme`/`pseudo` above.
+          challenge_words: generateChallengeWords.length ? generateChallengeWords : undefined,
         }),
       }, FETCH_TIMEOUT_MS);
     } catch (err) {

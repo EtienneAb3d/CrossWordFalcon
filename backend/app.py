@@ -51,7 +51,8 @@ from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
-    build_word_entries, extract_slots, generate_grid, slot_direction, _interactive_fill_diagnostics,
+    build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
+    _interactive_fill_diagnostics,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
@@ -202,6 +203,18 @@ THEME_LOG_DIR = _PROJECT_ROOT / "LOG_THEME"
 # analysis. Off unless the value is one of 1/true/yes/on (case-
 # insensitive) — so CHATBOT_DEBUG=0 stays off.
 CHATBOT_DEBUG = os.environ.get("CHATBOT_DEBUG", "").strip().lower() in ("1", "true", "yes", "on")
+
+# Red "experimental site" notice on the welcome panel (Pseudo/Mot secret),
+# at the user's explicit request, after this instance's own public-facing
+# deployment turned out to be experimental rather than a stable release:
+# warns a first-time visitor that features may be temporarily broken.
+# Defaults ON (the safe failure mode for a warning: an unset/misconfigured
+# env var must never silently hide it) — a stable deployment opts out
+# explicitly via CROSSWORDFALCON_EXPERIMENTAL_NOTICE=0 in env.sh. See
+# GET /api/system_info's own `experimental_notice` field.
+EXPERIMENTAL_NOTICE = os.environ.get(
+    "CROSSWORDFALCON_EXPERIMENTAL_NOTICE", "1"
+).strip().lower() not in ("0", "false", "no", "off")
 # session_id (supplied by the frontend, see ChatRequest) -> path of this
 # session's log file, already created. An in-memory dict, like
 # JOBS/CANCEL_EVENTS above — a single uvicorn process, no --workers (see
@@ -826,6 +839,17 @@ class GenerateRequest(BaseModel):
     # unknown value is simply ignored (treated as an
     # ordinary request), never a 422.
     source: Optional[str] = None
+    # "Mots Défi (personnalisation)": the same free-form, author-typed
+    # word list as Interactive mode's own panel (see
+    # `InteractiveStepRequest.challenge_words` below) — kept exactly as
+    # typed (accents/case), normalized only inside `_run_generate_job`
+    # via `challenge_word_grid_form` before being handed to
+    # `generate_grid(challenge_words=...)`. Empty by default = no effect,
+    # ordinary generation. Never shown in the Library (see `grid_store.
+    # save_grid_json`'s own `challenge_words` field, absent from
+    # `_iter_stored_grids`'s whitelist) — these words are assumed to be
+    # answers the author is deliberately hiding at specific locations.
+    challenge_words: list[str] = Field(default_factory=list)
 
 
 class RecomputeRequest(BaseModel):
@@ -847,9 +871,21 @@ class InteractiveStepRequest(BaseModel):
     "Interactif" authoring mode. Carries the whole current editable grid
     (a 2D list, one string per cell: "#" black, "." empty white, or an
     uppercase letter). The backend places exactly one more word on top of
-    it (no backtracking) and returns the updated grid."""
+    it (no backtracking) and returns the updated grid. `challenge_words`
+    is the client's current "Mots Défi" list, exactly as the author typed
+    each entry — accents/case kept, "comme dans les dictionnaires," at the
+    user's explicit request, see #interactive-challenge-panel in the web
+    UI — sent on every "Suivant" click so the placed word is drawn from
+    this list first whenever one still fits, ahead of the theme glossary
+    (see `backend/crossword_gen.py`'s `interactive_place_word`/`Filler.
+    challenge_words`). This endpoint's own handler derives each entry's
+    bare-uppercase grid form on the fly (`challenge_word_grid_form`) —
+    the request body itself is never stored, so it doesn't need to be in
+    that form already. Defaults to empty for a session with no challenge
+    words."""
     job_id: str
     grid: list[list[str]]
+    challenge_words: list[str] = []
 
 
 class InteractiveCleanRequest(BaseModel):
@@ -865,10 +901,19 @@ class InteractiveCleanRequest(BaseModel):
     noires, et pas seulement les emplacements impossibles") additionally
     runs `interactive_minimize_black_cells` on the result: tries removing
     every black cell of the grid outright, not just the ones incidentally
-    touched while resolving an impossible zone."""
+    touched while resolving an impossible zone.
+
+    `challenge_words` is the client's current "Mots Défi" list, exactly
+    as the author typed it — same convention/derivation as `Interactive
+    StepRequest.challenge_words` (`challenge_word_grid_form`, applied by
+    this endpoint's own handler) — so "Nettoyer"/"Nettoyer (+noires)"
+    never strip out a validly placed challenge word, at the user's
+    explicit request: "Les Mots Défi doivent être considérés comme
+    faisant partie du dictionnaire.\" """
     job_id: str
     grid: list[list[str]]
     deep: bool = False
+    challenge_words: list[str] = []
 
 
 class InteractiveCandidatesRequest(BaseModel):
@@ -933,9 +978,17 @@ class InteractiveImpossibleRequest(BaseModel):
     word that isn't a real dictionary word (`_invalid_fully_known_
     indices`), matching "y compris les mots posés inconnus" with no
     separate mechanism needed. "Vérifier" reuses this exact same check
-    and additionally verifies every complete word has a definition."""
+    and additionally verifies every complete word has a definition.
+
+    `challenge_words` (the client's current "Mots Défi" list, same
+    convention as `InteractiveStepRequest.challenge_words`) is exempted
+    from this check — a "Mots Défi" word is considered part of the
+    dictionary for it, at the user's explicit request, so it never shows
+    up red as an "impossible"/invented word here (or, by extension, via
+    "Vérifier", which is built directly on top of this endpoint)."""
     job_id: str
     grid: list[list[str]]
+    challenge_words: list[str] = []
 
 
 class InteractiveVerifyWord(BaseModel):
@@ -962,9 +1015,16 @@ class InteractiveVerifyRequest(BaseModel):
     slot's own {answer, direction} — whether a complete word also has a
     definition is resolved entirely client-side (interactiveDefs lives
     only in the browser), so the backend is only ever asked to validate
-    dictionary membership, nothing else."""
+    dictionary membership, nothing else.
+
+    `challenge_words` (the client's current "Mots Défi" list, same
+    convention as `InteractiveStepRequest.challenge_words`) is considered
+    part of the dictionary for this check, at the user's explicit
+    request — a word in this list is never reported back as invalid,
+    whatever its real dictionary status."""
     job_id: str
     words: list[InteractiveVerifyWord]
+    challenge_words: list[str] = []
 
 
 class InteractiveTitleRequest(BaseModel):
@@ -1010,6 +1070,12 @@ class InteractiveSaveRequest(BaseModel):
     difficulty: str = "easy"
     theme: Optional[str] = None
     pseudo: Optional[str] = None
+    # The client's current "Mots Défi" list — same convention as
+    # InteractiveSaveWorkRequest.challenge_words just below (it genuinely
+    # changes within a session, no session-start value to fall back to,
+    # so it's resent here too rather than read back from
+    # `JOBS[job_id]["interactive"]`, which is never kept current).
+    challenge_words: list[str] = []
 
 
 class InteractiveSaveWorkRequest(BaseModel):
@@ -1024,12 +1090,17 @@ class InteractiveSaveWorkRequest(BaseModel):
     docstring. `language`/`difficulty`/`theme` are deliberately absent
     here: the endpoint reads them back from `JOBS[job_id]["interactive"]`
     (set once, at session start) instead of trusting the frontend to
-    resend them correctly on every single autosave."""
+    resend them correctly on every single autosave. `challenge_words` is
+    the client's current "Mots Défi" list — unlike the three fields just
+    above, it genuinely changes within a session (the author edits it
+    directly, no session-start value to fall back to), so it IS resent on
+    every autosave, exactly like `grid`/`definitions`/`title`."""
     job_id: str
     grid: list[list[str]]
     definitions: list[dict] = []
     title: str = ""
     pseudo: Optional[str] = None
+    challenge_words: list[str] = []
 
 
 class InteractiveFinishRequest(BaseModel):
@@ -1604,7 +1675,7 @@ def system_info():
         _embed_gpu_layers = int(os.environ.get("EMBED_N_GPU_LAYERS", "0").strip() or "0")
     except ValueError:
         _embed_gpu_layers = 0
-    return get_system_info(
+    info = get_system_info(
         clue_generator.model,
         interactive_llm_model=(
             interactive_clue_generator.model if interactive_clue_generator is not clue_generator else None
@@ -1612,6 +1683,9 @@ def system_info():
         embed_model=_similar_embedder.model,
         embed_on_gpu=_embed_gpu_layers > 0,
     )
+    # See EXPERIMENTAL_NOTICE's own comment above.
+    info["experimental_notice"] = EXPERIMENTAL_NOTICE
+    return info
 
 
 _LIBRARY_SEEN_FILTERS = ("all", "unseen", "seen", "mine")
@@ -3376,6 +3450,18 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                     short_id,
                 )
 
+        # "Mots Défi (personnalisation)" — same normalization as POST
+        # /api/interactive/step's own `challenge_words` handling (see
+        # `interactive_step` below): the author's own typed spelling,
+        # reduced here to the grid's bare-uppercase form
+        # (`challenge_word_grid_form`), the only form `generate_grid`'s
+        # CSP search ever compares against actual cells.
+        challenge_words = frozenset(
+            grid_form
+            for w in req.challenge_words
+            if w and (grid_form := challenge_word_grid_form(w))
+        )
+
         GRID_QUEUE.append(task)
         try:
             grid_resume_state = resume_state
@@ -3418,6 +3504,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         permanent_locked_letters=permanent_locked_letters,
                         permanent_black_cells=permanent_black_cells,
                         required_cells=required_cells,
+                        challenge_words=challenge_words,
                     )
                     break
                 except GenerationPaused as p:
@@ -3795,6 +3882,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                     save_grid_json, result, req.language, req.difficulty, req.mode, title,
                     result.get("bilingual_language"), pseudo, theme or None,
                     generation_params=generation_params,
+                    challenge_words=req.challenge_words or None,
                 )
                 logger.info("[%s] saved to library: %s (pseudo=%r)", short_id, grid_id, pseudo)
                 # This grid's own GRID_STORE file id, so the frontend can
@@ -3978,8 +4066,21 @@ async def _run_interactive_job(job_id, req):
             available_lengths=available_lengths, index=index,
             black_enrichment_fraction=req.black_enrichment_percent / 100,
         )
+        # "Mots Défi (personnalisation)" typed on the main generation form
+        # before switching to "mode == interactive" (GenerateRequest.
+        # challenge_words, reused as-is by POST /api/interactive/start) —
+        # same bare-uppercase-grid-form normalization POST /api/
+        # interactive/step already applies to every later "Suivant" call,
+        # so this very first placed word is drawn from the list too, not
+        # just later ones.
+        challenge_words = frozenset(
+            grid_form
+            for w in req.challenge_words
+            if w and (grid_form := challenge_word_grid_form(w))
+        )
         placed = await asyncio.to_thread(
             interactive_place_word, grid, rows, cols, index, rng, priority_words,
+            challenge_words,
         )
 
         INTERACTIVE_SESSIONS[job_id] = {
@@ -4008,6 +4109,17 @@ async def _run_interactive_job(job_id, req):
             "theme": theme or None,
             "has_theme": bool(priority_words),
             "theme_description": theme_description,
+            # "Mots Défi (personnalisation)" this session started from —
+            # the client's own author-typed spelling verbatim (see
+            # InteractiveSaveWorkRequest/InteractiveSaveRequest's own
+            # `challenge_words` docstring), read back by POST /api/
+            # interactive/save[_work] as a *fallback* only (the frontend
+            # always resends its own, possibly-since-edited, live list on
+            # every actual save call) and mirrored onto job["result"]
+            # below so enterInteractiveMode() can restore it into the
+            # "Mots Défi" panel(s) on this entry path too, exactly like a
+            # resumed/from-library session already does.
+            "challenge_words": req.challenge_words or [],
         }
         result_grid = grid if placed["impossible"] else placed["grid"]
         job["result"] = {
@@ -4038,6 +4150,9 @@ async def _run_interactive_job(job_id, req):
             "language": req.language,
             "bilingual_language": job["interactive"]["bilingual_language"],
             "difficulty": req.difficulty,
+            # Same reasoning as "theme"/"language" above — see job
+            # ["interactive"]["challenge_words"]'s own comment just above.
+            "challenge_words": req.challenge_words or [],
         }
         progress("done")
         job["status"] = "done"
@@ -4237,6 +4352,7 @@ async def _run_recompute_job(job_id, grid_id):
                 # through (`result` is already the original record minus
                 # id/created_at/bilingual, see above).
                 generation_params=result.get("generation_params"),
+                challenge_words=result.get("challenge_words"),
             )
             logger.info("[%s] recompute saved to library: %s", short_id, new_grid_id)
             result["id"] = new_grid_id
@@ -4380,10 +4496,22 @@ async def interactive_step(req: InteractiveStepRequest):
     cols = len(req.grid[0]) if req.grid else 0
     if rows < 1 or cols < 1:
         raise HTTPException(status_code=400, detail="grille vide")
+    # `req.challenge_words` carries the author's own typed spelling
+    # verbatim (accents/case kept, "comme dans les dictionnaires" — see
+    # InteractiveStepRequest's own docstring); `interactive_place_word`
+    # itself only ever needs the grid's own bare-uppercase form to compare
+    # against actual cells, derived here on demand
+    # (`challenge_word_grid_form`) rather than stored anywhere.
+    challenge_words = frozenset(
+        grid_form
+        for w in req.challenge_words
+        if w and (grid_form := challenge_word_grid_form(w))
+    )
     placed = await asyncio.to_thread(
         interactive_place_word,
         [list(row) for row in req.grid], rows, cols,
         sess["index"], sess["rng"], sess["priority_words"],
+        challenge_words,
     )
     if placed["impossible"]:
         return {"width": cols, "height": rows, "grid": req.grid,
@@ -4413,22 +4541,30 @@ async def interactive_clean(req: InteractiveCleanRequest):
     cols = len(req.grid[0]) if req.grid else 0
     if rows < 1 or cols < 1:
         raise HTTPException(status_code=400, detail="grille vide")
+    # Same conversion as POST /api/interactive/step — see InteractiveClean
+    # Request's own `challenge_words` docstring.
+    challenge_words = frozenset(
+        grid_form
+        for w in req.challenge_words
+        if w and (grid_form := challenge_word_grid_form(w))
+    )
     result = await asyncio.to_thread(
         interactive_clean_impossible_zones,
         [list(row) for row in req.grid], rows, cols,
-        sess["index"], sess["rng"],
+        sess["index"], sess["rng"], challenge_words,
     )
     grid = result["grid"]
     removed_black_count = 0
     if req.deep:
         black_result = await asyncio.to_thread(
             interactive_minimize_black_cells, grid, rows, cols, sess["index"], sess["rng"],
+            challenge_words,
         )
         if black_result["changed"]:
             grid = black_result["grid"]
             removed_black_count = black_result["removed_count"]
     imp, low = await asyncio.to_thread(
-        _interactive_fill_diagnostics, grid, rows, cols, sess["index"],
+        _interactive_fill_diagnostics, grid, rows, cols, sess["index"], challenge_words,
     )
     return {
         "width": cols, "height": rows,
@@ -4535,8 +4671,16 @@ async def interactive_impossible(req: InteractiveImpossibleRequest):
     cols = len(req.grid[0]) if req.grid else 0
     if rows < 1 or cols < 1:
         raise HTTPException(status_code=400, detail="grille vide")
+    # Same conversion as POST /api/interactive/step — see InteractiveImpossibleRequest's
+    # own `challenge_words` docstring.
+    challenge_words = frozenset(
+        grid_form
+        for w in req.challenge_words
+        if w and (grid_form := challenge_word_grid_form(w))
+    )
     imp, low = await asyncio.to_thread(
         _interactive_fill_diagnostics, [list(row) for row in req.grid], rows, cols, sess["index"],
+        challenge_words,
     )
     return {"impossible_cells": imp, "low_candidate_cells": low}
 
@@ -4564,6 +4708,14 @@ async def interactive_verify(req: InteractiveVerifyRequest):
     if sess is None:
         raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
 
+    # Same conversion as POST /api/interactive/step — see InteractiveVerifyRequest's
+    # own `challenge_words` docstring.
+    challenge_words = frozenset(
+        grid_form
+        for w in req.challenge_words
+        if w and (grid_form := challenge_word_grid_form(w))
+    )
+
     def _check():
         invalid = []
         seen = set()
@@ -4572,6 +4724,8 @@ async def interactive_verify(req: InteractiveVerifyRequest):
             if key in seen:
                 continue
             seen.add(key)
+            if w.answer in challenge_words:
+                continue
             idx = sess["index"].for_direction(w.direction)
             entry = idx.get(len(w.answer))
             if not entry or w.answer not in entry["words"]:
@@ -4705,6 +4859,15 @@ async def interactive_save(req: InteractiveSaveRequest):
         # settings' own provenance survives publication just like
         # "origin"/"theme" above.
         generation_params=meta.get("generation_params"),
+        # "Mots Défi (personnalisation)" — the client's own current list,
+        # resent on every "Publier" click just like on every autosave
+        # (`req.challenge_words`, not `job["interactive"]`, which is only
+        # ever populated at session start/resume and never kept current
+        # as the author edits the list — see InteractiveSaveRequest's own
+        # `challenge_words` docstring), carried onto the published record
+        # so "Ouvrir en mode Interactif" restores it later — see grid_
+        # store.save_grid_json's own `challenge_words` docstring.
+        challenge_words=req.challenge_words or None,
     )
     # Also refresh this session's own GRID_WORK snapshot to the final,
     # published state (at the user's explicit request: "Au moment de
@@ -4729,6 +4892,15 @@ async def interactive_save(req: InteractiveSaveRequest):
                 sess.get("resumed_from"), meta.get("origin"),
                 meta.get("bilingual_language"),
                 generation_params=meta.get("generation_params"),
+                # Same reasoning as the save_grid_json call above: the
+                # client's own current list (`req.challenge_words`), not
+                # the stale `job["interactive"]` snapshot — without this,
+                # publishing silently wiped out this same GRID_WORK file's
+                # own "Mots Défi" list (the parameter defaults to None,
+                # promoted by save_grid_work to an empty list) even though
+                # the session's last real autosave had already correctly
+                # saved it.
+                challenge_words=req.challenge_words,
             )
         except Exception:
             logger.warning("interactive save: GRID_WORK snapshot skipped", exc_info=True)
@@ -4766,6 +4938,7 @@ async def interactive_save_work(req: InteractiveSaveWorkRequest):
         sess.get("resumed_from"), meta.get("origin"),
         meta.get("bilingual_language"),
         generation_params=meta.get("generation_params"),
+        challenge_words=req.challenge_words,
     )
     return {"work_id": work_id}
 
@@ -4866,7 +5039,18 @@ async def _run_interactive_resume_job(job_id, record):
         grid = record.get("grid") or []
         rows = len(grid)
         cols = len(grid[0]) if grid else 0
-        imp, low = await asyncio.to_thread(_interactive_fill_diagnostics, grid, rows, cols, index)
+        # Same conversion as POST /api/interactive/step — see
+        # InteractiveStepRequest's own `challenge_words` docstring — so a
+        # resumed session's own initial diagnostics already exempt its
+        # "Mots Défi" words, same as every other diagnostics call site.
+        challenge_words = frozenset(
+            grid_form
+            for w in (record.get("challenge_words") or ())
+            if w and (grid_form := challenge_word_grid_form(w))
+        )
+        imp, low = await asyncio.to_thread(
+            _interactive_fill_diagnostics, grid, rows, cols, index, challenge_words,
+        )
 
         INTERACTIVE_SESSIONS[job_id] = {
             "index": index,
@@ -4902,6 +5086,15 @@ async def _run_interactive_resume_job(job_id, record):
             # save_grid_work so the provenance survives both a publish
             # and a pause/resume of the editing session.
             "origin": record.get("origin"),
+            # "Mots Défi" list this session was resumed with — see
+            # grid_store.save_grid_work's own `challenge_words` docstring.
+            # Not otherwise consulted from `job["interactive"]` (the
+            # frontend resends its own live list on every later autosave/
+            # "Suivant" instead — see InteractiveStepRequest/
+            # InteractiveSaveWorkRequest); only mirrored onto job["result"]
+            # below, like "theme"/generation_params, so enterInteractive
+            # Mode() can restore it on this entry path too.
+            "challenge_words": record.get("challenge_words") or [],
         }
         job["result"] = {
             "width": cols,
@@ -4944,6 +5137,10 @@ async def _run_interactive_resume_job(job_id, record):
             # grid_store.save_grid_json's own `generation_params`
             # docstring.
             "generation_params": generation_params,
+            # Same reasoning again, for enterInteractiveMode()'s own "Mots
+            # Défi" list restore — see job["interactive"]["challenge_words"]
+            # just above.
+            "challenge_words": record.get("challenge_words") or [],
         }
         progress("done")
         job["status"] = "done"
@@ -5025,6 +5222,11 @@ def _library_record_to_interactive(record):
         # generation (e.g. a grid itself built by hand in Interactive
         # mode, then published).
         "generation_params": record.get("generation_params"),
+        # "Mots Défi (personnalisation)" — see grid_store.save_grid_json's
+        # own `challenge_words` docstring; `_run_interactive_resume_job`
+        # reads it back via `record.get("challenge_words") or []`, same
+        # as it already does for a real GRID_WORK record.
+        "challenge_words": record.get("challenge_words") or [],
         "priority_words": [],
         "seed": 0,
         "origin": {

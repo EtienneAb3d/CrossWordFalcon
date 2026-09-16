@@ -322,22 +322,107 @@ form {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
-  align-items: center;
+  /* flex-start (not flex-end), at the user's explicit follow-up request:
+     "il faut qu'ils restent alignés en haut, mais avec une marge top qui
+     permet à ces boutons bleus de s'aligner sur les champs de saisie (et
+     non alignés sur leurs titres)." `flex-end` (the previous choice, see
+     git history) aligned every item's BOTTOM edge — fine while #theme-
+     field/#generate-challenge-panel's own word list (<ul>) stayed empty,
+     but the moment a word chip is added that block grows taller, dragging
+     the shared bottom edge (and so every plain button here) down with it:
+     the buttons visibly sank toward the bottom of the row instead of
+     staying level with the input line. `flex-start` plus a fixed
+     `margin-top` on the plain buttons (below) fixes this at the source —
+     top edges never move regardless of how tall the word list grows. */
+  align-items: flex-start;
 }
 
-/* Optional "Thématique" field, placed next to the "Générer la grille"
-   button in #form-actions, at the user's explicit request. Laid out in a
-   row (label + input) rather than a column like the other `label`
-   elements, to stay compact on the buttons' row, and wider than the
-   default `input` (6rem) to accommodate a list of words. */
-#theme-field {
+/* Plain action buttons (Générer la grille, Bibliothèque, etc — every
+   direct <button> child, never #theme-field/#generate-challenge-panel,
+   which lay out their own label+input+list internally) get a fixed
+   top margin so their own top edge lines up with the INPUT row of
+   #theme-field/#generate-challenge-panel, not with those two blocks'
+   own label text above it. Measured live (Playwright) against the
+   real rendered page: the label line + the column gap above the input
+   row comes out to 1.55rem at this page's base font size — confirmed
+   by checking the buttons' resulting `top` exactly matches #theme
+   input's own `top` after applying it. */
+#form-actions > button {
+  margin-top: 1.55rem;
+}
+
+/* Optional "Thématique" field and "Mots Défi (personnalisation)" mini-form,
+   both on the main generation form, side by side in #form-actions's own
+   flex-wrap toolbar (no `flex-basis: 100%` here, unlike #form-actions
+   itself, so neither ever forces its own line). Same "+/-" chip-list
+   mechanic on both — see #theme-field/#generate-challenge-panel in
+   index.html, themeWords/generateChallengeWords in script.js: an add
+   button, an input row, and a list below it that only shows once
+   non-empty. Both lists lay words out in a wrapping horizontal line —
+   each word's own "−" button already visually separates it from the
+   next, so no comma or other separator is added — specifically to avoid
+   growing tall. Interactive mode's own #interactive-challenge-list
+   (further below) uses a different, one-word-per-row layout instead,
+   within its own unchanged fixed-height, scrollable frame
+   (#interactive-challenge-panel). */
+#theme-field,
+#generate-challenge-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+#theme-field label,
+#generate-challenge-panel label {
+  gap: 0;
+}
+#theme-input-row,
+#generate-challenge-input-row {
+  display: flex;
+  gap: 0.3rem;
+}
+#theme-input-row input,
+#generate-challenge-input {
+  flex: 0 1 14rem;
+  /* `min-width: 14rem` (not `0`) is load-bearing, not decorative: real
+     measurement (Playwright) showed the two fields rendering at visibly
+     different widths (96px vs 160px on one test, 109px vs 224px on
+     another) despite sharing this exact `flex: 0 1 14rem` — a `flex-
+     basis` alone does not feed into how a flex container with an "auto"
+     width sizes itself (a real, if obscure, flexbox behavior): the
+     container's own auto width is instead computed from each item's
+     plain intrinsic size, which for an empty `<input>` isn't 14rem at
+     all and differs between #theme (no `maxlength`) and
+     #generate-challenge-input (`maxlength="15"`, see index.html) enough
+     to produce two different container widths, before flex-basis/shrink
+     ever gets applied within whatever width the container ends up with.
+     An explicit `min-width` sidesteps this entirely — confirmed by
+     forcing both to `14rem` and re-measuring: both then render at an
+     identical 224px. */
+  min-width: 14rem;
+}
+#theme-list,
+#generate-challenge-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
   flex-direction: row;
-  align-items: center;
-  gap: 0.4rem;
+  flex-wrap: wrap;
+  column-gap: 0.3rem;
+  row-gap: 0.15rem;
+  max-width: 20rem;
 }
-
-#theme-field input {
-  width: 14rem;
+#theme-list[hidden],
+#generate-challenge-list[hidden] {
+  display: none;
+}
+#theme-list li,
+#generate-challenge-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.85rem;
+  word-break: break-all;
 }
 
 label {
@@ -542,30 +627,63 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+/* #board holds two independent regions, side by side: #board-main (#clues
+   + #grid-column, see its own rule right below — takes whatever width
+   #interactive-challenge-panel doesn't) and the challenge panel itself,
+   pinned to #board's own right edge at a fixed 25% of #board's own width
+   (`flex: 0 0 25%` on the panel, see its own rule further below) whenever
+   it's visible — at the user's explicit request: "modifier la structure
+   de la page Edition pour que la boite Mots Défi soit alignée à droite de
+   la zone centrale, en faisant 25% de la largeur de la zone," clarified
+   on a follow-up report to mean this whole central content column (=
+   <main>'s own width, `main { width: 80% }`), not the narrower grid
+   itself — an earlier version sized the panel off #grid's own pixel width
+   and placed it immediately after "Suivant" with no reserved space,
+   reported live as "collée derrière le bouton Suivant" instead of
+   "alignée à droite de la zone centrale". `align-items: flex-start` keeps
+   #board-main's own top edge flush with #board's (needed for
+   #interactive-cell-stats' own absolute positioning below), while
+   #interactive-challenge-panel overrides it with its own `align-self:
+   stretch` to still match #board-main's full height. */
+#board {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 2rem;
+  margin-top: 1rem;
+}
+
 /* Centered (never flush left), at the user's explicit request: "En mode
    jeu, centrer le bloc grille+définition+flèches." In play mode's own
    default state (#clues/#down-clues-section hidden until "Définitions"
    has been enabled, see applyDefinitionsVisibility()), #grid-column —
-   grid + definition panel + direction arrows — is the only visible
-   child of #board, so this centering applies exactly to that one block.
-   If "Définitions" is enabled, #clues (a horizontal list) reappears
+   grid + definition panel + direction arrows — is the only visible child
+   here, so this centering applies exactly to that one block. If
+   "Définitions" is enabled, #clues (a horizontal list) reappears
    alongside it and the centering then applies to the #clues+#grid-column
    pair together — a reasonable degraded behavior, never a case the user
-   excluded.
+   excluded. `flex: 1 1 auto` claims whatever width #board's other child,
+   #interactive-challenge-panel, doesn't (all of #board's own width when
+   the panel is hidden, outside "Interactif" mode — its own fixed `flex: 0
+   0 25%` then contributes nothing); `min-width: 0` is the standard
+   flexbox-shrinking override (see the style-guide SKILL's own repeated
+   entries on this gotcha) so this can still shrink below its own content's
+   natural width rather than force #board to overflow when space is tight.
    This rule used to be scoped to `#board.interactive-centered` (set/
    removed by script.js's enterInteractiveMode()/hideInteractivePanel()),
    with only "Interactif" mode centered — play mode deliberately stayed
    flush left. Made unconditional here; the `.interactive-centered` class
    itself (having become a pure duplicate, #board now always being
    centered) was removed from the HTML/JS rather than left dead. */
-#board {
-  position: relative;
+#board-main {
   display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
   flex-wrap: wrap;
   align-items: flex-start;
   justify-content: center;
   gap: 2rem;
-  margin-top: 1rem;
 }
 
 /* Wraps #grid and #hover-definition-row so the definition panel (plus its
@@ -654,7 +772,8 @@ button:disabled {
    grid itself is displayed, not the raw browser window edge and not the
    grid's own (centered, and in Interactive mode Précédent-button-offset)
    left edge. #board already uses align-items: flex-start, so its own top
-   edge coincides with #grid-column's, which in turn coincides with
+   edge coincides with #board-main's (no padding/border of its own),
+   which in turn coincides with #grid-column's, which in turn coincides with
    #grid's own top edge once #grid-column becomes a row (see
    .interactive-flank below) with align-items: center around #grid as its
    tallest child — so top: 0/left: 0 against #board lands this card
@@ -1038,6 +1157,25 @@ button:disabled {
   font-weight: 800;
 }
 
+/* Green letters for words coming from "Mots Défi", at the user's explicit
+   request ("les Mots Défi doivent être affichés en vert, comme sur la
+   grille du mode Interactif") — the same `--best` green already used for
+   "Mots Défi" everywhere else in this app (.interactive-word-challenge,
+   .cell.white.interactive-challenge). Same treatment as .theme just
+   above (text colour, extra-bold) for visual consistency between the
+   two kinds of "this word is special" highlight in these preview grids;
+   the two are mutually exclusive by construction (a placed word is
+   either a challenge word or a theme word, never both — see
+   backend/crossword_gen.py's `_content_score`/`Filler.challenge_words`
+   own priority over `priority_words`), so no cascade order between them
+   matters in practice. See backend/crossword_gen.py's `_challenge_word_
+   cells_from_assignment` and script.js's renderAttemptPreview(). Always
+   empty for a generation with no "Mots Défi" list. */
+.attempt-preview-grid .cell.white.challenge {
+  color: var(--best);
+  font-weight: 800;
+}
+
 /* Wraps #attempt-preview-label and the prev/next navigation buttons in one
    row, at the user's explicit request to let the player step back/forward
    through the history of preview states already shown (script.js's
@@ -1118,7 +1256,20 @@ button:disabled {
    icon glyph. Fixed width/height + centered flex overrides that padding
    uniformly across every sponge button in the app (Dictionnaire,
    Paraphraseur, mode Interactif) without touching .nav-btn itself, which
-   every other (non-square, text-bearing) button still relies on. */
+   every other (non-square, text-bearing) button still relies on. Also
+   applied to the "+"/"−" theme/challenge-word buttons (#theme-add-btn,
+   #generate-challenge-add-btn, #interactive-challenge-add-btn, and the
+   per-word remove buttons script.js builds) for the same square shape.
+   `flex-shrink: 0` is required, not optional: real measurement (Playwright)
+   showed #theme-add-btn/#generate-challenge-add-btn squeezed down to
+   12-19px wide (vs. the intended 1.6rem/~25.6px square) whenever their
+   flex row (#theme-input-row/#generate-challenge-input-row, packed onto a
+   crowded #form-actions line alongside the 14rem-wide text input) ran
+   short on space — the default `flex-shrink: 1` let the button shrink
+   right along with its sibling input instead of keeping its own fixed
+   footprint. The per-word remove buttons never hit this in practice
+   (their own row, a wrapping <ul>, is rarely space-constrained) but get
+   the same guarantee for consistency. */
 .clear-icon-btn {
   display: inline-flex;
   align-items: center;
@@ -1126,6 +1277,7 @@ button:disabled {
   width: 1.6rem;
   height: 1.6rem;
   padding: 0;
+  flex-shrink: 0;
 }
 
 /* Interactive mode's "help" icon button (see index.html) — a .nav-btn
@@ -2222,6 +2374,18 @@ button:disabled {
   font-weight: 800;
 }
 
+/* "Interactif" mode: same treatment, for a letter belonging to a word
+   placed automatically from "Mots Défi" instead (script.js's
+   interactiveChallengeCells) — green (`--best`, already the "Mots Défi"
+   color everywhere else in this app: .interactive-word-challenge, the
+   attempt-preview grids' own .challenge below), at the user's explicit
+   request. Mutually exclusive with .interactive-theme by construction
+   (backend/crossword_gen.py's `from_theme`/`from_challenge`). */
+.cell.white.interactive-challenge {
+  color: var(--best);
+  font-weight: 800;
+}
+
 /* Hover-only word outline (grid <-> clue list, see script.js's
    highlightWordAt()) — an inset border rather than a background fill, so
    it reads as "this is the word under the cursor" without being confused
@@ -2310,6 +2474,80 @@ button:disabled {
    in play mode would silently do nothing. */
 .interactive-flank-btn[hidden] {
   display: none;
+}
+/* "Mots Défi" box — a direct flex-item sibling of #board-main inside
+   #board itself, never one of #board-main's own children (see index.
+   html's own comment on this element, and #board's own comment above, for
+   the full reasoning) — at the user's explicit request: "modifier la
+   structure de la page Edition pour que la boite Mots Défi soit alignée à
+   droite de la zone centrale, en faisant 25% de la largeur de la zone."
+   `flex: 0 0 25%` sets this box's width to exactly a quarter of #board's
+   own width (flex-basis resolves a percentage against the flex
+   container's own size — here #board, i.e. the whole central content
+   column, matching what "the zone" turned out to mean — see #board's own
+   comment) and disables both grow and shrink, so it always renders at
+   that exact width regardless of how much #board-main's own content
+   needs. No JS measurement of any kind is needed (unlike, say, #hover-
+   definition-row): a flex-basis percentage against the *container* is
+   exactly the width this element needs, with nothing further to resolve
+   from a specific descendant like #grid. `align-self: stretch` overrides
+   #board's own `align-items: flex-start` so this box's height always
+   matches #board-main's own rendered height (its tallest child, #grid-
+   column, is in turn at least as tall as #grid itself). */
+#interactive-challenge-panel {
+  align-self: stretch;
+  flex: 0 0 25%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-y: auto;
+}
+#interactive-challenge-panel[hidden] {
+  display: none;
+}
+#interactive-challenge-panel h3 {
+  margin: 0;
+  font-size: 0.85rem;
+  text-align: center;
+}
+#interactive-challenge-input-row {
+  display: flex;
+  gap: 0.3rem;
+}
+#interactive-challenge-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 0;
+}
+/* Words laid out in a wrapping horizontal line — same compact layout as
+   the main generation form's own #generate-challenge-list, at the user's
+   explicit request ("mets les mots en ligne comme sur la page d'accueil
+   (sans virgule)") — rather than the one-word-per-row stack this used to
+   be. #interactive-challenge-panel's own height (`align-self: stretch`/
+   `flex: 0 0 25%` above) is untouched: this list still scrolls
+   (`overflow-y: auto`) within that same fixed-height frame if it ever
+   grows past it, wrapping words filling that space far more densely than
+   one row each ever did. */
+#interactive-challenge-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  column-gap: 0.3rem;
+  row-gap: 0.15rem;
+  overflow-y: auto;
+}
+#interactive-challenge-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.85rem;
+  word-break: break-all;
 }
 #interactive-message {
   flex: 1 1 auto;
@@ -2464,6 +2702,16 @@ button:disabled {
    consistent with those other two rules. */
 .interactive-word-theme {
   color: var(--theme-fg);
+  font-weight: 700;
+}
+/* "Mots Défi" challenge-list matches, shown before the theme-glossary
+   ones above — at the user's explicit request ("en vert ... avant les
+   mots du glossaire thématique en magenta"). Reuses `--best` (already a
+   distinct green in the theme, see .attempt-preview-grid.attempt-preview-
+   best above) rather than `--correct-fg`, which is tied to the unrelated
+   "Vérification" correctness feedback. */
+.interactive-word-challenge {
+  color: var(--best);
   font-weight: 700;
 }
 /* The one letter, within each candidate, matching the cell selected (in
@@ -3029,6 +3277,24 @@ button:disabled {
   margin: 0;
   font-size: 1.2rem;
   text-align: center;
+}
+
+/* Persistent "experimental site" warning (see #welcome-experimental-
+   notice in index.html) — reuses --error (already used for #status.error/
+   .cell.incorrect) rather than a new token, per this file's own
+   permanent rule 2. Plain bold text, not a bordered box: this project has
+   no established bordered-notice convention, and a heads-up warning
+   inside an already-small modal reads clearly enough as bold colored
+   text, consistent with every other red state in this stylesheet. */
+.warning-text {
+  margin: 0;
+  color: var(--error);
+  font-weight: 700;
+  font-size: 0.85rem;
+  text-align: center;
+}
+.warning-text[hidden] {
+  display: none;
 }
 
 #welcome-form label {

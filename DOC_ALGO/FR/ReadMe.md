@@ -26,9 +26,10 @@ l'ouvre dans un panneau.
 - Placer ses lettres dans la grille. La touche Espace permet d'ajouter ou de
   supprimer une case noire.
 - Le bouton **Suivant** génère automatiquement un nouveau mot (en tenant
-  compte d'un éventuel glossaire thématique). Le bouton **Précédent** permet
-  de revenir en arrière (par exemple pour faire générer un autre mot par
-  Suivant).
+  compte d'une éventuelle liste **Mots Défi**, en priorité, puis d'un
+  éventuel glossaire thématique — voir « Choisir quel emplacement remplir
+  en premier » plus bas). Le bouton **Précédent** permet de revenir en
+  arrière (par exemple pour faire générer un autre mot par Suivant).
 - Utiliser les outils pour s'aider : **Dictionnaire**, **Paraphraseur**, le
   bouton **Mots** donne la liste des mots compatibles avec l'emplacement
   sélectionné.
@@ -65,7 +66,12 @@ toute la grille lui-même, sans aucune intervention manuelle.
    fixe qu'un budget de recherche par tentative (voir « Limites de la
    recherche » plus bas), pas la qualité du résultat final.
 3. Lister éventuellement des mots dans le champ **Thématique** pour orienter
-   le choix des mots vers un sujet (facultatif).
+   le choix des mots vers un sujet (facultatif), et/ou des mots dans le
+   champ **Mots Défi (personnalisation)** juste en dessous pour forcer des
+   mots précis dans la grille (facultatif — même mécanique de priorité que
+   le bouton **Suivant** du mode manuel, voir « Choisir quel emplacement
+   remplir en premier » plus bas ; ces mots ne sont jamais montrés dans la
+   Bibliothèque).
 4. Cliquer sur le bouton **Générer la grille**.
 
 À partir de là, tout se déroule sans autre action : les trois étapes
@@ -375,7 +381,15 @@ départage ne porte que sur les mots effectivement placés qui appartiennent
 au glossaire thématique — jamais sur la totalité des mots de la grille —
 de façon à départager en faveur de la tentative qui fait réellement le
 plus (et le plus longuement) ressortir la thématique, pas simplement
-celle qui a les mots les plus longs en général.
+celle qui a les mots les plus longs en général. Un mot de la liste
+**Mots Défi** compte toujours dans ce score, qu'il y ait ou non un
+glossaire thématique et qu'il en fasse lui-même partie ou non, avec un
+bonus de 2 ajouté à sa longueur avant la mise au carré — de façon à
+favoriser, à égalité de cases noires, la tentative qui a réussi à placer
+un mot Défi. C'est exactement le même score (`backend/crossword_gen.py`,
+`_content_score`) qui départage aussi, plus bas, la sélection de la
+meilleure tentative *échouée* d'un palier et celle du meilleur candidat
+nettoyé — les trois utilisent désormais rigoureusement la même logique.
 
 Cette optimisation d'essai est jetée une fois la comparaison faite —
 seule la grille de la tentative gagnante, dans son état d'AVANT
@@ -448,6 +462,74 @@ d'affichage retiré (voir plus bas), puisque cette grille-là est choisie
 selon un critère légèrement différent (l'état après nettoyage) de celui
 qui départage le reste du vivier (l'état brut).
 
+### Réaménagement d'une case noire flottante pour un mot Défi ou thématique
+
+Une fois le motif de cases noires accepté pour ce palier — mais avant
+même le tout premier mot posé — une dernière passe cherche, pour chaque
+mot **Mots Défi** puis pour chaque mot du glossaire **thématique** qui n'a
+encore aucun emplacement de sa propre longueur nulle part dans la grille,
+une case noire déplaçable (`backend/crossword_gen.py`,
+`_widen_floating_black_cells_for_priority_words`) : une case noire non
+protégée (absente de `permanent_black_cells`) dont le déplacement vers
+l'autre bout d'un emplacement voisin garderait la grille structurellement
+valide (`is_structurally_valid`, seuil relâché à 1, le même que celui
+utilisé pour retirer une case noire lors de la minimisation finale — voir
+plus bas). Le mot est alors testé au début et à la fin de la zone
+élargie ainsi obtenue (`_try_widen_black_cell`), en respectant toute
+lettre déjà verrouillée sur ces cases ; s'il y tient, la case noire est
+déplacée pour le borner de ce côté-là, et la case noire d'origine
+redevient blanche. Cette passe ne pose jamais elle-même une seule lettre :
+elle se contente de façonner le motif pour qu'un emplacement de la bonne
+taille existe déjà lorsque la recherche par backtracking (étape 2
+ci-dessous) commence — c'est alors le mécanisme habituel de choix
+d'emplacement/de mot (voir "Choisir quel emplacement remplir en premier"
+plus bas) qui s'en saisit naturellement, en priorité, comme n'importe quel
+autre emplacement Mots Défi ou thématique.
+
+Deux vérifications protègent chaque déplacement contre toute corruption
+d'un mot déjà posé ailleurs dans la grille — indispensable dès lors que
+cette même passe est aussi réutilisée en mode Interactif (voir plus bas),
+où, contrairement à la génération automatique, la grille peut déjà
+contenir de vraies lettres en dehors de l'emplacement en cours
+d'élargissement. D'abord, la case qui doit absorber le déplacement (la «
+nouvelle » case noire, à l'opposé de la case libérée) ne peut jamais être
+une case déjà porteuse d'une vraie lettre. Ensuite, dans l'axe
+PERPENDICULAIRE au déplacement, ni la case libérée (une fois sa propre
+lettre du mot en cours posée) ni la case nouvellement noircie ne peuvent
+faire basculer l'emplacement perpendiculaire qui les traverse vers un état
+sans plus aucun mot réel du dictionnaire possible, compte tenu des lettres
+déjà connues à cet endroit (`_perpendicular_slot_stays_valid`/`_slot_
+has_domain`, une vérification de domaine légère, indépendante de
+`Filler`) — sans cette dernière vérification, libérer une case pourrait
+accoler discrètement une case surnuméraire à un mot perpendiculaire déjà
+posé (le laissant avec une case vide qu'aucune case noire ne referme
+jamais), et noircir une case pourrait au contraire en tronquer un. Grâce à
+ces deux vérifications, cette manipulation ne peut jamais rendre un
+emplacement impossible ailleurs dans la grille — un mot pour lequel aucun
+déplacement ne le permet est alors simplement laissé de côté ce tour-ci,
+exactement comme s'il n'y avait eu aucune zone flottante disponible du
+tout. Ce n'est là encore qu'un mécanisme du mieux possible, pas une
+garantie de résultat : un mot trop long pour la moindre zone voisine
+disponible, ou pour lequel aucun déplacement valide n'existe (structurellement
+ou du point de vue des mots perpendiculaires), retombe simplement sur les
+mêmes chances ordinaires que décrites plus bas, sans jamais corrompre quoi
+que ce soit d'autre entre-temps. Au sein de la génération automatique,
+cette passe ne s'applique qu'au tout premier motif de chaque palier
+(`_pattern_attempt`), jamais à une reprise « telle quelle » du motif d'un
+palier précédent (`_pattern_continue`, voir plus bas), puisque cette
+dernière porte déjà des mots réellement posés sur certains de ses
+emplacements — les deux vérifications ci-dessus n'y ont d'ailleurs jamais
+d'effet, la grille étant encore entièrement vierge à ce stade. Le mode
+Interactif (`interactive_place_word`) réutilise exactement la même
+fonction avant chaque pose du bouton **Suivant**, en lui passant cette
+fois les lettres déjà posées comme verrouillées — c'est là que les deux
+vérifications jouent réellement leur rôle. Côté interface, un déplacement
+de case noire fait partie intégrante de l'étape posée par **Suivant** :
+la grille entière renvoyée par le serveur remplace l'état affiché
+côté client (pas seulement les cases du mot posé), de sorte qu'un clic
+sur **Précédent** annule aussi bien le mot posé que le déplacement de
+case noire qui l'a accompagné.
+
 ## Étape 2 — Remplir la grille avec de vrais mots
 
 Une fois le motif de cases noires accepté, chaque suite de cases blanches
@@ -518,16 +600,34 @@ laissant à celui qui l'a appelée le soin d'essayer autre chose.
      emplacements que ce mot **croise** (ceux qui partagent au moins une
      case avec lui, précalculés une fois pour toutes par emplacement —
      `Filler._crossing_slots`) : pour chacun d'eux encore non rempli, il
-     recalcule son propre domaine (même règle qu'à l'étape 1). Si l'un
-     d'eux s'est retrouvé sans aucun mot candidat encore disponible à
+     recalcule son propre domaine (même règle qu'à l'étape 1) — sauf qu'un
+     emplacement croisé sans aucun mot du dictionnaire encore disponible
+     n'est PAS pour autant considéré comme cassé s'il reste au moins un
+     mot **Mots Défi** non posé et encore compatible avec lui à cet
+     instant (voir « Mots Défi » plus bas) : dans ce cas précis, poser le
+     candidat courant est accepté malgré tout, quitte à ce qu'un futur
+     appel confie cet emplacement croisé au mécanisme Mots Défi plutôt
+     qu'au dictionnaire ordinaire. Si, hors ce cas, l'un des emplacements
+     croisés s'est retrouvé sans aucun mot candidat encore disponible à
      cause de la lettre qui vient d'être imposée, ce mot est écarté
      immédiatement — retiré de la grille et de `used_words` — sans même
      essayer de continuer plus loin, et le programme passe directement au
-     mot candidat suivant sur ce même emplacement (retour à l'étape 3).
-     Poser un mot ne peut jamais affecter le domaine d'un emplacement qui
-     ne partage aucune case avec lui, donc vérifier seulement ses voisins
-     directs suffit à détecter le problème aussi tôt et aussi sûrement
-     que si toute la grille avait été revérifiée ;
+     mot candidat suivant sur ce même emplacement (retour à l'étape 3),
+     **sauf** si l'emplacement en cours de remplissage a déjà épuisé son
+     propre budget de croisements cassés côté dictionnaire général (voir
+     « Sécurité des croisements et budget d'abandon » plus bas) : dans ce
+     cas précis, ce mot ordinaire est accepté malgré tout, quitte à créer
+     une zone impossible que la reprise entre tentatives réparera plus
+     tard. Pour un candidat **Mots Défi** ou un candidat du glossaire
+     thématique, ce rejet compte comme une tentative ratée pour ce mot
+     précis (voir « Sécurité des croisements et budget d'abandon » plus
+     bas pour le budget, propre à chacun, qui borne combien de fois un
+     même mot peut ainsi échouer avant d'être abandonné pour le reste de
+     la tentative en cours). Poser un mot ne peut jamais affecter le
+     domaine d'un
+     emplacement qui ne partage aucune case avec lui, donc vérifier
+     seulement ses voisins directs suffit à détecter le problème aussi tôt
+     et aussi sûrement que si toute la grille avait été revérifiée ;
    - si, au contraire, aucun emplacement croisé n'est devenu impossible, le
      programme choisit l'emplacement suivant à remplir (voir "Choisir quel
      emplacement remplir en premier" plus bas) et se rappelle lui-même
@@ -675,6 +775,112 @@ mot hors thématique n'est atteint ici que si aucun mot thématique n'a mené
 à une solution (ni sur cet emplacement, ni plus loin). Étape sautée si
 tous — ou aucun — des candidats sont thématiques (rien à réordonner).
 
+S'il existe une liste **Mots Défi** non vide, une étape supplémentaire
+s'applique par-dessus celle-ci, dans le remplissage automatique comme dans
+le mode manuel : tout mot de cette liste non encore posé ailleurs, ni
+abandonné pour la tentative en cours (voir plus bas), et compatible avec
+l'emplacement choisi (au même sens géométrique que plus bas — pas besoin
+d'appartenir au dictionnaire) passe en tête de la liste de candidats,
+devant même les mots du glossaire thématique. Un emplacement dont le
+dictionnaire ne propose par ailleurs aucun candidat n'est alors pas pour
+autant considéré comme une impasse tant qu'un tel mot lui reste
+compatible — le programme continue d'essayer de le remplir plutôt que
+d'abandonner la tentative en cours.
+
+**Sécurité des croisements et budget d'abandon, pour les trois familles de
+candidats** — qu'il s'agisse d'un Mot Défi, d'un mot du glossaire
+thématique ou d'un mot ordinaire du dictionnaire, un candidat n'est
+jamais laissé en place s'il rend l'un des emplacements qu'il croise
+irrémédiablement impossible (plus aucun mot du dictionnaire ET plus aucun
+Mot Défi encore disponible pour ce croisement) : ce cas précis, décrit à
+l'étape 3 de la section « Le mécanisme de backtracking, en détail »
+ci-dessus, provoque un retour en arrière immédiat — le mot n'est pas
+posé, et le programme essaie aussitôt le candidat suivant de la même
+famille, puis, à défaut, de la famille suivante (Mots Défi, puis glossaire
+thématique, puis dictionnaire général) ; chercher le même mot sur un
+AUTRE emplacement se fait naturellement au fil du backtracking normal,
+puisque les niveaux 2 (Mots Défi) et 5 (glossaire thématique) du choix
+d'emplacement (voir plus bas) continuent de privilégier tout emplacement
+où il tient encore. Ce qui change d'une famille à l'autre, c'est ce qui se
+passe une fois qu'elle échoue ainsi de façon répétée :
+
+- Un Mot Défi ou un mot du glossaire thématique dispose de son propre
+  budget d'essais ratés, par mot : une fois qu'il a cassé un croisement
+  10% du budget de vérifications (`deadline_checks`) de la tentative en
+  cours, ce mot précis est abandonné pour le reste de celle-ci — il cesse
+  d'être proposé comme candidat (et, pour un Mot Défi, cesse aussi
+  d'excuser un emplacement croisé sans mot de dictionnaire), ce qui laisse
+  le reste du budget de la tentative se consacrer au reste de la grille
+  plutôt qu'à un mot particulièrement difficile à placer. Ce même mot
+  pourra malgré tout être retenté depuis zéro à la tentative/palier
+  suivant (chaque nouvelle tentative repart avec son propre budget).
+- Le dictionnaire général n'a aucune famille suivante vers laquelle se
+  replier : son budget se compte donc par EMPLACEMENT plutôt que par mot
+  (un mot ordinaire n'a pas d'identité propre à suivre). Une fois que le
+  budget de 10% propre à un emplacement donné est épuisé sans trouver de
+  candidat sûr, le programme cesse d'exiger un candidat sans risque pour
+  cet emplacement précis et accepte le suivant tel quel — créant
+  délibérément une zone « impossible » connue plutôt que de payer le coût
+  d'un backtracking exhaustif. Cette zone est ensuite réparée, comme
+  n'importe quelle autre, par le mécanisme de reprise entre tentatives
+  décrit plus loin (nettoyage des emplacements bloqués, nouveau motif au
+  palier suivant).
+
+Le mode Interactif (bouton **Suivant**, `backend/crossword_gen.py`,
+`interactive_place_word`) applique aux trois familles une version élargie
+de cette même règle de sécurité, mais sans le backtracking récursif de la
+génération automatique (aucune recherche n'y tourne). Un candidat y est
+écarté dès qu'il viderait le domaine d'un emplacement encore ouvert
+QUELCONQUE — pas seulement un emplacement directement croisé, mais aussi
+un emplacement totalement disjoint ailleurs dans la grille dont ce mot
+précis se trouvait être le dernier candidat disponible (`_word_breaks_
+open_slot`) : un glossaire thématique typiquement restreint fait qu'un
+même mot est souvent la dernière option encore libre pour deux
+emplacements sans aucune case commune à la fois, et le poser sur l'un
+rend l'autre tout aussi impossible que s'ils s'étaient croisés. Cette
+vérification élargie ne s'applique qu'en mode Interactif : le
+`crossing_broken` de la génération automatique reste volontairement
+limité aux croisements directs, puisque son mécanisme de reprise entre
+tentatives (nettoyage des emplacements bloqués, nouveau motif au palier
+suivant) répare de toute façon ce genre de zone au palier suivant — un
+filet de sécurité que **Suivant** n'a pas, chaque clic devant se
+suffire à lui-même. Un emplacement déjà impossible avant même ce clic,
+pour une raison sans rapport avec le mot testé, n'est jamais imputé au
+candidat en cours (`_open_slot_baseline`, calculé une seule fois par
+emplacement candidat puis réutilisé pour chacun de ses mots testés) :
+sans cette distinction, une seule zone impossible préexistante ailleurs
+dans la grille rendrait indéfiniment tout candidat, à tout autre
+emplacement, faussement « dangereux ».
+
+Pour les Mots Défi : avant de retenir l'un d'eux, le programme énumère
+toutes les combinaisons (mot, emplacement encore ouvert) géométriquement
+possibles pour l'ensemble de la liste **Mots Défi** — celles de
+l'emplacement d'abord désigné par la cascade à 8 niveaux ci-dessous en
+priorité, puis celles de tout autre emplacement ouvert, chaque groupe
+classé par le même score statistique/fréquence que le tirage final — et
+les essaie une à une dans cet ordre, en écartant immédiatement
+(« backtrack immédiat ») toute combinaison qui casserait un emplacement
+au sens élargi ci-dessus. Faute de budget de vérifications propre à ce
+simple placement, le budget de 10% se calcule ici sur le nombre total de
+combinaisons envisagées pour cet appel : chaque Mot Défi est abandonné,
+pour ce seul clic sur **Suivant**, dès qu'il a lui-même cassé un
+emplacement à hauteur de 10% de ce total. Ce n'est qu'une fois toutes les
+combinaisons épuisées — ou tous les Mots Défi encore actifs abandonnés —
+que le programme se rabat sur le glossaire thématique puis le
+dictionnaire général, à ce seul emplacement choisi ; ce repli applique
+lui aussi cette même vérification élargie : il classe les candidats de la
+famille applicable (thématique en premier, puis dictionnaire général une
+fois la thématique vide ou épuisée) par le même score, et retient le
+premier qui ne casse aucun autre emplacement. À la différence des Mots
+Défi ou de la génération automatique, ce classement n'a pas de budget
+propre : ne parcourir qu'un seul emplacement, dont la liste de candidats
+est déjà plafonnée, coûte assez peu pour l'examiner en entier plutôt que
+de s'en tenir à une tranche arbitraire de 10%. Si aucun candidat de la
+famille retenue n'évite de casser un autre emplacement, le programme
+accepte quand même le mieux classé — Mots Défi ayant toujours priorité
+sur le glossaire thématique, lui-même prioritaire sur le dictionnaire
+général, à chaque étape de ce repli.
+
 ### Choisir quel emplacement remplir en premier
 
 Pour aller plus vite, le dictionnaire est pré-organisé pour retrouver
@@ -693,7 +899,39 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    chances d'être tirée que l'autre. Ça fait naturellement alterner/
    équilibrer les deux catégories au fil du remplissage, sans imposer un
    ordre strict (par exemple tout l'horizontal puis tout le vertical) ;
-2. à l'intérieur de la catégorie tirée au niveau précédent, et **uniquement
+2. **Mots Défi** (la liste du panneau **Mots Défi (personnalisation)** —
+   celui de la page d'accueil, envoyé au serveur en une fois au moment de
+   cliquer sur **Générer la grille**, ou celui du mode Interactif, envoyé à
+   chaque clic sur **Suivant**, `POST /api/interactive/step`), prioritaire
+   sur TOUS les niveaux
+   suivants, y compris le niveau 3 ci-dessous (`backend/crossword_gen.py`,
+   `Filler._select_target_slot`) : s'il existe, parmi les emplacements de
+   la catégorie tirée au niveau précédent, au moins un emplacement où un
+   mot de cette liste (non encore posé ailleurs) tient encore compte tenu
+   des lettres déjà connues, le choix se restreint à ces emplacements —
+   et y reste à travers tous les niveaux suivants. « Tient » s'évalue ici
+   de façon purement géométrique — même longueur que l'emplacement, et
+   compatibilité lettre à lettre avec les seules lettres déjà réellement
+   connues (un mot croisé déjà posé, ou une lettre verrouillée d'un
+   palier précédent — jamais une simple graine statistique) — et n'exige
+   PAS que le mot appartienne au dictionnaire de la langue
+   (`Filler._challenge_word_fits`) : un mot Mots Défi est pris comme une
+   vérité affirmée par l'utilisateur, jamais soumis à validation contre
+   le lexique, contrairement à tout autre candidat. Un mot ainsi posé
+   sans être un vrai mot du dictionnaire est ensuite signalé comme
+   invalide par les diagnostics habituels (`_invalid_fully_known_
+   indices`), exactement comme s'il avait été inséré à la main en
+   cliquant dessus dans le panneau. Ce niveau est volontairement placé
+   ici, juste après le tirage de catégorie et avant le niveau 3 — une
+   version antérieure le plaçait après les niveaux 3/4, ce qui le
+   laissait en pratique bloqué : une grille bien avancée a presque
+   toujours au moins un emplacement à moins de 3 candidats quelque part
+   dans la catégorie tirée, et ce niveau-là, appliqué avant, pouvait alors
+   écarter systématiquement tout emplacement compatible Mots Défi, y
+   compris sur des dizaines de clics consécutifs sur Suivant. Sans aucun
+   mot dans la liste — le cas le plus courant — ce niveau ne change
+   jamais rien, mode manuel comme génération automatique ;
+3. à l'intérieur du groupe obtenu au niveau précédent, et **uniquement
    pour les emplacements de 4 lettres et plus** (un emplacement de 2-3
    lettres a un vocabulaire naturellement restreint, cette priorité n'y
    apporte rien), on choisit en priorité les emplacements avec **moins de
@@ -703,10 +941,10 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    pendant que la recherche progresse encore, avant qu'un futur palier de
    nettoyage ne les juge insuffisants et n'y ajoute une case noire pour
    les corriger — un mot réellement posé ici évite cette case noire. Si
-   aucun emplacement de la catégorie n'est sous ce seuil, ce niveau ne
-   change rien : le niveau suivant s'applique alors à la catégorie
-   entière ;
-3. parmi les emplacements retenus au niveau précédent, s'il en existe au
+   aucun emplacement du groupe n'est sous ce seuil, ce niveau ne
+   change rien : le niveau suivant s'applique alors au groupe
+   entier ;
+4. parmi les emplacements retenus au niveau précédent, s'il en existe au
    moins un qui a déjà **au moins une case déterminée par une vraie
    lettre** (un vrai mot croisé déjà assigné pendant cette même tentative,
    ou une lettre verrouillée d'un palier précédent — jamais une simple
@@ -716,22 +954,22 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    entamé plutôt que d'en ouvrir un nouveau. Si tous les emplacements
    retenus au niveau précédent sont entièrement vierges, ce niveau ne
    change rien : le niveau suivant s'applique alors au groupe entier ;
-4. **grille thématique uniquement** — ce niveau s'applique systématiquement
-   juste après le niveau précédent (comme tous les niveaux de cette
-   liste), sans priorité particulière sur les autres. S'il existe, parmi
-   les emplacements retenus au niveau précédent, au moins un emplacement
-   où un mot du glossaire thématique
-   (non encore posé ailleurs) tient encore compte tenu des lettres déjà
-   connues, le choix se restreint à ces emplacements — on commence donc
-   par remplir les zones thématiquement réalisables, et on y pose un mot
-   thématique en priorité (voir "Classement des mots candidats à
-   l'essai"). Sans thématique, ou si aucun emplacement du groupe
-   n'accepte de mot thématique, ce niveau ne change rien : le niveau
-   suivant s'applique alors au groupe entier. Sur une grille bilingue,
-   chaque direction utilise le glossaire thématique de SA PROPRE langue
-   (un glossaire par langue) : un emplacement horizontal est jaugé contre
-   le glossaire de la langue A, un vertical contre celui de la langue B ;
-5. parmi les emplacements retenus au niveau précédent, on calcule pour
+5. **grille thématique uniquement** — parmi les emplacements retenus au
+   niveau précédent (déjà éventuellement restreints par Mots Défi au
+   niveau 2 — ce qui est précisément ce qui donne à Mots Défi la priorité
+   sur le glossaire thématique), s'il en existe au
+   moins un où un mot du glossaire thématique (non encore posé
+   ailleurs) tient encore compte tenu des lettres déjà connues, le
+   choix se restreint à ces emplacements — on commence donc par
+   remplir les zones thématiquement réalisables, et on y pose un mot
+   thématique en priorité (voir « Classement des mots candidats à
+   l'essai »). Sur une grille bilingue, chaque direction utilise le
+   glossaire thématique de SA PROPRE langue (un glossaire par langue) :
+   un emplacement horizontal est jaugé contre le glossaire de la
+   langue A, un vertical contre celui de la langue B. Sans thématique, ou
+   si aucun emplacement du groupe n'accepte de mot thématique, ce niveau
+   ne change rien : le niveau suivant s'applique alors au groupe entier ;
+6. parmi les emplacements retenus au niveau précédent, on calcule pour
    chacun le score **x² + y²**, où `(x, y)` sont les coordonnées de la
    première case de l'emplacement (son coin le plus en haut à gauche),
    mesurées par rapport au coin **en haut à gauche** de la grille — la
@@ -751,19 +989,19 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    gauche), une **fenêtre de taille fixe de `SLOT_SELECTION_WINDOW_SIZE`
    (10) emplacements** (`backend/crossword_gen.py`) — jamais moins si le
    groupe compte lui-même moins de 10 emplacements ;
-6. cette fenêtre de niveau 5 est ensuite **retriée** par nombre de lettres
+7. cette fenêtre de niveau 6 est ensuite **retriée** par nombre de lettres
    déjà posées dans chaque emplacement (le plus de lettres en premier —
-   même distinction fait-acquis/simple-supposition que le niveau 3, une
+   même distinction fait-acquis/simple-supposition que le niveau 4, une
    simple graine statistique ne comptant jamais), puis **réduite** à ses
    `SLOT_SELECTION_REFINE_FRACTION` premiers emplacements (1/2,
    `backend/crossword_gen.py`) — mêlangée d'abord (même raison que le
-   mélange du niveau 5) pour éviter tout biais positionnel à la coupure.
+   mélange du niveau 6) pour éviter tout biais positionnel à la coupure.
    Un plancher de seulement 1 emplacement, jamais 0 : la fenêtre de
-   niveau 5 peut déjà être aussi petite qu'un seul emplacement (si le
+   niveau 6 peut déjà être aussi petite qu'un seul emplacement (si le
    groupe retenu au niveau précédent n'en compte lui-même qu'un), et un
    plancher plus élevé ici annulerait la réduction dans ce cas très
    courant — cette fenêtre réduite ne peut donc jamais finir vide ;
-7. cette fenêtre réduite est enfin retriée une dernière fois par un score
+8. cette fenêtre réduite est enfin retriée une dernière fois par un score
    statistique — la somme des carrés des fréquences mesurées (le même
    échantillonnage statistique qui alimente les graines, voir "Les
    graines" plus haut) de la lettre la plus fréquente à chaque case
@@ -1078,7 +1316,9 @@ même principe que pour le nettoyage complet (voir "Score et sélection
 parmi les tentatives nettoyées" plus bas) : retrait des mots croisant un
 emplacement impossible (voir "Nettoyage automatique des emplacements
 bloqués" plus bas), puis tri par le même score (somme des carrés des
-longueurs des mots en place, départagée par le nombre de cases noires).
+longueurs des mots en place — thématique et Mots Défi compris, voir
+"Score et sélection parmi les tentatives nettoyées" plus bas — départagée
+par le nombre de cases noires).
 Les moins bonnes sont éliminées, autant qu'il y a de "grilles nouvelles"
 configurées (voir "Une tentative repart d'une grille entièrement vierge"
 plus bas) ; chacune des grilles nettoyées survivantes sert de point de
@@ -1372,14 +1612,19 @@ distinctes de ce palier (jusqu'à `PARALLEL_ATTEMPTS`, une par
 tentative — exactement les mêmes que celles montrées à l'écran,
 également sans plafond, voir "Aperçu affiché pendant la génération"
 plus bas), pas seulement à la meilleure — la meilleure grille de tous
-les process, soit N grilles pour N process. Chacune, une fois nettoyée, reçoit le
-même score que celui utilisé plus haut pour départager les tentatives
-parallèles réussies — la **somme des carrés des longueurs des mots en
-place** (un mot n'est "en place" que si toutes ses cases sont
-confirmées), départagée à score égal par le **nombre de cases noires**
-de la candidate (la plus noire l'emporte, pour laisser plus de marge
-de manœuvre structurelle au palier suivant sur une grille très
-largement verrouillée).
+les process, soit N grilles pour N process. Chacune, une fois nettoyée,
+reçoit exactement le même score (`backend/crossword_gen.py`,
+`_content_score`) que celui utilisé plus haut pour départager les
+tentatives parallèles réussies — la **somme des carrés des longueurs
+des mots en place** (un mot n'est "en place" que si toutes ses cases
+sont confirmées), départagée à score égal par le **nombre de cases
+noires** de la candidate (la plus noire l'emporte, pour laisser plus de
+marge de manœuvre structurelle au palier suivant sur une grille très
+largement verrouillée). Sur une génération thématique, seuls les mots en
+place appartenant au glossaire comptent dans cette somme (comme pour les
+tentatives réussies) ; un mot de la liste **Mots Défi** compte toujours,
+avec le même bonus de +2 sur sa longueur — la même logique de score
+s'applique donc, à l'identique, que le palier ait réussi ou échoué.
 
 Triées du meilleur score au moins bon, les grilles nettoyées les moins
 bonnes sont ensuite **éliminées** — autant qu'il y a de "grilles

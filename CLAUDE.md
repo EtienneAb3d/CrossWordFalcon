@@ -196,7 +196,8 @@ json`. Holds all server-side state in plain module dicts/lists:
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 1],
 `black_enrichment_percent` [0-100, default 17], `mode` [flash/turbo/fast/
 medium/ultra, default medium], `pseudo`, `theme`, `theme_precision`
-[0.0-1.0, default `THEME_MIN_SCORE`], `source`); `RecomputeRequest`;
+[0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
+[list of free-form "Mots Défi" strings, default empty]); `RecomputeRequest`;
 the `Interactive*Request` family (`Step`, `Clean`, `Candidates`,
 `Crossing`, `Impossible`, `Verify`, `Title`, `Save`, `SaveWork`, `Finish`
 — `Finish` additionally carries an optional `zone_cells` to scope
@@ -249,23 +250,48 @@ via `ProcessPoolExecutor`:
    later paliers add proportionally less.
 2. **CSP fill** (`Filler`/`_backtrack`, via `try_fill`) — a standard
    recursive backtracking solver. Slot selection (`_select_target_slot`,
-   also reused verbatim by `interactive_place_word`) is a fixed 7-level
+   also reused verbatim by `interactive_place_word`) is a fixed 8-level
    cascade: (1) draw across-vs-down weighted by remaining open-slot
-   count; (2) among slots ≥4 letters, prefer ones with fewer than
-   `PREFILL_MIN_WORD_COUNT` real candidates, if any; (3) among those,
-   prefer ones with at least one already-known letter, if any; (4) for a
-   themed grid, prefer ones where an unused theme word still fits, if
-   any; (5) score the remaining group geometrically (distance² from the
-   top-left corner) and take a random draw among the `SLOT_SELECTION_
-   WINDOW_SIZE=10` lowest-scored; (6) re-sort that window by letters-
-   already-placed (most first), keep the top `SLOT_SELECTION_REFINE_
-   FRACTION=1/2`; (7) re-sort by statistical fill-option richness
-   (`_slot_letter_frequency_score`), highest wins. Candidate word order
+   count; (2) prefer ones where an unused "Mots Défi" word still fits, if
+   any (`Filler.challenge_words`) — checked purely geometrically (length +
+   already-known letters), never requiring dictionary membership, and
+   placed here, ahead of every level below, so it can never be starved by
+   an unrelated fragile slot winning level 3 first; (3) among slots ≥4
+   letters, prefer ones with fewer than
+   `PREFILL_MIN_WORD_COUNT` real candidates, if any; (4) among those,
+   prefer ones with at least one already-known letter, if any; (5) among
+   those, prefer ones where an unused theme word still fits, if any —
+   since level 2 already ran first, this group may already be challenge-
+   narrowed, which is what still gives "Mots Défi" priority over the
+   theme glossary specifically; (6) score the remaining group
+   geometrically (distance² from the top-left corner) and take a random
+   draw among the `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored; (7)
+   re-sort that window by letters-already-placed (most first), keep the
+   top `SLOT_SELECTION_REFINE_FRACTION=1/2`; (8) re-sort by statistical
+   fill-option richness (`_slot_letter_frequency_score`), highest wins.
+   Candidate word order
    within the chosen slot: shuffled, then ranked by `_candidate_score`
    (sum of squared per-cell statistical letter scores from `sample_
    letter_biases`) with a random draw inside a `CANDIDATE_SCORE_
    WINDOW=20000`-word sliding window; a themed grid's matching words are
-   pulled to the front as a stable block first. The search checks a
+   pulled to the front as a stable block first, then any still-unused
+   "Mots Défi" word geometrically fitting the chosen slot is injected
+   ahead of that block (even when absent from the loaded lexicon
+   entirely) — the same precedence `interactive_place_word`'s own
+   candidate draw already gives it. A slot whose real dictionary domain
+   is empty is not treated as a dead end (`Filler.
+   exclude_immediately_impossible_slots`/`_backtrack`'s own per-node
+   domain check) as long as an unused, not-yet-abandoned challenge word
+   still fits it (`Filler._active_challenge_words()` — see "Crossing-
+   safety retry, all three candidate tiers" below for what "abandoned"
+   means here). Placing a "Mots Défi" candidate is immediately reverted,
+   with no further recursion, the moment it leaves a CROSSING slot with
+   no viable candidate left — dictionary-dry AND no active challenge word
+   able to fill it in turn — so the loop simply moves on to the next
+   candidate (another challenge word fitting the same slot, or the theme
+   glossary/ordinary dictionary domain); see "Crossing-safety retry, all
+   three candidate tiers" below for the per-word/per-slot give-up budget
+   layered on top of this, for every candidate tier. The search checks a
    `deadline_checks` budget, a cooperative `cancel_event` (every
    `CANCEL_CHECK_INTERVAL=500` calls), and self-abandons
    (`UNFILLABLE_ABANDON_FRACTION=0.30`) once too much of the grid belongs
@@ -297,12 +323,32 @@ letters on the same axis — then generate a brand new pattern
 THRESHOLD=3` caps how many consecutive full-cleanup paliers may produce
 an identical grid state before a hard reset to a blank grid.
 
+**Content scoring** — every place in `generate_grid` that has to pick the
+"best" grid among several candidates shares one formula, `_content_score`
+(a `(word, cells)` pairs iterable in, a number out): sum of squares of
+each placed word's own "scored length". With `priority_words` (the theme
+glossary) non-empty, only a word belonging to ITS OWN slot's glossary
+counts at all; empty/`None`, every placed word counts. A `challenge_words`
+("Mots Défi") word always counts, whatever `priority_words` says, and its
+own scored length gets `CHALLENGE_WORD_SCORE_BONUS=2` added before
+squaring — so an attempt that manages to place one is favored over an
+otherwise-equal one that doesn't. The *same* formula backs every one of
+these selections, successful or failed alike: `opt_score` (tie-break
+among several successful attempts of one palier, on top of a primary
+sort by fewest black cells), `_playable_score`/`_cleaned_playable_score`
+(picking a *failed* palier's own "best" attempt to report/carry forward,
+raw state vs. post-`_clean_blocked_slots` state respectively), and
+`_words_in_place_score` (picking the best cleaned candidate among several
+— full nettoyage or "reprise telle quelle" alike, via `_sorted_by_score`,
+tie-broken by fewest black cells).
+
 `generate_grid`'s signature accepts `width`/`height`/`difficulty`/
 `max_words`/`black_ratio`/`attempts`/`seed`/`wordlist_path`/`on_
 progress`/`force_letters_fraction`/`cancel_event`/`black_enrichment_
 fraction`/`deadline_checks`/`resume_state`/`should_pause`/`bilingual_
 wordlist_path`/`priority_words`/`bilingual_priority_words`/`permanent_
-locked_letters`/`permanent_black_cells`/`required_cells`. It returns
+locked_letters`/`permanent_black_cells`/`required_cells`/`challenge_
+words`. It returns
 `{width, height, pattern, solution, words, word_count, black_count,
 black_ratio, winning_process_number, language, bilingual_language}` —
 `words` is a list of per-slot dicts (`answer`, `accented`, `canonical`,
@@ -325,6 +371,182 @@ the CSP fill (cascade level 4 above, plus front-loading matching
 candidates within a chosen slot) — never a hard restriction; the full
 lexicon is always still available.
 
+**"Mots Défi" in automatic generation**: `challenge_words` (`GenerateRequest.
+challenge_words` on the web UI's main generation form, alongside
+"Thématique") applies the same placement mechanic to automatic generation
+as Interactive mode's "Suivant" already applies to a single word: given
+priority over both the theme glossary and the ordinary dictionary domain
+wherever it geometrically fits a slot (see the CSP-fill cascade above),
+and never required to be a real dictionary entry itself. Threaded through
+the same `ProcessPoolExecutor` pool-initializer mechanism as `priority_
+words` (a `_worker_challenge_words` global, set once per worker,
+never a `DualSet` — a challenge word carries no language). Once placed,
+it survives the cross-palier cleanup passes that would otherwise treat a
+non-dictionary word as an "invented word" bug: `_optimize_before_cleanup`/
+`_shorten_impossible_zones`/`_lengthen_impossible_zones`/`_clean_continue_
+candidate`'s own calls to `_invalid_fully_known_indices` all additionally
+exempt a challenge word's own cells (`_challenge_word_cells`), the same
+way they already exempt `permanent_locked_letters`. This remains a
+best-effort mechanic, not a hard geometry guarantee: black-cell placement
+itself (`make_pattern`/`_prefill_unfillable_slots`) knows nothing about
+challenge words, so nothing reserves a slot of the right shape ahead of
+time — see "Floating-black-cell widening" below for the mechanism that
+*does* try to carve one out, in both automatic generation and Interactive
+mode's "Suivant" alike.
+`backend/grid_store.py`'s `save_grid_json` persists the typed list
+(`challenge_words`, never included in `_iter_stored_grids`'s Library-
+listing whitelist, so it stays invisible when browsing the Library) so
+it round-trips back into the Interactive panel when the grid is later
+reopened for editing (`_library_record_to_interactive`). It also feeds
+"Content scoring" above: a placed challenge word always counts toward
+every one of `generate_grid`'s content scores, regardless of
+`priority_words`, at a bonus-boosted length.
+
+**Crossing-safety retry, all three candidate tiers**: `Filler._backtrack`
+tries every slot's candidates in one fixed precedence — "Mots Défi"
+(challenge words), then the theme glossary (`priority_words`), then the
+general dictionary — and applies the same per-candidate `crossing_broken`
+forward-check to every one of them: placing a candidate that leaves some
+slot it CROSSES with no viable word left (dictionary-dry, and no other
+unused/not-yet-abandoned challenge word able to fill it either) reverts
+the placement on the spot, with no further recursion, and the candidate
+loop simply tries the next entry of the same or a lower tier. What
+differs between tiers is what happens once a tier keeps failing this way:
+
+- A challenge word or a theme word that breaks a crossing this often
+  keeps its own per-word budget (`Filler._challenge_word_budget`/`_theme_
+  word_budget`, each `FALLBACK_PHASE_BUDGET_FRACTION = 0.10` of the
+  attempt's own `deadline_checks`, resolved once in `solve()`): once
+  trying it has broken a crossing slot that many times in this one
+  attempt, it is abandoned for the rest of it (`Filler._challenge_
+  abandoned`/`_theme_abandoned`, checked via `_active_challenge_words()`/
+  `_active_priority_words_for()` everywhere that word's eligibility
+  matters) — it stops being injected as a candidate (and, for a challenge
+  word, stops exempting a crossing slot's dry domain too), freeing the
+  rest of the search's own budget instead of chasing one particularly
+  hard-to-place word; normal backtracking across the rest of the search
+  tree is what eventually offers a still-active word a different slot
+  elsewhere, since `_select_target_slot`'s own level 2 (challenge)/level 5
+  (theme) keeps preferring any slot it still fits.
+- The general dictionary has no further tier to fall back to. Its own
+  budget (`Filler._domain_word_budget`, same fraction) is tracked per
+  SLOT rather than per word (an ordinary candidate has no identity worth
+  tracking): once a given slot's own share of the budget has been spent
+  on candidates that all broke some crossing, `_backtrack` stops
+  insisting on a crossing-safe candidate for that slot
+  (`Filler._domain_break_abandoned`) and accepts the next one anyway —
+  deliberately creating a known "impossible" zone rather than paying for
+  exhaustive backtracking first. The cross-palier retry machinery
+  (`_clean_blocked_slots`/`_build_retry_seed`) repairs this kind of zone
+  on the next palier regardless of how it arose.
+
+Interactive mode's "Suivant" (`interactive_place_word`) applies a
+broadened version of this exemption (`_word_breaks_open_slot`), but runs
+no search of its own to draw a `deadline_checks`-shaped budget from: it
+instead builds every geometrically-fitting (word, open slot) combination
+for the whole challenge-word list up front (`target`'s own slot tried
+first, then every other open slot, both groups ranked by the same
+statistical score/frequency the final word draw already used), sets
+`Filler._challenge_word_budget` to 10% of that total combination count,
+and walks the ranked list skipping any combination that would break a
+slot, reusing `Filler._register_challenge_word_break`/`_challenge_
+abandoned` exactly like the automatic search does. Only once every
+combination has been tried, or every still-active word has exhausted its
+own share of the budget, does this call fall through to its theme-
+glossary/general-dictionary fallback at its one `target` slot — which is
+itself now crossing-safety-aware too: it ranks whichever pool applies
+(theme candidates first, then the general dictionary once theme is empty
+or exhausted) by the same score/frequency key and walks it with
+`_word_breaks_open_slot`, taking the first safe entry. Unlike the
+challenge-word combo search or `_backtrack`'s own per-attempt budgets,
+this scan carries no separate budget/abandon bookkeeping of its own: it
+only ever scans one slot's own, already-capped candidate list
+(`INTERACTIVE_SLOT_CANDIDATES_LIMIT`), cheap enough to check every
+candidate exhaustively. If nothing in the applicable pool is safe, it
+falls back to the top-ranked candidate anyway (preferring a themed one
+over an ordinary one, same precedence as before this crossing-safety
+check existed) — so "Suivant" can still complete a step even when no
+candidate can be placed without creating an impossible zone.
+
+`_word_breaks_open_slot`'s check is deliberately wider, here, than
+`_backtrack`'s own inline one: it rejects a candidate that empties the
+domain of ANY still-open slot in the grid, not only one literally
+CROSSING `target` — a themed glossary is typically narrow, so the very
+word chosen for one slot is often also the last unused dictionary
+candidate for some entirely disjoint slot elsewhere (no shared cell at
+all), and placing it there is just as much an "impossible zone" as a
+broken crossing would be. `_backtrack`'s own `crossing_broken` check
+stays crossing-only, since automatic generation's cross-palier retry
+machinery (`_clean_blocked_slots`/`_build_retry_seed`) already repairs
+that broader class of zone on the next palier regardless of how it
+arose — `interactive_place_word` has no such follow-up palier, so each
+"Suivant" click needs to get this right on its own. A slot already
+impossible before this call, for an unrelated reason, is never treated as
+broken by whatever candidate ends up tried (`_open_slot_baseline`,
+computed once per candidate slot and reused across every candidate tried
+there) — otherwise one pre-existing impossible zone anywhere in the grid
+would make every single candidate at every other slot look unsafe too.
+
+**Floating-black-cell widening**: `_widen_floating_black_cells_for_
+priority_words` tries to carve out a right-sized slot for every "Mots
+Défi" word, then every theme-glossary word, that has no matching-length
+empty slot anywhere in the pattern yet: for each such word it scans up to
+`WIDEN_BLACK_CELL_WINDOW` shuffled black cells not in `permanent_black_
+cells`, and for each one computes the merged run that would result from
+relocating it (`_white_run`, walking outward in both directions from the
+cell) — if the word fits flush against either end of that merged run
+(respecting any letter already fixed there by `locked_letters`) while
+keeping `is_structurally_valid(min_interior_free=1)`, the black cell is
+moved to bound the word on its far side (`_try_widen_black_cell`), and
+the ordinary `_select_target_slot`/candidate-priority cascade picks up
+the new empty slot on its own from there — this step never writes a
+letter itself, only reshapes the black-cell pattern. `_try_widen_black_
+cell` also refuses to let the relocated black cell (`new_black`, the one
+cell beyond the word's own span that absorbs it) land on any cell already
+in `locked_letters`, so it can never blacken — and so destroy — an
+already-known letter, and refuses any relocation that would turn a
+PERPENDICULAR slot into one with no real dictionary candidate at all
+(`_perpendicular_slot_stays_valid`/`_slot_has_domain`, a lightweight,
+`Filler`-independent domain check): freeing `(r, c)` merges it into the
+perpendicular slot(s) adjacent to it (checked with `(r, c)`'s own
+about-to-be-written letter already applied), and blackening `new_black`
+splits its own perpendicular slot into up to two pieces (each checked
+with the letters already known there) — either check failing rejects
+that candidate outright, so a relocation can never silently attach a
+stray uncloseable cell to an existing word, truncate one, or leave a
+newly-formed short crossing slot with no possible word at all. Capped by
+`WIDEN_PRIORITY_WORDS_LIMIT` (words tried per group) and `WIDEN_MAX_
+SUCCESSFUL` (total relocations per pattern) to bound its cost on a large
+theme glossary. This remains a best-effort mechanic, not a hard geometry
+guarantee: a word whose length exceeds every available merged run, or
+for which no floating black cell yields a structurally and dictionary-
+wise valid relocation, still falls back to the ordinary geometric-fit
+placement (or no placement at all) — never a corrupting one.
+
+Two callers share this one function, never a second implementation:
+`_pattern_attempt` runs it on a freshly generated pattern before the CSP
+search even starts (never `_pattern_continue`, whose pattern already
+carries real placed words on some slots) — every cell is still blank at
+that point, so both the letter-preservation and perpendicular-domain
+checks above are no-ops there, trivially satisfied by construction.
+`interactive_place_word` (Interactive mode's "Suivant") runs it too,
+right before its own slot/domain computation, passing that call's own
+`known` (already-placed letters) and `index` (its own `DualIndex`) —
+here the pattern can genuinely carry real letters outside whichever slot
+ends up widened, which is exactly what both checks above protect.
+
+On the frontend, `interactiveNextBtn`'s click handler (`script.js`)
+replaces the whole `interactiveGrid` from `POST /api/interactive/step`'s
+own response (`data.grid`) rather than patching only `data.placed.cells`
+— a relocated black cell can land outside the placed word's own cells,
+so patching only those would silently leave the client's own grid
+showing the stale, unwidened black-cell layout even though the backend's
+grid was correct, and every following "Suivant"/"Précédent" call would
+then diverge from the server's own state. The undo stack ("Précédent")
+needs no separate handling for this: it already snapshots/restores the
+whole grid, so a widened black cell is reverted along with everything
+else a "Suivant" click changed.
+
 **`GenerationCancelled`**/**`GenerationPaused`** are cooperative
 exceptions checked at palier boundaries, inside `_backtrack` (every
 `CANCEL_CHECK_INTERVAL` calls), inside `minimize_black_squares`'s
@@ -335,8 +557,38 @@ natural checkpoint.
 **Interactive-authoring module functions** (backing the web UI's
 "Interactif" word-by-word mode, all operating on a plain `grid`/`rows`/
 `cols`/`index` without any of the parallel-attempt machinery above):
-`interactive_place_word` (places exactly one more word, no backtracking,
-reusing the same 7-level slot-selection cascade); `interactive_clean_
+`interactive_place_word` (places exactly one more word — no backtracking
+for an ordinary candidate, reusing the same 8-level slot-selection
+cascade, except for the bounded "Mots Défi" crossing-safety retry
+described above, the one case where several (word, slot) combinations
+genuinely are tried in sequence before this call commits to one; before
+selecting a slot it first runs the same "Floating-black-cell widening"
+mechanism automatic generation's own `_pattern_attempt` uses (see that
+section above) to try to carve out a right-sized slot for any "Mots
+Défi"/theme word with no matching-length slot yet, passing this call's
+own already-placed letters as `locked_letters` so an existing crossing
+letter can never be destroyed; its own word draw prefers an unused,
+crossing-safe "Mots Défi" word over an unused theme word, which in turn
+comes before every ordinary candidate — and, once no challenge word can
+be safely placed this round, the theme-glossary/general-dictionary
+fallback at its one chosen slot is itself crossing-safety-aware too (see
+"Crossing-safety retry, all three candidate tiers" above): it prefers
+whichever crossing-safe candidate ranks highest within the applicable
+tier, only accepting one that breaks a crossing if nothing in either
+tier avoids it. `challenge_words`, a plain
+frozenset of bare uppercase words, built by `POST /api/interactive/step`'s
+own handler from `InteractiveStepRequest.challenge_words` (the author's
+own typed spelling, accents/case kept — see that field's own docstring)
+via `challenge_word_grid_form` (NFKD-normalize, drop combining marks,
+uppercase, strip anything left outside A-Z — the wordlist's own MOT-
+column convention). A "Mots Défi" word is matched purely geometrically —
+`Filler._challenge_word_fits`, length plus any letter already fixed by a
+crossing word — never required to be a genuine dictionary entry the way
+every other candidate is, so a real proper noun typed there (a surname,
+say) can still be placed automatically once the crossing-safety retry
+finds it a slot that doesn't break anything; if none does, it shows up
+flagged invalid by this same function's own diagnostics below instead,
+same as one placed by hand); `interactive_clean_
 impossible_zones`/`interactive_minimize_black_cells` (manual equivalents
 of the automatic cleanup, the latter additionally trying to remove every
 black cell outright); `interactive_slot_candidates` (dictionary words
@@ -352,7 +604,17 @@ carrying a letter, and structurally valid at `min_interior_free=1`;
 over the combined pool, so short lengths never crowd out longer ones);
 `_interactive_fill_diagnostics` (returns `(impossible_cells, low_
 candidate_cells)` for the live red/orange grid highlighting, also
-catching a word invented purely by crossing letters that isn't real).
+catching a word invented purely by crossing letters that isn't real —
+takes an optional `challenge_words`: a "Mots Défi" word is considered
+part of the dictionary for this check, never flagged red, whether it's a
+still-open slot only a challenge word could fill (folded into "low
+candidates" instead — `_challenge_fillable_slot_indices`) or an already-
+typed slot spelling one verbatim (`_challenge_word_cells`, exempted from
+`_invalid_fully_known_indices`); `interactive_clean_impossible_zones`/
+`interactive_minimize_black_cells` (`POST /api/interactive/clean`, both
+`Nettoyer` and `Nettoyer (+noires)`) and `POST /api/interactive/verify`
+(`Vérifier`) apply the same exemption, so none of them ever strips out
+or reports a validly placed challenge word as invalid).
 
 "Finir la grille"/"Finir la zone" reuses the ordinary automatic pipeline
 via `permanent_locked_letters`/`permanent_black_cells` (every already-
@@ -502,7 +764,47 @@ state, unlike the backend).
   rendering/keyboard input/solution-checking; the interactive-authoring
   mode (by far the largest block — zone selection, undo stack, per-cell
   editing, calls to every `/api/interactive/*` endpoint, candidate/
-  crossing-word panels, the "Créations" drafts panel); the library panel
+  crossing-word panels, a "Mots Défi" challenge-word list — stored and
+  shown exactly as the author typed it (accents/case kept), with a
+  derived bare-uppercase grid form (`challengeWordGridForm()`) computed
+  on demand wherever a comparison against actual grid cells is needed:
+  tested client-side against every candidate/crossing/boundary result and
+  highlighted first, ahead of the theme glossary, with its own
+  present-in-grid coloring and authoritative click-to-insert (a challenge
+  word need not itself be a real dictionary entry, so this matching never
+  goes through the backend's own theme_words/other_words arrays), but
+  also sent to the backend verbatim on every "Suivant" click (`Interactive
+  StepRequest.challenge_words`, itself deriving the bare grid form server-
+  side via `challenge_word_grid_form`) so the automatically placed word is
+  drawn from it first, and persisted to/restored from `GRID_WORK` — also
+  verbatim, as typed — across a pause/resume of the editing session
+  (`grid_store.save_grid_work`'s own `challenge_words` field) — the
+  "Créations" drafts panel); a second, simpler "Mots Défi
+  (personnalisation)" mini-form on the main generation form itself
+  (`#generate-challenge-panel`, right next to "Thématique") — a plain
+  add/remove list with no grid yet to color/click-insert against, sent as
+  `GenerateRequest.challenge_words` on "Générer la grille" — for either
+  mode the selector offers: an ordinary automatic generation, or (`mode
+  === "interactive"`) `POST /api/interactive/start`, which reuses the
+  same `GenerateRequest` field and round-trips it into the Interactive
+  panel's own list on entry (`job["result"].challenge_words`), same as a
+  resumed/from-library session already does. `POST /api/interactive/save`
+  ("Publier") likewise takes its own `InteractiveSaveRequest.challenge_
+  words` from the client's current live list on every call, never from
+  the session's own (session-start-only) snapshot. The list `<ul>` is
+  only shown once non-empty and grows in height with the number of words
+  (plain block flow, no fixed height/scroll, unlike the Interactive-mode
+  panel's own grid-height-stretched list). "Thématique"
+  (`#theme-field`) uses this exact same "+/-" chip-list mechanic (an
+  input, a "+" button, a word list below with per-word "-" removal) —
+  `themeKeywords` in `script.js`, joined into one space-separated string
+  wherever a `theme` request field is built, so the wire format/backend
+  tokenizer (`_theme_tokens`) are unaffected. All three of these text
+  inputs (`#generate-challenge-input`, `#interactive-challenge-input`,
+  `#theme`) also auto-validate the typed word — the same effect as
+  clicking "+" — the instant the user types a trailing punctuation
+  character (space, comma, semicolon, colon, period, `!`, `?`), via one
+  shared `attachPunctuationAutoAdd()` helper; the library panel
   (paginated/filterable listing, load-into-player, reopen-as-editable);
   the dictionary panel (root-family search, "Définir", "Thématique"/
   "Synonymes", bilingual-aware); the chatbot UI (Markdown rendering,
@@ -549,9 +851,13 @@ local embedding server 3003, a second interactive-dedicated LLM instance
 per-palier worker count (default: CPU count). `CROSSWORDFALCON_FRONTEND_
 WORKERS` (default 10) is the frontend's own uvicorn `--workers` count —
 the backend must never be given `--workers`, since its `JOBS`/queues/
-schedulers live in one process's memory. See the `project-best-practices`
-SKILL's "Ports and environment variables" section for the full variable
-list and the dual-GPU LLM routing scheme.
+schedulers live in one process's memory. `CROSSWORDFALCON_EXPERIMENTAL_
+NOTICE` (`backend/app.py`'s `EXPERIMENTAL_NOTICE`, on by default) toggles
+a red warning on the web UI's welcome overlay ("site expérimental, en
+cours de développement"), surfaced via `GET /api/system_info`'s
+`experimental_notice` field — set it to `0` on a stable deployment. See
+the `project-best-practices` SKILL's "Ports and environment variables"
+section for the full variable list and the dual-GPU LLM routing scheme.
 
 - **`Install.sh`** — installs `rsvg-convert` (runtime dependency), sets
   up the Python venv, and interactively configures which local LLM

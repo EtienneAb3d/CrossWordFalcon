@@ -207,6 +207,14 @@ export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_P
 # reply, for analysis. Off by default; "1"/"true"/"yes"/"on" turn it on.
 # export CHATBOT_DEBUG="1"
 
+# Red "experimental site" notice on the welcome panel (Pseudo/Mot secret):
+# warns a first-time visitor that this deployment is experimental,
+# still under development, and some features may be temporarily
+# non-operational. On by default — the safe failure mode for a warning
+# is to show it, not hide it, so this is an explicit opt-OUT rather than
+# opt-in. Once this deployment is a stable release, disable it:
+# export CROSSWORDFALCON_EXPERIMENTAL_NOTICE="0"
+
 # Models below are ordered smallest to largest, each with a one-line
 # hardware/quality summary — pick the one that fits your machine and how
 # good you need the clues to be:

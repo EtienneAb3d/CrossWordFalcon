@@ -336,10 +336,20 @@ fi
 
 start_mlx_instance() {
     echo "Starting SGLang server (MLX): model=$SGLANG_MODEL_PATH, port=$LLM_PORT"
+    # --sleep-on-idle unconditionally, on both instances below: without
+    # it, SGLang's scheduler zero-timeout-polls its ZMQ inbox even with
+    # no requests in flight, pinning one CPU core per instance at 100%
+    # forever (verified live — `ps -eLo pid,pcpu,comm` shows a
+    # `sglang::schedul` thread at 100% CPU with nvidia-smi simultaneously
+    # at 0% GPU). This flag only sleeps that idle poll loop; the active
+    # request path is unchanged, and the wake-from-sleep cost lands
+    # inside normal first-token-time variance (SGLang upstream,
+    # https://github.com/sgl-project/sglang/pull/6026).
     SGLANG_USE_MLX=1 nohup .venv-sglang/bin/python3 -m sglang.launch_server \
         --model-path "$SGLANG_MODEL_PATH" \
         --host "$LLM_HOST" --port "$LLM_PORT" \
         --disable-cuda-graph \
+        --sleep-on-idle \
         $QUANT_ARGS \
         $THINK_ARGS \
         $OVERRIDE_ARGS \
@@ -363,6 +373,7 @@ start_cuda_instance() {
     CUDA_VISIBLE_DEVICES="$gpu_index" nohup .venv-sglang/bin/python3 -m sglang.launch_server \
         --model-path "$SGLANG_MODEL_PATH" \
         --host "$LLM_HOST" --port "$port" \
+        --sleep-on-idle \
         $QUANT_ARGS \
         $THINK_ARGS \
         $OVERRIDE_ARGS \

@@ -174,13 +174,57 @@
              the user's explicit request. Non-empty -> a Qdrant
              pre-search of the 5000 closest words, prioritized by the
              solver (see backend/app.py's THEME_PRESEARCH_LIMIT and
-             crossword_gen.py's priority_words). -->
-        <label id="theme-field" for="theme">
-          <span data-i18n="themeLabel">Thématique</span>
-          <input type="text" id="theme" name="theme" autocomplete="off"
-                 data-i18n-placeholder="themePlaceholder"
-                 data-i18n-title="themeTitle" />
-        </label>
+             crossword_gen.py's priority_words). Same "+/-" chip-list
+             mechanic as #generate-challenge-panel just below (add button,
+             word list, automatic add on punctuation — see themeWords/
+             renderThemeList()/addThemeWord() in script.js): the words are
+             joined back into one space-separated string before being sent
+             as GenerateRequest.theme, so the backend's own tokenizer
+             (_theme_tokens) sees exactly the same thing either way. -->
+        <div id="theme-field">
+          <label for="theme">
+            <span data-i18n="themeLabel">Thématique</span>
+          </label>
+          <div id="theme-input-row">
+            <input type="text" id="theme" name="theme" autocomplete="off"
+                   data-i18n-placeholder="themePlaceholder"
+                   data-i18n-title="themeTitle" />
+            <button type="button" id="theme-add-btn" class="nav-btn clear-icon-btn"
+                    data-i18n-aria="themeAddBtn" data-i18n-title="themeAddBtn">
+              <span aria-hidden="true">+</span>
+            </button>
+          </div>
+          <ul id="theme-list" hidden></ul>
+        </div>
+        <!-- "Mots Défi (personnalisation)": same free-form, author-typed
+             word list as Interactive mode's own panel further below
+             (#interactive-challenge-panel), at the user's explicit
+             request — words the automatic search must try to place in
+             priority over both the theme glossary and the ordinary
+             dictionary domain (crossword_gen.py's Filler._backtrack),
+             exactly the same mechanic already used by Interactive mode's
+             "Suivant" (see backend/app.py's GenerateRequest.challenge_
+             words). Sits right of "Thématique" (#theme-field), both
+             stacked in two lines (label above, input below). #generate-
+             challenge-list only shows once non-empty and lays its words
+             out horizontally, wrapping onto more than one row rather than
+             growing one row per word — deliberately more compact than
+             the Interactive panel's own list (one word per row), which
+             stays exactly as it was. -->
+        <div id="generate-challenge-panel">
+          <label for="generate-challenge-input">
+            <span data-i18n="interactiveChallengeTitle">Mots Défi (personnalisation)</span>
+          </label>
+          <div id="generate-challenge-input-row">
+            <input type="text" id="generate-challenge-input" maxlength="15" autocomplete="off"
+                   data-i18n-placeholder="interactiveChallengePlaceholder">
+            <button type="button" id="generate-challenge-add-btn" class="nav-btn clear-icon-btn"
+                    data-i18n-aria="interactiveChallengeAddBtn" data-i18n-title="interactiveChallengeAddBtn">
+              <span aria-hidden="true">+</span>
+            </button>
+          </div>
+          <ul id="generate-challenge-list" hidden></ul>
+        </div>
         <button type="submit" id="generate-btn" data-i18n="generateBtn">Générer la grille</button>
         <button type="button" id="attempt-preview-reveal-btn" class="toggle-btn"
                 data-i18n="attemptPreviewRevealBtn">Voir</button>
@@ -592,58 +636,126 @@
                 data-i18n-aria="attemptPreviewNextBtn" disabled>▶</button>
       </p>
       <div id="board">
-        <div id="clues">
-          <h2 data-i18n="acrossHeading">Horizontalement</h2>
-          <div id="clues-across" class="clue-lines"></div>
-        </div>
-        <div id="grid-column">
-          <!-- "Interactif" only (script.js's enterInteractiveMode() reveals
-               them and adds .interactive-flank to #grid-column): flanking
-               the grid on each side, vertically centered against it — moved
-               here from the play-mode-shaped #interactive-nav row that used
-               to sit inside #interactive-controls, at the user's explicit
-               request. Hidden by default so an ordinary generated grid
-               never shows them. -->
-          <button type="button" id="interactive-prev-btn" class="interactive-flank-btn" hidden
-                  data-i18n="interactivePrevBtn" disabled>Précédent</button>
-          <!-- Black-cell / white-cell-fill percentages — a small,
-               viewport-fixed floating card (see style.css), not an
-               in-flow sibling of #grid, so it neither shifts with
-               #grid's own horizontal offset (flanked by "Précédent" in
-               Interactive mode) nor pushes #grid itself down. script.js's
-               renderInteractive() keeps both lines current on every
-               edit. -->
-          <div id="interactive-cell-stats" hidden>
-            <p id="interactive-black-stat"></p>
-            <p id="interactive-fill-stat"></p>
+        <!-- Groups #clues and #grid-column so they keep centering together
+             as their own unit (#board's original, pre-"Mots Défi" behavior:
+             "en mode jeu, centrer le bloc grille+définition+flèches") within
+             whatever width is LEFT once #interactive-challenge-panel's own
+             25%-of-#board width is set aside — see that element's own
+             comment below. `flex: 1 1 auto` (see style.css) claims exactly
+             that remaining space; its own `justify-content: center` then
+             centers #clues+#grid-column inside it, unaffected by whether
+             the panel is currently taking up a quarter of #board or (hidden
+             outside "Interactif" mode) none of it at all. -->
+        <div id="board-main">
+          <div id="clues">
+            <h2 data-i18n="acrossHeading">Horizontalement</h2>
+            <div id="clues-across" class="clue-lines"></div>
           </div>
-          <!-- #grid wrapped in its own column purely so #grid-column can
-               become a horizontal row in Interactive mode (see
-               .interactive-flank below) with the Précédent/#grid/Suivant
-               trio side by side — harmless outside Interactive mode,
-               rendering identically to a bare #grid. -->
-          <div id="interactive-grid-wrap">
-            <div id="grid"></div>
-          </div>
-          <button type="button" id="interactive-next-btn" class="interactive-flank-btn" hidden
-                  data-i18n="interactiveNextBtn">Suivant</button>
-          <!-- Direction selector duplicated from the virtual keyboard,
-               to the right of the permanent definition area (never
-               hidden by the "définitions" button, unlike #clues/#down-
-               clues-section) — at the user's explicit request. Same
-               .toggle-btn buttons, same behavior (see script.js's
-               setActiveDirection()) — the two instances stay
-               permanently in sync with each other, with SHIFT/CAPSLOCK,
-               and with hovering over the grid. -->
-          <div id="hover-definition-row">
-            <p id="hover-definition"></p>
-            <div id="clues-direction-col">
-              <button type="button" id="clues-direction-across-btn" class="toggle-btn active"
-                      data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
-              <button type="button" id="clues-direction-down-btn" class="toggle-btn"
-                      data-i18n-aria="virtualKeyboardDownBtn">↓</button>
+          <div id="grid-column">
+            <!-- "Interactif" only (script.js's enterInteractiveMode() reveals
+                 them and adds .interactive-flank to #grid-column): flanking
+                 the grid on each side, vertically centered against it — moved
+                 here from the play-mode-shaped #interactive-nav row that used
+                 to sit inside #interactive-controls, at the user's explicit
+                 request. Hidden by default so an ordinary generated grid
+                 never shows them. -->
+            <button type="button" id="interactive-prev-btn" class="interactive-flank-btn" hidden
+                    data-i18n="interactivePrevBtn" disabled>Précédent</button>
+            <!-- Black-cell / white-cell-fill percentages — a small,
+                 viewport-fixed floating card (see style.css), not an
+                 in-flow sibling of #grid, so it neither shifts with
+                 #grid's own horizontal offset (flanked by "Précédent" in
+                 Interactive mode) nor pushes #grid itself down. script.js's
+                 renderInteractive() keeps both lines current on every
+                 edit. -->
+            <div id="interactive-cell-stats" hidden>
+              <p id="interactive-black-stat"></p>
+              <p id="interactive-fill-stat"></p>
+            </div>
+            <!-- #grid wrapped in its own column purely so #grid-column can
+                 become a horizontal row in Interactive mode (see
+                 .interactive-flank below) with the Précédent/#grid/Suivant
+                 trio side by side — harmless outside Interactive mode,
+                 rendering identically to a bare #grid. -->
+            <div id="interactive-grid-wrap">
+              <div id="grid"></div>
+            </div>
+            <button type="button" id="interactive-next-btn" class="interactive-flank-btn" hidden
+                    data-i18n="interactiveNextBtn">Suivant</button>
+            <!-- Direction selector duplicated from the virtual keyboard,
+                 to the right of the permanent definition area (never
+                 hidden by the "définitions" button, unlike #clues/#down-
+                 clues-section) — at the user's explicit request. Same
+                 .toggle-btn buttons, same behavior (see script.js's
+                 setActiveDirection()) — the two instances stay
+                 permanently in sync with each other, with SHIFT/CAPSLOCK,
+                 and with hovering over the grid. -->
+            <div id="hover-definition-row">
+              <p id="hover-definition"></p>
+              <div id="clues-direction-col">
+                <button type="button" id="clues-direction-across-btn" class="toggle-btn active"
+                        data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
+                <button type="button" id="clues-direction-down-btn" class="toggle-btn"
+                        data-i18n-aria="virtualKeyboardDownBtn">↓</button>
+              </div>
             </div>
           </div>
+        </div>
+        <!-- "Mots Défi": a direct sibling of #board-main inside #board
+             itself (not nested inside #board-main, unlike #clues/#grid-
+             column above), so it never joins their own centering group —
+             at the user's explicit request: "modifier la structure de la
+             page Edition pour que la boite Mots Défi soit alignée à droite
+             de la zone centrale, en faisant 25% de la largeur de la zone,"
+             clarified on a follow-up report (the first version, sized off
+             #grid's own pixel width and immediately following "Suivant"
+             with no gap-filling, looked "collée derrière le bouton Suivant"
+             instead) to specifically mean 25% of the WIDE central zone —
+             #board's own width (= <main>'s content width, #board-main
+             taking whatever's left, see its own comment above and
+             style.css) — flush against ITS right edge, not 25% of the
+             grid's own narrower width glued right behind "Suivant". `flex:
+             0 0 25%` (see style.css) resolves that percentage against
+             #board directly, no JS pixel measurement needed at all,
+             stretched to #board-main's own height (align-self: stretch).
+             A free-form list of words the author wants to force into the
+             grid: whenever "Mots"/"Croisés"/"Début"/"Fin" is clicked,
+             every word here is tested against that button's own result and
+             shown first, in green, ahead of the theme-glossary matches
+             (magenta) and the other dictionary words (black) — see
+             interactiveChallengeWords/challengeWordsForCells() in
+             script.js. Also sent to the backend on every "Suivant" click
+             (POST /api/interactive/step) so the placed word is drawn from
+             this list first, ahead of the theme glossary — see
+             crossword_gen.py's `interactive_place_word`/`Filler.
+             challenge_words` — and persisted to GRID_WORK on every
+             autosave/"Sauvegarder" so it survives a pause/resume of the
+             editing session (see grid_store.save_grid_work). A challenge
+             word never has to be a genuine dictionary entry — for the
+             "Mots"/"Croisés"/"Début"/"Fin" panels above, it's stored/sent
+             verbatim, never validated against the loaded lexicon, so it
+             can't silently vanish from a filtered candidates list the way
+             it would if it were mixed into the backend's own theme_words/
+             other_words arrays; "Suivant" goes further still, at the
+             user's own explicit follow-up request ("modifier le code pour
+             qu'il accepte de placer un Mot Défi même s'il ne fait pas
+             partie du dictionnaire (vérité utilisateur)") — it can
+             genuinely PLACE a non-dictionary challenge word automatically
+             (Filler._challenge_word_fits: matching length + already-known
+             letters only), not just list it; the word then shows up
+             flagged invalid by the usual diagnostics, same as one placed
+             by a direct click. -->
+        <div id="interactive-challenge-panel" hidden>
+          <h3 data-i18n="interactiveChallengeTitle">Mots Défi (personnalisation)</h3>
+          <div id="interactive-challenge-input-row">
+            <input type="text" id="interactive-challenge-input" maxlength="15" autocomplete="off"
+                   data-i18n-placeholder="interactiveChallengePlaceholder">
+            <button type="button" id="interactive-challenge-add-btn" class="nav-btn clear-icon-btn"
+                    data-i18n-aria="interactiveChallengeAddBtn" data-i18n-title="interactiveChallengeAddBtn">
+              <span aria-hidden="true">+</span>
+            </button>
+          </div>
+          <ul id="interactive-challenge-list"></ul>
         </div>
       </div>
       <!-- "Interactif" mode controls (see script.js) — inserted inside
@@ -957,6 +1069,15 @@
        aria-labelledby="welcome-title" hidden>
     <form id="welcome-form">
       <h2 id="welcome-title" data-i18n="welcomeTitle">Bienvenue</h2>
+      <!-- Togglable via CROSSWORDFALCON_EXPERIMENTAL_NOTICE in env.sh
+           (see backend/app.py's EXPERIMENTAL_NOTICE, GET /api/
+           system_info's `experimental_notice` field) — shown by default,
+           hidden by script.js once system_info confirms a stable
+           deployment opted out. Left visible (not `hidden`) in the
+           markup itself: a slow/failed system_info fetch must never
+           silently hide this warning. -->
+      <p id="welcome-experimental-notice" class="warning-text"
+         data-i18n="welcomeExperimentalNotice"></p>
       <label for="welcome-language">
         <span data-i18n="welcomeLanguageLabel">Langue</span>
         <select id="welcome-language">

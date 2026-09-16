@@ -18,6 +18,10 @@ dismissed by clicking **Accepter / Accept** — no close button, and
 neither the Escape key nor a click on the background closes it. It
 contains:
 
+- On some deployments, a red notice near the top of the panel warns that
+  the site is experimental and still under development, and that some
+  features may be temporarily unavailable — absent on a deployment marked
+  stable.
 - A **language** selector, preset to the browser's own language when it
   is one of the six supported languages, otherwise English. Changing it
   immediately re-renders both the panel itself and the whole page behind
@@ -128,9 +132,13 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   means a broader one. It only affects grid generation when the
   **Thématique** field is filled in, and it also sets the closeness cutoff
   for the Dictionary panel's **Thématique** button (below).
-- **Thématique / Theme** (`#theme`) — an optional list of words, next to
-  the Generate button. Left empty, the grid is filled from the whole
-  dictionary as usual. Filled in, the language model first writes a
+- **Thématique / Theme** (`#theme-field`) — an optional list of words, next
+  to the Generate button, entered the same "+/-" way as Challenge Words
+  below: type a word and click **+** (or just type a space, comma, or
+  other punctuation right after it) to add it to the list shown
+  underneath, **−** to remove one. Left empty, the grid is filled from the
+  whole dictionary as usual. Once at least one word is listed, the
+  language model first writes a
   short (~30-word) comma-separated list of keywords describing the theme of
   your words, deliberately mixing word types (nouns, verbs, adjectives,
   adverbs). The generator then runs a separate vector search for *each
@@ -162,10 +170,40 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   every keyword list the model produced, the flat set of keywords actually
   searched, and the resulting word list are written to a `LOG_THEME/` log
   file.
+- **Mots Défi (personnalisation) / Challenge Words (customization)**
+  (`#generate-challenge-panel`) — right next to the Thématique field, a
+  smaller cousin of the Interactive mode panel of the same name (see
+  "Interactive authoring mode" below): type a word and click **+** (or
+  just type a space, comma, or other punctuation right after it) to add
+  it to the list shown underneath (click **−** next to a listed word to
+  remove it — the list only appears once it holds at least one word, and
+  grows or shrinks with it). Every word listed here is given priority over
+  the theme glossary and the ordinary dictionary wherever it fits a slot
+  once generation starts — the exact same mechanic the Interactive mode
+  panel's own **Suivant / Next** button already applies one word at a
+  time, including accepting a word absent from the dictionary. If no slot
+  of the right size already exists for one of these words (or a theme
+  word), the generator will even try reshaping the black-cell layout
+  itself to make room for it before falling back to the ordinary
+  dictionary — the same reshaping **Suivant / Next** tries too (see
+  "Interactive authoring mode" below) — but it still isn't a hard
+  guarantee: a word that doesn't fit anywhere the black-cell layout
+  allows, even after that adjustment, may still be left out of the
+  finished grid. The words are
+  saved with the grid and restored into both this panel and the
+  Interactive mode panel if the grid is later reopened for editing — the
+  same as the Thématique field above — though, unlike Thématique, never
+  shown anywhere in the Library, since they're meant to stay hidden
+  answers to spots you chose yourself.
 - **Générer la grille / Generate** (`#generate-btn`) — starts generation
   with the settings above. While a generation is running, this and every
   field above stay usable for the *next* generation, but see "While a
-  grid is generating" below for what appears meanwhile.
+  grid is generating" below for what appears meanwhile. If the
+  Dictionnaire panel is open — typically still showing from an
+  Interactive authoring session, which opens it automatically (see
+  "Interactive authoring mode" below) — clicking this button closes it,
+  since its content no longer applies once you leave that session for a
+  fresh automatic generation.
 
 ## Action buttons
 
@@ -415,8 +453,13 @@ A dedicated panel (`#attempt-preview`, `frontend/static/script.js`,
 moving snapshot of the search: up to several small preview grids per
 step (one per attempt running in parallel), each annotated with how
 full/black it currently is and, when something went wrong on that
-attempt, which cells are involved. A green outline marks whichever
-preview is currently considered the best candidate. **⏮ ◀ ▶ ⏭** buttons
+attempt, which cells are involved. A word coming from the theme
+glossary is shown in bold magenta letters; a word coming from the "Mots
+Défi (personnalisation)" list is shown in bold green letters instead —
+the same green already used for a challenge word on the Interactive
+mode grid (see "Mots Défi (personnalisation) / Challenge Words" below).
+A green outline marks whichever preview is currently considered the
+best candidate. **⏮ ◀ ▶ ⏭** buttons
 (`showFirstPreview`/`showPreviousPreview`/`showNextPreview`/
 `catchUpPreviewToEnd`) and a "Étape X/Y" position indicator
 (`#attempt-preview-position`, `renderPreviewPosition`) let a player step
@@ -516,18 +559,30 @@ to the left of **Mots / Words** to open it as an overlay panel.
 - Place your letters in the grid. The Space key adds or removes a black
   cell.
 - The **Suivant / Next** button automatically generates a new word (taking
-  any theme glossary into account). The **Précédent / Back** button undoes
-  a step (for example so Next generates a different word).
+  any "Mots Défi (personnalisation)" list into account first, then any
+  theme glossary — see "Mots Défi (personnalisation) / Challenge Words
+  (customization)" below). The **Précédent / Back** button undoes a step
+  (for example so Next generates a different word).
+- The **Mots Défi (personnalisation) / Challenge Words (customization)**
+  panel, to the right of the grid, lets you list words you want to force
+  into the grid: they are shown first (in green) by the **Mots / Words**,
+  **Croisés / Crossings**, **Début / Start** and **Fin / End** buttons, and
+  **Suivant / Next** also places them first — even when the word isn't in
+  the dictionary.
 - Use the tools to help you: **Dictionnaire / Dictionary**, **Paraphraseur
   / Paraphraser**, the **Mots / Words** button lists the words compatible
   with the selected slot, and **Croisés / Crossings** lists, for the
   selected cell, every letter that fits a real word in BOTH directions at
-  once, together with the matching words in each direction.
+  once, together with the matching words in each direction. **Début /
+  Start** and **Fin / End** list dictionary words that can begin or end the
+  selected slot, even shorter than its full length.
 - Two buttons clean up the grid's impossible zones, with or without
   removing black cells.
 - The **Impossibles / Impossible** button identifies zones where no word
   fits any more. **Vérifier / Check** makes sure every word is really in
-  the dictionary and has a definition.
+  the dictionary and has a definition. A word from the "Mots Défi
+  (personnalisation)" list is always considered part of the dictionary
+  for both of these checks, whether or not it's a real dictionary entry.
 - The **Définitions / Definitions** button automatically generates the
   missing definitions.
 - The **Proposer une définition / Suggest a definition** and **Proposer un
@@ -575,7 +630,10 @@ reading `theme` off the started/resumed session's own result) rather
 than leaving it at whatever it previously held or blank — so a themed
 grid keeps steering both "Suggest a definition"/"Suggest a title" (see
 below) toward its own theme once you start editing it, with no need to
-retype it by hand.
+retype it by hand. The same entry reads back the grid's own "Mots Défi"
+list into the "Mots Défi (personnalisation)" mini-form at the top of the
+page (see above), alongside its own restore into the Interactive mode
+panel further below.
 
 Two small percentages sit above the grid throughout the session
 (`#interactive-cell-stats`, `renderInteractiveCellStats`), stacked one
@@ -634,6 +692,80 @@ real letter. Both update after every edit.
   so keeps the grid valid. Results are sorted shortest first, then
   alphabetically. Useful when no word fills the whole slot but part of it
   still can.
+- **Mots Défi (personnalisation) / Challenge Words (customization)**
+  (`#interactive-challenge-panel`, a panel of its own flush against the
+  right edge of the page's whole
+  central content column — not just the grid area itself — sized to a
+  quarter of that column's own width and stretched to the height of the
+  grid+Précédent/Suivant group beside it) — a free-form list of words
+  you want to force into the grid. Type one (up to 15 letters) and click
+  the **+** button to add it (or just type a space, comma, or other
+  punctuation right after it); a **−** button next to each listed word
+  removes it. Each word is shown, saved, and sent to the server exactly
+  as typed — accents and case included, the same way a word appears in a
+  dictionary — never reduced to the grid's own bare-uppercase spelling in
+  the list itself; that conversion only ever happens on the fly, wherever
+  a word is actually being compared against or written into the grid, so
+  typing "randonnées" keeps its two accents everywhere they can still be
+  seen. Whenever "Mots", "Croisés", "Début", or "Fin" list
+  candidate words, any listed challenge word that actually fits there is
+  shown first and in green, ahead of the theme glossary's own magenta
+  words and the other, plain dictionary words — click it to place it
+  exactly like any other listed word (`challengeWordsForCells`/
+  `challengeWordsForBoundary`, purely client-side, no server round trip
+  for this particular lookup). Within the "Mots Défi" list itself, each
+  word shows in green once it is genuinely present in the grid (an exact
+  match on some full across or down word, `gridContainsWord`) and in
+  black otherwise; clicking a word there inserts it directly into the
+  grid starting at the currently selected cell, along the current
+  Across/Down direction, overwriting any letter or black cell already in
+  its way — an authoritative placement, unlike every other word list on
+  this page, which never checks whether it actually fits first
+  (`insertInteractiveChallengeWord`). The list itself IS sent to the
+  server on every **Suivant** click: the automatically placed word is
+  drawn from it first whenever one still fits the chosen slot (matching
+  length and whatever letters are already fixed by a crossing word),
+  ahead of the theme glossary — and a challenge word never has to be a
+  genuine dictionary entry to be picked this way: a real surname or any
+  other word the loaded lexicon doesn't happen to contain can still be
+  placed automatically, not just by clicking it directly. **Suivant**
+  never settles on a challenge word that would leave any other still-open
+  word impossible to complete — not only one it directly crosses, but
+  also a completely separate one elsewhere in the grid that happened to
+  need that exact same word (common with a small "Mots Défi"/theme list):
+  it tries another listed word for the same slot first, or the same word
+  at a different open slot elsewhere in the grid, before giving up and
+  placing an ordinary word instead (`interactive_place_word`,
+  `_word_breaks_open_slot`) — it only ever gives up on placing any
+  challenge word this click once every such combination has genuinely
+  been tried. That same fallback pick (theme glossary first, then the
+  plain dictionary) is itself just as careful: among whichever list
+  applies, **Suivant** prefers a word that doesn't leave any other
+  still-open word impossible to complete, only settling for one that does
+  once nothing safer is available in that list. Before picking
+  a slot, **Suivant** also tries reshaping the black-cell layout itself —
+  nudging a black cell over to carve out a right-sized empty slot,
+  without ever disturbing an already-placed letter — for any challenge or
+  theme word with no matching-length slot anywhere yet, the same
+  best-effort mechanism automatic generation uses (see "Mots Défi
+  (personnalisation) / Challenge Words (customization)" above); a word
+  that still doesn't fit anywhere this allows simply waits for a later
+  click. A word from this list is never flagged as invalid (a red cell —
+  see "Impossibles"/"Vérifier" below), whether it isn't a real dictionary
+  entry or how it got into the grid — via "Suivant", a direct click, or
+  typed by hand — it's considered part of the dictionary for that check
+  as long as it's on the list; a non-dictionary word typed by hand
+  without being added to the list is still flagged the usual way. On the
+  grid itself, a word that
+  "Suivant" drew automatically from this list is shown in bold green
+  letters, and one drawn from the theme glossary instead in bold magenta
+  letters — the same colors as the attempt-preview grids shown while an
+  automatic generation runs (see "While a grid is generating" above); a
+  word typed in by hand, or clicked directly from a word list, is never
+  colored this way. The list is also saved with the
+  rest of the draft on every autosave/**Sauvegarder** and restored when
+  reopening that draft (via **Créations**) or reloading the page
+  mid-session.
 - **Nettoyer / Clean up** (`#interactive-clean-btn`, `POST /api/
   interactive/clean`) — for every emplacement that has become impossible
   (no real dictionary word fits its already-placed letters any more, or
@@ -641,7 +773,10 @@ real letter. Both update after every edit.
   word), removes every word crossing it and clears its own letters too,
   falling back to turning one of its cells black when removing words
   alone wouldn't be enough. Leaves the grid unchanged if nothing is
-  actually impossible. **Nettoyer (+noires) / Clean up (+black cells)**
+  actually impossible. A word from the "Mots Défi (personnalisation)"
+  list is considered part of the dictionary for this check — it is never
+  removed by "Nettoyer", even if it isn't a real dictionary entry.
+  **Nettoyer (+noires) / Clean up (+black cells)**
   (`#interactive-clean-deep-btn`) does the same, then additionally tries
   removing every black cell in the grid one by one, keeping a removal
   only when it doesn't make anything worse.
@@ -815,6 +950,17 @@ generator actively prefers a candidate that touches no other black cell
 at all, only accepting one right next to another as a genuine last
 resort, and never at all for the very first grid of a whole generation.
 
+Once this fresh pattern is in place but before any word has actually been
+placed into it, the generator makes one more pass specifically for any
+"Mots Défi (personnalisation)" / "Challenge Words" or theme word that has
+no slot of its own length anywhere yet: it looks for a black cell that
+can be nudged over to the far side of that word instead of its current
+spot — carving out a right-sized empty slot — as long as doing so keeps
+the grid's own hard rules intact and never disturbs a word that's already
+been placed. This is a best-effort adjustment, not a guarantee: a word
+too long for any nearby gap, or one for which no such move keeps the grid
+valid, simply falls back to the ordinary chances described below.
+
 **Choosing which word slot to fill next.** Once a black-cell pattern is
 accepted, every run of at least 2 white cells (across or down) becomes a
 slot that needs a real dictionary word. Rather than filling slots in a
@@ -822,7 +968,11 @@ fixed reading order, the generator picks the next slot through several
 layers of priority: first it leans, with some randomness, toward
 whichever of "across" or "down" still has more open slots, so the two
 categories fill in roughly together instead of one being finished before
-the other even starts; within that category, a slot with fewer than 3
+the other even starts; if any word from the "Mots Défi (personnalisation)"
+/ "Challenge Words" field still fits somewhere in that category, the
+choice narrows to those slots first, ahead of everything else described
+below — the same priority the Interactive mode panel's own "Suivant" /
+"Next" button gives it one word at a time; within that category, a slot with fewer than 3
 real dictionary candidates left is tackled first, on the theory that
 finishing it with a genuine word now is better than letting a later
 cleanup pass shorten it with a black cell instead; among what's left, a
@@ -867,7 +1017,24 @@ direct neighbors can possibly be affected by one word being placed), and
 if that leaves any of them with no real dictionary word left at all, the
 candidate is discarded right away and the next one is tried instead — no
 time is wasted descending any further into a branch that's already
-doomed. If none of a slot's own candidates work out, the whole attempt to
+doomed (a neighboring slot left with no real dictionary word doesn't
+count as broken, though, if a still-unplaced "Mots Défi (personnalisation)"
+/ "Challenge Words" entry could still fill it in turn — see that panel's
+own entry above). This same immediate-discard check applies to every
+candidate, whichever of the three tiers it comes from — a challenge word,
+a word from the "Thématique" glossary, or a plain dictionary word — but
+what happens once a tier keeps failing this way differs: a challenge word
+or a theme word that keeps breaking crossings is set aside for the rest
+of the current attempt once it has failed too many times, freeing the
+rest of that attempt's own search budget for the rest of the grid (a
+fresh attempt gets a fresh chance at the same word); the plain dictionary
+has no further tier to fall back to, so once a given slot itself has
+racked up too many such failures, the generator stops insisting on a
+safe candidate there and accepts the next one anyway, deliberately
+leaving a known trouble spot behind rather than exhaustively searching
+for a perfect fit — the same cross-cycle cleanup that already handles a
+whole failed attempt (see below) fixes this kind of spot up on a later
+cycle too. If none of a slot's own candidates work out, the whole attempt to
 fill that particular slot fails, and whichever slot was chosen just
 before it gets its own placed word undone so a different candidate can
 be tried there instead — this "undo and try something else" behavior can

@@ -56,6 +56,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from collections import Counter, defaultdict
 
 BLACK = "#"
@@ -1810,6 +1811,30 @@ class DualSet:
         return self.for_direction(slot_direction(cells))
 
 
+def challenge_word_grid_form(word):
+    """Bare, accent-stripped, uppercase grid form of one "Mots Défi" entry
+    — the wordlist's own MOT-column convention (see `data_builder/build_
+    wordlist_freq.py`'s `strip_accents`), the only form a grid cell (or
+    `Filler.challenge_words`) ever holds. The author's own typed spelling
+    is kept verbatim everywhere else (the web UI's own list,
+    `InteractiveStepRequest.challenge_words`, the `GRID_WORK` record) —
+    this is derived from it on demand, at the point `backend/app.py`'s
+    `interactive_step` builds the frozenset `interactive_place_word`
+    actually searches with, never stored itself. NFD-normalizing before
+    dropping combining marks keeps each base letter (`unicodedata.
+    combining`) rather than deleting the accented character outright, at
+    the user's explicit request: an earlier, JS-side-only version of this
+    same conversion used a bare `[^A-Z]` filter on the *typed* value
+    itself, which discarded an accented letter wholesale instead of
+    folding it to its base form — "randonnées" was silently stored (and
+    therefore ever matched) as "RANDONNES", not "RANDONNEES"."""
+    stripped = "".join(
+        c for c in unicodedata.normalize("NFKD", word)
+        if not unicodedata.combining(c)
+    )
+    return re.sub(r"[^A-Z]", "", stripped.upper())
+
+
 def _priority_words_for(priority_words, cells):
     """The frozenset of priority theme words applicable to slot `cells`'s
     own direction — see `generate_grid`'s `priority_words`. On a bilingual
@@ -2187,12 +2212,53 @@ SLOT_SELECTION_WINDOW_SIZE = 10
 # `selection_pool`), with no numeric relationship between them.
 SLOT_SELECTION_REFINE_FRACTION = 1 / 2
 
+# Fraction of the search's own `deadline_checks` budget one candidate
+# tier may consume in failed placement attempts (each one a genuine
+# crossing-slot break, see `Filler._backtrack`'s `crossing_broken` check)
+# before that tier gives up and falls through to the next one. Shared by
+# all three candidate tiers `_backtrack` tries in order for a slot —
+# "Mots Défi" (challenge words), the theme glossary (`priority_words`),
+# then the general dictionary — each with its own budget, counted
+# separately:
+#   - A challenge word or a theme word that keeps breaking crossings is
+#     abandoned for the rest of THIS attempt once its own share of the
+#     budget is spent: placing it is never attempted again (it stops
+#     being injected into a slot's candidate list — and, for a challenge
+#     word, stops exempting a crossing slot's dry domain too), letting
+#     the search spend the rest of its own budget on the remainder of
+#     the grid instead of chasing one particularly hard-to-place word.
+#     A challenge word is trusted at face value (`Filler._challenge_
+#     word_fits`, never checked against the dictionary), so nothing else
+#     ever bounds how many crossing slots it might keep breaking on a
+#     large, heavily-constrained grid; a theme word, though a real
+#     dictionary entry, can just as easily be geometrically unplaceable
+#     wherever it still fits — without this cap, either kind could
+#     otherwise eat into the whole attempt's budget one failed crossing
+#     at a time.
+#   - The general dictionary has no further tier to fall back to: once a
+#     given SLOT's own share of the budget is spent on candidates that
+#     all broke some crossing, `_backtrack` stops insisting and accepts
+#     the next candidate even though it breaks one — deliberately
+#     creating a known "impossible" zone rather than paying for
+#     exhaustive backtracking first. The cross-palier retry machinery
+#     (`_clean_blocked_slots`/`_build_retry_seed`) already repairs this
+#     kind of zone on the next palier regardless of how it arose.
+# Mirrors `UNFILLABLE_ABANDON_FRACTION`'s own shape (a fraction of a
+# whole-search resource, here `deadline_checks` rather than white-cell
+# count) — `interactive_place_word` applies the same principle to its own
+# challenge-word combo search, with a differently-shaped budget (a
+# combination count rather than a check count, see its own docstring);
+# its theme/general-dictionary fallback instead scans every available
+# candidate at its one target slot exhaustively (see its own docstring
+# for why no separate budget is needed there).
+FALLBACK_PHASE_BUDGET_FRACTION = 0.10
+
 
 class Filler:
     def __init__(self, slots, index, rng, forced_letters=None, letter_scores=None,
                  excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
                  attempt_done_event=None, on_new_best=None, locked_letters=None,
-                 priority_words=None):
+                 priority_words=None, challenge_words=None):
         self.slots = slots
         self.index = index
         self.rng = rng
@@ -2205,6 +2271,56 @@ class Filler:
         # monolingual grid, a DualSet (one glossary per language) on a
         # bilingual grid; empty = no theme, no change to the order.
         self.priority_words = priority_words or frozenset()
+        # "Mots Défi" (web UI "Interactif" mode only, see backend/app.py's
+        # `POST /api/interactive/step`), at the user's explicit request: a
+        # free-form list of words the author wants to force into the grid,
+        # given priority over the theme glossary above (see
+        # `_select_target_slot` level 2 and `interactive_place_word`'s own
+        # word draw). Always a plain frozenset — unlike `priority_words`,
+        # never a DualSet: a challenge word is typed by the author with no
+        # language attached, so it is checked against a slot purely
+        # geometrically (`_challenge_word_fits`: matching length + already-
+        # known letters), never against `_domain(i)`/the loaded lexicon —
+        # at the user's own explicit follow-up request, "modifier le code
+        # pour qu'il accepte de placer un Mot Défi même s'il ne fait pas
+        # partie du dictionnaire (vérité utilisateur)": a real surname (or
+        # any other non-dictionary word) typed here must still be place-
+        # able by "Suivant", not silently ignored just because the lexicon
+        # doesn't happen to contain it. `generate_grid`'s own automatic CSP
+        # fill (`_backtrack`/`try_fill`) never supplies this parameter, so
+        # it always stays empty there — every check below is then a
+        # guaranteed no-op, exactly like an empty `priority_words`.
+        self.challenge_words = challenge_words or frozenset()
+        # Per-attempt bookkeeping for the crossing-safety retry mechanism
+        # described at FALLBACK_PHASE_BUDGET_FRACTION: how many
+        # times each "Mots Défi" word has already broken a crossing slot
+        # in THIS attempt (_challenge_attempt_counts), and which ones have
+        # consequently been given up on for the rest of it
+        # (_challenge_abandoned, checked by _active_challenge_words()).
+        # _challenge_word_budget (the per-word cap itself, a fraction of
+        # deadline_checks) is only known once solve() receives that
+        # argument, so it stays None here and is resolved lazily there.
+        self._challenge_attempt_counts = Counter()
+        self._challenge_abandoned = set()
+        self._challenge_word_budget = None
+        # Same shape as the three fields right above, applied to the
+        # theme glossary (self.priority_words) instead of challenge
+        # words — see FALLBACK_PHASE_BUDGET_FRACTION and
+        # _active_priority_words_for.
+        self._theme_attempt_counts = Counter()
+        self._theme_abandoned = set()
+        self._theme_word_budget = None
+        # Same principle once more, but for the general dictionary tier,
+        # which has no word identity of its own to track (any candidate
+        # from the loaded lexicon is eligible) — keyed by SLOT index
+        # instead of by word: once a given slot's own share of the budget
+        # has been spent on candidates that all broke some crossing,
+        # `_backtrack` stops insisting on a crossing-safe candidate for
+        # that slot and accepts the next one anyway (see
+        # FALLBACK_PHASE_BUDGET_FRACTION).
+        self._domain_break_counts = Counter()
+        self._domain_break_abandoned = set()
+        self._domain_word_budget = None
         # Signal shared between the parallel attempts of the same batch,
         # see its own definition (`_worker_batch_abandoned_event`) — set by
         # any one of them the moment it abandons itself (see below),
@@ -2348,7 +2464,7 @@ class Filler:
         self.excluded_slots = excluded_slots if excluded_slots is not None else set()
         # Slots that cross (share at least one cell with) a slot in
         # `excluded_slots` — new selection rule, at the user's explicit
-        # request, taking priority over `_backtrack`'s own 7 levels: never
+        # request, taking priority over `_backtrack`'s own 8 levels: never
         # try to fill such a slot. A word placed there would be removed
         # again by the next cleanup anyway (`_build_retry_seed`, which
         # removes any word directly crossing an impossible slot) if it was
@@ -2439,13 +2555,135 @@ class Filler:
                 return ()
         return result
 
+    def _challenge_word_fits(self, i, word):
+        """True if `word` (a "Mots Défi" entry — see self.challenge_words'
+        own docstring) can legally go into slot i RIGHT NOW, at the user's
+        explicit request: "modifier le code pour qu'il accepte de placer un
+        Mot Défi même si il ne fait pas partie du dictionnaire (vérité
+        utilisateur)" — a challenge word is trusted at face value and never
+        required to be a real dictionary entry, unlike an ordinary
+        candidate (which must come from self._domain(i), i.e. the loaded
+        lexicon). Only two things are actually checked: the word's own
+        length must match the slot's, and it must agree, letter for
+        letter, with every cell of the slot already determined by a REAL
+        fact — a crossing slot already assigned during this same attempt,
+        or a letter locked from a previous palier (self.locked_letters) —
+        the same "fait-acquis" set _domain(i, ignore_forced=True) itself
+        constrains against, gathered here directly instead of filtered
+        through the dictionary. A mere statistical seed (self.forced_
+        letters) is deliberately never treated as a real constraint here,
+        same reasoning as _has_known_letter/_placed_letter_count: it's only
+        an unverified guess, and a "Mots Défi" word — the author's own
+        explicit intent — must win over it, never be blocked by it.
+        Placing a word this way can still make a CROSSING slot impossible
+        (no real dictionary word left matching the letters it now
+        imposes) — an accepted, unavoidable consequence of trusting a
+        non-dictionary word at all, already true of this panel's own
+        direct click-to-insert (script.js's insertInteractiveChallengeWord,
+        "never checks target cells against a real slot/dictionary fit
+        first") and still surfaced by this file's own diagnostics
+        (_interactive_fill_diagnostics/_invalid_fully_known_indices still
+        flag a fully-filled CROSSING slot spelling a non-word this way).
+        The slot i itself never gets flagged this way once its own
+        content is exactly this challenge word — a "Mots Défi" word is
+        considered part of the dictionary for that check, at the user's
+        explicit request (see `_challenge_word_cells`'s own `exempt`
+        role in `_invalid_fully_known_indices`)."""
+        cells = self.slots[i]
+        if len(word) != len(cells):
+            return False
+        for pos, cell in enumerate(cells):
+            letter = None
+            for j, other_pos in self.cell_to_slots[cell]:
+                if j != i and self.assignment[j] is not None:
+                    letter = self.assignment[j][other_pos]
+                    break
+            if letter is None:
+                letter = self.locked_letters.get(cell)
+            if letter is not None and word[pos] != letter:
+                return False
+        return True
+
+    def _active_challenge_words(self):
+        """`self.challenge_words` minus every word already given up on for
+        this attempt (`self._challenge_abandoned`, see FALLBACK_
+        PHASE_BUDGET_FRACTION) — the set still eligible to be offered as a
+        candidate, to restrict slot selection (`_select_target_slot`
+        level 2), or to exempt a crossing slot's dry dictionary domain
+        from counting as broken (`_backtrack`'s own domain check and
+        `crossing_broken` check). Called instead of reading `self.
+        challenge_words` directly everywhere one of those three things is
+        decided, so an abandoned word stops influencing the search the
+        moment it's given up, exactly as if it had never been typed."""
+        if not self.challenge_words or not self._challenge_abandoned:
+            return self.challenge_words
+        return self.challenge_words - self._challenge_abandoned
+
+    def _register_challenge_word_break(self, word):
+        """Counts one more crossing-slot break caused by trying to place
+        `word` (see FALLBACK_PHASE_BUDGET_FRACTION) and abandons it
+        for the rest of this attempt once its own share of the attempt's
+        `deadline_checks` budget is used up. `self._challenge_word_budget`
+        is always set by the time this is called (solve() resolves it
+        before the search ever starts) whenever `self.challenge_words` is
+        non-empty, which is the only case this is ever called from."""
+        count = self._challenge_attempt_counts[word] + 1
+        self._challenge_attempt_counts[word] = count
+        if count >= self._challenge_word_budget:
+            self._challenge_abandoned.add(word)
+
+    def _active_priority_words_for(self, cells):
+        """`_priority_words_for(self.priority_words, cells)` minus every
+        theme word already given up on for this attempt (`self.
+        _theme_abandoned`, see FALLBACK_PHASE_BUDGET_FRACTION) — the theme-
+        glossary counterpart of `_active_challenge_words`, used the same
+        way by `_select_target_slot` (level 5) and `_backtrack`'s own
+        theme front-loading, so an abandoned theme word stops being
+        preferred the moment it's given up."""
+        pw = _priority_words_for(self.priority_words, cells)
+        if not pw or not self._theme_abandoned:
+            return pw
+        return pw - self._theme_abandoned
+
+    def _register_theme_word_break(self, word):
+        """Theme-glossary counterpart of `_register_challenge_word_break`
+        (see FALLBACK_PHASE_BUDGET_FRACTION): counts one more crossing-slot
+        break caused by trying to place theme word `word`, abandoning it
+        for the rest of this attempt once its own share of the budget is
+        used up. `self._theme_word_budget` is always set by the time this
+        is called (solve() resolves it whenever `self.priority_words` is
+        non-empty, the only case this is ever called from)."""
+        count = self._theme_attempt_counts[word] + 1
+        self._theme_attempt_counts[word] = count
+        if count >= self._theme_word_budget:
+            self._theme_abandoned.add(word)
+
+    def _register_domain_break(self, slot_index):
+        """General-dictionary counterpart of `_register_challenge_word_
+        break`/`_register_theme_word_break` (see FALLBACK_PHASE_BUDGET_
+        FRACTION): counts one more crossing-slot break caused by trying an
+        ordinary candidate at `slot_index`, keyed by the SLOT rather than
+        by word (an ordinary candidate has no identity worth tracking on
+        its own — any dictionary word is as good as another). Once this
+        slot's own share of the budget is used up, `_backtrack` stops
+        insisting on a crossing-safe candidate for it and accepts the next
+        one anyway — see its own `domain_abandoned` check.
+        `self._domain_word_budget` is always set by the time this is
+        called (solve() resolves it unconditionally, unlike the challenge/
+        theme budgets, since the general dictionary is used on every
+        grid)."""
+        count = self._domain_break_counts[slot_index] + 1
+        self._domain_break_counts[slot_index] = count
+        if count >= self._domain_word_budget:
+            self._domain_break_abandoned.add(slot_index)
+
     def _placed_letter_count(self, i):
         """Number of cells of slot i already determined by a real letter —
         a crossing word already assigned during this same attempt, or a
         letter locked from a previous palier (self.locked_letters). Same
         fait-acquis/mere-guess distinction as _has_known_letter
         (self.forced_letters, a mere statistical seed, never counts here)
-        — see its own docstring. Used by _backtrack to re-sort level 5's
+        — see its own docstring. Used by _backtrack to re-sort level 6's
         own selection window (the most letters already placed first), at
         the user's explicit request."""
         count = 0
@@ -2486,7 +2724,7 @@ class Filler:
         no fill option anymore, so it's not counted here, same exclusion
         as _placed_letter_count/_has_known_letter.
 
-        Used by _backtrack as level 5's final tie-break criterion (see its
+        Used by _backtrack as level 8's final tie-break criterion (see its
         own docstring), at the user's explicit request: favors the slot
         whose own zone statistically offers the most fill options — that
         is, for every still-free cell, several different real words fitting
@@ -2577,12 +2815,26 @@ class Filler:
         excluding a slot never changes any other slot's own computed
         domain — `_domain` never consults `excluded_slots` at all, it only
         determines which ones `_backtrack` is allowed to select."""
+        # No word can have been abandoned yet (see _active_challenge_words):
+        # this method only ever runs once, before solve()/_backtrack ever
+        # gets a chance to break a crossing slot — resolved once here
+        # regardless, for consistency with every other caller of this
+        # method rather than reading self.challenge_words directly.
+        active_challenge_words = self._active_challenge_words()
         newly_excluded = {
             i for i in range(len(self.slots))
             if self.assignment[i] is None
             and i not in self.excluded_slots
             and i not in self._crossing_excluded_slots
             and all(w in self.used_words for w in self._domain(i))
+            # Same "Mots Défi" exemption as _backtrack's own domain check
+            # (see its comment): a slot with a dry dictionary domain must
+            # not be excluded here, permanently, before the search even
+            # starts, if an unused challenge word still fits it.
+            and not (active_challenge_words and any(
+                w not in self.used_words and self._challenge_word_fits(i, w)
+                for w in active_challenge_words
+            ))
         }
         if newly_excluded:
             self.excluded_slots = self.excluded_slots | newly_excluded
@@ -2590,6 +2842,25 @@ class Filler:
         return newly_excluded
 
     def solve(self, deadline_checks):
+        # Resolved here (once, from the same `deadline_checks` every
+        # recursive `_backtrack` call receives unchanged) rather than in
+        # __init__, which never sees this search's own budget — see
+        # FALLBACK_PHASE_BUDGET_FRACTION. `max(1, ...)` guarantees a word/
+        # slot is never abandoned before even one genuine attempt.
+        if self.challenge_words:
+            self._challenge_word_budget = max(
+                1, round(FALLBACK_PHASE_BUDGET_FRACTION * deadline_checks)
+            )
+        if self.priority_words:
+            self._theme_word_budget = max(
+                1, round(FALLBACK_PHASE_BUDGET_FRACTION * deadline_checks)
+            )
+        # Unlike the two budgets above, always resolved: the general
+        # dictionary is used on every grid, themed or not, challenge-word
+        # or not.
+        self._domain_word_budget = max(
+            1, round(FALLBACK_PHASE_BUDGET_FRACTION * deadline_checks)
+        )
         return self._backtrack(deadline_checks)
 
     def impossible_zone_slots(self):
@@ -2640,10 +2911,24 @@ class Filler:
         saved = self.assignment
         self.assignment = self.best_assignment
         used_at_best = {w for w in self.best_assignment if w is not None}
+        # A slot whose real dictionary domain is entirely used elsewhere
+        # is still not a genuine dead end as long as an unused, still-
+        # active "Mots Défi" word could legally go there instead (see
+        # `Filler._backtrack`'s own identical exemption during the actual
+        # search) — at the user's explicit request: "Les Mots Défi
+        # doivent être considérés comme faisant partie du dictionnaire,"
+        # so this failed-attempt preview never shows such a slot in red
+        # either. `_challenge_word_fits` reads crossing letters off
+        # `self.assignment`, already swapped to `best_assignment` above.
+        active_challenge_words = self._active_challenge_words()
         result = [
             i for i, word in enumerate(self.best_assignment)
             if word is None
             and all(w in used_at_best for w in self._domain(i, ignore_forced=True))
+            and not any(
+                cw not in used_at_best and self._challenge_word_fits(i, cw)
+                for cw in active_challenge_words
+            )
         ]
         self.assignment = saved
         return result
@@ -2669,14 +2954,14 @@ class Filler:
         """Chooses which slot to fill next among `unassigned` (already
         guaranteed non-empty, each with at least one genuinely available
         candidate — see the domain check right before this call, in
-        `_backtrack`), via the 7-level cascade documented below.
+        `_backtrack`), via the 8-level cascade documented below.
 
         Factored out of `_backtrack` to be reused as-is by `interactive_
         place_word` (the web UI's "Interactif" mode), at the user's
         explicit request — a hand-written duplicate of this logic used to
         live there (a plain MRV: the smallest domain, then an already
-        partially-known slot, then random), with neither level 2's length
-        threshold (which excludes 2-3-letter slots) nor level 5's
+        partially-known slot, then random), with neither level 3's length
+        threshold (which excludes 2-3-letter slots) nor level 6's
         geometric score (which favors the top-left corner) — which made
         interactive fill start with 2-letter slots scattered across the
         grid instead of following the same rules as automatic generation.
@@ -2684,7 +2969,7 @@ class Filler:
         recomputing them) since `interactive_place_word` has already built
         them in a slightly different shape (`viable`, filtered by `used_
         words`) for its own use."""
-        # 7-level selection rule, at the user's explicit request (MRV was
+        # 8-level selection rule, at the user's explicit request (MRV was
         # removed — see the comment further up, before the Filler class,
         # for why):
         # 1. first alternate across/down: draw the category (across or
@@ -2695,28 +2980,52 @@ class Filler:
         #    chosen than the other, which naturally tends to alternate/
         #    balance the two as the fill progresses without fixing a
         #    strict order;
-        # 2. **New, at the user's explicit request, taking priority over
-        #    the domain criterion below**: among the slots of the drawn
-        #    category that are **4 letters and longer** (at the user's
-        #    explicit request — a 2-3-letter slot has a naturally
-        #    restricted vocabulary, this priority brings nothing there),
-        #    if at least one has a domain (`domains[i]`, already computed
-        #    right above) with strictly fewer than `PREFILL_MIN_WORD_COUNT`
-        #    candidate words — the same threshold pre-fill's own step 1
-        #    uses to decide a slot needs a black cell — the choice is
-        #    restricted to those slots only. Goal: try to resolve these
-        #    fragile slots with a real word while the search is still
-        #    making progress, before a future cleanup palier judges them
-        #    insufficient and adds a black cell to fix them (see
-        #    `_prefill_unfillable_slots`, step 1) — a word genuinely placed
-        #    here avoids that black cell. First tried with a different
-        #    criterion ("a single still-empty cell"), replaced by this one
-        #    at the user's explicit request, which directly targets the
-        #    same threshold pre-fill uses rather than a geometric proxy.
-        #    If no slot of the category is in this case, this level
-        #    changes nothing: level 3 then applies to the whole category,
-        #    exactly as before this level was added;
-        # 3. **New, at the user's explicit request**: among the slots of
+        # 2. **"Mots Défi", at the user's explicit request, taking priority
+        #    over every level below**: if at
+        #    least one slot of the drawn category has a not-yet-used, not
+        #    yet abandoned "Mots Défi" word (`_active_challenge_words()` —
+        #    empty, hence a guaranteed no-op, whenever no challenge list
+        #    was supplied at all) still fitting its known letters
+        #    (`_challenge_word_fits` — length + already-known letters
+        #    only, deliberately NOT required to be a genuine dictionary
+        #    entry: a "Mots Défi" word is trusted at face value, at the
+        #    user's own explicit follow-up request "modifier le code pour
+        #    qu'il accepte de placer un Mot Défi même s'il ne fait pas
+        #    partie du dictionnaire"), the choice is restricted to those
+        #    slots outright, ahead of every criterion below — moved here,
+        #    right after the category draw, after live testing showed the
+        #    previous position (after levels 3/4 below) left it starved in
+        #    practice: a well-advanced grid almost always has at least one
+        #    slot with fewer than `PREFILL_MIN_WORD_COUNT` candidates in
+        #    whichever direction gets drawn, and that level, then applied
+        #    BEFORE this one, could keep excluding every "Mots Défi"-
+        #    fitting slot indefinitely, for reasons having nothing to do
+        #    with the challenge word itself. If no slot of the category is
+        #    placeable this way, this level changes nothing: level 3 then
+        #    applies to the whole category, exactly as before this level
+        #    existed;
+        # 3. **New, at the user's explicit request, taking priority over
+        #    the domain criterion below**: among the slots of the group
+        #    obtained at the previous level that are **4 letters and
+        #    longer** (at the user's explicit request — a 2-3-letter slot
+        #    has a naturally restricted vocabulary, this priority brings
+        #    nothing there), if at least one has a domain (`domains[i]`,
+        #    already computed right above) with strictly fewer than
+        #    `PREFILL_MIN_WORD_COUNT` candidate words — the same threshold
+        #    pre-fill's own step 1 uses to decide a slot needs a black
+        #    cell — the choice is restricted to those slots only. Goal:
+        #    try to resolve these fragile slots with a real word while the
+        #    search is still making progress, before a future cleanup
+        #    palier judges them insufficient and adds a black cell to fix
+        #    them (see `_prefill_unfillable_slots`, step 1) — a word
+        #    genuinely placed here avoids that black cell. First tried
+        #    with a different criterion ("a single still-empty cell"),
+        #    replaced by this one at the user's explicit request, which
+        #    directly targets the same threshold pre-fill uses rather than
+        #    a geometric proxy. If no slot of the group is in this case,
+        #    this level changes nothing: level 4 then applies to the whole
+        #    group, exactly as before this level was added;
+        # 4. **New, at the user's explicit request**: among the slots of
         #    the group obtained at the previous level, if at least one
         #    already has at least one cell determined by a real letter
         #    (`_has_known_letter` — an already-assigned crossing word, or a
@@ -2726,24 +3035,24 @@ class Filler:
         #    already-partially-known one remains — finish an already-
         #    started slot rather than opening a new one. If every slot of
         #    the group is entirely blank, this level changes nothing:
-        #    level 4 then applies to the whole group, exactly as before
+        #    level 5 then applies to the whole group, exactly as before
         #    this level was added;
-        # 4. **Themed grid only, at the user's explicit request**: moved
-        #    here, after the "few candidates" and "at least one known
-        #    cell" levels above — originally applied right after level 1,
-        #    moved to this spot at the user's explicit request. Like any
-        #    other link in the cascade, this level always applies after
-        #    the previous one, with no particular priority over the
-        #    following levels. If, among the slots of the group obtained
-        #    at the previous level, at least one slot exists where a word
-        #    from the theme glossary (`self.priority_words`, not yet used)
-        #    still fits given the known letters, the choice is restricted
-        #    to those slots. Filling therefore starts with thematically
-        #    achievable zones (and places a theme word there in priority,
-        #    see candidate sorting further below). With no theme, or if no
-        #    slot of the group accepts a theme word, this level changes
-        #    nothing: the next level then applies to the whole group;
-        # 5. among the slots of the group obtained at the previous level, a
+        # 5. **Themed grid only, at the user's explicit request**: applies
+        #    after the "few candidates" and "at least one known cell"
+        #    levels above — but since "Mots Défi" (level 2) already ran
+        #    ahead of both, this group may already be challenge-narrowed
+        #    by the time this level sees it, which is exactly what still
+        #    gives challenge words priority over the theme glossary. If,
+        #    among the slots of the group obtained at the previous level,
+        #    at least one slot exists where a word from the theme glossary
+        #    (`self.priority_words`, not yet used) still fits given the
+        #    known letters, the choice is restricted to those slots.
+        #    Filling therefore starts with thematically achievable zones
+        #    (and places a theme word there in priority, see candidate
+        #    sorting further below). With no theme, or if no slot of the
+        #    group accepts a theme word, this level changes nothing: the
+        #    next level then applies to the whole group;
+        # 6. among the slots of the group obtained at the previous level, a
         #    purely **geometric** score is computed for each: `x² + y²`,
         #    where `(y, x)` is the slot's first cell (`self.slots[i][0]`,
         #    always the topmost/leftmost one among its own cells — see
@@ -2770,16 +3079,16 @@ class Filler:
         #    Euclidean distance from the corner). This geometric window
         #    (`window`) is then re-sorted twice more, each time reducing
         #    it further, before the final choice is made:
-        # 6. by the number of letters already placed in each slot
+        # 7. by the number of letters already placed in each slot
         #    (`_placed_letter_count`, the most letters first), reduced to
         #    its own first `SLOT_SELECTION_REFINE_FRACTION` slots (see this
         #    constant's own docstring);
-        # 7. by `_slot_letter_frequency_score` (see its own docstring), the
+        # 8. by `_slot_letter_frequency_score` (see its own docstring), the
         #    highest score first — the slot whose own zone statistically
         #    offers the most fill options — whose very first entry directly
         #    becomes the chosen slot. Each of these two reductions
         #    re-shuffles its own input window beforehand (same reason as
-        #    level 5's own shuffle: since `sorted` is stable, this shuffle
+        #    level 6's own shuffle: since `sorted` is stable, this shuffle
         #    is what breaks ties between slots with equal scores, not the
         #    order inherited from the previous sort).
         free_across = [i for i in unassigned if self.directions[i] == "across"]
@@ -2792,6 +3101,49 @@ class Filler:
             )[0]
         else:
             direction_pool = free_across or free_down
+        # "Mots Défi" level: at the user's explicit request, applied here —
+        # right after the category draw, AHEAD of every other level below
+        # including "few candidates" — after a live report that the
+        # previous position (below "few candidates"/"known letter", sharing
+        # a spot with the theme level) left it starved in practice: a
+        # well-advanced grid almost always has at least one slot with
+        # fewer than `PREFILL_MIN_WORD_COUNT` candidates in whichever
+        # direction gets drawn, and that level used to run BEFORE this one
+        # — so it could keep excluding every "Mots Défi"-fitting slot,
+        # click after click, before this level ever got a chance to run at
+        # all: a real challenge word the author explicitly typed could
+        # then go unplaced indefinitely, for reasons having nothing to do
+        # with it. "Mots Défi" now overrides that urgency
+        # instead: if at least one slot of the drawn category has a
+        # not-yet-used, not-yet-abandoned challenge word (`_active_
+        # challenge_words()` — see FALLBACK_PHASE_BUDGET_FRACTION;
+        # empty, hence a guaranteed no-op, whenever no challenge list was
+        # supplied at all) still fitting its known letters
+        # (`_challenge_word_fits` — length + already-known letters only,
+        # deliberately NOT required to be a genuine dictionary entry, at
+        # the user's own explicit follow-up request: "modifier le code
+        # pour qu'il accepte de placer un Mot Défi même s'il ne fait pas
+        # partie du dictionnaire (vérité utilisateur)" — `domains[i]` only
+        # ever holds genuine dictionary candidates, so intersecting
+        # against it would silently exclude a real surname or any other
+        # word the lexicon doesn't happen to contain), the choice narrows
+        # to those slots outright — and every level below (including "few
+        # candidates") then only ever narrows further WITHIN this already-
+        # challenge-preferred group, never widening back out to the whole
+        # category. Skipped if there's no challenge list at all (or none
+        # of it still active), or if no slot of the category accepts any
+        # challenge word (nothing to restrict);
+        active_challenge_words = self._active_challenge_words()
+        if active_challenge_words:
+            challenge_placeable = [
+                i for i in direction_pool
+                if any(
+                    w not in self.used_words and self._challenge_word_fits(i, w)
+                    for w in active_challenge_words
+                )
+            ]
+            if challenge_placeable:
+                direction_pool = challenge_placeable
         # Only for slots of 4 letters and longer, at the user's explicit
         # request: a 2-3-letter slot has a naturally restricted
         # vocabulary, triggering this "few candidates" priority there
@@ -2812,28 +3164,34 @@ class Filler:
         non_blank = [i for i in selection_pool if self._has_known_letter(i)]
         if non_blank:
             selection_pool = non_blank
-        # Theme level: moved here, after the two levels above ("few
+        # Theme level: applies after the two levels above ("few
         # candidates" then "at least one known cell"), at the user's
-        # explicit request — originally applied right after the category
-        # draw. Like any other link in the cascade, this level always
-        # applies after the previous one, with no particular priority over
-        # the following levels. For a themed grid, the choice is
-        # restricted to the slots of the group obtained at the previous
-        # level where at least one word from the theme glossary (self.
-        # priority_words) still fits, given the letters already known and
-        # the words already placed elsewhere — filling therefore favors
-        # thematically achievable zones (and places a theme word there in
-        # priority, see candidate sorting further below). Skipped if
-        # there's no theme at all, or if no slot of the group accepts a
-        # theme word (nothing to restrict).
+        # explicit request — but, since "Mots Défi" now runs before all
+        # three (see above), this group can already be challenge-narrowed
+        # by the time this level ever sees it, which is exactly what still
+        # gives challenge words priority over the theme glossary in that
+        # case. For a themed grid, the choice is restricted to the slots
+        # of the group obtained at the previous level where at least one
+        # word from the theme glossary (self.priority_words) still fits,
+        # given the letters already known and the words already placed
+        # elsewhere — filling therefore favors thematically achievable
+        # zones (and places a theme word there in priority, see candidate
+        # sorting further below). Skipped if there's no theme at all, or
+        # if no slot of the group accepts a theme word (nothing to
+        # restrict).
         if self.priority_words:
             # `selection_pool` always stays within a single direction
             # (across or down) — it only ever narrows `direction_pool`,
             # never mixes the two — so the applicable glossary (the same
             # for all its slots) is resolved once — a single frozenset on
             # a monolingual grid, that direction's language glossary on a
-            # bilingual grid (see `_priority_words_for`).
-            _pw = _priority_words_for(self.priority_words, self.slots[selection_pool[0]])
+            # bilingual grid (see `_priority_words_for`). `_active_
+            # priority_words_for` (rather than `_priority_words_for`
+            # directly) excludes a theme word already abandoned this
+            # attempt (see FALLBACK_PHASE_BUDGET_FRACTION), so slot
+            # selection stops favoring a slot only a hopeless theme word
+            # still fits.
+            _pw = self._active_priority_words_for(self.slots[selection_pool[0]])
             theme_placeable = [
                 i for i in selection_pool
                 if any(
@@ -3019,18 +3377,44 @@ class Filler:
         # but every one of them was already used by another word of the
         # grid, so `impossible_zone_slots` (see above, same fix) never
         # surfaced it either.
+        # Resolved once for the whole node (never changes mid-node, only
+        # between recursive calls — see _register_challenge_word_break):
+        # every place below that needs to know which "Mots Défi" words are
+        # still worth trying uses this instead of self.challenge_words
+        # directly, so a word already abandoned this attempt (see
+        # FALLBACK_PHASE_BUDGET_FRACTION) stops influencing anything,
+        # exactly as if it had never been supplied at all.
+        active_challenge_words = self._active_challenge_words()
         domains = {}
         for i in unassigned:
             domain = self._domain(i)
             if all(w in self.used_words for w in domain):
-                return False
+                # A dictionary-empty domain is only a genuine dead end if
+                # no unused "Mots Défi" word can still fill this exact
+                # slot — a challenge word is trusted purely geometrically
+                # (_challenge_word_fits), never against this domain at
+                # all, so a slot reserved for one (a real surname, say,
+                # absent from the lexicon) must not abort this whole
+                # branch just because _domain(i) itself came back dry.
+                if not (active_challenge_words and any(
+                    w not in self.used_words and self._challenge_word_fits(i, w)
+                    for w in active_challenge_words
+                )):
+                    return False
             domains[i] = domain
 
-        # Selects which slot to fill next via the 7-level cascade,
+        # Selects which slot to fill next via the 8-level cascade,
         # factored out into _select_target_slot (reused as-is by
         # interactive_place_word — see its own docstring for the full
         # history of every level).
         best_i = self._select_target_slot(unassigned, domains)
+        # Resolved once for the whole node, same timing as
+        # active_challenge_words above: whether the general-dictionary
+        # tier's own budget for THIS slot is already spent (see
+        # FALLBACK_PHASE_BUDGET_FRACTION/_register_domain_break) — if so,
+        # the crossing_broken forward-check below is relaxed for this
+        # slot's ordinary candidates instead of rejecting them forever.
+        domain_abandoned = best_i in self._domain_break_abandoned
 
         cands = [w for w in domains[best_i] if w not in self.used_words]
         # Always shuffled first (with this attempt's own seeded RNG, hence
@@ -3069,6 +3453,7 @@ class Filler:
                 idx = self.rng.randrange(take)
                 reordered.append(remaining.pop(idx))
             cands = reordered
+        pri_set = frozenset()
         if self.priority_words:
             # Theme preselection: the order already obtained above is
             # stabilized into two blocks — theme candidates first, then
@@ -3077,11 +3462,44 @@ class Filler:
             # word. Backtracking does the rest: a non-theme word is only
             # reached if no theme word led to a solution here (nor
             # further down). Skipped if every candidate — or none of
-            # them — is thematic (nothing to reorder).
-            _pw = _priority_words_for(self.priority_words, self.slots[best_i])
+            # them — is thematic (nothing to reorder). `_active_priority_
+            # words_for` (rather than `_priority_words_for` directly)
+            # excludes a theme word already abandoned this attempt (see
+            # FALLBACK_PHASE_BUDGET_FRACTION). `pri_set` is kept regardless
+            # of whether `cands` was actually reordered, so the crossing-
+            # break registration below can still recognize a theme word
+            # even in the (rare) case every candidate here is thematic.
+            _pw = self._active_priority_words_for(self.slots[best_i])
             pri = [w for w in cands if w in _pw]
-            if pri and len(pri) != len(cands):
-                cands = pri + [w for w in cands if w not in _pw]
+            if pri:
+                pri_set = frozenset(pri)
+                if len(pri) != len(cands):
+                    cands = pri + [w for w in cands if w not in pri_set]
+        challenged_set = frozenset()
+        if active_challenge_words:
+            # "Mots Défi" win over both the theme reorder above and the
+            # ordinary dictionary domain — exactly the same precedence as
+            # `interactive_place_word`'s own `pool = challenged or themed
+            # or cands`. Unlike that one-shot placement, injected here
+            # into `cands` rather than replacing it outright, so a
+            # challenge word that turns out to make some crossing slot
+            # unfillable still lets backtracking fall back to `cands`'
+            # other entries instead of failing this slot outright — the
+            # "chercher un autre Mot Défi ou un autre emplacement" retry
+            # described at FALLBACK_PHASE_BUDGET_FRACTION: another
+            # challenge word fitting this same slot (if any) is simply the
+            # next entry of `challenged` itself, tried right below; another
+            # LOCATION for this same word is instead found across separate
+            # recursive calls, as `_select_target_slot`'s own level 2 keeps
+            # preferring any slot it still fits, for as long as it stays
+            # unused and unabandoned.
+            challenged = [
+                w for w in active_challenge_words
+                if w not in self.used_words and self._challenge_word_fits(best_i, w)
+            ]
+            if challenged:
+                challenged_set = frozenset(challenged)
+                cands = challenged + [w for w in cands if w not in challenged_set]
         for w in cands:
             # Count this placement attempt immediately, whether or not it
             # leads to a further recursive descent — at the user's
@@ -3145,9 +3563,56 @@ class Filler:
                     and j not in self._crossing_excluded_slots
                 ):
                     domain = self._domain(j)
-                    if all(w2 in self.used_words for w2 in domain):
+                    if all(w2 in self.used_words for w2 in domain) and not (
+                        # Same "Mots Défi" exemption as the domain check
+                        # above and at the top of this method: a crossing
+                        # slot left with no real dictionary candidate is
+                        # only a genuine break if no unused, not-yet-
+                        # abandoned challenge word can still fill IT in
+                        # turn — otherwise placing `w` here hasn't actually
+                        # closed off that neighbor, it's merely handed it
+                        # to the "Mots Défi" mechanism instead of the
+                        # ordinary dictionary.
+                        active_challenge_words and any(
+                            w2 not in self.used_words
+                            and self._challenge_word_fits(j, w2)
+                            for w2 in active_challenge_words
+                        )
+                    ):
                         crossing_broken = True
                         break
+            # "Backtrack immédiat" (see FALLBACK_PHASE_BUDGET_FRACTION):
+            # every candidate here, whichever of the three tiers it comes
+            # from, already gets reverted on the spot the moment it breaks
+            # a crossing slot (`crossing_broken`, checked right above) —
+            # the loop then simply moves on to the next entry of `cands`,
+            # which is exactly "try another candidate of the same tier, or
+            # fall through to the next one" for this slot. What's tracked
+            # here on top of that is each tier's own budget: a challenge
+            # or theme word that has spent its own share of the whole
+            # attempt's `deadline_checks` on nothing but broken crossings
+            # is abandoned for the rest of this attempt, so it stops being
+            # offered anywhere else in the grid too (`_register_challenge_
+            # word_break`/`_register_theme_word_break`). The general
+            # dictionary has no further tier to fall back to: once THIS
+            # slot's own share of the budget is spent the same way
+            # (`_register_domain_break`), `domain_abandoned` (resolved
+            # once at the top of this node) lets an ordinary candidate
+            # through anyway instead of rejecting it forever — accepting a
+            # known "impossible" crossing rather than paying for
+            # exhaustive backtracking first; the cross-palier retry
+            # machinery (`_clean_blocked_slots`/`_build_retry_seed`)
+            # already repairs this kind of zone on the next palier
+            # regardless of how it arose.
+            if crossing_broken:
+                if w in challenged_set:
+                    self._register_challenge_word_break(w)
+                elif w in pri_set:
+                    self._register_theme_word_break(w)
+                elif domain_abandoned:
+                    crossing_broken = False
+                else:
+                    self._register_domain_break(best_i)
             if not crossing_broken and self._backtrack(deadline_checks):
                 return True
             self.assignment[best_i] = None
@@ -3482,7 +3947,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              attempt_done_event=None, locked_letters=None, best_state_queue=None,
              attempt_id=None, proper_noun_words=None, max_proper_nouns=None,
              non_gloss_words=None, max_non_gloss=None, priority_words=None,
-             required_cells=None):
+             challenge_words=None, required_cells=None):
     """`non_gloss_words`/`max_non_gloss` (both `None` by default — every
     pre-existing caller unaffected) work exactly like `proper_noun_words`/
     `max_proper_nouns` below, but count words absent from the definition
@@ -3736,7 +4201,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                      excluded_slots=excluded_slots, cancel_event=cancel_event,
                      batch_abandoned_event=batch_abandoned_event,
                      attempt_done_event=attempt_done_event, locked_letters=locked_letters,
-                     priority_words=priority_words)
+                     priority_words=priority_words, challenge_words=challenge_words)
     if best_state_queue is not None:
         # Assigned after construction, not passed to Filler(...) directly
         # above: the closure below needs `filler` itself (to read filler.
@@ -3773,6 +4238,9 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "forced_cells": forced_cells,
                 "locked_cells": locked_cells,
                 "theme_cells": _theme_word_cells(slots, best_assignment, priority_words),
+                "challenge_cells": _challenge_word_cells_from_assignment(
+                    slots, best_assignment, challenge_words
+                ),
                 "checks": filler.checks,
                 "reason": "best_state_snapshot",
                 # `attempt_id` is what lets `generate_grid` later recover
@@ -3872,6 +4340,9 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             diagnostics["locked_cells"] = locked_cells
             diagnostics["theme_cells"] = _theme_word_cells(
                 slots, filler.best_assignment, priority_words
+            )
+            diagnostics["challenge_cells"] = _challenge_word_cells_from_assignment(
+                slots, filler.best_assignment, challenge_words
             )
             diagnostics["attempt_id"] = attempt_id
     if truly_complete:
@@ -4099,7 +4570,7 @@ def build_word_entries(grid, rows, cols, slots, assignment):
     return entries
 
 
-def _interactive_fill_diagnostics(grid, rows, cols, index):
+def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None):
     """For grid `grid` (same cell conventions as `interactive_place_
     word`), returns `(impossible_cells, low_candidate_cells)` — two sorted
     `[r, c]` lists, to display on the interface in "Interactif" mode just
@@ -4122,7 +4593,19 @@ def _interactive_fill_diagnostics(grid, rows, cols, index):
     being genuinely fixed, and another never shown impossible at all —
     both cases correspond to an entirely known slot the old version never
     checked. No backtracking: builds a `Filler` purely as a domain-
-    computation helper, like `interactive_place_word`."""
+    computation helper, like `interactive_place_word`.
+
+    `challenge_words` (`None`/empty by default — no effect for any
+    pre-existing caller) is the session's current "Mots Défi" list, in
+    grid form: a "Mots Défi" word is considered part of the dictionary
+    for this diagnostic, at the user's explicit request — never flagged
+    red, whether it's a still-open slot only a challenge word can fill
+    (`_challenge_fillable_slot_indices`, folded into "low candidates"
+    instead of "impossible", since the real dictionary genuinely has
+    nothing there) or an already-fully-typed slot spelling a challenge
+    word verbatim (`_challenge_word_cells`, folded into `_invalid_fully_
+    known_indices`'s own `exempt` set — never flagged at all, exactly
+    like a genuine dictionary word)."""
     pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
     slots = extract_slots(pattern, rows, cols)
     if not slots:
@@ -4149,16 +4632,21 @@ def _interactive_fill_diagnostics(grid, rows, cols, index):
             filler.assignment[i] = "".join(known[cell] for cell in cells)
             filler.used_words.add(filler.assignment[i])
 
+    fillable = _challenge_fillable_slot_indices(slots, known, challenge_words)
     impossible, low = set(), set()
     for i, cells in enumerate(slots):
         if filler.assignment[i] is not None:
             continue
         n = len(set(filler._domain(i)) - filler.used_words)
         if n == 0:
-            impossible.update(cells)
+            if i in fillable:
+                low.update(cells)
+            else:
+                impossible.update(cells)
         elif n < PREFILL_MIN_WORD_COUNT:
             low.update(cells)
-    for i in _invalid_fully_known_indices(slots, index, known):
+    exempt = _challenge_word_cells(slots, known, challenge_words)
+    for i in _invalid_fully_known_indices(slots, index, known, exempt=exempt):
         impossible.update(slots[i])
     return (
         sorted([r, c] for (r, c) in impossible),
@@ -4166,7 +4654,101 @@ def _interactive_fill_diagnostics(grid, rows, cols, index):
     )
 
 
-def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
+def _open_slot_baseline(filler, exclude_index):
+    """Snapshot, for every still-open slot other than `exclude_index` (the
+    slot a candidate is about to be tried at), of its own currently-viable
+    candidate set (`_domain(j) - used_words`) — computed with `exclude_
+    index` itself left unassigned, i.e. the grid exactly as it stands
+    right now, before any candidate is even considered for it.
+
+    Feeds `_word_breaks_open_slot`'s own "was this slot already broken,
+    independent of whatever candidate ends up tried" distinction: a slot
+    already empty here is a pre-existing condition (already visible in
+    this same diagnostics pass's red/orange highlighting) that must never
+    be blamed on the candidate under test — without this baseline, one
+    unrelated impossible zone anywhere in the grid would make every
+    single candidate at every slot look "unsafe" forever after, since a
+    permanently-empty domain trivially satisfies "all remaining
+    candidates are used up" regardless of what gets placed elsewhere.
+
+    Candidate-independent (nothing about which word ends up tried at
+    `exclude_index` changes any OTHER slot's own domain, except one
+    literally CROSSING it — see `_word_breaks_open_slot`'s own per-
+    candidate recompute for that one case), so it only needs computing
+    once per `exclude_index` and can be reused across every candidate
+    considered for it."""
+    baseline = {}
+    for j in range(len(filler.slots)):
+        if j == exclude_index or filler.assignment[j] is not None:
+            continue
+        baseline[j] = set(filler._domain(j)) - filler.used_words
+    return baseline
+
+
+def _word_breaks_open_slot(filler, i, w, active_challenge_words, baseline):
+    """Tentatively assigns `w` to slot `i` on `filler` (a `Filler` built
+    purely as a domain/scoring helper, no search running), checks whether
+    any OTHER still-open slot in the grid — not only one literally
+    CROSSING `i` — becomes impossible to fill as a result, then reverts
+    the tentative assignment either way, leaving `filler` exactly as it
+    found it. A themed glossary is typically narrow, so the very word
+    chosen for one slot can just as easily be the LAST unused dictionary
+    candidate of some entirely disjoint slot elsewhere (no shared cell at
+    all) as of a crossing one — placing it still empties that other
+    slot's own domain, exactly the "impossible zone" this whole mechanism
+    exists to avoid, whether or not the two slots ever touch.
+
+    `baseline` (see `_open_slot_baseline`, computed once by the caller for
+    this same `i`) is what tells a slot genuinely broken BY this candidate
+    apart from one that was already broken beforehand for an unrelated
+    reason — only the former counts. For a slot `j` sharing a cell with
+    `i` (`filler._crossing_slots[i]`), `w`'s own letters can change `j`'s
+    domain, so it's recomputed fresh from the tentative assignment; for
+    every other still-open slot, its domain never depends on what ends up
+    placed at `i`, so `baseline[j]` is reused as-is, only removing `w`
+    itself in case it was the one candidate keeping `j` alive. Either way,
+    a slot with no real dictionary candidate left only counts as broken if
+    no unused, still-active challenge word (`active_challenge_words`) can
+    fill it in turn — the same two-way exemption `Filler._backtrack`'s own
+    `crossing_broken` check applies.
+
+    Used by `interactive_place_word`'s own "Mots Défi" crossing-safety
+    retry (see FALLBACK_PHASE_BUDGET_FRACTION) to evaluate a
+    candidate (word, slot) combination without committing to it, and
+    reused as-is for its theme-glossary/general-dictionary crossing-safety
+    scan too (see `_first_crossing_safe`) — this check has no notion of
+    which tier `w` belongs to, only whether placing it breaks some other
+    slot. Unlike `_backtrack`'s own version (scoped to direct crossings
+    only, and self-healed palier to palier by the cross-palier retry
+    machinery `interactive_place_word` has no equivalent of), there is no
+    `excluded_slots`/`_crossing_excluded_slots` to check here —
+    `interactive_place_word` never builds a `Filler` with either
+    non-empty."""
+    filler.assignment[i] = w
+    filler.used_words.add(w)
+    broken = False
+    for j, before in baseline.items():
+        if not before:
+            continue
+        if j in filler._crossing_slots[i]:
+            remaining = set(filler._domain(j)) - filler.used_words
+        else:
+            remaining = before - {w}
+        if not remaining and not (
+            active_challenge_words and any(
+                w2 not in filler.used_words and filler._challenge_word_fits(j, w2)
+                for w2 in active_challenge_words
+            )
+        ):
+            broken = True
+            break
+    filler.assignment[i] = None
+    filler.used_words.discard(w)
+    return broken
+
+
+def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
+                            challenge_words=None):
     """Place EXACTLY ONE additional word into `grid`, honouring every letter
     already present, with NO backtracking — the single-step primitive behind
     the web UI's "Interactif" authoring mode (see backend/app.py's
@@ -4176,7 +4758,22 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
     white) or an uppercase letter (filled white). `extract_slots` already
     treats any non-`"#"` cell as white, so a grid carrying letters feeds
     straight into it. `index` is a DualIndex; `priority_words` a
-    frozenset/DualSet (theme glossary) or `None`.
+    frozenset/DualSet (theme glossary) or `None`; `challenge_words` the
+    "Mots Défi" list (a plain frozenset of bare uppercase words, or `None`)
+    — given priority over `priority_words`, see `Filler.challenge_words`
+    and `_select_target_slot`'s own docstring. Unlike `priority_words`, a
+    challenge word is trusted at face value and never required to be a
+    genuine dictionary entry (`Filler._challenge_word_fits`) — a word not
+    in the lexicon can therefore still be placed automatically, though it
+    then shows up flagged as invalid by this same function's own
+    diagnostics below, same as a hand-typed one. Before any slot is even
+    selected, `_widen_floating_black_cells_for_priority_words` (see its
+    own docstring, and the comment right above its call below) gets a
+    chance to relocate a floating black cell so a "Mots Défi"/theme word
+    with no matching-length slot anywhere yet can still be reached by the
+    ordinary cascade below — the same mechanic automatic generation's own
+    `_pattern_attempt` already applies to a freshly generated pattern,
+    reused here unchanged.
 
     Returns `{"impossible": True}` when no still-open slot has any viable
     candidate word, otherwise
@@ -4193,22 +4790,53 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
     # a run — so work from a plain black/white pattern derived from `grid`,
     # with the letters tracked separately as `known`.
     pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
-    slots = extract_slots(pattern, rows, cols)
-    if not slots:
-        return {"impossible": True}
     known = {
         (r, c): grid[r][c]
         for r in range(rows)
         for c in range(cols)
         if grid[r][c] not in (BLACK, WHITE)
     }
+    # Floating-black-cell widening for "Mots Défi"/theme words — the exact
+    # same `_widen_floating_black_cells_for_priority_words` automatic
+    # generation's own `_pattern_attempt` already uses (see that
+    # function's own docstring), reused here as-is rather than a second,
+    # Interactive-mode-specific implementation, at the user's explicit
+    # request: "Suivant doit utiliser le même code que l'inférence
+    # automatique. Il ne doit pas y avoir 2 versions du code." Unlike
+    # `_pattern_attempt`'s own call (a freshly generated pattern with no
+    # word placed anywhere yet), this grid can already carry real,
+    # previously-placed letters outside whichever slot ends up widened —
+    # `known` doubles as `locked_letters` here exactly like it already
+    # does for `Filler` below, so a relocated black cell can never land on
+    # (and so destroy) an already-known letter (`_try_widen_black_cell`'s
+    # own `locked_letters` guard).
+    if challenge_words or priority_words:
+        _widen_floating_black_cells_for_priority_words(
+            pattern, rows, cols, rng, (challenge_words, priority_words), index,
+            locked_letters=known,
+        )
+        # Reconcile `grid` with whatever `pattern` was reshaped into: a
+        # cell can only ever move from a plain, letter-free WHITE to BLACK
+        # or back (never the reverse for an already-known cell, per the
+        # guard above), so this is always a safe, letter-preserving sync.
+        grid = [
+            [
+                BLACK if pattern[r][c] == BLACK
+                else (WHITE if grid[r][c] == BLACK else grid[r][c])
+                for c in range(cols)
+            ]
+            for r in range(rows)
+        ]
+    slots = extract_slots(pattern, rows, cols)
+    if not slots:
+        return {"impossible": True}
     _, letter_scores = sample_letter_biases(
         pattern, rows, cols, index, rng, force_fraction=0.0, known_letters=known,
     )
     filler = Filler(
         slots, index, rng,
         letter_scores=letter_scores, locked_letters=known,
-        priority_words=priority_words,
+        priority_words=priority_words, challenge_words=challenge_words,
     )
     # Pre-assign every slot already entirely filled: it can neither be
     # re-selected nor counted as a new placement, and its word blocks a
@@ -4222,7 +4850,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
     # `domains` keeps the RAW domain (like in _backtrack, never filtered by
     # used_words) — that's what _select_target_slot expects, in
     # particular for its own "fewer than PREFILL_MIN_WORD_COUNT
-    # candidates" threshold (level 2), which genuinely compares the raw
+    # candidates" threshold (level 3), which genuinely compares the raw
     # domain's size. `viable` remains the filtered version (genuinely
     # available candidates) the word draw, right after, uses.
     domains, viable = {}, {}
@@ -4235,33 +4863,152 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
             domains[i] = domain
             viable[i] = cands
     if not viable:
-        imp, low = _interactive_fill_diagnostics(grid, rows, cols, index)
+        imp, low = _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words)
         return {"impossible": True, "impossible_cells": imp, "low_candidate_cells": low}
 
-    # Target slot: the same 7-level cascade as automatic generation (see
+    # Target slot: the same 8-level cascade as automatic generation (see
     # Filler._select_target_slot), reused as-is rather than a hand-rolled,
     # simple MRV — at the user's explicit request, after confirming live
     # that this MRV (smallest domain first) made Interactive mode start
     # with 2-letter slots scattered across the grid, honoring neither the
-    # length threshold (level 2, >=4 letters) nor the top-left front
-    # sought by automatic generation's own geometric score (level 5).
+    # length threshold (level 3, >=4 letters) nor the top-left front
+    # sought by automatic generation's own geometric score (level 6).
     target = filler._select_target_slot(list(viable.keys()), domains)
-    cells = slots[target]
-    cands = viable[target]
 
-    # Word: theme-glossary members first, if applicable, then the rest;
-    # ranked by statistical score, then by lexicon frequency.
-    themed = _priority_words_for(filler.priority_words, cells) & cands
-    pool = themed or cands
-    freq = index.for_cells(cells).get(len(cells), {}).get("freq", {})
-    word = max(pool, key=lambda w: (filler._candidate_score(target, w), freq.get(w, 0.0)))
+    # "Mots Défi" crossing-safety retry, at the user's explicit request:
+    # a challenge word is never placed straight into `target` without
+    # first checking it leaves every OTHER still-open slot in the grid
+    # still fillable (`_word_breaks_open_slot`, the same exemption
+    # `Filler._backtrack`'s own `crossing_broken` check applies) — not
+    # only a slot it directly crosses, but also a disjoint one whose own
+    # domain this word happened to be the last unused candidate for (see
+    # `_word_breaks_open_slot`'s own docstring). A combination that would
+    # break either kind is abandoned on the spot ("backtrack immédiat") in
+    # favor of the next one — another challenge word fitting `target`, or
+    # the same/another word at a DIFFERENT slot elsewhere in the grid
+    # (`target`'s own combinations are tried first, then every other
+    # currently open slot, each group ranked by the same statistical
+    # score/frequency the final word draw already used). Giving up on
+    # placing any challenge word this round (falling through to the
+    # theme-glossary/general-dictionary fallback below, itself now also
+    # crossing-safety-aware — see its own comment) only happens once every
+    # combination has been tried, or once a given word alone has broken
+    # some slot `FALLBACK_PHASE_BUDGET_FRACTION` (10%) of the total number
+    # of combinations considered this call — `interactive_place_word` runs
+    # no search of its own to draw a `deadline_checks`-based budget from
+    # (unlike `Filler._backtrack`'s own twin mechanism), so the total
+    # combination count itself serves as this call's whole-phase
+    # resource, reused via `filler._challenge_word_budget`/`filler.
+    # _register_challenge_word_break` exactly as `_backtrack` uses them.
+    placed_target = placed_word = None
+    challenge_pool = filler._active_challenge_words() - filler.used_words
+    if challenge_pool:
+        combos = [
+            (i, w)
+            for i in viable
+            for w in challenge_pool
+            if filler._challenge_word_fits(i, w)
+        ]
+        if combos:
+            filler._challenge_word_budget = max(
+                1, round(FALLBACK_PHASE_BUDGET_FRACTION * len(combos))
+            )
+
+            def _combo_key(iw):
+                i, w = iw
+                freq = index.for_cells(slots[i]).get(len(slots[i]), {}).get("freq", {})
+                return (i != target, -filler._candidate_score(i, w), -freq.get(w, 0.0))
+
+            combos.sort(key=_combo_key)
+            # `_open_slot_baseline` only depends on which slot `i` is
+            # about to receive a tentative candidate, never on which word
+            # — cached here so the several challenge words often tried at
+            # the same slot (or at `target` specifically, always tried
+            # first per `_combo_key`) don't each recompute it from scratch.
+            baseline_cache = {}
+            for i, w in combos:
+                active = challenge_pool - filler._challenge_abandoned
+                if w not in active or w in filler.used_words:
+                    continue
+                baseline = baseline_cache.get(i)
+                if baseline is None:
+                    baseline = baseline_cache[i] = _open_slot_baseline(filler, i)
+                if _word_breaks_open_slot(filler, i, w, active, baseline):
+                    filler._register_challenge_word_break(w)
+                    continue
+                placed_target, placed_word = i, w
+                break
+
+    themed_from = None
+    if placed_word is not None:
+        target, word = placed_target, placed_word
+        cells = slots[target]
+    else:
+        cells = slots[target]
+        cands = viable[target]
+        # Fallback: no challenge word could be placed anywhere without
+        # breaking some other slot (or none was typed at all) — ordinary
+        # "Suivant" draw, theme-glossary members preferred over the rest,
+        # same precedence as before this mechanism existed, now also
+        # preferring — within whichever tier is drawn from — a candidate
+        # that doesn't itself break some OTHER still-open slot, whether or
+        # not it crosses `target` (see FALLBACK_PHASE_BUDGET_FRACTION,
+        # generalizing the "Mots Défi" crossing-safety retry above to the
+        # theme glossary and the general dictionary — a narrow themed
+        # glossary in particular routinely has the same word be the last
+        # unused candidate for two entirely disjoint slots at once, see
+        # `_word_breaks_open_slot`'s own docstring). Unlike that retry (a
+        # combinatorial, multi-slot scan needing its own budget) or
+        # `Filler._backtrack`'s own per-attempt budget (bounding an
+        # expensive recursive search), this only ever scans ONE slot's
+        # own, already-capped candidate list (see INTERACTIVE_SLOT_
+        # CANDIDATES_LIMIT) — cheap enough to check every candidate
+        # exhaustively rather than truncate to an arbitrary 10%, so no
+        # separate budget/abandon bookkeeping is needed here.
+        themed = _priority_words_for(filler.priority_words, cells) & cands
+        freq = index.for_cells(cells).get(len(cells), {}).get("freq", {})
+        active_challenge_words = filler._active_challenge_words()
+        baseline = _open_slot_baseline(filler, target)
+
+        def _rank(pool):
+            return sorted(
+                pool,
+                key=lambda w: (filler._candidate_score(target, w), freq.get(w, 0.0)),
+                reverse=True,
+            )
+
+        def _first_crossing_safe(ranked):
+            return next(
+                (w for w in ranked
+                 if not _word_breaks_open_slot(filler, target, w, active_challenge_words, baseline)),
+                None,
+            )
+
+        word = None
+        ranked_themed = _rank(themed) if themed else None
+        if ranked_themed is not None:
+            word = _first_crossing_safe(ranked_themed)
+        ranked_cands = None
+        if word is None:
+            ranked_cands = _rank(cands)
+            word = _first_crossing_safe(ranked_cands)
+        if word is None:
+            # Every candidate available at this slot breaks some
+            # crossing: accept the best one anyway rather than leaving
+            # "Suivant" stuck — the same final compromise `_backtrack`'s
+            # own general-dictionary tier falls back to once its own
+            # budget is spent, preferring a themed word over an ordinary
+            # one exactly as this call already did before this crossing-
+            # safety check existed.
+            word = ranked_themed[0] if themed else ranked_cands[0]
+        themed_from = themed
 
     new_grid = [row[:] for row in grid]
     for (r, c), ch in zip(cells, word):
         new_grid[r][c] = ch
     # Diagnostics computed on the grid AFTER placement — that's the state
     # the player sees after "Suivant".
-    imp, low = _interactive_fill_diagnostics(new_grid, rows, cols, index)
+    imp, low = _interactive_fill_diagnostics(new_grid, rows, cols, index, challenge_words)
     return {
         "impossible": False,
         "grid": new_grid,
@@ -4274,7 +5021,18 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None):
             # `from_theme`: does the automatically placed word come from
             # the applicable theme glossary? Shown in magenta on the
             # interface ("Interactif"), at the user's explicit request.
-            "from_theme": word in themed,
+            # `themed_from` stays `None` whenever a "Mots Défi" word won
+            # the crossing-safety retry above instead (never both at
+            # once — see `Filler.challenge_words`'s own priority over the
+            # theme glossary).
+            "from_theme": bool(themed_from and word in themed_from),
+            # `from_challenge`: does the automatically placed word come
+            # from "Mots Défi" (the crossing-safety retry above,
+            # `placed_word is not None`)? Shown in green on the grid
+            # ("Interactif"), at the user's explicit request — mirrors
+            # `from_theme` just above, mutually exclusive with it by
+            # construction (see that field's own comment).
+            "from_challenge": placed_word is not None,
         },
     }
 
@@ -4516,7 +5274,7 @@ def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priori
     return theme_words, other_words
 
 
-def interactive_clean_impossible_zones(grid, rows, cols, index, rng):
+def interactive_clean_impossible_zones(grid, rows, cols, index, rng, challenge_words=None):
     """"Nettoyer" button (mode "Interactif") — the equivalent, for the
     manual grid, of the "full cleanup" `_build_retry_seed` automatically
     applies at every palier of automatic generation (see CLAUDE.md for its
@@ -4561,7 +5319,16 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng):
     blocked_slots` only ever removes already-fully-placed words
     (`assignment[j] is not None`); such a case can only be resolved via
     the black-cell alternative, if it applies to the impossible slot
-    itself."""
+    itself.
+
+    `challenge_words` (`None`/empty by default), in grid form: a "Mots
+    Défi" word is never "impossible" here either, at the user's explicit
+    request — same exemption as `_interactive_fill_diagnostics`
+    (`_challenge_fillable_slot_indices` for a still-open slot, `_challenge_
+    word_cells` folded into `_invalid_fully_known_indices`'s own `exempt`
+    for an already-typed one) — so "Nettoyer" never strips out a validly
+    placed challenge word thinking it's an invented, dictionary-less
+    invention."""
     pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
     slots = extract_slots(pattern, rows, cols)
     if not slots:
@@ -4580,9 +5347,11 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng):
         "".join(known[cell] for cell in cells) if all(cell in known for cell in cells) else None
         for cells in slots
     ]
+    challenge_fillable = _challenge_fillable_slot_indices(slots, known, challenge_words)
+    challenge_exempt = _challenge_word_cells(slots, known, challenge_words)
     impossible = sorted(
-        set(_impossible_indices(slots, index, known))
-        | set(_invalid_fully_known_indices(slots, index, known))
+        (set(_impossible_indices(slots, index, known)) - challenge_fillable)
+        | set(_invalid_fully_known_indices(slots, index, known, exempt=challenge_exempt))
     )
     if not impossible:
         return {"changed": False, "grid": grid, "cleared_count": 0}
@@ -4640,7 +5409,7 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng):
     return {"changed": True, "grid": new_grid, "cleared_count": cleared_count}
 
 
-def interactive_minimize_black_cells(grid, rows, cols, index, rng):
+def interactive_minimize_black_cells(grid, rows, cols, index, rng, challenge_words=None):
     """"Nettoyer (+noires)" button (mode "Interactif") — the extra half of
     the deep cleanup, at the user's explicit request: "deep cleanup
     (cleaning black cells too, not just impossible slots)."
@@ -4669,7 +5438,14 @@ def interactive_minimize_black_cells(grid, rows, cols, index, rng):
     removal that would break the grid's own connectivity.
 
     Returns `{"changed": bool, "grid": <updated or identical grid>,
-    "removed_count": <number of black cells actually removed>}`."""
+    "removed_count": <number of black cells actually removed>}`.
+
+    `challenge_words` (`None`/empty by default), in grid form: excluded
+    from this "impossible" count the same way as `interactive_clean_
+    impossible_zones`/`_interactive_fill_diagnostics`, at the user's
+    explicit request — a "Mots Défi" word is part of the dictionary for
+    this purpose, so it never counts against a removal, and can never
+    itself get merged/blackened away by this pass either."""
     black_cells = [(r, c) for r in range(rows) for c in range(cols) if grid[r][c] == BLACK]
     if not black_cells:
         return {"changed": False, "grid": grid, "removed_count": 0}
@@ -4685,9 +5461,11 @@ def interactive_minimize_black_cells(grid, rows, cols, index, rng):
             for c in range(cols)
             if g[r][c] not in (BLACK, WHITE)
         }
+        challenge_fillable = _challenge_fillable_slot_indices(slots, known, challenge_words)
+        challenge_exempt = _challenge_word_cells(slots, known, challenge_words)
         return len(
-            set(_impossible_indices(slots, index, known))
-            | set(_invalid_fully_known_indices(slots, index, known))
+            (set(_impossible_indices(slots, index, known)) - challenge_fillable)
+            | set(_invalid_fully_known_indices(slots, index, known, exempt=challenge_exempt))
         )
 
     rng.shuffle(black_cells)
@@ -4860,6 +5638,44 @@ def _theme_cells_from_preview_state(seed_grid, rows, cols, locked_letters,
             for cells in slots
         ]
         return _theme_word_cells(slots, assignment, priority_words)
+    return []
+
+
+def _challenge_word_cells_from_assignment(slots, assignment, challenge_words):
+    """Cells of every slot whose assigned word is one of `challenge_words`
+    — the `(slots, assignment)` counterpart of `_challenge_word_cells`
+    (which reads from a `{cell: letter}` map instead), at the user's
+    explicit request: "In the preview grids, show 'Mots Défi' words in
+    green, like on the grid in Interactive mode." Mirrors `_theme_word_
+    cells` exactly, just tested against `challenge_words` instead of the
+    theme glossary. `assignment` can contain `None` entries (slot not
+    reached yet) — simply ignored."""
+    if not challenge_words:
+        return []
+    out = set()
+    for cells, word in zip(slots, assignment):
+        if word is not None and word in challenge_words:
+            out.update((r, c) for (r, c) in cells)
+    return sorted(out)
+
+
+def _challenge_cells_from_preview_state(seed_grid, rows, cols, locked_letters,
+                                         preseed_assignment, challenge_words):
+    """`_challenge_word_cells_from_assignment` for a cycle-START preview —
+    the `challenge_words` counterpart of `_theme_cells_from_preview_state`,
+    same two resume-state shapes handled the same way."""
+    if not challenge_words or seed_grid is None:
+        return []
+    slots = extract_slots(seed_grid, rows, cols)
+    if preseed_assignment is not None:
+        return _challenge_word_cells_from_assignment(slots, preseed_assignment, challenge_words)
+    if locked_letters:
+        assignment = [
+            "".join(locked_letters[c] for c in cells)
+            if all(c in locked_letters for c in cells) else None
+            for cells in slots
+        ]
+        return _challenge_word_cells_from_assignment(slots, assignment, challenge_words)
     return []
 
 
@@ -5083,11 +5899,68 @@ def _cycle_start_preview(rows, cols, seed_grid, locked_letters, preseed_assignme
     return grid, []
 
 
-def _playable_score(diag):
+# Added to a "Mots Défi" word's own length before squaring it into
+# `_content_score`'s sum, at the user's explicit request: "Inclus les
+# Mots Défis dans le calcul (avec ou sans glossaire thématique) en
+# attribuant un bonus +2 sur leur longueur." Applies on top of whatever
+# else already makes a word eligible for the sum (see `_content_score`'s
+# own docstring) — a challenge word that also happens to be a theme word
+# is not counted twice, just scored with the bonus once.
+CHALLENGE_WORD_SCORE_BONUS = 2
+
+
+def _content_score(pairs, priority_words=None, challenge_words=None):
+    """Sum of squares of each placed word's own "scored length", over
+    `pairs` (an iterable of `(word, cells)`, `word` possibly `None` for an
+    unassigned slot — ignored). This is the ONE formula shared by every
+    content-scoring use in `generate_grid`: breaking ties among several
+    *successful* attempts of the same palier, and picking a *failed*
+    palier's own "best" attempt (raw state via `_playable_score`, post-
+    cleanup state via `_cleaned_playable_score`) to carry forward — at the
+    user's explicit request: "Le scoring réussi et échoué doivent utiliser
+    la même logique qui favorise le glossaire thématique." Before this,
+    only the successful-attempt tie-break restricted itself to theme
+    words; the failed-attempt scores summed every placed word regardless
+    of theme, an inconsistency this function removes by being the only
+    place either kind of score is actually computed.
+
+    `priority_words` (`None`/empty by default — no effect for any pre-
+    existing caller before theming existed): when non-empty, a word only
+    counts toward the sum at all if it belongs to ITS OWN slot's theme
+    glossary (`_priority_words_for(priority_words, cells)`, handling a
+    bilingual grid's per-direction `DualSet` the same way every other
+    theme-aware check in this file already does) — so a themed generation
+    favors the attempt that surfaces more/longer theme words, not merely
+    more/longer words overall. Empty/`None`: every placed word counts, at
+    its own plain length — unchanged from before theming existed.
+
+    `challenge_words` (`None`/empty by default — no effect for any pre-
+    existing caller before this feature existed): a "Mots Défi" word
+    always counts toward the sum, REGARDLESS of `priority_words` — even
+    one that isn't itself a theme word, and even with no theme at all —
+    so a challenge word's own placement is never invisible to either
+    score. Its own scored length additionally gets `CHALLENGE_WORD_SCORE_
+    BONUS` added before squaring, so an attempt that manages to place a
+    challenge word is favored over one that doesn't, all else equal."""
+    total = 0
+    for w, cells in pairs:
+        if w is None:
+            continue
+        is_challenge = bool(challenge_words) and w in challenge_words
+        if priority_words and not (
+            is_challenge or w in _priority_words_for(priority_words, cells)
+        ):
+            continue
+        scored_length = len(w) + (CHALLENGE_WORD_SCORE_BONUS if is_challenge else 0)
+        total += scored_length ** 2
+    return total
+
+
+def _playable_score(grid, diag, rows, cols, priority_words=None, challenge_words=None):
     """Measures the amount of content genuinely placed and confirmed in
-    `diag["assignment"]` — the square root of the sum of squares of the
-    length of every already-assigned word (`None` ignored) — at the
-    user's explicit request: "Au lieu d'un score sur les injouables,
+    `diag["assignment"]` — the square root of `_content_score` over every
+    already-assigned word paired with its own slot (`None` ignored) — at
+    the user's explicit request: "Au lieu d'un score sur les injouables,
     mesurer les jouables (racine carré des sommes des carrés des longueurs
     jouables)." Used by `generate_grid` to sort `failed_unique` when
     selecting a palier's own "best" failed attempt — see its own comment
@@ -5099,16 +5972,27 @@ def _playable_score(diag):
     Same principle as the score `generate_grid` already uses to break ties
     among several *successful* attempts of the same palier — favoring a
     handful of long words over many short ones for the same total letter
-    count — with the square root added on top to bring this score back to
-    a scale comparable to a plain length rather than a sum of squares. An
+    count, and, with `priority_words`/`challenge_words` given, the same
+    theme/"Mots Défi" preference too (see `_content_score`) — with the
+    square root added on top to bring this score back to a scale
+    comparable to a plain length rather than a sum of squares. An
     assigned word's length is read directly via `len(word)` (never
     recomputed from the pattern): a word can only ever be assigned to a
     slot of its own length, so the two values are always rigorously
-    equal."""
-    return sum(len(w) ** 2 for w in diag["assignment"] if w is not None) ** 0.5
+    equal. `slots` is recomputed from `grid`/`rows`/`cols` (the same
+    pattern `diag["assignment"]` was itself built against) purely to pair
+    each word with its own cells for `_content_score`'s theme/challenge
+    lookup — `grid` is never otherwise read."""
+    slots = extract_slots(grid, rows, cols)
+    if len(slots) != len(diag["assignment"]):
+        pairs = zip(diag["assignment"], [None] * len(diag["assignment"]))
+    else:
+        pairs = zip(diag["assignment"], slots)
+    return _content_score(pairs, priority_words, challenge_words) ** 0.5
 
 
-def _cleaned_playable_score(grid, diag, rows, cols, index, rng):
+def _cleaned_playable_score(grid, diag, rows, cols, index, rng,
+                             priority_words=None, challenge_words=None):
     """Like `_playable_score`, but on the state AFTER cleanup — the
     content that would genuinely survive once removed one at a time, as
     needed to resolve every impossible situation in `diag["impossible_
@@ -5120,7 +6004,10 @@ def _cleaned_playable_score(grid, diag, rows, cols, index, rng):
     `index`/`rng` passed straight through to `_clean_blocked_slots` — the
     same random generator already shared by the whole `generate_grid()`
     call, so this score stays reproducible from the same seed instead of
-    introducing a second, independent source of randomness.
+    introducing a second, independent source of randomness. `priority_
+    words`/`challenge_words` passed straight through to `_content_score`
+    — see `_playable_score`'s own docstring for why this now matters here
+    too, on the same footing as the successful-attempt tie-break.
 
     Used to sort `failed_unique`/choose `failed_pairs[0]` — the winning
     attempt is therefore now the one that keeps the most genuinely placed
@@ -5137,16 +6024,19 @@ def _cleaned_playable_score(grid, diag, rows, cols, index, rng):
     (never from an `example_grid` with letters overlaid, which would
     throw off `extract_slots`) — each attempt has its own pattern and its
     own assignment, nothing to share between them. Falls back to
-    `_playable_score(diag)` (the raw state) if `slots`'s length doesn't
-    match `diag["assignment"]`'s — should never happen in real use, a
-    safety net rather than an expected case."""
+    `_playable_score(grid, diag, rows, cols, priority_words, challenge_
+    words)` (the raw state) if `slots`'s length doesn't match `diag[
+    "assignment"]`'s — should never happen in real use, a safety net
+    rather than an expected case."""
     slots = extract_slots(grid, rows, cols)
     if len(slots) != len(diag["assignment"]):
-        return _playable_score(diag)
+        return _playable_score(grid, diag, rows, cols, priority_words, challenge_words)
     cleaned_assignment, _, _ = _clean_blocked_slots(
         slots, diag["assignment"], diag["impossible_slots"], index=index, rng=rng,
     )
-    return sum(len(w) ** 2 for w in cleaned_assignment if w is not None) ** 0.5
+    return _content_score(
+        zip(cleaned_assignment, slots), priority_words, challenge_words,
+    ) ** 0.5
 
 
 def _public_diag(diag):
@@ -5265,6 +6155,68 @@ def _invalid_fully_known_indices(slots_list, index, known, exempt=None):
         if not _slot_candidates(index, length, cells, known_full):
             result.append(j)
     return result
+
+
+def _challenge_word_cells(slots_list, known, challenge_words):
+    """Cells of every slot in `slots_list` fully covered by `known` whose
+    spelled-out word is one of `challenge_words` — meant to be folded into
+    the `exempt` set passed to `_invalid_fully_known_indices`, exactly
+    like `permanent_locked_letters` already is: a "Mots Défi" word placed
+    by `Filler._backtrack` (see its own `self.challenge_words`) is trusted
+    at face value, same as a letter locked in Interactive mode, and must
+    never be silently wiped out by one of generate_grid's own cleanup
+    passes just because it isn't a real dictionary entry."""
+    if not challenge_words:
+        return frozenset()
+    cells = set()
+    for slot_cells in slots_list:
+        if all(c in known for c in slot_cells):
+            word = "".join(known[c] for c in slot_cells)
+            if word in challenge_words:
+                cells.update(slot_cells)
+    return cells
+
+
+def _challenge_fillable_slot_indices(slots_list, known, challenge_words):
+    """Indices of the still-OPEN (not entirely covered by `known`) slots
+    of `slots_list` that an unused "Mots Défi" word could still legally
+    fill — used to exempt such a slot from being reported "impossible" in
+    Interactive mode (`_interactive_fill_diagnostics`, `interactive_clean_
+    impossible_zones`, `interactive_minimize_black_cells`) purely because
+    the real dictionary has nothing left for it, at the user's explicit
+    request: "Les Mots Défi doivent être considérés comme faisant partie
+    du dictionnaire" — a slot with no real dictionary candidate left is
+    not a genuine dead end as long as a challenge word can still legally
+    go there, mirroring `Filler._backtrack`'s own crossing-safety
+    exemption (`self.challenge_words`) during automatic placement. Purely
+    geometric (length + already-known letters), like `Filler.
+    _challenge_word_fits` — a challenge word is trusted at face value,
+    never required to be a real dictionary entry. A challenge word
+    already spelled out in full by some OTHER slot is excluded first
+    (mirrors `Filler.used_words`), so it can't also exempt a second,
+    different open slot."""
+    if not challenge_words:
+        return set()
+    used = {
+        "".join(known[c] for c in cells)
+        for cells in slots_list
+        if all(c in known for c in cells)
+    }
+    available = challenge_words - used
+    if not available:
+        return set()
+    out = set()
+    for i, cells in enumerate(slots_list):
+        if all(c in known for c in cells):
+            continue
+        length = len(cells)
+        for w in available:
+            if len(w) != length:
+                continue
+            if all(w[pos] == known[c] for pos, c in enumerate(cells) if c in known):
+                out.add(i)
+                break
+    return out
 
 
 def _new_crossing_impossibility(cur_slots, cell_to_slots, own_idx, sub, word, known, index):
@@ -5633,7 +6585,8 @@ PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50
 
 def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                               deadline_checks=6_000, cancel_event=None,
-                              permanent_locked_letters=None, permanent_black_cells=None):
+                              permanent_locked_letters=None, permanent_black_cells=None,
+                              challenge_words=None):
     """A new step inserted BEFORE even `_shorten_impossible_zones`/
     `_clean_blocked_slots` (so before any cleanup at all), at the user's
     explicit request: "verrouiller tous les emplacements entièrement vides
@@ -5856,7 +6809,11 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
     # impossible: neither function flags it in that case, and it
     # naturally disappears from `final_impossible`.
     invalid_fully_known = set(
-        _invalid_fully_known_indices(final_slots, index, confirmed, exempt=permanent_locked_letters)
+        _invalid_fully_known_indices(
+            final_slots, index, confirmed,
+            exempt=set(permanent_locked_letters or ())
+            | _challenge_word_cells(final_slots, confirmed, challenge_words),
+        )
     )
     for j in invalid_fully_known:
         final_assignment[j] = None
@@ -5907,7 +6864,8 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
 
 
 def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
-                               index, rng, permanent_locked_letters=None):
+                               index, rng, permanent_locked_letters=None,
+                               challenge_words=None):
     """A new step inserted BEFORE the ordinary blocked-slot cleanup
     (`_clean_blocked_slots` below), at the user's explicit request,
     reserved for "reprise telle quelle" (see `_clean_continue_candidate`)
@@ -6038,7 +6996,11 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
 
     final_slots = extract_slots(new_grid, rows, cols)
     invalid_full = set(
-        _invalid_fully_known_indices(final_slots, index, known, exempt=permanent_locked_letters)
+        _invalid_fully_known_indices(
+            final_slots, index, known,
+            exempt=set(permanent_locked_letters or ())
+            | _challenge_word_cells(final_slots, known, challenge_words),
+        )
     )
     final_assignment = [
         "".join(known[c] for c in cells)
@@ -6051,7 +7013,7 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
 
 def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
                                 index, rng, permanent_locked_letters=None,
-                                permanent_black_cells=None):
+                                permanent_black_cells=None, challenge_words=None):
     """A new step, the exact complement of `_shorten_impossible_zones`
     above, at the user's explicit request: "si un emplacement ne trouve
     pas de mot dans le glossaire thématique (ou le glossaire normal si ce
@@ -6174,7 +7136,11 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
 
     final_slots = extract_slots(new_grid, rows, cols)
     invalid_full = set(
-        _invalid_fully_known_indices(final_slots, index, known, exempt=permanent_locked_letters)
+        _invalid_fully_known_indices(
+            final_slots, index, known,
+            exempt=set(permanent_locked_letters or ())
+            | _challenge_word_cells(final_slots, known, challenge_words),
+        )
     )
     final_assignment = [
         "".join(known[c] for c in cells)
@@ -6850,20 +7816,24 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
 
 
 # Score used to pick the best cleaned grid among several candidates — the
-# sum of squares of the lengths of every word genuinely "in place" after
-# cleanup (all of its cells appear in `cand_confirmed`). Hoisted to module
-# level (previously a local closure, specific to the full nettoyage only,
-# `else:` in `generate_grid`) at the user's explicit request, once the
-# same logic was also needed for "reprise telle quelle" (see `_clean_
-# continue_candidate`/`_continue_seed_pool` further below) — favors a
-# handful of long words over many short ones for the same total letter
-# count, the same formula already used to break ties among successful
-# parallel attempts in `generate_grid`.
-def _words_in_place_score(cand_slots, cand_confirmed):
-    return sum(
-        len(cells) ** 2 for cells in cand_slots
+# same shared `_content_score` formula used everywhere else in this file
+# (successful-attempt tie-break, failed-attempt selection — see its own
+# docstring), computed here over every word genuinely "in place" after
+# cleanup (all of its cells appear in `cand_confirmed`; its own letters
+# read directly off `cand_confirmed` to recover the actual word, since
+# this function is only ever given cells/letters, never a `Filler.
+# assignment`-style word list). Hoisted to module level (previously a
+# local closure, specific to the full nettoyage only, `else:` in
+# `generate_grid`) at the user's explicit request, once the same logic
+# was also needed for "reprise telle quelle" (see `_clean_continue_
+# candidate`/`_continue_seed_pool` further below).
+def _words_in_place_score(cand_slots, cand_confirmed, priority_words=None, challenge_words=None):
+    pairs = (
+        ("".join(cand_confirmed[cell] for cell in cells), cells)
+        for cells in cand_slots
         if all(cell in cand_confirmed for cell in cells)
     )
+    return _content_score(pairs, priority_words, challenge_words)
 
 
 # Breaks a `_words_in_place_score` tie — the candidate's own black-cell
@@ -6879,12 +7849,18 @@ def _candidate_black_count(cand_seed):
 # `_candidate_black_count`) descending — each candidate is a tuple whose
 # first 3 elements are `(seed_grid, confirmed, slots)`, in this exact
 # order (any further elements, if present, are never read here — see
-# `_clean_continue_candidate` for a 6-element example).
-def _sorted_by_score(cleaned_candidates):
+# `_clean_continue_candidate` for a 6-element example). `priority_words`/
+# `challenge_words` passed straight through to `_words_in_place_score` —
+# see `_content_score`'s own docstring: the same theme/"Mots Défi"
+# preference already applied to every other content score in this file
+# now applies here too, at the user's explicit request ("le scoring
+# réussi et échoué doivent utiliser la même logique qui favorise le
+# glossaire thématique").
+def _sorted_by_score(cleaned_candidates, priority_words=None, challenge_words=None):
     return sorted(
         cleaned_candidates,
         key=lambda sc: (
-            _words_in_place_score(sc[2], sc[1]),
+            _words_in_place_score(sc[2], sc[1], priority_words, challenge_words),
             _candidate_black_count(sc[0]),
         ),
         reverse=True,
@@ -7025,7 +8001,8 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # "impossible_slots"]` for the rest of this function — a complete no-op
 # (same objects, same indices) as long as neither one changed anything.
 def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
-                               permanent_locked_letters=None, permanent_black_cells=None):
+                               permanent_locked_letters=None, permanent_black_cells=None,
+                               challenge_words=None):
     """Cleans up a single failed attempt of a "reprise telle quelle"
     palier (see `_continue_seed_pool`) — removes whatever crosses an
     impossible slot (`_clean_blocked_slots`), after first trying to
@@ -7066,11 +8043,13 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
         cand_grid, rows, cols, cand_slots, cand_diag["assignment"],
         cand_diag["impossible_slots"], index, rng,
         permanent_locked_letters=permanent_locked_letters,
+        challenge_words=challenge_words,
     )
     cand_grid, cand_slots, cand_assignment, cand_impossible = _lengthen_impossible_zones(
         cand_grid, rows, cols, cand_slots, cand_assignment, cand_impossible, index, rng,
         permanent_locked_letters=permanent_locked_letters,
         permanent_black_cells=permanent_black_cells,
+        challenge_words=challenge_words,
     )
     cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
         cand_slots, cand_assignment, cand_impossible,
@@ -7088,7 +8067,9 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
             for cells in new_slots
         ]
         for j in _invalid_fully_known_indices(
-            new_slots, index, confirmed, exempt=permanent_locked_letters
+            new_slots, index, confirmed,
+            exempt=set(permanent_locked_letters or ())
+            | _challenge_word_cells(new_slots, confirmed, challenge_words),
         ):
             cand_preseed_assignment[j] = None
         old_impossible_cell_tuples = {
@@ -7131,6 +8112,11 @@ _worker_index = None
 # initializer, like `_worker_index` (it can hold several thousand words
 # and never changes during a generate_grid() call).
 _worker_priority_words = None
+# "Mots Défi" (see generate_grid's `challenge_words` and Filler.
+# challenge_words): a small, plain frozenset (never a DualSet, unlike
+# `_worker_priority_words` above — a challenge word carries no language),
+# shared the same way for the same reason.
+_worker_challenge_words = None
 # "Stop" button (see CANCEL_CHECK_INTERVAL/Filler.__init__), at the
 # user's explicit request — like `_worker_index` right above, passed once
 # per worker via the pool's initializer rather than as an argument of
@@ -7326,7 +8312,7 @@ def _warmup_worker():
 def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_done_event=None,
                   best_state_queue=None, warmup_barrier=None, proper_noun_words=None,
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
-                  priority_words=None):
+                  priority_words=None, challenge_words=None):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -7348,9 +8334,11 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
     global _worker_index, _worker_cancel_event, _worker_batch_abandoned_event, \
         _worker_attempt_done_event, _worker_best_state_queue, _worker_warmup_barrier, \
         _worker_proper_noun_words, _worker_max_proper_nouns, \
-        _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words
+        _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
+        _worker_challenge_words
     _worker_index = index
     _worker_priority_words = priority_words
+    _worker_challenge_words = challenge_words
     _worker_cancel_event = cancel_event
     _worker_batch_abandoned_event = batch_abandoned_event
     _worker_attempt_done_event = attempt_done_event
@@ -7360,6 +8348,272 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
     _worker_max_proper_nouns = max_proper_nouns
     _worker_non_gloss_words = non_gloss_words
     _worker_max_non_gloss = max_non_gloss
+
+
+# ---------- Floating-black-cell widening for "Mots Défi"/theme words ----------
+#
+# At the user's explicit request: when a "Mots Défi" (challenge) word has no
+# slot of its own length anywhere in a freshly generated pattern, look for a
+# "floating" black cell — one not protected by `permanent_black_cells`, whose
+# relocation to the far side of the word still leaves the grid structurally
+# valid (`is_structurally_valid`'s relaxed `min_interior_free=1` threshold,
+# the same bar `minimize_black_squares` already uses for the same kind of
+# cell) — and relocate it there instead of its current position, carving out
+# a right-sized empty slot before the CSP search even starts. The theme
+# glossary (`priority_words`) gets the exact same treatment, tried only after
+# every challenge word has had its turn (see `_pattern_attempt`'s own call).
+# This only ever touches cells with no word on either side yet (the pattern
+# is examined before any `Filler` exists), so "no damage to an already-
+# placed word" is true by construction — never a mid-search operation, and
+# never applied to `_pattern_continue` (a continuation's pattern already
+# carries real placed words on some of its slots; see that function's own
+# docstring for why it never calls `make_pattern` again either). Once a
+# right-sized slot exists, the ALREADY-existing `_select_target_slot`/
+# candidate-priority cascade (see CLAUDE.md's "Grid generation" section)
+# picks it up and places the word on its own — this widening step never
+# writes a single letter itself, only reshapes the black-cell pattern.
+
+WIDEN_BLACK_CELL_WINDOW = 40
+WIDEN_PRIORITY_WORDS_LIMIT = 30
+WIDEN_MAX_SUCCESSFUL = 6
+
+
+def _white_run(grid, rows, cols, r, c, dr, dc):
+    """Contiguous WHITE cells starting one step from (r, c) in direction
+    (dr, dc), stopping at the first non-WHITE cell or the grid border — same
+    walk as the nested `_run_cells` closure inside
+    `_new_black_cell_breaks_locked_slot`, factored out at module scope here
+    since this side needs it from a plain black cell, not from inside a
+    method."""
+    cells = []
+    rr, cc = r + dr, c + dc
+    while 0 <= rr < rows and 0 <= cc < cols and grid[rr][cc] == WHITE:
+        cells.append((rr, cc))
+        rr += dr
+        cc += dc
+    return cells
+
+
+def _slot_has_domain(cells, index, locked_letters):
+    """True if at least one real dictionary word can still fill `cells`,
+    given whichever of them are already in `locked_letters` — a
+    lightweight, `Filler`-independent cousin of `Filler._domain` (no
+    crossing-assignment/forced-letter awareness needed here, only the
+    plain already-known facts), used by `_perpendicular_slot_stays_valid`
+    below. `cells` need not be one of `index`'s own registered slots."""
+    idx = index.for_cells(cells).get(len(cells))
+    if idx is None:
+        return False
+    constraints = {
+        pos: locked_letters[cell] for pos, cell in enumerate(cells) if cell in locked_letters
+    }
+    if not constraints:
+        return True
+    sets = []
+    for pos, ch in constraints.items():
+        s = idx["pos"][pos].get(ch)
+        if not s:
+            return False
+        sets.append(s)
+    sets.sort(key=len)
+    result = sets[0]
+    for s in sets[1:]:
+        result = result & s
+        if not result:
+            return False
+    return bool(result)
+
+
+def _perpendicular_slot_stays_valid(grid, rows, cols, r, c, dr, dc, index, locked_letters):
+    """Checks, along the axis PERPENDICULAR to `(dr, dc)` (a 90° rotation,
+    `(dc, dr)`), that touching `(r, c)` — freeing it if it is currently
+    BLACK, or blackening it if currently WHITE — can never turn an
+    existing or resulting perpendicular slot into one with no real
+    dictionary candidate left, given whatever is already known there.
+    Used by `_try_widen_black_cell` for both `(r, c)` itself and `new_
+    black`, at the user's explicit request: "Le placement des Mots Défi
+    doit se faire en respectant les règles fondamentales du placement
+    d'un mot (ne pas créer d'emplacement impossible)." Neither `is_
+    structurally_valid` (shape-only, no notion of "known letter" or
+    "dictionary word") nor the existing `locked_letters` span check
+    (only ever checks the widened word's OWN cells) can catch this: only
+    this perpendicular check does. `locked_letters` must already include
+    whatever letter `(r, c)` itself is about to receive as part of the
+    widened word, when checking the freed-cell side (see the caller). A
+    no-op (always True) when `locked_letters` is empty (`_pattern_
+    attempt`'s own ordinary, letter-free caller)."""
+    if not locked_letters:
+        return True
+    pdr, pdc = dc, dr
+    before = list(reversed(_white_run(grid, rows, cols, r, c, -pdr, -pdc)))
+    after = _white_run(grid, rows, cols, r, c, pdr, pdc)
+    if grid[r][c] == BLACK:
+        # About to turn WHITE: `(r, c)` merges into one combined slot
+        # together with both perpendicular neighbor runs — too short to be
+        # a real (>=2-cell) slot at all is always safe (nothing to break).
+        cells = before + [(r, c)] + after
+        return len(cells) < 2 or _slot_has_domain(cells, index, locked_letters)
+    # About to turn BLACK: the combined run through `(r, c)` (which used
+    # to include it) is cut into up to two independent pieces — each,
+    # if still long enough to be a real slot, must keep a real candidate.
+    return (
+        (len(before) < 2 or _slot_has_domain(before, index, locked_letters))
+        and (len(after) < 2 or _slot_has_domain(after, index, locked_letters))
+    )
+
+
+def _flatten_priority_words(words):
+    """The flat union of a priority-word collection, whether a plain
+    frozenset (monolingual) or a `DualSet` (bilingual, one glossary per
+    direction) — only used here to decide which words are worth trying to
+    widen a slot for; the actual placement afterward still resolves the
+    right per-direction glossary itself (`_priority_words_for`), so getting
+    this pre-check exactly right for a bilingual grid isn't required."""
+    if not words:
+        return frozenset()
+    if isinstance(words, DualSet):
+        return frozenset(words.across) | frozenset(words.down)
+    return frozenset(words)
+
+
+def _try_widen_black_cell(grid, rows, cols, r, c, dr, dc, word, locked_letters, index):
+    """Tries to relocate the black cell at (r, c) to make room for `word`
+    along the (dr, dc) axis, using the freed cell itself plus whichever side
+    the word needs to reach. Returns True and mutates `grid` in place on
+    success (leaving the mutation applied); returns False and leaves `grid`
+    untouched otherwise.
+
+    `new_black` (the one extra cell beyond the word's own span that has to
+    absorb the relocated black cell) must never be a cell already in
+    `locked_letters` — on `_pattern_attempt`'s own ordinary caller this
+    never matters (that pattern carries no letters at all yet), but the
+    same function is also reused, unmodified, by Interactive mode's
+    "Suivant" (`interactive_place_word`, at the user's explicit request:
+    "Suivant doit utiliser le même code que l'inférence automatique"),
+    where `grid` cells outside the word's own span can genuinely already
+    hold a real, previously-placed letter — without this guard, widening
+    could silently blacken (and so destroy) an already-placed crossing
+    letter that happens to sit right next to the relocated black cell.
+
+    Two more checks (`_perpendicular_slot_stays_valid`), for the same
+    Interactive-mode reason, refuse any relocation that would turn a
+    PERPENDICULAR slot — the one crossing `(r, c)` itself once it takes
+    its own letter from `word`, or the one crossing `new_black` once it's
+    split/shortened by it — into one with no real dictionary candidate
+    left, given whatever is already known there — at the user's explicit
+    request: "Le placement des Mots Défi doit se faire en respectant les
+    règles fondamentales du placement d'un mot (ne pas créer d'emplacement
+    impossible)." Without them, freeing `(r, c)` could silently attach a
+    stray extra cell onto an already-placed crossing word (leaving it with
+    a trailing blank cell no black cell ever closes) or form a new,
+    unfillable short crossing slot, and blackening `new_black` could
+    silently truncate an existing crossing word into an invalid one —
+    none of this is visible to `is_structurally_valid` below, which only
+    ever reasons about the black/white shape, never about which cells
+    already carry a real letter or what the dictionary actually allows."""
+    before = list(reversed(_white_run(grid, rows, cols, r, c, -dr, -dc)))
+    after = _white_run(grid, rows, cols, r, c, dr, dc)
+    merged = before + [(r, c)] + after
+    total = len(merged)
+    word_len = len(word)
+    if word_len > total:
+        return False
+    rc_index_in_merged = len(before)
+    starts = set()
+    if word_len > len(before):
+        starts.add(0)
+    if word_len > len(after):
+        starts.add(total - word_len)
+    for start in starts:
+        span = merged[start:start + word_len]
+        if any(locked_letters.get(cell, letter) != letter
+               for cell, letter in zip(span, word)):
+            continue
+        new_black = None
+        if start == 0:
+            if word_len < total:
+                new_black = merged[word_len]
+        else:
+            new_black = merged[start - 1]
+        if new_black is not None and new_black in locked_letters:
+            continue
+        rc_letter = word[rc_index_in_merged - start]
+        rc_locked_letters = {**locked_letters, (r, c): rc_letter}
+        if not _perpendicular_slot_stays_valid(grid, rows, cols, r, c, dr, dc, index, rc_locked_letters):
+            continue
+        if new_black is not None and not _perpendicular_slot_stays_valid(
+            grid, rows, cols, new_black[0], new_black[1], dr, dc, index, locked_letters,
+        ):
+            continue
+        saved_new_black = grid[new_black[0]][new_black[1]] if new_black else None
+        grid[r][c] = WHITE
+        if new_black:
+            grid[new_black[0]][new_black[1]] = BLACK
+        if is_structurally_valid(grid, rows, cols, min_interior_free=1):
+            return True
+        grid[r][c] = BLACK
+        if new_black:
+            grid[new_black[0]][new_black[1]] = saved_new_black
+    return False
+
+
+def _widen_one_floating_black_cell(grid, rows, cols, rng, word,
+                                    locked_letters, permanent_black_cells, index):
+    """Scans up to `WIDEN_BLACK_CELL_WINDOW` shuffled floating black cells
+    (never one in `permanent_black_cells`), across then down, for one whose
+    relocation makes room for `word`. Returns True on the first success."""
+    black_cells = [
+        (r, c) for r in range(rows) for c in range(cols)
+        if grid[r][c] == BLACK and (r, c) not in permanent_black_cells
+    ]
+    rng.shuffle(black_cells)
+    for (r, c) in black_cells[:WIDEN_BLACK_CELL_WINDOW]:
+        for dr, dc in ((0, 1), (1, 0)):
+            if _try_widen_black_cell(grid, rows, cols, r, c, dr, dc, word, locked_letters, index):
+                return True
+    return False
+
+
+def _widen_floating_black_cells_for_priority_words(
+    grid, rows, cols, rng, priority_word_groups, index,
+    locked_letters=None, permanent_black_cells=None,
+):
+    """Runs `_widen_one_floating_black_cell` for every word of every group in
+    `priority_word_groups`, in order — "Mots Défi" first, the theme glossary
+    second, at the user's explicit request: "Ne placer des mots autres que
+    Mots Défi ou Thématique que quand on a épuisé les possibilités de
+    manipuler des cases noires flottantes" (only the ordinary dictionary
+    domain is placed once this has run its course; that part is already true
+    by construction, since this only ever runs before the CSP search even
+    starts). A word already matching an existing empty slot's length is
+    skipped — no need to reshape the grid for it, the ordinary cascade
+    already handles it. `index` (a `DualIndex`) grounds the perpendicular-
+    slot safety check inside `_try_widen_black_cell` — see its own
+    docstring — in the real dictionary; harmless busywork when `locked_
+    letters` is empty (`_pattern_attempt`'s own ordinary caller), since
+    that check is then a no-op regardless. Mutates `grid` in place;
+    returns nothing."""
+    locked_letters = locked_letters or {}
+    permanent_black_cells = permanent_black_cells or set()
+    existing_lengths = {len(cells) for cells in extract_slots(grid, rows, cols)}
+    successful = 0
+    for words in priority_word_groups:
+        if successful >= WIDEN_MAX_SUCCESSFUL:
+            break
+        flat = _flatten_priority_words(words)
+        pending = [w for w in flat if len(w) >= 2 and len(w) not in existing_lengths]
+        if not pending:
+            continue
+        rng.shuffle(pending)
+        for word in pending[:WIDEN_PRIORITY_WORDS_LIMIT]:
+            if successful >= WIDEN_MAX_SUCCESSFUL:
+                break
+            if len(word) in existing_lengths:
+                continue
+            if _widen_one_floating_black_cell(grid, rows, cols, rng, word,
+                                               locked_letters, permanent_black_cells, index):
+                successful += 1
+                existing_lengths = {len(cells) for cells in extract_slots(grid, rows, cols)}
 
 
 def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
@@ -7500,6 +8754,17 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
                          black_enrichment_fraction=black_enrichment_fraction)
+    # Floating-black-cell widening for "Mots Défi"/theme words — see that
+    # section's own docstring just above `_pattern_attempt`. Runs on this
+    # freshly generated pattern, before any word exists anywhere in it, so
+    # it can never damage an already-placed word; "Mots Défi" tried before
+    # the theme glossary, at the user's explicit request.
+    if _worker_challenge_words or _worker_priority_words:
+        _widen_floating_black_cells_for_priority_words(
+            grid, rows, cols, rng,
+            (_worker_challenge_words, _worker_priority_words), _worker_index,
+            locked_letters=locked_letters, permanent_black_cells=permanent_black_cells,
+        )
     # Retrieves, even before launching the search (and even before the
     # sample_letter_biases sampling below — see right after), the word
     # already entirely determined by `locked_letters` for every slot
@@ -7619,6 +8884,7 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                        non_gloss_words=_worker_non_gloss_words,
                        max_non_gloss=_worker_max_non_gloss,
                        priority_words=_worker_priority_words,
+                       challenge_words=_worker_challenge_words,
                        required_cells=required_cells)
     return grid, result, diag
 
@@ -7805,6 +9071,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        non_gloss_words=_worker_non_gloss_words,
                        max_non_gloss=_worker_max_non_gloss,
                        priority_words=_worker_priority_words,
+                       challenge_words=_worker_challenge_words,
                        required_cells=required_cells)
     return seed_grid, result, diag
 
@@ -7870,8 +9137,37 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    deadline_checks=None, resume_state=None, should_pause=None,
                    bilingual_wordlist_path=None, priority_words=None,
                    bilingual_priority_words=None, permanent_locked_letters=None,
-                   permanent_black_cells=None, required_cells=None):
-    """`required_cells` (`None`/empty by default — no effect for any
+                   permanent_black_cells=None, required_cells=None, challenge_words=None):
+    """`challenge_words` (`None`/empty by default — no effect for any
+    pre-existing caller): "Mots Défi", the same free-form, author-typed
+    word list as Interactive mode's own panel (see `Filler.challenge_
+    words`/`InteractiveStepRequest.challenge_words` in backend/app.py),
+    threaded through the automatic CSP search so it applies "la même
+    mécanique que Suivant" — a challenge word is given priority over both
+    the theme glossary and the ordinary dictionary domain for whichever
+    slot it geometrically fits (`Filler._backtrack`), and is never
+    required to be a real dictionary entry itself. Always a plain
+    frozenset, normalized via `challenge_word_grid_form` (bare, accent-
+    stripped, uppercase — never filtered against the loaded lexicon,
+    unlike `priority_words` right below, precisely because a challenge
+    word is allowed to be absent from it) — never a DualSet: a challenge
+    word carries no language, checked purely geometrically wherever it's
+    tried. A best-effort mechanic, not a hard guarantee: unlike
+    `permanent_locked_letters`, a challenge word's target cells are never
+    reserved ahead of time in the pattern itself (`make_pattern`/
+    `_prefill_unfillable_slots`, which run before any Filler exists, know
+    nothing about it) — exactly the same limitation Interactive mode's
+    own "Suivant" already has (no code path there reserves geometry for a
+    challenge word ahead of time either); only its actual PLACEMENT, once
+    a slot of the right shape exists, is favored. It is however protected
+    once placed: `_optimize_before_cleanup`/`_shorten_impossible_zones`/
+    `_lengthen_impossible_zones`/`_clean_continue_candidate`'s own calls
+    to `_invalid_fully_known_indices` all additionally exempt a
+    challenge word's cells (`_challenge_word_cells`), so a non-dictionary
+    challenge word already placed by `_backtrack` survives cross-palier
+    cleanup exactly like a `permanent_locked_letters` cell already does.
+
+    `required_cells` (`None`/empty by default — no effect for any
     pre-existing caller) is passed straight through to every `_pattern_
     attempt`/`_pattern_continue` call (see `try_fill`'s own docstring for
     the full reasoning): the set of cells "Finir la zone" (backend/app.py's
@@ -8234,6 +9530,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             priority_words = across_pw
     else:
         priority_words = frozenset()
+    # "Mots Défi" (see this function's own docstring): normalized once
+    # here, deliberately with NO lexicon filter (unlike priority_words
+    # right above) — a challenge word is trusted even when absent from
+    # the loaded dictionary.
+    challenge_words = frozenset(
+        gf for w in (challenge_words or ()) if (gf := challenge_word_grid_form(w))
+    )
     # Precomputed once (not per palier) — same lengths for the whole
     # generation, `index` never changes. Reproduces exactly the same
     # computation each worker does in `_pattern_attempt` (see its own
@@ -8575,7 +9878,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   warmup_barrier, proper_noun_words, max_proper_nouns,
-                  non_gloss_words, max_non_gloss, priority_words)
+                  non_gloss_words, max_non_gloss, priority_words, challenge_words)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -8679,6 +9982,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         "theme_cells": _theme_cells_from_preview_state(
                             pool_grid, rows, cols, None, pool_preseed, priority_words
                         ),
+                        "challenge_cells": _challenge_cells_from_preview_state(
+                            pool_grid, rows, cols, None, pool_preseed, challenge_words
+                        ),
                         "low_candidate_cells": [],
                         "noise_cells": [],
                         "process_number": continue_pool_lineage[pool_idx % len(continue_pool_lineage)],
@@ -8741,6 +10047,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         "locked_cells": start_locked_cells,
                         "theme_cells": _theme_cells_from_preview_state(
                             pool_grid, rows, cols, pool_locked, None, priority_words
+                        ),
+                        "challenge_cells": _challenge_cells_from_preview_state(
+                            pool_grid, rows, cols, pool_locked, None, challenge_words
                         ),
                         "low_candidate_cells": low_candidate_cells,
                         "noise_cells": noise_cells,
@@ -8941,8 +10250,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             "forced_cells": [],
                             "locked_cells": early_pattern_locked,
                             # Very first palier: nothing is locked or
-                            # assigned yet, so no theme word to report.
+                            # assigned yet, so no theme/challenge word to
+                            # report.
                             "theme_cells": [],
+                            "challenge_cells": [],
                             "process_number": dispatch_lineage[i],
                             # No comparison has happened yet at this
                             # point (very first palier, every attempt
@@ -9020,6 +10331,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             "locked_cells": early_pattern_locked,
                             "theme_cells": _theme_cells_from_preview_state(
                                 early_pattern, rows, cols, pool_locked, None, priority_words
+                            ),
+                            "challenge_cells": _challenge_cells_from_preview_state(
+                                early_pattern, rows, cols, pool_locked, None, challenge_words
                             ),
                             "process_number": pool_lineage[p % len(pool_lineage)],
                             # `pool[0]` (never a duplicate — the first
@@ -9318,30 +10632,22 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             permanent_black_cells=permanent_black_cells,
                         )
                         opt_black = sum(row.count(BLACK) for row in opt_grid)
-                        # Tie-break, at the user's explicit request: "au
-                        # lieu d'évaluer la grille avec les mots les plus
-                        # longs sur tous les mots, évaluer uniquement sur
-                        # les mots du glossaire thématique" — for a
-                        # themed generation (priority_words non-empty),
-                        # the sum-of-squares score now only counts a
-                        # placed word that's actually a member of the
-                        # theme glossary, rather than every slot
-                        # regardless of content — so the candidate that
-                        # ends up surfacing more/longer theme words wins
-                        # the tie-break, not merely the one with the
-                        # longest words overall. An ordinary, non-themed
-                        # generation (priority_words empty) is completely
-                        # unaffected: opt_score still sums every slot's
-                        # own length, exactly as before this change.
-                        if priority_words:
-                            opt_score = sum(
-                                len(w) ** 2
-                                for w, slot in zip(opt_assignment, opt_slots)
-                                if w is not None
-                                and w in _priority_words_for(priority_words, slot)
-                            )
-                        else:
-                            opt_score = sum(len(slot) ** 2 for slot in opt_slots)
+                        # Tie-break — see `_content_score`'s own docstring
+                        # for the shared formula (also used by the FAILED-
+                        # palier scores, `_playable_score`/`_cleaned_
+                        # playable_score`, on the same footing): with a
+                        # theme (`priority_words` non-empty), only a
+                        # placed word actually belonging to the glossary
+                        # counts at all, so the candidate that surfaces
+                        # more/longer theme words wins the tie-break, not
+                        # merely the one with the longest words overall;
+                        # a "Mots Défi" word always counts regardless, at
+                        # a bonus-boosted length. An ordinary, non-themed,
+                        # challenge-free generation sums every placed
+                        # word's own plain length, unchanged.
+                        opt_score = _content_score(
+                            zip(opt_assignment, opt_slots), priority_words, challenge_words,
+                        )
                         scored.append((opt_black, -opt_score, g, r, d))
                     _, _, best, best_result, best_diag = min(scored, key=lambda t: (t[0], t[1]))
                 break
@@ -9396,7 +10702,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # docstring for the complete detail.
             failed_pairs = sorted(
                 failed_unique,
-                key=lambda gd: _cleaned_playable_score(gd[0], gd[1], rows, cols, index, rng),
+                key=lambda gd: _cleaned_playable_score(
+                    gd[0], gd[1], rows, cols, index, rng, priority_words, challenge_words,
+                ),
                 reverse=True,
             )
             last_diag = failed_pairs[0][1]
@@ -9507,7 +10815,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 attempt_key = d.get("attempt_id")
                 if attempt_key is None:
                     attempt_key = ("__no_attempt_id__", idx)
-                score = _playable_score(d)
+                score = _playable_score(g, d, rows, cols, priority_words, challenge_words)
                 if attempt_key not in best_by_attempt or score > best_by_attempt[attempt_key][0]:
                     best_by_attempt[attempt_key] = (score, (g, d))
             display_unique = [gd for _, gd in best_by_attempt.values()]
@@ -9556,7 +10864,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 (gd for gd in display_unique
                  if (tuple(map(tuple, gd[0])), tuple(gd[1]["assignment"])) != winner_key
                  and (winner_attempt_id is None or gd[1].get("attempt_id") != winner_attempt_id)),
-                key=lambda gd: _playable_score(gd[1]), reverse=True,
+                key=lambda gd: _playable_score(
+                    gd[0], gd[1], rows, cols, priority_words, challenge_words,
+                ),
+                reverse=True,
             )
             display_pairs = [(winner_grid, winner_diag)] + display_rest
             # Every displayed grid shows the state BEFORE cleanup (`d[
@@ -9587,6 +10898,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     "forced_cells": d["forced_cells"],
                     "locked_cells": d.get("locked_cells", []),
                     "theme_cells": d.get("theme_cells", []),
+                    "challenge_cells": d.get("challenge_cells", []),
                     "process_number": d.get("process_number"),
                     # `display_pairs[0]` is ALWAYS the real winner (see
                     # its own comment above) — marked here, before the
@@ -9755,7 +11067,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                                           cancel_event=cancel_event,
                                           permanent_locked_letters=permanent_locked_letters,
-                                          permanent_black_cells=permanent_black_cells)
+                                          permanent_black_cells=permanent_black_cells,
+                                          challenge_words=challenge_words)
                 for cand_grid, cand_diag in failed_pairs
             ]
             # "Before" preview: already `last_examples`/`pattern_attempt_
@@ -9802,6 +11115,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # value, the same choice as `forced_cells` right
                     # above.
                     "theme_cells": cand_diag.get("theme_cells", []),
+                    "challenge_cells": cand_diag.get("challenge_cells", []),
                     "process_number": d.get("process_number"),
                     # `failed_pairs[0]` (index 0, before any sort-by-
                     # process below) is this palier's genuine winner — see
@@ -9838,12 +11152,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # reasoning), applied once per attempt instead of once on
                 # the winner alone.
                 cleaned_continue_candidates = _sorted_by_score(
-                    _clean_continue_candidate(
-                        cand_grid, cand_diag, rows, cols, index, rng,
-                        permanent_locked_letters=permanent_locked_letters,
-                        permanent_black_cells=permanent_black_cells,
-                    )
-                    for cand_grid, cand_diag in optimized_pairs
+                    (
+                        _clean_continue_candidate(
+                            cand_grid, cand_diag, rows, cols, index, rng,
+                            permanent_locked_letters=permanent_locked_letters,
+                            permanent_black_cells=permanent_black_cells,
+                            challenge_words=challenge_words,
+                        )
+                        for cand_grid, cand_diag in optimized_pairs
+                    ),
+                    priority_words=priority_words, challenge_words=challenge_words,
                 )
                 carry_seed_pool_continue = _continue_seed_pool(cleaned_continue_candidates)
                 carry_seed_grid, carry_preseed_assignment, carry_excluded_slots = (
@@ -9966,7 +11284,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # large, heavily locked 30×30 grid).
 
                 previous_locked_letters = carry_locked_letters
-                cleaned_candidates = _sorted_by_score(_clean_all_candidates(force_exclude=False))
+                cleaned_candidates = _sorted_by_score(
+                    _clean_all_candidates(force_exclude=False),
+                    priority_words=priority_words, challenge_words=challenge_words,
+                )
                 carry_seed_pool = _seed_pool(cleaned_candidates)
                 carry_seed_grid, carry_locked_letters = carry_seed_pool[0]
                 # See `carry_seed_pool_lineage`'s own definition (before
@@ -10009,7 +11330,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # detection, the other about diversity for the next
                 # launch).
                 if previous_locked_letters is not None and carry_locked_letters == previous_locked_letters:
-                    cleaned_candidates = _sorted_by_score(_clean_all_candidates(force_exclude=True))
+                    cleaned_candidates = _sorted_by_score(
+                        _clean_all_candidates(force_exclude=True),
+                        priority_words=priority_words, challenge_words=challenge_words,
+                    )
                     carry_seed_pool = _seed_pool(cleaned_candidates)
                     carry_seed_grid, carry_locked_letters = carry_seed_pool[0]
                     raw_lineage = _seed_pool(cleaned_candidates, extract=lambda sc: sc[3])
@@ -10180,6 +11504,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             "forced_cells": [],
             "locked_cells": [],
             "theme_cells": _theme_word_cells(best_slots, best_assignment, priority_words),
+            "challenge_cells": _challenge_word_cells_from_assignment(
+                best_slots, best_assignment, challenge_words
+            ),
             "process_number": winning_process_number,
             "is_best": True,
         }],
