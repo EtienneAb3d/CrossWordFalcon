@@ -686,6 +686,24 @@ async def proxy_interactive_impossible(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/interactive/stats")
+async def proxy_interactive_stats(request: Request):
+    """"Stats" button of the "Interactif" mode — read-only statistical
+    letter-frequency preview for every still-empty cell, with no mutation
+    of the grid."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/stats",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.post("/api/interactive/verify")
 async def proxy_interactive_verify(request: Request):
     """"Vérifier" button of the "Interactif" mode — checks every complete

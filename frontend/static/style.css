@@ -20,6 +20,11 @@
   --best: #16a34a;
   --theme-fg: #ff00fb;
   --finish-locked: #4ade80;
+  /* "Interactif" mode "Stats" button: light gray suggested letter shown
+     inside an otherwise-still-empty cell (script.js's
+     interactiveStatLetters, backend's `_interactive_letter_stats`) — a
+     plain overlay hint, never mistaken for a real placed letter. */
+  --stats-fg: #a3a3a3;
   /* "Cases hors zone" — a plain gray fill for every cell NOT part of a
      click-dragged selection zone (Édition mode), at the user's explicit
      request: "mettre en fond gris les cases qui ne font pas partie de la
@@ -2405,6 +2410,15 @@ button:disabled {
   line-height: 1;
 }
 
+/* "Interactif" mode "Stats" button: the suggested letter itself, an
+   overlay span (never the cell's real letter text node, which stays
+   empty) so it can carry its own light-gray color independent of
+   .interactive-theme/.interactive-challenge/etc. */
+.interactive-stat-letter {
+  color: var(--stats-fg);
+  font-weight: 600;
+}
+
 .header-cell {
   background: var(--bg);
   color: var(--fg);
@@ -2624,12 +2638,15 @@ button:disabled {
    effacer la liste précédente affichée, qui reste visible en dessous"
    (see renderInteractiveWords()/renderInteractiveCrossing() in
    script.js — both prepend into this one shared zone, never replace).
-   Within one block, every word is an inline <span> plus a plain ", "
-   text node between them, same as #interactive-propose-results' own
-   sibling lines. 100% width + naturally 0-height/hidden when empty, at
-   the user's explicit request — no padding/border/min-height set here,
-   so an empty zone (no stacked block yet) already collapses to nothing
-   on its own, same as every other [hidden] panel in this file. */
+   Within one block, every word is an inline <span>; the comma between
+   two visible ones is drawn by .interactive-word-item's own ::before
+   rule below, not a text node, so the "eye" toggle (see
+   .interactive-words-eye-btn) can hide/show individual words without
+   leaving stray commas behind. 100% width + naturally 0-height/hidden
+   when empty, at the user's explicit request — no padding/border/
+   min-height set here, so an empty zone (no stacked block yet) already
+   collapses to nothing on its own, same as every other [hidden] panel
+   in this file. */
 #interactive-answers {
   width: 100%;
   line-height: 1.6;
@@ -2641,6 +2658,16 @@ button:disabled {
   border-top: 1px solid var(--border);
   margin-top: 0.3rem;
   padding-top: 0.3rem;
+}
+/* Header row of one stacked block: the emplacement label on the left,
+   the "eye" toggle button (see .interactive-words-eye-btn) at the
+   block's top-right, at the user's explicit request ("ajouter un
+   bouton icône 'voir' en haut à droite"). */
+.interactive-words-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
 }
 /* Which emplacement a given stacked block was fetched for — the same
    small/dim treatment as .attempt-preview-stats, and the same H/V +
@@ -2654,6 +2681,38 @@ button:disabled {
   color: var(--fg);
   opacity: 0.7;
 }
+/* "Eye" toggle button, one per stacked block (see
+   createInteractiveWordsEyeToggle() in script.js) — at the user's
+   explicit request: clicking it hides every candidate word containing a
+   red/unsafe letter (.interactive-word-item-unsafe, see below), leaving
+   only the safe ones to compare; a second click restores them and swaps
+   the icon back. Reuses .nav-btn/.clear-icon-btn's own square shape
+   (same as the neighboring sponge/help icon buttons) and holds two
+   stroke-only SVGs (open eye / crossed-out eye), only one shown at a
+   time. Driven by the button's own `aria-pressed` state rather than an
+   SVG `hidden` attribute/property: real-browser testing showed `hidden`
+   isn't reliably reflected as a live, style-affecting attribute on SVG
+   elements the way it is on HTML ones, so toggling it in script.js
+   silently did nothing visually. */
+.interactive-eye-icon {
+  display: block;
+}
+.interactive-words-eye-btn .interactive-eye-icon-closed {
+  display: none;
+}
+.interactive-words-eye-btn[aria-pressed="true"] .interactive-eye-icon-open {
+  display: none;
+}
+.interactive-words-eye-btn[aria-pressed="true"] .interactive-eye-icon-closed {
+  display: block;
+}
+/* A word hidden by the "eye" toggle above. display:none (not the
+   [hidden] attribute) so .interactive-word-item's own ::before comma
+   rule below can target it by class regardless of any other attribute
+   state. */
+.interactive-word-item-hidden {
+  display: none;
+}
 .interactive-word-item {
   cursor: pointer;
   padding: 0.05rem 0.15rem;
@@ -2663,6 +2722,16 @@ button:disabled {
 .interactive-word-item:focus-visible {
   background: var(--selected);
   outline: none;
+}
+/* The comma between two candidate words, generated rather than a plain
+   ", " text node between the <span> elements — so it can automatically
+   skip any word hidden by the "eye" toggle instead of leaving a stray
+   ", ," or a trailing ", " behind. Matches only a word preceded, among
+   its own siblings, by at least one other still-visible word — the
+   very first visible word of a line/block never gets a leading comma. */
+.interactive-word-item:not(.interactive-word-item-hidden)
+  ~ .interactive-word-item:not(.interactive-word-item-hidden)::before {
+  content: ", ";
 }
 /* "Croisés" button — one .interactive-crossing-group per compatible
    letter, inside its own .interactive-words-block (same stacking
@@ -2725,6 +2794,20 @@ button:disabled {
 .interactive-word-highlight-letter {
   color: var(--accent);
   font-weight: 700;
+}
+/* A letter that would create a new impossible crossing slot if this
+   candidate were placed (backend's own `unsafe` field on each candidate,
+   "Mots"/"Croisés"/"Début"/"Fin") — the same --error red already used for
+   a real word missing from the dictionary (.word-missing), applied here
+   as a text colour plus underline rather than a cell background, since
+   this marks one letter within an inline word list, not a grid cell.
+   Combines with .interactive-word-highlight-letter (declared after it,
+   so its red wins over the blue text colour) when the selected-cell
+   letter is itself the unsafe one — the underline still shows either way. */
+.interactive-word-unsafe-letter {
+  color: var(--error);
+  font-weight: 700;
+  text-decoration: underline wavy;
 }
 #interactive-title-row {
   display: flex;

@@ -4654,6 +4654,43 @@ def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None)
     )
 
 
+def _interactive_letter_stats(grid, rows, cols, index):
+    """"Stats" button: for every still-empty white cell, the single most
+    statistically likely letter — the exact same mechanism `generate_grid`
+    uses to pick its own "graines" preview letters (`sample_letter_biases`,
+    `force_fraction=0.0` so nothing is ever forced, only tallied), just
+    read out for every cell instead of only the few crossing the sampling
+    threshold. Returns a sorted `[r, c, letter]` list; a cell whose every
+    crossing slot is already impossible contributes nothing to `letter_
+    scores` and is simply omitted.
+    """
+    pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
+    slots = extract_slots(pattern, rows, cols)
+    if not slots:
+        return []
+    known = {
+        (r, c): grid[r][c]
+        for r in range(rows)
+        for c in range(cols)
+        if grid[r][c] not in (BLACK, WHITE)
+    }
+    scratch_rng = random.Random(0)
+    _, letter_scores = sample_letter_biases(
+        pattern, rows, cols, index, scratch_rng, force_fraction=0.0, known_letters=known,
+    )
+    out = []
+    for r in range(rows):
+        for c in range(cols):
+            if grid[r][c] != WHITE:
+                continue
+            counts = letter_scores.get((r, c))
+            if not counts:
+                continue
+            letter, _count = counts.most_common(1)[0]
+            out.append([r, c, letter])
+    return out
+
+
 def _open_slot_baseline(filler, exclude_index):
     """Snapshot, for every still-open slot other than `exclude_index` (the
     slot a candidate is about to be tried at), of its own currently-viable
@@ -5164,7 +5201,102 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
 INTERACTIVE_SLOT_CANDIDATES_LIMIT = 300
 
 
-def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=None):
+def _crossing_cells_map(slots, own_cells):
+    """For every cell of `own_cells` (one slot's own ordered cells), the
+    OTHER slot of `slots` running through it in the perpendicular
+    direction — `None` where no such slot exists there (a white run < 2
+    cells at that spot, so nothing to check). Built once per request and
+    reused for every candidate word tried at this slot, by `_unsafe_
+    letter_positions` below."""
+    own_set = set(own_cells)
+    result = {}
+    for cell in own_cells:
+        cross = None
+        for slot_cells in slots:
+            if cell in slot_cells and set(slot_cells) != own_set:
+                cross = slot_cells
+                break
+        result[cell] = cross
+    return result
+
+
+def _challenge_word_fits_cells(cells, known, challenge_words, used_words):
+    """True if some unused "Mots Défi" word could still legally occupy
+    `cells`, given the letters already fixed there (`known`) — a bare
+    geometric fit (length + letter agreement), like `Filler._challenge_
+    word_fits`, never a real dictionary check. Mirrors `_challenge_
+    fillable_slot_indices`'s own inline test, generalized to a raw
+    `cells` list rather than an indexed `slots_list` entry."""
+    if not challenge_words:
+        return False
+    length = len(cells)
+    for w in challenge_words:
+        if w in used_words or len(w) != length:
+            continue
+        if all(w[pos] == known[c] for pos, c in enumerate(cells) if c in known):
+            return True
+    return False
+
+
+def _unsafe_letter_positions(cells, word, crossing_map, index, known, used_words,
+                              challenge_words=None):
+    """Positions (indices into `cells`/`word`) where placing `word[pos]` at
+    `cells[pos]` would NEWLY make the crossing slot through that cell
+    impossible to fill — no real dictionary candidate left (`used_words`
+    excluded, like `_interactive_fill_diagnostics`), and no still-
+    available "Mots Défi" word able to fill it either (same exemption
+    `_challenge_fillable_slot_indices` already applies elsewhere). A
+    crossing slot already impossible BEFORE this placement, for an
+    unrelated reason, is never reported here — only a new degradation
+    caused by this exact letter, the same "créerait un emplacement
+    impossible" scope `_new_crossing_impossibility` already applies to
+    automatic completion's own shorter/longer-word fallback search.
+    Backs the red-letter warning on the "Mots"/"Croisés"/"Début"/"Fin"
+    panels."""
+    unsafe = set()
+    for pos, cell in enumerate(cells):
+        cross_cells = crossing_map.get(cell)
+        if cross_cells is None:
+            continue
+        known_before = {c: known[c] for c in cross_cells if c in known}
+        before_ok = bool(
+            set(_slot_candidates(index, len(cross_cells), cross_cells, known_before)) - used_words
+        ) or _challenge_word_fits_cells(cross_cells, known_before, challenge_words, used_words)
+        if not before_ok:
+            continue
+        known_after = dict(known_before)
+        known_after[cell] = word[pos]
+        after_ok = bool(
+            set(_slot_candidates(index, len(cross_cells), cross_cells, known_after)) - used_words
+        ) or _challenge_word_fits_cells(cross_cells, known_after, challenge_words, used_words)
+        if not after_ok:
+            unsafe.add(pos)
+    return unsafe
+
+
+def _words_with_unsafe_positions(words, cells, crossing_map, index, known, used_words,
+                                  challenge_words):
+    """Wraps a sorted word list (as returned so far by `interactive_slot_
+    candidates`/`interactive_crossing_words`/`interactive_boundary_
+    candidates`) into `{"word", "unsafe"}` dicts, `unsafe` being the
+    sorted list of `_unsafe_letter_positions` for that candidate — the
+    shape the "Mots"/"Croisés"/"Début"/"Fin" panels use to underline, in
+    red, whichever of a candidate's own letters would create a new
+    impossible crossing slot if placed."""
+    return [
+        {
+            "word": w,
+            "unsafe": sorted(
+                _unsafe_letter_positions(cells, w, crossing_map, index, known, used_words,
+                                          challenge_words)
+            ),
+        }
+        for w in words
+    ]
+
+
+def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=None,
+                                 challenge_words=None):
     """"Mots" button (mode "Interactif"), at the user's explicit request:
     "add a Mots button listing the possible words for the selected slot...
     First, the theme-glossary words if there are any... then the other
@@ -5175,16 +5307,21 @@ def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=N
     correct even while the slot is still partially empty (a not-yet-
     complete slot has no stable slot-list index anyway).
 
-    Returns `(theme_words, other_words)`, two sorted lists of real
-    dictionary words compatible with the letters already placed on
-    `cells` (the same per-position intersection as `_slot_candidates`,
-    reused as-is) — `theme_words`: the candidates belonging to the theme
-    glossary applicable to `cells`'s own direction (`_priority_words_for`,
-    like `interactive_place_word`), always complete, never truncated;
-    `other_words`: the rest, capped at `INTERACTIVE_SLOT_CANDIDATES_
-    LIMIT`. A word already used elsewhere in the grid (another slot,
-    entirely filled, already carrying this word) is excluded from both
-    lists — like `interactive_place_word`, to never offer a duplicate."""
+    Returns `(theme_words, other_words)`, two sorted lists of `{"word",
+    "unsafe"}` dicts for real dictionary words compatible with the
+    letters already placed on `cells` (the same per-position intersection
+    as `_slot_candidates`, reused as-is) — `theme_words`: the candidates
+    belonging to the theme glossary applicable to `cells`'s own direction
+    (`_priority_words_for`, like `interactive_place_word`), always
+    complete, never truncated; `other_words`: the rest, capped at
+    `INTERACTIVE_SLOT_CANDIDATES_LIMIT`. A word already used elsewhere in
+    the grid (another slot, entirely filled, already carrying this word)
+    is excluded from both lists — like `interactive_place_word`, to never
+    offer a duplicate. Each entry's own `unsafe` (`_words_with_unsafe_
+    positions`) lists the 0-indexed positions in `word` that would create
+    a new impossible crossing slot if placed — `challenge_words` treated
+    as part of the dictionary for that check, same exemption `_interactive_
+    fill_diagnostics` already applies."""
     pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
     slots = extract_slots(pattern, rows, cols)
     known = {
@@ -5202,8 +5339,14 @@ def interactive_slot_candidates(grid, rows, cols, index, cells, priority_words=N
     candidates = set(_slot_candidates(index, len(cells), cells, known)) - used_words
     themed = _priority_words_for(priority_words, cells) & candidates
     other = candidates - themed
-    theme_words = sorted(themed)
-    other_words = sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT]
+    crossing_map = _crossing_cells_map(slots, cells)
+    theme_words = _words_with_unsafe_positions(
+        sorted(themed), cells, crossing_map, index, known, used_words, challenge_words,
+    )
+    other_words = _words_with_unsafe_positions(
+        sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT], cells, crossing_map, index, known,
+        used_words, challenge_words,
+    )
     return theme_words, other_words
 
 
@@ -5236,7 +5379,7 @@ def _interactive_white_run_at(grid, rows, cols, cell, axis):
     return tuple(cells) if len(cells) >= 2 else ()
 
 
-def interactive_crossing_words(grid, rows, cols, index, cell):
+def interactive_crossing_words(grid, rows, cols, index, cell, challenge_words=None):
     """"Croisés" button (mode "Interactif"), to the right of "Mots", at
     the user's explicit request: "identify the letters compatible with a
     word in each direction (can be restricted by the letters in place)...
@@ -5260,11 +5403,13 @@ def interactive_crossing_words(grid, rows, cols, index, cell):
       in AT LEAST one across candidate word AND AT LEAST one down
       candidate word (the same per-position intersection as `_slot_
       candidates`, already reused by `_slot_candidates` itself);
-      `across_words`/`down_words` are the real candidate words (sorted,
-      each capped at `INTERACTIVE_SLOT_CANDIDATES_LIMIT`) carrying this
-      letter at this position. A word already used elsewhere in the grid
-      (another slot, entirely filled, already carrying this word) is
-      excluded, like `interactive_slot_candidates`."""
+      `across_words`/`down_words` are the real candidate words, each a
+      sorted list of `{"word", "unsafe"}` dicts (`_words_with_unsafe_
+      positions`, see `interactive_slot_candidates`) capped at
+      `INTERACTIVE_SLOT_CANDIDATES_LIMIT`, carrying this letter at this
+      position. A word already used elsewhere in the grid (another slot,
+      entirely filled, already carrying this word) is excluded, like
+      `interactive_slot_candidates`."""
     across_cells = _interactive_white_run_at(grid, rows, cols, cell, "across")
     down_cells = _interactive_white_run_at(grid, rows, cols, cell, "down")
     across_start = list(across_cells[0]) if across_cells else None
@@ -5298,18 +5443,27 @@ def interactive_crossing_words(grid, rows, cols, index, cell):
     for w in down_words:
         by_letter_down[w[pos_down]].append(w)
     common_letters = sorted(set(by_letter_across) & set(by_letter_down))
+    across_crossing_map = _crossing_cells_map(slots, across_cells)
+    down_crossing_map = _crossing_cells_map(slots, down_cells)
     letters = [
         {
             "letter": letter,
-            "across_words": sorted(by_letter_across[letter])[:INTERACTIVE_SLOT_CANDIDATES_LIMIT],
-            "down_words": sorted(by_letter_down[letter])[:INTERACTIVE_SLOT_CANDIDATES_LIMIT],
+            "across_words": _words_with_unsafe_positions(
+                sorted(by_letter_across[letter])[:INTERACTIVE_SLOT_CANDIDATES_LIMIT],
+                across_cells, across_crossing_map, index, known, used_words, challenge_words,
+            ),
+            "down_words": _words_with_unsafe_positions(
+                sorted(by_letter_down[letter])[:INTERACTIVE_SLOT_CANDIDATES_LIMIT],
+                down_cells, down_crossing_map, index, known, used_words, challenge_words,
+            ),
         }
         for letter in common_letters
     ]
     return across_start, down_start, letters
 
 
-def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priority_words=None):
+def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priority_words=None,
+                                     challenge_words=None):
     """"Début"/"Fin" buttons (mode "Interactif"), next to "Croisés", at the
     user's explicit request: "à côté du bouton Croisés, ajouter un bouton
     'Début' qui liste le mots pouvant commencer l'emplacement sélectionné en
@@ -5337,19 +5491,21 @@ def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priori
     check, same as `interactive_slot_candidates`.
 
     Returns `(theme_words, other_words)` exactly like `interactive_slot_
-    candidates`, both sorted by `(length, word)` (length first, then
-    alphabetically) rather than plain alphabetical order, and mixing every
-    accepted length together — the word's own length already tells the
-    caller how many of `cells` (from `side`'s end) it covers, no separate
-    field needed. `INTERACTIVE_SLOT_CANDIDATES_LIMIT` is applied PER
-    length rather than once over the combined pool: an empty/lightly-
-    constrained slot can easily have hundreds of 2- or 3-letter matches,
-    which would otherwise fill the entire cap on their own and silently
-    hide every longer (more specific, usually more useful) length behind
-    them — including the full-length matches `interactive_slot_candidates`
-    itself would have shown. A word already used elsewhere in the grid is
-    excluded, like `interactive_slot_candidates`/`interactive_crossing_
-    words`."""
+    candidates` — lists of `{"word", "unsafe"}` dicts (`_words_with_
+    unsafe_positions`, `unsafe` positions counted within that candidate's
+    own, possibly shorter-than-`cells`, span) — both sorted by `(length,
+    word)` (length first, then alphabetically) rather than plain
+    alphabetical order, and mixing every accepted length together — the
+    word's own length already tells the caller how many of `cells` (from
+    `side`'s end) it covers, no separate field needed.
+    `INTERACTIVE_SLOT_CANDIDATES_LIMIT` is applied PER length rather than
+    once over the combined pool: an empty/lightly-constrained slot can
+    easily have hundreds of 2- or 3-letter matches, which would otherwise
+    fill the entire cap on their own and silently hide every longer (more
+    specific, usually more useful) length behind them — including the
+    full-length matches `interactive_slot_candidates` itself would have
+    shown. A word already used elsewhere in the grid is excluded, like
+    `interactive_slot_candidates`/`interactive_crossing_words`."""
     pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
     slots = extract_slots(pattern, rows, cols)
     known = {
@@ -5383,8 +5539,17 @@ def interactive_boundary_candidates(grid, rows, cols, index, cells, side, priori
         candidates = set(_slot_candidates(index, length, sub_cells, sub_known)) - used_words
         themed = _priority_words_for(priority_words, sub_cells) & candidates
         other = candidates - themed
-        theme_words.extend(sorted(themed))
-        other_words.extend(sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT])
+        sub_crossing_map = _crossing_cells_map(slots, sub_cells)
+        theme_words.extend(
+            _words_with_unsafe_positions(sorted(themed), sub_cells, sub_crossing_map, index,
+                                          known, used_words, challenge_words)
+        )
+        other_words.extend(
+            _words_with_unsafe_positions(
+                sorted(other)[:INTERACTIVE_SLOT_CANDIDATES_LIMIT], sub_cells, sub_crossing_map,
+                index, known, used_words, challenge_words,
+            )
+        )
     return theme_words, other_words
 
 

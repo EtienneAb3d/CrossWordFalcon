@@ -278,6 +278,7 @@ const interactiveCleanDeepBtn = document.getElementById("interactive-clean-deep-
 const interactiveDefinitionInput = document.getElementById("interactive-definition-input");
 const interactiveProposeBtn = document.getElementById("interactive-propose-btn");
 const interactiveProposeClearBtn = document.getElementById("interactive-propose-clear-btn");
+const interactiveStatsBtn = document.getElementById("interactive-stats-btn");
 const interactiveImpossibleBtn = document.getElementById("interactive-impossible-btn");
 const interactiveVerifyBtn = document.getElementById("interactive-verify-btn");
 const interactiveDefinitionsBtn = document.getElementById("interactive-definitions-btn");
@@ -828,6 +829,14 @@ let finishLockedCells = null;
 // any manual edit (they only describe the state the backend last saw).
 let interactiveImpossibleCells = new Set();
 let interactiveLowCells = new Set();
+// "Stats" button: "row,col" -> the statistically most probable letter for
+// that still-empty cell, from POST /api/interactive/stats (backend's
+// `_interactive_letter_stats`, the same statistical mechanism `generate_
+// grid` uses for its own "graines" preview letters). Shown in light gray
+// in renderGrid(). Same staleness rule as interactiveImpossibleCells/
+// LowCells above: cleared on any manual edit, since it describes a grid
+// state the backend may no longer recognize.
+let interactiveStatLetters = new Map();
 // "Vérifier" button: cells of every complete word flagged as a problem —
 // either not a real dictionary word (checked server-side, POST /api/
 // interactive/verify) or missing a definition (checked client-side against
@@ -2062,6 +2071,21 @@ function renderGrid() {
 
       const letter = showSolution ? solution[r][c] : userLetters[r][c];
       cell.appendChild(document.createTextNode(letter || ""));
+
+      // "Interactif" mode "Stats" button: light-gray suggested letter,
+      // shown only while the cell is still genuinely empty (see
+      // interactiveStatLetters's own docstring) — an overlay span, never
+      // the real letter text node above, so it never gets mistaken for a
+      // placed letter and disappears the instant a real one is typed.
+      if (interactiveMode && !letter) {
+        const suggested = interactiveStatLetters.get(`${r},${c}`);
+        if (suggested) {
+          const hint = document.createElement("span");
+          hint.className = "interactive-stat-letter";
+          hint.textContent = suggested;
+          cell.appendChild(hint);
+        }
+      }
 
       // "Interactif" mode: magenta letter for a word placed automatically
       // from the theme glossary (see interactiveThemeCells).
@@ -5247,6 +5271,7 @@ function clearInteractiveDiagnostics() {
   interactiveLowCells = new Set();
   interactiveInvalidCells = new Set();
   interactiveVerifyReport = [];
+  interactiveStatLetters = new Map();
 }
 
 function setInteractiveMessage(text, isError) {
@@ -6297,6 +6322,80 @@ function challengeWordsForBoundary(cells, side) {
   });
 }
 
+// Builds one candidate word's letters inside `item`, one <span> per
+// letter — shared by the "Mots"/"Croisés"/"Début"/"Fin" panels so both
+// the selected-cell highlight (blue, `highlightPos`, -1 for none) and the
+// "would create an impossible crossing slot" warning (red underline,
+// `unsafeSet`, 0-indexed positions from the backend's own `unsafe` field)
+// can be marked independently — and together, when they land on the same
+// letter. A letter needing neither stays a plain text node, like before
+// this warning existed.
+function appendWordLetters(item, word, highlightPos, unsafeSet) {
+  for (let pos = 0; pos < word.length; pos++) {
+    const classes = [];
+    if (pos === highlightPos) classes.push("interactive-word-highlight-letter");
+    if (unsafeSet && unsafeSet.has(pos)) classes.push("interactive-word-unsafe-letter");
+    if (classes.length) {
+      const mark = document.createElement("span");
+      mark.className = classes.join(" ");
+      mark.textContent = word[pos];
+      item.appendChild(mark);
+    } else {
+      item.appendChild(document.createTextNode(word[pos]));
+    }
+  }
+}
+
+// "Eye" toggle button added to the header of every "Mots"/"Croisés"/
+// "Début"/"Fin" results block, at the user's explicit request: "ajouter
+// un bouton icône 'voir' (oeil) en haut à droite. Quand on clique sur ce
+// bouton, masquer les mots contenant des lettres en rouge... et changer
+// le bouton icône avec un barré. Un deuxième clique remontre les mots...
+// et restaure le bouton voir non barré." Operates purely by class on
+// `block`'s own already-rendered `.interactive-word-item-unsafe` words
+// (set by the three render functions below whenever a candidate's own
+// `unsafe` list is non-empty) — no re-fetch, no re-render, so it never
+// disturbs the block's own click-to-place handlers or any other stacked
+// block. The two SVGs (open eye / crossed-out eye) are both always
+// present, toggled via their own `hidden` attribute — see
+// .interactive-eye-icon in style.css.
+function createInteractiveWordsEyeToggle(block) {
+  const t = I18N[uiLanguage];
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "nav-btn clear-icon-btn interactive-words-eye-btn";
+  btn.setAttribute("aria-pressed", "false");
+  btn.setAttribute("aria-label", t.interactiveHideUnsafeBtn);
+  btn.title = t.interactiveHideUnsafeBtn;
+  // Both icons always exist; which one is visible is driven purely by
+  // the button's own `aria-pressed` state via CSS (see
+  // .interactive-words-eye-btn[aria-pressed="true"] in style.css) —
+  // not by an SVG `hidden` attribute/property, which some browsers
+  // don't reflect live on SVG elements the way they do on HTML ones.
+  btn.innerHTML =
+    '<svg class="interactive-eye-icon interactive-eye-icon-open" viewBox="0 0 24 24" ' +
+    'width="16" height="16" aria-hidden="true" focusable="false">' +
+    '<path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7-10.5-7-10.5-7z" ' +
+    'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>' +
+    '<circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+    "</svg>" +
+    '<svg class="interactive-eye-icon interactive-eye-icon-closed" viewBox="0 0 24 24" ' +
+    'width="16" height="16" aria-hidden="true" focusable="false">' +
+    '<path d="M1.5 12S5.5 5 12 5s10.5 7 10.5 7-4 7-10.5 7-10.5-7-10.5-7z" ' +
+    'fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>' +
+    '<circle cx="12" cy="12" r="2.6" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+    '<line x1="2.5" y1="21.5" x2="21.5" y2="2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+    "</svg>";
+  btn.addEventListener("click", () => {
+    const hiding = btn.getAttribute("aria-pressed") !== "true";
+    btn.setAttribute("aria-pressed", hiding ? "true" : "false");
+    block.querySelectorAll(".interactive-word-item-unsafe").forEach((item) => {
+      item.classList.toggle("interactive-word-item-hidden", hiding);
+    });
+  });
+  return btn;
+}
+
 // ---- Candidate words for the selected slot (POST /api/interactive/
 // candidates) — "Mots" button, at the user's explicit request: "add a
 // Mots button that lists the possible words for the selected slot...
@@ -6331,11 +6430,11 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   const challengeWords = challengeWordsForCells(slot.cells);
   const challengeSet = new Set(challengeWords);
   const all = [
-    ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge" })),
-    ...(themeWords || []).filter((word) => !challengeSet.has(word))
-      .map((word) => ({ word, cls: "interactive-word-theme" })),
-    ...(otherWords || []).filter((word) => !challengeSet.has(word))
-      .map((word) => ({ word, cls: "" })),
+    ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
+    ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
+      .map((entry) => ({ word: entry.word, cls: "interactive-word-theme", unsafe: entry.unsafe })),
+    ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
+      .map((entry) => ({ word: entry.word, cls: "", unsafe: entry.unsafe })),
   ];
   if (!all.length) return false;
   // Which position in `slot.cells` is the cell that was selected (shown
@@ -6360,25 +6459,22 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
   };
   const block = document.createElement("div");
   block.className = "interactive-words-block";
+  const header = document.createElement("div");
+  header.className = "interactive-words-block-header";
   const label = document.createElement("p");
   label.className = "interactive-words-block-label";
   const dirPrefix = slot.direction === "across" ? "H" : "V";
   label.textContent = `${dirPrefix} (${slot.startRow + 1}, ${slot.startCol + 1})`;
-  block.appendChild(label);
-  all.forEach(({ word, cls }, i) => {
+  header.appendChild(label);
+  header.appendChild(createInteractiveWordsEyeToggle(block));
+  block.appendChild(header);
+  all.forEach(({ word, cls, unsafe }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
-    for (let pos = 0; pos < word.length; pos++) {
-      if (pos === highlightIndex) {
-        const mark = document.createElement("span");
-        mark.className = "interactive-word-highlight-letter";
-        mark.textContent = word[pos];
-        item.appendChild(mark);
-      } else {
-        item.appendChild(document.createTextNode(word[pos]));
-      }
-    }
+    const unsafeSet = new Set(unsafe);
+    if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
+    appendWordLetters(item, word, highlightIndex, unsafeSet);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -6388,9 +6484,6 @@ function renderInteractiveWords(themeWords, otherWords, slot, atCell) {
       }
     });
     block.appendChild(item);
-    if (i < all.length - 1) {
-      block.appendChild(document.createTextNode(", "));
-    }
   });
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
@@ -6418,6 +6511,7 @@ interactiveWordsBtn.addEventListener("click", async () => {
         job_id: interactiveJobId,
         grid: wireGrid,
         cells: w.cells.map((c) => [c.row, c.col]),
+        challenge_words: interactiveChallengeWords,
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -6494,25 +6588,22 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
   const appendWordList = (parent, words, cells, highlightPos, challengeWords) => {
     // "Mots Défi" matches shown first, in green — at the user's explicit
     // request. Any dictionary word already covered by a challenge-word
-    // match is dropped from `words` to avoid listing it twice.
+    // match is dropped from `words` to avoid listing it twice. `words`
+    // itself is the backend's own list of `{word, unsafe}` dicts.
     const challengeSet = new Set(challengeWords);
-    const ordered = [...challengeWords, ...words.filter((word) => !challengeSet.has(word))];
-    ordered.forEach((word, i) => {
+    const ordered = [
+      ...challengeWords.map((word) => ({ word, unsafe: [], challenge: true })),
+      ...words.filter((entry) => !challengeSet.has(entry.word)),
+    ];
+    ordered.forEach(({ word, unsafe, challenge }) => {
       const item = document.createElement("span");
-      item.className = challengeSet.has(word)
+      item.className = challenge
         ? "interactive-word-item interactive-word-challenge"
         : "interactive-word-item";
       item.tabIndex = 0;
-      for (let pos = 0; pos < word.length; pos++) {
-        if (pos === highlightPos) {
-          const mark = document.createElement("span");
-          mark.className = "interactive-word-highlight-letter";
-          mark.textContent = word[pos];
-          item.appendChild(mark);
-        } else {
-          item.appendChild(document.createTextNode(word[pos]));
-        }
-      }
+      const unsafeSet = new Set(unsafe);
+      if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
+      appendWordLetters(item, word, highlightPos, unsafeSet);
       const pick = () => placeWord(cells, word);
       item.addEventListener("click", pick);
       item.addEventListener("keydown", (e) => {
@@ -6522,15 +6613,18 @@ function renderInteractiveCrossing(acrossStart, downStart, letters, atCell) {
         }
       });
       parent.appendChild(item);
-      if (i < ordered.length - 1) parent.appendChild(document.createTextNode(", "));
     });
   };
   const block = document.createElement("div");
   block.className = "interactive-words-block";
+  const header = document.createElement("div");
+  header.className = "interactive-words-block-header";
   const label = document.createElement("p");
   label.className = "interactive-words-block-label";
   label.textContent = t.interactiveCrossingLabel(atCell.row + 1, atCell.col + 1);
-  block.appendChild(label);
+  header.appendChild(label);
+  header.appendChild(createInteractiveWordsEyeToggle(block));
+  block.appendChild(header);
   for (const { letter, across_words: acrossWords, down_words: downWords } of letters) {
     const group = document.createElement("div");
     group.className = "interactive-crossing-group";
@@ -6589,6 +6683,7 @@ interactiveCrossingBtn.addEventListener("click", async () => {
         job_id: interactiveJobId,
         grid: wireGrid,
         cell: [atCell.row, atCell.col],
+        challenge_words: interactiveChallengeWords,
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -6634,11 +6729,11 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   const challengeWords = challengeWordsForBoundary(slot.cells, side);
   const challengeSet = new Set(challengeWords);
   const all = [
-    ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge" })),
-    ...(themeWords || []).filter((word) => !challengeSet.has(word))
-      .map((word) => ({ word, cls: "interactive-word-theme" })),
-    ...(otherWords || []).filter((word) => !challengeSet.has(word))
-      .map((word) => ({ word, cls: "" })),
+    ...challengeWords.map((word) => ({ word, cls: "interactive-word-challenge", unsafe: [] })),
+    ...(themeWords || []).filter((entry) => !challengeSet.has(entry.word))
+      .map((entry) => ({ word: entry.word, cls: "interactive-word-theme", unsafe: entry.unsafe })),
+    ...(otherWords || []).filter((entry) => !challengeSet.has(entry.word))
+      .map((entry) => ({ word: entry.word, cls: "", unsafe: entry.unsafe })),
   ];
   if (!all.length) return false;
   const placeWord = (word) => {
@@ -6662,15 +6757,21 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
   };
   const block = document.createElement("div");
   block.className = "interactive-words-block";
+  const header = document.createElement("div");
+  header.className = "interactive-words-block-header";
   const labelEl = document.createElement("p");
   labelEl.className = "interactive-words-block-label";
   labelEl.textContent = label;
-  block.appendChild(labelEl);
-  all.forEach(({ word, cls }, i) => {
+  header.appendChild(labelEl);
+  header.appendChild(createInteractiveWordsEyeToggle(block));
+  block.appendChild(header);
+  all.forEach(({ word, cls, unsafe }) => {
     const item = document.createElement("span");
     item.className = cls ? `interactive-word-item ${cls}` : "interactive-word-item";
     item.tabIndex = 0;
-    item.textContent = word;
+    const unsafeSet = new Set(unsafe);
+    if (unsafeSet.size) item.classList.add("interactive-word-item-unsafe");
+    appendWordLetters(item, word, -1, unsafeSet);
     const pick = () => placeWord(word);
     item.addEventListener("click", pick);
     item.addEventListener("keydown", (e) => {
@@ -6680,7 +6781,6 @@ function renderInteractiveBoundary(themeWords, otherWords, slot, side, label) {
       }
     });
     block.appendChild(item);
-    if (i < all.length - 1) block.appendChild(document.createTextNode(", "));
   });
   interactiveAnswers.insertBefore(block, interactiveAnswers.firstChild);
   interactiveAnswers.hidden = false;
@@ -6706,6 +6806,7 @@ async function fetchInteractiveBoundary(side, btn, keys) {
         grid: wireGrid,
         cells: w.cells.map((c) => [c.row, c.col]),
         side,
+        challenge_words: interactiveChallengeWords,
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -7788,6 +7889,59 @@ async function fetchInteractiveImpossible(t) {
     return null;
   }
 }
+
+// "Stats" button — POST /api/interactive/stats for the CURRENT grid
+// (read-only, no mutation) and store the suggested letters into
+// interactiveStatLetters (see its own docstring). Returns the backend's
+// `letters` array (`[r, c, letter]` triples) on success, or `null` on
+// failure, with the error already reported via setInteractiveMessage.
+async function fetchInteractiveStats(t) {
+  try {
+    const wireGrid = interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch)));
+    const resp = await fetchWithTimeout("/api/interactive/stats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: interactiveJobId, grid: wireGrid }),
+    }, FETCH_TIMEOUT_MS);
+    if (resp.status === 404) {
+      setInteractiveMessage(t.interactiveSessionLost, true);
+      return null;
+    }
+    const data = await resp.json();
+    if (!resp.ok) {
+      setInteractiveMessage(describeErrorCode(t, data.detail && data.detail.code, data.detail), true);
+      return null;
+    }
+    const letters = data.letters || [];
+    interactiveStatLetters = new Map(letters.map(([r, c, letter]) => [`${r},${c}`, letter]));
+    return letters;
+  } catch (err) {
+    setInteractiveMessage(t.errorConnectionLost, true);
+    return null;
+  }
+}
+
+// "Stats": a read-only statistical preview, in light gray, of the single
+// most probable letter for every still-empty cell — the same mechanism
+// `generate_grid` uses to pick its own "graines" preview letters, just
+// read out for every cell instead of only forcing a few of them. Placed
+// just before "Impossibles" (see index.html).
+interactiveStatsBtn.addEventListener("click", async () => {
+  const t = I18N[uiLanguage];
+  interactiveStatsBtn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const letters = await fetchInteractiveStats(t);
+    if (!letters) return;
+    renderInteractive();
+    setInteractiveMessage(
+      letters.length ? t.interactiveStatsSummary(letters.length) : t.interactiveStatsNone,
+      false,
+    );
+  } finally {
+    interactiveStatsBtn.disabled = false;
+  }
+});
 
 // How many interactiveSlots() are THEMSELVES genuinely flagged in
 // `cellSet` — used to summarize the impossible/low-candidate cell sets

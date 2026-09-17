@@ -50,6 +50,7 @@ const I18N = {
       "Utilisez les outils pour vous aider : <strong>Dictionnaire</strong>, <strong>Paraphraseur</strong>, le bouton <strong>Mots</strong> donne la liste des mots compatibles avec l'emplacement sélectionné.",
       "Le bouton <strong>Croisés</strong> indique, pour la case sélectionnée, les lettres compatibles avec un mot dans les deux sens à la fois (horizontal et vertical), avec les mots correspondants dans chaque sens. Les boutons <strong>Début</strong> et <strong>Fin</strong> listent les mots du dictionnaire pouvant commencer ou terminer l'emplacement sélectionné, même plus courts que sa longueur totale.",
       "Deux boutons permettent de nettoyer la grille sur les zones impossibles, avec ou sans retrait des cases noires.",
+      "Le bouton <strong>Stats</strong> affiche, en gris clair dans chaque case encore vide, la lettre la plus probable statistiquement.",
       "Le bouton <strong>Impossibles</strong> identifie les zones où plus aucun mot n'est possible. <strong>Vérifier</strong> permet de s'assurer que tous les mots sont bien dans le dictionnaire et possèdent une définition.",
       "Le bouton <strong>Définitions</strong> génère automatiquement les définitions manquantes.",
       "Les boutons <strong>Proposer une définition</strong> et <strong>Proposer un titre</strong> vous aident avec plusieurs propositions.",
@@ -81,6 +82,9 @@ const I18N = {
       n > 1
         ? `${n} mots posent problème (surlignés en rouge).`
         : "1 mot pose problème (surligné en rouge).",
+    interactiveStatsBtn: "Stats",
+    interactiveStatsNone: "Aucune case vide à suggérer.",
+    interactiveStatsSummary: (n) => `${n} lettre${n > 1 ? "s" : ""} suggérée${n > 1 ? "s" : ""} (en gris clair).`,
     interactiveImpossibleBtn: "Impossibles",
     interactiveImpossibleNone: "Aucun emplacement impossible, ni à faible nombre d'options.",
     interactiveImpossibleSummary: (n, m) => {
@@ -120,6 +124,7 @@ const I18N = {
     interactiveEndNeedsSlot: "Sélectionnez d'abord un emplacement.",
     interactiveEndEmpty: "Aucun mot possible pour terminer cet emplacement.",
     interactiveEndError: "Impossible de lister les mots pour l'instant.",
+    interactiveHideUnsafeBtn: "Masquer les mots impossibles",
     interactiveComplete: "Grille complète : proposez un titre puis sauvegardez.",
     interactiveTitleLabel: "Titre de la grille",
     interactiveTitleProposeBtn: "Proposer un titre",
@@ -399,6 +404,7 @@ const I18N = {
       "Use the tools to help you: <strong>Dictionary</strong>, <strong>Paraphraser</strong>, the <strong>Words</strong> button lists the words compatible with the selected slot.",
       "The <strong>Crossings</strong> button shows, for the selected cell, the letters compatible with a real word in both directions at once (across and down), together with the matching words in each direction. The <strong>Start</strong> and <strong>End</strong> buttons list dictionary words that can begin or end the selected slot, even shorter than its full length.",
       "Two buttons clean up the grid's impossible zones, with or without removing black cells.",
+      "The <strong>Stats</strong> button shows, in light gray inside every still-empty cell, the statistically most probable letter.",
       "The <strong>Impossible</strong> button identifies zones where no word fits any more. <strong>Check</strong> makes sure every word is really in the dictionary and has a definition.",
       "The <strong>Definitions</strong> button automatically generates the missing definitions.",
       "The <strong>Suggest a definition</strong> and <strong>Suggest a title</strong> buttons help you with several proposals.",
@@ -428,6 +434,9 @@ const I18N = {
     interactiveVerifyOk: "Every word is valid and defined.",
     interactiveVerifyProblems: (n) =>
       `${n} word${n > 1 ? "s have" : " has"} a problem (highlighted in red).`,
+    interactiveStatsBtn: "Stats",
+    interactiveStatsNone: "No empty cell to suggest a letter for.",
+    interactiveStatsSummary: (n) => `${n} letter${n > 1 ? "s" : ""} suggested (in light gray).`,
     interactiveImpossibleBtn: "Impossible",
     interactiveImpossibleNone: "No impossible spot, and none with few options.",
     interactiveImpossibleSummary: (n, m) => {
@@ -467,6 +476,7 @@ const I18N = {
     interactiveEndNeedsSlot: "Select a slot first.",
     interactiveEndEmpty: "No possible word to end this slot.",
     interactiveEndError: "Cannot list words right now.",
+    interactiveHideUnsafeBtn: "Hide impossible words",
     interactiveComplete: "Grid complete: suggest a title, then save.",
     interactiveTitleLabel: "Grid title",
     interactiveTitleProposeBtn: "Suggest a title",
@@ -737,6 +747,7 @@ const I18N = {
       "Nutzen Sie die Werkzeuge als Hilfe: <strong>Wörterbuch</strong>, <strong>Paraphrasierer</strong>, die Schaltfläche <strong>„Wörter\"</strong> listet die zum ausgewählten Feld passenden Wörter auf.",
       "Die Schaltfläche <strong>„Kreuzungen\"</strong> zeigt für die ausgewählte Zelle die Buchstaben, die gleichzeitig in beide Richtungen (waagerecht und senkrecht) zu einem echten Wort passen, zusammen mit den passenden Wörtern in jeder Richtung. Die Schaltflächen <strong>„Anfang\"</strong> und <strong>„Ende\"</strong> listen Wörterbuchwörter auf, die das ausgewählte Feld beginnen oder beenden können, auch kürzer als seine volle Länge.",
       "Zwei Schaltflächen bereinigen unmögliche Zonen im Gitter, mit oder ohne Entfernen schwarzer Felder.",
+      "Die Schaltfläche <strong>„Statistik\"</strong> zeigt in jeder noch leeren Zelle, in hellgrau, den statistisch wahrscheinlichsten Buchstaben.",
       "Die Schaltfläche <strong>„Unmöglich\"</strong> zeigt Zonen, in denen kein Wort mehr passt. <strong>„Prüfen\"</strong> stellt sicher, dass jedes Wort wirklich im Wörterbuch steht und eine Definition hat.",
       "Die Schaltfläche <strong>„Definitionen\"</strong> erzeugt automatisch die fehlenden Definitionen.",
       "Die Schaltflächen <strong>„Definition vorschlagen\"</strong> und <strong>„Titel vorschlagen\"</strong> helfen Ihnen mit mehreren Vorschlägen.",
@@ -768,6 +779,9 @@ const I18N = {
       n > 1
         ? `${n} Wörter haben ein Problem (rot markiert).`
         : "1 Wort hat ein Problem (rot markiert).",
+    interactiveStatsBtn: "Statistik",
+    interactiveStatsNone: "Keine leere Zelle für eine Vorschlagsbuchstabe.",
+    interactiveStatsSummary: (n) => `${n} Buchstabe${n > 1 ? "n" : ""} vorgeschlagen (in hellgrau).`,
     interactiveImpossibleBtn: "Unmöglich",
     interactiveImpossibleNone: "Keine unmögliche Stelle und keine mit wenigen Optionen.",
     interactiveImpossibleSummary: (n, m) => {
@@ -807,6 +821,7 @@ const I18N = {
     interactiveEndNeedsSlot: "Wählen Sie zuerst ein Feld aus.",
     interactiveEndEmpty: "Kein mögliches Wort, um dieses Feld zu beenden.",
     interactiveEndError: "Wörter können derzeit nicht aufgelistet werden.",
+    interactiveHideUnsafeBtn: "Unmögliche Wörter ausblenden",
     interactiveComplete: "Gitter vollständig: Titel vorschlagen, dann speichern.",
     interactiveTitleLabel: "Gittertitel",
     interactiveTitleProposeBtn: "Titel vorschlagen",
@@ -1077,6 +1092,7 @@ const I18N = {
       "Use las herramientas de ayuda: <strong>Diccionario</strong>, <strong>Parafraseador</strong>; el botón <strong>Palabras</strong> muestra la lista de palabras compatibles con la casilla seleccionada.",
       "El botón <strong>Cruces</strong> indica, para la casilla seleccionada, las letras compatibles con una palabra real en ambos sentidos a la vez (horizontal y vertical), junto con las palabras correspondientes en cada sentido. Los botones <strong>Inicio</strong> y <strong>Fin</strong> muestran palabras del diccionario que pueden empezar o terminar la casilla seleccionada, incluso más cortas que su longitud total.",
       "Dos botones permiten limpiar las zonas imposibles de la cuadrícula, con o sin retirar casillas negras.",
+      "El botón <strong>Stats</strong> muestra, en gris claro dentro de cada casilla aún vacía, la letra estadísticamente más probable.",
       "El botón <strong>Imposibles</strong> identifica las zonas donde ya no cabe ninguna palabra. <strong>Verificar</strong> comprueba que todas las palabras estén realmente en el diccionario y tengan una definición.",
       "El botón <strong>Definiciones</strong> genera automáticamente las definiciones que faltan.",
       "Los botones <strong>Proponer una definición</strong> y <strong>Proponer un título</strong> le ayudan con varias propuestas.",
@@ -1108,6 +1124,9 @@ const I18N = {
       n > 1
         ? `${n} palabras tienen un problema (resaltadas en rojo).`
         : "1 palabra tiene un problema (resaltada en rojo).",
+    interactiveStatsBtn: "Stats",
+    interactiveStatsNone: "Ninguna casilla vacía para sugerir una letra.",
+    interactiveStatsSummary: (n) => `${n} letra${n > 1 ? "s" : ""} sugerida${n > 1 ? "s" : ""} (en gris claro).`,
     interactiveImpossibleBtn: "Imposibles",
     interactiveImpossibleNone: "Ningún emplazamiento imposible, ni con pocas opciones.",
     interactiveImpossibleSummary: (n, m) => {
@@ -1147,6 +1166,7 @@ const I18N = {
     interactiveEndNeedsSlot: "Seleccione primero una casilla.",
     interactiveEndEmpty: "Ninguna palabra posible para terminar esta casilla.",
     interactiveEndError: "No se pueden listar palabras por ahora.",
+    interactiveHideUnsafeBtn: "Ocultar palabras imposibles",
     interactiveComplete: "Crucigrama completo: proponga un título y guarde.",
     interactiveTitleLabel: "Título del crucigrama",
     interactiveTitleProposeBtn: "Proponer un título",
@@ -1417,6 +1437,7 @@ const I18N = {
       "Usa gli strumenti per aiutarti: <strong>Dizionario</strong>, <strong>Parafrasatore</strong>; il pulsante <strong>Parole</strong> elenca le parole compatibili con la casella selezionata.",
       "Il pulsante <strong>Incroci</strong> indica, per la casella selezionata, le lettere compatibili con una parola reale in entrambi i sensi contemporaneamente (orizzontale e verticale), insieme alle parole corrispondenti in ciascun senso. I pulsanti <strong>Inizio</strong> e <strong>Fine</strong> elencano le parole del dizionario che possono iniziare o terminare la casella selezionata, anche più corte della sua lunghezza totale.",
       "Due pulsanti permettono di pulire le zone impossibili della griglia, con o senza rimozione delle caselle nere.",
+      "Il pulsante <strong>Stats</strong> mostra, in grigio chiaro in ogni casella ancora vuota, la lettera statisticamente più probabile.",
       "Il pulsante <strong>Impossibili</strong> identifica le zone in cui non è più possibile alcuna parola. <strong>Verifica</strong> controlla che tutte le parole siano davvero nel dizionario e abbiano una definizione.",
       "Il pulsante <strong>Definizioni</strong> genera automaticamente le definizioni mancanti.",
       "I pulsanti <strong>Proponi una definizione</strong> e <strong>Proponi un titolo</strong> ti aiutano con diverse proposte.",
@@ -1448,6 +1469,9 @@ const I18N = {
       n > 1
         ? `${n} parole hanno un problema (evidenziate in rosso).`
         : "1 parola ha un problema (evidenziata in rosso).",
+    interactiveStatsBtn: "Stats",
+    interactiveStatsNone: "Nessuna casella vuota da suggerire.",
+    interactiveStatsSummary: (n) => `${n > 1 ? `${n} lettere suggerite` : "1 lettera suggerita"} (in grigio chiaro).`,
     interactiveImpossibleBtn: "Impossibili",
     interactiveImpossibleNone: "Nessuna posizione impossibile, né con poche opzioni.",
     interactiveImpossibleSummary: (n, m) => {
@@ -1487,6 +1511,7 @@ const I18N = {
     interactiveEndNeedsSlot: "Seleziona prima una casella.",
     interactiveEndEmpty: "Nessuna parola possibile per terminare questa casella.",
     interactiveEndError: "Impossibile elencare le parole al momento.",
+    interactiveHideUnsafeBtn: "Nascondi parole impossibili",
     interactiveComplete: "Griglia completa: proponi un titolo e salva.",
     interactiveTitleLabel: "Titolo della griglia",
     interactiveTitleProposeBtn: "Proponi un titolo",
@@ -1758,6 +1783,7 @@ const I18N = {
       "Use as ferramentas de ajuda: <strong>Dicionário</strong>, <strong>Parafraseador</strong>; o botão <strong>Palavras</strong> lista as palavras compatíveis com a casa selecionada.",
       "O botão <strong>Cruzamentos</strong> indica, para a casa selecionada, as letras compatíveis com uma palavra real em ambos os sentidos ao mesmo tempo (horizontal e vertical), juntamente com as palavras correspondentes em cada sentido. Os botões <strong>Início</strong> e <strong>Fim</strong> listam palavras do dicionário que podem começar ou terminar a casa selecionada, mesmo mais curtas do que o seu comprimento total.",
       "Dois botões permitem limpar as zonas impossíveis da grelha, com ou sem remoção de casas pretas.",
+      "O botão <strong>Stats</strong> mostra, em cinza claro em cada casa ainda vazia, a letra estatisticamente mais provável.",
       "O botão <strong>Impossíveis</strong> identifica as zonas onde já não é possível nenhuma palavra. <strong>Verificar</strong> garante que todas as palavras estão realmente no dicionário e têm uma definição.",
       "O botão <strong>Definições</strong> gera automaticamente as definições em falta.",
       "Os botões <strong>Propor uma definição</strong> e <strong>Propor um título</strong> ajudam-no com várias propostas.",
@@ -1789,6 +1815,9 @@ const I18N = {
       n > 1
         ? `${n} palavras têm um problema (destacadas a vermelho).`
         : "1 palavra tem um problema (destacada a vermelho).",
+    interactiveStatsBtn: "Stats",
+    interactiveStatsNone: "Nenhuma casa vazia para sugerir uma letra.",
+    interactiveStatsSummary: (n) => `${n > 1 ? `${n} letras sugeridas` : "1 letra sugerida"} (em cinza claro).`,
     interactiveImpossibleBtn: "Impossíveis",
     interactiveImpossibleNone: "Nenhum local impossível, nem com poucas opções.",
     interactiveImpossibleSummary: (n, m) => {
@@ -1828,6 +1857,7 @@ const I18N = {
     interactiveEndNeedsSlot: "Selecione primeiro uma casa.",
     interactiveEndEmpty: "Nenhuma palavra possível para terminar esta casa.",
     interactiveEndError: "Não é possível listar palavras neste momento.",
+    interactiveHideUnsafeBtn: "Ocultar palavras impossíveis",
     interactiveComplete: "Grelha completa: proponha um título e guarde.",
     interactiveTitleLabel: "Título da grelha",
     interactiveTitleProposeBtn: "Propor um título",

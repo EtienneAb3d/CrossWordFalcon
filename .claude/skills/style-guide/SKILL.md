@@ -3661,3 +3661,103 @@ end through the real running API (interactive start/step/save,
   "Voir"/"Bibliothèque"/"Dictionnaire" level with the "Thématique"/"Mots
   Défi" input boxes, with "chat"/"chien" chips added below and the
   buttons unmoved.
+
+- **New `.interactive-word-unsafe-letter` class** underlines, in red, any
+  letter within a candidate word (shown by the "Mots"/"Croisés"/"Début"/
+  "Fin" panels of Interactive mode) that would create a new impossible
+  crossing slot if that candidate were placed — at the user's explicit
+  request: "indiquer dans les réponses les mots qui, une fois posés
+  créeraient des emplacements impossibles = mettre les lettres de ces
+  emplacements impossibles en rouge." Reuses `--error` (permanent rule 2 —
+  the same red already used for `.word-missing`'s own "real word missing
+  from the dictionary" text) as a text colour, not a background fill,
+  since this marks one letter inside an inline word list rather than a
+  grid cell — `.impossible`/`.interactive-impossible`'s own red
+  background convention is for cells, not for this kind of inline text.
+  Paired with `text-decoration: underline wavy` so the warning stays
+  legible even where the letter also carries the existing blue
+  `.interactive-word-highlight-letter` selected-cell mark — declared
+  right after that rule so its red `color` wins the cascade when both
+  classes land on the same `<span>`, while the underline itself always
+  shows regardless of which colour wins. **Visually confirmed** with
+  Playwright/Chromium (permanent rule 4): a real Interactive-mode session
+  (5×5, French) with "Mots" clicked on a 5-letter down slot rendered 212
+  underlined red letters across the candidate list, each one's computed
+  `color` matching `--error` (`rgb(179, 38, 30)`) exactly and
+  `text-decoration-line: underline`; the backend logic itself was
+  additionally verified directly against the real French wordlist (an
+  engineered crossing scenario — a slot ending in a locked "Z" whose only
+  real 2-letter matches are HZ/OZ/PZ — correctly flagged every candidate
+  letter outside `{H, O, P}` as unsafe and left every other letter alone).
+
+- **"Stats" button** (`#interactive-stats-btn`), placed in `#interactive-
+  arrows` immediately before "Impossibles", at the user's explicit
+  request: a read-only statistical preview showing, in light gray inside
+  every still-empty cell, the single most probable letter (the same
+  `sample_letter_biases` mechanism already used for "Graines" — see
+  CLAUDE.md/`DOC_ALGO/FR/ReadMe.md`). A new `--stats-fg: #a3a3a3` token
+  drives a new `.interactive-stat-letter` overlay `<span>` — an extra
+  child element, not a `color` rule on `.cell.white` itself (the
+  convention `.interactive-theme`/`.interactive-challenge` use), because
+  those two rely on the cell's real letter text node already being
+  non-empty; here that text node stays empty by definition (the cell has
+  no real letter yet), so the suggested letter needs its own element to
+  render at all — plain unstyled button, same shared accent-blue look as
+  "Nettoyer"/"Impossibles"/"Vérifier" beside it, no dedicated button CSS.
+  **Visually confirmed** with Playwright/Chromium (permanent rule 4): a
+  real Interactive-mode session (6×6, French) — clicking "Stats" on a
+  grid with 25 still-empty cells populated all 25 with a gray suggested
+  letter, each one's computed `color` matching `--stats-fg`
+  (`rgb(163, 163, 163)`) exactly, visibly lighter than the black/green
+  already-placed letters in the same grid; a follow-up edit clears the
+  suggestions the same way every other diagnostic overlay in this panel
+  does (`clearInteractiveDiagnostics()`).
+
+- **"Eye" toggle button** on every "Mots"/"Croisés"/"Début"/"Fin" results
+  block, at the user's explicit request: "ajouter un bouton icône 'voir'
+  (oeil) en haut à droite. Quand on clique sur ce bouton, masquer les
+  mots contenant des lettres en rouge... et changer le bouton icône avec
+  un barré. Un deuxième clique remontre les mots... et restaure le
+  bouton voir non barré." Each stacked `.interactive-words-block` now
+  starts with a new `.interactive-words-block-header` flex row
+  (`justify-content: space-between`) holding the existing emplacement
+  label on the left and this new button on the right —
+  `createInteractiveWordsEyeToggle()` in `script.js`, reusing `.nav-btn
+  .clear-icon-btn`'s own square icon-button shape (same as the "Effacer"
+  sponge/help buttons) rather than inventing a new size. Holds two
+  stroke-only SVGs (open eye / crossed-out eye, Feather-style paths) —
+  **driven by the button's own `aria-pressed` attribute via CSS**
+  (`.interactive-words-eye-btn[aria-pressed="true"] .interactive-eye-
+  icon-open { display: none }` and the mirror rule for `-closed`), not
+  by an SVG `hidden` property/attribute: a real-browser check (permanent
+  rule 4) showed `hidden` isn't reliably reflected as a live,
+  style-affecting attribute on `<svg>` elements the way it is on HTML
+  ones in this environment's Chromium — toggling `svgEl.hidden` in
+  script.js merely set an inert JS property, with the icon's computed
+  `display` never actually changing. Clicking the button toggles
+  `.interactive-word-item-hidden` (`display: none`) on every
+  `.interactive-word-item-unsafe` word within that one block (a class
+  set at render time whenever a candidate's own `unsafe` list is
+  non-empty) — scoped to that single stacked block only, never touching
+  any other one, matching every other per-block mechanic already
+  established here (see "Mots"/"Croisés" stacking above).
+
+  The comma between two candidates in these blocks (previously a plain
+  `", "` text node inserted between `<span>` items) is now CSS-generated
+  instead: `.interactive-word-item:not(.interactive-word-item-hidden) ~
+  .interactive-word-item:not(.interactive-word-item-hidden)::before {
+  content: ", "; }` — a hidden word takes any comma bound to it out of
+  the flow automatically, so toggling never leaves a stray double comma
+  or a trailing one behind; a text-node approach would have needed
+  manually hiding/restoring the right neighboring comma on every toggle
+  instead. This applies to the "Mots"/"Début"/"Fin" blocks directly and
+  to "Croisés"'s own per-direction (H/V) word lines the same way, since
+  each line is its own sibling group. **Visually confirmed** with
+  Playwright/Chromium (permanent rule 4): rendered a real 4-word list (2
+  flagged unsafe) — before toggling, the first (unsafe) word has no
+  leading comma and the two safe words each show their own `", "`
+  `::before` content; after clicking the eye button, both unsafe words'
+  computed `display` is `none` and the surviving two words read cleanly
+  as "BETAS, DELTAS" with no stray comma; the open/closed SVG icons'
+  computed `display` correctly swap (`block`↔`none`) on each click, and
+  a second click restores every word and icon to their original state.

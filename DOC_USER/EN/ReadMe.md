@@ -578,6 +578,13 @@ to the left of **Mots / Words** to open it as an overlay panel.
   selected slot, even shorter than its full length.
 - Two buttons clean up the grid's impossible zones, with or without
   removing black cells.
+- The **Stats** button shows, in light gray inside every still-empty
+  cell, the single letter that is statistically most likely to belong
+  there — the same statistical mechanism behind the "Graines / Seeds"
+  option on the automatic-generation form, just read out for every empty
+  cell instead of forcing a few of them. Purely informational: it never
+  places a letter itself, and the suggestions disappear the moment you
+  edit the grid.
 - The **Impossibles / Impossible** button identifies zones where no word
   fits any more. **Vérifier / Check** makes sure every word is really in
   the dictionary and has a definition. A word from the "Mots Défi
@@ -692,6 +699,21 @@ real letter. Both update after every edit.
   so keeps the grid valid. Results are sorted shortest first, then
   alphabetically. Useful when no word fills the whole slot but part of it
   still can.
+- In every one of these four lists ("Mots", "Croisés", "Début", "Fin"),
+  a letter shown underlined in red within a candidate word means placing
+  that word would leave the crossing emplacement through that letter with
+  no real dictionary word left to complete it (unless a still-available
+  "Mots Défi (personnalisation)" word could still fill it, which is never
+  flagged this way) — the same "impossible" condition **Nettoyer** cleans
+  up, shown ahead of time so a choice that would create it can be spotted
+  before clicking. A word with no red letter at all is safe to place
+  everywhere; one whose only red letter sits on a position you don't
+  actually need can still be a reasonable choice. Each of these four
+  lists' own results block carries an eye icon button, top-right, next
+  to its emplacement label — click it to hide every word carrying at
+  least one red letter, leaving only the safe ones to compare (the icon
+  switches to a crossed-out eye); click it again to bring the hidden
+  words back and restore the plain eye icon.
 - **Mots Défi (personnalisation) / Challenge Words (customization)**
   (`#interactive-challenge-panel`, a panel of its own flush against the
   right edge of the page's whole

@@ -179,7 +179,8 @@ json`. Holds all server-side state in plain module dicts/lists:
   impossible zones, optional deep mode), `/candidates` (dictionary words
   for a slot), `/crossing` (letter/word options at one cell's crossing),
   `/boundary` (dictionary words that can start or end a slot, even
-  shorter than its full length), `/impossible` (read-only diagnostic
+  shorter than its full length), `/stats` (read-only statistical letter
+  preview for every still-empty cell), `/impossible` (read-only diagnostic
   recompute), `/verify` (dictionary-
   membership check), `/title` (LLM proposals), `/save` (publish),
   `/save_work` (autosave draft), `GET /work` + `/work/delete` (drafts
@@ -695,7 +696,40 @@ placed — a shorter-than-full-length candidate is only offered when the
 single boundary cell right beyond it is free to turn black: not already
 carrying a letter, and structurally valid at `min_interior_free=1`;
 `INTERACTIVE_SLOT_CANDIDATES_LIMIT` applies per length rather than once
-over the combined pool, so short lengths never crowd out longer ones);
+over the combined pool, so short lengths never crowd out longer ones).
+All three of these candidate-listing functions return every word wrapped
+as `{"word", "unsafe"}` (`_words_with_unsafe_positions`) instead of a bare
+string — `unsafe` is the sorted list of 0-indexed positions within that
+word where placing it would NEWLY make a crossing slot impossible to fill
+(`_unsafe_letter_positions`: per position, compares that crossing slot's
+own real-dictionary domain, minus words already used elsewhere, before vs.
+after hypothetically writing this candidate's letter there — a crossing
+slot already impossible beforehand, for an unrelated reason, is never
+reported; `_challenge_word_fits_cells` exempts a still-available "Mots
+Défi" word the same way `_challenge_fillable_slot_indices` does elsewhere).
+All three now also accept `challenge_words` (threaded from each endpoint's
+own `InteractiveCandidatesRequest`/`InteractiveCrossingRequest`/
+`InteractiveBoundaryRequest.challenge_words`, converted via `challenge_
+word_grid_form` exactly like `/step`/`/impossible`) purely for this
+exemption. `frontend/static/script.js`'s `appendWordLetters()` (shared by
+the "Mots"/"Croisés"/"Début"/"Fin" panels) renders each candidate one
+`<span>` per letter, adding `.interactive-word-unsafe-letter` (red
+underline, `--error`) to a flagged position — composing with the existing
+`.interactive-word-highlight-letter` (blue, the selected-cell letter) when
+both land on the same letter. Each of these four buttons' own results
+block carries an "eye" toggle button in its header
+(`createInteractiveWordsEyeToggle()`), top-right of the emplacement
+label: clicking it hides every candidate flagged with at least one
+unsafe letter (`.interactive-word-item-unsafe`, set at render time
+whenever a candidate's own `unsafe` list is non-empty), leaving only the
+safe ones to compare, and swaps the button's icon to a crossed-out eye;
+a second click restores them and reverts the icon. Purely a display
+filter, scoped to that one stacked block — it never re-fetches or
+re-renders, so it can't disturb any other stacked block's own state.
+The comma between two candidates in these blocks is CSS-generated
+(`.interactive-word-item`'s own `::before` rule, matching a visible item
+preceded by another visible sibling) rather than a literal `", "` text
+node, so a hidden candidate never leaves a stray comma behind.
 `_interactive_fill_diagnostics` (returns `(impossible_cells, low_
 candidate_cells)` for the live red/orange grid highlighting, also
 catching a word invented purely by crossing letters that isn't real —
@@ -709,6 +743,22 @@ typed slot spelling one verbatim (`_challenge_word_cells`, exempted from
 `Nettoyer` and `Nettoyer (+noires)`) and `POST /api/interactive/verify`
 (`Vérifier`) apply the same exemption, so none of them ever strips out
 or reports a validly placed challenge word as invalid).
+
+`_interactive_letter_stats` (`POST /api/interactive/stats`, the "Stats"
+button, placed just before "Impossibles") is a read-only diagnostic
+mirroring `_interactive_fill_diagnostics`'s own structure: for every
+still-empty white cell it runs `sample_letter_biases` (`force_
+fraction=0.0`, so nothing is ever forced into the grid — see "Les
+graines" above) with `known_letters` built from the grid's own
+already-placed letters, and returns the single most common letter of
+each cell's own `letter_scores` tally (`[[row, col, letter], ...]`,
+omitting a cell whose every crossing slot is already impossible and so
+contributes nothing to the tally). `frontend/static/script.js` renders
+each returned letter as a light-gray overlay `<span>`
+(`.interactive-stat-letter`) inside the otherwise-still-empty cell,
+alongside the existing `.cell-number` overlay — cleared, like every
+other diagnostic in this panel, the moment the player edits the grid by
+hand (`clearInteractiveDiagnostics()`).
 
 "Finir la grille"/"Finir la zone" reuses the ordinary automatic pipeline
 via `permanent_locked_letters`/`permanent_black_cells` (every already-

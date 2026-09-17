@@ -52,7 +52,7 @@ from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
-    _interactive_fill_diagnostics,
+    _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
@@ -924,10 +924,15 @@ class InteractiveCandidatesRequest(BaseModel):
     `[row, col]` pairs (already resolved client-side by
     `selectedInteractiveWord()`, script.js) — never recomputed server-side
     from `grid` alone, so this works the same way whether that word is
-    already fully typed or still partially empty."""
+    already fully typed or still partially empty. `challenge_words` (the
+    author's own typed spelling, like `InteractiveStepRequest`) is treated
+    as part of the dictionary when deciding whether a candidate would
+    create a new impossible crossing slot (see `interactive_slot_
+    candidates`'s own `unsafe` field)."""
     job_id: str
     grid: list[list[str]]
     cells: list[list[int]]
+    challenge_words: list[str] = []
 
 
 class InteractiveCrossingRequest(BaseModel):
@@ -941,10 +946,13 @@ class InteractiveCrossingRequest(BaseModel):
     button reasons about the crossing of TWO emplacements (horizontal AND
     vertical) through a single cell — so it only ever needs that one
     `cell`, never a pre-resolved cell list; the backend derives both
-    emplacements itself (see `interactive_crossing_words`)."""
+    emplacements itself (see `interactive_crossing_words`). `challenge_
+    words`, like `InteractiveCandidatesRequest`, feeds the same crossing-
+    safety check backing each candidate's own `unsafe` field."""
     job_id: str
     grid: list[list[str]]
     cell: list[int]
+    challenge_words: list[str] = []
 
 
 class InteractiveBoundaryRequest(BaseModel):
@@ -958,11 +966,14 @@ class InteractiveBoundaryRequest(BaseModel):
     selected slot's own ordered `[row, col]` list (`selectedInteractiveWord
     ()`, script.js); `side` ("start" for "Début", "end" for "Fin") picks
     which end of the slot the shorter candidate words anchor to — see
-    `interactive_boundary_candidates`."""
+    `interactive_boundary_candidates`. `challenge_words`, like
+    `InteractiveCandidatesRequest`, feeds the same crossing-safety check
+    backing each candidate's own `unsafe` field."""
     job_id: str
     grid: list[list[str]]
     cells: list[list[int]]
     side: str
+    challenge_words: list[str] = []
 
 
 class InteractiveImpossibleRequest(BaseModel):
@@ -989,6 +1000,20 @@ class InteractiveImpossibleRequest(BaseModel):
     job_id: str
     grid: list[list[str]]
     challenge_words: list[str] = []
+
+
+class InteractiveStatsRequest(BaseModel):
+    """Body of POST /api/interactive/stats — the "Stats" button of the
+    "Interactif" authoring mode, placed just before "Impossibles". A
+    read-only diagnostic — never mutates the grid — that reuses the same
+    statistical mechanism `generate_grid` uses to pick its own "graines"
+    preview letters (`sample_letter_biases`): for every still-empty white
+    cell, the single letter that turns up most often across a large
+    random sample of dictionary words compatible with that cell's own
+    slot(s) and whatever letters are already placed elsewhere in the
+    grid."""
+    job_id: str
+    grid: list[list[str]]
 
 
 class InteractiveVerifyWord(BaseModel):
@@ -4598,8 +4623,10 @@ async def interactive_candidates(req: InteractiveCandidatesRequest):
     """"Mots" button: list every real dictionary word compatible with the
     letters already posed on the selected slot (`req.cells`), split into
     the applicable theme-glossary matches (always shown first) and every
-    other match (capped, see `INTERACTIVE_SLOT_CANDIDATES_LIMIT`) — see
-    `interactive_slot_candidates`."""
+    other match (capped, see `INTERACTIVE_SLOT_CANDIDATES_LIMIT`) — each
+    entry an `{"word", "unsafe"}` dict, `unsafe` flagging which of that
+    candidate's own letters would create a new impossible crossing slot if
+    placed — see `interactive_slot_candidates`."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
@@ -4610,10 +4637,17 @@ async def interactive_candidates(req: InteractiveCandidatesRequest):
     cells = [tuple(c) for c in req.cells]
     if len(cells) < 2:
         raise HTTPException(status_code=400, detail="emplacement invalide")
+    # Same conversion as POST /api/interactive/step — see InteractiveImpossibleRequest's
+    # own `challenge_words` docstring.
+    challenge_words = frozenset(
+        grid_form
+        for w in req.challenge_words
+        if w and (grid_form := challenge_word_grid_form(w))
+    )
     theme_words, other_words = await asyncio.to_thread(
         interactive_slot_candidates,
         [list(row) for row in req.grid], rows, cols,
-        sess["index"], cells, sess["priority_words"],
+        sess["index"], cells, sess["priority_words"], challenge_words,
     )
     return {"theme_words": theme_words, "other_words": other_words}
 
@@ -4624,7 +4658,9 @@ async def interactive_crossing(req: InteractiveCrossingRequest):
     compatible with a real dictionary word in BOTH the horizontal AND the
     vertical emplacement crossing there (restricted by whatever letters
     are already in place elsewhere on the grid), each paired with its own
-    matching horizontal/vertical candidate words — see
+    matching horizontal/vertical candidate words (`{"word", "unsafe"}`
+    dicts, `unsafe` flagging which of that candidate's own letters would
+    create a new impossible crossing slot if placed) — see
     `interactive_crossing_words`."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is None:
@@ -4638,9 +4674,16 @@ async def interactive_crossing(req: InteractiveCrossingRequest):
     cell = (req.cell[0], req.cell[1])
     if not (0 <= cell[0] < rows and 0 <= cell[1] < cols):
         raise HTTPException(status_code=400, detail="case hors grille")
+    # Same conversion as POST /api/interactive/step — see InteractiveImpossibleRequest's
+    # own `challenge_words` docstring.
+    challenge_words = frozenset(
+        grid_form
+        for w in req.challenge_words
+        if w and (grid_form := challenge_word_grid_form(w))
+    )
     across_start, down_start, letters = await asyncio.to_thread(
         interactive_crossing_words,
-        [list(row) for row in req.grid], rows, cols, sess["index"], cell,
+        [list(row) for row in req.grid], rows, cols, sess["index"], cell, challenge_words,
     )
     return {"across_start": across_start, "down_start": down_start, "letters": letters}
 
@@ -4654,7 +4697,10 @@ async def interactive_boundary(req: InteractiveBoundaryRequest):
     offered when the cell right beyond it could actually turn black (never
     already carrying a letter, and structurally valid) — split into theme-
     glossary matches and every other match, both sorted by length then
-    alphabetically — see `interactive_boundary_candidates`."""
+    alphabetically, each entry an `{"word", "unsafe"}` dict (`unsafe`
+    flagging which of that candidate's own letters would create a new
+    impossible crossing slot if placed) — see `interactive_boundary_
+    candidates`."""
     sess = INTERACTIVE_SESSIONS.get(req.job_id)
     if sess is None:
         raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
@@ -4667,10 +4713,17 @@ async def interactive_boundary(req: InteractiveBoundaryRequest):
         raise HTTPException(status_code=400, detail="emplacement invalide")
     if req.side not in ("start", "end"):
         raise HTTPException(status_code=400, detail="côté invalide")
+    # Same conversion as POST /api/interactive/step — see InteractiveImpossibleRequest's
+    # own `challenge_words` docstring.
+    challenge_words = frozenset(
+        grid_form
+        for w in req.challenge_words
+        if w and (grid_form := challenge_word_grid_form(w))
+    )
     theme_words, other_words = await asyncio.to_thread(
         interactive_boundary_candidates,
         [list(row) for row in req.grid], rows, cols,
-        sess["index"], cells, req.side, sess["priority_words"],
+        sess["index"], cells, req.side, sess["priority_words"], challenge_words,
     )
     return {"theme_words": theme_words, "other_words": other_words}
 
@@ -4699,6 +4752,23 @@ async def interactive_impossible(req: InteractiveImpossibleRequest):
         challenge_words,
     )
     return {"impossible_cells": imp, "low_candidate_cells": low}
+
+
+@app.post("/api/interactive/stats")
+async def interactive_stats(req: InteractiveStatsRequest):
+    """"Stats" button: for every empty cell, the statistically most likely
+    letter — see InteractiveStatsRequest's own docstring."""
+    sess = INTERACTIVE_SESSIONS.get(req.job_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="session interactive inconnue (expirée ?)")
+    rows = len(req.grid)
+    cols = len(req.grid[0]) if req.grid else 0
+    if rows < 1 or cols < 1:
+        raise HTTPException(status_code=400, detail="grille vide")
+    letters = await asyncio.to_thread(
+        _interactive_letter_stats, [list(row) for row in req.grid], rows, cols, sess["index"],
+    )
+    return {"letters": letters}
 
 
 @app.post("/api/interactive/verify")

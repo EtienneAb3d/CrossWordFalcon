@@ -827,6 +827,15 @@
                impossible slot — at the user's explicit request. -->
           <button type="button" id="interactive-clean-deep-btn"
                   data-i18n="interactiveCleanDeepBtn">Nettoyer (+noires)</button>
+          <!-- "Stats": a read-only statistical preview, in light gray, of
+               the single most probable letter for every still-empty
+               cell — the same statistical mechanism `generate_grid` uses
+               to pick its own "graines" preview letters
+               (`sample_letter_biases`), just read out for every cell
+               instead of only forcing a few of them. Placed just before
+               "Impossibles". See POST /api/interactive/stats. -->
+          <button type="button" id="interactive-stats-btn"
+                  data-i18n="interactiveStatsBtn">Stats</button>
           <!-- "Impossibles": a read-only check (no cleanup) of the
                impossible slots (including a fully-filled word absent
                from the dictionary) and of the ones with too few real
