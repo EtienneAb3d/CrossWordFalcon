@@ -139,7 +139,7 @@ else:
 # importing this with Qdrant / the embed server down is harmless — the
 # endpoint just returns a clean 503. The Qdrant/embed timeouts stay short
 # (10s each — a per-keyword search pages the ranking only until the score
-# drops below the threshold, fast around THEME_MIN_SCORE = 0.76), but the
+# drops below the threshold, fast around THEME_MIN_SCORE = 0.75), but the
 # added LLM expansion makes the whole call slower than before, so the
 # frontend/proxy timeouts for this route are widened (see
 # SIMILAR_*_TIMEOUT in script.js / frontend/server.py, and
@@ -395,7 +395,23 @@ THEME_LENGTH_SEARCH_PAGE = 1000
 # _compiled_theme_words_by_length / _theme_words_by_length). The
 # Dictionary panel's "Thématique" button, meanwhile, always uses this
 # constant.
-THEME_MIN_SCORE = 0.76
+THEME_MIN_SCORE = 0.75
+
+# Grid glossary construction ONLY, at the user's explicit request: a word
+# preselected by `_compiled_theme_words_by_length` (against a single sharp
+# keyword) is rejected outright if its own best proximity to the typed
+# theme's own words (`_whole_theme_proximity_scores`) falls below
+# `1 - (1 - theme_precision) * WHOLE_THEME_REJECT_LENIENCY` — a
+# deliberately LOOSER bound than `theme_precision`/`THEME_MIN_SCORE`
+# itself (the same threshold halves-then-some the "distance to 1.0" a
+# plain `min_score` would require), since a word can legitimately be very
+# close to one sharp, narrow keyword yet only moderately close to the
+# theme's own words as literally typed — this filter exists only to catch
+# a word that drifted essentially off-topic, not to duplicate the primary
+# per-keyword threshold. No effect (every preselected word kept) when
+# `_whole_theme_proximity_scores` itself failed (Qdrant/embedder outage) —
+# see `_build_theme_glossary`.
+WHOLE_THEME_REJECT_LENIENCY = 1.5
 
 # Grid glossary construction ONLY (not the Dictionary panel's
 # "Thématique" button), at the user's explicit request: "raise the LLM's
@@ -817,7 +833,7 @@ class GenerateRequest(BaseModel):
     # a word to enter THIS generation's theme glossary —
     # passed as `min_score` to _compiled_theme_words_by_length /
     # _theme_words_by_length. Defaults to the module
-    # constant THEME_MIN_SCORE (0.68). Has no effect if `theme` is empty.
+    # constant THEME_MIN_SCORE (0.75). Has no effect if `theme` is empty.
     theme_precision: float = Field(
         default=THEME_MIN_SCORE, ge=0.0, le=1.0,
         description="Minimum Qdrant similarity threshold for the theme glossary (0.0 to 1.0)",
@@ -1191,6 +1207,31 @@ class InteractiveFromLibraryRequest(BaseModel):
     grid_id: str
 
 
+class InteractiveFromAttemptRequest(BaseModel):
+    """Body of POST /api/interactive/from-attempt — the pencil icon button
+    next to an automatic-generation attempt-preview snapshot ("Process N :
+    X % noir, Y % rempli, Z % injouable"), at the user's explicit request:
+    "ajouter un bouton icône crayon... permettant de reprendre n'importe
+    quelle grille de l'historique en mode Interactif." Unlike
+    `InteractiveFromLibraryRequest` (a stored `grid_id`, since the full
+    record already lives server-side), an attempt-preview snapshot is
+    never persisted or indexed by any id — `examples_history` is a plain
+    in-memory, per-job log — so the client sends the exact same grid it is
+    already showing on screen (`example_grid`, including any "." for a
+    still-undetermined white cell — `interactive_place_word`/`_interactive_
+    fill_diagnostics` already treat that exactly like a fresh session's own
+    blank cell) plus the language/difficulty/bilingual_language/theme/
+    challenge_words of the generation job this attempt came from — the
+    same fields the client already sent to `POST /api/generate` to start
+    it."""
+    grid: list[list[str]]
+    language: str = "fr"
+    bilingual_language: Optional[str] = None
+    difficulty: str = "easy"
+    theme: Optional[str] = None
+    challenge_words: list[str] = []
+
+
 @dataclass
 class GenerationTask:
     """Everything the two-stage background pipeline below (GRID_QUEUE,
@@ -1443,7 +1484,8 @@ def _write_users_log(count, pseudos):
 
 
 def _write_theme_log(short_id, theme, description, words, language=None,
-                     keyword_lists=None, searched_keywords=None, min_score=None):
+                     keyword_lists=None, searched_keywords=None, min_score=None,
+                     whole_theme_reject_threshold=None):
     """Writes `LOG_THEME/<timestamp>_<short_id>.log`, the filename prefixed
     with a full timestamp (`%Y%m%d-%H%M%S-%f`) like `LOG_LLM/`
     (`backend/clues.py`, `_write_call_log`) — at the user's explicit
@@ -1459,15 +1501,49 @@ def _write_theme_log(short_id, theme, description, words, language=None,
     ligne)"), the entire glossary of words preselected by Qdrant is listed
     in full, one word per line, right after the header.
 
-    `words`: a list of `(word, score)` pairs, already sorted by increasing
-    word length by the caller (`_theme_words_by_length`) — at the user's
-    explicit request ("continuer à les lister par taille de mots
-    croissante"). The Qdrant similarity score (cosine, higher = closer to
-    the theme) is shown next to each word, at the user's explicit request
-    ("afficher les scores de chaque mot produit par Qdrant"), and — at the
-    user's explicit request ("en indiquant le nombre de lettres en plus du
-    score") — the word's own letter count is shown between the two, each
-    field separated by a tab so the file stays easy to parse/align.
+    `words`: a list of `(word, score, keyword, whole_theme_score)`
+    quadruples, already sorted by increasing word length by the caller
+    (`_compiled_theme_words_by_length`) — at the user's explicit request
+    ("continuer à les lister par taille de mots croissante"). The Qdrant
+    similarity score (cosine, higher = closer to the theme) is shown next
+    to each word, at the user's explicit request ("afficher les scores de
+    chaque mot produit par Qdrant"), and — at the user's explicit request
+    ("en indiquant le nombre de lettres en plus du score") — the word's
+    own letter count is shown between the two, each field separated by a
+    tab so the file stays easy to parse/align. `keyword` (at the user's
+    explicit request: "indiquer le mot de référence qui a servi à
+    calculer le taux de proximité") is the single keyword — among every
+    one of `searched_keywords` — whose own Qdrant search actually
+    produced that word's kept score: the highest-scoring keyword, when
+    the same word turned up under more than one keyword's search (see
+    `_compiled_theme_words_by_length`'s own merge). `whole_theme_score`
+    (at the user's explicit request: "ajouter sur chaque ligne le taux de
+    proximité du mot avec le 'whole theme'", then, once every word was
+    found to only carry it when a whole-theme keyword's own search
+    happened to surface that word: "calculer le score pour tous les mots,
+    y compris ceux qui ne proviennent pas de la 'whole theme'", then
+    corrected once more, twice: first to compare against the theme exactly
+    as typed by the user rather than the LLM-expanded "(whole theme)"
+    keyword list, then to take the BEST score across the typed theme's own
+    individual words (`_theme_tokens`) rather than one merged embedding of
+    the whole phrase — see `_whole_theme_proximity_scores`) is that same
+    word's own proximity to the typed theme, computed for every word
+    `_compiled_theme_words_by_length` preselected, regardless of which
+    keyword actually surfaced it — a fixed reference point distinct from
+    `score`/`keyword` above, which can come from any list. At the user's
+    own further explicit request, this score also now GATES membership in
+    `words`: `_build_theme_glossary` drops a word from the compiled
+    glossary entirely — it is never handed to `generate_grid` as a
+    priority word, and never appears in this log's own word list at all —
+    the moment its own `whole_theme_score` falls below
+    `WHOLE_THEME_REJECT_LENIENCY`'s own reject threshold (logged in the
+    header as `whole_theme_reject_threshold` when whole-theme scoring
+    itself succeeded). This filter is skipped entirely (every preselected
+    word kept, `whole_theme_reject_threshold` absent from the header) on a
+    genuine Qdrant/embedder outage during this one extra computation
+    (caught separately in `_build_theme_glossary`, best-effort — the rest
+    of the themed generation proceeds regardless), so `whole_theme_score`
+    can still show up blank for a word in that case.
 
     `language`: the target language this glossary was built for (the
     `language` parameter of `_build_theme_glossary`, e.g. `"fr"`) — logged
@@ -1482,7 +1558,10 @@ def _write_theme_log(short_id, theme, description, words, language=None,
     deduplicated set of keywords that actually triggered a Qdrant search
     (see `_split_keywords`/`_compiled_theme_words_by_length`). `min_score`:
     the Qdrant score threshold used for this generation (the "Précision
-    thématique" field, `GenerateRequest.theme_precision`). All logged in
+    thématique" field, `GenerateRequest.theme_precision`).
+    `whole_theme_reject_threshold`: the resolved cutoff `whole_theme_score`
+    filter described above (`None` when whole-theme scoring itself failed,
+    so no filtering happened). All logged in
     the header to keep track of what was compiled."""
     try:
         THEME_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1497,6 +1576,10 @@ def _write_theme_log(short_id, theme, description, words, language=None,
             fh.write(f"# theme (as typed): {theme}\n")
             if min_score is not None:
                 fh.write(f"# score threshold (theme_precision): {min_score}\n")
+            if whole_theme_reject_threshold is not None:
+                fh.write(
+                    f"# whole-theme reject threshold: {whole_theme_reject_threshold}\n"
+                )
             if keyword_lists:
                 fh.write(f"# {len(keyword_lists)} keyword list(s) from the LLM:\n")
                 for label, kws in keyword_lists:
@@ -1511,9 +1594,12 @@ def _write_theme_log(short_id, theme, description, words, language=None,
             if words:
                 fh.write("\n")
                 fh.write("\n".join(
-                    f"{w}\t{len(w)}\t{score:.4f}" if score is not None
-                    else f"{w}\t{len(w)}"
-                    for w, score in words
+                    f"{w}\t{len(w)}\t{score:.4f}\t{keyword}\t"
+                    f"{'' if whole_theme_score is None else f'{whole_theme_score:.4f}'}"
+                    if score is not None
+                    else f"{w}\t{len(w)}\t\t{keyword}\t"
+                    f"{'' if whole_theme_score is None else f'{whole_theme_score:.4f}'}"
+                    for w, score, keyword, whole_theme_score in words
                 ) + "\n")
     except OSError as exc:
         logger.warning("failed to write LOG_THEME journal: %s", exc)
@@ -2389,10 +2475,13 @@ def _theme_tokens(theme: str) -> list[str]:
 
 
 def _compiled_theme_words_by_length(keywords: list[str], lang: str,
-                                    min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float]]:
+                                    min_score: float = THEME_MIN_SCORE) -> list[tuple[str, float, str]]:
     """Runs `_theme_words_by_length` for EVERY keyword in `keywords` and
     merges the resulting glossaries — each word keeps the BEST (highest)
-    score seen across every search. At the user's explicit request:
+    score seen across every search, alongside the specific keyword whose
+    search produced that kept score (at the user's explicit request:
+    "indiquer le mot de référence qui a servi à calculer le taux de
+    proximité" — see `_write_theme_log`). At the user's explicit request:
     "Compiler toutes les recherches dans Qdrant pour tous les mots de ces
     listes (dédoublonner les mots)." `keywords` is the flat, already
     de-duplicated list of keywords extracted from the LLM-produced lists
@@ -2409,13 +2498,18 @@ def _compiled_theme_words_by_length(keywords: list[str], lang: str,
     thématique" field — GenerateRequest.theme_precision —, defaulting to
     the THEME_MIN_SCORE constant) via `_theme_words_by_length`.
 
-    The result is re-sorted by increasing word length then descending
-    score — exactly the order a single call to `_theme_words_by_length`
-    already returns (see `_write_theme_log`). A keyword whose Qdrant
-    search fails is skipped; the error only propagates as long as no
-    search has succeeded yet (Qdrant/embedder genuinely unavailable →
-    generation then proceeds with no theme)."""
-    merged: dict[str, float] = {}
+    Returns `(word, score, keyword)` triples, re-sorted by increasing word
+    length then descending score — exactly the order a single call to
+    `_theme_words_by_length` already returns (see `_write_theme_log`). A
+    keyword whose Qdrant search fails is skipped; the error only
+    propagates as long as no search has succeeded yet (Qdrant/embedder
+    genuinely unavailable → generation then proceeds with no theme).
+
+    A word's proximity to the "(whole theme)" list specifically (as
+    opposed to whichever keyword above happened to produce its kept
+    score) is a SEPARATE computation, over every returned word regardless
+    of which keyword surfaced it — see `_whole_theme_proximity_scores`."""
+    merged: dict[str, tuple[float, str]] = {}
     any_ok = False
     for kw in keywords:
         try:
@@ -2427,10 +2521,65 @@ def _compiled_theme_words_by_length(keywords: list[str], lang: str,
         any_ok = True
         for word, score in pairs:
             if word not in merged:
-                merged[word] = score
-            elif score is not None and (merged[word] is None or score > merged[word]):
-                merged[word] = score
-    return sorted(merged.items(), key=lambda pair: (len(pair[0]), -(pair[1] or 0.0)))
+                merged[word] = (score, kw)
+            elif score is not None and (merged[word][0] is None or score > merged[word][0]):
+                merged[word] = (score, kw)
+    return sorted(
+        ((word, score, kw) for word, (score, kw) in merged.items()),
+        key=lambda triple: (len(triple[0]), -(triple[1] or 0.0)),
+    )
+
+
+def _whole_theme_proximity_scores(words: list[str], theme_text: str,
+                                  lang: str) -> dict[str, float]:
+    """Blocking. Computes EVERY one of `words`' own cosine-similarity
+    proximity to the theme exactly as typed by the user (`theme_text`,
+    e.g. `GenerateRequest.theme`), directly — at the user's explicit
+    request: "Calculer le score pour tous les mots, y compris ceux qui ne
+    proviennent pas de la 'whole theme'", later corrected to compare
+    against the typed theme itself rather than the LLM-expanded "(whole
+    theme)" keyword list, then corrected once more: the reference is the
+    BEST score across `theme_text`'s own individual words (`_theme_tokens`
+    — the same tokenizer `_build_theme_glossary` already uses to build one
+    keyword list per theme word), not one merged embedding of the whole
+    phrase — a multi-word theme ("chats et chiens") is judged by how close
+    a candidate word comes to its single closest theme word, exactly the
+    same "best across a keyword group" shape `_compiled_theme_words_by_
+    length`'s own `score` column already uses, just with the typed theme's
+    own words as that group instead of an LLM-expanded keyword list.
+    Unlike `_compiled_theme_words_by_length`'s own
+    per-keyword search (which only ever learns a word's score against a
+    keyword when that word happens to be one of the keyword's own top
+    Qdrant hits, above `min_score`), this embeds each of `theme_text`'s own
+    words once, retrieves the STORED vector of every one of `words`
+    directly by id (`QdrantStore.retrieve_word_vectors` — the same
+    deterministic `word_point_id` every populated point already uses, no
+    re-embedding of the word itself, so the vector is exactly the one
+    Qdrant already indexed for it), and computes the dot product of each
+    (word, theme word) pair by hand — since `backend/embedder.py`'s
+    vectors are L2-normalized and this collection's own distance metric is
+    Cosine (see `backend/qdrant_store.py`), a plain dot product IS the
+    cosine similarity, identical to what a real Qdrant search would have
+    reported for that exact pair. Returns `{word: score}` for every word
+    whose vector was found (normally all of them — every word came from a
+    Qdrant search in this exact tenant to begin with); a word missing from
+    the tenant is simply omitted rather than erroring. Best-effort: raises
+    `QdrantStoreError`/`EmbedderError` on a genuine outage, caught by the
+    caller (`_build_theme_glossary`), which then just leaves this column
+    blank AND skips the whole-theme filter below rather than failing the
+    whole themed generation over it."""
+    theme_words = _theme_tokens(theme_text) or ([theme_text] if theme_text else [])
+    if not words or not theme_words:
+        return {}
+    theme_vecs = [_similar_embedder.embed(tok) for tok in theme_words]
+    word_vecs = _similar_qdrant.retrieve_word_vectors(lang, words)
+    return {
+        word: max(
+            sum(a * b for a, b in zip(vec, theme_vec))
+            for theme_vec in theme_vecs
+        )
+        for word, vec in word_vecs.items()
+    }
 
 
 @app.get("/api/similar_words")
@@ -3042,16 +3191,15 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
         "[%s] theme -> %d distinct keywords to search in Qdrant (min_score=%s)",
         log_tag, len(searched_keywords), theme_precision,
     )
-    theme_scored_words: list[tuple[str, float]] = []
+    theme_scored_words: list[tuple[str, float, str]] = []
     try:
         theme_scored_words = await asyncio.to_thread(
             _compiled_theme_words_by_length, searched_keywords, language,
             theme_precision,
         )
-        theme_priority_words = [w for w, _score in theme_scored_words]
         logger.info(
-            "[%s] theme -> %d preselected words",
-            log_tag, len(theme_priority_words),
+            "[%s] theme -> %d preselected words (before whole-theme filter)",
+            log_tag, len(theme_scored_words),
         )
     except (QdrantStoreError, EmbedderError) as exc:
         logger.warning(
@@ -3059,10 +3207,39 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
             log_tag, exc,
         )
         theme_priority_words = None
+    whole_theme_scores: dict[str, float] = {}
+    whole_theme_reject_threshold = None
+    if theme_scored_words:
+        try:
+            whole_theme_scores = await asyncio.to_thread(
+                _whole_theme_proximity_scores,
+                [w for w, _score, _kw in theme_scored_words],
+                theme, language,
+            )
+            whole_theme_reject_threshold = max(
+                0.0, 1 - (1 - theme_precision) * WHOLE_THEME_REJECT_LENIENCY,
+            )
+            theme_scored_words = [
+                (w, score, kw) for w, score, kw in theme_scored_words
+                if whole_theme_scores.get(w, 1.0) >= whole_theme_reject_threshold
+            ]
+            logger.info(
+                "[%s] theme -> %d preselected words after whole-theme filter "
+                "(reject threshold=%.4f)",
+                log_tag, len(theme_scored_words), whole_theme_reject_threshold,
+            )
+        except (QdrantStoreError, EmbedderError) as exc:
+            logger.warning(
+                "[%s] whole-theme proximity scoring unavailable (%s) — LOG_THEME "
+                "column left blank, no whole-theme filtering applied", log_tag, exc,
+            )
+        theme_priority_words = [w for w, _score, _kw in theme_scored_words]
     await asyncio.to_thread(
         _write_theme_log, log_tag, theme, theme_description,
-        theme_scored_words, language=language, keyword_lists=keyword_lists,
+        [(w, score, kw, whole_theme_scores.get(w)) for w, score, kw in theme_scored_words],
+        language=language, keyword_lists=keyword_lists,
         searched_keywords=searched_keywords, min_score=theme_precision,
+        whole_theme_reject_threshold=whole_theme_reject_threshold,
     )
     return theme_priority_words, theme_description
 
@@ -4172,6 +4349,7 @@ async def _run_interactive_job(job_id, req):
             "has_theme": bool(priority_words),
             "impossible_cells": placed.get("impossible_cells", []),
             "low_candidate_cells": placed.get("low_candidate_cells", []),
+            "deadlock_cells": placed.get("deadlock_cells", []),
             # The raw theme string this session started from (already set
             # on job["interactive"]["theme"] above — mirrored here too so
             # the frontend can read it straight off pollJob()'s own return
@@ -4558,11 +4736,13 @@ async def interactive_step(req: InteractiveStepRequest):
         return {"width": cols, "height": rows, "grid": req.grid,
                 "placed": None, "impossible": True,
                 "impossible_cells": placed.get("impossible_cells", []),
-                "low_candidate_cells": placed.get("low_candidate_cells", [])}
+                "low_candidate_cells": placed.get("low_candidate_cells", []),
+                "deadlock_cells": placed.get("deadlock_cells", [])}
     return {"width": cols, "height": rows, "grid": placed["grid"],
             "placed": placed["placed"], "impossible": False,
             "impossible_cells": placed.get("impossible_cells", []),
-            "low_candidate_cells": placed.get("low_candidate_cells", [])}
+            "low_candidate_cells": placed.get("low_candidate_cells", []),
+            "deadlock_cells": placed.get("deadlock_cells", [])}
 
 
 @app.post("/api/interactive/clean")
@@ -4604,7 +4784,7 @@ async def interactive_clean(req: InteractiveCleanRequest):
         if black_result["changed"]:
             grid = black_result["grid"]
             removed_black_count = black_result["removed_count"]
-    imp, low = await asyncio.to_thread(
+    imp, low, deadlock = await asyncio.to_thread(
         _interactive_fill_diagnostics, grid, rows, cols, sess["index"], challenge_words,
     )
     return {
@@ -4615,6 +4795,7 @@ async def interactive_clean(req: InteractiveCleanRequest):
         "removed_black_count": removed_black_count,
         "impossible_cells": imp,
         "low_candidate_cells": low,
+        "deadlock_cells": deadlock,
     }
 
 
@@ -4747,11 +4928,11 @@ async def interactive_impossible(req: InteractiveImpossibleRequest):
         for w in req.challenge_words
         if w and (grid_form := challenge_word_grid_form(w))
     )
-    imp, low = await asyncio.to_thread(
+    imp, low, deadlock = await asyncio.to_thread(
         _interactive_fill_diagnostics, [list(row) for row in req.grid], rows, cols, sess["index"],
         challenge_words,
     )
-    return {"impossible_cells": imp, "low_candidate_cells": low}
+    return {"impossible_cells": imp, "low_candidate_cells": low, "deadlock_cells": deadlock}
 
 
 @app.post("/api/interactive/stats")
@@ -5134,7 +5315,7 @@ async def _run_interactive_resume_job(job_id, record):
             for w in (record.get("challenge_words") or ())
             if w and (grid_form := challenge_word_grid_form(w))
         )
-        imp, low = await asyncio.to_thread(
+        imp, low, deadlock = await asyncio.to_thread(
             _interactive_fill_diagnostics, grid, rows, cols, index, challenge_words,
         )
 
@@ -5191,6 +5372,7 @@ async def _run_interactive_resume_job(job_id, record):
             "has_theme": bool(priority_words),
             "impossible_cells": imp,
             "low_candidate_cells": low,
+            "deadlock_cells": deadlock,
             # Only ever set on a resume result (a fresh start's own result
             # has neither yet) — enterInteractiveMode() uses these two to
             # restore interactiveDefs/the title input, which a fresh
@@ -5338,6 +5520,45 @@ async def interactive_from_library(req: InteractiveFromLibraryRequest):
         raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
     job_id = _new_job()
     synthetic = _library_record_to_interactive(record)
+    task = asyncio.create_task(_run_interactive_resume_job(job_id, synthetic))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return {"job_id": job_id}
+
+
+@app.post("/api/interactive/from-attempt", status_code=202)
+async def interactive_from_attempt(req: InteractiveFromAttemptRequest):
+    """Open one automatic-generation attempt-preview snapshot in the
+    "Interactif" authoring mode — see `InteractiveFromAttemptRequest`'s own
+    docstring. Reuses `_run_interactive_resume_job` wholesale, exactly like
+    `POST /api/interactive/from-library`, with a synthetic record built
+    directly from the request instead of a stored library entry (an
+    attempt-preview snapshot is never persisted server-side, so there is
+    no id to reload)."""
+    if req.language not in WORDLISTS or not WORDLISTS[req.language].exists():
+        raise HTTPException(status_code=400, detail="langue inconnue ou dictionnaire absent")
+    if req.bilingual_language is not None and req.bilingual_language != req.language:
+        if req.bilingual_language not in WORDLISTS or not WORDLISTS[req.bilingual_language].exists():
+            raise HTTPException(status_code=400, detail="langue bilingue inconnue ou dictionnaire absent")
+    if req.difficulty not in DIFFICULTY_PRESETS:
+        raise HTTPException(status_code=400, detail="difficulté inconnue")
+    if not req.grid or not req.grid[0]:
+        raise HTTPException(status_code=400, detail="grille vide")
+    job_id = _new_job()
+    synthetic = {
+        "language": req.language,
+        "bilingual_language": req.bilingual_language,
+        "difficulty": req.difficulty,
+        "grid": req.grid,
+        "definitions": [],
+        "title": "",
+        "theme": req.theme,
+        "generation_params": None,
+        "challenge_words": req.challenge_words,
+        "priority_words": [],
+        "seed": 0,
+        "origin": None,
+    }
     task = asyncio.create_task(_run_interactive_resume_job(job_id, synthetic))
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)

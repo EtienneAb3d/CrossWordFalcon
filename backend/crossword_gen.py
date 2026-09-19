@@ -32,9 +32,15 @@ Two-phase approach:
      processes — since the machine is typically far from saturating its
      CPU with a single attempt at a time, this parallelism gives several
      chances per palier for a real-time cost close to that of a single
-     attempt; if several succeed at the same palier, whichever maximizes
-     the sum of squares of all its own word lengths is kept, not simply
-     the first one found.
+     attempt. A single success is never enough to conclude the search on
+     its own (`MIN_SUCCESSFUL_ATTEMPTS`, cumulative across every palier
+     of the whole search, currently 2, at the user's explicit request):
+     until that many genuine successes have been found, every worker
+     process a success frees up is immediately reassigned to a brand-new,
+     from-scratch attempt instead of sitting idle for the rest of its own
+     palier. Once enough successes are in hand, whichever one maximizes
+     the sum of squares of all its own word lengths (after a fewest-
+     black-cells comparison) is kept, not simply the first one found.
   2. CSP fill (backtracking) against a real dictionary, then local
      minimization: try removing each black cell one at a time and only
      keep the removal if the grid stays fillable.
@@ -684,25 +690,44 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     any of these levels is adjacency accepted, retrying the same cascade
     (`STRUCTURAL_MIN_INTERIOR_FREE` down to 1, one level at a time) with
     no more isolation requirement — **unless `forbid_adjacency` is true**
-    (`False` by default, every pre-existing caller of this parameter
-    unchanged), in which case this very last attempt (accepting
-    adjacency) is skipped entirely: at the user's explicit request, "When
-    first initializing black cells, forbid any draw that would place 2
-    black cells with an adjacent side" — `make_pattern` passes
-    `forbid_adjacency=True` only when `seed_grid` is `None` (the very
-    first grid of a `generate_grid()` call, entirely white), never for a
-    palier resuming an already partially-blackened pattern from a
-    previous palier, where adjacency is still accepted as a last resort
-    exactly as before. No isolated candidate found across the whole
+    (`False` by default, kept only for a caller outside `make_pattern`
+    that might still want the old last-resort behavior; `make_pattern`
+    itself always passes `forbid_adjacency=True`, at the user's explicit
+    request — originally only for the very first, entirely white grid of
+    a `generate_grid()` call ("When first initializing black cells,
+    forbid any draw that would place 2 black cells with an adjacent
+    side"), then widened to every palier without exception, including
+    one resuming an already partially-blackened `seed_grid` from a
+    previous palier: "La génération de motif cases noires (au début de
+    chaque cycle) ne doit jamais poser de case noire adjacente à une case
+    noire déjà posée. Si l'objectif de pourcentage ne peut pas être
+    atteint sans poser des cases adjacentes, laisser la grille telle
+    quelle." — in which case this very last attempt (accepting adjacency)
+    is skipped entirely). No isolated candidate found across the whole
     window at this point then behaves exactly like the residual case
     below — the best candidate is refused and removed from the pool, the
     loop continues with the rest of the pool, never a crash or a
-    deadlock. In the residual case where even this finds nothing across
-    the whole window (all 32 candidates break connectivity or create an
-    orphaned cell, or — with `forbid_adjacency` — are all adjacent to an
-    already-black cell), the best candidate by the main criterion is
-    simply refused and removed from the pool, to guarantee the loop
-    always makes progress.
+    deadlock — so a palier whose density target can't be reached without
+    adjacency simply ends up short of `target`, left as-is, rather than
+    forcing an adjacent cell: the CSP fill is attempted on that grid as
+    it stands, exactly like any other case where `target` isn't fully
+    reached (see this function's own `Returns` note and `make_pattern`'s
+    own docstring). In the residual case where even this finds nothing
+    across the whole window (all 32 candidates break connectivity or
+    create an orphaned cell, or — with `forbid_adjacency` — are all
+    adjacent to an already-black cell), the best candidate by the main
+    criterion is simply refused and removed from the pool, to guarantee
+    the loop always makes progress.
+
+    This prohibition is scoped to pattern generation itself
+    (`make_pattern`, called once at the start of every palier/cycle,
+    before the CSP fill even starts) — it says nothing about, and never
+    constrains, the cross-palier cleanup mechanisms (`_clean_blocked_
+    slots`/`_build_retry_seed`) or the impossible-zone-resolution passes
+    (`_shorten_impossible_zones`/`_lengthen_impossible_zones`/
+    `interactive_clean_impossible_zones`), every one of which may still
+    place or relocate a black cell adjacent to an existing one when
+    that's what repairing an already-impossible zone requires.
 
     Returns (placed, rejected) — `rejected` covers EVERY cell not placed,
     whether the loop stops for lack of candidates or because `target` is
@@ -1270,7 +1295,19 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
     available_lengths`, never caused by locked letters), removing a word
     wouldn't change its length at all — the budget/removal is therefore
     ignored in this case, which keeps exactly the original behavior (black
-    cell, or unfixable)."""
+    cell, or unfixable).
+
+    `forbid_adjacency` (`False` by default): when true, a candidate cell
+    of the problematic slot that would touch an already-black cell is
+    never tried at all — only `non_adjacent` options are considered,
+    rather than falling back to an adjacent one once the non-adjacent
+    ones are exhausted. `make_pattern` (this function's only real caller)
+    always passes `True`, at the user's explicit request that pattern
+    generation itself never place two black cells with an adjacent side,
+    on any palier — see `make_pattern`'s own docstring. A slot that can't
+    be fixed this way falls through to `_remove_a_crossing_word`, then to
+    `unfixable`, exactly as already described above — never to placing an
+    adjacent black cell."""
     count = 0
     unfixable = set()
     zone_footprints = []  # [cases_d_origine (set), cases_noires_ajoutées (int)]
@@ -1562,14 +1599,25 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     accordingly, without any caller needing to compute or pass this
     shrinking rate itself.
 
-    Adjacency between two black cells is never accepted at all for the
-    very first palier of a call (`seed_grid is None`), at the user's
-    explicit request — see `_place_black_cells`'s own `forbid_adjacency`
-    parameter (passed here as `seed_grid is None`) for the mechanics.
-    Every later palier, which always starts from an already-partially-
-    black `seed_grid` carried forward from a previous one, keeps the
-    pre-existing behavior unchanged (adjacency still accepted as a last
-    resort when no isolated candidate can be found)."""
+    Adjacency between two black cells is never accepted at all, on any
+    palier — not just the very first, entirely white one (`seed_grid is
+    None`), but equally one resuming an already partially-black `seed_
+    grid` carried forward from a previous palier — at the user's explicit
+    request: "La génération de motif cases noires (au début de chaque
+    cycle) ne doit jamais poser de case noire adjacente à une case noire
+    déjà posée. Si l'objectif de pourcentage ne peut pas être atteint sans
+    poser des cases adjacentes, laisser la grille telle quelle." Every one
+    of this function's own three calls into `_place_black_cells`/
+    `_prefill_unfillable_slots` therefore always passes `forbid_
+    adjacency=True` — see `_place_black_cells`'s own docstring for the
+    mechanics, and for why this only ever leaves the grid short of its
+    own density target rather than forcing an adjacent cell to reach it.
+    This is a property of pattern generation alone: the cross-palier
+    cleanup mechanism (`_build_retry_seed`, run *between* paliers, not by
+    this function) and the impossible-zone-resolution passes (`_shorten_
+    impossible_zones`/`_lengthen_impossible_zones`) remain free to place
+    or relocate a black cell adjacent to an existing one, exactly as
+    before, when repairing an already-impossible zone calls for it."""
     # A defensive copy of `locked_letters`, on the same footing as the one
     # already made for `seed_grid` right below — a real bug observed
     # live, screenshot in hand: locked letters genuinely present in the
@@ -1661,7 +1709,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         candidates = _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=(seed_grid is None),
+            forbid_adjacency=True,
         )
 
     placed = sum(row.count(BLACK) for row in grid)
@@ -1682,13 +1730,13 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     )
     _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
                         index=index, locked_letters=locked_letters, available_lengths=available_lengths,
-                        forbid_adjacency=(seed_grid is None))
+                        forbid_adjacency=True)
 
     if available_lengths is not None and locked_letters:
         _prefill_unfillable_slots(
             grid, rows, cols, row_black, col_black, candidates, available_lengths,
             index, locked_letters, rng, fill_objective_fraction,
-            forbid_adjacency=(seed_grid is None),
+            forbid_adjacency=True,
         )
 
     return grid
@@ -1811,6 +1859,9 @@ class DualSet:
         return self.for_direction(slot_direction(cells))
 
 
+_LIGATURE_FOLD = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
+
+
 def challenge_word_grid_form(word):
     """Bare, accent-stripped, uppercase grid form of one "Mots Défi" entry
     — the wordlist's own MOT-column convention (see `data_builder/build_
@@ -1827,9 +1878,15 @@ def challenge_word_grid_form(word):
     same conversion used a bare `[^A-Z]` filter on the *typed* value
     itself, which discarded an accented letter wholesale instead of
     folding it to its base form — "randonnées" was silently stored (and
-    therefore ever matched) as "RANDONNES", not "RANDONNEES"."""
+    therefore ever matched) as "RANDONNES", not "RANDONNEES". A ligature
+    letter (French `œ`/`Œ`/`æ`/`Æ`) is folded into its two separate
+    letters BEFORE that NFKD step, the same way `strip_accents` does —
+    NFKD alone never decomposes it (it's an atomic code point, not a
+    combining-mark sequence), so without this the final `[^A-Z]` filter
+    would otherwise just delete it outright: "sœur" would become "SUR",
+    not "SOEUR"."""
     stripped = "".join(
-        c for c in unicodedata.normalize("NFKD", word)
+        c for c in unicodedata.normalize("NFKD", word.translate(_LIGATURE_FOLD))
         if not unicodedata.combining(c)
     )
     return re.sub(r"[^A-Z]", "", stripped.upper())
@@ -1920,16 +1977,26 @@ def build_index(by_length, frequencies=None):
 # of thousands of them.
 CANCEL_CHECK_INTERVAL = 500
 
-# Threshold (fraction of the grid's white cells) and check frequency (in
-# number of calls to _backtrack) for early abandonment of an attempt, at
-# the user's explicit request: "When a generation situation reaches more
-# than 30% of the grid deemed unfillable, consider this attempt's own
-# palier as failed, and stop trying to add words." See Filler._backtrack —
+# Whether early abandonment of an attempt (see UNFILLABLE_ABANDON_SLOT_COUNT
+# right below) is active at all. Optional, at the user's explicit request,
+# and currently disabled: when False, Filler._backtrack's own checkpoint for
+# this mechanism is a no-op — an attempt is never abandoned early just for
+# accumulating too many impossible slots, whatever UNFILLABLE_ABANDON_
+# SLOT_COUNT is set to; it only ever stops via the deadline/cancel/sibling-
+# done checks around it, or by naturally exhausting its own search tree.
+UNFILLABLE_ABANDON_ENABLED = False
+
+# Threshold (a fixed number of impossible slots) and check frequency (in
+# number of calls to _backtrack) for early abandonment of an attempt: the
+# moment more than this many still-unassigned slots are deemed impossible
+# (see Filler.impossible_zone_slots), the attempt is judged to have no
+# reasonable hope left and is abandoned on the spot. See Filler._backtrack —
 # checked periodically (like CANCEL_CHECK_INTERVAL above, not on every
-# call) since computing impossible cells (impossible_zone_cells) has a
+# call) since computing impossible slots (impossible_zone_slots) has a
 # real, non-negligible cost if repeated at every node of a search that can
-# visit hundreds of thousands of them.
-UNFILLABLE_ABANDON_FRACTION = 0.30
+# visit hundreds of thousands of them. Only takes effect when UNFILLABLE_
+# ABANDON_ENABLED (above) is True.
+UNFILLABLE_ABANDON_SLOT_COUNT = 3
 UNFILLABLE_ABANDON_CHECK_INTERVAL = 500
 
 # Check frequency (in number of calls to _backtrack) for the "another
@@ -1966,6 +2033,20 @@ PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500
 # ever set once every attempt has already completed on its own — a
 # temporary, deliberately conservative setting the user may revisit later.
 PALIER_ATTEMPT_INTERRUPT_FRACTION = 1.0
+
+# Minimum number of genuinely successful grids (cumulative across the
+# WHOLE search, every palier included — not just the current one)
+# required before generate_grid() stops the search and keeps the best
+# one, at the user's explicit request: a single success is no longer
+# enough to conclude. Until this threshold is reached, every worker
+# process freed by a success is immediately reassigned to a brand-new,
+# from-scratch attempt (see the palier's harvesting loop further below)
+# instead of sitting idle — the existing `attempts` budget (200 paliers
+# by default) remains the only cap: once it's exhausted, whichever
+# single success was actually found is accepted rather than declaring a
+# total failure (see the `best is None and accumulated_successes:`
+# fallback near the end of generate_grid).
+MIN_SUCCESSFUL_ATTEMPTS = 2
 
 # Grace period (seconds) left for `best_state_queue`'s drain (see
 # generate_grid) to catch a message published right before a worker yields
@@ -2030,7 +2111,8 @@ BUDGET_PROGRESS_REPORT_INTERVAL_S = 2.0
 # avant de terminer un cycle... Si on a bien testé tous les emplacements
 # restant, et que tous les mots en place sont valides, la grille est alors
 # réputée réussie." The real bug was elsewhere: `Filler`/`try_fill` could
-# end a search attempt (deadline exceeded, 30% abandon, interrupted by a
+# end a search attempt (deadline exceeded, too-many-impossible-slots
+# abandon, interrupted by a
 # sibling attempt, or genuinely exhausted) while a handful of slots were
 # already fully and validly determined by real crossing letters — matching
 # exactly one still-available dictionary word each — yet never explicitly
@@ -2181,6 +2263,15 @@ def _slots_touching(slots, target_indices):
 # more pronounced still).
 CANDIDATE_SCORE_WINDOW = 20000
 
+# Level 1 of the slot-selection cascade (see `Filler._select_target_slot`
+# below): whether to first split `unassigned` by direction and draw which
+# one (across or down) to restrict the rest of the cascade to, weighted by
+# each direction's own remaining open-slot count. Optional, at the user's
+# explicit request, and currently disabled: when False, level 1 is a
+# no-op and the cascade starts straight from the whole `unassigned` pool
+# (both directions together) at level 2.
+ALTERNATE_DIRECTION_ENABLED = False
+
 # Size (fixed, not a proportion of the group) of the final draw window
 # among the retained group of slots (`selection_pool`, see `Filler.
 # _backtrack`, "Choose which slot to fill first"): only the `SLOT_
@@ -2188,7 +2279,7 @@ CANDIDATE_SCORE_WINDOW = 20000
 # computation right above) are kept, regardless of `selection_pool`'s own
 # size — never fewer if the group has fewer slots than this size (`[:N]`
 # on a shorter list simply returns the whole list).
-SLOT_SELECTION_WINDOW_SIZE = 10
+SLOT_SELECTION_WINDOW_SIZE = 3
 
 # Once the window above is obtained (`window`, sorted by ascending
 # geometric score), `Filler._backtrack` re-sorts it a second time by the
@@ -2243,14 +2334,15 @@ SLOT_SELECTION_REFINE_FRACTION = 1 / 2
 #     exhaustive backtracking first. The cross-palier retry machinery
 #     (`_clean_blocked_slots`/`_build_retry_seed`) already repairs this
 #     kind of zone on the next palier regardless of how it arose.
-# Mirrors `UNFILLABLE_ABANDON_FRACTION`'s own shape (a fraction of a
-# whole-search resource, here `deadline_checks` rather than white-cell
-# count) — `interactive_place_word` applies the same principle to its own
-# challenge-word combo search, with a differently-shaped budget (a
-# combination count rather than a check count, see its own docstring);
-# its theme/general-dictionary fallback instead scans every available
-# candidate at its one target slot exhaustively (see its own docstring
-# for why no separate budget is needed there).
+# Also a fraction of a whole-search resource (`deadline_checks`), the same
+# shape `UNFILLABLE_ABANDON_SLOT_COUNT` above would have if it were a
+# fraction rather than a fixed slot count — `interactive_place_word`
+# applies the same principle to its own challenge-word combo search, with
+# a differently-shaped budget (a combination count rather than a check
+# count, see its own docstring); its theme/general-dictionary fallback
+# instead scans every available candidate at its one target slot
+# exhaustively (see its own docstring for why no separate budget is needed
+# there).
 FALLBACK_PHASE_BUDGET_FRACTION = 0.10
 
 
@@ -2258,10 +2350,27 @@ class Filler:
     def __init__(self, slots, index, rng, forced_letters=None, letter_scores=None,
                  excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
                  attempt_done_event=None, on_new_best=None, locked_letters=None,
-                 priority_words=None, challenge_words=None):
+                 priority_words=None, challenge_words=None, rows=None, cols=None):
         self.slots = slots
         self.index = index
         self.rng = rng
+        # Grid dimensions, at the user's explicit request: needed only to
+        # compute the grid's own center for `_select_target_slot`'s level 6
+        # (see there) — every real caller (`try_fill`/`interactive_place_
+        # word`/`_interactive_fill_diagnostics`/`_build_interactive_filler`)
+        # already has `rows`/`cols` in scope and passes them through; `None`
+        # remains a safeguard for a direct caller that doesn't (e.g. a
+        # test), in which case they're inferred from the slots' own cells —
+        # correct as long as at least one slot actually reaches the grid's
+        # last row/column, which is true for every real grid (a wholly
+        # black last row/column would never happen in practice, but isn't
+        # guaranteed by construction either).
+        self.rows = rows if rows is not None else (
+            max((r for cells in slots for r, c in cells), default=-1) + 1
+        )
+        self.cols = cols if cols is not None else (
+            max((c for cells in slots for r, c in cells), default=-1) + 1
+        )
         # Theme preselection (see generate_grid's `priority_words`): in
         # _backtrack, a slot's candidates that belong to the glossary of
         # ITS OWN direction (`_priority_words_for`) are tried BEFORE any
@@ -2417,14 +2526,9 @@ class Filler:
             {j for cell in cells for j, _ in self.cell_to_slots[cell] if j != i}
             for i, cells in enumerate(slots)
         ]
-        # Total number of white cells in the grid (one cell per
-        # cell_to_slots key, regardless of how many slots run through it)
-        # — the denominator of UNFILLABLE_ABANDON_FRACTION, see
-        # _backtrack. Computed once here, never recomputed.
-        self._total_white_cells = len(self.cell_to_slots)
         # Turns True the moment an attempt is abandoned along the way for
         # lack of reasonable hope (see _backtrack and UNFILLABLE_ABANDON_
-        # FRACTION) — once set, every following call to _backtrack fails
+        # SLOT_COUNT) — once set, every following call to _backtrack fails
         # immediately, with no further exploration.
         self.abandoned = False
         # Distinct from `self.abandoned` above (which it still reuses as a
@@ -2863,6 +2967,76 @@ class Filler:
         )
         return self._backtrack(deadline_checks)
 
+    def _crossing_deadlock_slots(self, used_words, challenge_words=()):
+        """Indices of every still-unassigned slot that crosses another
+        still-unassigned slot at a cell where the two slots' own
+        remaining candidates agree on no single letter at all — added to
+        the "impossible emplacement" definition at the user's explicit
+        request: "Ajouter à la définition les emplacements qui possèdent
+        au moins une case qui ne peut pas être remplie dans les 2 sens
+        (donc avec une lettre commune pour les 2 sens). Dans ce cas, il y
+        a donc 2 emplacements impossibles." However healthy each slot's
+        own domain (`self._domain(i, ignore_forced=True)`, `used_words`
+        excluded, plus any still-fitting `challenge_words` entry — same
+        sources `impossible_zone_slots` itself already reads) looks in
+        isolation, no combination of the two could ever be validly
+        completed together, so both are reported here.
+
+        A slot whose own domain is already empty contributes an empty
+        letter set at every one of its positions and is therefore never
+        the CAUSE of a deadlock here (an empty set never fails the "both
+        sides non-empty" guard below in a way that blames the other
+        side) — that case is already covered by `impossible_zone_slots`'s
+        own pre-existing empty-domain check, one level up.
+
+        Only ever called with `self.assignment` already pointing at the
+        state to diagnose (`self.best_assignment` for every current
+        caller — see `impossible_zone_slots`), exactly like `_domain`
+        itself expects.
+
+        Returns `(deadlocked, deadlock_cells)`: `deadlocked` is the set of
+        slot indices described above; `deadlock_cells` is the (usually
+        much smaller) set of actual CROSSING cells where a conflict was
+        found — the specific root-cause cell(s), as opposed to every
+        other cell of the same two slots, which is only impossible by
+        association. Lets a caller (`_interactive_fill_diagnostics`)
+        highlight that exact cell more prominently than the rest of the
+        slot, at the user's explicit request: "la case ... devrait être
+        en rouge vif (plus vif que les mots impossibles qui passent par
+        cette case)"."""
+        open_slots = [i for i, w in enumerate(self.assignment) if w is None]
+        letters_by_slot = {}
+        for i in open_slots:
+            cells = self.slots[i]
+            letters = [set() for _ in cells]
+            for w in self._domain(i, ignore_forced=True):
+                if w in used_words:
+                    continue
+                for pos, ch in enumerate(w):
+                    letters[pos].add(ch)
+            for cw in challenge_words:
+                if cw not in used_words and self._challenge_word_fits(i, cw):
+                    for pos, ch in enumerate(cw):
+                        letters[pos].add(ch)
+            letters_by_slot[i] = letters
+        deadlocked = set()
+        deadlock_cells = set()
+        for cell, entries in self.cell_to_slots.items():
+            open_here = [(i, pos) for i, pos in entries if i in letters_by_slot]
+            for a in range(len(open_here)):
+                i, pi = open_here[a]
+                li = letters_by_slot[i][pi]
+                if not li:
+                    continue
+                for b in range(a + 1, len(open_here)):
+                    j, pj = open_here[b]
+                    lj = letters_by_slot[j][pj]
+                    if lj and not (li & lj):
+                        deadlocked.add(i)
+                        deadlocked.add(j)
+                        deadlock_cells.add(cell)
+        return deadlocked, deadlock_cells
+
     def impossible_zone_slots(self):
         """Like impossible_zone_cells (see below), but returns *slot
         indices* rather than the cells themselves — at the user's explicit
@@ -2887,6 +3061,13 @@ class Filler:
         *current* state (which may have fully backtracked to its starting
         state once the search has ended), not necessarily that of the most
         advanced point (`best_assignment`) this diagnostic examines.
+
+        A slot also counts as impossible when it crosses another
+        still-open slot at a cell where the two agree on no letter at all
+        — see `_crossing_deadlock_slots` for the full reasoning. Unlike
+        the empty-domain case above, this one can flag a slot whose own
+        domain is perfectly non-empty in isolation; both slots of such a
+        pair are reported.
 
         `_domain(i, ignore_forced=True)` — never the default version, which
         would let a mere statistical seed (`forced_letters`, an unverified
@@ -2921,13 +3102,24 @@ class Filler:
         # either. `_challenge_word_fits` reads crossing letters off
         # `self.assignment`, already swapped to `best_assignment` above.
         active_challenge_words = self._active_challenge_words()
+        # Second, additional criterion — see _crossing_deadlock_slots'
+        # own docstring, at the user's explicit request: two still-open
+        # slots crossing at a cell where their own remaining candidates
+        # share no letter at all are both impossible too, even though
+        # each one's domain, in isolation, is perfectly non-empty.
+        deadlocked, _deadlock_cells = self._crossing_deadlock_slots(used_at_best, active_challenge_words)
         result = [
             i for i, word in enumerate(self.best_assignment)
             if word is None
-            and all(w in used_at_best for w in self._domain(i, ignore_forced=True))
-            and not any(
-                cw not in used_at_best and self._challenge_word_fits(i, cw)
-                for cw in active_challenge_words
+            and (
+                i in deadlocked
+                or (
+                    all(w in used_at_best for w in self._domain(i, ignore_forced=True))
+                    and not any(
+                        cw not in used_at_best and self._challenge_word_fits(i, cw)
+                        for cw in active_challenge_words
+                    )
+                )
             )
         ]
         self.assignment = saved
@@ -2950,6 +3142,24 @@ class Filler:
             cells.update(self.slots[i])
         return sorted(cells)
 
+    def deadlock_zone_cells(self):
+        """Like `impossible_zone_cells` above, but only the exact crossing
+        cell(s) actually responsible for a crossing-letter deadlock (see
+        `_crossing_deadlock_slots`) — always a subset of `impossible_zone_
+        cells`'s own result, at the user's explicit request: "les
+        prévisualisations [doivent montrer] les cases impossibles en rouge
+        vif... comme sur le mode Interactif," which already highlights
+        this narrower set more prominently than the rest of the same
+        impossible slot(s) (`_interactive_fill_diagnostics`'s own third
+        return value)."""
+        used_at_best = {w for w in self.best_assignment if w is not None}
+        active_challenge_words = self._active_challenge_words()
+        saved = self.assignment
+        self.assignment = self.best_assignment
+        _deadlocked, cells = self._crossing_deadlock_slots(used_at_best, active_challenge_words)
+        self.assignment = saved
+        return sorted(cells)
+
     def _select_target_slot(self, unassigned, domains):
         """Chooses which slot to fill next among `unassigned` (already
         guaranteed non-empty, each with at least one genuinely available
@@ -2962,7 +3172,7 @@ class Filler:
         live there (a plain MRV: the smallest domain, then an already
         partially-known slot, then random), with neither level 3's length
         threshold (which excludes 2-3-letter slots) nor level 6's
-        geometric score (which favors the top-left corner) — which made
+        geometric score (which favors the grid's own center) — which made
         interactive fill start with 2-letter slots scattered across the
         grid instead of following the same rules as automatic generation.
         Takes `unassigned`/`domains` as parameters (rather than
@@ -2972,14 +3182,18 @@ class Filler:
         # 8-level selection rule, at the user's explicit request (MRV was
         # removed — see the comment further up, before the Filler class,
         # for why):
-        # 1. first alternate across/down: draw the category (across or
-        #    down) at random, with a probability proportional to the
-        #    number of still-open slots in each of the 2 categories
-        #    (self.directions, precomputed in __init__) — a category that
-        #    still has many unfilled slots has a better chance of being
-        #    chosen than the other, which naturally tends to alternate/
-        #    balance the two as the fill progresses without fixing a
-        #    strict order;
+        # 1. **Optional, currently disabled** (`ALTERNATE_DIRECTION_
+        #    ENABLED`, see its own docstring): first alternate across/
+        #    down: draw the category (across or down) at random, with a
+        #    probability proportional to the number of still-open slots
+        #    in each of the 2 categories (self.directions, precomputed in
+        #    __init__) — a category that still has many unfilled slots
+        #    has a better chance of being chosen than the other, which
+        #    naturally tends to alternate/balance the two as the fill
+        #    progresses without fixing a strict order. While disabled,
+        #    this level is a no-op: `direction_pool` starts as the whole
+        #    `unassigned` group, both directions together, and level 2
+        #    below applies to it directly;
         # 2. **"Mots Défi", at the user's explicit request, taking priority
         #    over every level below**: if at
         #    least one slot of the drawn category has a not-yet-used, not
@@ -3053,21 +3267,21 @@ class Filler:
         #    group accepts a theme word, this level changes nothing: the
         #    next level then applies to the whole group;
         # 6. among the slots of the group obtained at the previous level, a
-        #    purely **geometric** score is computed for each: `x² + y²`,
-        #    where `(y, x)` is the slot's first cell (`self.slots[i][0]`,
-        #    always the topmost/leftmost one among its own cells — see
-        #    `extract_slots`), measured from the grid's own top-left
-        #    corner (the same origin as `(row, col)` everywhere else in
-        #    this file) — see the computation itself further below for the
-        #    detail. This score doesn't depend at all on the slot's own
-        #    fill state (neither its known letters nor its domain) —
-        #    only on its fixed position in the grid — which tends to make
-        #    the fill progress along a geometric front rather than by each
-        #    slot's own difficulty. A uniform random draw is then made
-        #    **among the `SLOT_SELECTION_WINDOW_SIZE` (10) slots with the
-        #    smallest score** (the closest to the top-left corner) — a
-        #    fixed window size, not a proportion of the group (see its own
-        #    docstring). The slots are shuffled (with this attempt's own
+        #    purely **geometric** score is computed for each: the squared
+        #    distance between the slot's own CENTRAL position (the midpoint
+        #    of its own span, from `self.slots[i][0]`/`self.slots[i][-1]`
+        #    — see `extract_slots`) and the grid's own center (the same
+        #    `(row, col)` origin as everywhere else in this file) — see the
+        #    computation itself further below for the detail. This score
+        #    doesn't depend at all on the slot's own fill state (neither
+        #    its known letters nor its domain) — only on its fixed position
+        #    in the grid — which tends to make the fill progress along a
+        #    geometric front rather than by each slot's own difficulty. A
+        #    uniform random draw is then made **among the `SLOT_SELECTION_
+        #    WINDOW_SIZE` (10) slots with the smallest score** (the closest
+        #    to the grid's own center) — a fixed window size, not a
+        #    proportion of the group (see its own docstring). The slots are
+        #    shuffled (with this attempt's own
         #    seeded RNG, hence reproducible) before being sorted by score:
         #    without this prior shuffle, the sort order (`sorted` is
         #    stable) would decide which tied slots pass the window's own
@@ -3075,8 +3289,8 @@ class Filler:
         #    encountered elsewhere in this file (see further up, pre-
         #    fill's own "black column"/"triangle" bugs) — all the more
         #    relevant here since the score is geometric, so many slots can
-        #    share exactly the same score (the whole arc at a given
-        #    Euclidean distance from the corner). This geometric window
+        #    share exactly the same score (the whole ring at a given
+        #    Euclidean distance from the center). This geometric window
         #    (`window`) is then re-sorted twice more, each time reducing
         #    it further, before the final choice is made:
         # 7. by the number of letters already placed in each slot
@@ -3091,16 +3305,19 @@ class Filler:
         #    level 6's own shuffle: since `sorted` is stable, this shuffle
         #    is what breaks ties between slots with equal scores, not the
         #    order inherited from the previous sort).
-        free_across = [i for i in unassigned if self.directions[i] == "across"]
-        free_down = [i for i in unassigned if self.directions[i] == "down"]
-        if free_across and free_down:
-            direction_pool = self.rng.choices(
-                [free_across, free_down],
-                weights=[len(free_across), len(free_down)],
-                k=1,
-            )[0]
+        if ALTERNATE_DIRECTION_ENABLED:
+            free_across = [i for i in unassigned if self.directions[i] == "across"]
+            free_down = [i for i in unassigned if self.directions[i] == "down"]
+            if free_across and free_down:
+                direction_pool = self.rng.choices(
+                    [free_across, free_down],
+                    weights=[len(free_across), len(free_down)],
+                    k=1,
+                )[0]
+            else:
+                direction_pool = free_across or free_down
         else:
-            direction_pool = free_across or free_down
+            direction_pool = list(unassigned)
         # "Mots Défi" level: at the user's explicit request, applied here —
         # right after the category draw, AHEAD of every other level below
         # including "few candidates" — after a live report that the
@@ -3201,30 +3418,35 @@ class Filler:
             ]
             if theme_placeable:
                 selection_pool = theme_placeable
-        # Geometric score: x²+y², where (y, x) is the slot's first cell
-        # (self.slots[i][0], always the topmost/leftmost one among its own
-        # cells — see extract_slots), x/y measured from the grid's own
-        # top-left corner — the same origin as `(row, col)` everywhere
-        # else in this file, so x = column, y = row directly. A slot whose
-        # first cell already sits at the top-left corner gets the lowest
-        # possible score (0); the score grows as a slot starts further
-        # down and/or further right. Squaring each coordinate before
-        # summing them (a squared Euclidean distance, replacing an earlier
-        # plain x + y linear score — a Manhattan distance, constant along
-        # a whole diagonal) penalizes a slot that's markedly off-center on
-        # a single axis more heavily than one at an equal Manhattan
-        # distance but spread across both axes — a fill front held more
-        # tightly around the top-left corner, rather than a flat diagonal.
-        # An even earlier version measured this same score from the
-        # top-RIGHT corner instead (x = distance from the right edge
-        # rather than the left) — reverted once live testing confirmed the
-        # fill was starting from the wrong corner, in favor of the
-        # top-left origin used here; this version needs no knowledge of
-        # the grid's own width at all (`cols` was removed from
-        # `Filler.__init__`, which only ever used it for that earlier
-        # calculation).
+        # Geometric score, at the user's explicit request: squared distance
+        # between the slot's own CLOSEST cell to the grid's own center, and
+        # that center itself — not the slot's own midpoint. Every cell of
+        # the slot (`self.slots[i]`, a straight run of cells along one axis
+        # — see `extract_slots`) is considered individually, and the
+        # smallest squared distance among them is the slot's own score, so
+        # a long slot only needs to REACH toward the grid's own center to
+        # score well, even when most of its span sits far from it. The
+        # grid's own center is `((self.rows - 1) / 2, (self.cols - 1) / 2)`
+        # (the same origin as `(row, col)` everywhere else in this file). A
+        # slot with at least one cell exactly on the grid's own center gets
+        # the lowest possible score (0); the score grows as its closest
+        # cell sits further away, in any direction. Squaring each
+        # coordinate's own distance before summing them (a squared
+        # Euclidean distance, not a Manhattan one) penalizes a slot whose
+        # closest cell is markedly off-center on a single axis more
+        # heavily than one at an equal Manhattan distance but spread
+        # across both axes — a fill front held more tightly around the
+        # grid's own center, rather than a flat diamond. Replaces an
+        # earlier version of this same score, measured from the slot's own
+        # CENTRAL position (the midpoint of its span) instead of its
+        # closest cell — at the user's explicit request.
+        center_row = (self.rows - 1) / 2
+        center_col = (self.cols - 1) / 2
         scores = {
-            i: self.slots[i][0][1] ** 2 + self.slots[i][0][0] ** 2
+            i: min(
+                (col - center_col) ** 2 + (row - center_row) ** 2
+                for row, col in self.slots[i]
+            )
             for i in selection_pool
         }
         shuffled_pool = list(selection_pool)
@@ -3279,7 +3501,7 @@ class Filler:
             raise GenerationCancelled()
         # Early stop of the WHOLE batch the moment a sibling attempt has
         # abandoned itself (see _worker_batch_abandoned_event and
-        # UNFILLABLE_ABANDON_FRACTION below) — at the user's explicit
+        # UNFILLABLE_ABANDON_SLOT_COUNT below) — at the user's explicit
         # request: don't wait for this attempt to also reach its own
         # abandon threshold or its own budget once another one has already
         # judged the shared pattern hopeless. Same check frequency as the
@@ -3312,22 +3534,25 @@ class Filler:
             self.abandoned = True
             self.interrupted_by_sibling = True
             return False
-        # Early abandonment of an attempt, at the user's explicit request
-        # (see UNFILLABLE_ABANDON_FRACTION above): the moment more than 30%
-        # of the grid's white cells belong to a slot deemed impossible (in
-        # the sense of impossible_zone_cells, computed on best_assignment),
-        # this attempt is judged to have no reasonable hope left and is
-        # abandoned on the spot — no point continuing to try adding words
-        # elsewhere on a pattern already this badly compromised. Checked
-        # only every UNFILLABLE_ABANDON_CHECK_INTERVAL times (like
-        # cancel_event above), not on every call: impossible_zone_cells
-        # recomputes every unassigned slot's domain, a real cost not worth
-        # paying at every node.
+        # Early abandonment of an attempt (see UNFILLABLE_ABANDON_ENABLED/
+        # UNFILLABLE_ABANDON_SLOT_COUNT above): the moment more than
+        # `UNFILLABLE_ABANDON_SLOT_COUNT` still-unassigned slots are deemed
+        # impossible (in the sense of impossible_zone_slots, computed on
+        # best_assignment), this attempt is judged to have no reasonable
+        # hope left and is abandoned on the spot — no point continuing to
+        # try adding words elsewhere on a pattern already this badly
+        # compromised. Optional, at the user's explicit request, and
+        # currently disabled (UNFILLABLE_ABANDON_ENABLED = False): while
+        # disabled this whole check is a no-op and an attempt is never cut
+        # short for this reason alone. When enabled, checked only every
+        # UNFILLABLE_ABANDON_CHECK_INTERVAL times (like cancel_event above),
+        # not on every call: impossible_zone_slots recomputes every
+        # unassigned slot's domain, a real cost not worth paying at every
+        # node.
         if (
-            self._total_white_cells > 0
+            UNFILLABLE_ABANDON_ENABLED
             and self.checks % UNFILLABLE_ABANDON_CHECK_INTERVAL == 0
-            and len(self.impossible_zone_cells())
-            > UNFILLABLE_ABANDON_FRACTION * self._total_white_cells
+            and len(self.impossible_zone_slots()) > UNFILLABLE_ABANDON_SLOT_COUNT
         ):
             self.abandoned = True
             # Signals to every other attempt of the same batch that they
@@ -3701,8 +3926,8 @@ def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=No
     every letter already determined by genuinely assigned crossing words —
     but which `_backtrack` itself never explicitly confirmed (it simply
     never had the chance to select it before the attempt ended, whatever
-    the reason: budget exhausted, 30% abandonment, interrupted by a
-    sibling palier, or genuinely exhausted search). Such a slot is
+    the reason: budget exhausted, too-many-impossible-slots abandonment,
+    interrupted by a sibling palier, or genuinely exhausted search). Such a slot is
     visually "complete" (every cell already carries a real letter) but
     stays formally `None` in `assignment` — so neither counted as
     successful, nor ever flagged unfillable (`Filler.impossible_zone_
@@ -4055,10 +4280,12 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     "deadline_exceeded" means the `deadline_checks` budget ran out first,
     inconclusive; "abandoned_too_unfillable" means the search itself gave
     up early, well before either of the above, because more than
-    `UNFILLABLE_ABANDON_FRACTION` (30%) of the grid's white cells already
-    belonged to a slot deemed impossible (see `Filler.abandoned`) — at
+    `UNFILLABLE_ABANDON_SLOT_COUNT` (3) still-unassigned slots already
+    were deemed impossible (see `Filler.abandoned`) — at
     that point continuing to search elsewhere on the same pattern isn't
-    worth the remaining budget; "interrupted_other_attempt_done" means this
+    worth the remaining budget; only possible when `UNFILLABLE_ABANDON_
+    ENABLED` is True (currently False, so this reason never occurs at
+    present); "interrupted_other_attempt_done" means this
     attempt was cut short because another attempt of the same palier
     already produced the palier's outcome (success or failure) — see
     `attempt_done_event`/`generate_grid`, at the user's explicit request to
@@ -4148,6 +4375,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             diagnostics["reason"] = "no_slots"
             diagnostics["example_grid"] = grid
             diagnostics["impossible_cells"] = []
+            diagnostics["deadlock_cells"] = []
             diagnostics["forced_cells"] = []
             diagnostics["assigned_letter_count"] = 0
             diagnostics["assignment"] = []
@@ -4201,7 +4429,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                      excluded_slots=excluded_slots, cancel_event=cancel_event,
                      batch_abandoned_event=batch_abandoned_event,
                      attempt_done_event=attempt_done_event, locked_letters=locked_letters,
-                     priority_words=priority_words, challenge_words=challenge_words)
+                     priority_words=priority_words, challenge_words=challenge_words,
+                     rows=rows, cols=cols)
     if best_state_queue is not None:
         # Assigned after construction, not passed to Filler(...) directly
         # above: the closure below needs `filler` itself (to read filler.
@@ -4234,6 +4463,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "assignment": list(best_assignment),
                 "example_grid": example_grid,
                 "impossible_cells": filler.impossible_zone_cells(),
+                "deadlock_cells": filler.deadlock_zone_cells(),
                 "impossible_slots": filler.impossible_zone_slots(),
                 "forced_cells": forced_cells,
                 "locked_cells": locked_cells,
@@ -4334,6 +4564,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             diagnostics["example_grid"] = example_grid
             diagnostics["forced_cells"] = forced_cells
             diagnostics["impossible_cells"] = filler.impossible_zone_cells()
+            diagnostics["deadlock_cells"] = filler.deadlock_zone_cells()
             diagnostics["assigned_letter_count"] = assigned_letter_count
             diagnostics["assignment"] = list(filler.best_assignment)
             diagnostics["impossible_slots"] = filler.impossible_zone_slots()
@@ -4355,8 +4586,31 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
 def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks=6_000,
                             cancel_event=None, proper_noun_words=None, max_proper_nouns=None,
                             non_gloss_words=None, max_non_gloss=None, priority_words=None,
-                            permanent_locked_letters=None, permanent_black_cells=None):
-    """`permanent_black_cells` (`None`/empty by default — no effect for
+                            permanent_locked_letters=None, permanent_black_cells=None,
+                            challenge_words=None):
+    """`challenge_words` (`None`/empty by default — no effect for any
+    pre-existing caller): a "Mots Défi" word already placed in `result`'s
+    own `assignment` is protected the exact same way a `permanent_locked_
+    letters` cell already is — its own cells are folded into the hard
+    per-cell constraint AND into the preseed passed to every trial's own
+    `try_fill` (recomputed on every accepted removal, since a challenge
+    word can move to a different slot across trials the same way any
+    other placed word already can), and exempted from this function's own
+    final "every word must be a real dictionary entry" acceptance check.
+    Without this, a black cell removed near a challenge word's own slot
+    would rerun the CSP fill with no memory that this slot was meant to
+    keep that exact, possibly non-dictionary, word — either silently
+    replacing it with a different real word the fresh search happens to
+    prefer, or, if the crossings alone still forced back the same
+    non-dictionary spelling, rejecting an otherwise perfectly legitimate
+    removal for having no dictionary-entry exemption to fall back on. This
+    mirrors the protection every other cross-palier repair stage already
+    gives a challenge word (`_optimize_before_cleanup`/`_shorten_
+    impossible_zones`/`_lengthen_impossible_zones`/`_clean_continue_
+    candidate`'s own `_challenge_word_cells` exemption) — this was the one
+    stage of the pipeline that didn't yet.
+
+    `permanent_black_cells` (`None`/empty by default — no effect for
     any pre-existing caller): a set of `(row, col)` cells never considered
     as candidates for removal, at the user's explicit request for the
     "Finir la zone" button (see backend/app.py's `interactive_finish` —
@@ -4489,21 +4743,29 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                 # every candidate black cell, would be free to replace the
                 # word placed by the player themselves in Interactive mode
                 # with a completely different, if genuinely real, word.
-                # `locked_letters` provides the hard constraint (`Filler.
-                # locked_letters`, consulted for every cell it covers,
-                # including a slot only partially covered by it);
-                # `preseed_assignment` additionally promotes, verbatim and
-                # without ever revalidating it against the dictionary,
-                # every slot ENTIRELY covered by these cells — recomputed
-                # here on `grid`, the pattern this same `try_fill` will
-                # itself re-query via `extract_slots`, to stay aligned with
-                # the structure it will actually use.
+                # `challenge_words` gets the exact same treatment, merged
+                # into the same map — recomputed from the CURRENT (slots,
+                # assignment) on every trial, since an earlier accepted
+                # removal in this same pass may have already changed which
+                # slot a challenge word occupies. `locked_letters` provides
+                # the hard constraint (`Filler.locked_letters`, consulted
+                # for every cell it covers, including a slot only partially
+                # covered by it); `preseed_assignment` additionally
+                # promotes, verbatim and without ever revalidating it
+                # against the dictionary, every slot ENTIRELY covered by
+                # these cells — recomputed here on `grid`, the pattern this
+                # same `try_fill` will itself re-query via `extract_slots`,
+                # to stay aligned with the structure it will actually use.
+                merged_locked_letters = dict(permanent_locked_letters or {})
+                for cells, word in zip(slots, assignment):
+                    if word is not None and challenge_words and word in challenge_words:
+                        merged_locked_letters.update(zip(cells, word))
                 permanent_preseed = None
-                if permanent_locked_letters:
+                if merged_locked_letters:
                     trial_slots = extract_slots(grid, rows, cols)
                     permanent_preseed = [
-                        "".join(permanent_locked_letters[cell] for cell in cells)
-                        if all(cell in permanent_locked_letters for cell in cells) else None
+                        "".join(merged_locked_letters[cell] for cell in cells)
+                        if all(cell in merged_locked_letters for cell in cells) else None
                         for cells in trial_slots
                     ]
                 new_result = try_fill(grid, rows, cols, index, rng, deadline_checks,
@@ -4513,15 +4775,15 @@ def minimize_black_squares(grid, result, rows, cols, index, rng, deadline_checks
                                        non_gloss_words=non_gloss_words,
                                        max_non_gloss=max_non_gloss,
                                        priority_words=priority_words,
-                                       locked_letters=permanent_locked_letters or None,
+                                       locked_letters=merged_locked_letters or None,
                                        preseed_assignment=permanent_preseed)
                 if new_result is not None:
                     new_slots, new_assignment = new_result
                     if all(
                         w is not None and (
                             w in word_sets.for_cells(new_slots[i]).get(len(w), ())
-                            or (permanent_locked_letters and all(
-                                cell in permanent_locked_letters for cell in new_slots[i]
+                            or (merged_locked_letters and all(
+                                cell in merged_locked_letters for cell in new_slots[i]
                             ))
                         )
                         for i, w in enumerate(new_assignment)
@@ -4572,12 +4834,17 @@ def build_word_entries(grid, rows, cols, slots, assignment):
 
 def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None):
     """For grid `grid` (same cell conventions as `interactive_place_
-    word`), returns `(impossible_cells, low_candidate_cells)` — two sorted
-    `[r, c]` lists, to display on the interface in "Interactif" mode just
-    like on the previews: red for a still-open slot no dictionary word
-    fits anymore (given the letters already placed and the words already
-    used elsewhere), orange for a slot with strictly fewer than
-    `PREFILL_MIN_WORD_COUNT` options left. A slot already entirely filled
+    word`), returns `(impossible_cells, low_candidate_cells, deadlock_
+    cells)` — three sorted `[r, c]` lists, to display on the interface in
+    "Interactif" mode just like on the previews: red for a still-open
+    slot no dictionary word fits anymore (given the letters already
+    placed and the words already used elsewhere), orange for a slot with
+    strictly fewer than `PREFILL_MIN_WORD_COUNT` options left, and —
+    always a subset of `impossible_cells` — a more vivid red for the
+    exact crossing cell(s) where two still-open slots' own remaining
+    candidates share no letter at all (`Filler._crossing_deadlock_slots`),
+    as opposed to the rest of those same two slots' cells, impossible only
+    by association. A slot already entirely filled
     IS now also checked — not for its option count (it no longer needs
     one, its cells are already fixed), but for the actual validity of the
     word it holds (`_invalid_fully_known_indices`): an invented word can
@@ -4609,7 +4876,7 @@ def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None)
     pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
     slots = extract_slots(pattern, rows, cols)
     if not slots:
-        return [], []
+        return [], [], []
     known = {
         (r, c): grid[r][c]
         for r in range(rows)
@@ -4626,6 +4893,7 @@ def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None)
     filler = Filler(
         slots, index, scratch_rng,
         letter_scores=letter_scores, locked_letters=known,
+        rows=rows, cols=cols,
     )
     for i, cells in enumerate(slots):
         if all(cell in known for cell in cells):
@@ -4633,6 +4901,12 @@ def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None)
             filler.used_words.add(filler.assignment[i])
 
     fillable = _challenge_fillable_slot_indices(slots, known, challenge_words)
+    # Second, additional "impossible" criterion — see Filler._crossing_
+    # deadlock_slots' own docstring, at the user's explicit request: two
+    # still-open slots crossing at a cell where their own remaining
+    # candidates share no letter at all are both impossible too, whatever
+    # their own individual candidate count otherwise looks like.
+    deadlocked, deadlock_cells = filler._crossing_deadlock_slots(filler.used_words, challenge_words or ())
     impossible, low = set(), set()
     for i, cells in enumerate(slots):
         if filler.assignment[i] is not None:
@@ -4643,6 +4917,8 @@ def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None)
                 low.update(cells)
             else:
                 impossible.update(cells)
+        elif i in deadlocked:
+            impossible.update(cells)
         elif n < PREFILL_MIN_WORD_COUNT:
             low.update(cells)
     exempt = _challenge_word_cells(slots, known, challenge_words)
@@ -4651,6 +4927,7 @@ def _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words=None)
     return (
         sorted([r, c] for (r, c) in impossible),
         sorted([r, c] for (r, c) in low),
+        sorted([r, c] for (r, c) in deadlock_cells),
     )
 
 
@@ -4840,6 +5117,7 @@ def _build_interactive_filler(pattern, rows, cols, index, rng, known, priority_w
         slots, index, rng,
         letter_scores=letter_scores, locked_letters=known,
         priority_words=priority_words, challenge_words=challenge_words,
+        rows=rows, cols=cols,
     )
     for i, cells in enumerate(slots):
         if all(cell in known for cell in cells):
@@ -5030,15 +5308,18 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
             domains[i] = domain
             viable[i] = cands
     if not viable:
-        imp, low = _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words)
-        return {"impossible": True, "impossible_cells": imp, "low_candidate_cells": low}
+        imp, low, deadlock = _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words)
+        return {
+            "impossible": True, "impossible_cells": imp, "low_candidate_cells": low,
+            "deadlock_cells": deadlock,
+        }
 
     # Target slot: the same 8-level cascade as automatic generation (see
     # Filler._select_target_slot), reused as-is rather than a hand-rolled,
     # simple MRV — at the user's explicit request, after confirming live
     # that this MRV (smallest domain first) made Interactive mode start
     # with 2-letter slots scattered across the grid, honoring neither the
-    # length threshold (level 3, >=4 letters) nor the top-left front
+    # length threshold (level 3, >=4 letters) nor the centered front
     # sought by automatic generation's own geometric score (level 6). Only
     # ever resolved against the grid's own BASE pattern — never against a
     # reshaped one, since which reshape (if any) ends up mattering is only
@@ -5167,12 +5448,13 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
         new_grid[r][c] = ch
     # Diagnostics computed on the grid AFTER placement — that's the state
     # the player sees after "Suivant".
-    imp, low = _interactive_fill_diagnostics(new_grid, rows, cols, index, challenge_words)
+    imp, low, deadlock = _interactive_fill_diagnostics(new_grid, rows, cols, index, challenge_words)
     return {
         "impossible": False,
         "grid": new_grid,
         "impossible_cells": imp,
         "low_candidate_cells": low,
+        "deadlock_cells": deadlock,
         "placed": {
             "cells": [[r, c] for (r, c) in cells],
             "word": word,
@@ -5628,16 +5910,25 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng, challenge_w
     ]
     challenge_fillable = _challenge_fillable_slot_indices(slots, known, challenge_words)
     challenge_exempt = _challenge_word_cells(slots, known, challenge_words)
+    # Computed separately from `_impossible_indices` (which already folds
+    # this same set in) because `_clean_blocked_slots` needs to know
+    # specifically WHICH impossible slots are crossing-letter deadlocks —
+    # see its own `deadlocked_slots` parameter — so it never blackens one
+    # of them: blackening is a distinct mechanism from plain "nettoyage,"
+    # at the user's explicit request, so such a slot only ever has
+    # whatever crossing word touches its other cells removed (a no-op
+    # when both sides of the deadlock are still open).
+    deadlocked = _crossing_deadlock_indices(slots, index, known, challenge_words)
     impossible = sorted(
-        (set(_impossible_indices(slots, index, known)) - challenge_fillable)
+        (set(_impossible_indices(slots, index, known, challenge_words=challenge_words)) - challenge_fillable)
         | set(_invalid_fully_known_indices(slots, index, known, exempt=challenge_exempt))
     )
     if not impossible:
         return {"changed": False, "grid": grid, "cleared_count": 0}
 
-    cleaned_assignment, _confirmed, new_black_cells = _clean_blocked_slots(
+    cleaned_assignment, _confirmed, new_black_cells, _reopened_cells = _clean_blocked_slots(
         slots, assignment, impossible, index=index, rng=rng,
-        grid=grid, rows=rows, cols=cols,
+        grid=grid, rows=rows, cols=cols, deadlocked_slots=deadlocked,
     )
     # `_clean_blocked_slots` only ever clears a CROSSING slot's own word —
     # never the impossible slot i's own entry (see its own docstring: built
@@ -5770,7 +6061,7 @@ def interactive_minimize_black_cells(grid, rows, cols, index, rng, challenge_wor
         challenge_fillable = _challenge_fillable_slot_indices(slots, known, challenge_words)
         challenge_exempt = _challenge_word_cells(slots, known, challenge_words)
         bad = (
-            (set(_impossible_indices(slots, index, known)) - challenge_fillable)
+            (set(_impossible_indices(slots, index, known, challenge_words=challenge_words)) - challenge_fillable)
             | set(_invalid_fully_known_indices(slots, index, known, exempt=challenge_exempt))
         )
         return slots, bad
@@ -6206,14 +6497,19 @@ def _cycle_start_preview(rows, cols, seed_grid, locked_letters, preseed_assignme
     return grid, []
 
 
-# Added to a "Mots Défi" word's own length before squaring it into
-# `_content_score`'s sum, at the user's explicit request: "Inclus les
-# Mots Défis dans le calcul (avec ou sans glossaire thématique) en
-# attribuant un bonus +2 sur leur longueur." Applies on top of whatever
-# else already makes a word eligible for the sum (see `_content_score`'s
-# own docstring) — a challenge word that also happens to be a theme word
-# is not counted twice, just scored with the bonus once.
-CHALLENGE_WORD_SCORE_BONUS = 2
+# Added to a placed word's own length before squaring it into
+# `_content_score`'s sum: a theme-glossary word gets `THEME_WORD_SCORE_
+# BONUS`, a "Mots Défi" word gets the larger `CHALLENGE_WORD_SCORE_BONUS`
+# instead (the two never stack — a challenge word that also happens to be
+# a theme word is scored with the challenge bonus only, once).
+THEME_WORD_SCORE_BONUS = 2
+CHALLENGE_WORD_SCORE_BONUS = 4
+
+# A word's own length is capped at this many letters (before any bonus)
+# when computing its `_content_score` contribution, so one very long word
+# can't dominate the sum on its own — a themed/challenge attempt is still
+# favored by the bonus above, not by chasing raw word length indefinitely.
+CONTENT_SCORE_LENGTH_CAP = 7
 
 
 def _content_score(pairs, priority_words=None, challenge_words=None):
@@ -6223,42 +6519,45 @@ def _content_score(pairs, priority_words=None, challenge_words=None):
     content-scoring use in `generate_grid`: breaking ties among several
     *successful* attempts of the same palier, and picking a *failed*
     palier's own "best" attempt (raw state via `_playable_score`, post-
-    cleanup state via `_cleaned_playable_score`) to carry forward — at the
-    user's explicit request: "Le scoring réussi et échoué doivent utiliser
-    la même logique qui favorise le glossaire thématique." Before this,
-    only the successful-attempt tie-break restricted itself to theme
-    words; the failed-attempt scores summed every placed word regardless
-    of theme, an inconsistency this function removes by being the only
-    place either kind of score is actually computed.
+    cleanup state via `_cleaned_playable_score`) to carry forward.
+
+    Every placed word counts toward the sum, whether or not `priority_
+    words`/`challenge_words` is set — a themed or challenge-enriched
+    generation is favored by a BONUS on top of the plain word count, never
+    by excluding the rest of the grid's own content from the score.
 
     `priority_words` (`None`/empty by default — no effect for any pre-
-    existing caller before theming existed): when non-empty, a word only
-    counts toward the sum at all if it belongs to ITS OWN slot's theme
-    glossary (`_priority_words_for(priority_words, cells)`, handling a
-    bilingual grid's per-direction `DualSet` the same way every other
-    theme-aware check in this file already does) — so a themed generation
-    favors the attempt that surfaces more/longer theme words, not merely
-    more/longer words overall. Empty/`None`: every placed word counts, at
-    its own plain length — unchanged from before theming existed.
+    existing caller before theming existed): a word belonging to ITS OWN
+    slot's theme glossary (`_priority_words_for(priority_words, cells)`,
+    handling a bilingual grid's per-direction `DualSet` the same way every
+    other theme-aware check in this file already does) gets `THEME_WORD_
+    SCORE_BONUS` added to its own length before squaring, so an attempt
+    that surfaces more/longer theme words is favored over an otherwise-
+    equal one that doesn't, without ignoring its non-theme words either.
 
     `challenge_words` (`None`/empty by default — no effect for any pre-
-    existing caller before this feature existed): a "Mots Défi" word
-    always counts toward the sum, REGARDLESS of `priority_words` — even
-    one that isn't itself a theme word, and even with no theme at all —
-    so a challenge word's own placement is never invisible to either
-    score. Its own scored length additionally gets `CHALLENGE_WORD_SCORE_
-    BONUS` added before squaring, so an attempt that manages to place a
-    challenge word is favored over one that doesn't, all else equal."""
+    existing caller before this feature existed): a "Mots Défi" word gets
+    `CHALLENGE_WORD_SCORE_BONUS` added to its own length before squaring
+    instead of the theme bonus (even one that isn't itself a theme word,
+    and even with no theme at all), so an attempt that manages to place a
+    challenge word is favored over one that doesn't, all else equal.
+
+    A word's own length is capped at `CONTENT_SCORE_LENGTH_CAP` BEFORE any
+    bonus is added — a 12-letter word scores the same raw length as a
+    7-letter one, so the sum keeps favoring more/longer-within-reason
+    words over one single very long word dominating the whole score."""
     total = 0
     for w, cells in pairs:
         if w is None:
             continue
         is_challenge = bool(challenge_words) and w in challenge_words
-        if priority_words and not (
-            is_challenge or w in _priority_words_for(priority_words, cells)
-        ):
-            continue
-        scored_length = len(w) + (CHALLENGE_WORD_SCORE_BONUS if is_challenge else 0)
+        if is_challenge:
+            bonus = CHALLENGE_WORD_SCORE_BONUS
+        elif priority_words and w in _priority_words_for(priority_words, cells):
+            bonus = THEME_WORD_SCORE_BONUS
+        else:
+            bonus = 0
+        scored_length = min(len(w), CONTENT_SCORE_LENGTH_CAP) + bonus
         total += scored_length ** 2
     return total
 
@@ -6338,7 +6637,7 @@ def _cleaned_playable_score(grid, diag, rows, cols, index, rng,
     slots = extract_slots(grid, rows, cols)
     if len(slots) != len(diag["assignment"]):
         return _playable_score(grid, diag, rows, cols, priority_words, challenge_words)
-    cleaned_assignment, _, _ = _clean_blocked_slots(
+    cleaned_assignment, _, _, _ = _clean_blocked_slots(
         slots, diag["assignment"], diag["impossible_slots"], index=index, rng=rng,
     )
     return _content_score(
@@ -6395,7 +6694,82 @@ def _public_diag(diag):
 BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY = 1 / 10
 
 
-def _impossible_indices(slots_list, index, known):
+def _crossing_deadlock_indices(slots_list, index, known, challenge_words=None):
+    """Module-level counterpart to `Filler._crossing_deadlock_slots` (see
+    its own docstring for the full reasoning and the user's explicit
+    request behind it), for contexts with no live `Filler`/search running
+    — folded into `_impossible_indices` below rather than called
+    separately by each of that function's own callers. Indices of every
+    still-open slot of `slots_list` (not entirely covered by `known`)
+    that crosses another still-open slot at a cell where the two slots'
+    own remaining candidates — real dictionary words (`_slot_candidates`,
+    the same per-position intersection `_impossible_indices` itself
+    already relies on) plus any still-unused `challenge_words` entry that
+    geometrically fits — agree on no single letter at all. A slot whose
+    own candidates are already empty in isolation contributes an empty
+    letter set at every position and can therefore never be the CAUSE of
+    a deadlock here (see the same guard in `Filler._crossing_deadlock_
+    slots`) — that case is already `_impossible_indices`'s own pre-
+    existing empty-domain criterion, one level up.
+
+    A candidate word already fully spelled out elsewhere in the grid
+    (`used`, the same "no word placed twice" convention as `Filler.
+    used_words`) is excluded from every slot's own achievable-letter set
+    — a real bug found live: without this exclusion, this function could
+    disagree with `Filler._crossing_deadlock_slots` (which already
+    excludes `used_words`) on the exact same grid, since a used-up word
+    could paper over a genuine deadlock by counting as "achievable" here
+    when it can no longer actually be placed — the live red highlight
+    (backed by the Filler-based check) would then show a deadlock
+    "Nettoyer" (backed by this one) didn't see at all."""
+    used = {
+        "".join(known[c] for c in cells)
+        for cells in slots_list
+        if all(c in known for c in cells)
+    }
+    available_challenge_words = (set(challenge_words) - used) if challenge_words else set()
+    open_indices = [
+        j for j, cells in enumerate(slots_list) if not all(c in known for c in cells)
+    ]
+    cell_to_slots = defaultdict(list)
+    for j in open_indices:
+        for pos, cell in enumerate(slots_list[j]):
+            cell_to_slots[cell].append((j, pos))
+    letters_by_slot = {}
+    for j in open_indices:
+        cells = slots_list[j]
+        length = len(cells)
+        sub_known = {c: known[c] for c in cells if c in known}
+        letters = [set() for _ in cells]
+        for w in _slot_candidates(index, length, cells, sub_known):
+            if w in used:
+                continue
+            for pos, ch in enumerate(w):
+                letters[pos].add(ch)
+        for w in available_challenge_words:
+            if len(w) == length and all(
+                sub_known.get(c, w[pos]) == w[pos] for pos, c in enumerate(cells)
+            ):
+                for pos, ch in enumerate(w):
+                    letters[pos].add(ch)
+        letters_by_slot[j] = letters
+    deadlocked = set()
+    for cell, entries in cell_to_slots.items():
+        for a in range(len(entries)):
+            i, pi = entries[a]
+            li = letters_by_slot[i][pi]
+            if not li:
+                continue
+            for b in range(a + 1, len(entries)):
+                jx, pj = entries[b]
+                lj = letters_by_slot[jx][pj]
+                if lj and not (li & lj):
+                    deadlocked.add(i)
+                    deadlocked.add(jx)
+    return deadlocked
+
+
+def _impossible_indices(slots_list, index, known, challenge_words=None):
     """Indices of the slots of `slots_list` deemed impossible in the local
     sense used by `_shorten_impossible_zones` below: not entirely covered
     by `known`, and with no real candidate once this constraint is applied
@@ -6408,7 +6782,14 @@ def _impossible_indices(slots_list, index, known):
     file (see the AVALAS bug in CLAUDE.md). Same criterion used at both
     places where `_shorten_impossible_zones` needs it: to redetect still-
     blocked slots after every black cell placed, and to compute the final
-    list returned to the caller."""
+    list returned to the caller.
+
+    `challenge_words` (`None`/empty by default — no effect for any
+    pre-existing caller before this addition) additionally folds in
+    `_crossing_deadlock_indices`: two still-open slots crossing at a cell
+    where their own remaining candidates share no letter at all are both
+    reported impossible too, even though each one's own domain, checked
+    in isolation by the loop below, is perfectly non-empty."""
     result = []
     for j, cells in enumerate(slots_list):
         length = len(cells)
@@ -6417,7 +6798,9 @@ def _impossible_indices(slots_list, index, known):
         sub_known = {c: known[c] for c in cells if c in known}
         if not _slot_candidates(index, length, cells, sub_known):
             result.append(j)
-    return result
+    return sorted(
+        set(result) | _crossing_deadlock_indices(slots_list, index, known, challenge_words)
+    )
 
 
 def _invalid_fully_known_indices(slots_list, index, known, exempt=None):
@@ -7136,7 +7519,7 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
     # is what keeps that cleanup from reshaping/blackening/emptying it.
     final_impossible = sorted(
         invalid_fully_known | (
-            set(_impossible_indices(final_slots, index, confirmed))
+            set(_impossible_indices(final_slots, index, confirmed, challenge_words=challenge_words))
             - _challenge_fillable_slot_indices(final_slots, confirmed, challenge_words)
         )
     )
@@ -7224,11 +7607,26 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
     consistent with `_low_candidate_slot_cells`/`_noise_slot_cells`,
     which already make this same choice elsewhere in this file.
 
-    Returns `(grid, slots, assignment, impossible_slots)` — unchanged, by
-    reference, if no shorter word was ever placed (the common case),
-    otherwise a new pattern/slots/words triple reflecting the state after
-    this preliminary cleanup, with the list of still-impossible slots
-    reindexed against the new pattern.
+    Returns `(grid, slots, assignment, impossible_slots, black_cell_links)`
+    — unchanged, by reference, if no shorter word was ever placed (the
+    common case, `black_cell_links` then an empty dict), otherwise a new
+    pattern/slots/words quadruple reflecting the state after this
+    preliminary cleanup, with the list of still-impossible slots reindexed
+    against the new pattern. `black_cell_links` maps each newly-placed
+    word's own cells (a tuple, never a numeric slot index — see the same
+    reasoning just above for `remaining_cells`) to `("shorten", boundary)`
+    — the one cell that was blackened to make room for it. This is what
+    lets `_clean_blocked_slots` treat the word and its own boundary cell as
+    one atomic unit later on: at the user's explicit request, "chaque mot
+    posé plus court ou plus long qui ajoute ou déplace une case noire doit
+    être traité comme unitaire avec la case noire ajoutée ou déplacée, de
+    sorte qu'un backtrack annule le mot et l'ajout/déplacement de la case
+    noire" — without this map, a word placed here that later turns out to
+    still cross some OTHER slot that never got resolved (this function
+    deliberately allows that, see `_new_crossing_impossibility`'s own
+    docstring) could be removed by `_clean_blocked_slots`'s own crossing
+    cleanup while the black cell added for it silently stayed behind,
+    permanently and pointlessly narrowing that zone.
 
     The pattern, the crossing slots (`cell_to_slots`), and the already-
     used words are all recomputed fresh before EVERY slot processed — not
@@ -7268,6 +7666,7 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
     new_grid = [row[:] for row in grid]
     changed = False
     remaining_cells = [tuple(slots[i]) for i in impossible_slots]
+    black_cell_links = {}
 
     while remaining_cells:
         progressed = False
@@ -7303,6 +7702,7 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
             for c, ch in zip(sub, word):
                 known[c] = ch
             new_grid[boundary[0]][boundary[1]] = BLACK
+            black_cell_links[tuple(sub)] = ("shorten", boundary)
             progressed = True
             changed = True
         if not progressed:
@@ -7315,13 +7715,13 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
         # this shortening loop, which would otherwise reshape a zone that
         # isn't a genuine dead end.
         remaining_idx = (
-            set(_impossible_indices(cur_slots, index, known))
+            set(_impossible_indices(cur_slots, index, known, challenge_words=challenge_words))
             - _challenge_fillable_slot_indices(cur_slots, known, challenge_words)
         )
         remaining_cells = [tuple(cur_slots[j]) for j in remaining_idx]
 
     if not changed:
-        return grid, slots, assignment, impossible_slots
+        return grid, slots, assignment, impossible_slots, {}
 
     final_slots = extract_slots(new_grid, rows, cols)
     invalid_full = set(
@@ -7341,16 +7741,17 @@ def _shorten_impossible_zones(grid, rows, cols, slots, assignment, impossible_sl
     # see the comment on `remaining_idx` above.
     final_impossible = sorted(
         invalid_full | (
-            set(_impossible_indices(final_slots, index, known))
+            set(_impossible_indices(final_slots, index, known, challenge_words=challenge_words))
             - _challenge_fillable_slot_indices(final_slots, known, challenge_words)
         )
     )
-    return new_grid, final_slots, final_assignment, final_impossible
+    return new_grid, final_slots, final_assignment, final_impossible, black_cell_links
 
 
 def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_slots,
                                 index, rng, permanent_locked_letters=None,
-                                permanent_black_cells=None, challenge_words=None):
+                                permanent_black_cells=None, challenge_words=None,
+                                black_cell_links=None):
     """A new step, the exact complement of `_shorten_impossible_zones`
     above, at the user's explicit request: "si un emplacement ne trouve
     pas de mot dans le glossaire thématique (ou le glossaire normal si ce
@@ -7390,11 +7791,22 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
     every slot processed, since the pattern shifts underneath it as the
     loop runs.
 
-    Returns `(grid, slots, assignment, impossible_slots)` unchanged, by
-    reference, if no lengthening was ever applied (the common case),
-    otherwise a new pattern/slots/words/still-impossible-slots quadruple
-    reflecting the state after this step — exactly the same return
-    contract as `_shorten_impossible_zones`.
+    Returns `(grid, slots, assignment, impossible_slots, black_cell_links)`
+    unchanged, by reference, if no lengthening was ever applied (the
+    common case), otherwise a new pattern/slots/words/still-impossible-
+    slots/black-cell-links quintuple reflecting the state after this step
+    — exactly the same return contract as `_shorten_impossible_zones`,
+    including `black_cell_links` itself: the incoming `black_cell_links`
+    (`_shorten_impossible_zones`'s own, threaded straight through by
+    `_clean_continue_candidate` — see that function's own docstring) is
+    carried over as-is (this function never touches a cell `_known_slot_
+    boundary_cells` already protects for bounding one of those words, so
+    none of its own entries can ever go stale here) and merged with one
+    `("lengthen", old_boundary, new_boundary)` entry per newly-placed word
+    here, keyed the same way, by its own cells. `_clean_blocked_slots`
+    reads this combined map to revert a word's own black-cell change
+    together with the word itself, should it end up removing that word
+    later — see `_shorten_impossible_zones`'s own docstring for why.
 
     `permanent_black_cells` (`None`/empty by default — no effect for any
     pre-existing caller before "Finir la zone"): a real bug reported live
@@ -7427,6 +7839,7 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
     new_grid = [row[:] for row in grid]
     changed = False
     remaining_cells = [tuple(slots[i]) for i in impossible_slots]
+    black_cell_links = dict(black_cell_links or {})
 
     while remaining_cells:
         progressed = False
@@ -7460,6 +7873,7 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
             new_grid[old_boundary[0]][old_boundary[1]] = WHITE
             if new_boundary is not None:
                 new_grid[new_boundary[0]][new_boundary[1]] = BLACK
+            black_cell_links[tuple(new_cells)] = ("lengthen", old_boundary, new_boundary)
             progressed = True
             changed = True
         if not progressed:
@@ -7470,13 +7884,13 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
         # indices`'s docstring): a slot an unused challenge word could
         # still legally fill is never fed back into this lengthening loop.
         remaining_idx = (
-            set(_impossible_indices(cur_slots, index, known))
+            set(_impossible_indices(cur_slots, index, known, challenge_words=challenge_words))
             - _challenge_fillable_slot_indices(cur_slots, known, challenge_words)
         )
         remaining_cells = [tuple(cur_slots[j]) for j in remaining_idx]
 
     if not changed:
-        return grid, slots, assignment, impossible_slots
+        return grid, slots, assignment, impossible_slots, black_cell_links
 
     final_slots = extract_slots(new_grid, rows, cols)
     invalid_full = set(
@@ -7495,16 +7909,17 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
     # see the comment on `remaining_idx` above.
     final_impossible = sorted(
         invalid_full | (
-            set(_impossible_indices(final_slots, index, known))
+            set(_impossible_indices(final_slots, index, known, challenge_words=challenge_words))
             - _challenge_fillable_slot_indices(final_slots, known, challenge_words)
         )
     )
-    return new_grid, final_slots, final_assignment, final_impossible
+    return new_grid, final_slots, final_assignment, final_impossible, black_cell_links
 
 
 def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=None,
                           exclude_impossible_locked=False, index=None, rng=None,
-                          grid=None, rows=None, cols=None, permanent_locked_letters=None):
+                          grid=None, rows=None, cols=None, permanent_locked_letters=None,
+                          black_cell_links=None, deadlocked_slots=None):
     """Steps 1 and 2 of `_build_retry_seed` (see its own docstring for the
     complete history), extracted into their own function at the user's
     explicit request: "à la fin d'un tour, nettoyer automatiquement les
@@ -7619,15 +8034,61 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     word they spell or the situation of the slot (at `i`, or of another
     slot crossing it) they might otherwise concern.
 
-    Returns `(cleaned_assignment, confirmed, new_black_cells)` —
-    `cleaned_assignment` is a new list (never a mutation of the received
-    `assignment`), with an explicit `None` for every removed slot, ready
-    to directly serve as `preseed_assignment` for the next palier;
-    `new_black_cells` is the (possibly empty) set of cells newly
-    blackened by this alternative — to be folded into the pattern passed
-    to the next palier by the caller, `_clean_blocked_slots` itself never
-    mutating `grid` in place (an internal working copy, discarded after
-    the call)."""
+    `black_cell_links` (`None`/empty by default — no effect for any pre-
+    existing caller): the map `_shorten_impossible_zones`/`_lengthen_
+    impossible_zones` hand back describing exactly which black-cell change
+    came paired with which word they placed (see their own docstrings).
+    Resolved once, against this call's own `slots`, into `links_by_slot`
+    — whenever this function's own removal logic (any of the three: the
+    black-cell alternative above, the plain crossing removal below, or
+    the dead-end-zone black cell) sets `assignment[j] = None` for a slot
+    `j` with a link, the paired black-cell change is undone in the very
+    same step (`_revert_black_cell_link`) — at the user's explicit
+    request: "chaque mot posé plus court ou plus long qui ajoute ou
+    déplace une case noire doit être traité comme unitaire avec la case
+    noire ajoutée ou déplacée, de sorte qu'un backtrack annule le mot et
+    l'ajout/déplacement de la case noire." Without this, a word placed by
+    either of those two functions — which both deliberately allow
+    crossing an ALREADY impossible slot elsewhere, see `_new_crossing_
+    impossibility`'s own docstring — could be removed right here, in the
+    very same cleanup pass, while the black cell added or moved
+    specifically to fit it stayed behind for good, permanently and
+    pointlessly narrowing (or failing to widen) that zone.
+
+    Returns `(cleaned_assignment, confirmed, new_black_cells,
+    reopened_cells)` — `cleaned_assignment` is a new list (never a
+    mutation of the received `assignment`), with an explicit `None` for
+    every removed slot, ready to directly serve as `preseed_assignment`
+    for the next palier; `new_black_cells`/`reopened_cells` are the
+    (possibly empty, always disjoint) sets of cells respectively newly
+    blackened (this function's own black-cell alternative, OR a
+    `black_cell_links` "lengthen" entry's own `old_boundary` being
+    restored) and newly reopened (a reverted `black_cell_links` entry's
+    own boundary) — both to be folded into the pattern passed to the next
+    palier by the caller, `_clean_blocked_slots` itself never mutating
+    `grid` in place (an internal working copy, discarded after the
+    call).
+
+    `deadlocked_slots` (`None`/empty by default — no effect for any
+    pre-existing caller before this addition): the subset of
+    `impossible_slots` known to be impossible specifically because of a
+    crossing-letter deadlock (`Filler._crossing_deadlock_slots`/
+    `_crossing_deadlock_indices` — two still-open slots crossing at a
+    cell where their own remaining candidates share no letter at all),
+    rather than a plain empty domain. At the user's explicit request —
+    "il ne faut pas noircir la case. Le noircissement des cases est un
+    autre mécanisme que le nettoyage simple. Le nettoyage simple ... ne
+    fait que retirer les mots qui croisent un emplacement impossible" —
+    a slot in this set is EXCLUDED from the black-cell alternative below
+    (never tried at all for it, not even at the usual
+    `BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY` rate): the only action
+    "nettoyage simple" ever takes for such a slot is removing whatever
+    crossing word(s) happen to touch its OTHER cells, exactly like any
+    other impossible slot — which does nothing at all when `crossing` is
+    empty (both sides of the deadlock still open), leaving it flagged
+    impossible until resolved some other way (a manual edit, or
+    automatic generation's own pattern-reshaping, which already treats
+    black cells as fully mutable on its own terms)."""
     if locked_letters:
         assignment = list(assignment)
         impossible_set = set(impossible_slots) if exclude_impossible_locked else set()
@@ -7661,10 +8122,66 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
             cell_to_slots[cell].append(i)
 
     new_black_cells = set()
+    reopened_cells = set()
     black_cell_capable = (
         grid is not None and rows is not None and cols is not None
     )
     working_grid = [row[:] for row in grid] if black_cell_capable else None
+
+    # `black_cell_links` (see `_shorten_impossible_zones`/`_lengthen_
+    # impossible_zones`'s own docstrings) pairs a word placed by either of
+    # those two functions with the exact black-cell change made to fit it —
+    # keyed by the word's own cells (never a numeric slot index, since
+    # `slots` here is fixed for the whole call, but the caller's own
+    # tuples were built against an intermediate pattern). Resolved once,
+    # against THIS call's own `slots`, into `links_by_slot`, so the
+    # removal loop below can look a slot's own link up in O(1) instead of
+    # re-matching cell tuples on every removal.
+    links_by_slot = {}
+    if black_cell_links:
+        for i, cells in enumerate(slots):
+            link = black_cell_links.get(tuple(cells))
+            if link is not None:
+                links_by_slot[i] = link
+
+    def _revert_black_cell_link(j):
+        # At the user's explicit request: "chaque mot posé plus court ou
+        # plus long qui ajoute ou déplace une case noire doit être traité
+        # comme unitaire avec la case noire ajoutée ou déplacée, de sorte
+        # qu'un backtrack annule le mot et l'ajout/déplacement de la case
+        # noire." Called right alongside every `assignment[j] = None`
+        # below — reverting the black-cell change (if any) that came
+        # paired with the word this exact call is removing, never
+        # leaving it behind to permanently, pointlessly narrow a zone
+        # whose own justification (the word) no longer exists. A no-op
+        # for any `j` with no link (the overwhelming majority of removed
+        # words: only ones placed by `_shorten_impossible_zones`/`_
+        # lengthen_impossible_zones` this same round ever carry one).
+        # Reverting never needs its own `is_structurally_valid` check,
+        # unlike every ADDITION elsewhere in this function: it only ever
+        # restores a cell to the exact color it had before this round's
+        # shortening/lengthening touched it, a state already known valid.
+        link = links_by_slot.pop(j, None)
+        if link is None:
+            return
+        kind = link[0]
+        if kind == "shorten":
+            _, boundary = link
+            new_black_cells.discard(boundary)
+            reopened_cells.add(boundary)
+            if black_cell_capable:
+                working_grid[boundary[0]][boundary[1]] = WHITE
+        else:
+            _, old_boundary, new_boundary = link
+            reopened_cells.discard(old_boundary)
+            new_black_cells.add(old_boundary)
+            if black_cell_capable:
+                working_grid[old_boundary[0]][old_boundary[1]] = BLACK
+            if new_boundary is not None:
+                new_black_cells.discard(new_boundary)
+                reopened_cells.add(new_boundary)
+                if black_cell_capable:
+                    working_grid[new_boundary[0]][new_boundary[1]] = WHITE
 
     if index is not None and rng is not None:
         impossible_slot_set = set(impossible_slots)
@@ -7683,9 +8200,21 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
             # its full reasoning) — tried once per impossible slot,
             # independently of the word removal below (which, itself,
             # removes ALL crossing words at once again, see the docstring
-            # above).
+            # above). A crossing-letter deadlock (`deadlocked_slots`, see
+            # this function's own docstring) is excluded from this
+            # alternative entirely, at the user's explicit request:
+            # blackening is a distinct mechanism from plain "nettoyage" —
+            # such a slot only ever has whatever crossing word(s) touch
+            # its OTHER cells removed below, which is a no-op when
+            # `crossing` is empty (both sides of the deadlock still open,
+            # nothing assigned to remove) — left flagged impossible until
+            # resolved some other way, never blackened by this function.
+            is_deadlock = bool(deadlocked_slots) and i in deadlocked_slots
             placed_black = False
-            if crossing and black_cell_capable and rng.random() < BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY:
+            if (
+                crossing and not is_deadlock and black_cell_capable
+                and rng.random() < BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY
+            ):
                 known = {}
                 for cell in slots[i]:
                     for j in cell_to_slots[cell]:
@@ -7726,6 +8255,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                         for j in cell_to_slots[(br, bc)]:
                             if j != i and assignment[j] is not None:
                                 assignment[j] = None
+                                _revert_black_cell_link(j)
                         placed_black = True
                         break
                     working_grid[br][bc] = WHITE
@@ -7734,6 +8264,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
 
             for j in crossing:
                 assignment[j] = None
+                _revert_black_cell_link(j)
 
             # Genuinely dead-end zone, at the user's explicit request:
             # every crossing word has just been removed (above) and, once
@@ -7762,6 +8293,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                             for j in cell_to_slots[(br, bc)]:
                                 if j != i and assignment[j] is not None:
                                     assignment[j] = None
+                                    _revert_black_cell_link(j)
                         else:
                             working_grid[br][bc] = WHITE
     else:
@@ -7770,6 +8302,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                 for j in cell_to_slots[cell]:
                     if j != i and assignment[j] is not None:
                         assignment[j] = None
+                        _revert_black_cell_link(j)
 
     confirmed = {}
     for i, word in enumerate(assignment):
@@ -7778,7 +8311,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
         for cell, ch in zip(slots[i], word):
             confirmed[cell] = ch
 
-    return assignment, confirmed, new_black_cells
+    return assignment, confirmed, new_black_cells, reopened_cells
 
 
 def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_locked_letters=None):
@@ -8073,7 +8606,7 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
     second time for that palier, this time with `exclude_impossible_
     locked=True`, solely to unblock this specific case rather than
     applying the more aggressive rule everywhere."""
-    assignment, confirmed, _ = _clean_blocked_slots(
+    assignment, confirmed, _, _ = _clean_blocked_slots(
         slots, assignment, impossible_slots, locked_letters=locked_letters,
         exclude_impossible_locked=exclude_impossible_locked, index=index, rng=rng,
         permanent_locked_letters=permanent_locked_letters,
@@ -8394,42 +8927,87 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
     first palier, so it can structurally never appear among their own
     candidates).
 
-    When `_clean_blocked_slots` also placed a new black cell (its 1/10
-    alternative — `new_black_cells`), the pattern's own shape changes:
-    `new_slots` is re-extracted on this modified grid, and `cand_preseed_
-    assignment` then recomposes the word of EVERY slot of this new
-    pattern entirely covered by `confirmed` — including a brand-new slot,
-    born from the added black cell, never itself resolved by a real
-    search. This word is validated before being promoted (`_invalid_
-    fully_known_indices`, the same safeguard as `_optimize_before_
-    cleanup`/`_clean_blocked_slots` — see CLAUDE.md, "UI"): a combination
-    matching no real dictionary word, even entirely covered by
-    individually correct letters, is never promoted — the slot stays
-    `None`, and will be rediscovered on its own as impossible at the very
-    next search (`Filler.exclude_immediately_impossible_slots`), rather
-    than being locked in as-is for the rest of the generation."""
+    `cand_black_cell_links` — `_shorten_impossible_zones`'s own map,
+    carried through `_lengthen_impossible_zones` (which merges in its own
+    entries) and finally handed to `_clean_blocked_slots` — is what lets
+    that last call treat a word placed by either of the first two
+    functions and its own paired black-cell change as one atomic unit: at
+    the user's explicit request, "chaque mot posé plus court ou plus long
+    qui ajoute ou déplace une case noire doit être traité comme unitaire
+    avec la case noire ajoutée ou déplacée, de sorte qu'un backtrack
+    annule le mot et l'ajout/déplacement de la case noire." Both of those
+    functions deliberately allow such a word to cross an already
+    impossible slot elsewhere (see `_new_crossing_impossibility`'s own
+    docstring) — exactly the case `_clean_blocked_slots` can go on to
+    remove a few lines later, in this very same call, once it processes
+    that other, still-unresolved impossible slot.
+
+    When `_clean_blocked_slots` placed a new black cell (its own 1/10
+    alternative, or a `black_cell_links` "lengthen" entry's `old_boundary`
+    being restored — both folded into `new_black_cells`) or reopened one
+    (a reverted `black_cell_links` entry's own boundary — `reopened_
+    cells`), the pattern's own shape changes: `new_slots` is re-extracted
+    on this modified grid, and `cand_preseed_assignment` then recomposes
+    the word of EVERY slot of this new pattern entirely covered by
+    `confirmed` — including a brand-new slot, born from the added black
+    cell (or from a reopened one merging back into a longer run), never
+    itself resolved by a real search. This word is validated before being
+    promoted (`_invalid_fully_known_indices`, the same safeguard as
+    `_optimize_before_cleanup`/`_clean_blocked_slots` — see CLAUDE.md,
+    "UI"): a combination matching no real dictionary word, even entirely
+    covered by individually correct letters, is never promoted — the slot
+    stays `None`, and will be rediscovered on its own as impossible at the
+    very next search (`Filler.exclude_immediately_impossible_slots`),
+    rather than being locked in as-is for the rest of the generation."""
     cand_slots = extract_slots(cand_grid, rows, cols)
-    cand_grid, cand_slots, cand_assignment, cand_impossible = _shorten_impossible_zones(
-        cand_grid, rows, cols, cand_slots, cand_diag["assignment"],
-        cand_diag["impossible_slots"], index, rng,
-        permanent_locked_letters=permanent_locked_letters,
-        challenge_words=challenge_words,
+    cand_grid, cand_slots, cand_assignment, cand_impossible, cand_black_cell_links = (
+        _shorten_impossible_zones(
+            cand_grid, rows, cols, cand_slots, cand_diag["assignment"],
+            cand_diag["impossible_slots"], index, rng,
+            permanent_locked_letters=permanent_locked_letters,
+            challenge_words=challenge_words,
+        )
     )
-    cand_grid, cand_slots, cand_assignment, cand_impossible = _lengthen_impossible_zones(
-        cand_grid, rows, cols, cand_slots, cand_assignment, cand_impossible, index, rng,
-        permanent_locked_letters=permanent_locked_letters,
-        permanent_black_cells=permanent_black_cells,
-        challenge_words=challenge_words,
+    cand_grid, cand_slots, cand_assignment, cand_impossible, cand_black_cell_links = (
+        _lengthen_impossible_zones(
+            cand_grid, rows, cols, cand_slots, cand_assignment, cand_impossible, index, rng,
+            permanent_locked_letters=permanent_locked_letters,
+            permanent_black_cells=permanent_black_cells,
+            challenge_words=challenge_words,
+            black_cell_links=cand_black_cell_links,
+        )
     )
-    cleaned_assignment, confirmed, new_black_cells = _clean_blocked_slots(
+    # Recomputed here, fresh, from `cand_slots`/`cand_assignment` — not
+    # merely inherited from `cand_diag["impossible_slots"]`'s own earlier
+    # snapshot, since `_shorten_impossible_zones`/`_lengthen_impossible_
+    # zones` above may have already reshaped some of these slots. Needed
+    # separately from `cand_impossible` (see `_clean_blocked_slots`'s own
+    # `deadlocked_slots` parameter) so a crossing-letter deadlock is never
+    # blackened by this cleanup step either — the cross-palier retry
+    # machinery's own pattern-reshaping (this same function's own
+    # `_shorten_impossible_zones`/`_lengthen_impossible_zones` calls
+    # above, or a fresh pattern on a later palier) is what may eventually
+    # resolve it instead.
+    cand_known = {
+        cell: ch
+        for cells, word in zip(cand_slots, cand_assignment)
+        if word is not None
+        for cell, ch in zip(cells, word)
+    }
+    cand_deadlocked = _crossing_deadlock_indices(cand_slots, index, cand_known, challenge_words)
+    cleaned_assignment, confirmed, new_black_cells, reopened_cells = _clean_blocked_slots(
         cand_slots, cand_assignment, cand_impossible,
         index=index, rng=rng, grid=cand_grid, rows=rows, cols=cols,
         permanent_locked_letters=permanent_locked_letters,
+        black_cell_links=cand_black_cell_links,
+        deadlocked_slots=cand_deadlocked,
     )
-    if new_black_cells:
+    if new_black_cells or reopened_cells:
         cand_seed_grid = [row[:] for row in cand_grid]
         for (br, bc) in new_black_cells:
             cand_seed_grid[br][bc] = BLACK
+        for (br, bc) in reopened_cells:
+            cand_seed_grid[br][bc] = WHITE
         new_slots = extract_slots(cand_seed_grid, rows, cols)
         cand_preseed_assignment = [
             "".join(confirmed[cell] for cell in cells)
@@ -8512,10 +9090,11 @@ _worker_cancel_event = None
 # palier — unlike `cancel_event`, which only ever fires once for the
 # whole generation, this signal has a different meaning at every palier
 # (a blockage observed at palier N must not influence palier N+1). Set
-# by any worker whose own `Filler.abandoned` becomes true (the 30% rule,
-# see UNFILLABLE_ABANDON_FRACTION) — checked by every other worker of the
-# same batch, which then also stop, without waiting to individually reach
-# their own abandon threshold or their own budget.
+# by any worker whose own `Filler.abandoned` becomes true (the too-many-
+# impossible-slots rule, see UNFILLABLE_ABANDON_SLOT_COUNT) — checked by
+# every other worker of the same batch, which then also stop, without
+# waiting to individually reach their own abandon threshold or their own
+# budget.
 #
 # No longer actually passed ANYWHERE today — neither to `_pattern_attempt`
 # (fresh pattern) nor to `_pattern_continue` ("reprise telle quelle") —
@@ -8527,9 +9106,9 @@ _worker_cancel_event = None
 # attempt` palier's own PARALLEL_ATTEMPTS attempts each generate their
 # OWN independent pattern (`make_pattern` with its own `rng`, on the same
 # starting `seed_grid`/`locked_letters` but with black cells added
-# differently each time) — one attempt's "30% of THIS pattern is
-# impossible" conclusion therefore says nothing reliable about another
-# attempt's completely different pattern in the same batch. Reproduced
+# differently each time) — one attempt's "THIS pattern has too many
+# impossible slots" conclusion therefore says nothing reliable about
+# another attempt's completely different pattern in the same batch. Reproduced
 # live on the reference 15×10 grid (seed 7, previously reliable):
 # applying this signal to both mechanisms at once made this seed fail
 # (`None` returned after 200 paliers, whereas it succeeded before this
@@ -9586,8 +10165,8 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     # continue` (see `generate_grid`), two parallel attempts of the same
     # palier can now receive DIFFERENT pool entries — a `_pattern_attempt`
     # (fresh pattern, for reset attempts) mixed with several `_pattern_
-    # continue` attempts on distinct grids — so one attempt's "30% of MY
-    # grid is impossible" conclusion no longer says anything reliable
+    # continue` attempts on distinct grids — so one attempt's "MY grid has
+    # too many impossible slots" conclusion no longer says anything reliable
     # about another attempt's potentially different grid in the same
     # palier: exactly the same reasoning, applied to the same global,
     # that already motivated disabling it for `_pattern_attempt` (see
@@ -9703,6 +10282,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     challenge word's cells (`_challenge_word_cells`), so a non-dictionary
     challenge word already placed by `_backtrack` survives cross-palier
     cleanup exactly like a `permanent_locked_letters` cell already does.
+    `minimize_black_squares` (the final black-cell-removal optimization
+    pass, run once the grid is fully solved) gives it the same protection
+    too, via its own `challenge_words` parameter: a placed challenge
+    word's cells are locked/preseeded into every trial's own `try_fill`
+    exactly like `permanent_locked_letters`, and exempted from that
+    function's own final "every word must be a real dictionary entry"
+    check — so optimization can never silently swap it out for a
+    different real word, nor reject an otherwise legitimate black-cell
+    removal purely because the challenge word itself isn't in the
+    dictionary.
 
     `required_cells` (`None`/empty by default — no effect for any
     pre-existing caller) is passed straight through to every `_pattern_
@@ -10115,6 +10704,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     )
     ratio = black_ratio
     best, best_result = None, None
+    # Genuine successes found so far, cumulative across the WHOLE search
+    # (every palier included), never reset by the failure-side retry
+    # machinery below — see MIN_SUCCESSFUL_ATTEMPTS.
+    accumulated_successes = []
     # The winning candidate's own diagnostics (see the `if successes:`
     # branch below) — kept only for its own `process_number` (see
     # `seed_to_lineage`), so the "minimizing" preview/the final result's
@@ -10514,6 +11107,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     cycle_start_examples.append({
                         "example_grid": start_grid,
                         "impossible_cells": [],
+                        "deadlock_cells": [],
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
                         "theme_cells": _theme_cells_from_preview_state(
@@ -10580,6 +11174,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     cycle_start_examples.append({
                         "example_grid": start_grid,
                         "impossible_cells": [],
+                        "deadlock_cells": [],
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
                         "theme_cells": _theme_cells_from_preview_state(
@@ -10693,7 +11288,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # generated` further below (`_cycle_start_preview` on
                 # `failed_pairs`/`best`) can only be computed once ALL of
                 # this palier's parallel attempts have finished
-                # (`concurrent.futures.as_completed`, further below) —
+                # (the harvesting loop further below, built on
+                # `concurrent.futures.wait`) —
                 # for a "fresh pattern" palier (this one, not the "reprise
                 # telle quelle" above, whose own `pattern_generated`
                 # already coincides with the cycle's own starting state),
@@ -10784,6 +11380,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         early_examples.append({
                             "example_grid": early_pattern_grid,
                             "impossible_cells": [],
+                            "deadlock_cells": [],
                             "forced_cells": [],
                             "locked_cells": early_pattern_locked,
                             # Very first palier: nothing is locked or
@@ -10864,6 +11461,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         early_examples.append({
                             "example_grid": early_pattern_grid,
                             "impossible_cells": [],
+                            "deadlock_cells": [],
                             "forced_cells": [],
                             "locked_cells": early_pattern_locked,
                             "theme_cells": _theme_cells_from_preview_state(
@@ -10911,9 +11509,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         permanent_locked_letters, permanent_black_cells,
                         required_cells=required_cells,
                     ))
-            # Collected in completion order (`as_completed`), not
-            # submission order, at the user's explicit request ("le
-            # bouton Stop ne s'applique pas rapidement... prévoir l'arrêt
+            # Collected in completion order (`concurrent.futures.wait`,
+            # see below), not submission order, at the user's explicit
+            # request ("le bouton Stop ne s'applique pas rapidement... prévoir l'arrêt
             # dans toutes les phases"): the moment one of the PARALLEL_
             # ATTEMPTS attempts raises GenerationCancelled (every worker
             # checks the same `cancel_event`, see Filler._backtrack), the
@@ -10928,8 +11526,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # (ProcessPoolExecutor's own default behavior), but this delay
             # stays short, unrelated to a palier's own full `deadline_
             # checks` budget.
-            # Collected in completion order (`as_completed`), not submission
-            # order — once PALIER_ATTEMPT_INTERRUPT_FRACTION (30%) of this
+            # Collected in completion order (`concurrent.futures.wait`), not
+            # submission order — once PALIER_ATTEMPT_INTERRUPT_FRACTION (30%) of this
             # batch's attempts have finished (success or failure alike),
             # `attempt_done_event` is set so every other still-running
             # attempt stops at its own next checkpoint (see
@@ -10972,11 +11570,53 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # worker (PID) produced it.
             seed_to_lineage = {seeds[i]: dispatch_lineage[i] for i in range(PARALLEL_ATTEMPTS)}
             interrupt_threshold = max(1, math.ceil(PALIER_ATTEMPT_INTERRUPT_FRACTION * len(futures)))
+            # Harvests this palier's futures with `concurrent.futures.wait`
+            # (not the simpler `as_completed`) specifically so `pending` can
+            # grow mid-palier: every time a worker's future completes with a
+            # genuine SUCCESS while `accumulated_successes` (across the
+            # whole search, MIN_SUCCESSFUL_ATTEMPTS) still hasn't reached
+            # its threshold, the process this success just freed is
+            # immediately reassigned to a brand-new, from-scratch attempt
+            # (the same shape as the "reset" tasks built above — never a
+            # continuation of the successful grid) instead of sitting idle
+            # for the rest of the palier, at the user's explicit request.
+            # `interrupt_threshold`/`attempt_done_event` above keep their
+            # existing, unchanged meaning and only ever count the palier's
+            # own ORIGINAL `futures` (`orig_futures`) — a reassigned task is
+            # never counted towards it, consistent with the fact that,
+            # today, PALIER_ATTEMPT_INTERRUPT_FRACTION == 1.0 makes it a
+            # no-op (see that constant's own docstring) that this new
+            # mechanism must not silently change the meaning of.
+            orig_futures = set(futures)
+            pending = set(futures)
             outcomes = []
-            for f in concurrent.futures.as_completed(futures):
-                outcomes.append(f.result())
-                if len(outcomes) == interrupt_threshold:
-                    attempt_done_event.set()
+            orig_done_count = 0
+            while pending:
+                done, pending = concurrent.futures.wait(
+                    pending, return_when=concurrent.futures.FIRST_COMPLETED
+                )
+                for f in done:
+                    result = f.result()
+                    outcomes.append(result)
+                    if f in orig_futures:
+                        orig_done_count += 1
+                        if orig_done_count == interrupt_threshold:
+                            attempt_done_event.set()
+                    g, r, d = result
+                    total_successes = len(accumulated_successes) + sum(
+                        1 for _, rr, _ in outcomes if rr is not None
+                    )
+                    if r is not None and total_successes < MIN_SUCCESSFUL_ATTEMPTS:
+                        new_seed = rng.randrange(2**31)
+                        pending.add(executor.submit(
+                            _pattern_attempt, rows, cols, ratio, new_seed,
+                            force_letters_fraction, None, None,
+                            black_enrichment_fraction, deadline_checks,
+                            permanent_locked_letters, permanent_black_cells,
+                            required_cells=required_cells,
+                        ))
+                        next_lineage_number += 1
+                        seed_to_lineage[new_seed] = next_lineage_number
             # Attaches, to every diag of this palier (successes and
             # failures alike), the lineage number inherited from the task
             # that produced it (`seed_to_lineage`, see its own
@@ -10989,6 +11629,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             for _, _, d in outcomes:
                 d["process_number"] = seed_to_lineage.get(d.get("attempt_id"))
             successes = [(g, r, d) for g, r, d in outcomes if r is not None]
+            # Cumulative across the whole search — see MIN_SUCCESSFUL_
+            # ATTEMPTS/accumulated_successes's own docstring above.
+            accumulated_successes.extend(successes)
             # Dedup of failed attempts, at the user's explicit request,
             # after a real bug observed live: once a good part of the grid
             # is locked by the cross-palier retry mechanism below, the
@@ -11102,12 +11745,15 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # path that can differ even if the final result converges), so
             # neither quantity of work is to be ignored.
             total_attempts_tried += sum(d["checks"] for _, d in failed_all)
-            if successes:
-                # Several of the PARALLEL_ATTEMPTS attempts can succeed in
-                # the same palier — as_completed(futures) above already
-                # drained every one of them before this code runs, so this
-                # choice always sees the palier's full, final outcome, never
-                # a partial one. When there's more than one, each is
+            if len(accumulated_successes) >= MIN_SUCCESSFUL_ATTEMPTS:
+                # A single success is no longer enough to conclude the
+                # search — see MIN_SUCCESSFUL_ATTEMPTS's own docstring.
+                # `accumulated_successes` spans the WHOLE search (every
+                # palier included, this one's own `successes` already
+                # merged into it a few lines above), so the comparison
+                # below can end up picking a winner from an earlier palier
+                # over one just found here, or vice-versa. When there's
+                # more than one, each is
                 # actually optimized (a trial minimize_black_squares pass on
                 # its own defensive grid copy — that function mutates its
                 # `grid` argument in place, so a real attempt's own grid is
@@ -11145,48 +11791,47 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # `optimization_duration_seconds` (backend/app.py) still
                 # measures exactly one real optimization pass, not several.
                 #
-                # Skipped entirely when there's only a single success (the
-                # overwhelmingly common case) — nothing to compare, so
-                # trialing it here would just pay for the exact same
-                # optimization work twice (once as a throwaway trial, once
-                # for real right after the loop) for no benefit.
-                if len(successes) == 1:
-                    best, best_result, best_diag = successes[0]
-                else:
-                    scored = []
-                    for g, r, d in successes:
-                        cand_slots, cand_assignment = r
-                        trial_grid = [row[:] for row in g]
-                        opt_grid, opt_slots, opt_assignment = minimize_black_squares(
-                            trial_grid, (cand_slots, cand_assignment), rows, cols,
-                            index, rng, cancel_event=cancel_event,
-                            proper_noun_words=proper_noun_words,
-                            max_proper_nouns=max_proper_nouns,
-                            non_gloss_words=non_gloss_words,
-                            max_non_gloss=max_non_gloss,
-                            priority_words=priority_words,
-                            permanent_locked_letters=permanent_locked_letters,
-                            permanent_black_cells=permanent_black_cells,
-                        )
-                        opt_black = sum(row.count(BLACK) for row in opt_grid)
-                        # Tie-break — see `_content_score`'s own docstring
-                        # for the shared formula (also used by the FAILED-
-                        # palier scores, `_playable_score`/`_cleaned_
-                        # playable_score`, on the same footing): with a
-                        # theme (`priority_words` non-empty), only a
-                        # placed word actually belonging to the glossary
-                        # counts at all, so the candidate that surfaces
-                        # more/longer theme words wins the tie-break, not
-                        # merely the one with the longest words overall;
-                        # a "Mots Défi" word always counts regardless, at
-                        # a bonus-boosted length. An ordinary, non-themed,
-                        # challenge-free generation sums every placed
-                        # word's own plain length, unchanged.
-                        opt_score = _content_score(
-                            zip(opt_assignment, opt_slots), priority_words, challenge_words,
-                        )
-                        scored.append((opt_black, -opt_score, g, r, d))
-                    _, _, best, best_result, best_diag = min(scored, key=lambda t: (t[0], t[1]))
+                # `accumulated_successes` always holds at least
+                # MIN_SUCCESSFUL_ATTEMPTS (>= 2) entries here — the gate
+                # above guarantees it — so there's always something real to
+                # compare; unlike before MIN_SUCCESSFUL_ATTEMPTS existed,
+                # the single-success shortcut can no longer apply at this
+                # point.
+                scored = []
+                for g, r, d in accumulated_successes:
+                    cand_slots, cand_assignment = r
+                    trial_grid = [row[:] for row in g]
+                    opt_grid, opt_slots, opt_assignment = minimize_black_squares(
+                        trial_grid, (cand_slots, cand_assignment), rows, cols,
+                        index, rng, cancel_event=cancel_event,
+                        proper_noun_words=proper_noun_words,
+                        max_proper_nouns=max_proper_nouns,
+                        non_gloss_words=non_gloss_words,
+                        max_non_gloss=max_non_gloss,
+                        priority_words=priority_words,
+                        permanent_locked_letters=permanent_locked_letters,
+                        permanent_black_cells=permanent_black_cells,
+                        challenge_words=challenge_words,
+                    )
+                    opt_black = sum(row.count(BLACK) for row in opt_grid)
+                    # Tie-break — see `_content_score`'s own docstring
+                    # for the shared formula (also used by the FAILED-
+                    # palier scores, `_playable_score`/`_cleaned_
+                    # playable_score`, on the same footing): with a
+                    # theme (`priority_words` non-empty), only a
+                    # placed word actually belonging to the glossary
+                    # counts at all, so the candidate that surfaces
+                    # more/longer theme words wins the tie-break, not
+                    # merely the one with the longest words overall;
+                    # a "Mots Défi" word always counts regardless, at
+                    # a bonus-boosted length. An ordinary, non-themed,
+                    # challenge-free generation sums every placed
+                    # word's own plain length, unchanged.
+                    opt_score = _content_score(
+                        zip(opt_assignment, opt_slots), priority_words, challenge_words,
+                    )
+                    scored.append((opt_black, -opt_score, g, r, d))
+                _, _, best, best_result, best_diag = min(scored, key=lambda t: (t[0], t[1]))
                 break
             # Every genuinely distinct attempt of this palier, sorted by
             # ascending black-cell count — at the user's explicit
@@ -11278,8 +11923,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # worker has come back, gave this pipe time to fill up and
             # block a `put()` before anyone ever read it.
             #
-            # `as_completed` has already drained every future of this
-            # palier above, so every worker has already finished its own
+            # The harvesting loop above has already drained every future of
+            # this palier (originals and any mid-palier reassignments
+            # alike), so every worker has already finished its own
             # search and issued its last `put()` — but the drain thread
             # may not necessarily have consumed it yet at the exact moment
             # this code runs (it only polls the queue every BEST_STATE_
@@ -11432,6 +12078,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 {
                     "example_grid": d["example_grid"],
                     "impossible_cells": d["impossible_cells"],
+                    "deadlock_cells": d.get("deadlock_cells", []),
                     "forced_cells": d["forced_cells"],
                     "locked_cells": d.get("locked_cells", []),
                     "theme_cells": d.get("theme_cells", []),
@@ -11530,8 +12177,11 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 for i, w in enumerate(selected_diag["assignment"])
             )
             # Forced cleanup if all 10 of this palier's attempts were
-            # abandoned via the 30% rule (see UNFILLABLE_ABANDON_FRACTION,
-            # Filler.abandoned, reason == "abandoned_too_unfillable"), at
+            # abandoned via the too-many-impossible-slots rule (see
+            # UNFILLABLE_ABANDON_ENABLED/UNFILLABLE_ABANDON_SLOT_COUNT,
+            # Filler.abandoned, reason == "abandoned_too_unfillable") — a
+            # no-op for now, since that rule is currently disabled and so
+            # this reason never occurs, at
             # the user's explicit request: when each one, independently,
             # judged its own pattern too broadly doomed to keep searching,
             # that's a strong signal that a "reprise telle quelle" on this
@@ -11980,6 +12630,17 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     stop_best_state_drain.set()
     best_state_drain_thread.join(timeout=1.0)
 
+    if best is None and accumulated_successes:
+        # The `attempts` budget (200 paliers by default) ran out before
+        # MIN_SUCCESSFUL_ATTEMPTS was ever reached — accept the single
+        # success genuinely found rather than declaring a total failure,
+        # at the user's explicit request (rely on the existing budget as
+        # the only cap, rather than adding a new one). Can only ever hold
+        # exactly one entry here: with >= MIN_SUCCESSFUL_ATTEMPTS the
+        # palier loop above would already have picked a winner and
+        # `break`-ed, leaving `best` no longer `None`.
+        best, best_result, best_diag = accumulated_successes[0]
+
     if best is None:
         # "Continuer" button on the web UI (see _serialize_resume_state's
         # own docstring above), at the user's explicit request — `None`
@@ -12038,6 +12699,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         examples=[{
             "example_grid": build_letters_grid(rows, cols, best_slots, best_assignment),
             "impossible_cells": [],
+            "deadlock_cells": [],
             "forced_cells": [],
             "locked_cells": [],
             "theme_cells": _theme_word_cells(best_slots, best_assignment, priority_words),
@@ -12053,7 +12715,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         proper_noun_words=proper_noun_words, max_proper_nouns=max_proper_nouns,
         non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
         priority_words=priority_words, permanent_locked_letters=permanent_locked_letters,
-        permanent_black_cells=permanent_black_cells,
+        permanent_black_cells=permanent_black_cells, challenge_words=challenge_words,
     )
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)

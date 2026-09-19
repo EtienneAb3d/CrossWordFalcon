@@ -327,7 +327,17 @@ project's engineering language.
   entry on first autosave; the stored library record is never touched
   (`priority_words` is left empty even for a themed grid — the resolved
   Qdrant glossary was never stored on a library record, same limitation
-  as a recompute job). Backend:
+  as a recompute job). The automatic-generation attempt-preview panel
+  has the same kind of icon button next to each attempt's own stats line
+  (`.attempt-preview-interactive-btn`, `renderAttemptPreview`) — `POST
+  /api/interactive/from-attempt` (matching proxy route per rule 15) opens
+  that specific attempt's own snapshot grid (whatever letters/black cells
+  it has at that exact moment, an attempt-preview snapshot is never
+  persisted or indexed by any id so the client sends the grid it is
+  already showing directly) as a new editable interactive session, via a
+  synthetic record reusing `_run_interactive_resume_job` exactly like
+  `from-library`; the client cancels the still-running generation job
+  first if there is one. Backend:
   (`POST /api/interactive/start` — a background job polled via
   `GET /api/generate/status/{job_id}` and cancelled via `POST /api/
   generate/cancel/{job_id}`; `POST /api/interactive/step` /`/title`
@@ -452,7 +462,7 @@ project's engineering language.
        **every** merged word whose score reaches `min_score` — the current
        value of the generation form's "Précision thématique" field,
        forwarded as a query param so the panel reacts to it live (default
-       `THEME_MIN_SCORE` = 0.76 when blank, clamped `[0,1]`) —
+       `THEME_MIN_SCORE` = 0.75 when blank, clamped `[0,1]`) —
        most-similar-first, no count limit and no length filter; a clean
        503 `similar_unavailable` when Qdrant / the embed server is down or
        the collection is unpopulated, so the rest of the UI is
@@ -672,8 +682,12 @@ project's engineering language.
   precision matching `LOG_LLM/`: first line is the LLM's ~15-word
   comma-separated keyword list, then the typed theme, every keyword list
   produced, the flat set of keywords actually searched in Qdrant, and the
-  entire preselected-word glossary, one `word<TAB>length<TAB>score` per
-  line (Qdrant's own cosine similarity)),
+  entire preselected-word glossary, one
+  `word<TAB>length<TAB>score<TAB>keyword<TAB>whole_theme_score` per line
+  (Qdrant's own cosine similarity, the reference keyword whose search
+  produced that score, then that same word's own proximity to the theme
+  exactly as typed by the user — blank only on a Qdrant/embedder outage
+  for that one extra computation)),
   `models/` (LLM GGUF weights,
   auto-downloaded by `run_llm.sh`), `data/
   hunspell_cache/`, `data/reference_corpus/` (both the full and the
@@ -761,7 +775,15 @@ project's engineering language.
   `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE` — the bare accent-stripped
   uppercase grid form, its natural accented/inflected spelling, a blended
   frequency score, and every candidate canonical form/lemma
-  (semicolon-separated when ambiguous). Minimum word length is 2 (a
+  (semicolon-separated when ambiguous). `strip_accents` also folds a
+  ligature letter with no accent-style decomposition of its own (French
+  `œ`/`Œ`/`æ`/`Æ`) into its two separate ASCII letters before MOT is
+  derived (`œ`→`oe`, `æ`→`ae` — "sœur" -> `SOEUR`, never `SŒUR`), so MOT
+  always stays a plain run of A-Z letters typable on a simple keyboard;
+  `ACCENTUE`/`CANONIQUE` keep the natural ligature spelling.
+  `backend/crossword_gen.py`'s `challenge_word_grid_form` and
+  `backend/dictionary_lookup.py`'s `_norm` apply the same fold before
+  deriving their own grid/search-key forms, for the same reason. Minimum word length is 2 (a
   2-letter word is a real, cluable grid slot; a bare 1-letter word can never
   become a slot at all). Every candidate is validated against a Hunspell
   dictionary for its own language (both as-is and title-cased, since German
@@ -870,6 +892,17 @@ the current defaults/behavior to know before touching this code.
   `ProcessPoolExecutor`; `attempts` (paliers)
   defaults to 200 (raised from an original 40 — some grids need many quick,
   unproductive cycles before a workable state emerges).
+- A single successful grid never concludes `generate_grid`'s search on its
+  own: at least `MIN_SUCCESSFUL_ATTEMPTS` (2) genuine successes, counted
+  cumulatively across the whole search rather than one palier alone, are
+  required before the best one is picked. While harvesting a palier's
+  parallel attempts, a worker freed by a success is immediately reassigned
+  to a brand-new, from-scratch attempt (never a continuation of the grid
+  that just succeeded) as long as the threshold isn't reached yet, instead
+  of sitting idle for the rest of that palier. Relies entirely on the
+  existing `attempts` budget (200 paliers by default, see above) as its
+  only cap — if that budget runs out with just one success ever found,
+  that one is accepted rather than the search reporting total failure.
 - **Cross-palier retry**: when a palier's search fails, if the best failed
   attempt still has an unassigned slot that is neither impossible nor
   crossing an impossible one (`_slots_touching`, shared by both this check
@@ -933,8 +966,8 @@ the current defaults/behavior to know before touching this code.
   it isn't worth trying.
 - `Filler._backtrack` abandons a search attempt early — `self.abandoned =
   True`, every later call returns `False` immediately — once more than
-  `UNFILLABLE_ABANDON_FRACTION` (30%) of the grid's white cells belong to
-  a slot deemed impossible (`impossible_zone_cells()` against `best_
+  `UNFILLABLE_ABANDON_SLOT_COUNT` (3) still-unassigned slots are deemed
+  impossible (`impossible_zone_slots()` against `best_
   assignment`), checked every `UNFILLABLE_ABANDON_CHECK_INTERVAL` (500)
   calls (not every call — recomputing domains for every unassigned slot
   has a real cost). Surfaces as `try_fill`'s `reason ==
@@ -944,6 +977,42 @@ the current defaults/behavior to know before touching this code.
   behavior of this whole mechanism, not itself a bug — verified live by
   reproducing the identical transient stall with the pre-window-of-10
   tier rule on the same seed before either of these two rules existed.
+- "Impossible" also covers a crossing-letter deadlock, not just a plain
+  empty domain: two still-open slots crossing at a cell whose remaining
+  achievable letters share none in common are both flagged impossible,
+  even though each one's own domain is non-empty alone
+  (`Filler._crossing_deadlock_slots`, folded into `impossible_zone_slots`;
+  module-level `_crossing_deadlock_indices`, folded into
+  `_impossible_indices` so every one of its own callers inherits it too).
+  Blackening a cell is a distinct mechanism from plain "nettoyage"
+  cleanup, at the user's explicit request: `_clean_blocked_slots` never
+  blackens a cell for a slot in its own `deadlocked_slots` subset — such
+  a slot only ever has whatever crossing word(s) happen to touch its
+  OTHER cells removed, the same unconditional "remove everything crossing
+  an impossible slot" plain cleanup already applies to any impossible
+  slot — which does nothing at all when both sides of the deadlock are
+  still open (nothing assigned to remove either way), left flagged
+  impossible until resolved some other way (a manual edit, or automatic
+  generation's own pattern-reshaping, which already treats black cells as
+  fully mutable on its own terms). The two functions also return the
+  exact conflicting cell(s), surfaced by `_interactive_fill_diagnostics`
+  as a third value (`deadlock_cells`, always ⊆ `impossible_cells`) shown
+  in a more vivid red (`.interactive-deadlock`/`.attempt-preview-grid
+  .cell.white.deadlock`, see `style-guide` SKILL) than the rest of the
+  same impossible slot, in both Interactive mode and the automatic-
+  generation attempt previews — `Filler.deadlock_zone_cells()` is
+  `impossible_zone_cells()`'s own live-search counterpart, folded into
+  every preview `examples` entry alongside `theme_cells`/`challenge_
+  cells` — see `DOC_ALGO/FR/ReadMe.md` for the full reasoning.
+  `_crossing_deadlock_indices` (the module-level, non-`Filler` version)
+  also excludes a word already fully spelled out elsewhere in the grid
+  from its own achievable-letter computation, matching the `Filler`-based
+  version — a real bug found live: without this exclusion, an already-
+  placed word could still count as "achievable" for an unrelated slot
+  (it can't really be placed there again), silently papering over a real
+  deadlock that the live red highlight (backed by the `Filler`-based
+  check) still correctly showed — "Nettoyer" would then report nothing
+  to clean up for a slot visibly shown impossible.
 - On a `_pattern_continue` ("reprise telle quelle") palier only, the
   moment any one of its `PARALLEL_ATTEMPTS` parallel workers abandons
   itself this way, every *other* worker in that same palier stops too,
@@ -959,17 +1028,17 @@ the current defaults/behavior to know before touching this code.
   attempts. `Filler._backtrack` both checks it (same
   `UNFILLABLE_ABANDON_CHECK_INTERVAL` cadence, sets its own `self.abandoned
   = True` and returns `False` if set) and sets it (right when its *own*
-  30% rule fires) — so one worker's abandon becomes every sibling's
+  too-many-impossible-slots rule fires) — so one worker's abandon becomes every sibling's
   `reason == "abandoned_too_unfillable"` within one check interval,
-  without waiting for each to independently reach 30% or its own
+  without waiting for each to independently reach `UNFILLABLE_ABANDON_SLOT_COUNT` or its own
   `deadline_checks` budget. **Deliberately never wired into
   `_pattern_attempt`** ("motif neuf" paliers) — `_pattern_attempt` always
   passes `batch_abandoned_event=None` to `try_fill`, regardless of the
   worker-global being set, so this mechanism is a structural no-op there.
   This is load-bearing, not a stylistic choice: `_pattern_continue`'s own
   `PARALLEL_ATTEMPTS` workers all search the exact same shared pattern
-  (only their exploration order differs), so one worker's "30% impossible"
-  finding really does generalize to its siblings — but `_pattern_attempt`'s
+  (only their exploration order differs), so one worker's "too many
+  impossible slots" finding really does generalize to its siblings — but `_pattern_attempt`'s
   own workers each build their *own* independent random pattern via
   `make_pattern` (same starting `seed_grid`/`locked_letters`, different
   new black cells laid down by each worker's own `rng`), so one worker's
@@ -1104,10 +1173,54 @@ the current defaults/behavior to know before touching this code.
   default the Dictionary panel keeps) to widen the keyword variety. Then
   `_compiled_theme_words_by_length` runs a **separate Qdrant nearest-words
   search per keyword** (`_theme_words_by_length` each), merging every
-  result and keeping each word's highest score across searches. A single
-  sharp keyword is a far more precise query vector than one averaged
-  embedding of a 15-word sentence — the full-sentence embedding is no
-  longer searched at all. `theme_description` (the **whole-theme** keyword
+  result and keeping each word's highest score across searches, along
+  with the specific keyword whose own search produced that kept score —
+  `(word, score, keyword)` triples, logged next to each word in
+  `LOG_THEME/`, at the user's explicit request: "indiquer le mot de
+  référence qui a servi à calculer le taux de proximité." A single sharp
+  keyword is a far more precise query vector than one averaged embedding
+  of a 15-word sentence — the full-sentence embedding is no longer
+  searched at all. A 4th LOG_THEME column, `whole_theme_score`, is
+  computed SEPARATELY by `_whole_theme_proximity_scores` for every one of
+  these words regardless of which keyword surfaced it — at the user's
+  own further, explicit request: "ajouter sur chaque ligne le taux de
+  proximité du mot avec le 'whole theme'", then "calculer le score pour
+  tous les mots, y compris ceux qui ne proviennent pas de la 'whole
+  theme'" once it was pointed out that reusing the incidental per-keyword
+  search hits (as the first version of this column did) silently left it
+  blank for any word that only ever surfaced via a per-token/top-up
+  keyword, then corrected twice more: first to compare against the theme
+  exactly as typed by the user (`theme`, `GenerateRequest.theme`) rather
+  than the LLM-expanded "(whole theme)" keyword list, then to take the
+  BEST score across `theme`'s own individual words (`_theme_tokens(theme)`
+  — the same tokenizer used elsewhere in this function to build one
+  keyword list per theme word) rather than one merged embedding of the
+  whole typed phrase. It embeds each of `theme`'s own words once via
+  the embedder directly, retrieves every
+  preselected word's own ALREADY-INDEXED vector by id in one batched call
+  (`QdrantStore.retrieve_word_vectors`, built on a new `retrieve_vectors`
+  — Qdrant's "Retrieve points" API, no re-embedding, so the vector is
+  exactly the one already stored for that word), and computes each
+  (word, theme word) pair's cosine similarity by hand as a plain dot
+  product — valid because `backend/embedder.py`'s vectors are
+  L2-normalized and this collection's own distance metric is Cosine, so a
+  dot product IS the cosine similarity, identical to what a real Qdrant
+  search would report. At the user's own further explicit request, this
+  score also GATES membership in the compiled glossary: a preselected
+  word is dropped outright — never handed to `generate_grid`, never
+  listed in `LOG_THEME/` — the moment its own `whole_theme_score` falls
+  below `WHOLE_THEME_REJECT_LENIENCY` (1.5)'s own reject threshold,
+  `max(0.0, 1 - (1 - theme_precision) * WHOLE_THEME_REJECT_LENIENCY)` —
+  deliberately looser than `theme_precision` itself, since a word can
+  legitimately sit very close to one sharp keyword while only moderately
+  close to the theme's own literal words; this filter exists only to
+  catch a word that drifted essentially off-topic. The resolved threshold
+  is logged in `LOG_THEME/`'s own header as `whole-theme reject
+  threshold`. Best-effort, isolated from the
+  rest of `_build_theme_glossary`: a Qdrant/embedder outage during just
+  this extra computation leaves the column blank AND skips this filter
+  entirely (every preselected word kept) rather than failing the
+  themed generation itself. `theme_description` (the **whole-theme** keyword
   list only — never a per-token or top-up list) is still produced and fed
   to `generate_title` (soft inspiration) and to `generate()` clue writing
   as a **strong** directive: `_build_system_prompt`'s `THEME` block tells
@@ -1122,7 +1235,7 @@ the current defaults/behavior to know before touching this code.
   collecting **every** word whose own length falls between
   `THEME_LENGTH_MIN` and `THEME_LENGTH_MAX` (3-15) and whose Qdrant
   cosine-similarity score is at least the threshold — `THEME_MIN_SCORE`
-  (0.76) is the *default*, overridable by the "Précision thématique" form
+  (0.75) is the *default*, overridable by the "Précision thématique" form
   field (`GenerateRequest.theme_precision`, a 0-1 float threaded as
   `min_score` through `_compiled_theme_words_by_length`/`_theme_words_by_
   length`/`_iter_scored_words`); the same field's value is also forwarded
@@ -1173,7 +1286,30 @@ the current defaults/behavior to know before touching this code.
   fillable and structurally valid at `min_interior_free=1` (not the
   generation-time default of 3) — it only needs to preserve connectivity
   and the no-orphaned-cell invariant, not `make_pattern`'s own aesthetic
-  preference.
+  preference. It also takes a `challenge_words` parameter, protecting any
+  "Mots Défi" word already placed on the grid the exact same way it
+  already protects a `permanent_locked_letters` cell: the word's own
+  cells are locked/preseeded into every trial's own `try_fill`, and
+  exempted from this function's own final "every word must be a real
+  dictionary entry" acceptance check. Found live as a real gap: unlike
+  every other cross-palier repair stage (`_optimize_before_cleanup`/
+  `_shorten_impossible_zones`/`_lengthen_impossible_zones`/`_clean_
+  continue_candidate`, which already exempt a challenge word via
+  `_challenge_word_cells`), this final optimization pass used to rerun a
+  from-scratch `try_fill` with zero memory of which slot held a challenge
+  word — silently overwriting it with a different real word the fresh
+  search happened to prefer (reproduced deterministically in isolation:
+  a locked-nowhere 7-cell slot holding the non-dictionary "ZXQVJ" came
+  back as the real word "ETRENNE" once its neighboring black cell was
+  removed) or, more rarely, rejecting an otherwise-legitimate removal
+  outright because the challenge word itself had no dictionary-entry
+  exemption to fall back on. Both symptoms are the same missing-parameter
+  root cause, fixed by giving `minimize_black_squares` this parameter and
+  wiring it through both of its own callers in `generate_grid` (the
+  trial-optimization tie-break among several successful paliers, and the
+  real, final optimization of the winning grid) — the same isolated test
+  confirmed the word now survives unchanged (the removal is correctly
+  skipped) once `challenge_words` is passed.
 - A cooperative `GenerationCancelled` mechanism (checked at palier
   boundaries, inside `Filler._backtrack` every `CANCEL_CHECK_INTERVAL`
   (500) calls, inside `minimize_black_squares`'s removal loop, and between
@@ -1366,6 +1502,30 @@ the current defaults/behavior to know before touching this code.
   grid — no revert-unused-reshapes pass is needed any more, since nothing
   but the eventual winner's own single reshape (if any) was ever applied
   to begin with.
+- **A word's own black-cell change is atomic with the word itself, across
+  cross-palier cleanup**: `_shorten_impossible_zones`/`_lengthen_
+  impossible_zones` deliberately allow a shorter/longer word to cross an
+  ALREADY impossible slot elsewhere (`_new_crossing_impossibility` only
+  rejects a NEW degradation, never a pre-existing one) — a word placed
+  this way can therefore go on to be removed by `_clean_blocked_slots`'s
+  own crossing-word removal a few lines later, in that very same cleanup
+  pass, once it processes that other slot. Found live as a real gap: the
+  black cell added or relocated specifically to fit that word used to
+  stay behind regardless, permanently and pointlessly narrowing (or
+  failing to widen) a zone whose own justification had just been removed.
+  Fixed by having both functions hand back `black_cell_links` (a map from
+  each placed word's own cells to its exact black-cell change), threaded
+  through `_clean_continue_candidate` into `_clean_blocked_slots`, which
+  reverts the linked change (`_revert_black_cell_link`) in the same step
+  it removes a linked word — reopening a shortened word's own added
+  black cell, or restoring a lengthened word's own old boundary and
+  undoing its new one. Reverting never re-checks structural validity: it
+  only ever restores a cell to the exact color it had before this
+  round's shortening/lengthening touched it, a state already known
+  valid. `_clean_blocked_slots` now returns a 4th value, `reopened_cells`
+  (cells to whiten), alongside its existing `new_black_cells` (cells to
+  blacken) — `_clean_continue_candidate` applies both to the pattern it
+  hands to the next palier.
 
 ### LLM clue generation (`backend/clues.py`)
 

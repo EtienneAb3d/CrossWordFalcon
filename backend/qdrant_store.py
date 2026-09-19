@@ -461,6 +461,44 @@ class QdrantStore:
             json=body))
         return resp.json()["result"]
 
+    def retrieve_vectors(self, ids):
+        """Fetches the STORED vector of each of `ids` in one request
+        (Qdrant's own "Retrieve points" API, `with_vector: true`) — no
+        re-embedding, so the vector returned is exactly the one already
+        indexed for that point. A missing id is simply absent from the
+        result rather than an error, mirroring how `search` never errors
+        on an empty tenant. Returns `{id: vector}`. Added at the user's
+        explicit request, for computing an arbitrary (word, keyword)
+        pair's exact cosine similarity by hand (`backend/app.py`'s
+        `_whole_theme_proximity_scores`) without spending a full ranked
+        search just to learn one specific point's score."""
+        if not ids:
+            return {}
+        resp = self._ok(self._request(
+            "POST", f"/collections/{self.collection}/points",
+            json={"ids": list(ids), "with_vector": True, "with_payload": False},
+        ))
+        return {point["id"]: point["vector"] for point in resp.json()["result"]}
+
+    def retrieve_word_vectors(self, lang, words, batch_size=2000):
+        """`retrieve_vectors`, keyed by plain `word` rather than by point
+        id — the common case for a caller that only has the words
+        themselves: computes each `word_point_id(lang, word)`, chunks
+        into `batch_size`-sized `retrieve_vectors` calls (mirrors `delete_
+        words`'s own chunking, for the same reason — a caller with many
+        words should never send one oversized request), and returns
+        `{word: vector}` for whichever words actually exist in this
+        language's tenant."""
+        words = list(words)
+        id_to_word = {word_point_id(lang, w): w for w in words}
+        ids = list(id_to_word)
+        out = {}
+        for i in range(0, len(ids), batch_size):
+            chunk = ids[i:i + batch_size]
+            for point_id, vector in self.retrieve_vectors(chunk).items():
+                out[id_to_word[point_id]] = vector
+        return out
+
     def search_text(self, text, lang=None, limit=10, embedder=None):
         own = embedder is None
         if own:

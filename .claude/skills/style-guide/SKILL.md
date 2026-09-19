@@ -1010,7 +1010,7 @@ English (see `project-best-practices`).
   that would otherwise keep surfacing old search-phase previews for ~10
   more seconds *after* the backend had already moved on to optimizing the
   grid. This got noticeably worse this session specifically because the
-  30%-unfillable abandon rule and the 5-consecutive-continue cap (both in
+  too-many-impossible-slots abandon rule and the 5-consecutive-continue cap (both in
   `crossword_gen.py`) make many paliers fail much faster than before,
   piling up a bigger backlog before a grid is even found. Fixed with a new
   `POST_SEARCH_STEP_CODES` set (`"minimizing"`/`"grid_ready"`/`"clues"`/
@@ -3761,3 +3761,304 @@ end through the real running API (interactive start/step/save,
   as "BETAS, DELTAS" with no stray comma; the open/closed SVG icons'
   computed `display` correctly swap (`block`↔`none`) on each click, and
   a second click restores every word and icon to their original state.
+
+- **`#interactive-arrows` now stacks two flex rows instead of one**, at
+  the user's explicit request: "mettre les boutons sous la grille sur 2
+  lignes. Couper après le bouton 'Nettoyer (+noire)'." `#interactive-
+  arrows` itself became a plain flex COLUMN (`display: flex; flex-
+  direction: column; gap: 0.4rem`) wrapping two new `.interactive-arrows-
+  row` children — each carrying the row's own previous rule verbatim
+  (`display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center`) —
+  rather than trying to force a break inside one single flex row (e.g. a
+  `flex-basis: 100%` spacer), since an explicit two-container split is
+  simpler to reason about and matches how every other "two definite
+  groups" layout in this stylesheet is already built. First row: help
+  (?)/Mots/Croisés/Début/Fin/→/↓/Nettoyer/Nettoyer (+noires); second row:
+  Stats/Impossibles/Vérifier/Définitions/Finir la zone/Finir la grille/
+  the sponge clear-icon button — the cut lands right after "Nettoyer
+  (+noires)" as asked, with every other button's own relative order
+  inside each row unchanged. **Not yet visually confirmed in an actual
+  browser** — same tooling limitation noted throughout this file; the
+  two-row split follows the exact same wrapping/gap rule the single row
+  already used, so no new sizing/alignment behavior is introduced, only
+  the row boundary.
+
+- **Attempt-preview pencil icon** (`.attempt-preview-interactive-btn`),
+  at the user's explicit request: "à droite des mentions de remplissage
+  des prévisualisations... ajouter un bouton icône crayon (comme sur la
+  liste de la Bibliothèque) permettant de reprendre n'importe quelle
+  grille de l'historique en mode Interactif." Reuses the Library panel's
+  own `.library-interactive-btn` pencil SVG markup and `libraryInteractiveText`
+  i18n key verbatim — the exact same action (open a grid in Interactive
+  mode as a new "Créations" draft), just triggered from a different
+  place, so no new icon asset or translation was introduced. Same reset/
+  accent-tint treatment as `.library-interactive-btn`
+  (`background: none; border: none; padding: 0; color: var(--accent)`),
+  scaled down slightly (14px vs. the Library's 18px icon) to match this
+  panel's own smaller, secondary-glance scale (see `.attempt-preview-
+  grid`'s own 1.1rem-vs-2rem precedent).
+
+  Required splitting `.attempt-preview-stats` (a `<p>`, `opacity: 0.7`
+  for its dimmed secondary-text treatment) into a plain flex-row wrapper
+  (no opacity of its own any more) holding a new `.attempt-preview-stats-
+  text` `<span>` (carries the `opacity: 0.7` dimming that used to sit
+  directly on `.attempt-preview-stats`) plus the pencil button as a
+  sibling — CSS `opacity` dims an entire rendered subtree, so a button
+  living *inside* the dimmed element could never have undone that with
+  its own `opacity: 1`; only a sibling outside the dimmed span stays at
+  full, legible opacity. The same split pattern (a dimmed-text span
+  pulled out from underneath a still-full-opacity sibling control) is
+  the one to reach for again if a future button ever needs to sit next
+  to any of this file's several other `opacity: 0.7` secondary-text
+  lines (`#attempt-preview-status`, `#generation-times`, etc.). **Not yet
+  visually confirmed in an actual browser** — same tooling limitation
+  noted throughout this file; verified structurally (CSS brace-balance,
+  the button's own reset rules mirrored 1:1 against the already-shipped
+  Library button).
+
+- **"Mots Défi" (`#interactive-challenge-panel`) now matches the combined
+  height of grid + buttons, and `#interactive-controls` (the button strip
+  below the grid) is centered against the grid specifically**, at the
+  user's explicit request: "configurer le bloc Mots Défi pour faire la
+  hauteur du bloc Grille + Boutons. Dans le bloc Grille+Boutons, le bloc
+  Boutons en dessous doit être centré horizontalement par rapport à la
+  Grille." `#interactive-controls` moved out of being a bare sibling of
+  `#board` (see its own earlier entry above) into `#grid-column` itself,
+  as a sibling of a new `#interactive-flank-row` wrapper (which now holds
+  just Précédent/`#interactive-grid-wrap`/Suivant — the exact row
+  `#grid-column` itself used to become in Interactive mode; unconditional
+  now, not gated by any class, since with both buttons `hidden` outside
+  Interactive mode it simply wraps the grid alone). `#board-main`'s own
+  height (already stretched into by `#interactive-challenge-panel`'s
+  pre-existing `align-self: stretch`, see that entry above) now
+  naturally includes both the grid row and the buttons below it, with no
+  new rule needed for the height-matching requirement itself.
+
+  Centering the buttons against the grid specifically (not the wider,
+  asymmetric Précédent-to-Suivant span) needed more than that, though —
+  a first, pure-CSS attempt (a shared CSS Grid column between
+  `#interactive-grid-wrap` and `#interactive-controls`, both `justify-
+  self: center`) was tried and **rejected after a live Playwright check**
+  (permanent rule 4): CSS Grid's "auto" track sizing uses each item's own
+  max-content contribution, computed as if a `flex-wrap` control strip
+  never wrapped at all — `#interactive-controls`' own unwrapped width
+  (its widest single button row, ~650px) came out far wider than the
+  actual 7×7 grid tested (274px), forcing the shared column — and so
+  `#grid-column`, and so `#board-main` — wide enough that
+  `#interactive-challenge-panel`'s own 25%-of-`#board` slice no longer
+  fit beside it, wrapping the whole panel onto its own line below
+  `#board` instead: a real, measured regression of the wrapping bug this
+  project's own `#board-main` split was originally built to fix (see
+  that earlier entry). Fixed instead with the same explicit-pixel-
+  measurement idiom already established for `#hover-definition-row`
+  (`renderGrid()`, `script.js`): whenever `interactiveMode` is on, right
+  after `#grid`'s cells are all appended, it sets `#interactive-
+  controls`' own `width`/`margin-left` from `getBoundingClientRect()`
+  differences against `#grid-column` — `getBoundingClientRect()`
+  specifically, not `offsetLeft`/`offsetWidth`, since `#board`'s own
+  `position: relative` (for `#interactive-cell-stats`) makes it `#grid`'s
+  `offsetParent`, not `#grid-column` — so the controls box ends up
+  exactly as wide as, and exactly aligned under, `#grid` itself,
+  regardless of Précédent/Suivant's own differing widths.
+  `#interactive-controls`' pre-existing `align-items: center` (flex
+  column) then centers each button row inside that exact span, and,
+  being now width-constrained instead of free to claim its own max-
+  content width, its rows genuinely wrap via their existing `flex-wrap:
+  wrap` instead of forcing the layout wider. Reset (`style.width`/
+  `marginLeft` cleared) in `hideInteractivePanel()` so no stale
+  measurement survives into a later session. **Visually confirmed** with
+  Playwright/Chromium (permanent rule 4): a real Interactive-mode session
+  (7×7, French) measured `#interactive-controls`' own rect left/right
+  edges pixel-identical to `#grid`'s (420.78–694.78, both 274px wide),
+  `#interactive-challenge-panel`'s height (681.5px) exactly matching
+  `#board-main`'s combined grid+buttons height, and `#interactive-
+  challenge-panel` correctly staying beside `#board-main` rather than
+  wrapping below it; a second run confirmed ordinary play mode (no
+  Interactive session) is unaffected — `#interactive-flank-row`/`#grid`/
+  `#hover-definition-row` all render at the identical width they always
+  did, `#interactive-controls` never touched since `interactiveMode` is
+  `false` there.
+
+- **The entry right above was corrected/reversed almost immediately**, at
+  the user's own explicit follow-up: "le bloc Grille+Boutons doit occuper
+  le reste du bloc central. Les boutons en dessous ne doivent pas se
+  limiter à la zone grille, mais prendre toute la place à côté de Mots
+  Défi... 'Proposer une définition' et Sauvegarder, [et] la zone de
+  réponse aux boutons Mots/Croisés/Début/Fin doi[ven]t, elle[s] aussi
+  occuper toute la largeur de la zone centrale." "Centered against the
+  grid" (the previous entry) turned out to be the wrong target once
+  clarified — the whole "Grille + Boutons" block should fill the ENTIRE
+  75%-of-#board zone next to "Mots Défi" (unchanged, still confirmed
+  `flex: 0 0 25%`), not just center a grid-width-capped strip within it.
+
+  Reverted the JS pixel-measurement approach entirely (`renderGrid()`'s
+  `getBoundingClientRect()`-based `width`/`margin-left` block, removed)
+  in favor of pure CSS: `#grid-column.interactive-flank` (the class
+  `enterInteractiveMode()`/`hideInteractivePanel()` toggle, reinstated —
+  it had been dropped as dead code in the previous entry, now needed
+  again) gets `flex: 1 1 auto` (fills the full remaining board-main
+  width, instead of shrink-wrapping to its own content) plus
+  `align-items: center` (keeps `#interactive-flank-row` — the grid +
+  Précédent/Suivant trio — at its own natural, unstretched, centered
+  size — that part of the layout is untouched by this correction); a new
+  `#grid-column.interactive-flank #interactive-controls { align-self:
+  stretch; }` then makes the button strip alone opt back into filling
+  that full width. Every child already declaring `width: 100%`
+  (`#interactive-answers`, `#interactive-definition-row`, `#interactive-
+  propose-results`, `#interactive-verify-report`) automatically follows
+  suit with zero further rule needed — this alone satisfies the
+  "Proposer une définition"/"Mots-Croisés-Début-Fin answer zone" parts of
+  the request; `#interactive-save-row` needed one added rule
+  (`width: 100%`, to match `#interactive-definition-row`'s own existing
+  treatment) since it never had a declared width before.
+
+  **A second, real regression surfaced live via Playwright before landing
+  on the final fix**: switching `#grid-column` to `flex: 1 1 auto`
+  reintroduced the exact wrapping bug this feature's very first version
+  hit (`#interactive-challenge-panel` pushed onto its own line below
+  `#board` instead of beside it) — this time triggered by
+  `#interactive-controls`' own button rows (`.interactive-arrows-row`,
+  `flex-wrap: wrap`) bubbling their *unwrapped* max-content width all the
+  way up to `#board-main`'s own intrinsic-sizing contribution: per CSS
+  Flexbox §9.9, a flex container's max-content size is computed "as if
+  given infinite space" regardless of any `flex-wrap: wrap` further down
+  — `min-width: 0` (already present on `#board-main`) only ever governs
+  *shrinking* below content size, never this initial line-fitting
+  computation, so it didn't help. Root-fixed by changing `#board-main`
+  itself from `flex: 1 1 auto` to `flex: 1 1 0` — a *definite* flex-basis
+  (`0`, not `auto`) makes its contribution to #board's wrap decision
+  grow-factor-driven instead of content-driven, floored only by its own
+  *min*-content (small) rather than the runaway max-content sum. No
+  visible change to play mode (`#board-main` still claims 100% of
+  `#board` when the panel is `display: none`) or to Interactive mode's
+  final 75%/25% split — only the wrap-decision input changes.
+
+  **Visually confirmed** with Playwright/Chromium (permanent rule 4): a
+  real Interactive-mode session (7×7, French) measured `#grid-column`/
+  `#interactive-controls`/`#interactive-save-row` all pixel-identical to
+  `#board-main`'s own width (784px in the tested 1400px viewport, exactly
+  75% of `#board`'s 1088px), `#interactive-challenge-panel` staying
+  correctly beside it (272px, exactly 25%) rather than wrapping below;
+  clicking "Mots" on a real slot populated `#interactive-answers` with a
+  ~300-word candidate list that also measured the full 784px width, and
+  `#interactive-challenge-panel`'s own height grew to match the now much
+  taller combined block exactly (both measured 564–1758px). A second run
+  confirmed ordinary play mode is still unaffected (`#board-main` at the
+  full 1088px, grid centered as always).
+
+- **Corrected once more, at the user's own explicit follow-up**: "Mots
+  Défi ne doit faire que la hauteur de Grille+Boutons (et non toute la
+  hauteur restante de la fenêtre) — les réponses aux boutons et 'Proposer
+  une définition' doivent occuper toute la largeur de la zone centrale,
+  et pas seulement l'espace sous la grille (donc, passer en dessous de
+  Mots Défi) — le bouton Sauvegarder doit être centré." The two entries
+  right above had "Grille + Boutons" include the ENTIRE `#interactive-
+  controls` panel — button rows *and* every results zone (status
+  message, "Vérifier" report, "Mots"/"Croisés" stacked answers, "Proposer
+  une définition", title proposals, Sauvegarder/Publier) — stretched to
+  the 75%-of-#board zone next to "Mots Défi". Once the answers zone
+  actually accumulates several stacked blocks (its own long-standing
+  "never replaced, always prepended" design), that whole column grows
+  tall — and, since `#interactive-challenge-panel` matches its height via
+  `align-self: stretch`, "Mots Défi" grew right along with it, which is
+  what the user meant by "ne doit faire que la hauteur de Grille+Boutons":
+  the height match itself was working exactly as built, but "Grille +
+  Boutons" was including content it was never meant to (the answers zone
+  isn't part of the grid+buttons unit conceptually) — hence also "et pas
+  seulement l'espace sous la grille (donc, passer en dessous de Mots
+  Défi)": that content belongs full-width, under the ENTIRE central zone
+  (both the 75% and 25% columns combined), not confined to either one.
+
+  Split `#interactive-controls` in two: it now holds ONLY the button rows
+  (`#interactive-arrows` + its help overlay) and stays exactly where it
+  was (a child of `#grid-column`, `align-self: stretch` to the 75% zone,
+  unchanged). Everything else — `#interactive-message`, `#interactive-
+  verify-report`, `#interactive-answers`, `#interactive-definition-row`,
+  `#interactive-propose-results`, `#interactive-title-row`, `#interactive-
+  title-propose-results`, `#interactive-save-row`, `#interactive-save-
+  result` — moved into a brand new `#interactive-results`, a plain block-
+  level sibling of `#board` itself (like `#down-clues-section` right
+  after it), so it naturally spans the FULL central column width with no
+  explicit `width` rule needed. Every one of its children that already
+  declared its own `width: 100%` (`#interactive-answers`/`#interactive-
+  definition-row`/etc.) simply resolves that percentage against the new,
+  wider container — no per-child change needed. `interactiveResults`
+  (`script.js`, a new const alongside `interactiveControls`) is toggled
+  in lockstep with it in both `enterInteractiveMode()`/
+  `hideInteractivePanel()`. `#interactive-save-row` gained `justify-
+  content: center` for "le bouton Sauvegarder doit être centré" (its
+  pre-existing `width: 100%` stays — the row itself is still full width,
+  only its own buttons center within it now, instead of sitting flush
+  left).
+
+  **Visually confirmed** with Playwright/Chromium (permanent rule 4): a
+  real Interactive-mode session (7×7, French) measured `#interactive-
+  challenge-panel` (364px tall) exactly matching `#board`/`#board-main`/
+  `#grid-column` (all 364px) both BEFORE and AFTER clicking "Mots" — a
+  ~300-word answer list no longer changes that height at all, since
+  `#interactive-results` (944–1637px, well below `#board`'s own
+  564–928px) is now where that content lives; `#interactive-results`/
+  `#interactive-answers`/`#interactive-save-row` all measured the full
+  1088px central-zone width (156–1244, spanning under both the grid
+  column AND "Mots Défi"); `#interactive-draft-save-btn` measured
+  centered at x≈700, exactly the row's own midpoint.
+
+- **"Éponge" (clear) button in the "Mots"/"Croisés"/"Début"/"Fin" row
+  moved from the very end of the button rows (after "Finir la grille")
+  to right after "Fin"**, at the user's explicit request: "mettre
+  l'éponge à droite de Fin (et non après 'Finir la grille')." Purely a
+  DOM reorder of `#interactive-results-clear-btn` within `index.html`'s
+  first `.interactive-arrows-row` — no CSS/JS change, since the button is
+  wired by `id`, not by DOM position, and the row's own `flex-wrap: wrap`
+  layout doesn't care where in the row an item sits.
+
+- **`.cell.white.interactive-deadlock`** — a more vivid red for the exact
+  crossing cell of a "crossing-letter deadlock" (see CLAUDE.md/`DOC_ALGO/
+  FR/ReadMe.md`'s own entries on `Filler._crossing_deadlock_slots`), at
+  the user's explicit request: "la case ... devrait être en rouge vif
+  (plus vif que les mots impossibles qui passent par cette case)." No new
+  color token needed (permanent rule 2): reuses `--error` (`#b3261e`),
+  already more saturated/intense than `--incorrect-bg`'s own pastel tint
+  (`#fecaca`, used by `.interactive-impossible` for the rest of the same
+  impossible slot(s)) — a background fill, like `.interactive-impossible`
+  itself, with `color: var(--accent-fg)` (white) added since `--error` is
+  dark enough to need a light foreground, unlike every other pastel-
+  background diagnostic in this file. Always a subset of
+  `.interactive-impossible`'s own cells (backend's `deadlock_cells` is
+  always `⊆ impossible_cells`) — declared right after `.interactive-
+  impossible`/`.interactive-low` so its background wins there, and still
+  before `.selected` per this section's own pre-existing convention (the
+  selected cell keeps its blue fill regardless of any diagnostic
+  underneath). **Not yet visually confirmed in an actual browser** — same
+  tooling limitation noted throughout this file; verified structurally
+  (a real JS syntax check via `esprima`, a CSS brace-balance check) and
+  via a direct backend-level reproduction (a hand-built deadlock scenario
+  confirmed `_interactive_fill_diagnostics`'s new `deadlock_cells` return
+  value contains exactly the one shared conflicting cell, a proper subset
+  of `impossible_cells`).
+
+- **`.attempt-preview-grid .cell.white.deadlock`** — the same more vivid
+  red as `.interactive-deadlock` above, extended to the automatic-
+  generation attempt previews, at the user's explicit request: "les
+  prévisualisations ne montrent pas les cases impossibles en rouge vif...
+  il faut les voir, comme sur le mode Interactif." Reuses `--error` +
+  `color: var(--accent-fg)` verbatim (same reasoning: `--error` is more
+  saturated than `.impossible`'s own `--incorrect-bg` pastel tint here
+  too), declared right after `.attempt-preview-grid .cell.white.
+  impossible` so it wins on that one cell. Backend: `Filler.deadlock_
+  zone_cells()` (new, mirrors `impossible_zone_cells()`) folded into every
+  preview `examples` entry `try_fill`/`generate_grid` already build,
+  alongside `impossible_cells` — `script.js`'s `renderAttemptPreview()`
+  reads the new `deadlock_cells` field the same way it already reads
+  `theme_cells`/`challenge_cells` (a `|| []` overlay pass, no-op when
+  empty). Verified: a real, non-mocked `generate_grid()` run confirmed the
+  `deadlock_cells` key now reaches the preview `examples` dicts (it did
+  not before this fix — found live: the field only ever existed on
+  `try_fill`'s own internal `diagnostics` dict, but the actual `examples`
+  list `progress()`/`on_progress` receives is built by several SEPARATE,
+  cherry-picking dict literals elsewhere in `generate_grid` that don't
+  forward the whole diagnostics dict — each of those needed its own
+  explicit `deadlock_cells` key added). **Not yet visually confirmed in
+  an actual browser** — same tooling limitation noted throughout this
+  file; verified structurally (JS syntax check, CSS brace-balance check)
+  and via the real backend data reaching the preview `examples`.

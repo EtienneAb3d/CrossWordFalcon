@@ -1501,7 +1501,7 @@ GRACE	grâce	144027.0	grâce
 CROIT	croit	143950.30000000002	croire
 FORT	fort	143833.0	fort
 UTILISONS	utilisons	143769.80000000002	utiliser
-CŒUR	cœur	143766.0	cœur
+COEUR	cœur	143766.0	cœur
 ENFIN	enfin	143692.0	enfin
 PLEIN	plein	143640.0	plein
 GROSSE	grosse	143493.2	gros
@@ -1735,7 +1735,7 @@ MANGEASSIEZ	mangeassiez	130682.3	manger
 MANGEASSE	mangeasse	130682.1	manger
 MANGEATES	mangeâtes	130681.90000000001	manger
 LONGUE	longue	130645.79999999999	long
-CŒURS	cœurs	130636.70000000001	cœur
+COEURS	cœurs	130636.70000000001	cœur
 PLEINS	pleins	130427.9	plein
 GRACES	grâces	130425.90000000001	grâce
 ARMEE	armée	130292.0	armée;armer
@@ -3150,7 +3150,7 @@ RENTRES	rentres	82210.9	rentrer
 OBTENU	obtenu	82190.59999999999	obtenir
 RENTREZ	rentrez	82144.2	rentrer
 IMAGE	image	82101.0	image;imager
-ŒUVRE	œuvre	82098.0	œuvre;œuvrer
+OEUVRE	œuvre	82098.0	œuvre;œuvrer
 CERTAINS	certains	81987.90000000001	certain
 RENCONTRE	rencontre	81918.0	rencontre;rencontrer
 CHANGEMENT	changement	81912.0	changement
@@ -3456,7 +3456,7 @@ SUIVRIONS	suivrions	76883.8	suivre
 SUIVISSENT	suivissent	76882.8	suivre
 SUIVISSE	suivisse	76882.7	suivre
 FOLS	fols	76870.3	fou
-ŒUVRES	œuvres	76837.9	œuvre;œuvrer
+OEUVRES	œuvres	76837.9	œuvre;œuvrer
 ORIGINE	origine	76802.0	origine;originer
 REVENUE	revenue	76711.0	revenue;revenir
 CANADAS	canadas	76696.6	canada
@@ -4359,7 +4359,7 @@ QUITTES	quittes	60938.0	quitte;quitter
 RETOURNAIENT	retournaient	60929.5	retourner
 PERMET	permet	60924.1	permettre
 RETOURNAI	retournai	60919.7	retourner
-SŒUR	sœur	60908.0	sœur
+SOEUR	sœur	60908.0	sœur
 RETOURNIONS	retournions	60906.5	retourner
 PROCHAINS	prochains	60902.9	prochain
 RETOURNERAIENT	retourneraient	60901.1	retourner
@@ -4691,7 +4691,7 @@ VENDRAIS	vendrais	56457.50000000001	vendre
 VENDIT	vendit	56456.50000000001	vendre
 VENDRAIT	vendrait	56454.9	vendre
 AIMERAIENT	aimeraient	56451.600000000006	aimer
-SŒURS	sœurs	56430.700000000004	sœur
+SOEURS	sœurs	56430.700000000004	sœur
 AIMERA	aimera	56419.3	aimer
 PERMETTANT	permettant	56418.8	permettre
 APPAREIL	appareil	56417.0	appareil
@@ -5592,7 +5592,7 @@ COUCHANT	couchant	46216.2	couchant;coucher
 COUCHAIT	couchait	46213.2	coucher
 VERITABLE	véritable	46191.0	véritable
 COUCHEZ	couchez	46179.7	coucher
-ŒIL	œil	46155.0	œil
+OEIL	œil	46155.0	œil
 COUCHENT	couchent	46127.1	coucher
 COUCHA	coucha	46117.3	coucher
 COUCHAIS	couchais	46112.9	coucher
@@ -6079,7 +6079,7 @@ LIMITES	limites	41587.299999999996	limite;limiter
 APPORTES	apportés	41580.3	apporter
 DECLARE	déclaré	41550.49999999999	déclarer
 BETES	bêtes	41550.0	bête
-ŒILS	œils	41541.4	œil
+OEILS	œils	41541.4	œil
 REALISEES	réalisées	41536.600000000006	réaliser
 NULLES	nulles	41521.9	nul
 ANGES	anges	41518.1	ange
@@ -21811,7 +21811,7 @@ PROBABILITE	probabilité	8144.0	probabilité
 AFFIRMER	affirmer	8142.0	affirmer
 GIRL	girl	8141.0	girl
 RAPPROCHER	rapprocher	8140.0	rapprocher
-ŒUFS	œufs	8138.7	œuf
+OEUFS	œufs	8138.7	œuf
 ANTENNES	antennes	8138.6	antenne
 PIQUER	piquer	8138.0	piquer
 PENETRE	pénètre	8137.400000000001	pénétrer
@@ -23766,7 +23766,7 @@ DESIGNERIEZ	désigneriez	7238.8	désigner
 IMPLICATIONS	implications	7237.200000000001	implication
 CRANS	crans	7236.700000000001	cran
 SCANNEE	scannée	7235.400000000001	scanner
-ŒUF	œuf	7235.0	œuf
+OEUF	œuf	7235.0	œuf
 SCANNEZ	scannez	7234.8	scanner
 SCANNES	scannés	7234.400000000001	scanner
 DIZAINE	dizaine	7233.0	dizaine
@@ -25253,7 +25253,7 @@ RECUEILLERAI	recueillerai	6518.400000000001	recueillir
 ENNUI	ennui	6518.0	ennui
 BOULEVARD	boulevard	6518.0	boulevard
 INTERACTIONS	interactions	6517.9	interaction
-BŒUF	bœuf	6517.0	bœuf
+BOEUF	bœuf	6517.0	bœuf
 VIDERAI	viderai	6517.0	vider
 VIDAIENT	vidaient	6516.6	vider
 DEALAIS	dealais	6516.5	dealer
@@ -26021,7 +26021,7 @@ PECHER	pêcher	6157.0	pêcher
 HANS	hans	6156.9	han
 REDIGEES	rédigées	6156.8	rédiger
 FONDRA	fondra	6156.6	fondre
-BŒUFS	bœufs	6156.1	bœuf
+BOEUFS	bœufs	6156.1	bœuf
 CURES	cures	6155.700000000001	cure;curer
 CITOYENNETES	citoyennetés	6154.5	citoyenneté
 ORDONNA	ordonna	6153.4	ordonner
@@ -26327,7 +26327,7 @@ PARCOURUE	parcourue	6037.599999999999	parcourir
 PARCOURANT	parcourant	6037.4	parcourir
 LEE	Lee	6037.0	Lee
 PLONGEONS	plongeons	6036.3	plongeon;plonger
-VŒUX	vœux	6035.900000000001	vœu
+VOEUX	vœux	6035.900000000001	vœu
 TIROIRS	tiroirs	6035.6	tiroir
 PLONGEAIT	plongeait	6035.2	plonger
 JIM	Jim	6035.0	Jim
@@ -26615,7 +26615,7 @@ DISTRIBUASSENT	distribuassent	5932.000000000001	distribuer
 DISTRIBUAS	distribuas	5932.000000000001	distribuer
 SOIGNEUSEMENT	soigneusement	5932.0	soigneusement
 DECORS	décors	5929.6	décor
-VŒU	vœu	5929.0	vœu
+VOEU	vœu	5929.0	vœu
 SPENCERS	spencers	5928.400000000001	spencer
 PALMERAS	palmeras	5926.4	palmer
 PALMEE	palmée	5925.9	palmer
@@ -32239,7 +32239,7 @@ EPROUVES	éprouvés	4188.400000000001	éprouver
 OFFENSER	offenser	4188.0	offenser
 ADDITIONS	additions	4187.500000000001	addition
 SCOLARITES	scolarités	4187.5	scolarité
-NŒUD	nœud	4187.0	nœud
+NOEUD	nœud	4187.0	nœud
 RAISONNEMENTS	raisonnements	4186.400000000001	raisonnement
 DRESSAIT	dressait	4186.000000000001	dresser
 BUILDING	building	4186.0	building
@@ -32755,7 +32755,7 @@ DEFAISONS	défaisons	4089.6000000000004	défaire
 DEDUCTIONS	déductions	4089.6	déduction
 DEFERONT	déferont	4089.4	défaire
 DEFERAS	déferas	4089.3	défaire
-NŒUDS	nœuds	4089.2000000000003	nœud
+NOEUDS	nœuds	4089.2000000000003	nœud
 RADIATIONS	radiations	4089.2	radiation
 DEFERONS	déferons	4089.1000000000004	défaire
 DEFEREZ	déferez	4089.1000000000004	défaire
@@ -33721,7 +33721,7 @@ INSISTIONS	insistions	3832.2000000000003	insister
 INSISTERAIENT	insisteraient	3832.2000000000003	insister
 PESERA	pèsera	3832.2	peser
 BRILLERAIT	brillerait	3832.2	briller
-CHŒUR	chœur	3832.0	chœur
+CHOEUR	chœur	3832.0	chœur
 DICTATEUR	dictateur	3832.0	dictateur
 PESAIENT	pesaient	3831.9	peser
 ALIMENTAIT	alimentait	3831.9	alimenter
@@ -35326,7 +35326,7 @@ FIGURAIS	figurais	3531.7000000000003	figurer
 PRESSES	pressés	3530.8999999999996	presser
 FIGURA	figura	3530.7000000000003	figurer
 EMEUTES	émeutes	3530.7	émeute
-CHŒURS	chœurs	3530.2000000000003	chœur
+CHOEURS	chœurs	3530.2000000000003	chœur
 LEGALITE	légalité	3530.0	légalité
 FROC	froc	3530.0	froc
 CACAO	cacao	3529.0	cacao
@@ -36761,7 +36761,7 @@ PRECHIEZ	prêchiez	3311.6	prêcher
 REDONNERONS	redonnerons	3311.1	redonner
 CONVENIR	convenir	3311.0	convenir
 POLEMIQUE	polémique	3311.0	polémique;polémiquer
-MANŒUVRE	manœuvre	3311.0	manœuvre;manœuvrer
+MANOEUVRE	manœuvre	3311.0	manœuvre;manœuvrer
 PRECHERAIS	prêcherais	3311.0	prêcher
 REDONNERAS	redonneras	3311.0	redonner
 PAYABLES	payables	3310.8	payable
@@ -37369,7 +37369,7 @@ TRIER	trier	3217.0	trier
 GENEZ	gênez	3216.9	gêner
 EMILY	Emily	3216.0	Emily
 CAMPEMENT	campement	3215.0	campement
-MŒURS	mœurs	3215.0	mœurs
+MOEURS	mœurs	3215.0	mœurs
 HERO	héro	3215.0	héro
 INSPECTE	inspecté	3214.7	inspecter
 RESPECTABLES	respectables	3214.3	respectable
@@ -37429,7 +37429,7 @@ TOLERERAIENT	toléreraient	3197.7	tolérer
 PRIVILEGIE	privilégié	3197.0	privilégié;privilégier
 CREANCIERES	créancières	3196.8	créancier
 TOLERAIENT	toléraient	3196.7999999999997	tolérer
-MANŒUVRES	manœuvres	3196.5	manœuvre;manœuvrer
+MANOEUVRES	manœuvres	3196.5	manœuvre;manœuvrer
 CAROTTES	carottes	3196.1	carotte;carotter
 LESIONS	lésions	3196.0	lésion;léser
 TANK	tank	3196.0	tank
@@ -42706,7 +42706,7 @@ DONATIONS	donations	2351.5	donation
 JORDAN	Jordan	2350.75	Jordan
 LAURENT	Laurent	2350.25	Laurent
 YENS	yens	2350.2	yen
-FŒTUS	fœtus	2350.0	fœtus
+FOETUS	fœtus	2350.0	fœtus
 ABAISSES	abaissés	2349.7000000000003	abaisser
 SEDUCTIONS	séductions	2349.7000000000003	séduction
 BRAQUES	braqués	2349.1000000000004	braquer
@@ -50628,7 +50628,7 @@ MULTINATIONALES	multinationales	1598.4	multinationale;multinational
 REBONDISSONS	rebondissons	1598.2	rebondir
 REBONDISSES	rebondisses	1598.2	rebondir
 REVENDIQUONS	revendiquons	1598.1	revendiquer
-ŒUVRER	œuvrer	1598.0	œuvrer
+OEUVRER	œuvrer	1598.0	œuvrer
 HUMANISME	humanisme	1598.0	humanisme
 FREROT	frérot	1598.0	frérot
 REBONDIREZ	rebondirez	1598.0	rebondir
@@ -51844,7 +51844,7 @@ SOMBRAIT	sombrait	1501.0000000000002	sombrer
 BOUSCULER	bousculer	1501.0	bousculer
 VIGOUREUX	vigoureux	1501.0	vigoureux
 RESIDER	résider	1501.0	résider
-ŒCUMENIQUE	œcuménique	1501.0	œcuménique
+OECUMENIQUE	œcuménique	1501.0	œcuménique
 SEXISTE	sexiste	1501.0	sexiste
 PROSTITUEE	prostituée	1500.9999999999998	prostitué;prostituer
 POSTULES	postules	1500.8999999999999	postuler
@@ -51963,7 +51963,7 @@ INFLUERONT	influeront	1495.3	influer
 INFLUERAIT	influerait	1495.2	influer
 SOMBREREZ	sombrerez	1495.2	sombrer
 ATTRAYANTE	attrayante	1495.1999999999998	attrayant
-ŒUVRENT	œuvrent	1495.1000000000001	œuvrer
+OEUVRENT	œuvrent	1495.1000000000001	œuvrer
 LAVEUSE	laveuse	1495.1000000000001	laveur
 SOMBRAI	sombrai	1495.1000000000001	sombrer
 SOMBRAIS	sombrais	1495.1000000000001	sombrer
@@ -52024,7 +52024,7 @@ POSTULIEZ	postuliez	1492.3999999999999	postuler
 POSTULERA	postulera	1492.3999999999999	postuler
 POSTULERONT	postuleront	1492.3999999999999	postuler
 PERFECTIONNANT	perfectionnant	1492.2	perfectionner
-ŒUVRANT	œuvrant	1492.1000000000001	œuvrer
+OEUVRANT	œuvrant	1492.1000000000001	œuvrer
 PERFECTIONNENT	perfectionnent	1492.1	perfectionner
 POSTULEES	postulées	1492.1	postuler
 POSTULERAIS	postulerais	1492.1	postuler
@@ -52634,7 +52634,7 @@ DATERONS	daterons	1453.8	dater
 DATERAIS	daterais	1453.8	dater
 REJOUEE	rejouée	1453.7	rejouer
 DATERAI	daterai	1453.7	dater
-ŒUVRONS	œuvrons	1453.6000000000001	œuvrer
+OEUVRONS	œuvrons	1453.6000000000001	œuvrer
 REJOUONS	rejouons	1453.6000000000001	rejouer
 DATAT	datât	1453.6	dater
 DATAIS	datais	1453.6	dater
@@ -52765,7 +52765,7 @@ CANOES	canoës	1447.6000000000001	canoë
 FATIGUERAIT	fatiguerait	1447.6	fatiguer
 TRAVIS	Travis	1447.5	Travis
 MATELOTS	matelots	1447.4	matelot
-ŒUVREZ	œuvrez	1447.4	œuvrer
+OEUVREZ	œuvrez	1447.4	œuvrer
 FATIGUERAI	fatiguerai	1447.4	fatiguer
 FATIGUAIS	fatiguais	1447.3	fatiguer
 NICOLE	Nicole	1447.25	Nicole
@@ -52792,7 +52792,7 @@ SIFFLERONT	siffleront	1445.9	siffler
 FATIGUEREZ	fatiguerez	1445.8	fatiguer
 CONSENTIT	consentit	1445.6	consentir
 FATIGUIEZ	fatiguiez	1445.6	fatiguer
-ŒUVRAIENT	œuvraient	1445.5	œuvrer
+OEUVRAIENT	œuvraient	1445.5	œuvrer
 FATIGUA	fatigua	1445.4	fatiguer
 LAITIERS	laitiers	1445.3	laitier
 SUPERFLU	superflu	1445.0	superflu
@@ -52812,7 +52812,7 @@ BILATERAUX	bilatéraux	1444.0	bilatéral
 GLAND	gland	1444.0	gland
 SOBRIETE	sobriété	1444.0	sobriété
 FRAUDULEUSE	frauduleuse	1443.8	frauduleux
-ŒUVRAIT	œuvrait	1443.4	œuvrer
+OEUVRAIT	œuvrait	1443.4	œuvrer
 INCARNERAIT	incarnerait	1443.4	incarner
 EGAREMENT	égarement	1443.0	égarement
 IMPARTIAL	impartial	1443.0	impartial
@@ -52836,7 +52836,7 @@ FREROTS	frérots	1441.8	frérot
 SIFFLERAIS	sifflerais	1441.8	siffler
 SIFFLAI	sifflai	1441.7	siffler
 FAMILIARISE	familiarisé	1441.5	familiariser
-ŒUVRERA	œuvrera	1441.5	œuvrer
+OEUVRERA	œuvrera	1441.5	œuvrer
 ATTRACTIVE	attractive	1441.4	attractif
 INCARNIEZ	incarniez	1441.4	incarner
 INCARNERAIS	incarnerais	1441.4	incarner
@@ -52858,17 +52858,17 @@ INCARNERONS	incarnerons	1441.0	incarner
 INCARNERAS	incarneras	1441.0	incarner
 INCARNERIONS	incarnerions	1441.0	incarner
 RENOUANT	renouant	1440.9	renouer
-ŒUVRERONT	œuvreront	1440.9	œuvrer
+OEUVRERONT	œuvreront	1440.9	œuvrer
 SIFFLONS	sifflons	1440.9	siffler
 SIFFLIEZ	siffliez	1440.9	siffler
 CONES	cônes	1440.8000000000002	cône
 SCELLEES	scellées	1440.8	sceller
 REECRITE	réécrite	1440.7	réécrire
-ŒUVRA	œuvra	1440.7	œuvrer
+OEUVRA	œuvra	1440.7	œuvrer
 SIFFLERENT	sifflèrent	1440.7	siffler
 CARTIERS	cartiers	1440.7	cartier
 FICHEZ	fichez	1440.5	ficher
-ŒUVRERONS	œuvrerons	1440.5	œuvrer
+OEUVRERONS	œuvrerons	1440.5	œuvrer
 RENOUEE	renouée	1440.3000000000002	renouer
 FOLKS	folks	1440.2	folk
 SIFFLEREZ	sifflerez	1440.2	siffler
@@ -52886,8 +52886,8 @@ LOTIONS	lotions	1439.9	lotion
 THAIES	thaïes	1439.5	thaï
 DISSERTATIONS	dissertations	1439.3000000000002	dissertation
 POINTUE	pointue	1439.3	pointu
-ŒUVRERAI	œuvrerai	1439.3	œuvrer
-ŒUVRERENT	œuvrèrent	1439.2	œuvrer
+OEUVRERAI	œuvrerai	1439.3	œuvrer
+OEUVRERENT	œuvrèrent	1439.2	œuvrer
 SUCCEDA	succéda	1439.1000000000001	succéder
 RENOUONS	renouons	1439.1000000000001	renouer
 FREE	Free	1439.0	Free
@@ -52898,21 +52898,21 @@ RAFALES	rafales	1439.0	rafale
 ECHAUFFEMENTS	échauffements	1439.0	échauffement
 BROUILLE	brouillé	1438.9	brouiller
 REUTILISE	réutilisé	1438.8999999999999	réutiliser
-ŒUVRIONS	œuvrions	1438.8	œuvrer
-ŒUVRIEZ	œuvriez	1438.8	œuvrer
+OEUVRIONS	œuvrions	1438.8	œuvrer
+OEUVRIEZ	œuvriez	1438.8	œuvrer
 RENOUEES	renouées	1438.7	renouer
 INCIRCONCISE	incirconcise	1438.7	incirconcis
 HUMANISMES	humanismes	1438.7	humanisme
 RENOUERA	renouera	1438.6000000000001	renouer
-ŒUVRAIS	œuvrais	1438.6000000000001	œuvrer
-ŒUVRERAIT	œuvrerait	1438.6000000000001	œuvrer
+OEUVRAIS	œuvrais	1438.6000000000001	œuvrer
+OEUVRERAIT	œuvrerait	1438.6000000000001	œuvrer
 ATTRAYANTS	attrayants	1438.5	attrayant
 RENOUEZ	renouez	1438.5	renouer
-ŒUVRERAIS	œuvrerais	1438.5	œuvrer
-ŒUVRERAIENT	œuvreraient	1438.4	œuvrer
-ŒUVRERAS	œuvreras	1438.3	œuvrer
-ŒUVRAMES	œuvrâmes	1438.3	œuvrer
-ŒUVREREZ	œuvrerez	1438.3	œuvrer
+OEUVRERAIS	œuvrerais	1438.5	œuvrer
+OEUVRERAIENT	œuvreraient	1438.4	œuvrer
+OEUVRERAS	œuvreras	1438.3	œuvrer
+OEUVRAMES	œuvrâmes	1438.3	œuvrer
+OEUVREREZ	œuvrerez	1438.3	œuvrer
 INSULTANTES	insultantes	1438.2	insultant
 INCIRCONCISES	incirconcises	1438.1000000000001	incirconcis
 PYRENEES	Pyrénées	1438.0	Pyrénées
@@ -53915,7 +53915,7 @@ CONFERERAIT	conférerait	1368.3999999999999	conférer
 CONFERERENT	conférèrent	1368.3	conférer
 DESAMORCA	désamorça	1368.3	désamorcer
 PHOENIX	Phoenix	1368.25	Phoenix
-ŒCUMENIQUES	œcuméniques	1368.2	œcuménique
+OECUMENIQUES	œcuméniques	1368.2	œcuménique
 DESAMORCERAS	désamorceras	1368.2	désamorcer
 MARXISMES	marxismes	1368.1000000000001	marxisme
 MOSAIQUEE	mosaïquée	1368.1	mosaïqué
@@ -64828,7 +64828,7 @@ BOSSU	bossu	843.0	bossu
 DUVET	duvet	843.0	duvet
 BOF	bof	843.0	bof
 QUANTITATIF	quantitatif	843.0	quantitatif
-ŒDEME	œdème	843.0	œdème
+OEDEME	œdème	843.0	œdème
 GNOMES	gnomes	843.0	gnome
 CONCEPTUELLES	conceptuelles	842.9000000000001	conceptuel
 JORGE	Jorge	842.75	Jorge
@@ -67133,7 +67133,7 @@ STERNUMS	sternums	767.8000000000001	sternum
 CORRUPTIBLES	corruptibles	767.8	corruptible
 MARIANNE	Marianne	767.75	Marianne
 INTERCONTINENTALE	intercontinentale	767.7	intercontinental
-ŒDEMES	œdèmes	767.7	œdème
+OEDEMES	œdèmes	767.7	œdème
 RALLUMES	rallumes	767.6	rallumer
 RALLUMEES	rallumées	767.5	rallumer
 CAPRICIEUSES	capricieuses	767.4	capricieux
@@ -71355,11 +71355,11 @@ PERSECUTEZ	persécutez	647.1	persécuter
 RESTRUCTUREES	restructurées	647.1	restructurer
 ANKARA	Ankara	647.0	Ankara
 POULPE	poulpe	647.0	poulpe
-MANŒUVRER	manœuvrer	647.0	manœuvrer
+MANOEUVRER	manœuvrer	647.0	manœuvrer
 INDENIABLEMENT	indéniablement	647.0	indéniablement
 BIENSEANCE	bienséance	647.0	bienséance
 AUTOMOBILISTE	automobiliste	647.0	automobiliste
-ŒSOPHAGE	œsophage	647.0	œsophage
+OESOPHAGE	œsophage	647.0	œsophage
 CADASTRE	cadastre	647.0	cadastre;cadastrer
 BLITZ	blitz	647.0	blitz
 BAFFES	baffes	646.9000000000001	baffe;baffer
@@ -71669,7 +71669,7 @@ ETRIPERONT	étriperont	640.1	étriper
 ASSIEGE	assiégé	640.0	assiégé;assiéger
 TERNIR	ternir	640.0	ternir
 IMPROPRE	impropre	640.0	impropre
-RANCŒUR	rancœur	640.0	rancœur
+RANCOEUR	rancœur	640.0	rancœur
 REMIX	remix	640.0	remix
 COINCIDENT	coïncident	640.0	coïncident;coïncider
 ARMATEURS	armateurs	640.0	armateur
@@ -73457,7 +73457,7 @@ ENSEVELIRONS	ensevelirons	601.4000000000001	ensevelir
 PERSISTAIENT	persistaient	601.3000000000001	persister
 ARMATRICES	armatrices	601.3000000000001	armateur
 DECALE	décalé	601.3	décaler
-RANCŒURS	rancœurs	601.3	rancœur
+RANCOEURS	rancœurs	601.3	rancœur
 JENKINS	Jenkins	601.25	Jenkins
 ENSEVELIRONT	enseveliront	601.2	ensevelir
 NEIGEAIT	neigeait	601.1	neiger
@@ -74054,9 +74054,9 @@ ENVIRONNANTES	environnantes	586.8	environnant
 ACETATES	acétates	586.8	acétate
 VAPORISE	vaporisé	586.7	vaporiser
 QUINQUENNATS	quinquennats	586.7	quinquennat
-MANŒUVRANT	manœuvrant	586.6	manœuvrer
+MANOEUVRANT	manœuvrant	586.6	manœuvrer
 DRESSEUSES	dresseuses	586.6	dresseur
-MANŒUVRENT	manœuvrent	586.5000000000001	manœuvrer
+MANOEUVRENT	manœuvrent	586.5000000000001	manœuvrer
 FRANCESCO	Francesco	586.5	Francesco
 ACCABLENT	accablent	586.5	accabler
 REFORMULEES	reformulées	586.5	reformuler
@@ -74132,7 +74132,7 @@ COURTISE	courtise	584.6	courtiser
 VEGETATIVE	végétative	584.6	végétatif
 CLIGNES	clignes	584.6	cligner
 ANNULAIRES	annulaires	584.6	annulaire
-MANŒUVREE	manœuvrée	584.6	manœuvrer
+MANOEUVREE	manœuvrée	584.6	manœuvrer
 HARDIESSES	hardiesses	584.6	hardiesse
 PROPULSES	propulsés	584.5000000000001	propulser
 PICHETS	pichets	584.5	pichet
@@ -74185,9 +74185,9 @@ ANNONCIATIONS	annonciations	583.7	annonciation
 ARAMEENS	araméens	583.6	araméen
 CHAIS	chais	583.6	chai
 DECHAINA	déchaîna	583.6	déchaîner
-MANŒUVRAIT	manœuvrait	583.6	manœuvrer
+MANOEUVRAIT	manœuvrait	583.6	manœuvrer
 ENSOLEILLEMENTS	ensoleillements	583.6	ensoleillement
-MANŒUVREZ	manœuvrez	583.5000000000001	manœuvrer
+MANOEUVREZ	manœuvrez	583.5000000000001	manœuvrer
 CLIFF	Cliff	583.5	Cliff
 DETAILLERAI	détaillerai	583.5	détailler
 DETAILLERONS	détaillerons	583.5	détailler
@@ -74199,7 +74199,7 @@ FAUCHEZ	fauchez	583.1	faucher
 FAUCHANT	fauchant	583.1	faucher
 NUMERISANT	numérisant	583.1	numériser
 IMMERGERA	immergera	583.1	immerger
-MANŒUVREES	manœuvrées	583.0000000000001	manœuvrer
+MANOEUVREES	manœuvrées	583.0000000000001	manœuvrer
 MASSUE	massue	583.0	massue
 LANGUIR	languir	583.0	languir
 FLORAL	floral	583.0	floral
@@ -74211,22 +74211,22 @@ JUGEOTE	jugeote	583.0	jugeote
 STATE	state	582.9999999999999	stater
 IMMERGEONS	immergeons	582.8	immerger
 DUPLIQUENT	dupliquent	582.7	dupliquer
-MANŒUVRAIENT	manœuvraient	582.7	manœuvrer
+MANOEUVRAIENT	manœuvraient	582.7	manœuvrer
 DETAILLAIS	détaillais	582.6999999999999	détailler
 ANESTHESISTES	anesthésistes	582.6	anesthésiste
 DISSOCIATIONS	dissociations	582.6	dissociation
 IMMERGERONS	immergerons	582.6	immerger
-MANŒUVRERENT	manœuvrèrent	582.6	manœuvrer
-MANŒUVRONS	manœuvrons	582.6	manœuvrer
-MANŒUVREREZ	manœuvrerez	582.6	manœuvrer
-MANŒUVRERAIS	manœuvrerais	582.6	manœuvrer
-MANŒUVRA	manœuvra	582.5000000000001	manœuvrer
-MANŒUVRERA	manœuvrera	582.5000000000001	manœuvrer
+MANOEUVRERENT	manœuvrèrent	582.6	manœuvrer
+MANOEUVRONS	manœuvrons	582.6	manœuvrer
+MANOEUVREREZ	manœuvrerez	582.6	manœuvrer
+MANOEUVRERAIS	manœuvrerais	582.6	manœuvrer
+MANOEUVRA	manœuvra	582.5000000000001	manœuvrer
+MANOEUVRERA	manœuvrera	582.5000000000001	manœuvrer
 KABOUL	Kaboul	582.5	Kaboul
 DECHAINERA	déchaînera	582.5	déchaîner
 INTUBATIONS	intubations	582.5	intubation
-ŒSOPHAGES	œsophages	582.4000000000001	œsophage
-MANŒUVRIEZ	manœuvriez	582.4000000000001	manœuvrer
+OESOPHAGES	œsophages	582.4000000000001	œsophage
+MANOEUVRIEZ	manœuvriez	582.4000000000001	manœuvrer
 JANTES	jantes	582.4	jante
 VESPAS	vespas	582.4	vespa
 USURIERS	usuriers	582.3000000000001	usurier
@@ -77456,7 +77456,7 @@ DENIGREMENT	dénigrement	512.0	dénigrement
 BLAZER	blazer	512.0	blazer
 PEPITE	pépite	512.0	pépite
 CALORIFIQUE	calorifique	512.0	calorifique
-CONTRECŒUR	contrecœur	512.0	contrecœur
+CONTRECOEUR	contrecœur	512.0	contrecœur
 IMPEDANCE	impédance	512.0	impédance
 CONFLUENCE	confluence	512.0	confluence
 BOURGEON	bourgeon	512.0	bourgeon
@@ -77658,7 +77658,7 @@ DEROUTER	dérouter	508.0	dérouter
 GAELIQUE	gaélique	508.0	gaélique
 CAPITALISER	capitaliser	508.0	capitaliser
 DRASTIQUEMENT	drastiquement	508.0	drastiquement
-SŒURETTE	sœurette	508.0	sœurette
+SOEURETTE	sœurette	508.0	sœurette
 PENTECOTISTE	pentecôtiste	508.0	pentecôtiste
 RECEPTIONNER	réceptionner	508.0	réceptionner
 PIPETTE	pipette	508.0	pipette;pipeter
@@ -80552,7 +80552,7 @@ IMPRESSIONNISTES	impressionnistes	457.90000000000003	impressionniste
 FETICHISTES	fétichistes	457.9	fétichiste
 DEROUTA	dérouta	457.9	dérouter
 CAPITALISEZ	capitalisez	457.9	capitaliser
-SŒURETTES	sœurettes	457.9	sœurette
+SOEURETTES	sœurettes	457.9	sœurette
 ASSOUPLIS	assouplis	457.8	assouplir
 DEROUTONS	déroutons	457.8	dérouter
 DEROUTERAIT	dérouterait	457.8	dérouter
@@ -89658,7 +89658,7 @@ FEMMELETTE	femmelette	323.0	femmelette
 AFFILIER	affilier	323.0	affilier
 BARNUM	barnum	323.0	barnum
 VANTARD	vantard	323.0	vantard
-ŒCUMENISME	œcuménisme	323.0	œcuménisme
+OECUMENISME	œcuménisme	323.0	œcuménisme
 RUBEOLE	rubéole	323.0	rubéole
 SUCCESSORAL	successoral	323.0	successoral
 EVENEMENTIEL	événementiel	323.0	événementiel
@@ -89898,7 +89898,7 @@ DESINTERET	désintérêt	320.0	désintérêt
 BOURGUIGNON	bourguignon	320.0	bourguignon
 LABOUREUR	laboureur	320.0	laboureur
 RHUMATISME	rhumatisme	320.0	rhumatisme
-ŒDIPE	œdipe	320.0	œdipe
+OEDIPE	œdipe	320.0	œdipe
 MADRILENE	madrilène	320.0	madrilène
 CLASSIFIER	classifier	320.0	classifier
 PARACHUTISME	parachutisme	320.0	parachutisme
@@ -90113,7 +90113,7 @@ TERRASSERONT	terrasseront	317.40000000000003	terrasser
 RAMOLLIS	ramollis	317.3	ramollir
 MOISSONNEE	moissonnée	317.3	moissonner
 VOSGES	Vosges	317.25	Vosges
-FŒTALE	fœtale	317.20000000000005	fœtal
+FOETALE	fœtale	317.20000000000005	fœtal
 OBJECTE	objecte	317.20000000000005	objecter
 EVASIVES	évasives	317.2	évasif
 EURASIENNES	eurasiennes	317.2	eurasien
@@ -90360,7 +90360,7 @@ PUTT	putt	314.0	putt
 ESCLAVAGISME	esclavagisme	314.0	esclavagisme
 COGITER	cogiter	314.0	cogiter
 KIPPA	kippa	314.0	kippa
-FŒTAL	fœtal	314.0	fœtal
+FOETAL	fœtal	314.0	fœtal
 SAUTERIE	sauterie	314.0	sauterie
 NITOUCHE	nitouche	314.0	nitouche
 GYNECOLOGIQUES	gynécologiques	314.0	gynécologique
@@ -91687,7 +91687,7 @@ CLIGNOTAIENT	clignotaient	299.6	clignoter
 EMPALENT	empalent	299.6	empaler
 NOIRCIT	noircit	299.50000000000006	noircir
 FLAMBEUSE	flambeuse	299.50000000000006	flambeur
-ŒSTROGENES	œstrogènes	299.5	œstrogène
+OESTROGENES	œstrogènes	299.5	œstrogène
 DILUANTS	diluants	299.5	diluant
 EXONERAIENT	exonéraient	299.5	exonérer
 EMPALEES	empalées	299.5	empalé;empaler
@@ -92009,7 +92009,7 @@ CYAN	cyan	296.0	cyan
 MECANISATION	mécanisation	296.0	mécanisation
 SATYRE	satyre	296.0	satyre
 ENGRAISSEMENT	engraissement	296.0	engraissement
-ECŒURANT	écœurant	296.0	écœurant;écœurer
+ECOEURANT	écœurant	296.0	écœurant;écœurer
 MAURITANIEN	mauritanien	296.0	mauritanien
 POIX	poix	296.0	poix
 TUBULAIRE	tubulaire	296.0	tubulaire
@@ -92459,7 +92459,7 @@ CONFINERAIT	confinerait	290.6	confiner
 FERNAND	Fernand	290.5	Fernand
 ONTOLOGIQUES	ontologiques	290.5	ontologique
 KIFFERAIT	kifferait	290.5	kiffer
-FŒTALES	fœtales	290.40000000000003	fœtal
+FOETALES	fœtales	290.40000000000003	fœtal
 APPRETERA	apprêtera	290.40000000000003	apprêter
 DERACINEE	déracinée	290.4	déraciné;déraciner
 SOUPIRES	soupires	290.3	soupirer
@@ -92638,7 +92638,7 @@ SCINTILLEMENTS	scintillements	288.1	scintillement
 AFFRETEES	affrétées	288.1	affréter
 AFFRETENT	affrètent	288.1	affréter
 CHATTONS	chattons	288.1	chatter
-ŒDIPES	œdipes	288.1	œdipe
+OEDIPES	œdipes	288.1	œdipe
 QUARTIEZ	quartiez	288.1	quarter
 HEGIRES	hégires	288.1	hégire
 CLASSIFIERAIT	classifierait	288.1	classifier
@@ -92824,7 +92824,7 @@ TENDINITES	tendinites	286.8	tendinite
 TUNERS	tuners	286.8	tuner
 DIABOLISEZ	diabolisez	286.8	diaboliser
 ATTRISTEREZ	attristerez	286.8	attrister
-FŒTAUX	fœtaux	286.70000000000005	fœtal
+FOETAUX	fœtaux	286.70000000000005	fœtal
 BOUILLOTTES	bouillottes	286.7	bouillotte;bouillotter
 DISTILLONS	distillons	286.7	distiller
 CONSPIRERA	conspirera	286.7	conspirer
@@ -93104,7 +93104,7 @@ METALLURGIQUE	métallurgique	283.0	métallurgique
 MENSUALITE	mensualité	283.0	mensualité
 INVALIDATION	invalidation	283.0	invalidation
 DECOLLEMENT	décollement	283.0	décollement
-ŒSTROGENE	œstrogène	283.0	œstrogène
+OESTROGENE	œstrogène	283.0	œstrogène
 DECROIT	décroît	283.0	décroît;décroître
 DICTATORIAL	dictatorial	283.0	dictatorial
 POLAROID	polaroid	283.0	polaroid
@@ -93393,7 +93393,7 @@ TORPILLANT	torpillant	279.7	torpiller
 SALINITES	salinités	279.7	salinité
 ENCOCHES	encoches	279.6	encoche;encocher
 STIGMATISES	stigmatisés	279.6	stigmatiser
-ECŒURANTE	écœurante	279.6	écœurant
+ECOEURANTE	écœurante	279.6	écœurant
 STOPPEUSE	stoppeuse	279.6	stoppeur
 CHARCUTANT	charcutant	279.6	charcuter
 PRONENT	prônent	279.59999999999997	prôner
@@ -94146,7 +94146,7 @@ PHREATIQUES	phréatiques	271.7	phréatique
 REPERCUTERAIT	répercuterait	271.7	répercuter
 HATIFS	hâtifs	271.6	hâtif
 PARCMETRES	parcmètres	271.6	parcmètre
-ECŒURANTS	écœurants	271.6	écœurant
+ECOEURANTS	écœurants	271.6	écœurant
 DEBAUCHEZ	débauchez	271.6	débaucher
 DETRONEES	détrônées	271.6	détrôner
 KLAXONNERAIS	klaxonnerais	271.6	klaxonner
@@ -94382,7 +94382,7 @@ REECOUTAIT	réécoutait	270.0	réécouter
 REECOUTONS	réécoutons	270.0	réécouter
 GARNIS	garnis	269.90000000000003	garnir
 SEVREE	sevrée	269.90000000000003	sevrer
-ECŒURANTES	écœurantes	269.90000000000003	écœurant
+ECOEURANTES	écœurantes	269.90000000000003	écœurant
 REFOURGUERA	refourguera	269.90000000000003	refourguer
 MEUBLENT	meublent	269.90000000000003	meubler
 URIQUES	uriques	269.90000000000003	urique
@@ -94495,7 +94495,7 @@ SOPHROLOGIE	sophrologie	269.0	sophrologie
 PREEXISTANT	préexistant	269.0	préexistant;préexister
 SEPARATISME	séparatisme	269.0	séparatisme
 ANTIFRAUDE	antifraude	269.0	antifraude
-ÆQUO	æquo	269.0	æquo
+AEQUO	æquo	269.0	æquo
 CHATAINS	châtains	269.0	châtain
 GABONAISE	gabonaise	269.0	gabonais
 INCROYANTES	incroyantes	269.0	incroyant
@@ -95837,7 +95837,6 @@ VOYAGISTE	voyagiste	256.0	voyagiste
 ARENA	aréna	256.0	aréna
 EXFILTRATION	exfiltration	256.0	exfiltration
 OUTPUT	output	256.0	output
-PHŒNIX	phœnix	256.0	phœnix
 ELONGATION	élongation	256.0	élongation
 GODEMICHE	godemiché	256.0	godemiché
 TROYEN	troyen	256.0	troyen
@@ -101218,7 +101217,7 @@ EXFOLIANTES	exfoliantes	206.9	exfoliant
 FRAISEE	fraisée	206.9	fraiser
 TOURNOYANTES	tournoyantes	206.9	tournoyant
 SALISSANTES	salissantes	206.9	salissant
-ŒILLETS	œillets	206.89999999999998	œillet
+OEILLETS	œillets	206.89999999999998	œillet
 MILLIARDIEMES	milliardièmes	206.8	milliardième
 CAJOLEZ	cajolez	206.79999999999998	cajoler
 RECOMPOSANT	recomposant	206.79999999999998	recomposer
@@ -103537,7 +103536,7 @@ BATELIER	batelier	189.0	batelier
 ETOLE	étole	189.0	étole
 GRISAILLE	grisaille	189.0	grisaille;grisailler
 PROBE	probe	189.0	probe;prober
-ŒILLET	œillet	189.0	œillet
+OEILLET	œillet	189.0	œillet
 PHENOL	phénol	189.0	phénol
 STIGMATE	stigmate	189.0	stigmate
 TUMULUS	tumulus	189.0	tumulus
@@ -103686,7 +103685,7 @@ RECONDITIONNEMENT	reconditionnement	188.0	reconditionnement
 CONFIGURABLE	configurable	188.0	configurable
 FIC	fic	188.0	fic
 GLOBULAIRE	globulaire	188.0	globulaire
-CŒLIAQUE	cœliaque	188.0	cœliaque
+COELIAQUE	cœliaque	188.0	cœliaque
 EMMENTAL	emmental	188.0	emmental
 PROLAPSUS	prolapsus	188.0	prolapsus
 VOLATILISER	volatiliser	188.0	volatiliser
@@ -105731,7 +105730,7 @@ ETOURDISSANT	étourdissant	173.2	étourdissant;étourdir
 INSTILLE	instillé	173.2	instiller
 INTERMODALES	intermodales	173.2	intermodal
 BOUTONNEZ	boutonnez	173.2	boutonner
-CŒLIAQUES	cœliaques	173.10000000000002	cœliaque
+COELIAQUES	cœliaques	173.10000000000002	cœliaque
 PAVOISEES	pavoisées	173.10000000000002	pavoiser
 SWINGUAIENT	swinguaient	173.10000000000002	swinguer
 MONNAYAGES	monnayages	173.10000000000002	monnayage
@@ -114891,7 +114890,6 @@ AGENCER	agencer	120.0	agencer
 AMYOTROPHIQUE	amyotrophique	120.0	amyotrophique
 POLYMORPHISME	polymorphisme	120.0	polymorphisme
 MULTICOUCHE	multicouche	120.0	multicouche
-VITÆ	vitæ	120.0	vitæ
 ALCALINITE	alcalinité	120.0	alcalinité
 FEDERALISATION	fédéralisation	120.0	fédéralisation
 DEDRAMATISER	dédramatiser	120.0	dédramatiser
@@ -120007,7 +120005,7 @@ CAPSAICINE	capsaïcine	96.0	capsaïcine
 MALAXER	malaxer	96.0	malaxer
 PASTORALISME	pastoralisme	96.0	pastoralisme
 ANTIGRIPPAL	antigrippal	96.0	antigrippal
-ŒNOLOGIE	œnologie	96.0	œnologie
+OENOLOGIE	œnologie	96.0	œnologie
 ENSILAGE	ensilage	96.0	ensilage
 TONAL	tonal	96.0	tonal
 SYPHILITIQUE	syphilitique	96.0	syphilitique
@@ -122665,7 +122663,7 @@ MARTYROLOGE	martyrologe	85.0	martyrologe
 DECLIVITE	déclivité	85.0	déclivité
 FEBRILEMENT	fébrilement	85.0	fébrilement
 EBOULIS	éboulis	85.0	éboulis
-CÆTERA	cætera	85.0	cætera
+CAETERA	cætera	85.0	cætera
 CHOPINE	chopine	85.0	chopine;chopiner
 PRESTIDIGITATION	prestidigitation	85.0	prestidigitation
 QUATRAIN	quatrain	85.0	quatrain
@@ -124570,7 +124568,7 @@ NOMBRILISTE	nombriliste	78.0	nombriliste
 JACQUEMART	jacquemart	78.0	jacquemart
 CARVI	carvi	78.0	carvi
 PERCOLATION	percolation	78.0	percolation
-MANŒUVRABILITE	manœuvrabilité	78.0	manœuvrabilité
+MANOEUVRABILITE	manœuvrabilité	78.0	manœuvrabilité
 MICROCHIRURGIE	microchirurgie	78.0	microchirurgie
 BINER	biner	78.0	biner
 OPTIMISEUR	optimiseur	78.0	optimiseur
@@ -125665,7 +125663,7 @@ ENTROUVRAIS	entrouvrais	74.2	entrouvrir
 ENTROUVRES	entrouvres	74.2	entrouvrir
 PIAILLERONT	piailleront	74.2	piailler
 EXTERNALITES	externalités	74.19999999999999	externalité
-CONSŒURS	consœurs	74.10000000000001	consœur
+CONSOEURS	consœurs	74.10000000000001	consœur
 BRULOTS	brûlots	74.10000000000001	brûlot
 POIVRIERES	poivrières	74.10000000000001	poivrier
 ETRENNES	étrennes	74.1	étrenne;étrenner
@@ -125710,7 +125708,7 @@ ESCARPIN	escarpin	74.0	escarpin
 BUFFETIER	buffetier	74.0	buffetier
 JUIVERIE	juiverie	74.0	juiverie
 RACONTEUR	raconteur	74.0	raconteur
-CONSŒUR	consœur	74.0	consœur
+CONSOEUR	consœur	74.0	consœur
 MAINTENEUR	mainteneur	74.0	mainteneur
 EMPETRER	empêtrer	74.0	empêtrer
 NEPHRITE	néphrite	74.0	néphrite
@@ -128614,7 +128612,6 @@ INSPECTORAT	inspectorat	65.0	inspectorat
 QUADRICYCLE	quadricycle	65.0	quadricycle
 MULTIMOTEUR	multimoteur	65.0	multimoteur
 GICLEUR	gicleur	65.0	gicleur
-PRÆSIDIUM	præsidium	65.0	præsidium
 ANTISERUM	antisérum	65.0	antisérum
 GOUDRONNER	goudronner	65.0	goudronner
 RANCARDER	rancarder	65.0	rancarder
@@ -128972,7 +128969,7 @@ PASCALINE	pascaline	64.0	pascaline
 ALCALINISER	alcaliniser	64.0	alcaliniser
 CONCOCTION	concoction	64.0	concoction
 RETICULUM	réticulum	64.0	réticulum
-ŒILLETON	œilleton	64.0	œilleton
+OEILLETON	œilleton	64.0	œilleton
 LITCHI	litchi	64.0	litchi
 SASSAFRAS	sassafras	64.0	sassafras
 PYROMANIE	pyromanie	64.0	pyromanie
@@ -129289,7 +129286,7 @@ CRACRA	cracra	63.0	cracra
 FERMETTE	fermette	63.0	fermette
 METEORIQUE	météorique	63.0	météorique
 LEUCOPENIE	leucopénie	63.0	leucopénie
-CŒLACANTHE	cœlacanthe	63.0	cœlacanthe
+COELACANTHE	cœlacanthe	63.0	cœlacanthe
 BESANT	besant	63.0	besant
 ECHOGRAPHIQUE	échographique	63.0	échographique
 ANTHROPOMORPHIQUE	anthropomorphique	63.0	anthropomorphique
@@ -130368,7 +130365,7 @@ PSYCHOGENE	psychogène	60.0	psychogène
 DEME	dème	60.0	dème
 CARDON	cardon	60.0	cardon
 EPIPHYSE	épiphyse	60.0	épiphyse
-ŒNOLOGUE	œnologue	60.0	œnologue
+OENOLOGUE	œnologue	60.0	œnologue
 REPROUVER	réprouver	60.0	réprouver
 IKEBANA	ikebana	60.0	ikebana
 INCONSISTANT	inconsistant	60.0	inconsistant
@@ -131070,7 +131067,7 @@ BASSINETS	bassinets	58.1	bassinet
 EMBRIGADENT	embrigadent	58.1	embrigader
 ASTREIGNANTS	astreignants	58.1	astreignant
 FRETILLANTES	frétillantes	58.1	frétillant
-ŒILLETONS	œilletons	58.1	œilleton
+OEILLETONS	œilletons	58.1	œilleton
 EXULTAIS	exultais	58.1	exulter
 BRIMAIENT	brimaient	58.1	brimer
 PANTOISE	pantoise	58.1	pantois
@@ -131355,7 +131352,7 @@ MALFAMEES	malfamées	57.6	malfamé
 FIDJIENNES	fidjiennes	57.6	fidjien
 TECHNOPOLES	technopoles	57.6	technopole
 ENVIRONNENT	environnent	57.599999999999994	environner
-DESŒUVRES	désœuvrés	57.599999999999994	désœuvré
+DESOEUVRES	désœuvrés	57.599999999999994	désœuvré
 CEREMONIEUSE	cérémonieuse	57.599999999999994	cérémonieux
 SATANES	satanés	57.59999999999999	sataner
 SANDRES	sandres	57.50000000000001	sandre
@@ -131381,7 +131378,7 @@ METATARSIENS	métatarsiens	57.400000000000006	métatarsien
 RECURSIFS	récursifs	57.400000000000006	récursif
 CAQUETANT	caquetant	57.400000000000006	caquetant;caqueter
 GENEUSE	gêneuse	57.400000000000006	gêneur
-CŒLACANTHES	cœlacanthes	57.400000000000006	cœlacanthe
+COELACANTHES	cœlacanthes	57.400000000000006	cœlacanthe
 DILAPIDATIONS	dilapidations	57.400000000000006	dilapidation
 REBATTONS	rebattons	57.400000000000006	rebattre
 ACCESSOIRISEE	accessoirisée	57.400000000000006	accessoiriser
@@ -131577,7 +131574,7 @@ DALMATE	dalmate	57.0	dalmate
 PALMAIRE	palmaire	57.0	palmaire
 FLECHISSEUR	fléchisseur	57.0	fléchisseur
 TENDINEUX	tendineux	57.0	tendineux
-ŒSOPHAGIEN	œsophagien	57.0	œsophagien
+OESOPHAGIEN	œsophagien	57.0	œsophagien
 PAYSAGISME	paysagisme	57.0	paysagisme
 GLYCOPROTEINE	glycoprotéine	57.0	glycoprotéine
 EXTORQUEUR	extorqueur	57.0	extorqueur
@@ -131752,7 +131749,7 @@ DETONANTS	détonants	56.5	détonant
 VENDANGEA	vendangea	56.5	vendanger
 ANTIAMERICAINES	antiaméricaines	56.5	antiaméricain
 REPROUVONS	réprouvons	56.5	réprouver
-ŒNOLOGUES	œnologues	56.5	œnologue
+OENOLOGUES	œnologues	56.5	œnologue
 CIVILISATIONNELLES	civilisationnelles	56.5	civilisationnel
 FLOUTEES	floutées	56.5	flouter
 PERFORATEURS	perforateurs	56.5	perforateur
@@ -131899,7 +131896,7 @@ ASSOMBRISSEMENT	assombrissement	56.0	assombrissement
 BIAISER	biaiser	56.0	biaiser
 MORICAUD	moricaud	56.0	moricaud
 MALPROPRETE	malpropreté	56.0	malpropreté
-DESŒUVRE	désœuvré	56.0	désœuvré
+DESOEUVRE	désœuvré	56.0	désœuvré
 GLAPIR	glapir	56.0	glapir
 SUPPLICIE	supplicié	56.0	supplicié;supplicier
 OUTRECUIDANCE	outrecuidance	56.0	outrecuidance
@@ -132171,7 +132168,7 @@ OLIVINES	olivines	55.199999999999996	olivine
 PENDOUILLERONT	pendouilleront	55.199999999999996	pendouiller
 CACHOTTERIES	cachotteries	55.19999999999999	cachotterie
 ENLUMINURES	enluminures	55.1	enluminure
-ŒSOPHAGIENNE	œsophagienne	55.1	œsophagien
+OESOPHAGIENNE	œsophagienne	55.1	œsophagien
 VAGALE	vagale	55.1	vagal
 ZAIROISES	zaïroises	55.1	zaïrois
 INTERPELEE	interpelée	55.1	interpelé;interpeler
@@ -132809,7 +132806,7 @@ VERBEUSES	verbeuses	53.7	verbeux
 LARYNGEES	laryngées	53.7	laryngé
 ABSCONSES	absconses	53.7	abscons
 TAGUEUSE	tagueuse	53.7	tagueur
-ECŒURE	écœuré	53.699999999999996	écœurer
+ECOEURE	écœuré	53.699999999999996	écœurer
 METALLOS	métallos	53.699999999999996	métallo
 MICROFICHES	microfiches	53.699999999999996	microfiche
 SILLS	sills	53.6	sill
@@ -132879,7 +132876,7 @@ SUSNOMMEES	susnommées	53.400000000000006	susnommé
 INFORMATISEES	informatisées	53.4	informatiser
 CACHETEES	cachetées	53.4	cacheter
 OCCLUSIVE	occlusive	53.4	occlusif
-DESŒUVREE	désœuvrée	53.4	désœuvré
+DESOEUVREE	désœuvrée	53.4	désœuvré
 INCONDITIONNES	inconditionnés	53.4	inconditionné
 REENCHANTENT	réenchantent	53.4	réenchanter
 SUAVITES	suavités	53.4	suavité
@@ -132927,7 +132924,7 @@ KRASNODAR	Krasnodar	53.25	Krasnodar
 HABILLEUSE	habilleuse	53.2	habilleur
 TIRAILLAIT	tiraillait	53.2	tirailler
 CALEDONIENNES	calédoniennes	53.2	calédonien
-ŒSOPHAGIENNES	œsophagiennes	53.2	œsophagien
+OESOPHAGIENNES	œsophagiennes	53.2	œsophagien
 ENTORTILLEES	entortillées	53.2	entortiller
 DETONANTES	détonantes	53.2	détonant
 BRUNIS	brunis	53.2	brunir
@@ -133108,7 +133105,7 @@ PHALENE	phalène	53.0	phalène
 MARTELEUR	marteleur	53.0	marteleur
 VAGISSEMENT	vagissement	53.0	vagissement
 CLASSIFICATEURS	classificateurs	53.0	classificateur
-DESŒUVREES	désœuvrées	53.0	désœuvré
+DESOEUVREES	désœuvrées	53.0	désœuvré
 NEGRILLONS	négrillons	53.0	négrillon
 INTERNALISEES	internalisées	53.0	internaliser
 RADOTEUSE	radoteuse	53.0	radoteur
@@ -133587,7 +133584,7 @@ BADERNES	badernes	51.7	baderne
 SOCIALITES	socialités	51.7	socialité
 MATCHANT	matchant	51.7	matcher
 ENGUIRLANDES	enguirlandés	51.7	enguirlander
-ŒSOPHAGIENS	œsophagiens	51.7	œsophagien
+OESOPHAGIENS	œsophagiens	51.7	œsophagien
 ENGUIRLANDAIS	enguirlandais	51.7	enguirlander
 NEUROTOXICITES	neurotoxicités	51.7	neurotoxicité
 TOMMES	tommes	51.7	tomme
@@ -134252,7 +134249,7 @@ INEBRANLABLEMENT	inébranlablement	50.0	inébranlablement
 BUREAUCRATISATION	bureaucratisation	50.0	bureaucratisation
 VISSEUSE	visseuse	50.0	visseuse
 PESTILENTIEL	pestilentiel	50.0	pestilentiel
-ECŒUREMENT	écœurement	50.0	écœurement
+ECOEUREMENT	écœurement	50.0	écœurement
 REPETITIVITE	répétitivité	50.0	répétitivité
 REALLOCATION	réallocation	50.0	réallocation
 COUPEAU	coupeau	50.0	coupeau
@@ -136325,7 +136322,7 @@ AZOTH	azoth	45.0	azoth
 NEBULOSITE	nébulosité	45.0	nébulosité
 GONADOTROPHINE	gonadotrophine	45.0	gonadotrophine
 EFFEUILLER	effeuiller	45.0	effeuiller
-LYMPHŒDEME	lymphœdème	45.0	lymphœdème
+LYMPHOEDEME	lymphœdème	45.0	lymphœdème
 REDOUX	redoux	45.0	redoux
 RETICULAIRE	réticulaire	45.0	réticulaire
 LABBE	labbe	45.0	labbe
@@ -137494,7 +137491,7 @@ BALLOTTES	ballottés	42.5	ballotter
 CEPHALOPODES	céphalopodes	42.5	céphalopode
 ENCABLURES	encablures	42.5	encablure
 MINORE	minoré	42.5	minorer
-ŒNOLOGIQUES	œnologiques	42.5	œnologique
+OENOLOGIQUES	œnologiques	42.5	œnologique
 REINVITE	réinvité	42.5	réinviter
 DISSONANTES	dissonantes	42.5	dissonant
 AMELIORATEURS	améliorateurs	42.5	améliorateur
@@ -138161,7 +138158,7 @@ MITAN	mitan	41.0	mitan
 MOLY	moly	41.0	moly
 ISOCYANATE	isocyanate	41.0	isocyanate
 MINORER	minorer	41.0	minorer
-ŒNOLOGIQUE	œnologique	41.0	œnologique
+OENOLOGIQUE	œnologique	41.0	œnologique
 SADOMASOCHISTE	sadomasochiste	41.0	sadomasochiste
 SMILLA	smilla	41.0	smiller
 EBOURIFFANT	ébouriffant	41.0	ébouriffant;ébouriffer
@@ -138503,7 +138500,7 @@ CONTORSIONNEZ	contorsionnez	40.6	contorsionner
 DELEGANTES	délégantes	40.6	délégant
 MURISSEMENTS	mûrissements	40.6	mûrissement
 SANGLAS	sanglas	40.6	sangler
-LYMPHŒDEMES	lymphœdèmes	40.6	lymphœdème
+LYMPHOEDEMES	lymphœdèmes	40.6	lymphœdème
 TELECOMMANDEZ	télécommandez	40.6	télécommander
 FAUTERA	fautera	40.6	fauter
 JANSENISMES	jansénismes	40.6	jansénisme
@@ -139055,7 +139052,7 @@ CHARLEVILLE	Charleville	39.5	Charleville
 PELTIER	Peltier	39.5	Peltier
 MOUGINS	Mougins	39.5	Mougins
 ECROUE	écroué	39.5	écrouer
-ECŒUREE	écœurée	39.5	écœurer
+ECOEUREE	écœurée	39.5	écœurer
 MONNAYABLES	monnayables	39.5	monnayable
 INDIVISAIRES	indivisaires	39.5	indivisaire
 BIOCOMPATIBLES	biocompatibles	39.5	biocompatible
@@ -139220,7 +139217,7 @@ STOIQUEMENT	stoïquement	39.0	stoïquement
 PUGILISTE	pugiliste	39.0	pugiliste
 HERCULEEN	herculéen	39.0	herculéen
 BALLANT	ballant	39.0	ballant;baller
-DESŒUVREMENT	désœuvrement	39.0	désœuvrement
+DESOEUVREMENT	désœuvrement	39.0	désœuvrement
 EVIDER	évider	39.0	évider
 SYLPHIDE	sylphide	39.0	sylphide
 INCONVENABLE	inconvenable	39.0	inconvenable
@@ -140686,7 +140683,7 @@ RECUIT	recuit	36.5	recuire
 ZOONOTIQUES	zoonotiques	36.5	zoonotique
 MECROIENT	mécroient	36.5	mécroire
 COOPTE	coopté	36.5	coopter
-ECŒURES	écœurés	36.5	écœurer
+ECOEURES	écœurés	36.5	écœurer
 CORRODE	corrode	36.5	corroder
 NEWTONIENS	newtoniens	36.5	newtonien
 RATIERE	ratière	36.5	ratier
@@ -141622,7 +141619,7 @@ TRICHOMONAS	trichomonas	35.0	trichomonas
 FRISOTTIS	frisottis	35.0	frisottis
 DORIN	dorin	35.0	dorin
 FABULER	fabuler	35.0	fabuler
-ECŒURER	écœurer	35.0	écœurer
+ECOEURER	écœurer	35.0	écœurer
 GYROPODE	gyropode	35.0	gyropode
 PHALLOCRATE	phallocrate	35.0	phallocrate
 BACTERIEMIE	bactériémie	35.0	bactériémie
@@ -142843,7 +142840,7 @@ EXPANSIBLE	expansible	33.0	expansible
 MELIPHAGE	méliphage	33.0	méliphage
 WATERINGUE	wateringue	33.0	wateringue
 SUBLUMINIQUE	subluminique	33.0	subluminique
-ECŒURENT	écœurent	33.0	écœurer
+ECOEURENT	écœurent	33.0	écœurer
 MITEE	mitée	33.0	miter
 PROTONIQUES	protoniques	33.0	protonique
 PIOUPIOUS	pioupious	33.0	pioupiou
@@ -142939,7 +142936,7 @@ GAZOUILLEMENTS	gazouillements	32.7	gazouillement
 PAPETIERES	papetières	32.7	papetier
 BACTERIEMIES	bactériémies	32.7	bactériémie
 VIROLES	viroles	32.7	virole;viroler
-ECŒUREZ	écœurez	32.7	écœurer
+ECOEUREZ	écœurez	32.7	écœurer
 ENDEUILLEE	endeuillée	32.699999999999996	endeuiller
 TENDANCIELLE	tendancielle	32.699999999999996	tendanciel
 OURDIE	ourdie	32.699999999999996	ourdir
@@ -143532,7 +143529,7 @@ EMPHYTEOTIQUES	emphytéotiques	31.8	emphytéotique
 TRIPAILLES	tripailles	31.8	tripaille
 RAREFIERA	raréfiera	31.8	raréfier
 EPERONNAIS	éperonnais	31.8	éperonner
-ECŒURAIT	écœurait	31.8	écœurer
+ECOEURAIT	écœurait	31.8	écœurer
 FABULAIENT	fabulaient	31.8	fabuler
 FOURBI	fourbi	31.799999999999997	fourbir
 CELAS	celas	31.799999999999997	celer
@@ -143593,7 +143590,7 @@ RATIBOISERA	ratiboisera	31.7	ratiboiser
 REMPLUMES	remplumes	31.7	remplumer
 EPERONNERENT	éperonnèrent	31.7	éperonner
 EPERONNEREZ	éperonnerez	31.7	éperonner
-ECŒURERAIS	écœurerais	31.7	écœurer
+ECOEURERAIS	écœurerais	31.7	écœurer
 FURIBARDE	furibarde	31.7	furibard
 REMPLUMEZ	remplumez	31.7	remplumer
 CABLOGRAMMES	câblogrammes	31.7	câblogramme
@@ -143641,13 +143638,13 @@ SARROISES	sarroises	31.6	sarrois
 HYPERSTIMULATIONS	hyperstimulations	31.6	hyperstimulation
 MITANT	mitant	31.6	miter
 EPERONNEES	éperonnées	31.6	éperonner
-ECŒURERA	écœurera	31.6	écœurer
+ECOEURERA	écœurera	31.6	écœurer
 RATIBOISAIENT	ratiboisaient	31.6	ratiboiser
 EMMANCHEES	emmanchées	31.6	emmanché;emmancher
 TROUSSENT	troussent	31.6	trousser
 REMPLUMERAI	remplumerai	31.6	remplumer
 UNIVERSALISERENT	universalisèrent	31.6	universaliser
-ECŒURA	écœura	31.6	écœurer
+ECOEURA	écœura	31.6	écœurer
 FABULAIS	fabulais	31.6	fabuler
 RAREFIERONT	raréfieront	31.6	raréfier
 FURIBARDES	furibardes	31.6	furibard
@@ -143657,7 +143654,7 @@ ANTIAMERICANISMES	antiaméricanismes	31.6	antiaméricanisme
 REMPLUMERA	remplumera	31.6	remplumer
 POSTILLONNAIENT	postillonnaient	31.6	postillonner
 REMPLUMAIENT	remplumaient	31.6	remplumer
-ECŒURIEZ	écœuriez	31.6	écœurer
+ECOEURIEZ	écœuriez	31.6	écœurer
 REVULSIONS	révulsions	31.6	révulsion;révulser
 GANTIERE	gantière	31.6	gantier
 SACRAMENTAUX	sacramentaux	31.599999999999998	sacramental
@@ -144714,7 +144711,7 @@ INDECIDABLE	indécidable	30.0	indécidable
 BISULFITE	bisulfite	30.0	bisulfite
 GEOMANCIE	géomancie	30.0	géomancie
 IRRESPECTUEUSEMENT	irrespectueusement	30.0	irrespectueusement
-ŒSTRUS	œstrus	30.0	œstrus
+OESTRUS	œstrus	30.0	œstrus
 DURAILLE	duraille	30.0	duraille
 TARDIVETE	tardiveté	30.0	tardiveté
 PLATELAGE	platelage	30.0	platelage
@@ -145291,7 +145288,7 @@ COMPULSER	compulser	29.0	compulser
 BAASISTE	baasiste	29.0	baasiste
 JOLIESSE	joliesse	29.0	joliesse
 MONOCRISTALLIN	monocristallin	29.0	monocristallin
-ŒSOPHAGITE	œsophagite	29.0	œsophagite
+OESOPHAGITE	œsophagite	29.0	œsophagite
 NOOSPHERE	noosphère	29.0	noosphère
 SUCCESSIBLE	successible	29.0	successible
 ANTICYCLONIQUE	anticyclonique	29.0	anticyclonique
@@ -145349,7 +145346,7 @@ PRECONTRACTUEL	précontractuel	29.0	précontractuel
 GOUVERNEMENTALITE	gouvernementalité	29.0	gouvernementalité
 CANNELE	cannelé	29.0	cannelé;canneler
 SUPERFLUIDE	superfluide	29.0	superfluide
-CÆCUM	cæcum	29.0	cæcum
+CAECUM	cæcum	29.0	cæcum
 DEBITAGE	débitage	29.0	débitage
 ISOPRENE	isoprène	29.0	isoprène
 PERIDOT	péridot	29.0	péridot
@@ -146722,7 +146719,7 @@ NEURAMINIDASE	neuraminidase	27.0	neuraminidase
 CAENNAIS	caennais	27.0	caennais
 POLYMYXINE	polymyxine	27.0	polymyxine
 APPLAUDIMETRE	applaudimètre	27.0	applaudimètre
-MANŒUVRABLE	manœuvrable	27.0	manœuvrable
+MANOEUVRABLE	manœuvrable	27.0	manœuvrable
 GEMMOLOGIE	gemmologie	27.0	gemmologie
 SHINTOISTE	shintoïste	27.0	shintoïste
 CARRELET	carrelet	27.0	carrelet
@@ -147170,7 +147167,7 @@ COMPULSEE	compulsée	26.3	compulser
 VIOLONEUSE	violoneuse	26.3	violoneux
 ENCRASSERA	encrassera	26.3	encrasser
 DECHAUSSEMENTS	déchaussements	26.3	déchaussement
-ŒSOPHAGITES	œsophagites	26.3	œsophagite
+OESOPHAGITES	œsophagites	26.3	œsophagite
 UROGENITAUX	urogénitaux	26.3	urogénital
 ENCRASSEZ	encrassez	26.3	encrasser
 DEPEUPLANT	dépeuplant	26.3	dépeupler
@@ -147239,7 +147236,7 @@ METASTASERONT	métastaseront	26.200000000000003	métastaser
 DEPEUPLEZ	dépeuplez	26.200000000000003	dépeupler
 ATHEROMES	athéromes	26.200000000000003	athérome
 DETELAIT	dételait	26.200000000000003	dételer
-CÆCUMS	cæcums	26.200000000000003	cæcum
+CAECUMS	cæcums	26.200000000000003	cæcum
 PERIDOTS	péridots	26.200000000000003	péridot
 ENSOLEILLA	ensoleilla	26.200000000000003	ensoleiller
 ASSOURDISSENT	assourdissent	26.200000000000003	assourdir
@@ -147533,7 +147530,7 @@ DESINCARNATION	désincarnation	26.0	désincarnation
 COARCTATION	coarctation	26.0	coarctation
 DIORITE	diorite	26.0	diorite
 METAPSYCHIQUE	métapsychique	26.0	métapsychique
-ŒDIPIEN	œdipien	26.0	œdipien
+OEDIPIEN	œdipien	26.0	œdipien
 PROCRASTINATEUR	procrastinateur	26.0	procrastinateur
 DISCRIMINATEUR	discriminateur	26.0	discriminateur
 SOUTIER	soutier	26.0	soutier
@@ -147662,7 +147659,7 @@ GEEKETTES	geekettes	26.0	geekette
 GRIBOUILLEURS	gribouilleurs	26.0	gribouilleur
 CANTINA	cantina	25.999999999999996	cantiner
 ARCHIEPISCOPALE	archiépiscopale	25.900000000000002	archiépiscopal
-ŒDIPIENNE	œdipienne	25.900000000000002	œdipien
+OEDIPIENNE	œdipienne	25.900000000000002	œdipien
 ANGSTROMS	angströms	25.900000000000002	angström
 ATERMOIEMENTS	atermoiements	25.9	atermoiement
 RIPA	ripa	25.9	riper
@@ -148468,7 +148465,7 @@ NIMOISE	nîmoise	24.7	nîmois
 PONTIFIENT	pontifient	24.7	pontifier
 ENRAGEANTE	enrageante	24.7	enrageant
 GAZAOUIES	gazaouies	24.7	gazaoui
-MANŒUVRABLES	manœuvrables	24.7	manœuvrable
+MANOEUVRABLES	manœuvrables	24.7	manœuvrable
 DECROISEZ	décroisez	24.7	décroiser
 PROTRUSIONS	protrusions	24.7	protrusion
 PLURIETHNIQUES	pluriethniques	24.7	pluriethnique
@@ -149141,7 +149138,7 @@ TCHATTENT	tchattent	23.900000000000002	tchatter
 DREYFUSARDE	dreyfusarde	23.900000000000002	dreyfusard
 LUTINAIENT	lutinaient	23.900000000000002	lutiner
 DEGOISEZ	dégoisez	23.900000000000002	dégoiser
-ŒDIPIENS	œdipiens	23.900000000000002	œdipien
+OEDIPIENS	œdipiens	23.900000000000002	œdipien
 TOUCHEURS	toucheurs	23.900000000000002	toucheur
 MACHONNENT	mâchonnent	23.900000000000002	mâchonner
 LIQUIDATIVE	liquidative	23.9	liquidatif
@@ -149174,7 +149171,7 @@ GRIPPENT	grippent	23.8	gripper
 MONOVALENTE	monovalente	23.8	monovalent
 TCHATTANT	tchattant	23.8	tchatter
 ANAPLASIQUES	anaplasiques	23.8	anaplasique
-ŒDIPIENNES	œdipiennes	23.8	œdipien
+OEDIPIENNES	œdipiennes	23.8	œdipien
 SARTHOISE	sarthoise	23.8	sarthois
 SARTHOISES	sarthoises	23.8	sarthois
 TELETRAVAILLEZ	télétravaillez	23.8	télétravailler
@@ -151778,7 +151775,7 @@ NEFLES	nèfles	20.599999999999998	nèfle
 RECOURBE	recourbé	20.599999999999998	recourber
 GRIME	grimé	20.599999999999998	grimer
 MARRANES	marranes	20.599999999999998	marrane
-ŒILLERES	œillères	20.599999999999994	œillère
+OEILLERES	œillères	20.599999999999994	œillère
 CONGESTIVE	congestive	20.599999999999994	congestif
 TELEGUIDE	téléguidé	20.599999999999994	téléguider
 MESSALINE	Messaline	20.5	Messaline
@@ -154939,7 +154936,7 @@ JAINS	jaïns	17.2	jaïn
 RENUMEROTES	renumérotés	17.2	renuméroter
 NUCLEOTIDIQUES	nucléotidiques	17.2	nucléotidique
 ERUCTA	éructa	17.2	éructer
-ŒILLADES	œillades	17.2	œillade
+OEILLADES	œillades	17.2	œillade
 REGRIMPE	regrimpe	17.2	regrimper
 VIBRATIONNELS	vibrationnels	17.2	vibrationnel
 ZEOLITHES	zéolithes	17.2	zéolithe
@@ -155100,7 +155097,7 @@ PANARABISME	panarabisme	17.0	panarabisme
 CONDUCTIBLE	conductible	17.0	conductible
 GYMNIQUE	gymnique	17.0	gymnique
 ELUCUBRATION	élucubration	17.0	élucubration
-MULTICŒUR	multicœur	17.0	multicœur
+MULTICOEUR	multicœur	17.0	multicœur
 LOUVANISTE	louvaniste	17.0	louvaniste
 CIVE	cive	17.0	cive
 BRAYER	brayer	17.0	brayer
@@ -155722,7 +155719,7 @@ PARATHYROIDES	parathyroïdes	16.4	parathyroïde
 ERUCTANT	éructant	16.4	éructer
 MARATHES	marathes	16.4	marathe
 SOUQUE	souque	16.4	souquer
-MULTICŒURS	multicœurs	16.4	multicœur
+MULTICOEURS	multicœurs	16.4	multicœur
 DEFINITOIRES	définitoires	16.4	définitoire
 ACOUSTICIENS	acousticiens	16.4	acousticien
 DEPASSIONNE	dépassionné	16.4	dépassionner
@@ -156382,7 +156379,7 @@ CUVAISON	cuvaison	16.0	cuvaison
 HISTORISATION	historisation	16.0	historisation
 CARDIOTONIQUES	cardiotoniques	16.0	cardiotonique
 LIGASE	ligase	16.0	ligase
-ŒILLADE	œillade	16.0	œillade
+OEILLADE	œillade	16.0	œillade
 INTERLINGUA	interlingua	16.0	interlingua
 SHIITAKE	shiitaké	16.0	shiitaké
 EPIPHYSAIRE	épiphysaire	16.0	épiphysaire
@@ -156724,7 +156721,7 @@ HEMATIES	hématies	15.599999999999998	hématie
 UHLANS	uhlans	15.599999999999998	uhlan
 AUTOTROPHES	autotrophes	15.599999999999998	autotrophe
 ADJURERAI	adjurerai	15.599999999999998	adjurer
-LÆTITIA	Lætitia	15.5	Lætitia
+LAETITIA	Lætitia	15.5	Lætitia
 BERENGERE	Bérengère	15.5	Bérengère
 FERENCZI	Ferenczi	15.5	Ferenczi
 SEMIRAMIS	Sémiramis	15.5	Sémiramis
@@ -157223,7 +157220,7 @@ JUDAICITE	judaïcité	15.0	judaïcité
 PIPIT	pipit	15.0	pipit
 MONTPELLIERAIN	montpelliérain	15.0	montpelliérain
 FIBROBLASTE	fibroblaste	15.0	fibroblaste
-QUADRICŒUR	quadricœur	15.0	quadricœur
+QUADRICOEUR	quadricœur	15.0	quadricœur
 AITRE	aître	15.0	aître
 CONGLOMERATION	conglomération	15.0	conglomération
 ESCOT	escot	15.0	escot
@@ -157277,7 +157274,7 @@ EVINCEMENT	évincement	15.0	évincement
 CANONISTE	canoniste	15.0	canoniste
 PEPTIDASE	peptidase	15.0	peptidase
 PLURICELLULAIRE	pluricellulaire	15.0	pluricellulaire
-ŒSTRADIOL	œstradiol	15.0	œstradiol
+OESTRADIOL	œstradiol	15.0	œstradiol
 INTERPHONIE	interphonie	15.0	interphonie
 SULFATATION	sulfatation	15.0	sulfatation
 ENROULABLE	enroulable	15.0	enroulable
@@ -157350,7 +157347,7 @@ SOCIOPROFESSIONNEL	socioprofessionnel	15.0	socioprofessionnel
 PHOTOGENIE	photogénie	15.0	photogénie
 GRENADAGE	grenadage	15.0	grenadage
 INOBSERVANCE	inobservance	15.0	inobservance
-ŒSOPHAGECTOMIE	œsophagectomie	15.0	œsophagectomie
+OESOPHAGECTOMIE	œsophagectomie	15.0	œsophagectomie
 PASIONARIA	pasionaria	15.0	pasionaria
 SYRINGOMYELIE	syringomyélie	15.0	syringomyélie
 FRANGEANT	frangeant	15.0	frangeant;franger
@@ -158342,7 +158339,7 @@ ALCORAN	alcoran	14.0	alcoran
 NEVRODERMITE	névrodermite	14.0	névrodermite
 POUJADISTE	poujadiste	14.0	poujadiste
 ABRACADABRANT	abracadabrant	14.0	abracadabrant
-SUPERNOVÆ	supernovæ	14.0	supernovæ
+SUPERNOVAE	supernovæ	14.0	supernovæ
 VERTICALISATION	verticalisation	14.0	verticalisation
 PALATIAL	palatial	14.0	palatial
 TETRADE	tétrade	14.0	tétrade
@@ -158792,7 +158789,7 @@ CATAFALQUES	catafalques	13.9	catafalque
 BRAIMENTS	braiments	13.9	braiment
 REINFECTEES	réinfectées	13.9	réinfecter
 AUTOTRANSFUSIONS	autotransfusions	13.9	autotransfusion
-QUADRICŒURS	quadricœurs	13.9	quadricœur
+QUADRICOEURS	quadricœurs	13.9	quadricœur
 REGATONS	régatons	13.9	régater
 SYNTHETASES	synthétases	13.9	synthétase
 RECOURBANT	recourbant	13.9	recourber
@@ -159907,8 +159904,8 @@ COMPACTIFICATION	compactification	13.0	compactification
 DEPREDATEURS	déprédateurs	13.0	déprédateur
 KAOLINITE	kaolinite	13.0	kaolinite
 ACTUATION	actuation	13.0	actuation
-ŒDEMATEUX	œdémateux	13.0	œdémateux
-CŒLIOSCOPIE	cœlioscopie	13.0	cœlioscopie
+OEDEMATEUX	œdémateux	13.0	œdémateux
+COELIOSCOPIE	cœlioscopie	13.0	cœlioscopie
 TERPINEOL	terpinéol	13.0	terpinéol
 DEBLOCABLE	déblocable	13.0	déblocable
 REABSORBER	réabsorber	13.0	réabsorber
@@ -159950,7 +159947,7 @@ BEYLICAL	beylical	13.0	beylical
 FUMEROLLE	fumerolle	13.0	fumerolle
 REITRE	reître	13.0	reître
 SUBURBICAIRE	suburbicaire	13.0	suburbicaire
-ÆTERNAM	æternam	13.0	æternam
+AETERNAM	æternam	13.0	æternam
 HYPOPLASIQUE	hypoplasique	13.0	hypoplasique
 COPARTICIPANT	coparticipant	13.0	coparticipant
 GOURAMI	gourami	13.0	gourami
@@ -160224,7 +160221,7 @@ EMISSIVE	émissive	12.700000000000001	émissif
 ASCLEPIADES	asclépiades	12.700000000000001	asclépiade
 NOETIQUES	noétiques	12.700000000000001	noétique
 TECHNOSCIENCES	technosciences	12.700000000000001	technoscience
-ŒDEMATEUSE	œdémateuse	12.700000000000001	œdémateux
+OEDEMATEUSE	œdémateuse	12.700000000000001	œdémateux
 ARTHROPATHIES	arthropathies	12.700000000000001	arthropathie
 CAGUE	cagué	12.700000000000001	caguer
 CLAQUETTE	claquette	12.7	claquet;claqueter
@@ -160615,7 +160612,7 @@ TETRODES	tétrodes	12.200000000000001	tétrode
 RECOLORES	recolorés	12.200000000000001	recolorer
 OPSINES	opsines	12.200000000000001	opsine
 JAPONISANTS	japonisants	12.200000000000001	japonisant
-ŒDEMATEUSES	œdémateuses	12.200000000000001	œdémateux
+OEDEMATEUSES	œdémateuses	12.200000000000001	œdémateux
 TARSIENNES	tarsiennes	12.200000000000001	tarsien
 CISELEURS	ciseleurs	12.200000000000001	ciseleur
 DIFFEOMORPHISMES	difféomorphismes	12.200000000000001	difféomorphisme
@@ -161855,7 +161852,7 @@ FLAGEOLANT	flageolant	11.5	flageolant;flageoler
 CANONNEZ	canonnez	11.5	canonner
 STRIE	strié	11.499999999999998	strier
 IMITATIVE	imitative	11.4	imitatif
-ŒSTROGENIQUES	œstrogéniques	11.4	œstrogénique
+OESTROGENIQUES	œstrogéniques	11.4	œstrogénique
 FESTONNE	festonné	11.4	festonner
 VOISINENT	voisinent	11.4	voisiner
 VESCES	vesces	11.4	vesce
@@ -162480,7 +162477,7 @@ DETERSIF	détersif	11.0	détersif
 TREUILLAGE	treuillage	11.0	treuillage
 SURPRODUIRE	surproduire	11.0	surproduire
 SABRAGE	sabrage	11.0	sabrage
-ŒSTROGENIQUE	œstrogénique	11.0	œstrogénique
+OESTROGENIQUE	œstrogénique	11.0	œstrogénique
 USITATISSIMUM	usitatissimum	11.0	usitatissimum
 GRIFFONNEUR	griffonneur	11.0	griffonneur
 ENRAYEMENT	enrayement	11.0	enrayement
@@ -163443,7 +163440,7 @@ SUBSIDIEE	subsidiée	10.399999999999999	subsidier
 RENFROGNES	renfrognés	10.399999999999999	renfrogner
 BARTAVELLES	bartavelles	10.3	bartavelle
 INABOUTIE	inaboutie	10.3	inabouti
-STŒCHIOMETRIQUES	stœchiométriques	10.3	stœchiométrique
+STOECHIOMETRIQUES	stœchiométriques	10.3	stœchiométrique
 DESYNCHRONISES	désynchronisés	10.3	désynchroniser
 THURIFERAIRES	thuriféraires	10.3	thuriféraire
 WASHINGTONIENS	washingtoniens	10.3	washingtonien
@@ -163857,7 +163854,7 @@ PRONATEUR	pronateur	10.0	pronateur
 SUPINATEUR	supinateur	10.0	supinateur
 IRRIGATEUR	irrigateur	10.0	irrigateur
 BICORPS	bicorps	10.0	bicorps
-STŒCHIOMETRIQUE	stœchiométrique	10.0	stœchiométrique
+STOECHIOMETRIQUE	stœchiométrique	10.0	stœchiométrique
 MULTIPARE	multipare	10.0	multipare
 DEMANTIBULER	démantibuler	10.0	démantibuler
 CIMENTAIRES	cimentaires	10.0	cimentaire
@@ -164161,7 +164158,7 @@ INVISIBILISATION	invisibilisation	10.0	invisibilisation
 TELENCEPHALE	télencéphale	10.0	télencéphale
 PHOTORAJEUNISSEMENT	photorajeunissement	10.0	photorajeunissement
 PUNKETTE	punkette	10.0	punkette
-NÆVUS	nævus	10.0	nævus
+NAEVUS	nævus	10.0	nævus
 CONCEPTUALISME	conceptualisme	10.0	conceptualisme
 LISTEL	listel	10.0	listel
 AUTOCOMPLETION	autocomplétion	10.0	autocomplétion
@@ -164302,7 +164299,7 @@ LENTIGOS	lentigos	10.0	lentigo
 SEXER	sexer	10.0	sexer
 EPAISSISSEUR	épaississeur	10.0	épaississeur
 RABOUGRIR	rabougrir	10.0	rabougrir
-STŒCHIOMETRIE	stœchiométrie	10.0	stœchiométrie
+STOECHIOMETRIE	stœchiométrie	10.0	stœchiométrie
 CYTOLYSE	cytolyse	10.0	cytolyse
 IMPACTION	impaction	10.0	impaction
 ISOTYPE	isotype	10.0	isotype
@@ -166344,7 +166341,7 @@ PHONATOIRE	phonatoire	9.0	phonatoire
 COLLINAIRE	collinaire	9.0	collinaire
 DEPHASEUR	déphaseur	9.0	déphaseur
 ANTEBRACHIALE	antébrachiale	9.0	antébrachial
-ŒSTROPROGESTATIVE	œstroprogestative	9.0	œstroprogestatif
+OESTROPROGESTATIVE	œstroprogestative	9.0	œstroprogestatif
 PSYCHOLOGISATION	psychologisation	9.0	psychologisation
 DETERMINATIVE	déterminative	9.0	déterminatif
 MEGALITHISME	mégalithisme	9.0	mégalithisme
@@ -166574,7 +166571,6 @@ SCUDERY	Scudéry	8.75	Scudéry
 WAREMME	Waremme	8.75	Waremme
 LESIEUR	Lesieur	8.75	Lesieur
 AHRIMAN	Ahriman	8.75	Ahriman
-PHŒBE	Phœbé	8.75	Phœbé
 SILVERE	Silvère	8.75	Silvère
 CHAUNY	Chauny	8.75	Chauny
 NAGPUR	Nagpur	8.75	Nagpur
@@ -170190,7 +170186,7 @@ ASEXUELLEMENT	asexuellement	7.0	asexuellement
 AGAME	agame	7.0	agame
 CARIER	carier	7.0	carier
 NUCLEA	nucléa	7.0	nucléer
-NOVÆ	novæ	7.0	novæ
+NOVAE	novæ	7.0	novæ
 PREHOSPITALIER	préhospitalier	7.0	préhospitalier
 DESALIGNES	désalignés	7.0	désaligner
 PLACOTE	placote	7.0	placoter
@@ -171526,7 +171522,7 @@ ARABISEE	arabisée	6.1000000000000005	arabiser
 PREIMPRIMEE	préimprimée	6.1000000000000005	préimprimé
 TRADUCTIONNELLE	traductionnelle	6.1000000000000005	traductionnel
 ABRASEE	abrasée	6.1000000000000005	abraser
-MANŒUVRIERES	manœuvrières	6.1000000000000005	manœuvrier
+MANOEUVRIERES	manœuvrières	6.1000000000000005	manœuvrier
 ATTIFENT	attifent	6.1000000000000005	attifer
 BOTOXEES	botoxées	6.1000000000000005	botoxé
 PETREUSE	pétreuse	6.1000000000000005	pétreux
@@ -171652,7 +171648,7 @@ EGAILLER	égailler	6.0	égailler
 TAXIARQUE	taxiarque	6.0	taxiarque
 CHATOIENT	chatoient	6.0	chatoyer
 CAILLOUTAGE	cailloutage	6.0	cailloutage
-BICŒUR	bicœur	6.0	bicœur
+BICOEUR	bicœur	6.0	bicœur
 EXEMPLIFIE	exemplifié	6.0	exemplifier
 HYPERNERVEUX	hypernerveux	6.0	hypernerveux
 INESPERABLE	inespérable	6.0	inespérable
@@ -171689,7 +171685,7 @@ EXPROPRIATEURS	expropriateurs	6.0	expropriateur
 SUGGESTIONNER	suggestionner	6.0	suggestionner
 TARTUFFERIE	tartufferie	6.0	tartufferie
 MURETTE	murette	6.0	murette
-MANŒUVRIER	manœuvrier	6.0	manœuvrier
+MANOEUVRIER	manœuvrier	6.0	manœuvrier
 INFECOND	infécond	6.0	infécond
 NOSTALGIQUEMENT	nostalgiquement	6.0	nostalgiquement
 EQUIPROBABLE	équiprobable	6.0	équiprobable
@@ -172455,7 +172451,7 @@ AGNATIQUE	agnatique	6.0	agnatique
 MARITORNES	maritornes	6.0	maritorne
 COVIN	covin	6.0	covin
 INFERENTIEL	inférentiel	6.0	inférentiel
-ŒSTRAL	œstral	6.0	œstral
+OESTRAL	œstral	6.0	œstral
 IMAGISTE	imagiste	6.0	imagiste
 CELLULITIQUE	cellulitique	6.0	cellulitique
 ANTIQUAILLE	antiquaille	6.0	antiquaille
@@ -172541,7 +172537,7 @@ INSOIGNABLE	insoignable	6.0	insoignable
 PEDICULOSE	pédiculose	6.0	pédiculose
 ARTIFICATION	artification	6.0	artification
 DESQUAMER	desquamer	6.0	desquamer
-ŒSTROPROGESTATIFS	œstroprogestatifs	6.0	œstroprogestatif
+OESTROPROGESTATIFS	œstroprogestatifs	6.0	œstroprogestatif
 POLYRADICULONEVRITE	polyradiculonévrite	6.0	polyradiculonévrite
 ARISTOLOCHE	aristoloche	6.0	aristoloche
 AGERATUM	ageratum	6.0	ageratum
@@ -172674,7 +172670,7 @@ STRIGES	striges	6.0	strige
 MUSIQUER	musiquer	6.0	musiquer
 ASCITIQUE	ascitique	6.0	ascitique
 RAPERIE	râperie	6.0	râperie
-TÆNIA	tænia	6.0	tænia
+TAENIA	tænia	6.0	tænia
 CERASTE	céraste	6.0	céraste
 VARIOLISATION	variolisation	6.0	variolisation
 PHENAKISTISCOPE	phénakistiscope	6.0	phénakistiscope
@@ -173302,7 +173298,7 @@ LOVECRAFTIENNES	lovecraftiennes	5.6000000000000005	lovecraftien
 BLESOISE	blésoise	5.6000000000000005	blésois
 TRANSCASPIENNE	transcaspienne	5.6000000000000005	transcaspien
 EBRASEMENTS	ébrasements	5.6000000000000005	ébrasement
-TÆNIAS	tænias	5.6000000000000005	tænia
+TAENIAS	tænias	5.6000000000000005	tænia
 MODELABLES	modelables	5.6000000000000005	modelable
 ORLES	orles	5.6000000000000005	orle
 PAGAYEUSES	pagayeuses	5.6000000000000005	pagayeur
@@ -173410,7 +173406,7 @@ KONTICH	Kontich	5.5	Kontich
 RIESZ	Riesz	5.5	Riesz
 HENNEBONT	Hennebont	5.5	Hennebont
 MONTIVILLIERS	Montivilliers	5.5	Montivilliers
-BELŒIL	Belœil	5.5	Belœil
+BELOEIL	Belœil	5.5	Belœil
 GROUPALE	groupale	5.5	groupal
 XYLOPHAGES	xylophages	5.5	xylophage
 MULTIDEVISES	multidevises	5.5	multidevise
@@ -173633,7 +173629,7 @@ GRAPHEUSE	grapheuse	5.5	grapheur
 DECOMPACTEE	décompactée	5.5	décompacter
 KALMOUKES	kalmoukes	5.5	kalmouk
 LAMANAGES	lamanages	5.5	lamanage
-ŒSTRAUX	œstraux	5.5	œstral
+OESTRAUX	œstraux	5.5	œstral
 CONTINGENTA	contingenta	5.5	contingenter
 THALLES	thalles	5.5	thalle
 PREENCOLLES	préencollés	5.5	préencollé
@@ -173685,7 +173681,7 @@ GONDAS	gondas	5.5	gonder
 REMESUREZ	remesurez	5.5	remesurer
 EUTHANASISTES	euthanasistes	5.5	euthanasiste
 REVOMISSE	revomisse	5.5	revomir
-MANŒUVRIERS	manœuvriers	5.5	manœuvrier
+MANOEUVRIERS	manœuvriers	5.5	manœuvrier
 EGAILLEE	égaillée	5.5	égailler
 APOTROPAIQUES	apotropaïques	5.5	apotropaïque
 ENCADRURES	encadrures	5.5	encadrure
@@ -173733,7 +173729,7 @@ CIBORIUMS	ciboriums	5.5	ciborium
 REDECOUPERENT	redécoupèrent	5.5	redécouper
 SAONOISE	saônoise	5.5	saônois
 BRISQUES	brisques	5.5	brisque
-MANŒUVRIERE	manœuvrière	5.5	manœuvrier
+MANOEUVRIERE	manœuvrière	5.5	manœuvrier
 DICHROISMES	dichroïsmes	5.5	dichroïsme
 DEGLACIATIONS	déglaciations	5.5	déglaciation
 SUSTENTATEURS	sustentateurs	5.5	sustentateur
@@ -174239,7 +174235,7 @@ TRANSLATIONNEL	translationnel	5.0	translationnel
 GLYCOLYTIQUE	glycolytique	5.0	glycolytique
 QUILLEUR	quilleur	5.0	quilleur
 HASSIUM	hassium	5.0	hassium
-ŒSTROGENOTHERAPIE	œstrogénothérapie	5.0	œstrogénothérapie
+OESTROGENOTHERAPIE	œstrogénothérapie	5.0	œstrogénothérapie
 PROCALCITONINE	procalcitonine	5.0	procalcitonine
 VERNALISATION	vernalisation	5.0	vernalisation
 SENSATIONNELLEMENT	sensationnellement	5.0	sensationnellement
@@ -174335,7 +174331,7 @@ ICAUNAIS	icaunais	5.0	icaunais
 MELANOCYTE	mélanocyte	5.0	mélanocyte
 REFECTIONNER	réfectionner	5.0	réfectionner
 TRADUCTIBLE	traductible	5.0	traductible
-PERSONÆ	personæ	5.0	personæ
+PERSONAE	personæ	5.0	personæ
 DEMAZOUTER	démazouter	5.0	démazouter
 AMPHETAMINIQUE	amphétaminique	5.0	amphétaminique
 KITESURFEUR	kitesurfeur	5.0	kitesurfeur
@@ -175557,7 +175553,7 @@ TISSERIN	tisserin	5.0	tisserin
 SEULET	seulet	5.0	seulet
 INSALISSABLE	insalissable	5.0	insalissable
 KERABAU	kérabau	5.0	kérabau
-ŒSTRE	œstre	5.0	œstre
+OESTRE	œstre	5.0	œstre
 PADISCHAH	padischah	5.0	padischah
 THERAPSIDES	thérapsides	5.0	thérapside
 HYPERSUSTENTATEUR	hypersustentateur	5.0	hypersustentateur
@@ -176047,7 +176043,7 @@ EMPREIGNEZ	empreignez	4.7	empreindre
 HABSBOURGEOISES	habsbourgeoises	4.7	habsbourgeois
 FLUTENT	flûtent	4.7	flûter
 DEMAZOUTE	démazouté	4.7	démazouter
-ŒSTRES	œstres	4.7	œstre
+OESTRES	œstres	4.7	œstre
 TEUFEUSE	teufeuse	4.7	teufeur
 QUEBRACHOS	quebrachos	4.7	quebracho
 CHEVILLENT	chevillent	4.7	cheviller
@@ -177037,7 +177033,7 @@ CHUINTANT	chuintant	4.0	chuintant;chuinter
 MAFFLU	mafflu	4.0	mafflu
 SAMPANG	sampang	4.0	sampang
 IRREPETIBLE	irrépétible	4.0	irrépétible
-ŒCONOMICUS	œconomicus	4.0	œconomicus
+OECONOMICUS	œconomicus	4.0	œconomicus
 CHABLE	chable	4.0	chabler
 CAIDAT	caïdat	4.0	caïdat
 IRATO	irato	4.0	irato
@@ -177469,7 +177465,7 @@ DEIFORMES	déiformes	4.0	déiforme
 PANGRAMME	pangramme	4.0	pangramme
 REPARAMETRAGE	reparamétrage	4.0	reparamétrage
 DENEIGEUR	déneigeur	4.0	déneigeur
-ŒNOPHILE	œnophile	4.0	œnophile
+OENOPHILE	œnophile	4.0	œnophile
 OUTREPASSEMENT	outrepassement	4.0	outrepassement
 SUREMPLOI	suremploi	4.0	suremploi
 DENATURALISATION	dénaturalisation	4.0	dénaturalisation
@@ -178586,7 +178582,7 @@ REENREGISTRABLE	réenregistrable	4.0	réenregistrable
 FAISANDAGES	faisandages	4.0	faisandage
 SPHENODON	sphénodon	4.0	sphénodon
 FLEXURE	flexure	4.0	flexure
-PREŒDIPIENNE	préœdipienne	4.0	préœdipien
+PREOEDIPIENNE	préœdipienne	4.0	préœdipien
 COMPULSOIRE	compulsoire	4.0	compulsoire
 XENARTHRES	xénarthres	4.0	xénarthre
 AUTOMORPHE	automorphe	4.0	automorphe
@@ -179633,7 +179629,7 @@ VOLTONS	voltons	3.7	volter
 ZOZOTEURS	zozoteurs	3.7	zozoteur
 ERAILLERAIT	éraillerait	3.7	érailler
 EMBROCATIONS	embrocations	3.7	embrocation
-ŒNOPHILES	œnophiles	3.7	œnophile
+OENOPHILES	œnophiles	3.7	œnophile
 TICTAQUERA	tictaquera	3.7	tictaquer
 REFACTURIEZ	refacturiez	3.7	refacturer
 ATTACHEURS	attacheurs	3.7	attacheur
@@ -179949,7 +179945,7 @@ BAUDELAIRIENNE	baudelairienne	3.3	baudelairien
 RADIOGONIOMETRIQUES	radiogoniométriques	3.3	radiogoniométrique
 REVOULAIS	revoulais	3.3	revouloir
 FETICHISE	fétichise	3.3	fétichiser
-CÆCALE	cæcale	3.3	cæcal
+CAECALE	cæcale	3.3	cæcal
 DEGREVAIT	dégrevait	3.3	dégrever
 CHOLESTERIQUES	cholestériques	3.3	cholestérique
 DETALLE	détallé	3.3	détaller
@@ -179985,7 +179981,7 @@ ISSOLE	Issole	3.25	Issole
 FRENET	Frenet	3.25	Frenet
 INSULINDE	Insulinde	3.25	Insulinde
 CONSUEL	Consuel	3.25	Consuel
-VANDŒUVRE	Vandœuvre	3.25	Vandœuvre
+VANDOEUVRE	Vandœuvre	3.25	Vandœuvre
 KITWE	Kitwe	3.25	Kitwe
 YUTZ	Yutz	3.25	Yutz
 CALMIT	calmit	3.2	calmir
@@ -180680,7 +180676,7 @@ DESOCCIDENTALISATION	désoccidentalisation	3.0	désoccidentalisation
 BIBLIOMANIE	bibliomanie	3.0	bibliomanie
 BIOLOGISATION	biologisation	3.0	biologisation
 IONISABLE	ionisable	3.0	ionisable
-ŒRSTED	œrsted	3.0	œrsted
+OERSTED	œrsted	3.0	œrsted
 TRIBOELECTRIQUE	triboélectrique	3.0	triboélectrique
 CHIROLOGIE	chirologie	3.0	chirologie
 ADDICTOGENE	addictogène	3.0	addictogène
@@ -181452,7 +181448,7 @@ EPOINTER	épointer	3.0	épointer
 HELMINTHOSPORIOSE	helminthosporiose	3.0	helminthosporiose
 HELIOSISMOLOGIE	héliosismologie	3.0	héliosismologie
 BRIGANDINE	brigandine	3.0	brigandine
-ŒILLERE	œillère	3.0	œillère
+OEILLERE	œillère	3.0	œillère
 ZERVANT	zervant	3.0	zerver
 SCELLEUR	scelleur	3.0	scelleur
 SYNAPOMORPHIE	synapomorphie	3.0	synapomorphie
@@ -181520,7 +181516,7 @@ ADATOME	adatome	3.0	adatome
 IMMIGRATIONNISME	immigrationnisme	3.0	immigrationnisme
 CARBOXAMIDE	carboxamide	3.0	carboxamide
 TRANSSUBSTANTIEES	transsubstantiées	3.0	transsubstantier
-CÆCAL	cæcal	3.0	cæcal
+CAECAL	cæcal	3.0	cæcal
 MOULUREE	moulurée	3.0	moulurer
 LITHOPONE	lithopone	3.0	lithopone
 PENTANOL	pentanol	3.0	pentanol
@@ -181577,7 +181573,7 @@ CHAMPLAT	champlat	3.0	champlat
 SURENCHERISSEMENT	surenchérissement	3.0	surenchérissement
 DIBROME	dibrome	3.0	dibrome
 SIMILOR	similor	3.0	similor
-ŒNOTHEQUE	œnothèque	3.0	œnothèque
+OENOTHEQUE	œnothèque	3.0	œnothèque
 BARBASTELLE	barbastelle	3.0	barbastelle
 BERBERIS	berbéris	3.0	berbéris
 MODIQUEMENT	modiquement	3.0	modiquement
@@ -181742,7 +181738,7 @@ CROUPON	croupon	3.0	croupon
 VESPERTILION	vespertilion	3.0	vespertilion
 EPICANTHUS	épicanthus	3.0	épicanthus
 TADORNE	tadorne	3.0	tadorne
-PŒCILE	pœcile	3.0	pœcile
+POECILE	pœcile	3.0	pœcile
 CISSOIDALE	cissoïdale	3.0	cissoïdal
 LOQUETEAU	loqueteau	3.0	loqueteau
 PARAPHEUR	parapheur	3.0	parapheur
@@ -182412,7 +182408,7 @@ AMBULATEUR	ambulateur	3.0	ambulateur
 VIRELAIS	virelais	3.0	virelai
 TRIPHTONGUES	triphtongues	3.0	triphtongue
 DYSKINETIQUES	dyskinétiques	3.0	dyskinétique
-MYXŒDEME	myxœdème	3.0	myxœdème
+MYXOEDEME	myxœdème	3.0	myxœdème
 DEFANAGE	défanage	3.0	défanage
 ETIOLEMENT	étiolement	3.0	étiolement
 QUADRIPHONIE	quadriphonie	3.0	quadriphonie
@@ -184803,7 +184799,7 @@ SURMOBILISATION	surmobilisation	2.0	surmobilisation
 MEGACONSTELLATIONS	mégaconstellations	2.0	mégaconstellation
 NOMBRABLE	nombrable	2.0	nombrable
 PLOYABLE	ployable	2.0	ployable
-ŒCUMENICITE	œcuménicité	2.0	œcuménicité
+OECUMENICITE	œcuménicité	2.0	œcuménicité
 MUNTJACS	muntjacs	2.0	muntjac
 COSMOCHIMIE	cosmochimie	2.0	cosmochimie
 HYGROREGLABLE	hygroréglable	2.0	hygroréglable
@@ -184979,7 +184975,7 @@ TULLISTE	tulliste	2.0	tulliste
 SYSTEMICIENS	systémiciens	2.0	systémicien
 IMPEDIMENTUM	impedimentum	2.0	impedimentum
 AFFIQUETS	affiquets	2.0	affiquet
-FŒTICIDE	fœticide	2.0	fœticide
+FOETICIDE	fœticide	2.0	fœticide
 CYBERPIRATE	cyberpirate	2.0	cyberpirate
 CHICOTER	chicoter	2.0	chicoter
 SURCOTER	surcoter	2.0	surcoter
@@ -185286,7 +185282,7 @@ FLAGELLUM	flagellum	2.0	flagellum
 QUETZALES	quetzales	2.0	quetzales
 DEPELLICULAGE	dépelliculage	2.0	dépelliculage
 ICONOTHEQUE	iconothèque	2.0	iconothèque
-ŒNANTHE	œnanthe	2.0	œnanthe
+OENANTHE	œnanthe	2.0	œnanthe
 ILOTE	ilote	2.0	ilote
 PUISETTE	puisette	2.0	puisette
 HENOTHEISME	hénothéisme	2.0	hénothéisme
@@ -185449,7 +185445,7 @@ KLEPHTE	klephte	2.0	klephte
 RADIONECROSE	radionécrose	2.0	radionécrose
 EMOTIONNES	émotionnés	2.0	émotionner
 DACRYOCYSTITE	dacryocystite	2.0	dacryocystite
-MELÆNA	mélæna	2.0	mélæna
+MELAENA	mélæna	2.0	mélæna
 HUMIFERES	humifères	2.0	humifère
 EMBLAVURE	emblavure	2.0	emblavure
 PAPAVERACEES	papavéracées	2.0	papavéracée
@@ -186057,7 +186053,7 @@ NOBO	nobo	2.0	nobo
 COLOMBIDES	colombidés	2.0	colombidé
 SUPPURATIVES	suppuratives	2.0	suppuratif
 ROTAMETRES	rotamètres	2.0	rotamètre
-CŒLIOSCOPIQUE	cœlioscopique	2.0	cœlioscopique
+COELIOSCOPIQUE	cœlioscopique	2.0	cœlioscopique
 COLLATERALEMENT	collatéralement	2.0	collatéralement
 ANASTOMOSEES	anastomosées	2.0	anastomoser
 EPAUFRURES	épaufrures	2.0	épaufrure
@@ -187096,7 +187092,7 @@ INDISPENSABLEMENT	indispensablement	2.0	indispensablement
 ALLATE	allate	2.0	allate
 PLATEBANDE	platebande	2.0	platebande
 ASPHALTENE	asphaltène	2.0	asphaltène
-CŒLOME	cœlome	2.0	cœlome
+COELOME	cœlome	2.0	cœlome
 CONDYLOME	condylome	2.0	condylome
 LESIONNAIRE	lésionnaire	2.0	lésionnaire
 EXCREMENTIELS	excrémentiels	2.0	excrémentiel
@@ -187735,7 +187731,7 @@ CANULER	canuler	2.0	canuler
 SURLIES	surlies	2.0	surlier
 NUMBATS	numbats	2.0	numbat
 DRAGONNEE	dragonnée	2.0	dragonner
-ŒSOPHAGIQUE	œsophagique	2.0	œsophagique
+OESOPHAGIQUE	œsophagique	2.0	œsophagique
 PROTOPLASMA	protoplasma	2.0	protoplasma
 HYGROSCOPE	hygroscope	2.0	hygroscope
 PULSATIF	pulsatif	2.0	pulsatif
@@ -187829,7 +187825,7 @@ CUEILLOIR	cueilloir	2.0	cueilloir
 PAPABLE	papable	2.0	papable
 KITUBA	kituba	2.0	kituba
 ACIDULA	acidula	2.0	aciduler
-ÆSCHNE	æschne	2.0	æschne
+AESCHNE	æschne	2.0	æschne
 DIACRITEE	diacritée	2.0	diacrité
 CLITIQUES	clitiques	2.0	clitique
 MALTER	malter	2.0	malter
@@ -187846,7 +187842,7 @@ NEOTYPE	néotype	2.0	néotype
 UNIRAMEES	uniramées	2.0	uniramé
 BAROTROPES	barotropes	2.0	barotrope
 COTONEASTER	cotonéaster	2.0	cotonéaster
-POMŒRIUM	pomœrium	2.0	pomœrium
+POMOERIUM	pomœrium	2.0	pomœrium
 OGHAMIQUE	oghamique	2.0	oghamique
 POLYMOLECULARITE	polymolécularité	2.0	polymolécularité
 SOLFIA	solfia	2.0	solfier
@@ -188019,7 +188015,7 @@ MATERNISEZ	maternisez	1.9	materniser
 TRIPATOUILLEURS	tripatouilleurs	1.9	tripatouilleur
 DEPRECATIONS	déprécations	1.9	déprécation
 FLUANT	fluant	1.9	fluer
-FŒTICIDES	fœticides	1.9	fœticide
+FOETICIDES	fœticides	1.9	fœticide
 CHRISTIANOPHOBES	christianophobes	1.9	christianophobe
 AHANEZ	ahanez	1.9	ahaner
 CIRCUITERIES	circuiteries	1.9	circuiterie
@@ -188060,7 +188056,7 @@ DECHANTS	déchants	1.9	déchant
 STRIA	stria	1.9	strier
 UNISEXUES	unisexués	1.9	unisexué
 CANONIAUX	canoniaux	1.9	canonial
-ŒSOPHAGIQUES	œsophagiques	1.9	œsophagique
+OESOPHAGIQUES	œsophagiques	1.9	œsophagique
 REBOBINE	rebobiné	1.9	rebobiner
 CHOREGES	chorèges	1.9	chorège
 FRETTEE	frettée	1.9	fretter
@@ -190063,7 +190059,7 @@ BRIGANDERIES	briganderies	1.0	briganderie
 AVOCASSERIE	avocasserie	1.0	avocasserie
 EMBRUNIR	embrunir	1.0	embrunir
 TREILLISSES	treillissés	1.0	treillisser
-ÆGIPANS	ægipans	1.0	ægipan
+AEGIPANS	ægipans	1.0	ægipan
 DELISSES	délissés	1.0	délisser
 DESEXCITEES	désexcitées	1.0	désexciter
 CAPUCHONNE	capuchonné	1.0	capuchonner
@@ -190531,7 +190527,7 @@ REENDETTEMENT	réendettement	1.0	réendettement
 OBLATIVITE	oblativité	1.0	oblativité
 ARCHIPELLISATION	archipellisation	1.0	archipellisation
 OSTRACISATION	ostracisation	1.0	ostracisation
-PHYTOŒSTROGENES	phytoœstrogènes	1.0	phytoœstrogène
+PHYTOOESTROGENES	phytoœstrogènes	1.0	phytoœstrogène
 GUTTURALEMENT	gutturalement	1.0	gutturalement
 BOTTELEUR	botteleur	1.0	botteleur
 RUINIFORMES	ruiniformes	1.0	ruiniforme
@@ -191157,7 +191153,7 @@ TEILLEURS	teilleurs	1.0	teilleur
 DESIGNATIF	désignatif	1.0	désignatif
 ETABLANT	établant	1.0	établer
 TIERCERONS	tiercerons	1.0	tierceron;tiercer
-CŒLOMIQUE	cœlomique	1.0	cœlomique
+COELOMIQUE	cœlomique	1.0	cœlomique
 CACHUCHAS	cachuchas	1.0	cachucha
 POLYEMBRYONIE	polyembryonie	1.0	polyembryonie
 PHARMACOMANIE	pharmacomanie	1.0	pharmacomanie
@@ -191191,7 +191187,7 @@ BREHAIGNES	bréhaignes	1.0	bréhaigne
 ANGLAISA	anglaisa	1.0	anglaiser
 PERSECUTIVES	persécutives	1.0	persécutif
 ECOBUER	écobuer	1.0	écobuer
-ŒNANTHIQUE	œnanthique	1.0	œnanthique
+OENANTHIQUE	œnanthique	1.0	œnanthique
 ETYMOLOGUES	étymologues	1.0	étymologue
 ABSORPTIOMETRIE	absorptiométrie	1.0	absorptiométrie
 BREDOUILLAGE	bredouillage	1.0	bredouillage
@@ -191289,7 +191285,7 @@ VELARISEE	vélarisée	1.0	vélariser
 ASTROCYTAIRE	astrocytaire	1.0	astrocytaire
 SERVIABLEMENT	serviablement	1.0	serviablement
 COREOPSIS	coréopsis	1.0	coréopsis
-CŒLENTERES	cœlentérés	1.0	cœlentéré
+COELENTERES	cœlentérés	1.0	cœlentéré
 ECHARNANT	écharnant	1.0	écharner
 SUIFERONT	suiferont	1.0	suifer
 ENDIVIERS	endiviers	1.0	endivier
@@ -191565,7 +191561,7 @@ ETHNOMETHODOLOGUE	ethnométhodologue	1.0	ethnométhodologue
 PYRROLIDINES	pyrrolidines	1.0	pyrrolidine
 DRENNE	drenne	1.0	drenne
 ISOHELIE	isohélie	1.0	isohélie
-ŒSTRONE	œstrone	1.0	œstrone
+OESTRONE	œstrone	1.0	œstrone
 ABOMINAIS	abominais	1.0	abominer
 MERITOCRATES	méritocrates	1.0	méritocrate
 TABOUISE	tabouise	1.0	tabouiser
@@ -192533,7 +192529,7 @@ EMPIERRAGES	empierrages	1.0	empierrage
 COMPATRIOTISME	compatriotisme	1.0	compatriotisme
 BEALIERE	béalière	1.0	béalière
 DESACIDIFIER	désacidifier	1.0	désacidifier
-URÆUS	uræus	1.0	uræus
+URAEUS	uræus	1.0	uræus
 RENFLAMMER	renflammer	1.0	renflammer
 OLEOHYDRAULIQUE	oléohydraulique	1.0	oléohydraulique
 CYMBALAIRE	cymbalaire	1.0	cymbalaire
@@ -193073,7 +193069,7 @@ MANGANIQUE	manganique	1.0	manganique
 EVOCABLES	évocables	1.0	évocable
 MANGEURES	mangeures	1.0	mangeure
 REIMPUTEE	réimputée	1.0	réimputer
-CŒLIOSCOPE	cœlioscope	1.0	cœlioscope
+COELIOSCOPE	cœlioscope	1.0	cœlioscope
 RHINOLALIE	rhinolalie	1.0	rhinolalie
 ISOPHASE	isophase	1.0	isophase
 THERMORECEPTEUR	thermorécepteur	1.0	thermorécepteur
@@ -193208,7 +193204,7 @@ DERMATOMYCOSE	dermatomycose	1.0	dermatomycose
 SPIRANT	spirant	1.0	spirant
 PEDALEUR	pédaleur	1.0	pédaleur
 ISOGONE	isogone	1.0	isogone
-ŒILLE	œille	1.0	œiller
+OEILLE	œille	1.0	œiller
 PALETTISABLE	palettisable	1.0	palettisable
 TRINITROBENZENE	trinitrobenzène	1.0	trinitrobenzène
 INVAGINES	invaginés	1.0	invaginer
@@ -193287,7 +193283,7 @@ FOLIOTAGES	foliotages	1.0	foliotage
 DOUCINS	doucins	1.0	doucin
 EMBOITABLE	emboîtable	1.0	emboîtable
 CENTIGRAY	centigray	1.0	centigray
-ŒUFRIER	œufrier	1.0	œufrier
+OEUFRIER	œufrier	1.0	œufrier
 DRAGEON	drageon	1.0	drageon
 FUXEENNE	fuxéenne	1.0	fuxéen
 SOUPEUSES	soupeuses	1.0	soupeur
@@ -193423,7 +193419,7 @@ ZINCIFERES	zincifères	1.0	zincifère
 MORDACITE	mordacité	1.0	mordacité
 MANUPORTAGE	manuportage	1.0	manuportage
 VISUOSPATIAUX	visuospatiaux	1.0	visuospatial
-ŒNOTHERACEE	œnothéracée	1.0	œnothéracée
+OENOTHERACEE	œnothéracée	1.0	œnothéracée
 DENDROLOGIQUE	dendrologique	1.0	dendrologique
 INTERDECILES	interdéciles	1.0	interdécile
 DEPASSABLE	dépassable	1.0	dépassable
@@ -193495,7 +193491,7 @@ COANIMES	coanimés	1.0	coanimer
 PHALERISTIQUE	phaléristique	1.0	phaléristique
 MOTOVENTILATEUR	motoventilateur	1.0	motoventilateur
 SUBLIMINAIRES	subliminaires	1.0	subliminaire
-CŒTERA	cœtera	1.0	cœtera
+COETERA	cœtera	1.0	cœtera
 IRRAISON	irraison	1.0	irraison
 PANETONS	panetons	1.0	paneton
 BANNETONS	bannetons	1.0	banneton
@@ -193800,7 +193796,7 @@ CUPIDEMENT	cupidement	1.0	cupidement
 GARGAMELLE	gargamelle	1.0	gargamelle
 TRIVALENCE	trivalence	1.0	trivalence
 ADONIDES	adonides	1.0	adonide
-FŒTOSCOPIE	fœtoscopie	1.0	fœtoscopie
+FOETOSCOPIE	fœtoscopie	1.0	fœtoscopie
 CHOFE	chofe	1.0	chofer
 EUROSTRATEGIQUES	eurostratégiques	1.0	eurostratégique
 ARTISANERIE	artisanerie	1.0	artisanerie
@@ -193849,7 +193845,7 @@ MARMITAGE	marmitage	1.0	marmitage
 REBOISEUR	reboiseur	1.0	reboiseur
 REVISIONNELLE	révisionnelle	1.0	révisionnel
 ESSARTAIS	essartais	1.0	essarter
-ŒSTROPROGESTATIVES	œstroprogestatives	1.0	œstroprogestatif
+OESTROPROGESTATIVES	œstroprogestatives	1.0	œstroprogestatif
 REENFOURCHE	réenfourche	1.0	réenfourcher
 PLURIMODAL	plurimodal	1.0	plurimodal
 KHEDIVAL	khédival	1.0	khédival
@@ -193946,7 +193942,7 @@ STATTHALTER	statthalter	1.0	statthalter
 TOMENTEUX	tomenteux	1.0	tomenteux
 CULIERE	culière	1.0	culière
 TACHETURES	tachetures	1.0	tacheture
-ŒUFRIERS	œufriers	1.0	œufrier
+OEUFRIERS	œufriers	1.0	œufrier
 AOUTIEN	aoûtien	1.0	aoûtien
 MONOTHEIQUE	monothéique	1.0	monothéique
 PAROXYSTE	paroxyste	1.0	paroxyste
@@ -194536,7 +194532,7 @@ VACUOLISANT	vacuolisant	1.0	vacuoliser
 AXONAISES	axonaises	1.0	axonais
 COPOLYMERISES	copolymérisés	1.0	copolymériser
 BELANDRE	bélandre	1.0	bélandre
-ŒKOUMENE	œkoumène	1.0	œkoumène
+OEKOUMENE	œkoumène	1.0	œkoumène
 AUTHENTIQUANT	authentiquant	1.0	authentiquer
 ECARTOMETRIE	écartométrie	1.0	écartométrie
 STRIQUE	strique	1.0	striquer
@@ -195019,7 +195015,7 @@ FREINATEUR	freinateur	1.0	freinateur
 BRIOCHEES	briochées	1.0	briocher
 VOLATILISABLE	volatilisable	1.0	volatilisable
 POSSESSIONNEE	possessionnée	1.0	possessionné
-PREŒDIPIENS	préœdipiens	1.0	préœdipien
+PREOEDIPIENS	préœdipiens	1.0	préœdipien
 TELEDYNAMIQUE	télédynamique	1.0	télédynamique
 COLLETEUR	colleteur	1.0	colleteur
 DECARBONATER	décarbonater	1.0	décarbonater
@@ -195686,7 +195682,7 @@ RUDOIEMENT	rudoiement	1.0	rudoiement
 PLAINER	plainer	1.0	plainer
 TORRIDEMENT	torridement	1.0	torridement
 PLUMASSEAUX	plumasseaux	1.0	plumasseau
-ŒNOTHERES	œnothères	1.0	œnothère
+OENOTHERES	œnothères	1.0	œnothère
 SURCADENCER	surcadencer	1.0	surcadencer
 ANKYLOSAIT	ankylosait	1.0	ankyloser
 CAMIONNEZ	camionnez	1.0	camionner
@@ -195967,7 +195963,7 @@ METALLOPROTEINE	métalloprotéine	1.0	métalloprotéine
 INQUISITIF	inquisitif	1.0	inquisitif
 PIEGEABLE	piégeable	1.0	piégeable
 RESSASSAGE	ressassage	1.0	ressassage
-FŒTOSCOPIQUES	fœtoscopiques	1.0	fœtoscopique
+FOETOSCOPIQUES	fœtoscopiques	1.0	fœtoscopique
 AUTOFECONDES	autofécondés	1.0	autoféconder
 ENJOLIVURE	enjolivure	1.0	enjolivure
 BOUINA	bouina	1.0	bouiner
@@ -196016,7 +196012,7 @@ DESHERITEMENT	déshéritement	1.0	déshéritement
 ASTROSISMOLOGIE	astrosismologie	1.0	astrosismologie
 MAZOUTANT	mazoutant	1.0	mazouter
 CROCODILIENNES	crocodiliennes	1.0	crocodilien
-ŒNOTHERE	œnothère	1.0	œnothère
+OENOTHERE	œnothère	1.0	œnothère
 TUNICIER	tunicier	1.0	tunicier
 COMMOTIONNER	commotionner	1.0	commotionner
 SASTRUGI	sastrugi	1.0	sastrugi
@@ -196201,7 +196197,7 @@ ARTHROLOGIE	arthrologie	1.0	arthrologie
 TRUDGEON	trudgeon	1.0	trudgeon
 DECAPSIDATION	décapsidation	1.0	décapsidation
 GYROMITRES	gyromitres	1.0	gyromitre
-ŒSTRIOL	œstriol	1.0	œstriol
+OESTRIOL	œstriol	1.0	œstriol
 METACENTRE	métacentre	1.0	métacentre
 PERICHONDRE	périchondre	1.0	périchondre
 MACRODACTYLE	macrodactyle	1.0	macrodactyle
@@ -196497,7 +196493,7 @@ BRACTEOLE	bractéole	1.0	bractéole
 PRESONORISEE	présonorisée	1.0	présonoriser
 CULMINANCE	culminance	1.0	culminance
 HIPPOPHAGE	hippophage	1.0	hippophage
-ŒDICNEME	œdicnème	1.0	œdicnème
+OEDICNEME	œdicnème	1.0	œdicnème
 DECIMALISEE	décimalisée	1.0	décimaliser
 FACETTANT	facettant	1.0	facetter
 RUINIFORME	ruiniforme	1.0	ruiniforme
@@ -196852,5 +196848,5 @@ PIXERECOURT	Pixérécourt	0.25	Pixérécourt
 ITHAQUA	Ithaqua	0.25	Ithaqua
 BENDIXSON	Bendixson	0.25	Bendixson
 PBIT	Pbit	0.25	Pbit
-PLŒMEUR	Plœmeur	0.25	Plœmeur
+PLOEMEUR	Plœmeur	0.25	Plœmeur
 PLEYMO	Pleymo	0.25	Pleymo

@@ -26,11 +26,22 @@ MAX_ROWS = 300
 _index_cache = {}  # language -> _LangIndex | None
 
 
+# œ/æ (French "sœur", "vitæ"...) have no NFKD decomposition of their own
+# (unlike an accented letter's combining-mark decomposition, they're
+# atomic code points) — folded into their two ASCII letters before NFKD
+# below, so a query typed as plain "soeur" (the only way to type it on a
+# simple keyboard) still matches a wordlist/gloss entry spelled "sœur",
+# instead of both silently losing the letter to the ASCII-only encode
+# right after (which drops any character it can't represent, ligature
+# included) and colliding on the wrong, shorter key ("sur").
+_LIGATURE_FOLD = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
+
+
 def _norm(text):
     """Accent-stripped, ASCII-folded, case-folded, trimmed — the single
     normalization used for every key and every query, so "Écrit", "ecrit"
     and "  ÉCRIT " all collapse to the same lookup key."""
-    decomposed = unicodedata.normalize("NFKD", text)
+    decomposed = unicodedata.normalize("NFKD", text.translate(_LIGATURE_FOLD))
     ascii_only = decomposed.encode("ascii", "ignore").decode("ascii")
     return ascii_only.casefold().strip()
 

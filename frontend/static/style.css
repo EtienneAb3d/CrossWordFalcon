@@ -680,10 +680,36 @@ button:disabled {
    with only "Interactif" mode centered — play mode deliberately stayed
    flush left. Made unconditional here; the `.interactive-centered` class
    itself (having become a pure duplicate, #board now always being
-   centered) was removed from the HTML/JS rather than left dead. */
+   centered) was removed from the HTML/JS rather than left dead.
+
+   `flex-basis: 0` (not `auto`) since #grid-column became `flex: 1 1 auto`
+   in Interactive mode (see its own comment) to fill this whole block's
+   width with #interactive-controls — a real, measured regression found
+   live with Playwright right after that change: with `flex-basis: auto`,
+   this element's contribution to #board's own two-item line-wrapping
+   decision is its MAX-CONTENT size, and for a flex container that basis
+   is defined as "as if given infinite space" REGARDLESS of any
+   `flex-wrap: wrap` further down (CSS Flexbox §9.9) — #interactive-
+   arrows' own two button rows (also `flex-wrap: wrap`, but that only
+   matters once a real width is available to wrap within) bubbled their
+   own *unwrapped* width all the way up through #grid-column/#interactive-
+   controls to here, ballooning #board-main's own hypothetical size well
+   past #board's real width and pushing #interactive-challenge-panel onto
+   its own line below #board instead of beside it — the exact wrapping
+   bug `min-width: 0` above was already meant to prevent, but that rule
+   only ever governs *shrinking* below content size, never the initial
+   max-content-based line-fitting computation itself. `flex-basis: 0`
+   sidesteps it at the root: a definite (non-`auto`) basis makes this
+   item's contribution grow-factor-driven instead of content-driven, only
+   ever floored by its own *min*-content (small — the single widest
+   unbreakable child somewhere in the tree, not the sum of an entire
+   unwrapped button row). No visible change to play mode (still claims
+   100% of #board when the panel is `display: none`) or to Interactive
+   mode's actual final layout (still correctly splits 75%/25% with
+   #interactive-challenge-panel) — only the *wrap-decision* input changes. */
 #board-main {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -762,10 +788,10 @@ button:disabled {
 
 /* Interactive mode only: wraps #grid — never #interactive-cell-stats
    (see below, positioned independently, out of normal flow) — kept as
-   its own element because #grid-column itself becomes a horizontal row
-   in Interactive mode (see #grid-column.interactive-flank below, which
-   puts the Précédent/grid-wrap/Suivant trio side by side); harmless
-   outside Interactive mode too, rendering identically to a bare #grid. */
+   its own element because it sits inside #interactive-flank-row, itself
+   a horizontal row (see below) putting the Précédent/grid-wrap/Suivant
+   trio side by side; harmless outside Interactive mode too, rendering
+   identically to a bare #grid. */
 #interactive-grid-wrap {
   display: flex;
   flex-direction: column;
@@ -778,9 +804,10 @@ button:disabled {
    grid's own (centered, and in Interactive mode Précédent-button-offset)
    left edge. #board already uses align-items: flex-start, so its own top
    edge coincides with #board-main's (no padding/border of its own),
-   which in turn coincides with #grid-column's, which in turn coincides with
-   #grid's own top edge once #grid-column becomes a row (see
-   .interactive-flank below) with align-items: center around #grid as its
+   which in turn coincides with #grid-column's (its own first child,
+   #interactive-flank-row, sits flush at the top with no margin/padding
+   of its own), which in turn coincides with #grid's own top edge since
+   that row (see below) uses align-items: center around #grid as its
    tallest child — so top: 0/left: 0 against #board lands this card
    precisely at the grid's own top-left corner without needing a JS
    measurement. #board gets position: relative purely to serve as this
@@ -927,8 +954,39 @@ button:disabled {
 .attempt-preview-stats {
   margin: 0;
   font-size: 0.7rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+/* The dimmed text itself — split out of .attempt-preview-stats so the
+   pencil button appended next to it (a sibling span, see script.js) is
+   never dimmed along with it: CSS `opacity` dims an entire rendered
+   subtree, so the button couldn't have undone it with its own
+   `opacity: 1` if both lived under the same dimmed parent. */
+.attempt-preview-stats-text {
   color: var(--fg);
   opacity: 0.7;
+}
+
+/* Pencil icon button opening this specific attempt in "Interactif" mode,
+   at the user's explicit request: "à droite des mentions de remplissage
+   des prévisualisations... ajouter un bouton icône crayon (comme sur la
+   liste de la Bibliothèque)." Same reset/accent-tint treatment as
+   #library-table's own .library-interactive-btn. */
+.attempt-preview-interactive-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.attempt-preview-interactive-btn .interactive-icon {
+  display: block;
 }
 
 /* Prefix identifying which real process produced this specific preview
@@ -1075,6 +1133,20 @@ button:disabled {
    "something is wrong here" reads consistently across both contexts. */
 .attempt-preview-grid .cell.white.impossible {
   background: var(--incorrect-bg);
+}
+
+/* The exact crossing cell of a crossing-letter deadlock (two still-open
+   slots whose own remaining candidates share no letter at all) — always
+   a subset of .impossible above, at the user's explicit request: the
+   attempt previews must show this the same vivid way Interactive mode
+   already does (see .interactive-deadlock). Reuses --error (already a
+   more saturated, more intense red than --incorrect-bg's own pastel
+   tint — no new color token needed), with a light foreground since
+   --error is dark enough to need one. Declared after .impossible so its
+   background wins on that one cell. */
+.attempt-preview-grid .cell.white.deadlock {
+  background: var(--error);
+  color: var(--accent-fg);
 }
 
 /* Cells carried over verbatim from a previous palier's own real assignment
@@ -2331,6 +2403,22 @@ button:disabled {
   background: var(--low-candidates-bg);
 }
 
+/* The exact crossing cell of a deadlock (two still-open slots whose own
+   remaining candidates share no letter at all) — always a subset of
+   .interactive-impossible above, at the user's explicit request: "la
+   case ... devrait être en rouge vif (plus vif que les mots impossibles
+   qui passent par cette case)." Reuses --error (already a more saturated,
+   more intense red than --incorrect-bg's own pastel tint — no new color
+   token needed) rather than --incorrect-bg, so it reads as strictly more
+   severe than the rest of the same impossible slot; --error is dark
+   enough that it also needs a light foreground, unlike every other
+   pastel-background diagnostic in this file. Declared after
+   .interactive-impossible so its background wins on that one cell. */
+.cell.white.interactive-deadlock {
+  background: var(--error);
+  color: var(--accent-fg);
+}
+
 /* "Interactif" mode: "Vérifier" flags every COMPLETE word that is either
    not a real dictionary word or has no definition yet (script.js's
    interactiveInvalidCells) — same red as .interactive-impossible (both
@@ -2442,18 +2530,59 @@ button:disabled {
   margin-top: 2rem;
 }
 
-/* ---- "Interactif" authoring mode controls (see script.js) ---- */
+/* ---- "Interactif" authoring mode controls (see script.js) ----
+   Spacing above this block comes from #grid-column's own base `gap`
+   (unchanged — see that rule) — this element is a plain flex-column
+   sibling of #interactive-flank-row there, never a bare block-level
+   sibling of #board needing its own margin. Its own `align-self: stretch`
+   (set below, in Interactive mode) is what makes it span the full
+   "Grille + Boutons" width rather than the narrower grid's own — see
+   #grid-column.interactive-flank's own comment below. Holds ONLY the
+   button rows (#interactive-arrows) — every "results" zone (status
+   message, answers, "Proposer une définition", Sauvegarder...) that used
+   to live here too moved out to #interactive-results below, at the
+   user's own explicit follow-up correction — see that rule's own
+   comment. */
 #interactive-controls {
   display: flex;
   flex-direction: column;
   gap: 0.6rem;
-  margin-top: 0.8rem;
   align-items: center;
+}
+/* Every "results" zone of the Interactive panel, pulled out of
+   #interactive-controls above into its own full-width block — a plain
+   sibling of #board (like #down-clues-section right after it, see
+   index.html), so it spans the WHOLE central content column (100%),
+   both the 75% "Grille + Boutons" zone and the 25% "Mots Défi" zone
+   combined — at the user's explicit correction: "les réponses aux
+   boutons et 'Proposer une définition' doivent occuper toute la largeur
+   de la zone centrale, et pas seulement l'espace sous la grille (donc,
+   passer en dessous de Mots Défi)." Every child that already declared
+   its own `width: 100%` (#interactive-answers/#interactive-definition-
+   row/#interactive-propose-results/#interactive-title-row/#interactive-
+   title-propose-results — unchanged, see their own rules below) now
+   simply resolves that percentage against this new, wider container
+   instead — no per-child change needed for any of them. `align-items:
+   center` matches #interactive-controls' own treatment (kept for
+   #interactive-message, which has no declared width of its own). A
+   second, direct benefit of this move: since this is also where the
+   ever-growing stacked "Mots"/"Croisés" answer blocks live, "Grille +
+   Boutons" (and so #interactive-challenge-panel's own height, matched to
+   it via `align-self: stretch` — see #board's own comment) no longer
+   balloons with every click the way it did while these blocks still
+   lived inside #board-main. */
+#interactive-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  align-items: center;
+  margin-top: 1rem;
 }
 /* Bare-id `display` beats [hidden]{display:none} on specificity — see the
    #rss-panel/#rss-detail/#virtual-keyboard entries in the style-guide
    SKILL for the same trap. */
 #interactive-controls[hidden],
+#interactive-results[hidden],
 #interactive-propose-results[hidden],
 #interactive-answers[hidden],
 #interactive-verify-report[hidden],
@@ -2463,20 +2592,62 @@ button:disabled {
 }
 /* "Précédent"/"Suivant" flank #grid on each side, vertically centered
    against it, at the user's explicit request — moved out of the
-   play-mode-shaped #interactive-nav row (removed) into #grid-column
-   itself (see index.html), right before/after #interactive-grid-wrap
-   (which wraps #grid alone — the black/fill stats card floats
-   independently via `position: fixed`, see #interactive-cell-stats
-   above, so it no longer adds to this wrapper's own height). script.js's
-   enterInteractiveMode()/hideInteractivePanel() add/remove this class on
-   #grid-column and toggle the two buttons' own `hidden` attribute. The
-   row's cross-axis size is #interactive-grid-wrap's own height — now
-   exactly #grid's own height — so these two buttons, using the row's
-   default `align-items: center`, land precisely at #grid's own vertical
+   play-mode-shaped #interactive-nav row (removed) into a new
+   #interactive-flank-row wrapper inside #grid-column (see index.html),
+   around #interactive-grid-wrap (which wraps #grid alone — the black/
+   fill stats card floats independently via `position: fixed`, see
+   #interactive-cell-stats above, so it no longer adds to this wrapper's
+   own height). Unconditional (not gated by any Interactive-mode class):
+   with both buttons `hidden` outside Interactive mode, this row simply
+   contains #interactive-grid-wrap alone, rendering identically to a bare
+   wrap. Row height ends up exactly #interactive-grid-wrap's own height —
+   still exactly #grid's own height (#hover-definition-row stays hidden
+   throughout Interactive mode) — so Précédent/Suivant, via this row's
+   `align-items: center`, land precisely at #grid's own vertical
    midpoint. */
-#grid-column.interactive-flank {
-  flex-direction: row;
+#interactive-flank-row {
+  display: flex;
   align-items: center;
+  gap: 0.75rem;
+}
+/* #grid-column, in Interactive mode, spans the FULL remaining width of
+   #board-main (the whole "Grille + Boutons" zone next to the 25%-wide
+   "Mots Défi" panel) rather than shrinking to its own content's natural
+   width — at the user's explicit follow-up correction: "le bloc
+   Grille+Boutons doit occuper le reste du bloc central. Les boutons en
+   dessous ne doivent pas se limiter à la zone grille, mais prendre toute
+   la place à côté de Mots Défi... 'Proposer une définition' et
+   Sauvegarder, [et] la zone de réponse aux boutons Mots/Croisés/Début/
+   Fin doi[ven]t, elle[s] aussi occuper toute la largeur de la zone
+   centrale." This reverses an earlier, narrower version of this same
+   layout (see the style-guide SKILL's own entry) that instead measured
+   #grid's own pixel width via JS and constrained #interactive-controls
+   to exactly that — correct for "centered against the grid" as first
+   requested, but too narrow once the request became "take the full
+   width next to Mots Défi" instead. `align-items: center` here (rather
+   than the base rule's own default `stretch`) keeps #interactive-flank-
+   row itself at its own natural, unstretched width, centered within the
+   now-wide column — the grid + Précédent/Suivant trio's own size/
+   position is untouched by this change, only what's below it changes. */
+#grid-column.interactive-flank {
+  flex: 1 1 auto;
+  align-items: center;
+}
+/* #interactive-controls itself opts back into filling that full width
+   (`align-self: stretch` overrides the column's own `align-items:
+   center` above, for this one child only) — every child inside it that
+   already declares `width: 100%` (#interactive-answers, #interactive-
+   definition-row, #interactive-propose-results, #interactive-verify-
+   report — see their own rules below) automatically follows suit, which
+   is what satisfies the "Proposer une définition"/"Sauvegarder"/"Mots-
+   Croisés-Début-Fin answer zone" parts of the same request with no
+   further rule needed for any of them. #interactive-arrows (the button
+   rows) has no explicit width of its own — it simply gets much more
+   room to lay its `flex-wrap` rows out in before wrapping, now that its
+   container is the full board-main width instead of the narrow grid's
+   own. */
+#grid-column.interactive-flank #interactive-controls {
+  align-self: stretch;
 }
 /* A plain <button> has no `display` of its own in the UA stylesheet
    strong enough to need overriding — but `.interactive-flank-btn` itself
@@ -2574,6 +2745,11 @@ button:disabled {
 }
 #interactive-arrows {
   display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.interactive-arrows-row {
+  display: flex;
   flex-wrap: wrap;
   gap: 0.4rem;
   align-items: center;
@@ -2584,9 +2760,18 @@ button:disabled {
   width: 100%;
   align-items: center;
 }
+/* `width: 100%` at the user's own explicit follow-up correction
+   ("Sauvegarder... doit prendre toute la largeur de la zone centrale") —
+   matches #interactive-definition-row's own treatment right above.
+   `justify-content: center` added at a further explicit follow-up
+   ("le bouton Sauvegarder doit être centré") — "Sauvegarder"/"Publier"
+   (as a pair, when both are shown) now center together within the full-
+   width row instead of sitting flush left. */
 #interactive-save-row {
   display: flex;
   gap: 0.4rem;
+  width: 100%;
+  justify-content: center;
 }
 #interactive-definition-input {
   flex: 1 1 auto;

@@ -261,6 +261,13 @@ let generateChallengeWords = [];
 // "Interactif" authoring mode controls (see the Interactive-mode section
 // further down).
 const interactiveControls = document.getElementById("interactive-controls");
+// Every "results" zone (status message, answers, "Proposer une
+// définition", Sauvegarder...) — a full-width sibling of #board, toggled
+// in lockstep with interactiveControls (see enterInteractiveMode()/
+// hideInteractivePanel()) but no longer nested inside it, at the user's
+// own explicit follow-up correction — see style.css's own comment on
+// #interactive-results.
+const interactiveResults = document.getElementById("interactive-results");
 const interactivePrevBtn = document.getElementById("interactive-prev-btn");
 const interactiveNextBtn = document.getElementById("interactive-next-btn");
 const interactiveChallengePanel = document.getElementById("interactive-challenge-panel");
@@ -829,6 +836,15 @@ let finishLockedCells = null;
 // any manual edit (they only describe the state the backend last saw).
 let interactiveImpossibleCells = new Set();
 let interactiveLowCells = new Set();
+// Always a subset of interactiveImpossibleCells: the exact crossing
+// cell(s) where two still-open slots' own remaining candidates share no
+// letter at all (backend's Filler._crossing_deadlock_slots), as opposed
+// to the rest of those same two slots' cells, impossible only by
+// association — shown in a more vivid red, at the user's explicit
+// request: "la case ... devrait être en rouge vif (plus vif que les mots
+// impossibles qui passent par cette case)." Same staleness rule as
+// interactiveImpossibleCells/LowCells above.
+let interactiveDeadlockCells = new Set();
 // "Stats" button: "row,col" -> the statistically most probable letter for
 // that still-empty cell, from POST /api/interactive/stats (backend's
 // `_interactive_letter_stats`, the same statistical mechanism `generate_
@@ -1299,6 +1315,7 @@ function renderAttemptPreview(examples) {
   for (const {
     example_grid: exampleGrid,
     impossible_cells: impossibleCells,
+    deadlock_cells: deadlockCells,
     forced_cells: forcedCells,
     locked_cells: lockedCells,
     low_candidate_cells: lowCandidateCells,
@@ -1395,6 +1412,19 @@ function renderAttemptPreview(examples) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("noise");
     }
+    // Always a subset of impossibleCells above — the exact crossing
+    // cell(s) of a crossing-letter deadlock (two still-open slots whose
+    // own remaining candidates share no letter at all), shown in a more
+    // vivid red than the rest of the same impossible slot(s), at the
+    // user's explicit request: "les prévisualisations [doivent montrer]
+    // les cases impossibles en rouge vif... comme sur le mode
+    // Interactif" (see .interactive-deadlock, already built for that
+    // mode). `|| []` is a no-op whenever this specific case never
+    // occurred (backend/crossword_gen.py's `Filler.deadlock_zone_cells`).
+    for (const [r, c] of deadlockCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("deadlock");
+    }
     // Green letters for words coming from the theme glossary, at the
     // user's explicit request: "In the preview grids, show words coming
     // from the theme glossary in green letters." Always empty for a
@@ -1435,6 +1465,13 @@ function renderAttemptPreview(examples) {
     const impossiblePercent = Math.round((100 * impossibleSet.size) / totalCells);
     const stats = document.createElement("p");
     stats.className = "attempt-preview-stats";
+    // Dimmed text lives in its own span (rather than directly in `stats`)
+    // so the pencil button appended below — a sibling, not a descendant of
+    // this span — stays at full opacity: CSS `opacity` dims an entire
+    // rendered subtree, so a child button couldn't undo it with its own
+    // `opacity: 1` if it lived inside this same dimmed element.
+    const statsText = document.createElement("span");
+    statsText.className = "attempt-preview-stats-text";
     // Bold prefix with the number of the process that actually produced
     // this grid (backend/crossword_gen.py's own `process_number`, see its
     // own docstring), at the user's explicit request: "lets you track a
@@ -1447,18 +1484,87 @@ function renderAttemptPreview(examples) {
       const processLabel = document.createElement("strong");
       processLabel.className = "attempt-preview-process";
       processLabel.textContent = I18N[uiLanguage].attemptPreviewProcessLabel(processNumber);
-      stats.appendChild(processLabel);
-      stats.appendChild(document.createTextNode(" "));
+      statsText.appendChild(processLabel);
+      statsText.appendChild(document.createTextNode(" "));
     }
-    stats.appendChild(
+    statsText.appendChild(
       document.createTextNode(I18N[uiLanguage].attemptPreviewStats(blackPercent, fillPercent, impossiblePercent))
     );
+    stats.appendChild(statsText);
+    // Pencil icon button, at the user's explicit request: "à droite des
+    // mentions de remplissage des prévisualisations... ajouter un bouton
+    // icône crayon (comme sur la liste de la Bibliothèque) permettant de
+    // reprendre n'importe quelle grille de l'historique en mode
+    // Interactif." Same icon/markup as the Library panel's own
+    // `.library-interactive-btn` (script.js's renderLibraryList()), reusing
+    // its i18n key (`libraryInteractiveText`) since it's the exact same
+    // action — open this grid in "Interactif" mode as a new "Créations"
+    // draft — just triggered from a different place. See
+    // openAttemptPreviewInteractive() below and POST /api/interactive/
+    // from-attempt.
+    const openInteractiveBtn = document.createElement("button");
+    openInteractiveBtn.type = "button";
+    openInteractiveBtn.className = "attempt-preview-interactive-btn";
+    openInteractiveBtn.setAttribute("aria-label", I18N[uiLanguage].libraryInteractiveText);
+    openInteractiveBtn.title = I18N[uiLanguage].libraryInteractiveText;
+    openInteractiveBtn.innerHTML =
+      '<svg class="interactive-icon" viewBox="0 0 24 24" width="14" height="14" ' +
+      'aria-hidden="true" focusable="false">' +
+      '<path d="M4 20h4L18.5 9.5l-4-4L4 16v4z" fill="none" stroke="currentColor" ' +
+      'stroke-width="1.6" stroke-linejoin="round"/>' +
+      '<path d="M13.5 6.5l4 4" fill="none" stroke="currentColor" stroke-width="1.6"/>' +
+      "</svg>";
+    openInteractiveBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openAttemptPreviewInteractive(exampleGrid);
+    });
+    stats.appendChild(openInteractiveBtn);
     item.appendChild(stats);
     item.appendChild(miniGrid);
     attemptPreviewGrids.appendChild(item);
   }
   attemptPreview.hidden = false;
   syncRssPanelVisibility();
+}
+
+// Backs the attempt-preview pencil icon button above — at the user's
+// explicit request, opens whichever attempt grid is currently on screen
+// (live or from the history scrubber alike, since `exampleGrid` is
+// whatever this specific row was rendered with) in "Interactif" mode as a
+// brand-new "Créations" draft. `language`/`bilingual_language`/
+// `difficulty`/`theme`/`challenge_words` are read straight off the
+// generation form's own live fields/lists rather than kept in a separate
+// snapshot variable, since nothing resets them until the next "Générer"
+// submit — the same fields the still-running (or already finished)
+// generation job itself was started with. If a generation is still
+// running, its job is cancelled first (same call as the "Stop" button)
+// so it doesn't keep occupying a queue slot once the player has moved on
+// to editing this attempt by hand.
+async function openAttemptPreviewInteractive(exampleGrid) {
+  const jobToCancel = currentJobId;
+  if (jobToCancel) {
+    try {
+      await fetchWithTimeout(`/api/generate/cancel/${jobToCancel}`, { method: "POST" }, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      // Best-effort, same tolerance as stopBtn's own cancel — a connection
+      // hiccup here shouldn't block opening this attempt in Interactif.
+    }
+  }
+  const language = languageSelect.value;
+  const bilingualLanguage = bilingualLanguageSelect.value;
+  const difficulty = document.getElementById("difficulty").value;
+  const theme = themeKeywords.join(" ");
+  await runInteractive(
+    {
+      grid: exampleGrid.map((row) => Array.from(row)),
+      language,
+      bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
+      difficulty,
+      theme: theme || undefined,
+      challenge_words: generateChallengeWords.length ? generateChallengeWords : undefined,
+    },
+    "/api/interactive/from-attempt"
+  );
 }
 
 // Bi-stable toggle (same pattern as solutionBtn/checkBtn below), at the
@@ -2105,6 +2211,10 @@ function renderGrid() {
         const dk = `${r},${c}`;
         if (interactiveImpossibleCells.has(dk)) cell.classList.add("interactive-impossible");
         else if (interactiveLowCells.has(dk)) cell.classList.add("interactive-low");
+        // Always a subset of interactiveImpossibleCells above — the exact
+        // crossing cell of a deadlock, shown in a more vivid red on top of
+        // the ordinary impossible-slot background (see interactiveDeadlockCells).
+        if (interactiveDeadlockCells.has(dk)) cell.classList.add("interactive-deadlock");
         if (interactiveInvalidCells.has(dk)) cell.classList.add("interactive-invalid");
         // Gray-out for "not part of the drag-selected zone" — see
         // interactiveZoneSelection's own docstring/comment above (the
@@ -3307,8 +3417,16 @@ async function pollJob(jobId, t) {
   // 502) — reset to 0 the moment a poll actually succeeds. See
   // POLL_RECONNECT_ATTEMPTS's own comment for why this exists.
   let consecutivePollFailures = 0;
+  // True once some other job has taken over the shared preview/status UI
+  // (currentJobId now points elsewhere) — e.g. the attempt-preview pencil
+  // button cancels this loop's own job and immediately starts a brand-new
+  // interactive session while this loop's very last poll(s) may still be
+  // in flight. Without this guard, that straggler poll's own catchUpPreview
+  // ToEnd()/setStatus() calls would overwrite the new session's UI with this
+  // now-irrelevant job's own final state a moment after it was shown.
+  const isCurrentJob = () => jobId === currentJobId;
   const revealTimer = setInterval(() => {
-    if (autoFollowPreview) showNextPreview();
+    if (autoFollowPreview && isCurrentJob()) showNextPreview();
   }, PREVIEW_REVEAL_INTERVAL_MS);
   try {
     while (true) {
@@ -3350,13 +3468,15 @@ async function pollJob(jobId, t) {
       consecutivePollFailures = 0;
       const cluesFeed = data.clues_progress || [];
       if (cluesFeed.length > nextClueIndex) {
-        liveClues = liveClues.concat(cluesFeed.slice(nextClueIndex));
+        if (isCurrentJob()) {
+          liveClues = liveClues.concat(cluesFeed.slice(nextClueIndex));
+          renderLiveClues();
+        }
         nextClueIndex = cluesFeed.length;
-        renderLiveClues();
       }
       const history = data.examples_history || [];
       if (history.length > nextExampleIndex) {
-        recordPreviewHistory(history.slice(nextExampleIndex));
+        if (isCurrentJob()) recordPreviewHistory(history.slice(nextExampleIndex));
         nextExampleIndex = history.length;
       }
       // "Definitions count stuck at 0/27, even though the definitions
@@ -3375,7 +3495,7 @@ async function pollJob(jobId, t) {
       // "clues" entry stays the last one in previewHistory for the whole
       // rest of the job — so it can be found and refreshed in place
       // here, live, instead of being left frozen.
-      if (data.step && data.step.code === "clues" && previewHistory.length) {
+      if (isCurrentJob() && data.step && data.step.code === "clues" && previewHistory.length) {
         const cluesEntry = previewHistory[previewHistory.length - 1];
         if (cluesEntry.step && cluesEntry.step.code === "clues") {
           cluesEntry.step = {
@@ -3395,20 +3515,20 @@ async function pollJob(jobId, t) {
         }
       }
       if (data.status === "error") {
-        catchUpPreviewToEnd();
+        if (isCurrentJob()) catchUpPreviewToEnd();
         throw new GenerationFailedError(
           describeErrorCode(t, data.error_code, data.error), jobId, data.error_code,
         );
       }
       if (data.status === "cancelled") {
-        catchUpPreviewToEnd();
+        if (isCurrentJob()) catchUpPreviewToEnd();
         throw new CancelledError(t.statusCancelled);
       }
       if (data.status === "done") {
-        catchUpPreviewToEnd();
+        if (isCurrentJob()) catchUpPreviewToEnd();
         return data.result;
       }
-      setStatus(describeStep(t, data.step), false);
+      if (isCurrentJob()) setStatus(describeStep(t, data.step), false);
       await sleep(POLL_INTERVAL_MS);
     }
   } finally {
@@ -5262,6 +5382,7 @@ function interactiveGridFilled() {
 function setInteractiveDiagnostics(data) {
   interactiveImpossibleCells = new Set((data.impossible_cells || []).map(([r, c]) => `${r},${c}`));
   interactiveLowCells = new Set((data.low_candidate_cells || []).map(([r, c]) => `${r},${c}`));
+  interactiveDeadlockCells = new Set((data.deadlock_cells || []).map(([r, c]) => `${r},${c}`));
 }
 
 // The diagnostics describe the grid the backend last saw; drop them the
@@ -5269,6 +5390,7 @@ function setInteractiveDiagnostics(data) {
 function clearInteractiveDiagnostics() {
   interactiveImpossibleCells = new Set();
   interactiveLowCells = new Set();
+  interactiveDeadlockCells = new Set();
   interactiveInvalidCells = new Set();
   interactiveVerifyReport = [];
   interactiveStatLetters = new Map();
@@ -5975,9 +6097,16 @@ function renderInteractiveTitleProposals(list) {
 // "É", it doesn't fold it to "E") instead of just stripping their accent
 // — "randonnées" became "RANDONNES", not "RANDONNEES". Normalizing to NFD
 // (accents become separate combining marks) before stripping non-A-Z
-// keeps the base letter and only discards the mark itself.
+// keeps the base letter and only discards the mark itself. A ligature
+// letter (French "œ"/"Œ"/"æ"/"Æ") is folded into its two separate letters
+// first, since NFD never decomposes it (it's an atomic code point, not an
+// accent-style combining-mark sequence) — without this, the final
+// [^A-Z] strip would just delete it outright: "sœur" became "SUR", not
+// "SOEUR".
+const LIGATURE_GRID_FOLD = { "œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE" };
 function challengeWordGridForm(word) {
   return word
+    .replace(/[œŒæÆ]/g, (ch) => LIGATURE_GRID_FOLD[ch])
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
     .toUpperCase()
@@ -7066,6 +7195,7 @@ function enterInteractiveMode(state) {
   // Reveal the panel inside #result; hide play-mode-only chrome.
   result.hidden = false;
   interactiveControls.hidden = false;
+  interactiveResults.hidden = false;
   solutionBtn.hidden = true;
   checkBtn.hidden = true;
   definitionsBtn.hidden = true;
@@ -7090,13 +7220,20 @@ function enterInteractiveMode(state) {
   applyDefinitionsVisibility(); // hides #clues/#down-clues-section/#hover-definition-row
   // "Précédent"/"Suivant" flank the grid, vertically centered against it,
   // at the user's explicit request — moved here (out of the play-mode-
-  // shaped #interactive-nav row) into #grid-column itself, right next to
-  // #grid, which switches to a horizontal flex row for this mode (see
-  // style.css's #grid-column.interactive-flank).
+  // shaped #interactive-nav row) into #interactive-flank-row, a plain,
+  // unconditional flex row inside #grid-column wrapping the pair around
+  // #interactive-grid-wrap (see style.css's own comment on that row) — no
+  // JS class toggle needed for THAT layout, only the two buttons' own
+  // `hidden` attribute below. The `interactive-flank` class added right
+  // here still matters for a different reason: it makes #grid-column
+  // itself span the full "Grille + Boutons" width next to "Mots Défi"
+  // (rather than shrinking to its own content), so #interactive-controls
+  // can in turn stretch to fill that same full width — see style.css's
+  // own comment on #grid-column.interactive-flank.
   gridColumn.classList.add("interactive-flank");
   // #board is now unconditionally centered (see its own style.css
   // comment) — this mode's own Précédent+Grille+Suivant row lands
-  // centered "for free", no dedicated class needed here any more.
+  // centered "for free" within the now-wider #grid-column.
   interactivePrevBtn.hidden = false;
   interactiveNextBtn.hidden = false;
   interactiveChallengePanel.hidden = false;
@@ -7169,6 +7306,7 @@ function enterInteractiveMode(state) {
 function hideInteractivePanel() {
   interactiveMode = false;
   interactiveControls.hidden = true;
+  interactiveResults.hidden = true;
   gridColumn.classList.remove("interactive-flank");
   interactivePrevBtn.hidden = true;
   interactiveNextBtn.hidden = true;

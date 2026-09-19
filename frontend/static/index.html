@@ -161,7 +161,7 @@
              display a comma, a source of confusion. -->
         <input type="text" id="theme-precision" name="theme_precision"
                inputmode="decimal" autocomplete="off" spellcheck="false"
-               pattern="[0-9]*([.,][0-9]+)?" value="0.76"
+               pattern="[0-9]*([.,][0-9]+)?" value="0.75"
                data-i18n-title="themePrecisionTitle">
       </label>
 
@@ -652,15 +652,6 @@
             <div id="clues-across" class="clue-lines"></div>
           </div>
           <div id="grid-column">
-            <!-- "Interactif" only (script.js's enterInteractiveMode() reveals
-                 them and adds .interactive-flank to #grid-column): flanking
-                 the grid on each side, vertically centered against it — moved
-                 here from the play-mode-shaped #interactive-nav row that used
-                 to sit inside #interactive-controls, at the user's explicit
-                 request. Hidden by default so an ordinary generated grid
-                 never shows them. -->
-            <button type="button" id="interactive-prev-btn" class="interactive-flank-btn" hidden
-                    data-i18n="interactivePrevBtn" disabled>Précédent</button>
             <!-- Black-cell / white-cell-fill percentages — a small,
                  viewport-fixed floating card (see style.css), not an
                  in-flow sibling of #grid, so it neither shifts with
@@ -672,16 +663,211 @@
               <p id="interactive-black-stat"></p>
               <p id="interactive-fill-stat"></p>
             </div>
-            <!-- #grid wrapped in its own column purely so #grid-column can
-                 become a horizontal row in Interactive mode (see
-                 .interactive-flank below) with the Précédent/#grid/Suivant
-                 trio side by side — harmless outside Interactive mode,
-                 rendering identically to a bare #grid. -->
-            <div id="interactive-grid-wrap">
-              <div id="grid"></div>
+            <!-- "Interactif" only for Précédent/Suivant (script.js's
+                 enterInteractiveMode()/hideInteractivePanel() toggle their
+                 own `hidden` attribute — no class toggle needed on this
+                 row itself, see style.css's own comment): flanking the
+                 grid on each side, vertically centered against it — moved
+                 here from the play-mode-shaped #interactive-nav row that
+                 used to sit inside #interactive-controls, at the user's
+                 explicit request. This row is unconditional, not gated to
+                 Interactive mode, so outside it (both buttons hidden) it
+                 simply wraps #interactive-grid-wrap alone, rendering
+                 identically to a bare #grid. -->
+            <div id="interactive-flank-row">
+              <button type="button" id="interactive-prev-btn" class="interactive-flank-btn" hidden
+                      data-i18n="interactivePrevBtn" disabled>Précédent</button>
+              <div id="interactive-grid-wrap">
+                <div id="grid"></div>
+              </div>
+              <button type="button" id="interactive-next-btn" class="interactive-flank-btn" hidden
+                      data-i18n="interactiveNextBtn">Suivant</button>
             </div>
-            <button type="button" id="interactive-next-btn" class="interactive-flank-btn" hidden
-                    data-i18n="interactiveNextBtn">Suivant</button>
+            <!-- "Interactif" mode button rows (see script.js) — a plain
+                 sibling of #interactive-flank-row inside #grid-column's
+                 own flex column, not a bare sibling of #board any more —
+                 so it forms one "Grille + Boutons" unit with the grid row
+                 above it, and #interactive-challenge-panel's own height
+                 (already stretched to #board-main's height, see #board's
+                 comment) now also spans the buttons below the grid, not
+                 the grid alone, at the user's explicit request. Its own
+                 `align-self: stretch` (style.css's own
+                 #grid-column.interactive-flank rule) makes it span the
+                 FULL "Grille + Boutons" width next to "Mots Défi" — not
+                 just #grid's own narrower width, at the user's own
+                 explicit follow-up correction (see that rule's own
+                 comment for the full detail, including an earlier,
+                 narrower version of this same layout that this one
+                 replaced). Holds ONLY the button rows (#interactive-
+                 arrows) and their own help overlay — every "results" zone
+                 that used to live here too (status message, answers,
+                 "Proposer une définition", Sauvegarder...) moved out to
+                 the new #interactive-results, a full-width sibling of
+                 #board (see its own comment there), at a further explicit
+                 follow-up correction — this is what keeps "Grille +
+                 Boutons", and so "Mots Défi"'s own matched height, bounded
+                 to the grid + button rows alone. Hidden by default; hidden
+                 for an ordinary (non-"Interactif") generation. -->
+            <div id="interactive-controls" hidden>
+              <div id="interactive-arrows">
+               <div class="interactive-arrows-row">
+                <!-- "Help" icon button opening #interactive-help-overlay
+                     (fixed text explaining Interactif mode, translated in
+                     every language — see interactiveHelpLines in i18n.js) —
+                     at the user's explicit request, placed to the left of
+                     "Mots". Reuses .nav-btn (already used by the neighboring
+                     "Effacer" sponge) rather than a new button style; an
+                     inline SVG "?" icon in a circle (no external icon
+                     font/library, same convention as the PDF badge/the "i"
+                     badge in the header). -->
+                <button type="button" id="interactive-help-btn" class="nav-btn"
+                        data-i18n-aria="interactiveHelpBtn" data-i18n-title="interactiveHelpBtn">
+                  <svg class="help-icon" viewBox="0 0 24 24" width="16" height="16"
+                       aria-hidden="true" focusable="false">
+                    <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
+                    <path d="M9.3 9.5a2.8 2.8 0 0 1 5.3 1.2c0 1.6-2.4 2-2.4 3.5"
+                          fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+                    <circle cx="12" cy="16.6" r="0.9" fill="currentColor"/>
+                  </svg>
+                </button>
+                <!-- "Mots": lists the real dictionary words compatible with
+                     the selected slot (see POST /api/interactive/
+                     candidates) — at the user's explicit request. The
+                     result is shown in the shared #interactive-answers zone,
+                     below the button row (above "Proposer une définition").
+                     Placed to the left of the arrows at the user's explicit
+                     request. -->
+                <button type="button" id="interactive-words-btn"
+                        data-i18n="interactiveWordsBtn">Mots</button>
+                <!-- "Croisés": to the right of "Mots", at the user's explicit
+                     request — identifies, for the selected cell, the letters
+                     compatible with a word in both directions at once
+                     (across AND down), and lists, for each, the matching
+                     across/down words (see POST /api/interactive/crossing).
+                     Result shown in the same shared #interactive-answers zone
+                     as "Mots" (see below), most recent block first. -->
+                <button type="button" id="interactive-crossing-btn"
+                        data-i18n="interactiveCrossingBtn">Croisés</button>
+                <!-- "Début"/"Fin": to the right of "Croisés", at the user's
+                     explicit request — list the real dictionary words that can
+                     start/end the selected slot, taking the letters already
+                     placed into account, even shorter than the slot's own full
+                     length (see POST /api/interactive/boundary). Result shown
+                     in the same shared #interactive-answers zone as "Mots"/
+                     "Croisés", most recent block first. -->
+                <button type="button" id="interactive-start-btn"
+                        data-i18n="interactiveStartBtn">Début</button>
+                <button type="button" id="interactive-end-btn"
+                        data-i18n="interactiveEndBtn">Fin</button>
+                <!-- Clears the display area right below (status message,
+                     "Vérifier" report, "Mots" proposals) without recomputing
+                     anything — at the user's explicit request, placed right
+                     after "Fin" (the last of the "Mots"/"Croisés"/"Début"/
+                     "Fin" answer-producing buttons), not at the very end of
+                     the button rows. Also clears the matching highlight on
+                     the grid (impossible/low-option/invalid slots), since
+                     it comes from the same diagnostics. Sponge character
+                     (see the note on #dictionary-clear-btn earlier in this
+                     file) — same character, same i18n key as accessible
+                     name/tooltip. -->
+                <button type="button" id="interactive-results-clear-btn" class="nav-btn clear-icon-btn"
+                        data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
+                  <span class="clear-icon" aria-hidden="true">🧽</span>
+                </button>
+                <button type="button" id="interactive-dir-across-btn" class="toggle-btn active"
+                        data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
+                <button type="button" id="interactive-dir-down-btn" class="toggle-btn"
+                        data-i18n-aria="virtualKeyboardDownBtn">↓</button>
+                <!-- "Nettoyer": triggers a full cleanup of the impossible
+                     zones (removes crossing words / black cell, like the
+                     automatic generation), at the user's explicit request —
+                     placed to the right of the arrows. -->
+                <button type="button" id="interactive-clean-btn"
+                        data-i18n="interactiveCleanBtn">Nettoyer</button>
+                <!-- "Nettoyer (+noires)": a deeper cleanup — on top of the
+                     impossible zones, also tries removing every black cell
+                     of the grid itself, not just the ones tied to an
+                     impossible slot — at the user's explicit request. -->
+                <button type="button" id="interactive-clean-deep-btn"
+                        data-i18n="interactiveCleanDeepBtn">Nettoyer (+noires)</button>
+               </div>
+               <div class="interactive-arrows-row">
+                <!-- "Stats": a read-only statistical preview, in light gray, of
+                     the single most probable letter for every still-empty
+                     cell — the same statistical mechanism `generate_grid` uses
+                     to pick its own "graines" preview letters
+                     (`sample_letter_biases`), just read out for every cell
+                     instead of only forcing a few of them. Placed just before
+                     "Impossibles". See POST /api/interactive/stats. -->
+                <button type="button" id="interactive-stats-btn"
+                        data-i18n="interactiveStatsBtn">Stats</button>
+                <!-- "Impossibles": a read-only check (no cleanup) of the
+                     impossible slots (including a fully-filled word absent
+                     from the dictionary) and of the ones with too few real
+                     candidates — at the user's explicit request, placed to
+                     the left of "Vérifier". See
+                     POST /api/interactive/impossible. -->
+                <button type="button" id="interactive-impossible-btn"
+                        data-i18n="interactiveImpossibleBtn">Impossibles</button>
+                <!-- "Vérifier" moved here, next to "Nettoyer", at the user's
+                     explicit request (out of #interactive-definition-row,
+                     which now only keeps the definition field and
+                     "Proposer"). Now reuses the same control as
+                     "Impossibles" (POST /api/interactive/impossible), adding
+                     the check for missing definitions on top. -->
+                <button type="button" id="interactive-verify-btn"
+                        data-i18n="interactiveVerifyBtn">Vérifier</button>
+                <!-- "Définitions": automatically generates a definition for
+                     every fully-filled, valid word that doesn't have one yet
+                     — at the user's explicit request, to the right of
+                     "Vérifier". Reuses POST /api/interactive/verify (like
+                     "Vérifier", to discard words absent from the
+                     dictionary), then GET /api/dictionary/define (like
+                     "Proposer") for each, keeping the first proposal. -->
+                <button type="button" id="interactive-definitions-btn"
+                        data-i18n="interactiveDefinitionsBtn">Définitions</button>
+                <!-- "Finir la zone": to the left of "Finir la grille", at the
+                     user's explicit request — same mechanism as "Finir la
+                     grille", but restricted to the zone currently selected
+                     by click-and-drag (see interactiveZoneSelection): every
+                     slot outside that zone is locked (a permanent black cell
+                     for a still-empty cell, a locked letter as usual for an
+                     already-filled one). See POST /api/interactive/finish
+                     (zone_cells). -->
+                <button type="button" id="interactive-finish-zone-btn"
+                        data-i18n="interactiveFinishZoneBtn">Finir la zone</button>
+                <!-- "Finir la grille": permanently locks every letter already
+                     placed and starts a brand-new automatic generation from
+                     that state (new black cells/words added as needed),
+                     including generating missing definitions — at the user's
+                     explicit request, right after "Définitions". See
+                     POST /api/interactive/finish. -->
+                <button type="button" id="interactive-finish-btn"
+                        data-i18n="interactiveFinishBtn">Finir la grille</button>
+               </div>
+              </div>
+              <!-- Help panel, opened by the "?" button above — at the user's
+                   explicit request. Same overlay structure as #rss-detail
+                   (close button always visible, only the body scrolls), same
+                   specificity fix for the `hidden` attribute (see
+                   #interactive-help-overlay[hidden] in style.css) — the list
+                   (#interactive-help-list) is built dynamically from
+                   interactiveHelpLines (i18n.js), see
+                   renderInteractiveHelpList() in script.js. -->
+              <div id="interactive-help-overlay" hidden role="dialog" aria-modal="true">
+                <!-- A cross icon rather than a "Fermer" text — at the user's
+                     explicit request — same convention as every other close
+                     button in this file (#library-close-btn,
+                     #dictionary-close-btn, etc.: .nav-btn + the "✕" character,
+                     accessible name/tooltip via data-i18n-aria/data-i18n-title). -->
+                <button type="button" id="interactive-help-close-btn" class="nav-btn"
+                        data-i18n-aria="interactiveHelpCloseBtn" data-i18n-title="interactiveHelpCloseBtn">✕</button>
+                <div id="interactive-help-body">
+                  <h3 data-i18n="interactiveHelpTitle">Aide — Édition de grille</h3>
+                  <ul id="interactive-help-list"></ul>
+                </div>
+              </div>
+            </div>
             <!-- Direction selector duplicated from the virtual keyboard,
                  to the right of the permanent definition area (never
                  hidden by the "définitions" button, unlike #clues/#down-
@@ -758,166 +944,31 @@
           <ul id="interactive-challenge-list"></ul>
         </div>
       </div>
-      <!-- "Interactif" mode controls (see script.js) — inserted inside
-           #result to reuse #grid/renderGrid(); hidden for an ordinary
-           generation. -->
-      <div id="interactive-controls" hidden>
-        <div id="interactive-arrows">
-          <!-- "Help" icon button opening #interactive-help-overlay
-               (fixed text explaining Interactif mode, translated in
-               every language — see interactiveHelpLines in i18n.js) —
-               at the user's explicit request, placed to the left of
-               "Mots". Reuses .nav-btn (already used by the neighboring
-               "Effacer" sponge) rather than a new button style; an
-               inline SVG "?" icon in a circle (no external icon
-               font/library, same convention as the PDF badge/the "i"
-               badge in the header). -->
-          <button type="button" id="interactive-help-btn" class="nav-btn"
-                  data-i18n-aria="interactiveHelpBtn" data-i18n-title="interactiveHelpBtn">
-            <svg class="help-icon" viewBox="0 0 24 24" width="16" height="16"
-                 aria-hidden="true" focusable="false">
-              <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.6"/>
-              <path d="M9.3 9.5a2.8 2.8 0 0 1 5.3 1.2c0 1.6-2.4 2-2.4 3.5"
-                    fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-              <circle cx="12" cy="16.6" r="0.9" fill="currentColor"/>
-            </svg>
-          </button>
-          <!-- "Mots": lists the real dictionary words compatible with
-               the selected slot (see POST /api/interactive/
-               candidates) — at the user's explicit request. The
-               result is shown in the shared #interactive-answers zone,
-               below the button row (above "Proposer une définition").
-               Placed to the left of the arrows at the user's explicit
-               request. -->
-          <button type="button" id="interactive-words-btn"
-                  data-i18n="interactiveWordsBtn">Mots</button>
-          <!-- "Croisés": to the right of "Mots", at the user's explicit
-               request — identifies, for the selected cell, the letters
-               compatible with a word in both directions at once
-               (across AND down), and lists, for each, the matching
-               across/down words (see POST /api/interactive/crossing).
-               Result shown in the same shared #interactive-answers zone
-               as "Mots" (see below), most recent block first. -->
-          <button type="button" id="interactive-crossing-btn"
-                  data-i18n="interactiveCrossingBtn">Croisés</button>
-          <!-- "Début"/"Fin": to the right of "Croisés", at the user's
-               explicit request — list the real dictionary words that can
-               start/end the selected slot, taking the letters already
-               placed into account, even shorter than the slot's own full
-               length (see POST /api/interactive/boundary). Result shown
-               in the same shared #interactive-answers zone as "Mots"/
-               "Croisés", most recent block first. -->
-          <button type="button" id="interactive-start-btn"
-                  data-i18n="interactiveStartBtn">Début</button>
-          <button type="button" id="interactive-end-btn"
-                  data-i18n="interactiveEndBtn">Fin</button>
-          <button type="button" id="interactive-dir-across-btn" class="toggle-btn active"
-                  data-i18n-aria="virtualKeyboardAcrossBtn">→</button>
-          <button type="button" id="interactive-dir-down-btn" class="toggle-btn"
-                  data-i18n-aria="virtualKeyboardDownBtn">↓</button>
-          <!-- "Nettoyer": triggers a full cleanup of the impossible
-               zones (removes crossing words / black cell, like the
-               automatic generation), at the user's explicit request —
-               placed to the right of the arrows. -->
-          <button type="button" id="interactive-clean-btn"
-                  data-i18n="interactiveCleanBtn">Nettoyer</button>
-          <!-- "Nettoyer (+noires)": a deeper cleanup — on top of the
-               impossible zones, also tries removing every black cell
-               of the grid itself, not just the ones tied to an
-               impossible slot — at the user's explicit request. -->
-          <button type="button" id="interactive-clean-deep-btn"
-                  data-i18n="interactiveCleanDeepBtn">Nettoyer (+noires)</button>
-          <!-- "Stats": a read-only statistical preview, in light gray, of
-               the single most probable letter for every still-empty
-               cell — the same statistical mechanism `generate_grid` uses
-               to pick its own "graines" preview letters
-               (`sample_letter_biases`), just read out for every cell
-               instead of only forcing a few of them. Placed just before
-               "Impossibles". See POST /api/interactive/stats. -->
-          <button type="button" id="interactive-stats-btn"
-                  data-i18n="interactiveStatsBtn">Stats</button>
-          <!-- "Impossibles": a read-only check (no cleanup) of the
-               impossible slots (including a fully-filled word absent
-               from the dictionary) and of the ones with too few real
-               candidates — at the user's explicit request, placed to
-               the left of "Vérifier". See
-               POST /api/interactive/impossible. -->
-          <button type="button" id="interactive-impossible-btn"
-                  data-i18n="interactiveImpossibleBtn">Impossibles</button>
-          <!-- "Vérifier" moved here, next to "Nettoyer", at the user's
-               explicit request (out of #interactive-definition-row,
-               which now only keeps the definition field and
-               "Proposer"). Now reuses the same control as
-               "Impossibles" (POST /api/interactive/impossible), adding
-               the check for missing definitions on top. -->
-          <button type="button" id="interactive-verify-btn"
-                  data-i18n="interactiveVerifyBtn">Vérifier</button>
-          <!-- "Définitions": automatically generates a definition for
-               every fully-filled, valid word that doesn't have one yet
-               — at the user's explicit request, to the right of
-               "Vérifier". Reuses POST /api/interactive/verify (like
-               "Vérifier", to discard words absent from the
-               dictionary), then GET /api/dictionary/define (like
-               "Proposer") for each, keeping the first proposal. -->
-          <button type="button" id="interactive-definitions-btn"
-                  data-i18n="interactiveDefinitionsBtn">Définitions</button>
-          <!-- "Finir la zone": to the left of "Finir la grille", at the
-               user's explicit request — same mechanism as "Finir la
-               grille", but restricted to the zone currently selected
-               by click-and-drag (see interactiveZoneSelection): every
-               slot outside that zone is locked (a permanent black cell
-               for a still-empty cell, a locked letter as usual for an
-               already-filled one). See POST /api/interactive/finish
-               (zone_cells). -->
-          <button type="button" id="interactive-finish-zone-btn"
-                  data-i18n="interactiveFinishZoneBtn">Finir la zone</button>
-          <!-- "Finir la grille": permanently locks every letter already
-               placed and starts a brand-new automatic generation from
-               that state (new black cells/words added as needed),
-               including generating missing definitions — at the user's
-               explicit request, right after "Définitions". See
-               POST /api/interactive/finish. -->
-          <button type="button" id="interactive-finish-btn"
-                  data-i18n="interactiveFinishBtn">Finir la grille</button>
-          <!-- Clears the display area right below (status message,
-               "Vérifier" report, "Mots" proposals) without recomputing
-               anything — at the user's explicit request, placed to
-               the right of the button row. Also clears the matching
-               highlight on the grid (impossible/low-option/invalid
-               slots), since it comes from the same diagnostics. -->
-          <!-- Sponge character (see the note on #dictionary-clear-btn
-               earlier in this file) — same character, same i18n key
-               as accessible name/tooltip. -->
-          <button type="button" id="interactive-results-clear-btn" class="nav-btn clear-icon-btn"
-                  data-i18n-aria="interactiveProposeClearBtn" data-i18n-title="interactiveProposeClearBtn">
-            <span class="clear-icon" aria-hidden="true">🧽</span>
-          </button>
-        </div>
-        <!-- Help panel, opened by the "?" button above — at the user's
-             explicit request. Same overlay structure as #rss-detail
-             (close button always visible, only the body scrolls), same
-             specificity fix for the `hidden` attribute (see
-             #interactive-help-overlay[hidden] in style.css) — the list
-             (#interactive-help-list) is built dynamically from
-             interactiveHelpLines (i18n.js), see
-             renderInteractiveHelpList() in script.js. -->
-        <div id="interactive-help-overlay" hidden role="dialog" aria-modal="true">
-          <!-- A cross icon rather than a "Fermer" text — at the user's
-               explicit request — same convention as every other close
-               button in this file (#library-close-btn,
-               #dictionary-close-btn, etc.: .nav-btn + the "✕" character,
-               accessible name/tooltip via data-i18n-aria/data-i18n-title). -->
-          <button type="button" id="interactive-help-close-btn" class="nav-btn"
-                  data-i18n-aria="interactiveHelpCloseBtn" data-i18n-title="interactiveHelpCloseBtn">✕</button>
-          <div id="interactive-help-body">
-            <h3 data-i18n="interactiveHelpTitle">Aide — Édition de grille</h3>
-            <ul id="interactive-help-list"></ul>
-          </div>
-        </div>
-        <!-- Status message (Mots/Impossibles/Vérifier/Nettoyer/...) and
-             detailed "Vérifier" report — below the button row, above
-             "Proposer une définition", at the user's explicit request.
-             See renderInteractiveVerifyReport(). -->
+      <!-- Every "results" zone of the Interactive panel — status message,
+           "Vérifier" report, "Mots"/"Croisés"/"Début"/"Fin" answers,
+           "Proposer une définition"/titre, Sauvegarder/Publier — moved out
+           of #interactive-controls (which now only holds the button rows,
+           #interactive-arrows) to become this full-width sibling of #board
+           instead, at the user's explicit follow-up correction: "les
+           réponses aux boutons et 'Proposer une définition' doivent
+           occuper toute la largeur de la zone centrale, et pas seulement
+           l'espace sous la grille (donc, passer en dessous de Mots
+           Défi)." A direct block-level sibling of #board (like
+           #down-clues-section right after it), not nested inside either
+           #board-main or #interactive-challenge-panel, so it naturally
+           spans the WHOLE central content column's width (100%, both the
+           75% "Grille + Boutons" zone and the 25% "Mots Défi" zone
+           combined) rather than either one alone. This is also what fixes
+           the OTHER half of the same correction: "Mots Défi ne doit faire
+           que la hauteur de Grille+Boutons (et non toute la hauteur
+           restante de la fenêtre)" — #interactive-challenge-panel's own
+           `align-self: stretch` (style.css) already matches #board-main's
+           rendered height exactly (see #board's own comment); now that
+           this ever-growing results zone (stacked "Mots"/"Croisés"
+           answer blocks in particular) no longer lives inside
+           #board-main, that height stays bounded to the grid + button
+           rows alone, instead of ballooning with every click. -->
+      <div id="interactive-results" hidden>
         <span id="interactive-message" role="status"></span>
         <div id="interactive-verify-report" hidden></div>
         <!-- Combined "Mots"/"Croisés" answer zone, at the user's explicit

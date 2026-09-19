@@ -266,37 +266,37 @@ noire** et qui respecte l'exigence normale de `STRUCTURAL_MIN_INTERIOR_FREE`
 cases (8). Si cette exigence ne laisse plus aucune candidate à la fois
 isolée et valide, elle est abaissée d'un cran à la fois (7, puis 6, ...
 jusqu'à 1), toujours en cherchant une candidate isolée à chaque niveau.
-C'est seulement si aucune candidate isolée ne fonctionne à aucun de ces
-niveaux qu'on accepte l'adjacence — en retentant alors la même cascade
-(`STRUCTURAL_MIN_INTERIOR_FREE` jusqu'à 1, un cran à la fois) sans plus
-exiger l'isolement. Cette
-relaxation ne s'applique qu'à la case en cours de placement, pas à toute la
-grille ni aux tentatives suivantes — mais elle peut légitimement laisser un
-emplacement interne plus court que `STRUCTURAL_MIN_INTERIOR_FREE` dans la
-grille finale, quand c'est le seul moyen d'éviter qu'une nouvelle case
-touche une case noire déjà posée.
+**L'adjacence n'est en réalité jamais acceptée par cette génération de
+motif** (`backend/crossword_gen.py`, `_place_black_cells`), à aucun palier
+— ni le tout premier (grille entièrement vierge), ni un palier qui reprend
+un motif déjà partiellement noirci d'un palier précédent : si aucune
+candidate isolée ne convient à aucun des niveaux de la cascade (8 jusqu'à
+1), la meilleure candidate est simplement refusée et retirée du lot — la
+case noire n'est donc jamais posée cette fois-ci — plutôt que d'accepter
+malgré tout une case adjacente à une autre déjà en place. Un palier dont
+l'objectif de pourcentage de cases noires ne peut pas être atteint sans
+poser une case adjacente finit donc légitimement avec moins de cases
+noires que visé : la grille est laissée telle quelle, et c'est la
+recherche de remplissage (étape 2) qui est tentée sur ce motif, exactement
+comme pour tout autre cas où la cible n'est pas pleinement atteinte.
 
-**Exception : lors de la toute première initialisation d'une grille**
-(la première grille d'une génération, avant tout palier — aucun motif reçu
-d'un palier précédent), cette dernière relaxation (accepter l'adjacence en
-dernier recours) est **entièrement désactivée** :
-si aucune candidate isolée ne convient à aucun des niveaux de la cascade,
-la meilleure candidate est simplement refusée et retirée du lot — la case noire n'est
-donc jamais posée cette fois-ci — plutôt que d'accepter malgré tout une
-case adjacente à une autre. Dans ce cas précis, la grille peut donc
-légitimement finir avec moins de cases noires que l'objectif visé. Ce
-comportement plus strict ne s'applique qu'à cette toute première grille —
-tout palier qui reprend un motif déjà partiellement noirci d'un palier
-précédent garde le comportement habituel décrit ci-dessus (adjacence
-acceptée en dernier recours).
+Cette même règle s'applique aussi à la phase de pré-remplissage ci-dessus
+(`backend/crossword_gen.py`, `_prefill_unfillable_slots`), pas seulement à
+ce placement par pourcentage : elle aussi cherche uniquement une case qui
+ne touche aucune autre case noire, sans jamais accepter l'adjacence en
+dernier recours — un emplacement qu'elle ne peut réparer ainsi se rabat
+sur le retrait d'un mot déjà verrouillé qui le croise, puis, à défaut, est
+simplement marqué irréparable pour ce palier (voir "Retirer un mot
+bloquant" plus loin) — jamais sur une case adjacente.
 
-Cette même exception s'applique aussi à la phase de pré-remplissage
-ci-dessus, pas seulement à ce placement par pourcentage : sur cette toute
-première grille, le pré-remplissage cherche lui aussi en priorité une case
-qui ne touche aucune autre case noire, sans jamais accepter l'adjacence en
-dernier recours — ce qui compte particulièrement sur une grande grille, où
-le pré-remplissage pose l'essentiel des cases noires (de nombreux
-emplacements dépassent la longueur que le dictionnaire peut couvrir).
+Cette interdiction ne concerne que la génération de motif elle-même
+(`backend/crossword_gen.py`, `make_pattern`) : les mécanismes de reprise
+entre paliers et de résolution des zones impossibles décrits plus loin
+(`_clean_blocked_slots`, `_build_retry_seed`, `_shorten_impossible_zones`/
+`_lengthen_impossible_zones`, le repositionnement d'une case noire
+flottante pour un mot thématique/Défi) restent, eux, libres de poser ou
+déplacer une case noire adjacente à une autre quand c'est ce que demande
+la réparation d'une zone déjà impossible.
 
 ### Densité visée
 
@@ -359,34 +359,60 @@ tentatives du lot se terminent d'elles-mêmes avant de passer à la
 sélection, sans interruption anticipée — la sélection ci-dessous ne voit
 donc jamais qu'un lot partiel.
 
-Si une seule tentative réussit, elle est retenue telle quelle. Si
-**plusieurs** tentatives réussissent au même palier — un cas courant, pas
-une exception : mesuré en direct, plus de 40 % des paliers réussis testés
-en comportaient plusieurs, jusqu'à 6 simultanées sur une même machine à 10
-processeurs — ce n'est pas simplement la première trouvée qui est retenue,
-ni celle qui semble la meilleure avant optimisation : **chacune** de ces
-réussites est d'abord réellement optimisée (sa propre passe de
-minimisation des cases noires — voir "Minimisation des cases noires" plus
-bas —, sur sa propre copie de grille, jamais sur celle d'une autre
-tentative), puis c'est celle qui a le **moins de cases noires une fois
-optimisée** qui est gardée (`backend/crossword_gen.py`, `generate_grid`,
-la branche `if successes:`). À égalité de cases noires après
+#### Nombre minimal de réussites et réaffectation des process
+
+Une seule tentative réussie ne suffit jamais, à elle seule, à conclure la
+recherche : il en faut au moins **2**, cumulées sur l'ensemble de la
+recherche — un palier suivant peut donc fournir la deuxième réussite d'un
+palier précédent qui n'en avait trouvé qu'une seule (`backend/
+crossword_gen.py`, `generate_grid`, `MIN_SUCCESSFUL_ATTEMPTS`). Tant que ce
+seuil n'est pas atteint, chaque process qu'une réussite vient de libérer
+est immédiatement réaffecté à une toute nouvelle tentative — un motif
+entièrement neuf tiré depuis zéro, jamais une poursuite de la grille qui
+vient de réussir — plutôt que de rester inactif jusqu'à la fin du palier en
+cours. Les process encore en cours (qu'ils soient d'origine ou issus d'une
+réaffectation) sont toujours attendus jusqu'au bout, jamais tués ni
+abandonnés, conformément au principe déjà en vigueur pour ce mécanisme. Si
+la limite globale de paliers (`attempts`, 200 par défaut) est atteinte sans
+qu'une deuxième réussite n'ait jamais été trouvée, l'unique réussite
+obtenue est tout de même retenue plutôt que de déclarer un échec total.
+
+Une fois ce seuil atteint, la sélection porte sur **toutes** les réussites
+trouvées jusque-là dans la recherche, quel que soit le palier qui les a
+produites — un cas courant, pas une exception : mesuré en direct, plus de
+40 % des lots de réussites comparés en comportaient plusieurs, jusqu'à 6
+simultanées sur une même machine à 10 processeurs — ce n'est pas simplement
+la première trouvée qui est retenue, ni celle qui semble la meilleure avant
+optimisation : **chacune** de ces réussites est d'abord réellement
+optimisée (sa propre passe de minimisation des cases noires — voir
+"Minimisation des cases noires" plus bas —, sur sa propre copie de grille,
+jamais sur celle d'une autre tentative), puis c'est celle qui a le **moins
+de cases noires une fois optimisée** qui est gardée (`backend/
+crossword_gen.py`, `generate_grid`). À égalité de cases noires après
 optimisation, le départage se fait par la **somme des carrés des
-longueurs de mots** (ce score favorise quelques mots longs plutôt que
-beaucoup de mots courts pour le même total de lettres — un mot de 10
-lettres pèse 100 dans ce score, alors que dix mots de 2 lettres, qui
-couvrent pourtant le même nombre de lettres au total, ne pèsent que 40).
-Sur une génération thématique (glossaire non vide, voir plus haut), ce
-départage ne porte que sur les mots effectivement placés qui appartiennent
-au glossaire thématique — jamais sur la totalité des mots de la grille —
-de façon à départager en faveur de la tentative qui fait réellement le
-plus (et le plus longuement) ressortir la thématique, pas simplement
-celle qui a les mots les plus longs en général. Un mot de la liste
-**Mots Défi** compte toujours dans ce score, qu'il y ait ou non un
-glossaire thématique et qu'il en fasse lui-même partie ou non, avec un
-bonus de 2 ajouté à sa longueur avant la mise au carré — de façon à
-favoriser, à égalité de cases noires, la tentative qui a réussi à placer
-un mot Défi. C'est exactement le même score (`backend/crossword_gen.py`,
+longueurs de mots**, chaque longueur étant d'abord plafonnée à 7 lettres
+avant la mise au carré (`CONTENT_SCORE_LENGTH_CAP`, pour qu'un seul mot
+très long ne domine jamais la somme à lui seul) — ce score favorise
+quelques mots longs plutôt que beaucoup de mots courts pour le même total
+de lettres : un mot de 7 lettres ou plus pèse 49 dans ce score, alors que
+dix mots de 2 lettres, qui couvrent pourtant plus de lettres au total, ne
+pèsent que 40. Ce départage porte toujours sur la **totalité** des mots
+effectivement placés, thématique ou non — un glossaire thématique/des
+Mots Défi n'excluent jamais le reste du contenu de la grille du score, ils
+n'ajoutent qu'un bonus par-dessus. Sur une génération thématique
+(glossaire non vide, voir plus haut), un mot effectivement placé qui
+appartient au glossaire thématique de son propre emplacement reçoit un
+bonus de 2 ajouté à sa longueur plafonnée avant la mise au carré, de façon à
+départager en faveur de la tentative qui fait réellement le plus (et le
+plus longuement) ressortir la thématique, sans pour autant ignorer le
+reste des mots de la grille. Un mot de la liste **Mots Défi** reçoit lui
+un bonus de 4 à la place (qu'il y ait ou non un glossaire thématique et
+qu'il en fasse lui-même partie ou non — les deux bonus ne se cumulent
+jamais : un mot Défi qui est aussi un mot thématique n'est compté qu'une
+fois, avec le bonus Mots Défi) — de façon à favoriser, à égalité de cases
+noires, la tentative qui a réussi à placer un mot Défi encore davantage
+qu'un simple mot thématique. C'est exactement le même score (`backend/
+crossword_gen.py`,
 `_content_score`) qui départage aussi, plus bas, la sélection de la
 meilleure tentative *échouée* d'un palier et celle du meilleur candidat
 nettoyé — les trois utilisent désormais rigoureusement la même logique.
@@ -398,10 +424,10 @@ optimisation réelle qui produit la grille effectivement utilisée reste
 celle appliquée une fois, juste après ce palier gagnant (voir plus bas) —
 donc l'aperçu "avant optimisation" affiché côté interface reste fidèle à
 l'état réel de la tentative retenue, et la mesure du temps d'optimisation
-ne compte qu'une seule passe réelle, jamais plusieurs. Quand une seule
-tentative réussit (le cas le plus courant), cette comparaison est
-sautée entièrement — rien à comparer, l'optimiser deux fois (une fois à
-blanc, une fois pour de vrai) n'apporterait rien.
+ne compte qu'une seule passe réelle, jamais plusieurs. Cette comparaison a
+toujours au moins deux réussites à départager, puisque la recherche
+n'atteint jamais ce point avec moins que le seuil minimal décrit
+ci-dessus — il n'y a donc plus jamais de cas où rien ne reste à comparer.
 
 #### Publication en temps réel des records de chaque tentative
 
@@ -968,13 +994,19 @@ dictionnaire à chaque tentative.
 plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
 `Filler._backtrack`) :
 
-1. on tire d'abord la **catégorie** (horizontal ou vertical) : la
+1. **optionnel, actuellement désactivé** (`backend/crossword_gen.py`,
+   constante `ALTERNATE_DIRECTION_ENABLED`) : quand ce réglage est activé,
+   on tire d'abord la **catégorie** (horizontal ou vertical) — la
    probabilité de choisir l'une ou l'autre est proportionnelle au nombre
-   d'emplacements encore libres dans chacune des 2 catégories — une
-   catégorie qui a encore beaucoup d'emplacements non remplis a plus de
-   chances d'être tirée que l'autre. Ça fait naturellement alterner/
-   équilibrer les deux catégories au fil du remplissage, sans imposer un
-   ordre strict (par exemple tout l'horizontal puis tout le vertical) ;
+   d'emplacements encore libres dans chacune des 2 catégories, une
+   catégorie qui a encore beaucoup d'emplacements non remplis ayant plus
+   de chances d'être tirée que l'autre, ce qui fait naturellement
+   alterner/équilibrer les deux catégories au fil du remplissage, sans
+   imposer un ordre strict (par exemple tout l'horizontal puis tout le
+   vertical). Tant que ce réglage reste désactivé, ce niveau ne change
+   rien : le groupe de départ est l'ensemble des emplacements encore
+   libres, sans distinction de catégorie, et le niveau 2 ci-dessous
+   s'applique directement dessus ;
 2. **Mots Défi** (la liste du panneau **Mots Défi (personnalisation)** —
    celui de la page d'accueil, envoyé au serveur en une fois au moment de
    cliquer sur **Générer la grille**, ou celui du mode Interactif, envoyé à
@@ -1046,25 +1078,34 @@ plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
    si aucun emplacement du groupe n'accepte de mot thématique, ce niveau
    ne change rien : le niveau suivant s'applique alors au groupe entier ;
 6. parmi les emplacements retenus au niveau précédent, on calcule pour
-   chacun le score **x² + y²**, où `(x, y)` sont les coordonnées de la
-   première case de l'emplacement (son coin le plus en haut à gauche),
-   mesurées par rapport au coin **en haut à gauche** de la grille — la
-   même origine que celle utilisée partout ailleurs dans ce document (`x`
-   = colonne, `y` = ligne) : un emplacement dont la première case est déjà
-   au coin en haut à gauche obtient le score le plus bas possible (0), le
-   score augmentant à mesure qu'un emplacement démarre plus bas et/ou plus
-   à droite — un emplacement franchement excentré sur un seul axe est donc
-   davantage pénalisé qu'un emplacement à distance équivalente mais
-   répartie sur les deux axes, resserrant le front de remplissage autour
-   du coin en haut à gauche. Ce score ne dépend pas de l'état de
-   remplissage de l'emplacement — seulement de sa position fixe dans la
-   grille — ce qui tend à faire progresser le remplissage selon un front
-   géométrique partant du coin en haut à gauche plutôt que selon la
-   difficulté de chaque emplacement. On retient, **parmi les emplacements
-   ayant obtenu le plus petit score** (les plus proches du coin en haut à
-   gauche), une **fenêtre de taille fixe de `SLOT_SELECTION_WINDOW_SIZE`
-   (10) emplacements** (`backend/crossword_gen.py`) — jamais moins si le
-   groupe compte lui-même moins de 10 emplacements ;
+   chacun le carré de la distance entre sa **case la plus proche du
+   centre de la grille** et ce **centre de la grille** lui-même
+   (`backend/crossword_gen.py`, `Filler._select_target_slot`). Chaque
+   case de l'emplacement (un segment rectiligne — voir `extract_slots`)
+   est considérée individuellement, et c'est la plus petite distance au
+   carré parmi elles qui sert de score à l'emplacement — et non la
+   distance depuis sa position centrale (le point médian de son propre
+   segment) : il suffit donc à un emplacement long d'atteindre le centre
+   par au moins une de ses cases pour obtenir un bon score, même si le
+   reste de son étendue s'en trouve éloigné. Le centre de la grille est le
+   point `((lignes - 1) / 2, (colonnes - 1) / 2)`, dans la même origine
+   `(ligne, colonne)` que partout ailleurs dans ce document. Un
+   emplacement possédant au moins une case exactement sur le centre de la
+   grille obtient le score le plus bas possible (0), le score augmentant
+   à mesure que sa case la plus proche s'éloigne du centre, dans
+   n'importe quelle direction — un emplacement dont la case la plus
+   proche est franchement excentrée sur un seul axe est donc davantage
+   pénalisé qu'un emplacement à distance équivalente mais répartie sur
+   les deux axes, resserrant le front de remplissage autour du centre de
+   la grille plutôt que le long d'un losange plat. Ce score ne dépend pas
+   de l'état de remplissage de l'emplacement — seulement de sa position
+   fixe dans la grille — ce qui tend à faire progresser le remplissage
+   selon un front géométrique partant du centre de la grille plutôt que
+   selon la difficulté de chaque emplacement. On retient, **parmi les
+   emplacements ayant obtenu le plus petit score** (les plus proches du
+   centre de la grille), une **fenêtre de taille fixe de `SLOT_
+   SELECTION_WINDOW_SIZE` (3) emplacements** (`backend/crossword_gen.py`)
+   — jamais moins si le groupe compte lui-même moins de 3 emplacements ;
 7. cette fenêtre de niveau 6 est ensuite **retriée** par nombre de lettres
    déjà posées dans chaque emplacement (le plus de lettres en premier —
    même distinction fait-acquis/simple-supposition que le niveau 4, une
@@ -1154,16 +1195,21 @@ pourcentage disparaît de lui-même dès que la recherche de mots se termine
 (succès ou passage à l'étape 3) — il n'a plus de sens une fois la phase de
 remplissage terminée.
 
-#### Abandon anticipé à 30 % d'impossibilité
+#### Abandon anticipé au-delà de 3 emplacements impossibles (optionnel, actuellement désactivé)
 
-Une tentative peut aussi être abandonnée bien plus tôt : dès que plus de
-30 % des cases blanches de la grille appartiennent à un emplacement jugé
-impossible, la tentative en cours est jugée sans espoir raisonnable et
-arrêtée immédiatement, plutôt que de continuer à chercher ailleurs sur un
-motif déjà aussi largement compromis (vérifié de temps en temps, toutes les
-500 étapes de recherche, pas en continu ; `backend/crossword_gen.py`,
-`Filler._backtrack` — voir aussi l'étape 3, "Reprise telle quelle", pour un
-cas où ce signal se propage entre plusieurs tentatives parallèles).
+Une tentative peut aussi, en principe, être abandonnée bien plus tôt : dès
+que plus de 3 emplacements de la grille sont jugés impossibles, la
+tentative en cours serait jugée sans espoir raisonnable et arrêtée
+immédiatement, plutôt que de continuer à chercher ailleurs sur un motif
+déjà aussi largement compromis (vérifié de temps en temps, toutes les 500
+étapes de recherche, pas en continu ; `backend/crossword_gen.py`,
+`Filler._backtrack`, constante `UNFILLABLE_ABANDON_ENABLED` — voir aussi
+l'étape 3, "Reprise telle quelle", pour un cas où ce signal se propagerait
+entre plusieurs tentatives parallèles). Ce mécanisme est optionnel et
+actuellement désactivé : tant que `UNFILLABLE_ABANDON_ENABLED` vaut faux,
+une tentative n'est jamais interrompue pour cette seule raison — elle ne
+s'arrête que via son budget de vérifications, une annulation, ou en
+épuisant réellement son propre arbre de recherche.
 
 #### Qu'est-ce qu'un emplacement « impossible » ?
 
@@ -1185,6 +1231,46 @@ problème à corriger, et la même combinaison invalide se reconstruit à
 l'identique, cycle après cycle, sans jamais progresser ni jamais être
 signalée (`backend/crossword_gen.py`, `Filler.locked_letters`, distinct de
 `Filler.forced_letters`).
+
+Second cas, qui s'ajoute au premier plutôt que de le remplacer : deux
+emplacements encore vides qui se croisent sur une case sont eux aussi tous
+les deux jugés impossibles dès lors que leurs lettres encore atteignables
+à cette case précise (celles de leurs candidats respectifs, mot défi
+compris s'il en reste un disponible) n'ont **aucune lettre en commun** —
+aucune combinaison des deux ne pourra jamais être complétée ensemble,
+même si chacun des deux emplacements, pris isolément, a l'air parfaitement
+sain (un vrai domaine non vide). Un emplacement dont le domaine est déjà
+vide à lui seul ne peut jamais être la cause d'un tel blocage croisé
+(c'est déjà le premier cas ci-dessus qui le couvre) — seul un emplacement
+au domaine sain peut se retrouver signalé impossible pour cette raison,
+à cause d'un voisin tout aussi sain avec lequel aucun accord n'est
+possible (`Filler._crossing_deadlock_slots` pendant une recherche en
+cours, `_crossing_deadlock_indices` en dehors de toute recherche — pour
+le mode Interactif). Ce second cas alimente exactement les mêmes
+mécanismes de détection que le premier, sans dispositif séparé :
+surlignage rouge vif de l'aperçu et du mode Interactif, seuil d'abandon à
+plus de 3 emplacements impossibles (quand ce dernier est activé — voir
+plus haut). Le noircissement d'une case est en
+revanche un mécanisme distinct du nettoyage simple : le bouton
+« Nettoyer » d'Interactif, comme le nettoyage automatique entre deux
+paliers, ne fait jamais que retirer les mots qui croisent un emplacement
+impossible (que ce retrait résolve ou non le blocage réel) — jamais
+noircir de case pour ce cas précis, `_clean_blocked_slots` excluant
+explicitement un tel emplacement de sa propre alternative « case noire ».
+Quand les deux emplacements du blocage sont encore entièrement vides (le
+cas le plus fréquent), il n'y a donc rien à retirer et le nettoyage
+simple reste sans effet sur cette paire — elle reste signalée impossible
+jusqu'à une modification manuelle, ou jusqu'à ce que la génération
+automatique (dont le remodelage du motif de cases noires est un mécanisme
+entièrement différent, déjà mutable par nature) la résolve autrement.
+
+En mode Interactif, la case précise où le conflit a lieu (celle qui n'a
+aucune lettre en commun entre les deux sens) s'affiche dans un rouge plus
+vif que le reste des deux emplacements impossibles qui la traversent —
+ce sous-ensemble reste toujours inclus dans l'ensemble plus large des
+cases impossibles, jamais une catégorie séparée (`Filler._crossing_
+deadlock_slots`/`_crossing_deadlock_indices` renvoient les deux : les
+emplacements concernés, et la ou les cases de conflit elles-mêmes).
 
 #### Affichage : lettres verrouillées vs. graines statistiques
 
@@ -1214,8 +1300,9 @@ de la grille au lieu de s'arrêter net à la première vérification.
 
 ### Fermeture des derniers emplacements implicites
 
-Une fois la recherche terminée — succès, budget dépassé, abandon à 30 %,
-ou interruption par une tentative sœur — un dernier passage, bon marché,
+Une fois la recherche terminée — succès, budget dépassé, abandon pour
+trop d'emplacements impossibles, ou interruption par une tentative sœur —
+un dernier passage, bon marché,
 referme les emplacements qui restent formellement non assignés alors que
 toutes leurs lettres sont déjà déterminées par de vrais mots croisants
 réellement placés, et qu'il ne leur reste plus qu'un seul mot du
@@ -1628,15 +1715,35 @@ chacune de ses cases restantes est alors directement noircie (toujours
 sous réserve de garder la grille valide, case par case), plutôt que de
 laisser cette même zone resurgir identique à chaque nettoyage futur.
 
+##### Le mot et sa case noire associée forment une unité
+
+Le raccourcissement et l'allongement préalables (voir plus haut)
+autorisent délibérément un mot posé à croiser un emplacement déjà
+impossible ailleurs dans la grille — seule une NOUVELLE dégradation
+rejette le candidat, jamais un blocage préexistant (`backend/crossword_
+gen.py`, `_new_crossing_impossibility`). Un tel mot peut donc, quelques
+lignes plus loin dans ce même nettoyage, se retrouver retiré par le
+retrait des mots croisants ci-dessus, une fois traité l'emplacement
+impossible qu'il croise. La case noire posée ou déplacée spécifiquement
+pour lui est alors annulée dans le même mouvement — remise blanche
+(cas du raccourcissement), ou remise noire à son ancien emplacement et
+sa nouvelle case éventuelle remise blanche (cas de l'allongement) —
+plutôt que de rester en place sans plus aucun mot pour la justifier
+(`backend/crossword_gen.py`, `_clean_blocked_slots`). Le mot et sa case
+noire associée forment ainsi une unité : l'un ne peut jamais survivre au
+retrait de l'autre.
+
 ##### Interruption anticipée du lot (mécanisme aujourd'hui désactivé)
 
 Un mécanisme existe pour arrêter, dès qu'une tentative parallèle d'un
 palier est jugée bloquée (voir l'étape 2, "Limites de la recherche" —
-plus de 30 % de la grille jugée impossible), toutes les autres
+plus de 3 emplacements de la grille jugés impossibles, un seuil lui-même
+optionnel et actuellement désactivé), toutes les autres
 tentatives de ce même palier aussitôt elle aussi, sans attendre
 d'atteindre individuellement leur propre seuil d'abandon ou leur propre
 budget (`backend/crossword_gen.py`, `Filler._backtrack`,
-`_worker_batch_abandoned_event`). Il n'a de sens que si **toutes les
+`_worker_batch_abandoned_event`). Tant que ce seuil reste désactivé, ce
+mécanisme ne se déclenche donc jamais non plus. Il n'a de sens que si **toutes les
 tentatives parallèles du palier partagent rigoureusement le même
 motif** — un motif partagé jugé bloqué par une tentative l'est tout
 autant pour les autres — jamais si chacune peut explorer un motif
@@ -1700,14 +1807,16 @@ reçoit exactement le même score (`backend/crossword_gen.py`,
 `_content_score`) que celui utilisé plus haut pour départager les
 tentatives parallèles réussies — la **somme des carrés des longueurs
 des mots en place** (un mot n'est "en place" que si toutes ses cases
-sont confirmées), départagée à score égal par le **nombre de cases
-noires** de la candidate (la plus noire l'emporte, pour laisser plus de
-marge de manœuvre structurelle au palier suivant sur une grille très
-largement verrouillée). Sur une génération thématique, seuls les mots en
-place appartenant au glossaire comptent dans cette somme (comme pour les
-tentatives réussies) ; un mot de la liste **Mots Défi** compte toujours,
-avec le même bonus de +2 sur sa longueur — la même logique de score
-s'applique donc, à l'identique, que le palier ait réussi ou échoué.
+sont confirmées, sa longueur plafonnée à 7 lettres avant la mise au
+carré), départagée à score égal par le **nombre de cases noires** de la
+candidate (la plus noire l'emporte, pour laisser plus de marge de
+manœuvre structurelle au palier suivant sur une grille très largement
+verrouillée). Cette somme porte sur **tous** les mots en place,
+thématiques ou non (comme pour les tentatives réussies) ; un mot en place
+appartenant au glossaire thématique reçoit un bonus de +2 sur sa longueur
+plafonnée, un mot de la liste **Mots Défi** un bonus de +4 à la place
+(les deux ne se cumulant jamais) — la même logique de score s'applique
+donc, à l'identique, que le palier ait réussi ou échoué.
 
 Triées du meilleur score au moins bon, les grilles nettoyées les moins
 bonnes sont ensuite **éliminées** — autant qu'il y a de "grilles
@@ -1792,11 +1901,15 @@ Sans même regarder la
 condition du cas "Reprise « telle quelle »" ci-dessus : si toutes les
 tentatives réellement conclues
 de ce palier (hors celles interrompues par la fin d'une autre, voir
-plus haut) ont été abandonnées tôt pour la même raison (plus de 30 % de la
-grille jugée impossible, voir l'étape 2) — un signal fort qu'aucune d'elles
+plus haut) ont été abandonnées tôt pour la même raison (plus de 3
+emplacements de la grille jugés impossibles, voir l'étape 2) — un signal
+fort qu'aucune d'elles
 n'a de raison de croire qu'une reprise "telle quelle" sur son propre motif
 aboutirait un jour — le nettoyage se déclenche directement, sur la
 meilleure de ces grilles (`backend/crossword_gen.py`, `generate_grid`).
+Ce déclencheur reste lui aussi sans effet tant que ce seuil d'abandon est
+désactivé (voir l'étape 2) : aucune tentative ne peut alors être
+abandonnée pour cette raison, donc cette règle ne se déclenche jamais.
 Avec la fraction d'interruption actuellement fixée à 100 % (voir
 "Plusieurs tentatives en parallèle par palier" plus haut), toutes les
 tentatives du lot ont le temps de se conclure d'elles-mêmes avant cette

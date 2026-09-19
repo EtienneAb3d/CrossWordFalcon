@@ -170,7 +170,14 @@ conservés (`build_wordlist_freq.py`, `_count_word_frequencies`).
 ### Les quatre colonnes
 
 - **MOT** — la forme du mot telle qu'elle apparaît dans la grille : accents
-  et diacritiques retirés, tout en majuscules.
+  et diacritiques retirés, tout en majuscules. Une lettre ligaturée sans
+  décomposition de type accent (français `œ`/`Œ`/`æ`/`Æ` — des points de
+  code Unicode à part entière, contrairement à la décomposition en lettre
+  de base + accent d'une lettre accentuée ordinaire) est séparée en ses
+  deux lettres ASCII (`œ`→`oe`, `æ`→`ae`) : "sœur" donne le MOT `SOEUR`,
+  jamais `SŒUR` — le MOT reste ainsi toujours une suite de lettres A-Z
+  saisissables individuellement sur un clavier alphabétique simple
+  (`build_wordlist_freq.py`, `strip_accents`).
 - **ACCENTUE** — l'orthographe naturelle telle qu'écrite dans le corpus
   (accents et casse d'origine conservés) — transmise à `backend/clues.py`
   pour que le modèle de langage voie le genre, le nombre et la conjugaison
@@ -207,9 +214,9 @@ valide sous aucune des deux formes est définitivement écarté.
 
 ### Doublons
 
-Quand un même MOT (après retrait des accents) provient de plusieurs formes
-accentuées distinctes, seule celle à la fréquence la plus élevée est
-conservée (`build_wordlist_freq.py`, `main`).
+Quand un même MOT (après retrait des accents et séparation des ligatures)
+provient de plusieurs formes accentuées distinctes, seule celle à la
+fréquence la plus élevée est conservée (`build_wordlist_freq.py`, `main`).
 
 ### Un score corrigé
 

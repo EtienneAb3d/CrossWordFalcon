@@ -25,7 +25,14 @@ practices SKILL for the earlier HermitDave-to-corpus switch), persisting
 that intermediate step served no purpose `data/raw/` was originally kept
 for, so it was folded into one script and the file removed.
 
-- WORD is accent-stripped and uppercased (crossword grid convention).
+- WORD is accent-stripped and uppercased (crossword grid convention). A
+  ligature letter with no accent-style decomposition of its own (French
+  `œ`/`Œ`/`æ`/`Æ` — genuine single Unicode code points, unlike an accented
+  letter's combining-mark decomposition) is folded into its two separate
+  ASCII letters (`œ`→`oe`, `æ`→`ae`) rather than kept as one glued
+  character: "sœur" -> WORD `SOEUR`, not `SŒUR` — every WORD must stay a
+  plain run of A-Z letters, individually typable on a simple keyboard/grid
+  cell.
 - ACCENTED is the original spelling as written in the source (natural case,
   accents/diacritics kept) — carried through so clue generation
   (backend/clues.py) can see the word's real gender/number/conjugation,
@@ -201,9 +208,18 @@ HUNSPELL_ENCODING = {
 }
 
 
+# œ/Œ/æ/Æ have no NFKD decomposition of their own (verified via
+# unicodedata.decomposition — unlike an accented letter's combining-mark
+# decomposition, Unicode treats these as atomic letters), so plain NFKD
+# stripping below leaves them untouched; folded into their two ASCII
+# letters here so a MOT/grid form never carries one un-typable glued
+# character in place of two ordinary ones.
+_LIGATURE_FOLD = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
+
+
 def strip_accents(s):
     return "".join(
-        c for c in unicodedata.normalize("NFKD", s)
+        c for c in unicodedata.normalize("NFKD", s.translate(_LIGATURE_FOLD))
         if not unicodedata.combining(c)
     )
 

@@ -71,7 +71,12 @@ Each of the six languages has its own dictionary, built independently by
    example_sentences.py`). Both gitignored.
 2. **`build_wordlist_freq.py`** — counts word occurrences over the full
    corpus and writes `data/wordlist_<lang>_full.tsv`, four tab-separated
-   columns: `MOT` (bare, accent-stripped, uppercase — the grid form),
+   columns: `MOT` (bare, accent-stripped, ligature-folded, uppercase — the
+   grid form: a French ligature letter with no accent-style decomposition
+   of its own, `œ`/`Œ`/`æ`/`Æ`, is folded into its two separate ASCII
+   letters — "sœur" -> `SOEUR`, not `SŒUR` — so MOT always stays a plain
+   run of A-Z letters, individually typable on a simple keyboard/grid
+   cell; `ACCENTUE` keeps the ligature),
    `ACCENTUE` (natural accented/inflected spelling), `FREQUENCE` (a
    blended frequency score favoring the word's own canonical/lemma form),
    `CANONIQUE` (one or more `;`-separated candidate lemmas). Every
@@ -185,8 +190,10 @@ json`. Holds all server-side state in plain module dicts/lists:
   membership check), `/title` (LLM proposals), `/save` (publish),
   `/save_work` (autosave draft), `GET /work` + `/work/delete` (drafts
   list/delete), `/resume` (relaunch a draft), `/from-library` (reopen a
-  published grid as an editable draft), `/finish` (hand the current grid
-  to automatic generation, locking already-placed letters — see below).
+  published grid as an editable draft), `/from-attempt` (reopen one
+  automatic-generation attempt-preview snapshot as an editable draft),
+  `/finish` (hand the current grid to automatic generation, locking
+  already-placed letters — see below).
 - *Chat*: `POST /api/chat` (streamed "David FALCON" reply).
 - *Qdrant admin* (localhost-only, gated by `frontend/server.py`): `GET
   /api/qdrant/admin`, `POST /api/qdrant/admin/recreate`, `POST /api/
@@ -203,7 +210,7 @@ the `Interactive*Request` family (`Step`, `Clean`, `Candidates`,
 `Crossing`, `Impossible`, `Verify`, `Title`, `Save`, `SaveWork`, `Finish`
 — `Finish` additionally carries an optional `zone_cells` to scope
 automatic completion to a selected region instead of the whole grid,
-`WorkId`, `FromLibrary`); `PresenceRequest`, `PseudoClaimRequest`,
+`WorkId`, `FromLibrary`, `FromAttempt`); `PresenceRequest`, `PseudoClaimRequest`,
 `GridGameSaveRequest`, `LibraryListRequest`, `QdrantTenantRequest`,
 `ChatRequest`/`ChatMessage`.
 
@@ -237,14 +244,23 @@ via `ProcessPoolExecutor`:
    look-ahead window preferring the row/column with the fewest black
    cells so far, restricted to non-adjacent candidates satisfying
    `STRUCTURAL_MIN_INTERIOR_FREE=8` (an interior white zone must be at
-   least this long), relaxed down to 1 before ever accepting adjacency —
-   and adjacency is never accepted at all on a call's very first, blank
-   palier. A pre-fill phase (`_prefill_unfillable_slots`) runs first (and
-   again after ratio-based placement, whenever letters are already
-   locked) to blacken any slot whose length has too few dictionary
-   candidates (`PREFILL_MIN_WORD_COUNT=3`) or whose already-locked
-   letters leave too few exact matches (`PREFILL_LOCKED_MIN_WORD_
-   COUNT=3`) — pre-fill cells always count toward the density target. The
+   least this long), relaxed down to 1 — but adjacency itself is never
+   accepted at all, on any palier (`forbid_adjacency=True`, always, not
+   only on a call's very first, blank palier): a palier whose black-fill
+   percentage target can't be reached without an adjacent cell simply
+   ends up short of that target, left as-is, rather than forcing one. A
+   pre-fill phase (`_prefill_unfillable_slots`) runs first (and again
+   after ratio-based placement, whenever letters are already locked) to
+   blacken any slot whose length has too few dictionary candidates
+   (`PREFILL_MIN_WORD_COUNT=3`) or whose already-locked letters leave too
+   few exact matches (`PREFILL_LOCKED_MIN_WORD_COUNT=3`) — same
+   never-adjacent rule, falling through to removing a crossing locked word
+   or marking the slot `unfixable` instead; pre-fill cells always count
+   toward the density target. This adjacency prohibition is scoped to
+   pattern generation itself: the cross-palier retry machinery below and
+   the impossible-zone-resolution passes remain free to place or relocate
+   a black cell adjacent to an existing one when repairing an
+   already-impossible zone requires it. The
    overall black-cell rate (web UI "Taux noir", `black_enrichment_
    fraction`, default `POST_PREFILL_BLACK_FRACTION=0.10`) is scaled by
    how much of the grid is still white at the start of *this* palier, so
@@ -252,8 +268,11 @@ via `ProcessPoolExecutor`:
 2. **CSP fill** (`Filler`/`_backtrack`, via `try_fill`) — a standard
    recursive backtracking solver. Slot selection (`_select_target_slot`,
    also reused verbatim by `interactive_place_word`) is a fixed 8-level
-   cascade: (1) draw across-vs-down weighted by remaining open-slot
-   count; (2) prefer ones where an unused "Mots Défi" word still fits, if
+   cascade: (1) optional, currently disabled
+   (`ALTERNATE_DIRECTION_ENABLED=False`) — when enabled, draw across-vs-
+   down weighted by remaining open-slot count; while disabled, this level
+   is a no-op and the cascade starts from the whole unassigned pool, both
+   directions together; (2) prefer ones where an unused "Mots Défi" word still fits, if
    any (`Filler.challenge_words`) — checked purely geometrically (length +
    already-known letters), never requiring dictionary membership, and
    placed here, ahead of every level below, so it can never be starved by
@@ -265,8 +284,10 @@ via `ProcessPoolExecutor`:
    since level 2 already ran first, this group may already be challenge-
    narrowed, which is what still gives "Mots Défi" priority over the
    theme glossary specifically; (6) score the remaining group
-   geometrically (distance² from the top-left corner) and take a random
-   draw among the `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored; (7)
+   geometrically (squared distance between the slot's own CLOSEST cell to
+   the grid's own center, and that center itself — not the slot's own
+   midpoint) and take a random draw among the
+   `SLOT_SELECTION_WINDOW_SIZE=3` lowest-scored; (7)
    re-sort that window by letters-already-placed (most first), keep the
    top `SLOT_SELECTION_REFINE_FRACTION=1/2`; (8) re-sort by statistical
    fill-option richness (`_slot_letter_frequency_score`), highest wins.
@@ -294,14 +315,36 @@ via `ProcessPoolExecutor`:
    three candidate tiers" below for the per-word/per-slot give-up budget
    layered on top of this, for every candidate tier. The search checks a
    `deadline_checks` budget, a cooperative `cancel_event` (every
-   `CANCEL_CHECK_INTERVAL=500` calls), and self-abandons
-   (`UNFILLABLE_ABANDON_FRACTION=0.30`) once too much of the grid belongs
-   to an already-impossible zone.
+   `CANCEL_CHECK_INTERVAL=500` calls), and, when `UNFILLABLE_ABANDON_
+   ENABLED` is true (optional, currently disabled), self-abandons
+   (`UNFILLABLE_ABANDON_SLOT_COUNT=3`) once more than that many
+   still-unassigned slots belong to an already-impossible zone.
 3. **Minimization** (`minimize_black_squares`) — once a fill succeeds,
    iteratively removes black cells one at a time, keeping a removal only
    if the grid stays fillable (at the loosest structural bound,
    `min_interior_free=1`, since this phase only ever lengthens slots) and
    every resulting word is a genuine dictionary entry.
+
+**Minimum successful attempts, with worker reassignment** — a single
+successful grid is never enough to conclude the search: `generate_grid`
+only stops once at least `MIN_SUCCESSFUL_ATTEMPTS=2` attempts have
+genuinely succeeded, counted cumulatively across the *whole* search (every
+palier, not just the one that just ran). While harvesting a palier's
+`PARALLEL_ATTEMPTS` parallel futures, the moment one of them succeeds and
+the running total is still below that threshold, the worker process it
+just freed is immediately reassigned to a brand-new, from-scratch attempt
+(the same shape as an ordinary "reset" attempt — never a continuation of
+the grid that just succeeded) instead of sitting idle for the rest of the
+palier. A palier that ends with fewer than `MIN_SUCCESSFUL_ATTEMPTS`
+successes in hand (0 or 1) does not stop the search: it falls through to
+the ordinary cross-palier retry machinery below for its own failed
+attempts, and whatever single success it did find stays remembered for
+comparison against a later palier's own. Once the threshold is reached,
+the best candidate is picked among every genuinely successful attempt
+found anywhere in the search so far (see "Content scoring" below) and the
+search stops. If the whole `attempts` budget (200 paliers by default) is
+exhausted with only one success ever found, that one success is accepted
+rather than the search reporting total failure.
 
 **Cross-palier retry** (the mechanism that lets a failed palier's real
 progress survive into the next one, rather than starting every palier
@@ -311,10 +354,22 @@ impossible one — in that case the next palier reuses the exact same
 pattern verbatim (`_pattern_continue`, never calling `make_pattern`
 again), first stripping any word that directly crosses an impossible
 slot (`_clean_blocked_slots`) to free those cells for a fresh attempt.
+Before that stripping runs, `_shorten_impossible_zones`/`_lengthen_
+impossible_zones` each try placing a shorter/longer word into a still-
+impossible slot by adding or relocating one black cell — deliberately
+allowed to cross an ALREADY impossible slot elsewhere (only a NEW
+degradation rejects a candidate, `_new_crossing_impossibility`), which
+means `_clean_blocked_slots`'s own crossing-word removal can go on to
+remove that exact word a few lines later, in the very same cleanup pass.
+Both functions hand back a `black_cell_links` map pairing each word they
+place with its own black-cell change; `_clean_blocked_slots` reverts that
+change in the same step it removes the word, so a word and the black
+cell added or moved for it are always kept or discarded together.
 This can repeat for up to `MAX_CONSECUTIVE_CONTINUE_PALIERS=4`
 consecutive paliers before a full cleanup is forced regardless (and
 immediately, if every one of a palier's parallel attempts independently
-gave up as `abandoned_too_unfillable`). Once no slot can usefully be
+gave up as `abandoned_too_unfillable` — never the case while
+`UNFILLABLE_ABANDON_ENABLED` is False). Once no slot can usefully be
 continued, a full cleanup (`_build_retry_seed`) runs: remove every word
 crossing an impossible slot, keep every surviving letter as the next
 palier's locked constraint, and reopen any black cell that neither
@@ -324,19 +379,71 @@ letters on the same axis — then generate a brand new pattern
 THRESHOLD=3` caps how many consecutive full-cleanup paliers may produce
 an identical grid state before a hard reset to a blank grid.
 
+**"Impossible" also covers a crossing-letter deadlock**, on top of the
+plain empty-domain case above: two still-open slots crossing at a cell
+whose remaining achievable letters (real dictionary candidates already
+placed nowhere else in the grid, plus any still-active "Mots Défi" word)
+share no letter at all are both flagged impossible too, even though each
+one's own domain is non-empty in isolation — `Filler._crossing_deadlock_
+slots` (live-search context, folded into `Filler.impossible_zone_slots`,
+already excluding `used_words`) and its module-level counterpart
+`_crossing_deadlock_indices` (folded into `_impossible_indices`, so every
+one of that function's own callers — `_optimize_before_cleanup`,
+`_shorten_impossible_zones`/`_lengthen_impossible_zones`'s own internal
+re-checks, `interactive_clean_impossible_zones`/`interactive_minimize_
+black_cells` — inherits it automatically; also excludes a word already
+fully spelled out elsewhere in the grid, matching the Filler-based
+version — a word already placed once can't paper over a real deadlock by
+still counting as "achievable" for a different slot). Blackening is a distinct
+mechanism from plain "nettoyage" cleanup, at the user's explicit request:
+`_clean_blocked_slots` never blackens a cell for a slot in its own
+`deadlocked_slots` subset (recomputed fresh by each caller that passes
+it — `interactive_clean_impossible_zones`, `_clean_continue_candidate`),
+skipping the ordinary 1-in-10 black-cell alternative entirely for it —
+such a slot only ever has whatever crossing word(s) happen to touch its
+OTHER cells removed (the same unconditional "remove everything crossing
+an impossible slot" plain cleanup already applies to any impossible
+slot), which does nothing at all when both sides of the deadlock are
+still open (nothing assigned to remove) — left flagged impossible until
+resolved some other way: a manual edit, or automatic generation's own
+pattern-reshaping (`_shorten_impossible_zones`/`_lengthen_impossible_
+zones`, or a fresh pattern on a later palier), which already treats black
+cells as fully mutable on its own terms regardless of this exclusion.
+`Filler._crossing_deadlock_slots`/`_crossing_deadlock_indices` also
+return the exact conflicting cell(s) alongside the slot indices, so both
+Interactive mode and the automatic-generation attempt previews can
+highlight that specific cell in a more vivid red (`--error`) than the
+rest of the same impossible slot(s) (`--incorrect-bg`) —
+`_interactive_fill_diagnostics` returns this as a third value,
+`deadlock_cells`, always a subset of `impossible_cells`; `Filler.
+deadlock_zone_cells()` is its live-search counterpart, folded into every
+preview `examples` entry `try_fill`/`generate_grid` build (alongside
+`impossible_cells`) the same way `theme_cells`/`challenge_cells` already
+are — `frontend/static/script.js`'s `renderAttemptPreview()` reads it as
+`deadlock_cells` and adds `.deadlock` (`.attempt-preview-grid .cell.
+white.deadlock`).
+
 **Content scoring** — every place in `generate_grid` that has to pick the
 "best" grid among several candidates shares one formula, `_content_score`
 (a `(word, cells)` pairs iterable in, a number out): sum of squares of
-each placed word's own "scored length". With `priority_words` (the theme
-glossary) non-empty, only a word belonging to ITS OWN slot's glossary
-counts at all; empty/`None`, every placed word counts. A `challenge_words`
-("Mots Défi") word always counts, whatever `priority_words` says, and its
-own scored length gets `CHALLENGE_WORD_SCORE_BONUS=2` added before
-squaring — so an attempt that manages to place one is favored over an
-otherwise-equal one that doesn't. The *same* formula backs every one of
+each placed word's own "scored length" — its own length capped at
+`CONTENT_SCORE_LENGTH_CAP=7` letters (so one very long word can't
+dominate the sum on its own) before any bonus is added. Every placed word
+counts, whatever `priority_words`/`challenge_words` say — a theme/
+challenge-enriched attempt is favored by a bonus on top of the plain
+count, never by excluding the rest of the grid's content from the sum. A
+word belonging to its own slot's theme glossary (`priority_words`) gets
+`THEME_WORD_SCORE_BONUS=2` added to its capped length before squaring; a
+`challenge_words` ("Mots Défi") word gets the larger `CHALLENGE_WORD_
+SCORE_BONUS=4` instead (the two never stack — a challenge word that's
+also a theme word is scored with the challenge bonus only, once) — so an
+attempt that manages to place one is favored over an otherwise-equal one
+that doesn't. The *same* formula backs every one of
 these selections, successful or failed alike: `opt_score` (tie-break
-among several successful attempts of one palier, on top of a primary
-sort by fewest black cells), `_playable_score`/`_cleaned_playable_score`
+among every genuinely successful attempt found so far across the whole
+search — see "Minimum successful attempts, with worker reassignment"
+above — on top of a primary sort by fewest black cells),
+`_playable_score`/`_cleaned_playable_score`
 (picking a *failed* palier's own "best" attempt to report/carry forward,
 raw state vs. post-`_clean_blocked_slots` state respectively), and
 `_words_in_place_score` (picking the best cleaned candidate among several
@@ -387,7 +494,13 @@ non-dictionary word as an "invented word" bug: `_optimize_before_cleanup`/
 `_shorten_impossible_zones`/`_lengthen_impossible_zones`/`_clean_continue_
 candidate`'s own calls to `_invalid_fully_known_indices` all additionally
 exempt a challenge word's own cells (`_challenge_word_cells`), the same
-way they already exempt `permanent_locked_letters`. The same three
+way they already exempt `permanent_locked_letters`. `minimize_black_
+squares` (the final black-cell-removal optimization pass) gives it the
+same protection: a placed challenge word's cells are locked/preseeded
+into every trial's own `try_fill` and exempted from that function's own
+final "every word must be a real dictionary entry" check, so optimizing
+a grid can never silently swap out or reject-and-revert a challenge word
+already in place. The same three
 functions also never treat a still-OPEN slot as "impossible" — and so
 never shorten/lengthen/strip/blacken it — as long as an unused challenge
 word could still legally fill it (`_challenge_fillable_slot_indices`,
@@ -674,7 +787,8 @@ tier avoids it. `challenge_words`, a plain
 frozenset of bare uppercase words, built by `POST /api/interactive/step`'s
 own handler from `InteractiveStepRequest.challenge_words` (the author's
 own typed spelling, accents/case kept — see that field's own docstring)
-via `challenge_word_grid_form` (NFKD-normalize, drop combining marks,
+via `challenge_word_grid_form` (fold a ligature letter — `œ`/`Œ`/`æ`/`Æ` —
+into its two separate letters, NFKD-normalize, drop combining marks,
 uppercase, strip anything left outside A-Z — the wordlist's own MOT-
 column convention). A "Mots Défi" word is matched purely geometrically —
 `Filler._challenge_word_fits`, length plus any letter already fixed by a

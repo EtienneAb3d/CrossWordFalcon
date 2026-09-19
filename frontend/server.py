@@ -832,6 +832,23 @@ async def proxy_interactive_from_library(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/interactive/from-attempt")
+async def proxy_interactive_from_attempt(request: Request):
+    """Attempt-preview pencil icon: opens an automatic-generation attempt
+    snapshot in "Interactif" mode as a brand-new GRID_WORK creation."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/interactive/from-attempt",
+                content=body,
+                headers={"content-type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.post("/api/interactive/finish")
 async def proxy_interactive_finish(request: Request):
     """"Finir la grille" button of the "Interactif" authoring mode: locks

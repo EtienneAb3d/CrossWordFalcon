@@ -126,7 +126,7 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   you build the rest yourself (see "Interactive authoring mode" below).
 - **Précision thématique / Theme precision** (`#theme-precision`) — the
   minimum closeness a word must have to the theme to enter the theme
-  glossary, a number from 0 to 1 (0.68 by default; use a **point**, not a
+  glossary, a number from 0 to 1 (0.75 by default; use a **point**, not a
   comma, for the decimal — a typed comma is converted automatically).
   Higher means a tighter, more on-topic glossary with fewer words; lower
   means a broader one. It only affects grid generation when the
@@ -453,13 +453,25 @@ A dedicated panel (`#attempt-preview`, `frontend/static/script.js`,
 moving snapshot of the search: up to several small preview grids per
 step (one per attempt running in parallel), each annotated with how
 full/black it currently is and, when something went wrong on that
-attempt, which cells are involved. A word coming from the theme
+attempt, which cells are involved — a still-open slot with no candidate
+word left at all shows in red, and the exact crossing cell of two
+still-open slots that could never agree on a single letter (the same
+condition "Impossibles"/"Nettoyer" flag in Interactive mode, see below)
+shows in an even more vivid red than the rest of either one. A word
+coming from the theme
 glossary is shown in bold magenta letters; a word coming from the "Mots
 Défi (personnalisation)" list is shown in bold green letters instead —
 the same green already used for a challenge word on the Interactive
 mode grid (see "Mots Défi (personnalisation) / Challenge Words" below).
 A green outline marks whichever preview is currently considered the
-best candidate. **⏮ ◀ ▶ ⏭** buttons
+best candidate. Next to each preview's own stats line, a small pencil
+icon (`.attempt-preview-interactive-btn`, `renderAttemptPreview`, the
+same icon as the Library's own "Ouvrir en mode Interactif" button) opens
+that specific attempt — whatever it looks like at that exact moment,
+including any still-empty cell or unplayable zone — in Interactive
+authoring mode, so you can take over by hand instead of waiting for
+automatic generation to finish; if generation is still running, clicking
+it cancels the current job first. **⏮ ◀ ▶ ⏭** buttons
 (`showFirstPreview`/`showPreviousPreview`/`showNextPreview`/
 `catchUpPreviewToEnd`) and a "Étape X/Y" position indicator
 (`#attempt-preview-position`, `renderPreviewPosition`) let a player step
@@ -586,7 +598,10 @@ to the left of **Mots / Words** to open it as an overlay panel.
   places a letter itself, and the suggestions disappear the moment you
   edit the grid.
 - The **Impossibles / Impossible** button identifies zones where no word
-  fits any more. **Vérifier / Check** makes sure every word is really in
+  fits any more — including two still-open crossing words that could
+  never agree on a single letter where they meet, even if each one still
+  has real candidates on its own; the exact conflicting cell shows in a
+  more vivid red than the rest of either word. **Vérifier / Check** makes sure every word is really in
   the dictionary and has a definition. A word from the "Mots Défi
   (personnalisation)" list is always considered part of the dictionary
   for both of these checks, whether or not it's a real dictionary entry.
@@ -806,14 +821,22 @@ real letter. Both update after every edit.
   mid-session.
 - **Nettoyer / Clean up** (`#interactive-clean-btn`, `POST /api/
   interactive/clean`) — for every emplacement that has become impossible
-  (no real dictionary word fits its already-placed letters any more, or
-  it's already entirely filled in but spells something that isn't a real
-  word), removes every word crossing it and clears its own letters too,
-  falling back to turning one of its cells black when removing words
-  alone wouldn't be enough. Leaves the grid unchanged if nothing is
-  actually impossible. A word from the "Mots Défi (personnalisation)"
-  list is considered part of the dictionary for this check — it is never
-  removed by "Nettoyer", even if it isn't a real dictionary entry.
+  (no real dictionary word fits its already-placed letters any more, it's
+  already entirely filled in but spells something that isn't a real word,
+  or it crosses another still-open word with no letter the two could ever
+  agree on where they meet — the exact conflicting cell shows in a more
+  vivid red than the rest of either word, see "Impossibles" above),
+  removes every word crossing it and clears its own letters too. Turning a
+  cell black is a separate mechanism this button never reaches for: for
+  the last kind of conflict above specifically, the other word is itself
+  still open, so there is nothing already placed to remove there either —
+  this button simply has no effect on that particular pair (still shown
+  impossible afterward) unless one of them also crosses some other,
+  already-placed word elsewhere, in which case that word is removed as
+  usual. Leaves the grid unchanged if nothing is actually impossible. A
+  word from the "Mots Défi (personnalisation)" list is considered part of
+  the dictionary for this check — it is never removed by "Nettoyer", even
+  if it isn't a real dictionary entry.
   **Nettoyer (+noires) / Clean up (+black cells)**
   (`#interactive-clean-deep-btn`) does the same, then additionally tries
   removing every black cell in the grid one by one, keeping a removal
@@ -984,9 +1007,10 @@ that pinned those letters in place to begin with. Each new black cell is
 chosen, among a small batch of candidate positions, to fall in whichever
 row and column already has the fewest black cells of its own — spreading
 them out rather than letting them clump into ugly "walls" — and the
-generator actively prefers a candidate that touches no other black cell
-at all, only accepting one right next to another as a genuine last
-resort, and never at all for the very first grid of a whole generation.
+generator never places a black cell right next to another one, on any
+cycle: a cycle whose black-cell density target can't be reached without
+doing so simply ends up with fewer black cells than aimed for, left as-is,
+rather than forcing an adjacent one.
 
 Once this fresh pattern is in place but before any word has actually been
 placed into it, the generator makes one more pass specifically for any
@@ -1010,14 +1034,14 @@ the ordinary chances described below.
 accepted, every run of at least 2 white cells (across or down) becomes a
 slot that needs a real dictionary word. Rather than filling slots in a
 fixed reading order, the generator picks the next slot through several
-layers of priority: first it leans, with some randomness, toward
-whichever of "across" or "down" still has more open slots, so the two
-categories fill in roughly together instead of one being finished before
-the other even starts; if any word from the "Mots Défi (personnalisation)"
-/ "Challenge Words" field still fits somewhere in that category, the
+layers of priority, starting from every still-open slot in the grid (an
+optional first step that would narrow this down to only "across" or only
+"down" slots, leaning toward whichever category still has more open
+slots, currently sits disabled): if any word from the "Mots Défi
+(personnalisation)" / "Challenge Words" field still fits somewhere, the
 choice narrows to those slots first, ahead of everything else described
 below — the same priority the Interactive mode panel's own "Suivant" /
-"Next" button gives it one word at a time; within that category, a slot with fewer than 3
+"Next" button gives it one word at a time; within that group, a slot with fewer than 3
 real dictionary candidates left is tackled first, on the theory that
 finishing it with a genuine word now is better than letting a later
 cleanup pass shorten it with a black cell instead; among what's left, a
@@ -1025,7 +1049,7 @@ slot that's already partly determined by a real crossing letter is
 preferred over one that's still completely blank, so the generator tends
 to finish what it's already started rather than opening new fronts
 everywhere at once; ties are then broken by physical position (roughly
-sweeping from the top-left corner of the grid), and, as a final
+closing in from the grid's own center outward), and, as a final
 tie-break among a handful of similarly-placed slots, by which one's
 still-open cells look statistically the most promising to fill (see the
 next paragraph). A slot that crosses another slot already known to be
@@ -1100,12 +1124,21 @@ indefinitely on a hopeless case.
 between cycles.** Rather than only ever trying one pattern-and-fill
 combination at a time, each cycle ("palier") launches as many independent
 attempts in parallel as the machine has processor cores, each running in
-its own process. If more than one of them actually succeeds in the same
-cycle — which happens more often than one might expect — the generator
-doesn't just keep the first one that finished: every successful attempt
-is genuinely optimized on its own (see the next paragraph) and whichever
-one ends up with the fewest black cells afterward is the one that's
-actually kept. If every attempt in a cycle fails instead, the generator
+its own process. A single successful grid is never enough on its own —
+the generator always waits for at least two genuinely successful grids,
+counted across the whole search rather than just one cycle, before it
+will settle on a winner; the moment one attempt succeeds while a second
+is still needed, whichever processor core it was using is immediately
+put to work on a brand-new, from-scratch attempt instead of sitting idle
+for the rest of that cycle. Once enough successes are in hand — which
+happens more often than one might expect within a single cycle alone —
+the generator doesn't just keep the first one that finished: every
+successful attempt is genuinely optimized on its own (see the next
+paragraph) and whichever one ends up with the fewest black cells
+afterward is the one that's actually kept. If, after using up the
+generator's whole cycle budget, only one success was ever found, that
+one is still kept rather than the whole generation failing outright. If
+every attempt in a cycle fails instead, the generator
 doesn't necessarily throw everything away and start over from a blank
 grid: as long as the best of that cycle's own failed attempts still has
 at least one slot worth trying and a cycle-count limit hasn't been

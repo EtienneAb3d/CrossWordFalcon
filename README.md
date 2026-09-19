@@ -169,7 +169,10 @@ On the page:
    shows up to 6 small snapshots of layouts tried so far; once a layout is
    found, the same preview switches to a single, letters-free view of that
    final grid for the rest of the process (optimizing it, then writing its
-   definitions).
+   definitions). Next to each snapshot's own stats, a small pencil button
+   opens that exact attempt in Interactive mode, so you can take over by
+   hand instead of waiting for the search to finish — this cancels the
+   ongoing generation if it's still running.
 4. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
    ready to be filled in. Above it, a short generated title for the puzzle
