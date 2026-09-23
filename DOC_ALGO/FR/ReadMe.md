@@ -1,2129 +1,2532 @@
 # Comment CrossWordFalcon construit une grille
 
-Ce document décrit, en termes simples, l'algorithme de `backend/crossword_gen.py`
-qui construit une grille de mots croisés remplie. Il se déroule en trois étapes :
-d'abord placer les cases noires, puis remplir les cases blanches avec de vrais
-mots, puis simplifier la grille — que ce soit une tentative bloquée qu'on
-récupère avant de continuer, ou une grille déjà réussie qu'on rend encore plus
-dense en retirant le plus de cases noires possible.
+Ce document explique, en termes simples mais complets, l'algorithme de
+génération de grilles de `backend/crossword_gen.py` : comment les cases
+noires sont posées, comment les mots sont choisis et posés, et comment une
+grille bloquée est récupérée plutôt que jetée.
 
-## Construire une grille (mode manuel avec assistant)
+**Comment lire ce document.** Il suit l'**ordre d'exécution** de
+l'algorithme : d'abord le principe général ci-dessous (la vue d'ensemble
+suffisante pour comprendre de quoi parlent les chapitres), puis un chapitre
+par partie. Chaque chapitre commence par une **description générale** de ce
+que fait cette partie, avant d'en détailler les **particularités, cas
+particuliers et exceptions**.
 
-Pour construire soi-même une grille à la main (plutôt que de laisser une
-génération automatique la remplir), on part de la page d'accueil :
+Le sens exact des termes employés ici (emplacement bloqué, case croisée
+bloquée, emplacement écarté, emplacement pauvre, case croisée injouable) est
+fixé une fois pour toutes dans `DOC_ALGO/FR/Lexicon.md`.
 
-1. Configurer la grille avec les options de la page d'accueil (langue,
-   taille, difficulté, taux noir, etc.).
-2. Choisir le **Mode** « Interactif ».
-3. Lister éventuellement des mots dans le champ **Thématique** pour orienter
-   la grille vers un sujet (facultatif).
-4. Cliquer sur le bouton **Générer la grille**.
+Cet algorithme existe en deux implémentations identiques : Python
+(`backend/crossword_gen.py`, citée tout au long de ce document) et Java
+(`backend_java/`, paquet `falcon.gen`, où chaque fonction citée ici a son
+équivalent du même nom en camelCase). Ce document les spécifie toutes les
+deux ; en Java, les tentatives parallèles d'un palier sont des fils
+d'exécution d'un même processus plutôt que des processus séparés, sans
+autre différence de comportement.
 
-Le même guide est aussi disponible directement dans l'interface, une fois la
-session interactive démarrée : le bouton **?** situé à gauche de **Mots**
-l'ouvre dans un panneau.
+---
 
-- Placer ses lettres dans la grille. La touche Espace permet d'ajouter ou de
-  supprimer une case noire.
-- Le bouton **Suivant** génère automatiquement un nouveau mot (en tenant
-  compte d'une éventuelle liste **Mots Défi**, en priorité, puis d'un
-  éventuel glossaire thématique — voir « Choisir quel emplacement remplir
-  en premier » plus bas). Le bouton **Précédent** permet de revenir en
-  arrière (par exemple pour faire générer un autre mot par Suivant).
-- Utiliser les outils pour s'aider : **Dictionnaire**, **Paraphraseur**, le
-  bouton **Mots** donne la liste des mots compatibles avec l'emplacement
-  sélectionné.
-- Deux boutons permettent de nettoyer la grille sur les zones impossibles,
-  avec ou sans retrait des cases noires.
-- Le bouton **Impossibles** identifie les zones où plus aucun mot n'est
-  possible. **Vérifier** permet de s'assurer que tous les mots sont bien
-  dans le dictionnaire et possèdent une définition.
-- Le bouton **Définitions** génère automatiquement les définitions
-  manquantes.
-- Les boutons **Proposer une définition** et **Proposer un titre** aident
-  avec plusieurs propositions.
-- S'assurer que tous les mots posés ont une définition.
-- Cliquer sur **Finir la grille** pour que Falcon complète les cases encore
-  vides.
-- À la fin du processus automatique, supprimer les mots qui ne conviennent
-  pas, puis recommencer à placer des lettres, des cases noires et des
-  définitions. On peut relancer **Finir la grille** autant de fois que
-  nécessaire.
-- Penser à sauvegarder.
-- Quand la grille est complète et convient, cliquer sur **Publier**. Elle se
-  retrouve alors dans la **Bibliothèque**, où l'on peut copier un lien pour la
-  jouer ou l'exporter en PDF.
+## Principe général
 
-## Construire une grille (tout automatique)
+### Le vocabulaire minimal
 
-C'est le fonctionnement par défaut de la page d'accueil : Falcon construit
-toute la grille lui-même, sans aucune intervention manuelle.
+- Un **emplacement** est une suite de cases blanches consécutives, sur une
+  ligne (horizontal) ou une colonne (vertical), destinée à recevoir un mot.
+  Toute suite d'au moins **2** cases est un emplacement à remplir et à
+  définir ; une case blanche seule entre deux cases noires dans un sens
+  n'est qu'une case de passage pour le mot qui la traverse dans l'autre
+  sens. Une même case appartient le plus souvent à deux emplacements à la
+  fois (un horizontal et un vertical qui se croisent).
+- Une **tentative** est une construction complète et indépendante : un
+  motif de cases noires, puis une recherche de remplissage sur ce motif.
+- Un **palier** est un lot de tentatives menées **en parallèle**, une par
+  processus. Le palier réussit dès qu'une de ses tentatives remplit
+  entièrement sa grille ; sinon il échoue, et transmet au palier suivant ce
+  qu'il a de récupérable.
+
+### Les trois phases d'une tentative
+
+1. **Poser les cases noires** (chapitre 3) — construire le motif noir/blanc
+   sur lequel la recherche va travailler.
+2. **Remplir les cases blanches avec de vrais mots** (chapitre 4) — une
+   recherche par essais successifs avec retour en arrière
+   (*backtracking*) : choisir un emplacement, y essayer un mot du
+   dictionnaire compatible avec les lettres déjà imposées par les mots
+   croisés, puis recommencer sur l'emplacement suivant ; revenir en arrière
+   dès qu'un emplacement se retrouve sans aucun mot possible.
+3. **Simplifier ce qui a échoué** (chapitre 5) — si la recherche n'a pas
+   rempli toute la grille, retirer de cette tentative les mots et les cases
+   noires qui bloquent, pour que le palier suivant reparte de ce qui reste
+   exploitable plutôt que de zéro.
+
+### La boucle entre paliers
+
+Une génération enchaîne jusqu'à **200 paliers** (`attempts`). Après chaque
+palier échoué, le programme choisit comment enchaîner :
+
+- **reprise « telle quelle »** — le motif de chaque tentative est conservé
+  à l'identique et seulement débarrassé de ce qui bloque, parce qu'il reste
+  au moins un emplacement qui a encore une chance d'aboutir ;
+- **nettoyage complet puis motif neuf** — plus aucun emplacement libre n'a
+  de chance d'aboutir : on ne garde que les lettres confirmées et on
+  régénère un motif de cases noires ;
+- **nettoyage profond, puis grille écartée** — une grille nettoyée qui
+  reproduit le même état deux nettoyages de suite est nettoyée plus en
+  profondeur ; si elle le reproduit une troisième fois, elle seule est
+  écartée et remplacée par une grille entièrement vierge, les autres
+  poursuivant leur progression.
+
+Le remplissage n'est donc presque jamais recommencé de rien : chaque palier
+hérite du contenu réellement confirmé par les précédents.
+
+### La fin de la recherche
+
+Une seule tentative réussie ne suffit pas à conclure : il en faut au moins
+**2** sur l'ensemble de la recherche (`MIN_SUCCESSFUL_ATTEMPTS`). Une fois
+ce seuil atteint, la meilleure de toutes les réussites est retenue, puis
+une dernière passe (chapitre 6) lui retire encore le plus de cases noires
+possible pour la densifier. Les définitions de chaque mot sont ensuite
+écrites par le modèle de langage (`backend/clues.py`), et la grille est
+enregistrée.
+
+### Ce que le joueur voit pendant ce temps
+
+L'interface web affiche en direct un aperçu de la recherche : le motif de
+départ, le motif de cases noires obtenu, les meilleures tentatives
+échouées avec leurs diagnostics (cases bloquées, écartées, verrouillées),
+puis l'état de ces mêmes tentatives après optimisation. Le détail de ces
+aperçus est au chapitre 7.
+
+---
+
+## Chapitre 1 — Lancer une génération
+
+Il existe deux façons de construire une grille : la laisser entièrement
+construire par le programme, ou la construire soi-même mot à mot avec
+l'assistance du programme. Les deux passent par la même page d'accueil et
+partagent tout le moteur décrit dans ce document ; seul le déclenchement
+diffère.
+
+### Mode tout automatique
+
+C'est le fonctionnement par défaut : le programme construit toute la grille
+lui-même, sans aucune intervention manuelle.
 
 1. Configurer la grille avec les options de la page d'accueil (langue,
    taille, difficulté, taux noir, graines, etc.).
 2. Choisir un **Mode** de génération parmi Flash/Turbo/Rapide/Moyen/Ultra
-   (jamais « Interactif », réservé au mode manuel ci-dessus) — ce choix ne
+   (jamais « Interactif », réservé au mode manuel ci-dessous) — ce choix ne
    fixe qu'un budget de recherche par tentative (voir « Limites de la
-   recherche » plus bas), pas la qualité du résultat final.
-3. Lister éventuellement des mots dans le champ **Thématique** pour orienter
-   le choix des mots vers un sujet (facultatif), et/ou des mots dans le
-   champ **Mots Défi (personnalisation)** juste en dessous pour forcer des
-   mots précis dans la grille (facultatif — même mécanique de priorité que
-   le bouton **Suivant** du mode manuel, voir « Choisir quel emplacement
-   remplir en premier » plus bas ; ces mots ne sont jamais montrés dans la
-   Bibliothèque).
-4. Cliquer sur le bouton **Générer la grille**.
+   recherche », chapitre 4), pas la qualité du résultat final.
+3. Lister éventuellement des mots dans le champ **Thématique** pour
+   orienter le choix des mots vers un sujet, et/ou des mots dans le champ
+   **Mots Défi (personnalisation)** juste en dessous pour forcer des mots
+   précis dans la grille (facultatif ; ces mots ne sont jamais montrés dans
+   la Bibliothèque).
+4. Cliquer sur **Générer la grille**.
 
-À partir de là, tout se déroule sans autre action : les trois étapes
-décrites dans ce document (placement des cases noires, remplissage par de
-vrais mots, simplification de la grille) s'enchaînent d'elles-mêmes, avec un
-aperçu en direct de la recherche en cours (motifs de cases noires essayés,
-tentatives échouées, grille en cours d'optimisation), puis les définitions
-de chaque mot sont écrites par le modèle de langage. La grille terminée est
-automatiquement enregistrée dans la **Bibliothèque** dès qu'elle est prête —
-contrairement au mode manuel ci-dessus, il n'y a pas de bouton **Publier** à
-cliquer.
+À partir de là tout s'enchaîne sans autre action : les trois phases de
+chaque tentative, les paliers successifs, l'optimisation finale, puis
+l'écriture des définitions. La grille terminée est automatiquement
+enregistrée dans la **Bibliothèque** dès qu'elle est prête — il n'y a pas
+de bouton **Publier** à cliquer.
 
-Si aucune grille remplissable n'a été trouvée au bout du nombre de tentatives
-prévu, un bouton **Continuer** permet de relancer la recherche à partir du
-dernier état atteint plutôt que de repartir de zéro. Une fois la grille
-terminée, un bouton **Recalculer** permet de générer un nouveau jeu de
-définitions pour la même grille (une copie, la grille d'origine n'est jamais
-modifiée) sans refaire tout le placement des mots.
+Si aucune grille remplissable n'a été trouvée au bout des 200 paliers, un
+bouton **Continuer** relance 200 nouveaux paliers en repartant exactement
+de l'état où la recherche s'est arrêtée (motif, cases verrouillées, mots
+déjà confirmés) plutôt que d'une grille vierge (`backend/crossword_gen.py`,
+`generate_grid` et `_serialize_resume_state`/`_deserialize_resume_state` ;
+`backend/app.py`, `POST /api/generate/continue/{job_id}`). Une fois la
+grille terminée, un bouton **Recalculer** génère un nouveau jeu de
+définitions pour la même grille (une copie ; la grille d'origine n'est
+jamais modifiée) sans refaire le placement des mots.
 
-## Grilles bilingues
+### Mode Interactif (construction manuelle assistée)
+
+Pour construire soi-même une grille mot à mot :
+
+1. Configurer la grille avec les options de la page d'accueil (langue,
+   taille, difficulté, taux noir, etc.).
+2. Choisir le **Mode** « Interactif ».
+3. Lister éventuellement des mots dans le champ **Thématique** et/ou dans
+   le champ **Mots Défi**.
+4. Cliquer sur **Générer la grille**.
+
+Le même guide est disponible dans l'interface une fois la session
+démarrée : le bouton **?** situé à gauche de **Mots** l'ouvre dans un
+panneau.
+
+- Placer ses lettres dans la grille. La touche Espace ajoute ou supprime
+  une case noire.
+- Le bouton **Suivant** fait poser automatiquement **un** mot de plus, en
+  tenant compte d'abord d'une éventuelle liste **Mots Défi**, puis d'un
+  éventuel glossaire thématique (voir « Le mode Interactif : poser un seul
+  mot », chapitre 4). Le bouton **Précédent** revient en arrière, par
+  exemple pour faire proposer un autre mot.
+- Les outils d'aide : **Dictionnaire**, **Paraphraseur**, et le bouton
+  **Mots** qui donne la liste des mots compatibles avec l'emplacement
+  sélectionné.
+- Deux boutons nettoient la grille sur les zones impossibles, avec ou sans
+  retrait des cases noires.
+- Le bouton **Impossibles** identifie les zones où plus aucun mot n'est
+  possible ; **Stats** (bouton bistable, activé par défaut) affiche en
+  permanence, en gris clair dans chaque case encore vide, la lettre
+  statistiquement la plus probable à cet endroit ; **Vérifier**
+  s'assure que tous les mots posés sont bien dans le dictionnaire et
+  possèdent une définition.
+- Le bouton **Définitions** génère automatiquement les définitions
+  manquantes ; **Proposer une définition** et **Proposer un titre** font
+  plusieurs propositions.
+- **Finir la grille** (ou **Finir la zone**, si une zone est sélectionnée)
+  confie les cases encore vides à la génération automatique. À la fin de ce
+  processus, on peut supprimer les mots qui ne conviennent pas, replacer
+  des lettres, des cases noires et des définitions, et relancer **Finir la
+  grille** autant de fois que nécessaire.
+- Penser à sauvegarder. Quand la grille est complète et convient, cliquer
+  sur **Publier** : elle se retrouve dans la **Bibliothèque**, où l'on peut
+  copier un lien pour la jouer ou l'exporter en PDF.
+
+**Finir la grille / Finir la zone** réutilise exactement le pipeline
+automatique décrit dans ce document : chaque case déjà posée devient une
+contrainte permanente (`permanent_locked_letters`/`permanent_black_cells`),
+et, quand une zone est sélectionnée plutôt que la grille entière, seules
+les cases de cette zone doivent être résolues pour que la recherche se
+déclare réussie (`required_cells`) — les cases en dehors peuvent rester
+vides.
+
+### Grilles bilingues
 
 Une grille peut utiliser deux langues à la fois : les mots horizontaux dans
-une première langue, les mots verticaux dans une seconde (`backend/
-crossword_gen.py`, `generate_grid`'s own `bilingual_wordlist_path`
-parameter). Les trois étapes ci-dessous fonctionnent alors exactement de la
-même façon, sauf pour un point unique : chaque fois qu'un emplacement a
-besoin d'un mot candidat, c'est le dictionnaire de sa propre direction
-(horizontal ou vertical) qui est consulté, jamais l'autre — deux
-dictionnaires complets et indépendants, un par langue, plutôt qu'un seul
-dictionnaire mélangeant les deux (`backend/crossword_gen.py`, `DualIndex`/
-`DualSet`). Sur une grille ordinaire (une seule langue), les deux
-dictionnaires sont en réalité le même objet, donc rien ne change par
-rapport à une génération monolingue.
+une première langue, les mots verticaux dans une seconde
+(`backend/crossword_gen.py`, `generate_grid`, paramètre
+`bilingual_wordlist_path`). Tout ce qui suit fonctionne alors exactement de
+la même façon, à une exception près : chaque fois qu'un emplacement a
+besoin d'un mot candidat, c'est le dictionnaire de **sa propre direction**
+qui est consulté, jamais l'autre — deux dictionnaires complets et
+indépendants, un par langue, plutôt qu'un dictionnaire mélangeant les deux
+(`DualIndex`/`DualSet`). Sur une grille monolingue, les deux dictionnaires
+sont en réalité le même objet : rien ne change.
 
-Chaque mot du résultat final porte sa propre langue (`backend/
-crossword_gen.py`, `generate_grid`'s own per-word `language` field) — celle
-de la grille pour un mot horizontal, la seconde langue pour un mot
-vertical. C'est cette information qui permet ensuite à `backend/clues.py`
-d'écrire chaque définition dans la bonne langue, et au ChatBot (`backend/
-chatbot.py`) de donner un indice dans la langue du mot concerné.
+Chaque mot du résultat final porte sa propre langue (champ `language` de
+chaque mot renvoyé par `generate_grid`) — celle de la grille pour un mot
+horizontal, la seconde pour un mot vertical. C'est cette information qui
+permet à `backend/clues.py` d'écrire chaque définition dans la bonne
+langue, et au ChatBot (`backend/chatbot.py`) de donner un indice dans la
+langue du mot concerné.
 
-## Étape 1 — Placer les cases noires
+---
 
-On part d'une grille entièrement blanche de `width` colonnes sur `height`
-lignes (15×10 par défaut), et on y ajoute des cases noires une par une, **de
-façon totalement indépendante** — sans contrainte de symétrie. Ça permet
-d'atteindre des motifs beaucoup plus clairsemés (donc des grilles avec
-beaucoup plus de lettres visibles) tout en respectant les règles
-structurelles ci-dessous.
+## Chapitre 2 — L'organisation d'un palier
 
-### Pré-remplissage
+Un palier ne fait pas un seul essai : puisqu'une tentative est rapide et
+qu'une seule n'occupe pas toute la machine, chaque palier lance **autant de
+tentatives indépendantes en parallèle que la machine a de processeurs**,
+chacune dans son propre processus (`backend/crossword_gen.py`,
+`PARALLEL_ATTEMPTS` ; réglable par la variable
+`CROSSWORDFALCON_PARALLEL_ATTEMPTS` de `env.sh`). Chaque tentative a son
+propre générateur aléatoire, donc son propre motif et ses propres choix de
+mots.
 
-**Avant même de commencer** le placement décrit plus bas, une phase de
-**pré-remplissage** s'exécute : tant que la grille comporte un emplacement
-(un mot à trouver) dont la longueur a **moins de `PREFILL_MIN_WORD_COUNT`
-(3) mots candidats** dans le
-dictionnaire — typiquement un emplacement trop long, ou d'une longueur trop
-rare, pour le dictionnaire — on continue à poser des cases noires jusqu'à ce
-que ce ne soit plus le cas (ou jusqu'à ce qu'il ne soit plus possible d'en
-ajouter, un cas limite accepté, pas une erreur). Ce seuil est le
-même que celui utilisé par le critère d'impossibilité de remplissage
-appliqué aux emplacements touchant déjà des lettres verrouillées (voir plus
-bas), et par la priorité de sélection décrite dans "Choisir quel
-emplacement remplir en premier" (étape 2).
+Le palier attend que toutes ses tentatives se terminent, récolte leurs
+résultats, et décide de la suite : conclure la recherche si le nombre
+minimal de réussites est atteint, sinon transmettre au palier suivant ce
+que ces tentatives ont produit (chapitre 5).
 
-#### Cases comptées dans l'objectif « Taux noir »
+Au tout premier palier, il n'existe encore aucune grille de départ
+commune : **chaque tentative parallèle construit alors sa propre grille
+depuis zéro**, motif compris (`make_pattern`). Ce n'est qu'à partir du
+premier échec que les tentatives commencent à partir de grilles héritées du
+palier précédent — une grille distincte par tentative, jamais la même
+rediffusée à toutes.
 
-Les cases posées durant ce pré-remplissage comptent pour l'objectif de
-pourcentage de cases noires visé (le champ "Taux noir" de l'interface,
-`black_enrichment_percent`, fixé à 14 % par défaut) : ce pourcentage est
-calculé une bonne fois pour toutes sur le nombre de cases blanches **avant**
-le pré-remplissage, puis comparé au nombre de cases déjà posées
-(pré-remplissage inclus) — si le pré-remplissage a, à lui seul, déjà posé
-plus de cases que ce pourcentage n'en réclame, aucune case supplémentaire
-n'est ajoutée pour cette raison ; s'il en a posé moins, seule la différence
-est complétée ensuite.
+### Le pré-chauffage du pool de processus
 
-Ce pourcentage "Taux noir" est lui-même multiplié par la proportion de
-cases blanches encore restantes (cases blanches / cases totales de la
-grille), mesurée sur le motif de départ de ce palier précis (celui reçu du
-palier précédent, s'il y en a un) avant que le pré-remplissage de ce
-palier ne démarre. Pour la toute première grille (entièrement blanche),
-cette proportion vaut 1 : le taux appliqué est donc rigoureusement le taux
-réglé dans l'interface. À partir du deuxième palier, à mesure que les
-cases noires s'accumulent d'un palier à l'autre, cette proportion — et
-donc le taux réellement appliqué — diminue mécaniquement.
+Avant le tout premier palier, une phase de **pré-chauffage** force les
+`PARALLEL_ATTEMPTS` processus du pool à démarrer réellement. Sans elle, un
+pool tout juste créé ne démarre ses processus que paresseusement : seule
+une poignée est réellement disponible pour les premiers paliers, un même
+processus traite alors plusieurs tentatives pendant que d'autres restent
+inactifs, et le même numéro de processus apparaît plusieurs fois dans un
+même aperçu. Le pré-chauffage soumet exactement `PARALLEL_ATTEMPTS` tâches
+factices d'un coup, chacune bloquée dans une barrière de synchronisation
+partagée tant que toutes ne sont pas arrivées : un processus qui en attrape
+une reste occupé tant que les autres n'ont pas démarré, ce qui force le
+pool à en créer un nouveau pour chaque tâche restante. La répartition est
+donc parfaitement 1:1 dès le premier palier.
+
+### Une tentative va toujours jusqu'au bout
+
+Une tentative de remplissage va jusqu'à son terme avant que le palier ne se
+termine : jusqu'à ce qu'il n'y ait plus aucun emplacement jouable (chaque
+emplacement restant est soit assigné, soit signalé injouable), que son
+budget de vérifications soit dépassé, ou qu'elle soit interrompue par une
+tentative sœur du même palier. La décision « reprise telle quelle » /
+« nettoyage complet » n'intervient qu'*après* coup — jamais pour
+raccourcir la tentative elle-même. Les processus encore en cours ne sont
+jamais tués ni abandonnés.
+
+### Interruption anticipée du lot
+
+Une fraction réglable des tentatives, une fois terminées — qu'elles
+réussissent ou qu'elles échouent —, peut interrompre toutes les tentatives
+encore en cours pour passer directement au palier suivant
+(`generate_grid`, `PALIER_ATTEMPT_INTERRUPT_FRACTION`, et le point de
+contrôle correspondant dans `Filler._backtrack`) : le palier n'attendrait
+alors plus la tentative la plus lente du lot. Cette fraction est
+actuellement fixée à **100 %** : le palier attend donc que *toutes* les
+tentatives se terminent d'elles-mêmes, sans interruption anticipée, et la
+sélection ci-dessous voit toujours un lot complet.
+
+### Nombre minimal de réussites et réaffectation des processus
+
+Une seule tentative réussie ne suffit jamais à conclure la recherche : il
+en faut au moins **2**, cumulées sur l'ensemble de la recherche — un palier
+suivant peut donc fournir la deuxième réussite d'un palier précédent qui
+n'en avait trouvé qu'une (`generate_grid`, `MIN_SUCCESSFUL_ATTEMPTS`).
+
+Chaque processus libéré par une tentative terminée, réussie ou échouée,
+est immédiatement réaffecté à une toute nouvelle tentative — un motif
+entièrement neuf tiré depuis zéro, jamais une poursuite de la grille qui
+vient de se terminer — plutôt que de rester inactif, tant qu'au moins une
+tentative **d'origine** du palier est encore en course. Ces tentatives de
+remplacement ne prolongent jamais le palier : elles ne comptent pas comme
+« en course » pour l'allongement du budget des autres tentatives
+(`_pattern_attempt`, `racing=False`), et elles sont toutes interrompues
+dès que chaque tentative d'origine s'est terminée ou a consommé tout son
+budget (`attempt_done_event`). Une tentative de remplacement interrompue
+rend sa meilleure grille comme n'importe quelle tentative échouée.
+
+Ces tentatives de remplacement donnent une chance de réussite
+supplémentaire en exploitant toute la machine, mais un palier rend alors
+plus de grilles qu'il n'a de processus. Elles ne sont pas toutes reprises
+au palier suivant : sur N processus, seules les **N-1 meilleures** grilles
+(score de contenu ci-dessous) y sont conservées, plus **1 grille
+nouvelle** repartant de zéro (`_seed_pool`, plafonné à `PARALLEL_ATTEMPTS
+- reset_count` ; chapitre 5).
+
+Un palier qui se termine avec 0 ou 1 réussite en main ne conclut donc pas :
+ses tentatives échouées suivent la mécanique de reprise du chapitre 5, et
+l'éventuelle réussite unique reste mémorisée pour être comparée à celles
+des paliers suivants. Si la limite de 200 paliers est atteinte sans qu'une
+deuxième réussite n'ait jamais été trouvée, l'unique réussite obtenue est
+tout de même retenue plutôt que de déclarer un échec total.
+
+### Choisir la meilleure réussite
+
+Une fois le seuil atteint, la sélection porte sur **toutes** les réussites
+trouvées jusque-là dans la recherche, quel que soit le palier qui les a
+produites — un cas courant, pas une exception : un même palier en fournit
+souvent plusieurs à la fois. Ce n'est ni la première trouvée, ni celle qui
+semble la meilleure avant optimisation qui est retenue : **chacune** est
+d'abord réellement optimisée (sa propre passe de minimisation des cases
+noires — chapitre 6 —, sur sa propre copie de grille, jamais sur celle
+d'une autre tentative), puis c'est celle qui a le **moins de cases noires
+une fois optimisée** qui gagne. À égalité, le départage se fait par le
+score de contenu ci-dessous.
+
+Ces optimisations tournent **en parallèle**, une par réussite, sur les
+processus du palier qui vient de se terminer (`_minimize_trial`), et
+l'étape « minimisation » est affichée dès leur lancement, avec toutes les
+réussites en cours d'optimisation. La grille optimisée de la gagnante est
+directement la grille finale (`best_minimized`) : elle n'est pas optimisée
+une seconde fois. Seul le cas d'une réussite unique acceptée faute de
+mieux, en fin de budget, passe par une optimisation séparée
+(`backend/crossword_gen.py`, `generate_grid`).
+
+### Le score de contenu
+
+Toutes les sélections de l'algorithme qui doivent désigner la « meilleure »
+grille parmi plusieurs partagent une seule et même formule
+(`backend/crossword_gen.py`, `_content_score`) : la **somme des carrés des
+longueurs des mots réellement en place**, chaque longueur étant d'abord
+plafonnée à **7** lettres (`CONTENT_SCORE_LENGTH_CAP`) avant la mise au
+carré, pour qu'un seul mot très long ne domine pas la somme à lui seul. Ce
+score favorise quelques mots longs plutôt que beaucoup de mots courts : un
+mot de 7 lettres ou plus pèse 49, alors que dix mots de 2 lettres, qui
+couvrent pourtant plus de lettres au total, ne pèsent que 40.
+
+- La somme porte toujours sur la **totalité** des mots en place,
+  thématiques ou non : un glossaire thématique ou une liste **Mots Défi**
+  n'exclut jamais le reste du contenu, il n'ajoute qu'un bonus par-dessus.
+- Un mot en place appartenant au glossaire thématique de son propre
+  emplacement reçoit **+2** sur sa longueur plafonnée avant la mise au
+  carré (`THEME_WORD_SCORE_BONUS`), pour départager en faveur de la
+  tentative qui fait le plus ressortir la thématique.
+- Un mot de la liste **Mots Défi** reçoit **+4** à la place
+  (`CHALLENGE_WORD_SCORE_BONUS`). Les deux bonus ne se cumulent jamais : un
+  mot Défi qui est aussi un mot thématique n'est compté qu'une fois, avec
+  le bonus Mots Défi.
+
+La même formule départage donc, à l'identique : les réussites parallèles
+(ci-dessus, après le tri par nombre de cases noires), la meilleure
+tentative *échouée* d'un palier, et le meilleur candidat nettoyé
+(chapitre 5).
+
+### Ce que chaque tentative publie en direct
+
+Chaque processus publie, pendant sa propre recherche, chaque nouveau
+**record de mots placés** qu'il atteint — pas seulement l'état auquel il
+s'arrête. Ces publications remontent au processus parent au fil de l'eau
+par un canal dédié (`best_state_queue`), vidé en continu par un processus
+léger tournant pendant toute la génération. Le volume reste borné : une
+tentative ne peut battre son propre record qu'une fois par mot posé, donc
+au plus quelques dizaines de publications par tentative et par palier,
+quel que soit le nombre réel d'essais internes.
+
+Deux autres canaux, décrits au chapitre 4 (« Limites de la recherche »),
+complètent celui-ci : le compteur de budget consommé, et le battement de
+cœur qui republie périodiquement l'état *courant* d'une tentative même sans
+nouveau record.
+
+### Le vivier d'affichage n'influence jamais la sélection réelle
+
+**Ces états publiés en direct ne servent qu'à l'affichage, jamais à la
+sélection qui décide de la base du palier suivant.** Un état publié tôt
+dans une recherche encore peu avancée a mécaniquement très peu de cases
+pouvant déjà être jugées injouables (peu de mots posés, donc peu de
+croisements pour révéler un conflit) : le comparer au résultat abouti d'une
+autre tentative fausserait la sélection. La sélection réelle ne se fie donc
+qu'aux résultats finaux de vraies recherches abouties.
+
+La première des grilles montrées à l'écran est toujours, exactement, celle
+qui va réellement être nettoyée et conservée pour le palier suivant si elle
+est retenue ; les autres peuvent venir du vivier élargi (résultats réels +
+états publiés par la file), mais jamais à la place de celle-là, pour que la
+comparaison « avant nettoyage / après nettoyage » entre deux aperçus
+successifs reste valide.
+
+### Une seule grille par tentative dans le vivier
+
+Une même tentative peut avoir publié plusieurs états successifs en plus de
+son résultat final ; sans filtrage, ces instantanés d'une seule tentative
+occuperaient à eux seuls plusieurs des places affichées, au détriment des
+autres tentatives du palier. Chaque état porte donc l'identité de la
+tentative qui l'a produit, et, parmi tous les états d'une même tentative,
+seul celui au score le plus élevé est conservé. Cette règle protège aussi
+la première grille montrée (celle réellement conservée pour le palier
+suivant) : sa tentative d'origine ne peut pas réapparaître plus loin dans
+la liste via un de ses propres instantanés antérieurs, un cas possible
+puisque cette grille-là est choisie sur un critère légèrement différent
+(l'état après nettoyage) de celui qui départage le reste du vivier (l'état
+brut).
+
+---
+
+## Chapitre 3 — Phase 1 : poser les cases noires
+
+Chaque tentative part d'une grille de `width` colonnes sur `height` lignes
+(15×10 par défaut) — entièrement blanche au premier palier, ou déjà
+partiellement noircie et verrouillée si elle hérite d'un palier précédent —
+et y ajoute des cases noires **une par une, de façon totalement
+indépendante**, sans aucune contrainte de symétrie (`backend/
+crossword_gen.py`, `make_pattern`/`_place_black_cells`). Cette absence de
+symétrie permet d'atteindre des motifs beaucoup plus clairsemés, donc des
+grilles avec beaucoup plus de lettres visibles.
+
+La pose se fait en trois temps :
+
+1. un **pré-remplissage** qui noircit ce qui est de toute façon
+   inremplissable (emplacements dont la longueur ou les lettres déjà
+   verrouillées ne laissent presque aucun mot candidat) ;
+2. une **densification** qui complète jusqu'à l'objectif de pourcentage de
+   cases noires réglé dans l'interface ;
+3. un **réaménagement** éventuel d'une case noire flottante, pour faire
+   exister un emplacement de la bonne longueur pour un mot **Mots Défi**
+   qui n'en a pas encore — jamais pour un mot thématique, qui ne prend
+   qu'un emplacement déjà offert par le motif.
+
+Chaque case posée doit respecter les règles structurelles ci-dessous, et
+n'est jamais posée au hasard sur toute la grille.
+
+### Les règles structurelles
+
+Une case noire n'est acceptée que si elle respecte ces règles :
+
+- une case blanche ne peut jamais se retrouver isolée dans les **deux** sens
+  à la fois (entourée de cases noires sur ses 4 côtés) : elle ne ferait
+  partie d'aucun mot, dans aucune direction, et ne pourrait donc jamais
+  recevoir de lettre — cette règle est absolue, jamais assouplie ;
+- la grille blanche doit rester entièrement **connectée** : pas de zone
+  blanche isolée du reste par un mur de cases noires ;
+- un emplacement encadré par une case noire des deux côtés doit normalement
+  faire au moins `STRUCTURAL_MIN_INTERIOR_FREE` cases (**8**), **sauf** si
+  l'une de ses deux extrémités touche directement le bord de la grille :
+  dans ce cas il reste autorisé quelle que soit sa longueur (y compris 1 ou
+  2 cases), et quel qu'en soit le nombre sur la grille entière. Une zone
+  d'une seule lettre ne sert jamais de mot à définir ; une zone de deux
+  lettres, elle, devient un vrai mot à deviner avec sa propre définition
+  (« et », « ou », « no »…).
+
+L'exigence des 8 cases est une préférence esthétique, abaissable d'un cran
+à la fois (8, 7, 6… jusqu'à 1) quand elle empêche toute pose — voir
+« Éviter l'isolement » ci-dessous. C'est pourquoi `minimize_black_squares`
+(chapitre 6), qui ne fait que *retirer* des cases noires, vérifie la grille
+avec l'exigence minimale réelle (1 case, c'est-à-dire uniquement la
+connexité et l'absence de case orpheline) et non cette exigence
+esthétique, qu'il n'est pas de son rôle de faire respecter.
+
+### Choisir où poser une case
+
+Pour éviter que les cases noires se regroupent en petits paquets (ce qui
+créerait des murs disgracieux et forcerait beaucoup de mots voisins à avoir
+la même longueur), chaque nouvelle case n'est pas tirée au hasard sur toute
+la grille : on tire un groupe de **32** positions candidates, et on retient
+celle qui se trouve dans la ligne et la colonne les moins déjà chargées en
+cases noires.
+
+**Éviter l'isolement.** Parmi ces 32 candidates, on cherche d'abord la
+meilleure (au sens du critère ci-dessus) qui **ne touche aucune autre case
+noire** et qui respecte l'exigence normale de 8 cases. Si cette exigence ne
+laisse plus aucune candidate à la fois isolée et valide, elle est abaissée
+d'un cran à la fois (7, puis 6… jusqu'à 1), toujours en cherchant une
+candidate isolée à chaque niveau.
+
+**L'adjacence n'est jamais acceptée par la génération de motif**
+(`_place_black_cells`), à aucun palier — ni le premier (grille vierge), ni
+un palier qui reprend un motif déjà partiellement noirci : si aucune
+candidate isolée ne convient à aucun niveau de la cascade, la meilleure
+candidate est simplement refusée et retirée du lot, et la case noire n'est
+pas posée cette fois-ci. Un palier dont l'objectif de pourcentage ne peut
+pas être atteint sans poser une case adjacente finit donc légitimement avec
+moins de cases noires que visé : la grille est laissée telle quelle et la
+recherche de remplissage est tentée dessus, exactement comme dans tout
+autre cas où la cible n'est pas pleinement atteinte.
+
+La même règle s'applique à la phase de pré-remplissage ci-dessous
+(`_prefill_unfillable_slots`) : elle aussi cherche uniquement une case
+n'en touchant aucune autre, sans jamais accepter l'adjacence en dernier
+recours — un emplacement qu'elle ne peut pas réparer ainsi se rabat sur le
+retrait d'un mot verrouillé qui le croise, puis, à défaut, est marqué
+irréparable pour ce palier.
+
+**Portée de cette interdiction.** Elle ne concerne que la génération de
+motif elle-même (`make_pattern`). Les mécanismes de reprise entre paliers
+et de résolution des zones impossibles (`_clean_blocked_slots`,
+`_build_retry_seed`, `_shorten_impossible_zones`/
+`_lengthen_impossible_zones`, le réaménagement d'une case noire flottante)
+restent libres de poser ou de déplacer une case noire adjacente à une autre
+quand c'est ce que demande la réparation d'une zone déjà impossible.
+
+### Le pré-remplissage
+
+**Avant même** le placement par pourcentage, une phase de pré-remplissage
+noircit ce qui ne pourra de toute façon pas être rempli : tant que la grille
+comporte un emplacement dont la longueur a **moins de
+`PREFILL_MIN_WORD_COUNT` (3) mots candidats** dans le dictionnaire —
+typiquement un emplacement trop long, ou d'une longueur trop rare —, on
+continue à poser des cases noires jusqu'à ce que ce ne soit plus le cas (ou
+jusqu'à ce qu'il ne soit plus possible d'en ajouter, un cas limite accepté,
+pas une erreur). Ce seuil de 3 est le même que celui du critère
+d'impossibilité appliqué aux emplacements déjà partiellement verrouillés
+(ci-dessous) et que celui de la priorité de sélection d'emplacement
+(chapitre 4).
+
+#### Ces cases comptent dans l'objectif « Taux noir »
+
+Les cases posées pendant le pré-remplissage comptent pour l'objectif de
+pourcentage de cases noires visé (champ **Taux noir** de l'interface,
+`black_enrichment_percent`, **17 %** par défaut). Ce pourcentage porte sur
+**toute la grille** (lignes × colonnes) et vise un nombre total de cases
+noires : les cases noires déjà présentes dans le motif de départ du palier
+(reprises d'un nettoyage) comme celles posées par le pré-remplissage y sont
+comptées. Si ce total atteint déjà l'objectif, aucune case supplémentaire
+n'est ajoutée pour cette raison ; sinon, seule la différence est complétée
+(`backend/crossword_gen.py`, `make_pattern`). Une grille qui repart d'un
+nettoyage ayant rouvert beaucoup de cases noires est donc ramenée au taux
+réglé, et non laissée clairsemée. Le même taux sert de budget par zone au
+nettoyage curatif du pré-remplissage (`_prefill_unfillable_slots`).
 
 #### Prise en compte des lettres déjà verrouillées
 
-Ce même pré-remplissage tourne aussi, avec un contrôle en plus, chaque fois
-qu'un palier reprend un motif déjà partiellement verrouillé (voir l'étape 3) :
-en plus de vérifier la longueur d'un emplacement, il vérifie alors, pour tout
-emplacement touchant au moins une case déjà verrouillée par une lettre
-confirmée, qu'il reste vraiment au moins 3 mots compatibles **avec ces
-lettres précises à ces positions précises** — pas seulement avec sa longueur
-en général (un seuil plus bas que celui de la longueur seule, ci-dessus : un
-emplacement réduit à un unique mot compatible se révèle trop fragile, le
-moindre conflit avec une lettre croisée le rendant impossible sans recours ;
-3 offre une marge de manœuvre minimale tout en restant nettement plus
-permissif que le seuil de longueur seule). La case noire ajoutée pour
-corriger un tel emplacement est
-choisie **directement parmi les propres cases de cet emplacement** (jamais
-ailleurs dans la grille au hasard), sur la case qui touche la ligne/colonne
-la moins déjà chargée en cases noires (les cases à égalité étant départagées
-au hasard). Si aucune case de l'emplacement à corriger ne convient (un vrai
-blocage, par exemple deux mots croisés déjà verrouillés qui ne laissent plus
-aucune case libre pour le couper), cet emplacement est mis de côté comme
-"impossible à corriger pour l'instant" et le pré-remplissage continue avec
-les autres emplacements encore à court de candidats.
+Le même pré-remplissage tourne aussi, avec un contrôle supplémentaire,
+chaque fois qu'un palier reprend un motif déjà partiellement verrouillé
+(voir chapitre 5) : en plus de la longueur d'un emplacement, il vérifie,
+pour tout emplacement touchant au moins une case déjà verrouillée par une
+lettre confirmée, qu'il reste vraiment au moins **3** mots compatibles
+**avec ces lettres précises à ces positions précises**
+(`PREFILL_LOCKED_MIN_WORD_COUNT`) — pas seulement avec sa longueur en
+général. Un emplacement réduit à un unique mot compatible se révèle trop
+fragile, le moindre conflit avec une lettre croisée le rendant impossible
+sans recours ; 3 offre une marge minimale.
 
-#### « Nettoyage curatif »
+La case noire ajoutée pour corriger un tel emplacement est choisie
+**directement parmi les propres cases de cet emplacement** (jamais ailleurs
+dans la grille au hasard), sur la case qui touche la ligne/colonne la moins
+déjà chargée en cases noires (égalités départagées au hasard). Si aucune
+case de l'emplacement ne convient (un vrai blocage, par exemple deux mots
+croisés déjà verrouillés qui ne laissent plus aucune case libre pour le
+couper), l'emplacement est mis de côté comme « impossible à corriger pour
+l'instant » et le pré-remplissage continue avec les autres.
 
-Pour ce même cas (un emplacement rendu
-insuffisant par des lettres déjà verrouillées — jamais pour le cas d'une
-longueur simplement trop rare, qu'aucun retrait de mot ne pourrait de toute
-façon corriger), on ne se contente plus de continuer à noircir cet
-emplacement indéfiniment. À sa toute première détection, on compte combien
-de cases blanches il couvre (sa taille d'origine) ; à chaque nouvelle case
-noire ajoutée pour le corriger, on la mémorise et on compare le nombre
-cumulé de cases ainsi ajoutées à cette taille d'origine. Tant que ce cumul
-reste sous le budget de cet emplacement — l'**objectif de remplissage en
-noir de la grille entière** (le même "Taux noir" cité plus haut, 17 % par
-défaut) appliqué à sa taille d'origine, mais **jamais moins d'1 case
-noire garantie** — on continue d'ajouter des cases noires normalement.
-Ce plancher garantit qu'un emplacement de taille normale (souvent 8-15
+#### Le « nettoyage curatif »
+
+Pour ce même cas — un emplacement rendu insuffisant par des lettres déjà
+verrouillées, jamais pour une longueur simplement trop rare, qu'aucun
+retrait de mot ne corrigerait — on ne noircit pas cet emplacement
+indéfiniment. À sa première détection, on compte combien de cases blanches
+il couvre (sa taille d'origine) ; à chaque nouvelle case noire ajoutée pour
+le corriger, on compare le cumul de ces cases à son budget propre :
+l'objectif de remplissage en noir de la grille entière (le même **Taux
+noir**, 17 % par défaut) appliqué à sa taille d'origine, mais **jamais
+moins d'1 case noire garantie** (`PREFILL_ZONE_BLACK_BUDGET_FLOOR`). Ce
+plancher garantit qu'un emplacement de taille normale (souvent 8 à 15
 cases) dispose toujours d'au moins 1 case avant que le pourcentage ne
-prenne le relais — un pourcentage appliqué directement à la taille d'un
-petit emplacement (9 cases ou moins à 10 %, par exemple) pourrait sinon
-n'autoriser aucune case noire du tout ; un plancher de 2 cases minimum
-s'est révélé, à l'usage, en produire trop.
+prenne le relais : appliqué directement à un petit emplacement, le
+pourcentage seul pourrait n'autoriser aucune case noire du tout.
 
 Une fois ce budget dépassé (ou si aucune case noire disponible ne
-convient), plutôt que de déclarer aussitôt l'emplacement irréparable, on
-tente de **retirer un mot déjà verrouillé qui croise cet emplacement** —
-un mot forcément dans l'autre sens, qui participe aux lettres déjà
-positionnées rendant cet emplacement difficile à remplir — plutôt que de
-continuer à sur-noircir une seule zone bien au-delà de ce que l'objectif de
-remplissage global prévoit. Le mot retiré est tiré au hasard parmi tous
-ceux qui croisent l'emplacement, **sans aucun critère de fragilité**.
-L'évaluation est répétée (une nouvelle case noire, ou un nouveau retrait de
-mot) jusqu'à obtenir de nouveau au moins 3 mots compatibles pour cet
-emplacement ; il n'est marqué irréparable que si ni l'un ni l'autre des
-deux leviers ne débloque la situation.
+convient), plutôt que de déclarer l'emplacement irréparable, on tente de
+**retirer un mot déjà verrouillé qui le croise** — un mot forcément dans
+l'autre sens, qui participe aux lettres rendant cet emplacement difficile à
+remplir — plutôt que de sur-noircir une seule zone bien au-delà de ce que
+l'objectif global prévoit. Le mot retiré est tiré au hasard parmi tous ceux
+qui croisent l'emplacement, sans aucun critère de fragilité. L'évaluation
+est répétée (une nouvelle case noire, ou un nouveau retrait de mot) jusqu'à
+retrouver au moins 3 mots compatibles ; l'emplacement n'est marqué
+irréparable que si aucun des deux leviers ne débloque la situation.
 
-### Règles structurelles
+### La densité visée
 
-Une case n'est acceptée que si elle respecte ces règles :
+Le pourcentage cible de cases noires de ce placement (`black_ratio`, un
+réglage séparé réservé au CLI) est **0 % par défaut, et ne progresse pas
+d'un palier à l'autre** : le pré-remplissage combiné au mécanisme de
+reprise entre paliers (chapitre 5) suffit à faire progresser la grille sans
+la densifier artificiellement palier après palier.
 
-- une case blanche ne peut jamais se retrouver isolée d'une seule lettre
-  dans les **deux** sens à la fois (entourée de cases noires sur ses 4
-  côtés) : une telle case ne ferait alors partie d'aucun mot du tout, dans
-  aucune des deux directions, et ne pourrait donc jamais recevoir de
-  lettre — cette règle-là reste absolue, jamais assouplie ;
-- la grille blanche doit rester entièrement connectée — pas de zone blanche
-  isolée du reste de la grille par un mur de cases noires ;
-- un emplacement (une zone blanche encadrée par une case noire des deux
-  côtés) doit normalement faire **au moins `STRUCTURAL_MIN_INTERIOR_FREE`
-  cases** (8 — `backend/crossword_gen.py`), **sauf** si l'une de
-  ses deux extrémités touche directement le bord de la grille : dans ce
-  cas, il reste toujours autorisé, quelle que soit sa longueur (y compris 1
-  ou 2 cases) et quel qu'en soit le nombre sur la grille entière. Une zone
-  d'une seule lettre ne sert jamais de mot à définir (juste une case de
-  passage pour le mot qui la traverse dans l'autre sens) ; une zone de deux
-  lettres, elle, **devient un vrai mot à deviner** avec sa propre
-  définition, voir l'étape 2 ("et", "ou", "no", etc.).
+Une petite densification fixe reste appliquée, elle, à chaque palier qui
+part d'une grille vierge ou d'une simplification (jamais à un palier de
+reprise « telle quelle ») : une fois le pré-remplissage terminé, le
+pourcentage **Taux noir** décrit plus haut (`POST_PREFILL_BLACK_FRACTION`,
+0,10 par défaut côté moteur) complète le nombre de cases noires jusqu'à ce
+pourcentage de la grille entière.
 
-  Si aucune case ne peut être posée en respectant ce nombre pour atteindre
-  l'objectif de remplissage des noires, le nombre est abaissé d'un cran à
-  la fois (8, 7, 6, ... jusqu'à 1) et le placement retenté à chaque
-  palier — exactement le mécanisme décrit dans "Éviter l'isolement"
-  ci-dessous.
+Si le remplissage échoue malgré tout, on ne repart pas forcément de zéro :
+voir le chapitre 5. Le nombre maximal de paliers avant d'abandonner est de
+**200**.
 
-L'exigence de `STRUCTURAL_MIN_INTERIOR_FREE` cases peut être abaissée pour
-une case précise (voir "Éviter l'isolement" ci-dessous) — `minimize_black_
-squares` (étape 3), qui ne fait que *retirer* des cases noires, vérifie
-donc la grille avec l'exigence minimale réelle (1 case, c'est-à-dire
-uniquement la connexité et l'absence de case orpheline), pas l'exigence
-esthétique ci-dessus, qui n'est pas son rôle de faire respecter.
+### Réaménager une case noire flottante pour un mot Défi
 
-### Choisir où placer une case
+Une fois le motif accepté pour ce palier — mais avant même le premier mot
+posé — une dernière passe cherche, pour chaque mot **Mots Défi** qui n'a
+encore aucun emplacement disponible de sa propre longueur, à façonner le
+motif pour qu'un tel emplacement existe
+(`_widen_floating_black_cells_for_priority_words`). Les mots du glossaire
+**thématique** n'y ont jamais droit : ni élargissement ni raccourcissement
+n'est tenté pour eux, ils ne sont placés que sur les emplacements que le
+motif offre déjà (`backend/crossword_gen.py`, `_pattern_attempt`,
+`_find_priority_word_placement`). Cette passe ne pose jamais elle-même une
+lettre : elle se contente de modifier le motif, et c'est le mécanisme
+habituel de choix d'emplacement/de mot (chapitre 4) qui s'en saisit
+ensuite naturellement, en priorité, comme de n'importe quel autre
+emplacement Mots Défi.
 
-Pour éviter que les cases noires se regroupent en petits paquets (ce qui
-créerait des "murs" disgracieux et forcerait beaucoup de mots voisins à
-avoir la même longueur), chaque nouvelle case n'est pas choisie au hasard sur
-toute la grille : on tire un petit groupe de 32 positions candidates, et on
-retient celle qui se trouve dans la ligne et la colonne les moins déjà
-chargées en cases noires.
+**Quand un mot est considéré comme ayant déjà un emplacement.** Un
+emplacement vide de la bonne longueur existant ailleurs dans la grille ne
+suffit pas à écarter un mot de cette passe (`_has_free_matching_slot`) : il
+faut en plus que ses lettres déjà verrouillées concordent avec le mot, et
+qu'aucun autre Mot Défi de même longueur, traité plus tôt dans
+cette même passe, ne l'ait déjà revendiqué — sans quoi deux mots de même
+longueur se verraient tous deux crédités du seul emplacement réellement
+libre, ou un mot se verrait crédité d'un emplacement dont les lettres
+imposées épellent en réalité autre chose.
 
-**Éviter l'isolement.** Parmi les 32 candidates, on cherche d'abord la
-meilleure (au sens du critère ci-dessus) qui **ne touche aucune autre case
-noire** et qui respecte l'exigence normale de `STRUCTURAL_MIN_INTERIOR_FREE`
-cases (8). Si cette exigence ne laisse plus aucune candidate à la fois
-isolée et valide, elle est abaissée d'un cran à la fois (7, puis 6, ...
-jusqu'à 1), toujours en cherchant une candidate isolée à chaque niveau.
-**L'adjacence n'est en réalité jamais acceptée par cette génération de
-motif** (`backend/crossword_gen.py`, `_place_black_cells`), à aucun palier
-— ni le tout premier (grille entièrement vierge), ni un palier qui reprend
-un motif déjà partiellement noirci d'un palier précédent : si aucune
-candidate isolée ne convient à aucun des niveaux de la cascade (8 jusqu'à
-1), la meilleure candidate est simplement refusée et retirée du lot — la
-case noire n'est donc jamais posée cette fois-ci — plutôt que d'accepter
-malgré tout une case adjacente à une autre déjà en place. Un palier dont
-l'objectif de pourcentage de cases noires ne peut pas être atteint sans
-poser une case adjacente finit donc légitimement avec moins de cases
-noires que visé : la grille est laissée telle quelle, et c'est la
-recherche de remplissage (étape 2) qui est tentée sur ce motif, exactement
-comme pour tout autre cas où la cible n'est pas pleinement atteinte.
+**L'élargissement.** Pour chaque mot encore sans emplacement, la passe
+examine jusqu'à `WIDEN_BLACK_CELL_WINDOW` cases noires non protégées
+(absentes de `permanent_black_cells`), tirées dans un ordre mélangé, et
+calcule pour chacune la zone blanche qui résulterait de son déplacement
+(`_white_run`, en remontant dans les deux directions depuis la case). Si le
+mot tient à ras de l'une ou l'autre extrémité de cette zone élargie — en
+respectant toute lettre déjà verrouillée sur ces cases — et que la grille
+reste structurellement valide (`is_structurally_valid`, seuil relâché à 1,
+le même qu'à la minimisation finale), la case noire est déplacée pour
+border le mot de l'autre côté et la case d'origine redevient blanche
+(`_try_widen_black_cell`).
 
-Cette même règle s'applique aussi à la phase de pré-remplissage ci-dessus
-(`backend/crossword_gen.py`, `_prefill_unfillable_slots`), pas seulement à
-ce placement par pourcentage : elle aussi cherche uniquement une case qui
-ne touche aucune autre case noire, sans jamais accepter l'adjacence en
-dernier recours — un emplacement qu'elle ne peut réparer ainsi se rabat
-sur le retrait d'un mot déjà verrouillé qui le croise, puis, à défaut, est
-simplement marqué irréparable pour ce palier (voir "Retirer un mot
-bloquant" plus loin) — jamais sur une case adjacente.
+**Le repli par raccourcissement.** Une fois que tous les Mots Défi ont eu
+leur tentative d'élargissement, une seconde passe
+(`_shorten_one_slot_for_word`) s'applique à ceux encore sans emplacement. C'est l'opération miroir : plutôt que
+de déplacer une case noire existante pour agrandir une zone, elle cherche
+un emplacement déjà vide et **strictement plus long** que le mot, et y case
+le mot au début ou à la fin (`_try_shorten_slot`) en posant une case noire
+toute neuve juste après sa dernière lettre — aucune case noire existante
+n'est touchée, puisque tout l'espace concerné était déjà ouvert. Le nombre
+d'emplacements examinés par mot est plafonné à `SHORTEN_SLOT_WINDOW`, soit
+10 % de la fenêtre de l'élargissement (`FALLBACK_PHASE_BUDGET_FRACTION`) —
+le même budget de 10 % qu'ailleurs dans l'algorithme avant d'abandonner un
+mot Défi, repris ici faute de budget de recherche déjà défini
+à ce stade, puisque cette passe tourne avant que le remplissage ne
+commence.
 
-Cette interdiction ne concerne que la génération de motif elle-même
-(`backend/crossword_gen.py`, `make_pattern`) : les mécanismes de reprise
-entre paliers et de résolution des zones impossibles décrits plus loin
-(`_clean_blocked_slots`, `_build_retry_seed`, `_shorten_impossible_zones`/
-`_lengthen_impossible_zones`, le repositionnement d'une case noire
-flottante pour un mot thématique/Défi) restent, eux, libres de poser ou
-déplacer une case noire adjacente à une autre quand c'est ce que demande
-la réparation d'une zone déjà impossible.
+**Deux garde-fous protègent ces deux manipulations** (déplacer une case
+noire existante, ou en poser une nouvelle) contre toute corruption d'un mot
+déjà posé ailleurs — indispensable puisque ces mêmes passes servent aussi
+en mode Interactif, où la grille peut déjà contenir de vraies lettres en
+dehors de la zone remaniée :
 
-### Densité visée
+1. la case qui absorbe le changement (la « nouvelle » case noire) ne peut
+   jamais être une case déjà porteuse d'une vraie lettre ;
+2. dans l'axe **perpendiculaire** au mot, ni la case libérée par
+   l'élargissement (sa propre lettre du mot en cours étant déjà appliquée)
+   ni la case nouvellement noircie ne peuvent faire basculer l'emplacement
+   perpendiculaire qui les traverse vers un état sans plus aucun mot réel
+   du dictionnaire possible, compte tenu des lettres déjà connues
+   (`_perpendicular_slot_stays_valid`/`_slot_has_domain`, une vérification
+   de domaine légère, indépendante de `Filler`). Sans elle, libérer une
+   case pourrait accoler discrètement une case surnuméraire à un mot
+   perpendiculaire déjà posé (le laissant avec une case vide qu'aucune case
+   noire ne referme jamais), et noircir une case pourrait au contraire en
+   tronquer un.
 
-Le pourcentage cible de cases noires visé par ce placement (`black_ratio`,
-un réglage séparé réservé au CLI) est **0 % par défaut, et ne progresse pas
-d'un palier à l'autre** : le pré-remplissage (au moins 3 mots candidats par
-emplacement) combiné au mécanisme de reprise entre paliers (voir l'étape 3)
-suffit à faire progresser la grille sans avoir à la densifier
-artificiellement palier après palier. Une petite densification fixe reste
-appliquée, elle, à chaque palier qui part d'une grille vierge ou d'une
-simplification (jamais à un palier de reprise "telle quelle") : une fois le
-pré-remplissage terminé, le pourcentage "Taux noir" décrit plus haut
-transforme le nombre de cases encore blanches nécessaire en cases noires
-supplémentaires.
+Grâce à ces deux garde-fous, aucune de ces manipulations ne peut rendre un
+emplacement impossible ailleurs dans la grille. C'est un mécanisme du mieux
+possible, pas une garantie de résultat : un mot trop long pour la moindre
+zone voisine disponible ou pour le moindre emplacement plus long existant,
+ou pour lequel aucune manipulation ne reste valide, retombe simplement sur
+les chances ordinaires de placement du chapitre 4 — sans jamais rien
+corrompre entre-temps. Le coût total est borné par
+`WIDEN_PRIORITY_WORDS_LIMIT` (Mots Défi essayés) et
+`WIDEN_MAX_SUCCESSFUL` (réaménagements par motif, partagé avec le repli par
+raccourcissement).
 
-Si le remplissage de l'étape 2 échoue malgré tout, on ne repart pas
-forcément de zéro : voir l'étape 3 ("Simplifier une tentative échouée").
-Le nombre maximal de paliers avant d'abandonner est de 200.
+**Portée.** En génération automatique, ces deux passes ne s'appliquent
+qu'au motif neuf de chaque palier (`_pattern_attempt`), jamais à une
+reprise « telle quelle » (`_pattern_continue`), dont le motif porte déjà de
+vrais mots sur certains emplacements ; les deux garde-fous n'y ont
+d'ailleurs aucun effet, la grille étant encore entièrement vierge à ce
+stade. Le motif y est remanié **cumulativement** pour toute la liste de
+mots d'un coup (jusqu'à `WIDEN_MAX_SUCCESSFUL` réaménagements empilés sur
+un même motif), parce que chaque réaménagement est de toute façon conservé :
+la recherche qui suit remplit la grille entière en de nombreux placements,
+il n'y a pas de « choisir un gagnant, jeter les autres » à respecter.
 
-Si les 200 paliers sont épuisés sans succès, l'interface web propose un
-bouton "Continuer" : il relance 200 nouveaux paliers, mais en repartant
-exactement de l'état où la tentative précédente s'est arrêtée (motif,
-cases verrouillées, mots déjà confirmés) plutôt que d'une grille vierge
-(`backend/crossword_gen.py`, `generate_grid` et
-`_serialize_resume_state`/`_deserialize_resume_state` ; `backend/app.py`,
-`POST /api/generate/continue/{job_id}`).
+Le mode Interactif (`interactive_place_word`) réutilise exactement les
+mêmes primitives (`_widen_one_floating_black_cell`/
+`_shorten_one_slot_for_word`, et à travers elles `_try_widen_black_cell`/
+`_try_shorten_slot`/`_perpendicular_slot_stays_valid`) en leur passant les
+lettres déjà posées comme verrouillées — c'est là que les deux garde-fous
+jouent réellement leur rôle — mais jamais l'orchestration par lot, et
+jamais sur un motif partagé : un clic sur **Suivant** ne pose qu'un seul
+mot, donc chaque mot encore candidat reçoit sa propre tentative,
+entièrement isolée sur sa propre copie du motif (voir « Le mode
+Interactif : poser un seul mot », chapitre 4).
 
-### Plusieurs tentatives en parallèle par palier
+Côté interface, un réaménagement de case noire fait partie intégrante de
+l'étape posée par **Suivant** : la grille entière renvoyée par le serveur
+remplace l'état affiché côté client (pas seulement les cases du mot posé),
+de sorte qu'un clic sur **Précédent** annule aussi bien le mot posé que le
+réaménagement qui l'a accompagné.
 
-Puisque cette recherche est rapide et que la machine est loin de saturer son
-processeur avec une seule tentative à la fois, chaque palier ne se contente
-pas d'un seul essai : **autant de tentatives indépendantes en parallèle que
-la machine a de processeurs, par défaut** (motif différent + remplissage
-complet), chacune sur son propre processus — ce nombre est réglable dans
-`env.sh` (variable `CROSSWORDFALCON_PARALLEL_ATTEMPTS`, `backend/
-crossword_gen.py`) pour forcer une valeur différente du nombre de
-processeurs détecté.
+---
 
-Tout à fait au départ (avant même le tout premier palier, donc avant tout
-nettoyage), il n'existe encore aucune grille de départ commune :
-**chaque tentative parallèle construit alors sa propre grille depuis zéro,
-totalement indépendamment des autres** — motif noir/blanc différent
-d'une tentative à l'autre, chacune tirée par son propre générateur
-aléatoire (`backend/crossword_gen.py`, `make_pattern`). Ce n'est qu'à
-partir du moment où un premier palier échoue que les tentatives suivantes
-commencent à partager un même point de départ (motif conservé, ou grille
-nettoyée) — voir plus bas.
-
-#### Interruption anticipée et sélection
-
-Une fraction réglable de ces tentatives, une fois terminées — qu'elles
-réussissent ou qu'elles échouent —, peut interrompre toutes les tentatives
-encore en cours pour passer directement au palier suivant
-(`backend/crossword_gen.py`, `generate_grid`,
-`PALIER_ATTEMPT_INTERRUPT_FRACTION`, et le point de contrôle correspondant
-dans `Filler._backtrack`) : le palier n'attendrait alors plus
-systématiquement la tentative la plus lente du lot. Cette fraction est
-pour l'instant fixée à **100 %** : le palier attend donc que **toutes** les
-tentatives du lot se terminent d'elles-mêmes avant de passer à la
-sélection, sans interruption anticipée — la sélection ci-dessous ne voit
-donc jamais qu'un lot partiel.
-
-#### Nombre minimal de réussites et réaffectation des process
-
-Une seule tentative réussie ne suffit jamais, à elle seule, à conclure la
-recherche : il en faut au moins **2**, cumulées sur l'ensemble de la
-recherche — un palier suivant peut donc fournir la deuxième réussite d'un
-palier précédent qui n'en avait trouvé qu'une seule (`backend/
-crossword_gen.py`, `generate_grid`, `MIN_SUCCESSFUL_ATTEMPTS`). Tant que ce
-seuil n'est pas atteint, chaque process qu'une réussite vient de libérer
-est immédiatement réaffecté à une toute nouvelle tentative — un motif
-entièrement neuf tiré depuis zéro, jamais une poursuite de la grille qui
-vient de réussir — plutôt que de rester inactif jusqu'à la fin du palier en
-cours. Les process encore en cours (qu'ils soient d'origine ou issus d'une
-réaffectation) sont toujours attendus jusqu'au bout, jamais tués ni
-abandonnés, conformément au principe déjà en vigueur pour ce mécanisme. Si
-la limite globale de paliers (`attempts`, 200 par défaut) est atteinte sans
-qu'une deuxième réussite n'ait jamais été trouvée, l'unique réussite
-obtenue est tout de même retenue plutôt que de déclarer un échec total.
-
-Une fois ce seuil atteint, la sélection porte sur **toutes** les réussites
-trouvées jusque-là dans la recherche, quel que soit le palier qui les a
-produites — un cas courant, pas une exception : mesuré en direct, plus de
-40 % des lots de réussites comparés en comportaient plusieurs, jusqu'à 6
-simultanées sur une même machine à 10 processeurs — ce n'est pas simplement
-la première trouvée qui est retenue, ni celle qui semble la meilleure avant
-optimisation : **chacune** de ces réussites est d'abord réellement
-optimisée (sa propre passe de minimisation des cases noires — voir
-"Minimisation des cases noires" plus bas —, sur sa propre copie de grille,
-jamais sur celle d'une autre tentative), puis c'est celle qui a le **moins
-de cases noires une fois optimisée** qui est gardée (`backend/
-crossword_gen.py`, `generate_grid`). À égalité de cases noires après
-optimisation, le départage se fait par la **somme des carrés des
-longueurs de mots**, chaque longueur étant d'abord plafonnée à 7 lettres
-avant la mise au carré (`CONTENT_SCORE_LENGTH_CAP`, pour qu'un seul mot
-très long ne domine jamais la somme à lui seul) — ce score favorise
-quelques mots longs plutôt que beaucoup de mots courts pour le même total
-de lettres : un mot de 7 lettres ou plus pèse 49 dans ce score, alors que
-dix mots de 2 lettres, qui couvrent pourtant plus de lettres au total, ne
-pèsent que 40. Ce départage porte toujours sur la **totalité** des mots
-effectivement placés, thématique ou non — un glossaire thématique/des
-Mots Défi n'excluent jamais le reste du contenu de la grille du score, ils
-n'ajoutent qu'un bonus par-dessus. Sur une génération thématique
-(glossaire non vide, voir plus haut), un mot effectivement placé qui
-appartient au glossaire thématique de son propre emplacement reçoit un
-bonus de 2 ajouté à sa longueur plafonnée avant la mise au carré, de façon à
-départager en faveur de la tentative qui fait réellement le plus (et le
-plus longuement) ressortir la thématique, sans pour autant ignorer le
-reste des mots de la grille. Un mot de la liste **Mots Défi** reçoit lui
-un bonus de 4 à la place (qu'il y ait ou non un glossaire thématique et
-qu'il en fasse lui-même partie ou non — les deux bonus ne se cumulent
-jamais : un mot Défi qui est aussi un mot thématique n'est compté qu'une
-fois, avec le bonus Mots Défi) — de façon à favoriser, à égalité de cases
-noires, la tentative qui a réussi à placer un mot Défi encore davantage
-qu'un simple mot thématique. C'est exactement le même score (`backend/
-crossword_gen.py`,
-`_content_score`) qui départage aussi, plus bas, la sélection de la
-meilleure tentative *échouée* d'un palier et celle du meilleur candidat
-nettoyé — les trois utilisent désormais rigoureusement la même logique.
-
-Cette optimisation d'essai est jetée une fois la comparaison faite —
-seule la grille de la tentative gagnante, dans son état d'AVANT
-optimisation, est conservée à ce stade (`best`/`best_result`) ; la seule
-optimisation réelle qui produit la grille effectivement utilisée reste
-celle appliquée une fois, juste après ce palier gagnant (voir plus bas) —
-donc l'aperçu "avant optimisation" affiché côté interface reste fidèle à
-l'état réel de la tentative retenue, et la mesure du temps d'optimisation
-ne compte qu'une seule passe réelle, jamais plusieurs. Cette comparaison a
-toujours au moins deux réussites à départager, puisque la recherche
-n'atteint jamais ce point avec moins que le seuil minimal décrit
-ci-dessus — il n'y a donc plus jamais de cas où rien ne reste à comparer.
-
-#### Publication en temps réel des records de chaque tentative
-
-Chaque processus worker publie, en temps réel pendant sa propre recherche,
-chaque nouveau record de mots placés qu'il atteint — pas seulement l'état
-auquel il s'arrête (que ce soit un échec naturel ou une interruption). Ces
-publications sont envoyées au processus parent au fil de l'eau, via un
-canal dédié (`backend/crossword_gen.py`, `best_state_queue`),
-continuellement vidé par un processus léger dédié tournant pendant toute
-la durée de la génération. Le volume de ces publications reste modeste et
-borné : une tentative ne peut battre son propre record qu'une fois par mot
-placé, donc au plus une cinquantaine de publications par tentative et par
-palier (le nombre d'emplacements d'une grille), quel que soit le nombre
-réel d'essais internes de la recherche (potentiellement des centaines de
-milliers).
-
-#### Le vivier d'affichage n'influence jamais la sélection réelle
-
-**Ces états publiés en temps réel ne servent qu'à l'affichage — jamais à
-la vraie sélection qui décide de la base du palier suivant.** Un état
-publié tôt dans une recherche encore peu avancée a mécaniquement très peu
-de cases pouvant déjà être jugées injouables (peu de mots posés, donc peu
-de croisements pour révéler un conflit) : le comparer à un résultat
-réellement abouti d'une autre tentative fausserait la sélection. La
-sélection qui alimente réellement le palier suivant ne se fie donc qu'aux
-résultats finaux de vraies recherches abouties ; les états publiés par la
-file restent visibles dans l'aperçu affiché à l'écran (toutes les grilles
-distinctes, sans plafond — voir plus bas), dans un vivier séparé qui, lui,
-peut les inclure, mais qui n'a aucune
-influence sur la progression réelle de la recherche. La première des
-grilles montrées à l'écran est toujours, exactement, celle qui va
-réellement être nettoyée et conservée pour le palier suivant si elle est
-retenue — les autres grilles montrées peuvent provenir du vivier élargi
-(résultats réels + états publiés par la file), mais jamais à la place de
-celle-là, pour que la comparaison "avant nettoyage / après nettoyage"
-entre deux aperçus successifs reste valide.
-
-#### Une seule grille par tentative parallèle dans le vivier
-
-**Une seule grille par tentative parallèle dans ce vivier élargi**, pas
-plusieurs : une même tentative parallèle peut, au cours de sa propre
-recherche, avoir publié plusieurs états successifs (chacun un nouveau
-record, voir ci-dessus) en plus de son propre résultat final — sans
-filtrage, ces différents instantanés d'une seule et même tentative
-pouvaient occuper à eux seuls plusieurs des places affichées, au
-détriment des autres tentatives du même palier. Chaque état, qu'il vienne
-d'un résultat final ou d'une publication intermédiaire, porte désormais
-l'identité de la tentative qui l'a produit ; parmi tous les états d'une
-même tentative, seul celui au score le plus élevé (le même critère que le
-tri de l'affichage) est conservé — le vivier élargi ne peut donc plus
-jamais montrer deux états distincts provenant de la même tentative
-parallèle. Cette même règle protège aussi la toute première grille
-montrée (la grille réellement conservée pour le palier suivant, voir plus
-haut) : sa propre tentative d'origine ne peut plus, elle non plus,
-apparaître une seconde fois plus loin dans la liste via un de ses propres
-instantanés antérieurs — un cas qui peut se produire une fois le plafond
-d'affichage retiré (voir plus bas), puisque cette grille-là est choisie
-selon un critère légèrement différent (l'état après nettoyage) de celui
-qui départage le reste du vivier (l'état brut).
-
-### Réaménagement d'une case noire flottante pour un mot Défi ou thématique
-
-Une fois le motif de cases noires accepté pour ce palier — mais avant
-même le tout premier mot posé — une dernière passe cherche, pour chaque
-mot **Mots Défi** puis pour chaque mot du glossaire **thématique** qui n'a
-encore aucun emplacement disponible de sa propre longueur, une case noire
-déplaçable (`backend/crossword_gen.py`,
-`_widen_floating_black_cells_for_priority_words`). Un emplacement vide de
-la bonne longueur qui existe déjà ailleurs dans la grille ne suffit pas à
-écarter un mot de cette passe (`_has_free_matching_slot`) : il faut en
-plus que ses lettres déjà verrouillées concordent avec le mot, et
-qu'aucun autre mot de même longueur du même glossaire, traité plus tôt
-dans cette même passe, ne l'ait déjà revendiqué — sans quoi deux mots de
-même longueur se verraient tous deux crédités du seul emplacement
-réellement libre, ou un mot se verrait crédité d'un emplacement dont les
-lettres imposées épellent en réalité autre chose. Pour chaque mot qui a
-encore besoin d'un remaniement une fois ce tri fait : une case noire non
-protégée (absente de `permanent_black_cells`) dont le déplacement vers
-l'autre bout d'un emplacement voisin garderait la grille structurellement
-valide (`is_structurally_valid`, seuil relâché à 1, le même que celui
-utilisé pour retirer une case noire lors de la minimisation finale — voir
-plus bas). Le mot est alors testé au début et à la fin de la zone
-élargie ainsi obtenue (`_try_widen_black_cell`), en respectant toute
-lettre déjà verrouillée sur ces cases ; s'il y tient, la case noire est
-déplacée pour le borner de ce côté-là, et la case noire d'origine
-redevient blanche. Cette passe ne pose jamais elle-même une seule lettre :
-elle se contente de façonner le motif pour qu'un emplacement de la bonne
-taille existe déjà lorsque la recherche par backtracking (étape 2
-ci-dessous) commence — c'est alors le mécanisme habituel de choix
-d'emplacement/de mot (voir "Choisir quel emplacement remplir en premier"
-plus bas) qui s'en saisit naturellement, en priorité, comme n'importe quel
-autre emplacement Mots Défi ou thématique.
-
-Une fois que tous les mots d'un même glossaire (Mots Défi, puis
-thématique) ont eu leur propre tentative d'élargissement, une seconde
-passe (`_shorten_one_slot_for_word`) s'applique à ceux d'entre eux encore
-sans emplacement, avant de passer au glossaire suivant : plutôt que de
-déplacer une case noire existante pour agrandir un emplacement jusqu'à la
-longueur du mot, elle cherche un emplacement déjà vide et STRICTEMENT PLUS
-LONG que le mot, et y case le mot au début ou à la fin
-(`_try_shorten_slot`) en posant une toute nouvelle case noire juste après
-sa dernière lettre — aucune case noire existante n'est déplacée, puisque
-tout l'espace concerné était déjà ouvert. Le nombre d'emplacements
-examinés par mot est plafonné à 10 % de la fenêtre déjà utilisée par
-l'élargissement (`SHORTEN_SLOT_WINDOW`, 10 % de `WIDEN_BLACK_CELL_
-WINDOW`) — le même budget de 10 % déjà employé ailleurs dans l'algorithme
-avant d'abandonner un mot Défi ou thématique (voir "Sécurité des
-croisements et budget d'abandon, pour les trois familles de candidats"
-plus bas), repris ici faute d'un budget de recherche déjà défini à ce
-stade, puisque cette passe tourne avant même
-que le remplissage par backtracking ne commence.
-
-Deux vérifications protègent chacune de ces deux manipulations (déplacer
-une case noire existante, ou en poser une toute nouvelle) contre toute
-corruption d'un mot déjà posé ailleurs dans la grille — indispensable dès
-lors que ces mêmes passes sont aussi réutilisées en mode Interactif (voir
-plus bas), où, contrairement à la génération automatique, la grille peut
-déjà contenir de vraies lettres en dehors de l'emplacement en cours de
-remaniement. D'abord, la case qui doit absorber le changement (la «
-nouvelle » case noire) ne peut jamais être une case déjà porteuse d'une
-vraie lettre. Ensuite, dans l'axe PERPENDICULAIRE au mot, ni la case
-libérée par l'élargissement (une fois sa propre lettre du mot en cours
-posée) ni la case nouvellement noircie (par l'une ou l'autre des deux
-passes) ne peuvent faire basculer l'emplacement perpendiculaire qui les
-traverse vers un état sans plus aucun mot réel du dictionnaire possible,
-compte tenu des lettres déjà connues à cet endroit
-(`_perpendicular_slot_stays_valid`/`_slot_has_domain`, une vérification
-de domaine légère, indépendante de `Filler`) — sans cette dernière
-vérification, libérer une case pourrait accoler discrètement une case
-surnuméraire à un mot perpendiculaire déjà posé (le laissant avec une
-case vide qu'aucune case noire ne referme jamais), et noircir une case
-pourrait au contraire en tronquer un. Grâce à ces deux vérifications,
-aucune de ces deux manipulations ne peut jamais rendre un emplacement
-impossible ailleurs dans la grille — un mot pour lequel ni l'une ni
-l'autre ne fonctionne est alors simplement laissé de côté ce tour-ci,
-exactement comme s'il n'y avait eu aucune zone flottante ni aucun
-emplacement plus long disponible du tout. Ce n'est là encore qu'un
-mécanisme du mieux possible, pas une garantie de résultat : un mot trop
-long pour la moindre zone voisine disponible ou pour le moindre
-emplacement plus long existant, ou pour lequel aucune des deux
-manipulations ne reste valide (structurellement ou du point de vue des
-mots perpendiculaires), retombe simplement sur les mêmes chances
-ordinaires que décrites plus bas, sans jamais corrompre quoi que ce soit
-d'autre entre-temps. Au sein de la génération automatique, ces deux
-passes ne s'appliquent qu'au tout premier motif de chaque palier
-(`_pattern_attempt`), jamais à une reprise « telle quelle » du motif d'un
-palier précédent (`_pattern_continue`, voir plus bas), puisque cette
-dernière porte déjà des mots réellement posés sur certains de ses
-emplacements — les deux vérifications ci-dessus n'y ont d'ailleurs jamais
-d'effet, la grille étant encore entièrement vierge à ce stade. Le mode
-Interactif (`interactive_place_word`) réutilise exactement les deux mêmes
-fonctions de bas niveau (`_widen_one_floating_black_cell`/`_shorten_one_
-slot_for_word`) avant chaque pose du bouton **Suivant**, en leur passant
-cette fois les lettres déjà posées comme verrouillées — c'est là que les
-deux vérifications jouent réellement leur rôle — mais jamais l'orchestre
-par lot ci-dessus (`_widen_floating_black_cells_for_priority_words`), et
-jamais sur un motif partagé entre plusieurs mots : un seul clic sur
-**Suivant** ne pose jamais qu'un seul mot, donc jamais plus d'un
-remaniement de case noire à la fois ne peut réellement subsister, et
-chaque mot encore candidat à un remaniement reçoit sa propre tentative,
-entièrement isolée sur sa propre copie indépendante du motif de base
-(`_try_reshape_for_word`) — jamais une tentative influencée par, ou
-influençant, celle d'un autre mot. Voir « Sécurité des croisements et
-budget d'abandon, pour les trois familles de candidats » plus bas pour le
-détail de cette recherche à deux phases et la raison précise de cette
-isolation stricte.
-
-Côté interface, un
-remaniement de case noire (déplacement ou pose d'une nouvelle) fait
-partie intégrante de l'étape posée par **Suivant** : la grille entière
-renvoyée par le serveur remplace l'état affiché côté client (pas
-seulement les cases du mot posé), de sorte qu'un clic sur **Précédent**
-annule aussi bien le mot posé que le remaniement de case noire qui l'a
-accompagné.
-
-## Étape 2 — Remplir la grille avec de vrais mots
+## Chapitre 4 — Phase 2 : remplir la grille avec de vrais mots
 
 Une fois le motif de cases noires accepté, chaque suite de cases blanches
-d'au moins **2** lettres (horizontale ou verticale) devient un emplacement à
-remplir — un "mot à trouver", y compris les petites zones de 2 lettres
-tolérées à l'étape 1 (mais jamais les zones d'1 lettre, qui restent de
-simples cases de passage, sans emplacement propre). Certaines cases
-appartiennent à deux emplacements à la fois (un mot horizontal et un mot
-vertical qui se croisent).
-
+d'au moins 2 lettres devient un emplacement à remplir (`extract_slots`).
 Le remplissage se fait par **essais successifs avec retour en arrière**
-(*backtracking*) : le programme choisit un emplacement, y place un mot du
-dictionnaire qui respecte les lettres déjà posées par les mots croisés
-voisins, puis passe à l'emplacement suivant. Si, à un moment, un emplacement
-ne peut plus recevoir aucun mot valide (toutes les lettres déjà imposées
-rendent le mot introuvable — y compris quand tous les mots qui
-correspondraient encore sont déjà utilisés ailleurs dans la grille), le
-programme revient en arrière, annule le dernier mot posé, et en essaie un
-autre.
+(*backtracking* — `backend/crossword_gen.py`, `Filler`/`_backtrack`, appelés
+par `try_fill`) :
+le programme choisit un emplacement, y place un mot du dictionnaire qui
+respecte les lettres déjà posées par les mots croisés voisins, puis passe à
+l'emplacement suivant. Si un emplacement ne peut plus recevoir aucun mot
+valide — toutes les lettres déjà imposées rendent le mot introuvable, y
+compris quand tous les mots qui correspondraient sont déjà utilisés
+ailleurs —, le programme revient en arrière, annule le dernier mot posé et
+en essaie un autre.
+
+Deux règles absolues encadrent toute cette phase :
+
+- **un mot n'apparaît qu'une seule fois dans la grille** (`Filler.
+  used_words`) ;
+- **aucun mot n'est posé s'il laisse un emplacement bloqué parmi ceux qu'il
+  croise.** Un candidat est toujours jugé sur l'**état qu'il laisse**, et
+  cet état est refusé dans les deux cas :
+  - il **rend bloqué** un emplacement croisé qui ne l'était pas juste avant
+    lui — c'est le seul des deux qui cède, et seulement en tout dernier
+    recours (voir « L'unique dérogation » plus bas) ;
+  - il **croise un emplacement bloqué** qui le reste après la pose : refusé
+    à tous les stades, sans aucune exception. Un emplacement dont le
+    candidat remet au contraire un mot à portée (sa lettre remplaçant par
+    exemple une graine) n'est plus bloqué après la pose, donc ce cas ne le
+    concerne pas.
+
+Un emplacement écarté (jaune) qui est redevenu sain, lui, se croise
+librement : voir « Les emplacements écartés » et « Sécurité des
+croisements » plus bas.
+
+Avant de lancer la recherche, trois préparations ont lieu (déductions
+certaines, graines statistiques, repérage des emplacements condamnés) ;
+la recherche elle-même choisit à chaque pas un emplacement, puis un mot.
+
+### Avant la recherche : déductions certaines, graines, emplacements condamnés
+
+#### Les emplacements à une seule possibilité
+
+Le programme cherche d'abord une certitude, pas une tendance : pour chaque
+emplacement encore jouable, si les lettres déjà connues à certaines de ses
+cases ne laissent plus qu'**un seul mot du dictionnaire** possible
+(éventuellement un seul mot en tout pour cette longueur, sans même aucune
+lettre connue), les lettres restantes sont directement figées sur ce mot
+(`_force_single_candidate_slots`) — ce n'est plus une graine, un indice
+qu'un vrai mot peut contredire, mais un fait acquis, puisqu'aucune autre
+possibilité n'existe. Figer un tel emplacement peut, par une case de
+croisement, réduire à son tour un voisin à une seule possibilité : le
+programme recommence donc jusqu'à ce qu'un passage complet ne déduise plus
+rien. Un emplacement déjà connu impossible n'est jamais examiné ici.
+
+#### Les graines
+
+Ensuite, le programme se fait une idée statistique de ce à quoi le reste de
+la grille pourrait ressembler : pour chaque emplacement encore incertain,
+il tire au hasard 100 mots de la bonne longueur — uniquement parmi les mots
+réellement compatibles avec les lettres déjà connues, s'il en existe
+(`sample_letter_biases`) — et regarde, case par case, quelle lettre revient
+le plus souvent. Une case n'est candidate que si cette lettre
+« consensuelle » est apparue plus de `LETTER_BIAS_MIN_COUNT` (10) fois sur
+les 100 : un consensus trop faible ne garantit pas qu'il reste assez de
+mots compatibles une fois la lettre figée.
+
+Parmi les cases candidates, le programme en pioche **au hasard** un certain
+nombre pour en faire des **graines** — des indices qui initient les
+premiers placements ou les influencent quand d'autres lettres existent
+déjà. Leur nombre va jusqu'à un pourcentage réglable dans l'interface (1 %
+par défaut) du nombre de cases blanches **encore sans lettre connue** — pas
+du total des cases blanches : une case déjà connue avec certitude, héritée
+d'un palier précédent, ne compte pas dans cette base, donc le nombre de
+graines diminue naturellement à mesure qu'un palier de reprise confirme la
+grille. Jamais plus d'une graine par emplacement (une case qui croise deux
+emplacements compte pour les deux).
+
+Une graine n'est qu'un indice, jamais un mot posé : dès qu'un véritable mot
+est choisi pour un emplacement croisé, sa vraie lettre prend le pas. Une
+case déjà connue avec certitude n'est jamais reproposée comme graine. Une
+graine réduit en revanche, comme une vraie lettre croisée, le nombre de
+mots candidats compatibles avec son emplacement — la règle de sélection
+ci-dessous s'appuyant sur ce nombre, une graine lui donne une vraie
+priorité de traitement. Un emplacement déjà impossible ne propose jamais de
+graine : le sondage ne tirant que parmi les mots compatibles avec les
+lettres connues, un tel emplacement n'a simplement aucun mot à tirer.
+
+Ce relevé est tenu **séparément pour chaque sens** : à chaque case, le
+relevé de l'emplacement horizontal et celui de l'emplacement vertical qui
+s'y croisent sont conservés chacun de leur côté (`sample_letter_biases`,
+`Filler.letter_scores_by_dir`). Leur somme sert au classement des mots
+candidats (voir « Choisir quel mot essayer ») ; leur croisement — seules
+les lettres présentes dans les deux sens, chacune au plus bas de ses deux
+décomptes (`_crossed_letter_counts`) — sert au choix de l'emplacement
+(niveau 7 de la cascade), au bouton **Stats** du mode Interactif et aux
+lettres grises des aperçus.
+
+Ce relevé de lettres ne reste pas figé sur l'état d'avant la recherche. À
+chaque mot effectivement posé, les emplacements que ce mot **croise** sont
+rééchantillonnés sur leur domaine courant, qui tient déjà compte de la
+lettre qui vient d'être écrite (`Filler._refresh_letter_scores_around`) :
+ce sont exactement les emplacements dont les possibilités ont changé. Un
+emplacement sans plus aucune lettre valide (domaine vide) n'est pas
+rééchantillonné — il n'y a plus rien à y mesurer. Le relevé rafraîchi
+remplace celui des cases de l'emplacement concerné plutôt que de s'y
+ajouter : l'autre contributeur de ces cases est le mot qu'on vient de
+poser, dont les lettres sont désormais fixées et ne disent plus rien
+d'utile. Dans le relevé par sens, seul le sens de l'emplacement
+rééchantillonné est remplacé, l'autre sens restant tel quel : le croisement
+confronte ainsi toujours le dernier relevé de chacun des deux côtés. Le
+rafraîchissement est défait en même temps que la pose qu'il
+suivait, lors d'un retour en arrière, pour qu'un relevé ne survive jamais à
+l'état sur lequel il a été mesuré. Le coût reste borné par construction :
+au plus un emplacement croisé par case du mot posé, et la recherche calcule
+déjà le domaine de chaque emplacement ouvert à chaque étape.
+
+#### Les emplacements condamnés dès le départ
+
+Un emplacement condamné avant même le premier mot (par exemple une case
+noire qui coupe un emplacement déjà partiellement verrouillé d'une façon
+qui ne correspond à aucun mot du dictionnaire) est repéré juste avant le
+démarrage de la recherche (`Filler.mark_immediately_impossible_slots`) et
+mis de côté comme « écarté ». La recherche continue à remplir tout le reste
+de la grille au lieu de s'arrêter net. Ce balayage n'est qu'une avance : la
+vérification de domaine par nœud ci-dessous trouverait les mêmes
+emplacements dès son premier appel.
 
 ### Le mécanisme de backtracking, en détail
 
-Ce principe se traduit par une fonction qui s'appelle **elle-même**, un
-emplacement à la fois (`backend/crossword_gen.py`, `Filler._backtrack`) —
-elle n'a que deux issues possibles : réussir en confirmant que tout le
-reste de la grille, à partir de ce point, peut être rempli ; ou échouer, en
-laissant à celui qui l'a appelée le soin d'essayer autre chose.
+La recherche est une fonction qui s'appelle **elle-même**, un emplacement à
+la fois (`Filler._backtrack`), avec deux issues possibles : réussir en
+confirmant que tout le reste de la grille peut être rempli à partir de ce
+point, ou échouer, en laissant à l'appel supérieur le soin d'essayer autre
+chose.
 
-1. **Calculer les mots encore possibles pour cet emplacement** (`Filler.
-   _domain`) : le dictionnaire est pré-organisé par longueur/position/lettre
-   (`build_index`) pour retrouver instantanément, sans jamais le relire en
-   entier, tous les mots d'une longueur donnée compatibles avec chacune des
-   lettres déjà connues de cet emplacement — qu'elles viennent d'un vrai mot
-   croisé déjà posé pendant cette même tentative, d'une lettre verrouillée
-   héritée d'un palier précédent, ou, en tout dernier recours, d'une simple
-   graine statistique (voir plus bas). Un mot déjà utilisé ailleurs dans la
-   grille pendant cette même tentative (`Filler.used_words`) ne compte
-   jamais comme un candidat valide, même s'il correspondrait parfaitement
-   aux lettres déjà en place — un mot ne peut apparaître qu'une seule fois
-   dans toute la grille.
-2. **Si aucun mot candidat ne reste** (que ce soit parce qu'aucun mot du
-   dictionnaire ne correspond du tout, ou parce que tous ceux qui
-   correspondraient sont déjà utilisés ailleurs), cette branche entière est
-   sans issue : la fonction échoue immédiatement, sans même choisir de mot
-   — inutile de continuer plus loin sur un remplissage qui ne pourra de
-   toute façon jamais fonctionner (ce même calcul de "plus aucun candidat"
-   est aussi ce qui fait qu'un emplacement peut être jugé "impossible", voir
-   "Limites de la recherche" ci-dessous).
-3. **Sinon, les mots candidats sont essayés un par un**, dans un ordre qui
-   privilégie les mieux notés statistiquement sans être strictement figé
-   (voir "Les graines" plus bas pour le détail du classement et du tirage
-   dans une fenêtre) :
-   - **chaque candidat compte immédiatement pour le budget de vérifications**
-     (voir "Limites de la recherche" plus bas), qu'il mène ou non à une
-     descente récursive plus loin — cette tentative est aussitôt comparée au
-     budget restant, et à un signal d'abandon global éventuel : si l'un ou
-     l'autre est déjà atteint, la fonction s'arrête immédiatement, sans
-     même poser ce mot ni essayer les candidats suivants. Ce contrôle à
-     chaque candidat (pas seulement à chaque descente récursive) garantit
-     qu'un emplacement dont presque tous les candidats cassent un
-     croisement (voir le contrôle ciblé décrit juste en dessous) ne peut
-     jamais faire défiler un très grand nombre de candidats rejetés un par
-     un sans que le budget ne soit jamais reconsulté ;
-   - le mot est posé provisoirement sur l'emplacement, et ajouté à
-     `used_words` pour qu'il ne puisse plus être choisi ailleurs pendant
-     cette même tentative ;
-   - **avant d'aller plus loin**, le programme évalue tout de suite les
-     emplacements que ce mot **croise** (ceux qui partagent au moins une
-     case avec lui, précalculés une fois pour toutes par emplacement —
-     `Filler._crossing_slots`) : pour chacun d'eux encore non rempli, il
-     recalcule son propre domaine (même règle qu'à l'étape 1) — sauf qu'un
-     emplacement croisé sans aucun mot du dictionnaire encore disponible
-     n'est PAS pour autant considéré comme cassé s'il reste au moins un
-     mot **Mots Défi** non posé et encore compatible avec lui à cet
-     instant (voir « Mots Défi » plus bas) : dans ce cas précis, poser le
-     candidat courant est accepté malgré tout, quitte à ce qu'un futur
-     appel confie cet emplacement croisé au mécanisme Mots Défi plutôt
-     qu'au dictionnaire ordinaire. Si, hors ce cas, l'un des emplacements
-     croisés s'est retrouvé sans aucun mot candidat encore disponible à
-     cause de la lettre qui vient d'être imposée, ce mot est écarté
-     immédiatement — retiré de la grille et de `used_words` — sans même
-     essayer de continuer plus loin, et le programme passe directement au
-     mot candidat suivant sur ce même emplacement (retour à l'étape 3),
-     **sauf** si l'emplacement en cours de remplissage a déjà épuisé son
-     propre budget de croisements cassés côté dictionnaire général (voir
-     « Sécurité des croisements et budget d'abandon » plus bas) : dans ce
-     cas précis, ce mot ordinaire est accepté malgré tout, quitte à créer
-     une zone impossible que la reprise entre tentatives réparera plus
-     tard. Pour un candidat **Mots Défi** ou un candidat du glossaire
-     thématique, ce rejet compte comme une tentative ratée pour ce mot
-     précis (voir « Sécurité des croisements et budget d'abandon » plus
-     bas pour le budget, propre à chacun, qui borne combien de fois un
-     même mot peut ainsi échouer avant d'être abandonné pour le reste de
-     la tentative en cours). Poser un mot ne peut jamais affecter le
-     domaine d'un
-     emplacement qui ne partage aucune case avec lui, donc vérifier
-     seulement ses voisins directs suffit à détecter le problème aussi tôt
-     et aussi sûrement que si toute la grille avait été revérifiée ;
-   - si, au contraire, aucun emplacement croisé n'est devenu impossible, le
-     programme choisit l'emplacement suivant à remplir (voir "Choisir quel
-     emplacement remplir en premier" plus bas) et se rappelle lui-même
-     récursivement dessus ;
-   - si cet appel récursif réussit — c'est-à-dire si tout le reste de la
-     grille a fini par se remplir à partir de ce point — le succès remonte
-     tel quel, sans rien défaire : le mot qui vient d'être posé fait
-     définitivement partie de la solution ;
-   - si au contraire cet appel échoue (aucun des mots essayés plus loin
-     n'a fonctionné), le mot tout juste posé est retiré — à la fois de la
-     grille et de `used_words`, pour qu'il redevienne disponible ailleurs
-     — et le programme essaie le mot candidat suivant sur ce même
-     emplacement, en reprenant à l'étape 3.
+À chaque appel (un « nœud ») :
 
-   Cette vérification ciblée des voisins directs, faite avant même de
-   redescendre dans la récursion, garantit qu'aucun emplacement rendu
-   impossible par le mot qui vient d'être posé ne peut jamais rester en
-   place, ne serait-ce qu'un instant : soit le mot est écarté sur-le-champ,
-   soit il n'a provoqué aucun blocage chez ses voisins.
-4. **Si aucun des mots candidats de cet emplacement ne mène à un succès**,
-   il n'y a plus rien à essayer ici : la fonction échoue à son tour, et
-   c'est l'appel qui l'a choisi qui reprend la main — il retire alors *son
-   propre* mot et essaie le suivant, exactement de la même façon. Le retour
-   en arrière peut ainsi remonter sur plusieurs emplacements d'un coup si
-   nécessaire, jusqu'à trouver, plus haut dans la chaîne d'appels, un
-   emplacement qui a encore un candidat non essayé.
+1. **Calculer les mots encore possibles pour chaque emplacement ouvert**
+   (`Filler._domain`) : le dictionnaire est pré-organisé par longueur/
+   position/lettre (`build_index`) pour retrouver instantanément, sans
+   jamais le relire en entier, tous les mots d'une longueur donnée
+   compatibles avec chacune des lettres déjà connues — qu'elles viennent
+   d'un vrai mot croisé posé pendant cette tentative, d'une lettre
+   verrouillée d'un palier précédent, ou, en dernier recours, d'une graine
+   statistique. Un mot déjà utilisé ailleurs (`used_words`) ne compte
+   jamais comme candidat valide.
+2. **Un emplacement dont il ne reste aucun candidat** (aucun mot
+   compatible, ou tous déjà utilisés ailleurs) est marqué **écarté** et
+   **le nœud échoue aussitôt** : une pose antérieure de la recherche l'a
+   rendu impossible à remplir, et le retour en arrière va la remettre en
+   cause. Font exception les emplacements de `Filler._tolerated_dry`, qui
+   sont seulement laissés hors de la liste des domaines du nœud : ceux qui
+   étaient déjà vides avant que la recherche ne pose quoi que ce soit
+   (relevés par `Filler.solve`, `_dry_open_slots` — aucun retour en arrière
+   ne peut les ranimer) et, dans la passe de dernier recours, ceux qu'un mot
+   de dernier recours a vidés délibérément. Les emplacements qui croisent
+   un emplacement toléré restent sélectionnables, mais aucun de leurs
+   candidats ne pourra être retenu tant qu'il reste bloqué : le contrôle
+   de croisement ci-dessous refuse toute pose qui croise un emplacement
+   bloqué.
+3. **Choisir un emplacement**, selon la cascade à 9 niveaux décrite plus
+   bas, parmi ceux que l'état du nœud rend sélectionnables (voir « Les
+   emplacements écartés » juste après).
+4. **Essayer les mots candidats un par un**, dans l'ordre décrit plus bas :
+   - **chaque candidat compte immédiatement pour le budget de
+     vérifications** (voir « Limites de la recherche »), qu'il mène ou non
+     à une descente récursive, et le budget comme un éventuel signal
+     d'abandon sont consultés à ce moment-là : si l'un ou l'autre est
+     atteint, la fonction s'arrête immédiatement, sans poser ce mot. Ce
+     contrôle à chaque candidat (et pas seulement à chaque descente)
+     garantit qu'un emplacement dont presque tous les candidats cassent un
+     croisement ne peut pas faire défiler des milliers de rejets sans que
+     le budget soit jamais reconsulté ;
+   - le mot est posé provisoirement et ajouté à `used_words` ;
+   - **avant d'aller plus loin**, le programme évalue les emplacements que
+     ce mot **croise** (précalculés, `Filler._crossing_slots`) : pour
+     chacun d'eux encore ouvert et encore sain avant ce placement, il
+     recalcule son domaine (`crossing_broken`). Si l'un se retrouve sans
+     plus aucun mot disponible, le mot est retiré sur-le-champ — de la
+     grille et de `used_words` — et le programme passe au candidat suivant,
+     sans jamais descendre plus loin (voir « Sécurité des croisements »
+     pour le détail, les trois familles de candidats et la dérogation) ;
+   - si aucun emplacement croisé n'est cassé, le programme choisit
+     l'emplacement suivant et s'appelle récursivement ;
+   - si cet appel réussit, le succès remonte tel quel, sans rien défaire ;
+   - s'il échoue, le mot est retiré (grille et `used_words`) et le candidat
+     suivant est essayé.
+5. **Si aucun candidat ne mène à un succès**, la fonction échoue à son
+   tour : l'appel qui l'a choisie retire *son* propre mot et essaie le
+   suivant. Le retour en arrière peut ainsi remonter plusieurs emplacements
+   d'un coup, jusqu'à en trouver un qui a encore un candidat non essayé.
+6. **Un nœud ne fait qu'un nombre limité de descentes** : au bout de
+   `MAX_DESCENTS_PER_NODE` (3) descentes récursives sans succès, il échoue
+   aussitôt et rend la main à l'appel supérieur, quel que soit le stade
+   atteint (voir les quatre temps d'un nœud plus bas), dernier recours
+   compris. Une descente est un candidat qui a passé le contrôle de
+   croisement et dans lequel la recherche est descendue ; un candidat
+   rejeté sur-le-champ par ce contrôle n'en est pas une, pas plus qu'un
+   Mot Défi ou un mot du glossaire thématique : toutes les hypothèses
+   issues de ces deux glossaires sont explorées, quel que soit le
+   compte. Sans cette
+   limite, un nœud n'échouerait qu'après avoir épuisé tout son sous-arbre,
+   ce qui n'arrive jamais dans le budget sur un vrai dictionnaire : le
+   retour en arrière ne remonterait que de quelques niveaux, et un mot
+   difficile posé dans les premières phases resterait en place pour toute
+   la tentative. Avec elle, le retour en arrière remonte jusqu'à ces
+   premiers mots et peut les remplacer. Une valeur `<= 0` supprime la
+   limite : toutes les possibilités du nœud sont alors essayées
+   (`backend/crossword_gen.py`, `Filler._backtrack`,
+   `MAX_DESCENTS_PER_NODE`). Au début d'une tentative, le plafond est
+   plus large : un nœud atteint alors que la recherche a posé moins de
+   `EARLY_DESCENTS_WORD_COUNT` (5) mots en plus de ceux de l'état initial
+   de la tentative (les mots déjà en place au lancement de
+   `Filler.solve`) peut faire jusqu'à `EARLY_MAX_DESCENTS_PER_NODE` (10)
+   descentes. Le compte est pris à l'entrée du nœud, sur les mots alors
+   en place (`backend/crossword_gen.py`, `Filler._backtrack`,
+   `EARLY_MAX_DESCENTS_PER_NODE`).
+7. **Le retour en arrière saute directement à la cause (backjumping).**
+   Un nœud qui échoue indique quels mots déjà posés sont à l'origine de
+   son échec — son **ensemble de conflit** :
+   - un emplacement vide : les mots qui le croisent, plus ceux qui occupent
+     un mot qu'il aurait pu prendre (`_dry_slot_conflict`) ;
+   - un emplacement dont tous les candidats rendraient bloqué un
+     emplacement croisé sain : les mots qui croisent cet emplacement et
+     ceux qui croisent l'emplacement qu'ils bloqueraient
+     (`_assigned_crossers`) ;
+   - un nœud qui a épuisé ses possibilités : la réunion des ensembles de
+     conflit de toutes les possibilités essayées, sans le mot que ce nœud
+     y avait posé.
+
+   Un nœud dont le mot ne figure pas dans l'ensemble de conflit qui lui
+   remonte ne peut pas être en cause : essayer ses autres candidats
+   rejouerait exactement le même échec. Il retire donc son mot et transmet
+   l'échec tel quel à son propre appelant, sans rien essayer d'autre. Le
+   retour en arrière traverse ainsi d'un coup tous les niveaux sans
+   rapport avec le blocage, jusqu'au mot le plus récent réellement
+   impliqué, qui essaie alors son candidat suivant. Sans ce mécanisme, les
+   mots posés entre le blocage et sa cause (ailleurs dans la grille) sont
+   remis en cause un par un, à raison de `MAX_DESCENTS_PER_NODE`
+   possibilités par niveau, et le même blocage est rejoué à chacune.
+   Un échec dû au budget ou à un abandon n'indique aucun conflit : il
+   revient au retour en arrière ordinaire. Un emplacement déjà vide avant
+   toute pose de la recherche ne met en cause aucun mot, donc son échec
+   remonte jusqu'à la racine (`backend/crossword_gen.py`,
+   `Filler._backtrack`, `Filler._fail`, `_last_conflict`,
+   `BACKJUMPING_ENABLED`).
+
+Vérifier les voisins directs avant de redescendre suffit : poser un mot ne
+peut jamais affecter le domaine d'un emplacement qui ne partage aucune case
+avec lui, donc ce contrôle détecte le problème aussi tôt et aussi sûrement
+que si toute la grille avait été revérifiée.
 
 #### Fin de la recherche
 
 La recherche réussit dès que chaque emplacement du motif a reçu un vrai mot
-du dictionnaire (plus aucun appel récursif à faire) ; elle échoue si le
-tout premier appel — celui qui n'a encore rien posé du tout — épuise
-lui-même tous ses candidats sans jamais réussir plus loin, signe que le
-motif actuel, avec les lettres déjà imposées, n'admet tout simplement
-aucune solution valide.
+du dictionnaire. Elle échoue si le tout premier appel — celui qui n'a
+encore rien posé — épuise ses candidats, ou ses `MAX_DESCENTS_PER_NODE`
+descentes, sans jamais réussir plus loin, et cela deux fois : d'abord en
+recherche stricte, puis dans la seconde passe qui autorise le dernier
+recours (voir « L'unique dérogation »).
+Sur une grille trop difficile, c'est l'épuisement du budget de
+vérifications qui met fin à la tentative avant l'un ou l'autre de ces deux
+dénouements.
 
-**Ce que compte le budget** (voir "Limites de la recherche" plus bas) :
-non pas le nombre d'appels récursifs, mais le nombre de **tentatives de
-poser un mot** — chaque candidat essayé sur l'emplacement choisi (étape 3
-ci-dessus) compte pour une unité, que ce mot mène ensuite à une descente
-récursive ou soit immédiatement rejeté par le contrôle de croisement
-décrit dans cette même étape. Ce comptage par tentative garantit qu'un
-emplacement dont presque tous les candidats cassent un croisement (ce qui
-peut se produire sans jamais provoquer la moindre récursion) épuise bel et
-bien le budget lui aussi, plutôt que de laisser la recherche défiler un
-très grand nombre de candidats rejetés sans que le budget ne s'épuise
-jamais. C'est l'épuisement de ce compteur qui, sur une grille trop
-difficile, met fin à la tentative avant que l'un ou l'autre des deux
-dénouements ci-dessus ne soit atteint.
+**Ce que compte le budget** : non pas le nombre d'appels récursifs, mais le
+nombre de **tentatives de poser un mot** — chaque candidat essayé compte
+pour une unité, qu'il mène à une descente récursive ou qu'il soit
+immédiatement rejeté par le contrôle de croisement. Ce comptage garantit
+qu'un emplacement dont presque tous les candidats cassent un croisement
+(ce qui peut arriver sans provoquer la moindre récursion) épuise bel et
+bien le budget lui aussi.
 
-### Les emplacements à une seule possibilité
+### Les emplacements écartés
 
-**Avant même le sondage statistique des graines** décrit plus bas, le
-programme cherche d'abord une certitude, pas une simple tendance : pour
-chaque emplacement encore jouable, si les lettres déjà connues à certaines
-de ses cases ne laissent plus qu'**un seul mot du dictionnaire** possible
-(éventuellement un seul mot en tout pour toute cette longueur, sans même
-avoir besoin d'une seule lettre déjà connue), les lettres restantes de cet
-emplacement sont directement figées sur ce mot (`backend/crossword_gen.py`,
-`_force_single_candidate_slots`) — ce n'est plus une graine, un simple
-indice statistique qu'un vrai mot peut encore contredire, mais un fait
-acquis, puisqu'aucune autre possibilité n'existe. Fixer un tel emplacement
-peut, par une case de croisement, réduire à son tour un emplacement voisin
-encore incertain à une seule possibilité lui aussi — le programme
-recommence donc autant de fois que nécessaire jusqu'à ce qu'un passage
-complet ne trouve plus rien de nouveau à déduire. Un emplacement déjà connu
-impossible n'est jamais examiné par cette étape.
+Un **emplacement écarté** (affiché en fond jaune dans les aperçus) est une
+pure **déprioritisation**, propre à la tentative en cours : un emplacement
+trouvé bloqué récemment pendant cette tentative est mis de côté pour que
+la recherche n'y revienne qu'une fois qu'aucun autre emplacement ne peut
+recevoir de mot. La liste ne garde que les **3 derniers** emplacements
+écartés (`MAX_EXCLUDED_SLOTS`, `_RecentSlots`) : un quatrième en fait
+sortir le plus ancien, et un emplacement écarté de nouveau redevient le
+plus récent — la liste doit désigner les endroits qui viennent de poser
+problème, pas recouvrir la grille. **À chaque pose d'un mot**, les
+emplacements écartés qu'il croise sont réévalués : le contrôle de
+croisement vient justement de vérifier, pour chacun d'eux, s'il reste
+bloqué avec ce mot en place ; celui qui ne l'est plus sort de la liste.
+Cette sortie n'est pas annulée si le mot est retiré plus tard par le
+retour en arrière : l'emplacement est simplement écarté de nouveau s'il
+redevient vide. Il n'est jamais muré et n'est jamais hérité d'un
+palier précédent
+(`Filler._impossible_this_attempt` ; un nouveau `Filler` démarre avec la
+liste vide, et `generate_grid` ne transmet jamais ce diagnostic à
+`_pattern_continue`).
 
-### Les "graines"
+Trois sources, toutes internes à la recherche, alimentent cette liste :
+le balayage préalable (`mark_immediately_impossible_slots`), la
+vérification de domaine par nœud (étape 2 ci-dessus), et l'épuisement des
+candidats d'un emplacement — quand tous les mots essayés sur l'emplacement
+choisi ont été refusés parce qu'aucun ne pouvait être posé sans créer
+d'emplacement impossible, cet emplacement est écarté à son tour. Ce
+troisième constat est gratuit : la boucle de candidats vient précisément de
+les essayer tous.
 
-**Avant même de commencer** — c'est-à-dire une fois les emplacements
-entièrement déterminés ci-dessus mis de côté —, le programme se fait une
-petite idée statistique de ce à quoi le reste de la grille pourrait
-ressembler : pour chaque emplacement encore incertain, il tire au hasard
-100 mots de la bonne longueur — uniquement
-parmi les mots réellement compatibles avec les lettres déjà connues à
-certaines de ses cases (héritées d'un palier précédent, voir plus bas),
-s'il en existe (`backend/crossword_gen.py`, `sample_letter_biases`) — et
-regarde, case par case, quelle lettre revient le plus souvent dans cet
-échantillon. Une case n'est retenue comme candidate que si cette lettre
-"consensuelle" est apparue plus de 10 fois sur les 100 mots — un consensus
-trop faible ne garantit pas qu'il reste assez de mots compatibles une fois
-la lettre figée. Parmi les cases candidates, le programme en **pioche au
-hasard** un certain nombre pour en faire des **"graines"** — des
-emplacements qui initient les premiers placements, ou les influencent
-quand il y a déjà d'autres lettres. Le nombre de graines posées va jusqu'à
-un pourcentage réglable (choisi via l'interface, 1 % par défaut) du nombre
-de cases blanches **encore sans lettre connue** de la grille — pas du
-nombre total de cases blanches : une case déjà connue avec certitude,
-héritée d'un palier précédent, ne compte pas dans cette base de calcul,
-donc le nombre de graines diminue naturellement à mesure qu'un palier de
-reprise "telle quelle" confirme de plus en plus de la grille — pour la
-toute première grille d'un palier, sans aucune lettre encore connue, ce
-nombre correspond au total de cases blanches. Jamais plus d'une graine par
-emplacement (une case qui croise
-deux emplacements compte pour les deux à la fois). Ces graines ne sont que
-des indices, pas des mots
-réellement posés : dès qu'un véritable mot est choisi pour un emplacement
-croisé, sa vraie lettre prend le pas sur l'indice. Une case déjà connue
-avec certitude n'est elle-même jamais reproposée comme graine — inutile de
-lui donner un indice statistique, sa lettre est déjà sue.
+**Le constat provoque un retour en arrière, le marquage reste une
+possibilité.** Un emplacement constaté impossible à remplir en l'état — par
+la vérification de domaine, ou parce que chacun de ses candidats rendrait
+bloqué un emplacement croisé encore sain — fait échouer le nœud sur-le-
+champ : c'est une pose antérieure qui en est responsable. Un emplacement
+dont les candidats sont tous refusés **uniquement** parce qu'ils croiseraient
+un emplacement toléré (vide dès le départ) ne fait pas échouer le nœud,
+qui passe à l'emplacement suivant : aucun retour en arrière n'y changerait
+rien. Dans la passe de dernier recours, ce troisième constat ne fait pas
+non plus échouer le nœud, pour qu'il puisse atteindre son temps de dernier
+recours. Le marquage « écarté », lui, survit au retour en arrière : un
+emplacement écarté a peut-être été constaté impossible dans une
+configuration antérieure et être redevenu viable depuis, il reste donc une
+possibilité du nœud, simplement retentée après les autres
+(`Filler._backtrack`, `blameable_rejection`). L'emplacement garde un domaine réellement non vide, donc
+il continue d'être croisé librement par les mots voisins — seule sa
+priorité de sélection change, contrairement à un emplacement bloqué
+(rouge), qu'on ne croise jamais. **Aucun calcul
+d'affichage n'y écrit** : un blocage croisé (voir plus bas) est signalé
+pour l'instantané où il est constaté, jamais mémorisé — c'est une propriété
+de l'état examiné, pas un fait durable sur l'emplacement, et la pose
+suivante peut le dissoudre. Laisser un chemin d'affichage écrire dans cette
+liste reviendrait à laisser la publication d'aperçus réécrire
+l'ordonnancement de la recherche jusqu'à ce que tout soit écarté et que la
+déprioritisation ne veuille plus rien dire.
 
-Une graine réduit aussi, comme une lettre réellement croisée le ferait, le
-nombre de mots candidats compatibles avec son emplacement — la règle de
-sélection décrite plus bas s'appuie directement sur ce nombre, donc une
-graine lui donne une vraie priorité de traitement. Une graine ne doit être posée
-que sur un emplacement jouable : un emplacement déjà connu impossible
-(entièrement verrouillé par des lettres d'un palier précédent, mais sans
-qu'aucun mot réel du dictionnaire ne corresponde à cette combinaison) ne
-propose plus jamais l'une de ses cases comme graine. Ce n'est plus
-seulement une règle à part : puisque le sondage lui-même ne tire déjà que
-parmi les mots compatibles avec les lettres connues, un tel emplacement n'a
-tout simplement **aucun mot à tirer** — le sondage y reste vide de
-lui-même, sans qu'un test séparé soit nécessaire pour l'écarter.
+Chaque nœud se déroule alors en quatre temps :
 
-#### Classement des mots candidats à l'essai
+1. essayer de poser un mot sur les emplacements **non écartés** (et non
+   gelés), dans l'ordre de la cascade, jusqu'à ce que l'un accepte un
+   candidat ;
+2. si aucun mot ne peut être posé ainsi, les emplacements écartés sont
+   **libérés** : ils redeviennent ordinaires et la recherche continue,
+   toujours sans retour en arrière ;
+3. si rien ne peut encore être posé **et** que la recherche est dans sa
+   seconde passe — celle qui n'a lieu qu'une fois la recherche stricte
+   épuisée depuis la racine, voir « L'unique dérogation » plus bas —, le
+   nœud repasse une dernière fois en **acceptant un mot qui rend bloqué un
+   emplacement croisé**. Croiser un emplacement déjà bloqué reste, là
+   aussi, refusé. Pendant la recherche stricte, ce temps n'existe pas ;
+4. si même cela ne pose rien, le nœud échoue et le retour en arrière
+   ordinaire reprend.
 
-Ce même petit sondage statistique sert aussi à autre chose, indépendamment
-de savoir si une case a été réellement figée ou non : pour chaque
-emplacement que le programme choisit de remplir, les mots candidats du
-dictionnaire sont classés selon à quel point leurs lettres correspondent au
-consensus statistique observé sur les cases pas encore déterminées par un
-croisement — un mot qui colle bien au consensus sur plusieurs cases à la
-fois est essayé avant un mot qui n'y colle pas du tout, plutôt qu'un tirage
-entièrement aléatoire parmi tous les mots valides. Le tout premier mot
-essayé n'est toutefois pas strictement le mieux classé : le programme
-pioche au hasard parmi les `CANDIDATE_SCORE_WINDOW` meilleurs candidats
-restants à chaque fois (actuellement 20 000 — soit la totalité du
-dictionnaire FR pour n'importe quelle longueur de mot jusqu'à 8 lettres
-inclus, qui en compte 19 066), une fenêtre qui se décale au fur et à
-mesure. Sur un emplacement encore
-entièrement vierge (aucune case fixée par un croisement), ce classement
-n'a en pratique plus aucun effet discriminant — une fenêtre aussi large
-revient alors à un tirage quasiment uniforme dans tout le dictionnaire de
-cette longueur ; la préférence pour les mots les mieux notés ne redevient
-sensible qu'une fois plusieurs cases de l'emplacement déjà fixées par des
-croisements.
+Les quatre temps partagent le même plafond de descentes du nœud
+(`MAX_DESCENTS_PER_NODE`, ou `EARLY_MAX_DESCENTS_PER_NODE` en début de
+tentative — voir l'étape 6 plus haut) : un nœud qui l'a atteint échoue sans
+passer aux temps suivants.
 
-Sur une **grille thématique** (glossaire non vide), une dernière étape
-stabilise l'ordre obtenu ci-dessus en deux blocs : d'abord tous les mots
-candidats appartenant au glossaire thématique, puis les autres — pour que
-l'emplacement tente tous ses mots thématiques possibles avant de descendre
-vers un mot ordinaire du dictionnaire. Le backtracking fait le reste : un
-mot hors thématique n'est atteint ici que si aucun mot thématique n'a mené
-à une solution (ni sur cet emplacement, ni plus loin). Étape sautée si
-tous — ou aucun — des candidats sont thématiques (rien à réordonner).
+La libération vaut pour toute la descente qui la suit et se défait
+d'elle-même en remontant au-dessus du nœud qui l'a déclenchée (`released`
+est un simple paramètre de récursion). Un emplacement écarté reste donc
+pleinement réutilisable pour le reste de la tentative et est repris
+automatiquement, sans bookkeeping particulier, dès qu'un autre placement
+change et que son domaine redevient non vide (`_domain` est recalculé à
+chaque nœud) ; il cesse d'être affiché en jaune dès qu'un mot y est
+effectivement posé.
 
-S'il existe une liste **Mots Défi** non vide, une étape supplémentaire
-s'applique par-dessus celle-ci, dans le remplissage automatique comme dans
-le mode manuel : tout mot de cette liste non encore posé ailleurs, ni
-abandonné pour la tentative en cours (voir plus bas), et compatible avec
-l'emplacement choisi (au même sens géométrique que plus bas — pas besoin
-d'appartenir au dictionnaire) passe en tête de la liste de candidats,
-devant même les mots du glossaire thématique. Un emplacement dont le
-dictionnaire ne propose par ailleurs aucun candidat n'est alors pas pour
-autant considéré comme une impasse tant qu'un tel mot lui reste
-compatible — le programme continue d'essayer de le remplir plutôt que
-d'abandonner la tentative en cours.
+**`Filler.excluded_slots` est un mécanisme distinct et n'est pas un
+emplacement écarté** : il retire purement et simplement un emplacement de
+la grille que la recherche doit résoudre — jamais sélectionné, jamais exigé
+par la réussite, jamais compté comme croisement cassé, jamais montré par un
+diagnostic. Son seul utilisateur est `_optimize_before_cleanup`
+(chapitre 5) ; toute génération ordinaire le laisse vide.
 
-**Sécurité des croisements et budget d'abandon, pour les trois familles de
-candidats** — qu'il s'agisse d'un Mot Défi, d'un mot du glossaire
-thématique ou d'un mot ordinaire du dictionnaire, un candidat n'est
-jamais laissé en place s'il rend l'un des emplacements qu'il croise
-irrémédiablement impossible (plus aucun mot du dictionnaire ET plus aucun
-Mot Défi encore disponible pour ce croisement) : ce cas précis, décrit à
-l'étape 3 de la section « Le mécanisme de backtracking, en détail »
-ci-dessus, provoque un retour en arrière immédiat — le mot n'est pas
-posé, et le programme essaie aussitôt le candidat suivant de la même
-famille, puis, à défaut, de la famille suivante (Mots Défi, puis glossaire
-thématique, puis dictionnaire général) ; chercher le même mot sur un
-AUTRE emplacement se fait naturellement au fil du backtracking normal,
-puisque les niveaux 2 (Mots Défi) et 5 (glossaire thématique) du choix
-d'emplacement (voir plus bas) continuent de privilégier tout emplacement
-où il tient encore. Ce qui change d'une famille à l'autre, c'est ce qui se
-passe une fois qu'elle échoue ainsi de façon répétée :
+Cette liste n'a aucun effet en mode Interactif (`interactive_place_word`),
+qui ne fait tourner aucune recherche récursive et construit directement sa
+propre liste d'emplacements sélectionnables.
 
-- Un Mot Défi ou un mot du glossaire thématique dispose de son propre
-  budget d'essais ratés, par mot : une fois qu'il a cassé un croisement
-  10% du budget de vérifications (`deadline_checks`) de la tentative en
-  cours, ce mot précis est abandonné pour le reste de celle-ci — il cesse
-  d'être proposé comme candidat (et, pour un Mot Défi, cesse aussi
-  d'excuser un emplacement croisé sans mot de dictionnaire), ce qui laisse
-  le reste du budget de la tentative se consacrer au reste de la grille
-  plutôt qu'à un mot particulièrement difficile à placer. Ce même mot
-  pourra malgré tout être retenté depuis zéro à la tentative/palier
-  suivant (chaque nouvelle tentative repart avec son propre budget).
-- Le dictionnaire général n'a aucune famille suivante vers laquelle se
-  replier : son budget se compte donc par EMPLACEMENT plutôt que par mot
-  (un mot ordinaire n'a pas d'identité propre à suivre). Une fois que le
-  budget de 10% propre à un emplacement donné est épuisé sans trouver de
-  candidat sûr, le programme cesse d'exiger un candidat sans risque pour
-  cet emplacement précis et accepte le suivant tel quel — créant
-  délibérément une zone « impossible » connue plutôt que de payer le coût
-  d'un backtracking exhaustif. Cette zone est ensuite réparée, comme
-  n'importe quelle autre, par le mécanisme de reprise entre tentatives
-  décrit plus loin (nettoyage des emplacements bloqués, nouveau motif au
-  palier suivant).
+### Choisir quel emplacement remplir
 
-Le mode Interactif (bouton **Suivant**, `backend/crossword_gen.py`,
-`interactive_place_word`) applique aux trois familles une version élargie
-de cette même règle de sécurité, mais sans le backtracking récursif de la
-génération automatique (aucune recherche n'y tourne). Un candidat y est
-écarté dès qu'il viderait le domaine d'un emplacement encore ouvert
-QUELCONQUE — pas seulement un emplacement directement croisé, mais aussi
-un emplacement totalement disjoint ailleurs dans la grille dont ce mot
-précis se trouvait être le dernier candidat disponible (`_word_breaks_
-open_slot`) : un glossaire thématique typiquement restreint fait qu'un
-même mot est souvent la dernière option encore libre pour deux
-emplacements sans aucune case commune à la fois, et le poser sur l'un
-rend l'autre tout aussi impossible que s'ils s'étaient croisés. Cette
-vérification élargie ne s'applique qu'en mode Interactif : le
-`crossing_broken` de la génération automatique reste volontairement
-limité aux croisements directs, puisque son mécanisme de reprise entre
-tentatives (nettoyage des emplacements bloqués, nouveau motif au palier
-suivant) répare de toute façon ce genre de zone au palier suivant — un
-filet de sécurité que **Suivant** n'a pas, chaque clic devant se
-suffire à lui-même. Un emplacement déjà impossible avant même ce clic,
-pour une raison sans rapport avec le mot testé, n'est jamais imputé au
-candidat en cours (`_open_slot_baseline`, calculé une seule fois par
-emplacement candidat puis réutilisé pour chacun de ses mots testés) :
-sans cette distinction, une seule zone impossible préexistante ailleurs
-dans la grille rendrait indéfiniment tout candidat, à tout autre
-emplacement, faussement « dangereux ».
+À chaque emplacement à choisir, le programme applique une règle à plusieurs
+**niveaux de priorité** (`Filler._select_target_slot`, appelé par
+`_backtrack` — et réutilisé tel quel par `interactive_place_word`) :
 
-Pour les Mots Défi : avant de retenir l'un d'eux, le programme énumère
-toutes les combinaisons (mot, emplacement encore ouvert) géométriquement
-possibles pour l'ensemble de la liste **Mots Défi**, en ne considérant
-QUE les emplacements déjà existants et déjà viables pour le dictionnaire
-(`_find_priority_word_placement`, partagée avec le glossaire thématique)
-— celles de l'emplacement d'abord désigné par la cascade à 8 niveaux
-ci-dessous en priorité, puis celles de tout autre emplacement ouvert,
-chaque groupe classé par le même score statistique/fréquence que le
-tirage final — et les essaie une à une dans cet ordre, en écartant
-immédiatement (« backtrack immédiat ») toute combinaison qui casserait un
-emplacement au sens élargi ci-dessus. Un mot qui ne correspond à AUCUN
-emplacement existant de sa longueur reçoit ensuite, mais seulement à ce
-stade, sa propre tentative de remodelage de case noire, entièrement
-ISOLÉE sur sa propre copie indépendante du motif de base — jamais sur un
-motif partagé avec les autres mots encore en lice (voir plus bas
-pourquoi). Faute de budget de vérifications propre à ce simple placement,
-le budget de 10% se calcule ici sur le nombre total de combinaisons plus
-tentatives de remodelage envisagées pour cet appel : chaque Mot Défi est
-abandonné, pour ce seul clic sur **Suivant**, dès qu'il a lui-même cassé
-un emplacement à hauteur de 10% de ce total. Ce n'est qu'une fois toutes
-les combinaisons et tentatives de remodelage épuisées — ou tous les Mots
-Défi encore actifs abandonnés — que le programme se rabat sur le
-glossaire thématique (même recherche à deux phases, restreinte aux
-candidats réellement présents dans le dictionnaire), puis, si celui-ci
-échoue à son tour, sur le dictionnaire général à ce seul emplacement
-choisi ; ce dernier repli écarte d'entrée tout Mot Défi ou mot thématique
-encore présent dans le dictionnaire de cet emplacement — un tel mot, s'il
-s'y trouve encore, a nécessairement déjà été essayé, sur TOUS les
-emplacements de la grille, par l'une des deux familles précédentes, et
-s'y est révélé cassant à chaque fois ; le laisser reviendrait à laisser
-le repli « accepter quand même » ci-dessous re-choisir ce même mot déjà
-écarté, pour la même raison. Ce dernier repli n'a pas de budget propre :
-ne parcourir qu'un seul emplacement, dont la liste de candidats est déjà
-plafonnée, coûte assez peu pour l'examiner en entier plutôt que de s'en
-tenir à une tranche arbitraire de 10%. Si aucun candidat ordinaire
-n'évite de casser un autre emplacement, le programme accepte quand même
-le mieux classé — jamais un Mot Défi ou un mot thématique à ce stade,
-sauf si exclure les deux familles ne laisse absolument rien d'autre dans
-le dictionnaire brut de cet emplacement, seul cas où l'un d'eux est posé
-en tout dernier recours plutôt que de laisser **Suivant** bloqué.
+1. **optionnel, actuellement désactivé** (`ALTERNATE_DIRECTION_ENABLED`) :
+   quand ce réglage est activé, on tire d'abord la **catégorie**
+   (horizontal ou vertical), avec une probabilité proportionnelle au nombre
+   d'emplacements encore libres dans chacune — ce qui fait naturellement
+   alterner les deux directions sans imposer d'ordre strict. Tant qu'il est
+   désactivé, ce niveau ne change rien : le groupe de départ est l'ensemble
+   des emplacements encore libres, les deux directions confondues ;
+2. **Mots Défi**, prioritaire sur **tous** les niveaux suivants, y compris
+   le niveau 3 : s'il existe au moins un emplacement où un mot de cette
+   liste (non encore posé ailleurs, ni abandonné) tient encore compte tenu
+   des lettres déjà connues, le choix se restreint à ces emplacements — et
+   y reste à travers tous les niveaux suivants. « Tient » s'évalue de façon
+   purement **géométrique** — même longueur, et compatibilité lettre à
+   lettre avec les seules lettres réellement connues (un mot croisé posé,
+   ou une lettre verrouillée — jamais une graine) — et n'exige **pas** que
+   le mot appartienne au dictionnaire (`Filler._challenge_word_fits`) : un
+   Mot Défi est pris comme une vérité affirmée par l'utilisateur. Un tel
+   mot posé sans être un vrai mot du dictionnaire est ensuite signalé comme
+   invalide par les diagnostics habituels (`_invalid_fully_known_indices`),
+   exactement comme s'il avait été inséré à la main. Ce niveau est
+   volontairement placé avant le niveau 3 : une grille bien avancée a
+   presque toujours un emplacement à moins de 3 candidats quelque part, et
+   le niveau 3 appliqué d'abord écarterait systématiquement tout
+   emplacement compatible Mots Défi. Sans aucun mot dans la liste — le cas
+   le plus courant — ce niveau ne change rien ;
+3. à l'intérieur du groupe obtenu, et **uniquement pour les emplacements de
+   4 lettres et plus** (un emplacement de 2-3 lettres a un vocabulaire
+   naturellement restreint, cette priorité n'y apporte rien), on choisit en
+   priorité les emplacements avec **moins de `PREFILL_MIN_WORD_COUNT` (3)
+   mots candidats** — le même seuil que le pré-remplissage du chapitre 3.
+   But : résoudre ces emplacements fragiles par un vrai mot pendant que la
+   recherche progresse encore, avant qu'un futur nettoyage ne les juge
+   insuffisants et n'y ajoute une case noire. Si aucun emplacement du
+   groupe n'est sous ce seuil, ce niveau ne change rien ;
+4. parmi les emplacements retenus, s'il en existe au moins un ayant déjà
+   **au moins une case déterminée par une vraie lettre** (un mot croisé
+   posé pendant cette tentative, ou une lettre verrouillée — jamais une
+   graine), le choix se restreint à ceux-là : finir un emplacement déjà
+   entamé plutôt que d'en ouvrir un nouveau. Si tous sont entièrement
+   vierges, ce niveau ne change rien ;
+5. **grille thématique uniquement** — parmi les emplacements retenus (déjà
+   éventuellement restreints par Mots Défi au niveau 2, ce qui est
+   précisément ce qui donne aux Mots Défi la priorité sur le glossaire
+   thématique), s'il en existe au moins un où un mot du glossaire
+   thématique non encore posé tient encore, le choix se restreint à
+   ceux-là : on commence par les zones thématiquement réalisables. Sur une
+   grille bilingue, chaque direction est jaugée contre le glossaire de
+   **sa propre** langue. Sans thématique, ce niveau ne change rien ;
+6. parmi les emplacements retenus, on calcule pour chacun le carré de la
+   distance entre sa **case la plus proche du centre de la grille** et ce
+   centre. Chaque case de l'emplacement est considérée individuellement, et
+   c'est la plus petite distance au carré qui sert de score — et non la
+   distance depuis son point médian : il suffit donc à un emplacement long
+   d'atteindre le centre par une seule de ses cases pour obtenir un bon
+   score. Le centre est le point `((lignes - 1) / 2, (colonnes - 1) / 2)`.
+   Un emplacement ayant une case exactement sur le centre obtient 0, le
+   score augmentant à mesure que sa case la plus proche s'en éloigne dans
+   n'importe quelle direction — un emplacement franchement excentré sur un
+   seul axe est donc davantage pénalisé qu'un emplacement à distance
+   équivalente répartie sur les deux axes, ce qui resserre le front de
+   remplissage autour du centre plutôt que le long d'un losange plat. Ce
+   score ne dépend pas de l'état de remplissage, seulement de la position
+   fixe dans la grille. On retient, parmi les emplacements au plus petit
+   score, une fenêtre de `SLOT_SELECTION_WINDOW_SIZE` (10) emplacements —
+   tous si le groupe en compte lui-même moins de 10 —, mélangés au
+   préalable pour qu'aucun ordre positionnel ne départage les ex æquo à la
+   coupure (`Filler._select_target_slot`) ;
+7. parmi les emplacements de cette **fenêtre géométrique**, on cherche le
+   **plus petit nombre de lettres encore possibles sur une case encore
+   libre**, et la fenêtre se restreint aux emplacements possédant une case
+   à ce compte. Le nombre de
+   lettres possibles d'une case est celui du calcul **Stats** du mode
+   Interactif, compté séparément dans chaque sens puis croisé : chacun des
+   deux emplacements qui se croisent à cette case (l'horizontal et le
+   vertical) tient son propre relevé des lettres observées à cette case
+   sur son échantillon de vrais mots compatibles avec les lettres déjà
+   connues ; seules les lettres présentes dans **les deux** relevés sont
+   gardées, chacune avec le plus bas de ses deux décomptes, et c'est le
+   nombre de ces lettres communes qui est retenu
+   (`Filler._slot_min_letter_options`, `_crossed_letter_counts`, lisant le
+   même relevé par sens que `_interactive_letter_stats`). Une case que les
+   deux sens ne s'accordent sur aucune lettre compte 0 — la plus contrainte
+   possible. Ce 0 n'est qu'un signal d'échantillonnage : la case n'est ni
+   écartée de ce niveau ni déclarée impossible pour autant, elle est au
+   contraire traitée en premier, et c'est la recherche elle-même (domaines
+   réels, `Filler.slot_is_blocked`) qui établit s'il s'agit réellement
+   d'une case croisée bloquée ; une case qui n'appartient qu'à un seul emplacement garde le
+   relevé de ce seul sens. La mesure est limitée par un **seuil de
+   longueur décroissant** : on ne mesure d'abord que les emplacements de
+   **7 lettres et plus** (`MOST_CONSTRAINED_START_LENGTH`) ; si aucun
+   n'a de case libre mesurable (sélection vide ou épuisée), le seuil
+   descend à 6 lettres et plus, puis 5, et ainsi de suite jusqu'à **2**
+   (`MOST_CONSTRAINED_MIN_LENGTH`) ; le premier seuil qui retient au
+   moins un emplacement mesurable est celui appliqué. Les longs
+   emplacements sont ainsi résolus sur leur case la plus serrée avant les
+   courts, dont les cases serrées reflètent surtout un vocabulaire
+   naturellement restreint. Une case déjà
+   déterminée par une vraie lettre n'est pas comptée : sa lettre est fixée,
+   elle n'offre plus aucun choix à mesurer — sans cette exclusion tout
+   emplacement partiellement rempli rapporterait 1. La case la plus
+   contrainte de la grille est celle où le remplissage peut échouer le plus
+   tôt : on la résout pendant que la recherche a encore de la marge, plutôt
+   que de la laisser à un mot croisé qui la fixerait par accident. Si aucun
+   emplacement de la fenêtre n'a de case libre mesurable, même au seuil de
+   2 lettres, ce niveau ne change rien (`Filler._select_target_slot`,
+   `Filler._slot_min_letter_options`) ;
+8. cette fenêtre est **retriée** par nombre de lettres déjà posées (le plus
+   en premier — même distinction fait-acquis/graine qu'au niveau 4), puis
+   **réduite** à ses `SLOT_SELECTION_REFINE_FRACTION` premiers
+   emplacements (1/2), mélangée d'abord pour éviter tout biais positionnel
+   à la coupure. Le plancher est de 1 emplacement, jamais 0 : la fenêtre
+   issue du niveau 7 peut déjà n'en compter qu'un, et un plancher plus élevé
+   annulerait la réduction dans ce cas très courant ;
+9. cette fenêtre réduite est enfin retriée par un score statistique — la
+   somme des carrés des fréquences mesurées (le même échantillonnage qui
+   alimente les graines) de la lettre la plus fréquente à chaque case
+   **encore libre** de l'emplacement (une case déjà déterminée n'offre plus
+   d'option, donc n'est pas comptée) — le plus haut score en premier :
+   l'emplacement dont la zone propose statistiquement le plus d'options de
+   remplissage, et donc, pour ses voisins croisants, le plus de lettres
+   crédibles avec lesquelles composer. La fenêtre est remélangée au
+   préalable ; le premier emplacement devient l'emplacement choisi.
 
-Chaque tentative de remodelage de case noire (Mots Défi puis glossaire
-thématique) est strictement ISOLÉE sur sa propre copie du motif de base
-— jamais sur un motif partagé, cumulé au fil des mots. Une version
-antérieure appliquait, comme la génération automatique, TOUS les
-remodelages spéculatifs de TOUTE la liste des mots sur un même motif
-partagé avant même qu'un mot soit choisi pour ce clic — ce qui pouvait
-laisser le remodelage d'un mot totalement étranger fausser, temporairement
-et à tort, la vérification de sécurité d'un autre emplacement (en
-déplaçant la case noire qui le délimite), avant d'être lui-même annulé une
-fois le mot réellement posé déterminé — révélant alors, trop tard, un
-emplacement en réalité impossible. Chaque tentative de remodelage
-construit désormais son propre `Filler` jetable, bâti uniquement à partir
-de sa propre copie du motif — la vérification de sécurité qui s'ensuit
-porte donc toujours sur l'état réel et final que ce candidat précis
-laisserait derrière lui, jamais sur un état mélangé à celui d'un autre
-candidat.
+### Choisir quel mot essayer
 
-### Choisir quel emplacement remplir en premier
+Les mots candidats de l'emplacement choisi sont d'abord **mélangés**, puis
+classés selon à quel point leurs lettres correspondent au consensus
+statistique observé sur les cases pas encore déterminées par un croisement
+(`_candidate_score`, somme des carrés des scores par case) : un mot qui
+colle bien au consensus sur plusieurs cases est essayé avant un mot qui n'y
+colle pas du tout, plutôt qu'un tirage entièrement aléatoire.
 
-Pour aller plus vite, le dictionnaire est pré-organisé pour retrouver
-instantanément tous les mots d'une longueur donnée qui ont une lettre
-précise à une position précise — sans cela, il faudrait relire tout le
-dictionnaire à chaque tentative.
+Le premier mot essayé n'est toutefois pas strictement le mieux classé : le
+programme pioche au hasard parmi les `CANDIDATE_SCORE_WINDOW` meilleurs
+candidats **restants** à chaque fois (50), une fenêtre qui se décale à
+mesure que les mots en sortent. Elle est volontairement bien plus étroite
+que le domaine d'un emplacement, qui compte couramment plusieurs milliers
+de mots : le classement statistique garde ainsi la main — seuls les
+candidats les mieux notés sont réellement atteints en premier, les mots
+rares restant loin derrière — tout en laissant assez de jeu pour que deux
+tentatives parallèles, ou deux clics successifs sur un même état de
+grille, ne convergent pas sur le même mot.
 
-À chaque emplacement à choisir, le programme applique une règle à
-plusieurs **niveaux de priorité** (`backend/crossword_gen.py`,
-`Filler._backtrack`) :
+Ces trois étapes — mélange, classement statistique, tirage dans la fenêtre
+glissante — forment la **règle unique de tirage d'un mot** de ce moteur
+(`Filler.ordered_candidates`). Le mode Interactif étant la version pas à
+pas du mode automatique, son bouton **Suivant** tire ses mots exactement de
+la même façon, avec la même méthode : chacune de ses trois familles (Mots
+Défi, glossaire thématique, dictionnaire général) ordonne les candidats de
+chaque emplacement par cet appel, puis retient le premier acceptable. Deux
+clics successifs sur un même état de grille ne proposent donc pas
+forcément le même mot, exactement comme deux tentatives parallèles du mode
+automatique explorent le même motif différemment.
 
-1. **optionnel, actuellement désactivé** (`backend/crossword_gen.py`,
-   constante `ALTERNATE_DIRECTION_ENABLED`) : quand ce réglage est activé,
-   on tire d'abord la **catégorie** (horizontal ou vertical) — la
-   probabilité de choisir l'une ou l'autre est proportionnelle au nombre
-   d'emplacements encore libres dans chacune des 2 catégories, une
-   catégorie qui a encore beaucoup d'emplacements non remplis ayant plus
-   de chances d'être tirée que l'autre, ce qui fait naturellement
-   alterner/équilibrer les deux catégories au fil du remplissage, sans
-   imposer un ordre strict (par exemple tout l'horizontal puis tout le
-   vertical). Tant que ce réglage reste désactivé, ce niveau ne change
-   rien : le groupe de départ est l'ensemble des emplacements encore
-   libres, sans distinction de catégorie, et le niveau 2 ci-dessous
-   s'applique directement dessus ;
-2. **Mots Défi** (la liste du panneau **Mots Défi (personnalisation)** —
-   celui de la page d'accueil, envoyé au serveur en une fois au moment de
-   cliquer sur **Générer la grille**, ou celui du mode Interactif, envoyé à
-   chaque clic sur **Suivant**, `POST /api/interactive/step`), prioritaire
-   sur TOUS les niveaux
-   suivants, y compris le niveau 3 ci-dessous (`backend/crossword_gen.py`,
-   `Filler._select_target_slot`) : s'il existe, parmi les emplacements de
-   la catégorie tirée au niveau précédent, au moins un emplacement où un
-   mot de cette liste (non encore posé ailleurs) tient encore compte tenu
-   des lettres déjà connues, le choix se restreint à ces emplacements —
-   et y reste à travers tous les niveaux suivants. « Tient » s'évalue ici
-   de façon purement géométrique — même longueur que l'emplacement, et
-   compatibilité lettre à lettre avec les seules lettres déjà réellement
-   connues (un mot croisé déjà posé, ou une lettre verrouillée d'un
-   palier précédent — jamais une simple graine statistique) — et n'exige
-   PAS que le mot appartienne au dictionnaire de la langue
-   (`Filler._challenge_word_fits`) : un mot Mots Défi est pris comme une
-   vérité affirmée par l'utilisateur, jamais soumis à validation contre
-   le lexique, contrairement à tout autre candidat. Un mot ainsi posé
-   sans être un vrai mot du dictionnaire est ensuite signalé comme
-   invalide par les diagnostics habituels (`_invalid_fully_known_
-   indices`), exactement comme s'il avait été inséré à la main en
-   cliquant dessus dans le panneau. Ce niveau est volontairement placé
-   ici, juste après le tirage de catégorie et avant le niveau 3 — une
-   version antérieure le plaçait après les niveaux 3/4, ce qui le
-   laissait en pratique bloqué : une grille bien avancée a presque
-   toujours au moins un emplacement à moins de 3 candidats quelque part
-   dans la catégorie tirée, et ce niveau-là, appliqué avant, pouvait alors
-   écarter systématiquement tout emplacement compatible Mots Défi, y
-   compris sur des dizaines de clics consécutifs sur Suivant. Sans aucun
-   mot dans la liste — le cas le plus courant — ce niveau ne change
-   jamais rien, mode manuel comme génération automatique ;
-3. à l'intérieur du groupe obtenu au niveau précédent, et **uniquement
-   pour les emplacements de 4 lettres et plus** (un emplacement de 2-3
-   lettres a un vocabulaire naturellement restreint, cette priorité n'y
-   apporte rien), on choisit en priorité les emplacements avec **moins de
-   `PREFILL_MIN_WORD_COUNT` (3) mots candidats** — le même seuil que celui
-   du pré-remplissage de l'étape 1.
-   But : essayer de résoudre ces emplacements fragiles par un vrai mot
-   pendant que la recherche progresse encore, avant qu'un futur palier de
-   nettoyage ne les juge insuffisants et n'y ajoute une case noire pour
-   les corriger — un mot réellement posé ici évite cette case noire. Si
-   aucun emplacement du groupe n'est sous ce seuil, ce niveau ne
-   change rien : le niveau suivant s'applique alors au groupe
-   entier ;
-4. parmi les emplacements retenus au niveau précédent, s'il en existe au
-   moins un qui a déjà **au moins une case déterminée par une vraie
-   lettre** (un vrai mot croisé déjà assigné pendant cette même tentative,
-   ou une lettre verrouillée d'un palier précédent — jamais une simple
-   graine statistique), le choix se restreint à ces emplacements-là
-   uniquement, excluant les emplacements entièrement vierges tant qu'il en
-   reste au moins un déjà partiellement connu — finir un emplacement déjà
-   entamé plutôt que d'en ouvrir un nouveau. Si tous les emplacements
-   retenus au niveau précédent sont entièrement vierges, ce niveau ne
-   change rien : le niveau suivant s'applique alors au groupe entier ;
-5. **grille thématique uniquement** — parmi les emplacements retenus au
-   niveau précédent (déjà éventuellement restreints par Mots Défi au
-   niveau 2 — ce qui est précisément ce qui donne à Mots Défi la priorité
-   sur le glossaire thématique), s'il en existe au
-   moins un où un mot du glossaire thématique (non encore posé
-   ailleurs) tient encore compte tenu des lettres déjà connues, le
-   choix se restreint à ces emplacements — on commence donc par
-   remplir les zones thématiquement réalisables, et on y pose un mot
-   thématique en priorité (voir « Classement des mots candidats à
-   l'essai »). Sur une grille bilingue, chaque direction utilise le
-   glossaire thématique de SA PROPRE langue (un glossaire par langue) :
-   un emplacement horizontal est jaugé contre le glossaire de la
-   langue A, un vertical contre celui de la langue B. Sans thématique, ou
-   si aucun emplacement du groupe n'accepte de mot thématique, ce niveau
-   ne change rien : le niveau suivant s'applique alors au groupe entier ;
-6. parmi les emplacements retenus au niveau précédent, on calcule pour
-   chacun le carré de la distance entre sa **case la plus proche du
-   centre de la grille** et ce **centre de la grille** lui-même
-   (`backend/crossword_gen.py`, `Filler._select_target_slot`). Chaque
-   case de l'emplacement (un segment rectiligne — voir `extract_slots`)
-   est considérée individuellement, et c'est la plus petite distance au
-   carré parmi elles qui sert de score à l'emplacement — et non la
-   distance depuis sa position centrale (le point médian de son propre
-   segment) : il suffit donc à un emplacement long d'atteindre le centre
-   par au moins une de ses cases pour obtenir un bon score, même si le
-   reste de son étendue s'en trouve éloigné. Le centre de la grille est le
-   point `((lignes - 1) / 2, (colonnes - 1) / 2)`, dans la même origine
-   `(ligne, colonne)` que partout ailleurs dans ce document. Un
-   emplacement possédant au moins une case exactement sur le centre de la
-   grille obtient le score le plus bas possible (0), le score augmentant
-   à mesure que sa case la plus proche s'éloigne du centre, dans
-   n'importe quelle direction — un emplacement dont la case la plus
-   proche est franchement excentrée sur un seul axe est donc davantage
-   pénalisé qu'un emplacement à distance équivalente mais répartie sur
-   les deux axes, resserrant le front de remplissage autour du centre de
-   la grille plutôt que le long d'un losange plat. Ce score ne dépend pas
-   de l'état de remplissage de l'emplacement — seulement de sa position
-   fixe dans la grille — ce qui tend à faire progresser le remplissage
-   selon un front géométrique partant du centre de la grille plutôt que
-   selon la difficulté de chaque emplacement. On retient, **parmi les
-   emplacements ayant obtenu le plus petit score** (les plus proches du
-   centre de la grille), une **fenêtre de taille fixe de `SLOT_
-   SELECTION_WINDOW_SIZE` (3) emplacements** (`backend/crossword_gen.py`)
-   — jamais moins si le groupe compte lui-même moins de 3 emplacements ;
-7. cette fenêtre de niveau 6 est ensuite **retriée** par nombre de lettres
-   déjà posées dans chaque emplacement (le plus de lettres en premier —
-   même distinction fait-acquis/simple-supposition que le niveau 4, une
-   simple graine statistique ne comptant jamais), puis **réduite** à ses
-   `SLOT_SELECTION_REFINE_FRACTION` premiers emplacements (1/2,
-   `backend/crossword_gen.py`) — mêlangée d'abord (même raison que le
-   mélange du niveau 6) pour éviter tout biais positionnel à la coupure.
-   Un plancher de seulement 1 emplacement, jamais 0 : la fenêtre de
-   niveau 6 peut déjà être aussi petite qu'un seul emplacement (si le
-   groupe retenu au niveau précédent n'en compte lui-même qu'un), et un
-   plancher plus élevé ici annulerait la réduction dans ce cas très
-   courant — cette fenêtre réduite ne peut donc jamais finir vide ;
-8. cette fenêtre réduite est enfin retriée une dernière fois par un score
-   statistique — la somme des carrés des fréquences mesurées (le même
-   échantillonnage statistique qui alimente les graines, voir "Les
-   graines" plus haut) de la lettre la plus fréquente à chaque case
-   **encore libre** de l'emplacement (une case déjà déterminée par une
-   vraie lettre n'offre plus aucune option de remplissage, donc n'est pas
-   comptée) — le score le plus haut en premier : l'emplacement dont la
-   zone propose statistiquement le plus d'options de remplissage, et donc,
-   pour les emplacements voisins qui croisent ses cases encore libres, le
-   plus de lettres crédibles avec lesquelles composer à leur tour. Cette
-   fenêtre étant elle aussi remélangée au préalable, cet emplacement
-   devient directement l'emplacement choisi.
+Par-dessus ce classement, deux familles prennent la tête, dans cet ordre :
 
-Le programme n'essaie par ailleurs jamais de remplir un emplacement qui
-croise (partage une case avec) un emplacement déjà connu comme "impossible"
-(voir l'étape 3) — un mot posé là serait de toute façon retiré par le
-prochain nettoyage, autant ne jamais perdre de temps à le poser. Cette règle
-ne change rien tant qu'aucun emplacement n'est encore connu comme impossible
-(le tout premier palier, ou tout palier qui repart d'une grille vierge ou
-nettoyée) — elle n'entre en jeu que sur un palier de reprise "telle quelle".
+- **Mots Défi** — tout mot de la liste non encore posé ailleurs, ni
+  abandonné pour la tentative en cours, et géométriquement compatible avec
+  l'emplacement, passe en tête, devant même les mots thématiques ; il n'a
+  pas besoin d'appartenir au dictionnaire. Un emplacement dont le
+  dictionnaire ne propose par ailleurs aucun candidat n'est alors pas
+  considéré comme une impasse tant qu'un tel mot lui reste compatible.
+- **Glossaire thématique** — sur une grille thématique, l'ordre obtenu est
+  stabilisé en deux blocs : d'abord les candidats du glossaire, puis les
+  autres, pour que l'emplacement tente tous ses mots thématiques avant de
+  descendre vers un mot ordinaire. Le backtracking fait le reste : un mot
+  hors thématique n'est atteint que si aucun mot thématique n'a mené à une
+  solution. Étape sautée si tous — ou aucun — des candidats sont
+  thématiques.
+
+### Sécurité des croisements et budget d'abandon
+
+Qu'il s'agisse d'un Mot Défi, d'un mot du glossaire thématique ou d'un mot
+ordinaire du dictionnaire, un candidat n'est **jamais laissé en place si,
+après lui, un des emplacements qu'il croise est bloqué** (plus aucun mot du
+dictionnaire disponible **et** plus aucun Mot Défi encore actif pour ce
+croisement) — que ce candidat l'ait rendu bloqué ou qu'il l'ait été avant :
+le mot est retiré sur-le-champ, sans descendre plus loin, et le programme
+essaie le candidat suivant de la même famille, puis, à défaut, de la
+famille suivante. Chercher le même mot sur un **autre** emplacement
+se fait naturellement au fil du backtracking, puisque les niveaux 2 (Mots
+Défi) et 5 (thématique) de la cascade continuent de privilégier tout
+emplacement où il tient encore.
+
+**La référence est prise juste avant le placement, et elle est gratuite.**
+La liste des domaines calculée en début de nœud omet déjà tout emplacement
+trouvé bloqué (lequel est du même coup marqué écarté) : y figurer signifie
+donc exactement « cet emplacement avait encore un vrai candidat avant ce
+mot ». Un emplacement qui s'assèche seulement maintenant est le fait du
+candidat testé et le fait rejeter ; un emplacement déjà bloqué avant n'est
+jamais imputé au candidat suivant. Sans cette référence, un unique voisin
+déjà bloqué ferait paraître dangereux tous les candidats de tous les
+emplacements voisins. Un emplacement écarté redevenu sain figure dans les
+domaines, et se trouve donc pleinement protégé comme n'importe quel autre.
+
+**Croiser un emplacement qui reste bloqué est refusé sans exception.** Le
+contrôle distingue donc deux cas, et la référence ci-dessus est ce qui
+permet de les séparer : un emplacement croisé qui figurait dans les domaines
+du nœud était sain avant la pose, donc c'est ce candidat qui l'a rendu bloqué
+(`crossing_broken` — refusé, sauf dans la passe de dernier recours) ; un
+emplacement croisé qui n'y figurait pas était déjà bloqué, et le rester après
+la pose signifie que ce mot croise un emplacement bloqué
+(`crossing_still_impossible` — refusé à tous les stades, celle-là
+comprise).
+Un emplacement écarté redevenu sain figure dans les domaines : il se croise
+donc librement, exactement comme n'importe quel autre emplacement sain, du
+moment que la pose ne le rend pas bloqué de nouveau.
+
+#### L'unique dérogation, en tout dernier recours
+
+Le critère « tout a été essayé » est **global** à la tentative, jamais
+propre à un nœud. La recherche se déroule en deux passes
+(`Filler.solve`) :
+
+1. une **recherche stricte**, depuis la racine, où aucun nœud ne peut
+   créer d'emplacement bloqué. Le retour en arrière y remonte jusqu'aux
+   premiers mots posés et les remet en cause, dans la limite de
+   `MAX_DESCENTS_PER_NODE` descentes par nœud ;
+2. **seulement si cette recherche stricte est épuisée depuis la racine**
+   — la racine elle-même a échoué, pas simplement le budget de
+   vérifications épuisé ni la tentative abandonnée —, elle est rejouée
+   depuis la racine avec le dernier recours autorisé
+   (`Filler.breaking_permitted`). Dans cette seconde passe, un nœud qui a
+   exploré toutes ses possibilités strictes repasse une dernière fois en
+   acceptant un mot qui **assèche** un emplacement croisé, plutôt que
+   d'échouer et de laisser la grille presque vide.
+
+La première passe ne s'épuise dans le budget que lorsque les possibilités
+totales sont peu nombreuses : très petite grille, ou grande grille dont
+beaucoup de cases sont déjà verrouillées par les paliers précédents. Sur
+une grille plus ouverte, le budget s'épuise pendant la recherche stricte :
+la tentative se termine alors avec des emplacements encore vides, jamais
+avec un emplacement bloqué créé par la recherche, et l'enrichissement de
+dernière chance puis le nettoyage entre paliers prennent le relais (voir
+chapitre 5). Mieux vaut une grille bien remplie portant une zone
+impossible — que le nettoyage répare au palier suivant — qu'une grille
+déclarée échouée très tôt, mais seulement une fois que tout le reste a été
+tenté.
+
+Cette passe relâche une seule chose : le contrôle « ne pas rendre bloqué un
+emplacement croisé encore sain ». Elle garde deux limites strictes :
+
+- **croiser un emplacement déjà bloqué reste refusé** (`crossing_still_
+  impossible`), y compris ici : la dérogation autorise à en créer un, jamais
+  à écrire dans un emplacement qui l'est déjà. Le seul endroit où croiser un
+  emplacement déjà bloqué est permis est la passe de dernière chance, tout
+  à la fin du palier échoué (voir « Optimisation avant nettoyage ») ;
+- dans la seconde passe, elle n'est **jamais héritée** par un nœud
+  inférieur : chacun doit d'abord épuiser ses propres possibilités
+  strictes.
+
+Les candidats gardent leur ordre de priorité habituel dans cette passe :
+un candidat sans danger reste toujours préféré et n'est dépassé qu'une fois
+son propre sous-arbre épuisé.
+
+#### Le budget d'abandon par mot
+
+Ce qui change d'une famille à l'autre n'est que le budget d'essais ratés
+par mot :
+
+- un **Mot Défi** ou un **mot thématique** dispose de son propre budget
+  (`Filler._challenge_word_budget`/`_theme_word_budget`, chacun
+  `FALLBACK_PHASE_BUDGET_FRACTION` = 10 % du `deadline_checks` de la
+  tentative, résolu une fois dans `solve()`) : une fois que l'essayer a
+  cassé un croisement autant de fois, ce mot précis est abandonné pour le
+  reste de la tentative (`_challenge_abandoned`/`_theme_abandoned`) — il
+  cesse d'être proposé comme candidat, et, pour un Mot Défi, cesse aussi
+  d'excuser un emplacement croisé sans mot de dictionnaire. Le reste du
+  budget se consacre alors au reste de la grille plutôt qu'à un mot
+  particulièrement difficile à placer ; ce même mot est retenté depuis zéro
+  à la tentative suivante, qui repart avec son propre budget ;
+- le **dictionnaire général** n'a pas d'identité de mot à suivre, et n'en a
+  pas besoin : il essaie simplement ses candidats restants. Un mot accepté
+  au titre de la dérogation ci-dessus n'est jamais décompté d'un budget —
+  on n'y a pas renoncé, on l'a posé.
+
+### Qu'est-ce qu'un emplacement « impossible » ?
+
+Trois cas, cumulatifs, font juger un emplacement « impossible » (surlignage
+rouge des aperçus, retrait de mot ou de case noire au chapitre 5).
+
+**Premier cas — plus aucun mot possible.** Le jugement ne se fonde que sur
+des lettres réellement imposées par un mot croisé confirmé **ou déjà
+verrouillées d'un palier précédent** — jamais sur une graine statistique :
+une graine reste une supposition non vérifiée, qui ne redevient jamais
+pertinente une fois la recherche arrêtée, et ne doit donc pas faire
+conclure qu'un emplacement n'a aucune solution. Les lettres verrouillées, à
+l'inverse, ne sont jamais ignorées, même si aucun mot croisé ne les a
+redécouvertes pendant cette tentative : un emplacement entièrement
+verrouillé dont la combinaison ne correspond à aucun mot réel doit être
+signalé injouable comme n'importe quel autre — sinon le nettoyage entre
+paliers ne voit aucun problème à corriger, et la même combinaison invalide
+se reconstruit à l'identique, cycle après cycle (`Filler.locked_letters`,
+distinct de `Filler.forced_letters`). Un emplacement dont tous les
+candidats sont déjà utilisés ailleurs relève de ce même cas.
+
+**Deuxième cas — le blocage croisé.** Deux emplacements encore ouverts qui
+se croisent sur une case sont tous deux jugés impossibles dès lors que
+leurs lettres encore atteignables à cette case précise (celles de leurs
+candidats respectifs, Mot Défi disponible compris) n'ont **aucune lettre en
+commun** : aucune combinaison des deux ne pourra jamais être complétée
+ensemble, même si chacun, pris isolément, a un domaine parfaitement non
+vide. Un emplacement déjà vide de candidats ne peut jamais être la cause
+d'un tel blocage (c'est le premier cas qui le couvre) — seul un emplacement
+au domaine sain se retrouve signalé pour cette raison, à cause d'un voisin
+tout aussi sain avec lequel aucun accord n'est possible
+(`Filler._crossing_deadlock_slots` pendant une recherche,
+`_crossing_deadlock_indices` en dehors — pour le mode Interactif). La case
+précise du conflit s'affiche dans un rouge plus vif que le reste des deux
+emplacements (`deadlock_cells`, toujours un sous-ensemble des cases
+impossibles, jamais une catégorie séparée).
+
+Ce deuxième cas n'est **pas** détecté par un balayage lancé à chaque nœud :
+ce balayage parcourt le domaine entier de chaque emplacement ouvert, qui
+peut compter des dizaines de milliers de mots sur une grille encore peu
+remplie, et l'y brancher bloquerait la progression visible de la recherche
+précisément sur les grilles où il reste le plus à remplir. Il est calculé à
+la cadence, bien plus large, des instantanés qui paient déjà ce coût
+(`Filler.excluded_zone_cells(include_deadlock=True)`, appelée par
+`_publish_new_best` et par l'instantané de diagnostic final) — un blocage apparu
+puis résolu entre deux de ces instantanés n'est donc jamais vu.
+
+Le noircissement d'une case est par ailleurs un mécanisme **distinct** du
+nettoyage simple pour ce cas : le bouton **Nettoyer** d'Interactif, comme
+le nettoyage automatique entre deux paliers, ne fait jamais que retirer les
+mots qui croisent un emplacement impossible — jamais noircir une case pour
+un blocage croisé (`_clean_blocked_slots` exclut explicitement un tel
+emplacement de son alternative « case noire »). Quand les deux
+emplacements du blocage sont encore entièrement vides — le cas le plus
+fréquent — il n'y a donc rien à retirer et le nettoyage simple reste sans
+effet sur cette paire : elle reste signalée impossible jusqu'à une
+modification manuelle, ou jusqu'à ce que la génération automatique la
+résolve en remaniant son motif de cases noires (un mécanisme entièrement
+différent, mutable par nature).
+
+**Troisième cas — le quota de qualité de contenu**, propre à la génération
+automatique : une grille par ailleurs entièrement et validement remplie
+peut être refusée par un garde-fou appliqué une fois le remplissage
+terminé — trop de noms propres (`MAX_PROPER_NOUNS`) ou trop de mots absents
+du dictionnaire de gloses (`MAX_NON_GLOSS_WORDS`), selon la difficulté
+(`try_fill`). Les mots à l'origine du refus (tout mot fautif réellement
+présent dans la grille, pas seulement l'excédent au-delà du quota) sont
+alors eux aussi signalés impossibles — mêmes cases rouges, même entrée pour
+le nettoyage entre paliers (`_quota_overflow_slot_indices`) — plutôt que de
+laisser la tentative paraître inexplicablement « propre » tout en étant
+marquée échouée.
+
+#### Rouge, jaune : deux signaux distincts
+
+`Filler.impossible_zone_cells()` (le rouge) ne traite **jamais** un
+emplacement écarté comme impossible sur cette seule base : cette liste
+enregistre seulement qu'un emplacement s'est trouvé bloqué au moins une
+fois, et le retour en arrière le rend très régulièrement viable à nouveau —
+le peindre en rouge confondrait « déprioritisé » et « infaisable ».
+`Filler.excluded_zone_cells()` donne son propre signal à une
+telle case — fond jaune (`.attempt-preview-grid .cell.white.excluded`), et
+jamais soustrait du rouge : une case peut être à la fois écartée et
+(fraîchement, réellement) impossible, et c'est l'ordre de la cascade CSS
+(`.low-candidates`, puis `.excluded`, puis `.noise`/`.impossible`/
+`.deadlock`) qui laisse gagner le signal le plus sévère quand plusieurs
+s'appliquent : le jaune passe devant l'orange de l'emplacement pauvre,
+mais reste derrière le violet et le rouge. Cet affichage rend exactement la liste des emplacements
+écartés, filtrée aux emplacements encore non assignés, si bien que
+l'affichage et l'ordonnancement de la recherche ne peuvent jamais diverger.
+
+**Portée d'un emplacement écarté : le cycle de vie d'une tentative.** La
+liste est réellement peuplée sur exactement trois publications : les deux
+rappels en direct de `try_fill` (`_publish_new_best`/`_publish_live_state`,
+ce dernier à coût quasi nul, cette méthode ne faisant que des recherches
+d'ensemble) ; la vignette « juste terminée » de la boucle de récolte ; et
+`last_examples`, l'entrée d'historique navigable de fin de tentative
+(`pattern_attempt_failed`/`pattern_found`), publiée avant que
+l'optimisation et le nettoyage ne tournent — cette entrée portant le signal
+en plus du seul canal `live_preview`, dont l'affichage peut prendre du
+retard en mode rapide. Elle est toujours vide sur tout
+ce qui est publié après ce point : l'aperçu de début de cycle de la
+tentative suivante (la liste appartient à un `Filler` qui n'existe pas
+encore) et l'étape d'optimisation d'une recherche réussie (plus rien
+d'écarté à signaler).
 
 ### Limites de la recherche
 
-#### Budget de vérifications
+#### Le budget de vérifications
 
-Cette recherche a un budget maximal, proportionnel à la taille de la
-grille par défaut (**largeur × hauteur × 2000** vérifications — 300 000 sur
-la grille de référence 15×10 ; `backend/crossword_gen.py`, `try_fill`) : si
-une grille s'avère trop difficile à remplir, l'étape 2 abandonne et on
-passe à l'étape 3 pour simplifier la tentative avant de continuer. Une
-"vérification" est **une tentative de poser un mot sur l'emplacement
-choisi** (voir "Le mécanisme de backtracking, en détail" plus haut) — pas
-un appel récursif : un mot immédiatement rejeté parce qu'il casserait un
-croisement compte tout autant qu'un mot qui mène plus loin dans la
-recherche, précisément pour qu'une longue série de candidats voués à
-l'échec n'échappe jamais à ce budget. Depuis
-l'interface web, le sélecteur **"Mode"** (Flash/Turbo/Rapide/Moyen/Ultra ;
-`backend/app.py`, `BUDGET_MODES`) fixe directement ce budget par tentative
-à une valeur choisie (1 000 à 5 000 000), sans rapport avec la taille de la
-grille, à la place de cette formule par défaut.
+La recherche a un budget maximal, proportionnel à la taille de la grille
+par défaut (**largeur × hauteur × 2000** vérifications — 300 000 sur la
+grille de référence 15×10 ; `try_fill`). Une « vérification » est **une
+tentative de poser un mot** (voir « Fin de la recherche » plus haut) : un
+mot immédiatement rejeté parce qu'il casserait un croisement compte autant
+qu'un mot qui mène plus loin. Depuis l'interface, le sélecteur **Mode**
+(Flash/Turbo/Rapide/Moyen/Ultra ; `backend/app.py`, `BUDGET_MODES`) fixe
+directement ce budget par tentative à une valeur choisie (1 000 à
+5 000 000), sans rapport avec la taille de la grille.
 
-Puisqu'un mot immédiatement rejeté (sans jamais descendre dans la
-récursion) compte tout autant qu'un mot qui mène plus loin dans la
-recherche (voir le paragraphe ci-dessus sur "une tentative de poser un
-mot"), le mode **Flash** (1 000 vérifications, le plus contraint) reste le
-plus fragile des cinq : sur certaines grilles, ce budget peut s'épuiser
-avant qu'une recherche par ailleurs remplissable n'ait eu la chance
-d'aboutir. C'est un compromis assumé plutôt qu'un bug — un budget qui
-ne laisse jamais une recherche déjà sans espoir tourner indéfiniment sans
-jamais s'épuiser, au prix d'une fragilité accrue sur le mode le plus
-serré ; au budget par défaut (300 000, ou tout autre mode plus large), ce
-risque disparaît.
+Puisqu'un mot immédiatement rejeté compte autant qu'un mot productif, le
+mode **Flash** (1 000 vérifications) reste le plus fragile des cinq : sur
+certaines grilles, ce budget peut s'épuiser avant qu'une recherche par
+ailleurs remplissable n'ait eu la chance d'aboutir. C'est un compromis
+assumé — un budget qui ne laisse jamais une recherche sans espoir tourner
+indéfiniment — et le risque disparaît au budget par défaut comme dans tout
+mode plus large.
 
-#### Pourcentage de budget affiché en direct
+#### Un budget qui s'étire tant qu'une autre tentative en a besoin
 
-Pendant qu'une recherche est en cours, la ligne de statut de l'interface
-affiche, en plus de son message habituel (numéro de tentative, etc.), le
-pourcentage de ce budget déjà consommé par la tentative parallèle la plus
-avancée du palier en cours — affiché sous la forme d'un pourcentage de
-**générations** plutôt que de "budget" (mot qui, pour un utilisateur,
-évoque plutôt une somme d'argent) ou de "tentatives" (déjà utilisé sur
-cette même ligne avec un autre sens — le numéro du palier), par exemple
-« ... — 42 % des générations » —, republié toutes les 2 secondes. Cette estimation s'appuie sur les
-mêmes publications en temps réel que le vivier d'aperçu (voir "Plusieurs
-tentatives en parallèle par palier", étape 1) : chaque nouveau record de
-mots placés d'une tentative fait connaître son propre nombre de
-vérifications à cet instant, et le programme retient le plus élevé de tous
-ceux connus pour le palier en cours. C'est un plancher, pas une mesure
-exacte à l'instant T : une tentative en train de reculer/avancer sans
-jamais battre son propre record ne fait progresser aucun de ces chiffres,
-même si elle continue réellement de consommer son budget en arrière-plan —
-le pourcentage affiché ne peut donc jamais être surestimé, seulement
-sous-estimé le temps qu'une tentative batte de nouveau son record. Ce
-pourcentage disparaît de lui-même dès que la recherche de mots se termine
-(succès ou passage à l'étape 3) — il n'a plus de sens une fois la phase de
-remplissage terminée.
+Une tentative qui atteint son propre budget ne s'arrête pas forcément
+sur-le-champ : tant qu'au moins une autre tentative du même palier tourne
+encore sans avoir atteint le sien, la première continue de chercher
+au-delà — l'arrêter laisserait simplement son cœur de processeur inoccupé
+jusqu'à ce que la plus lente termine, puisque le palier ne peut de toute
+façon pas conclure avant elle (`Filler._deadline_reached_without_
+extension`/`_siblings_still_racing`, qui lisent deux tableaux partagés pour
+tout le palier : le compteur de vérifications de chaque tentative, et un
+octet par tentative disant si elle tourne encore — le compteur seul ne
+distingue pas « encore en course » de « arrêtée tôt avec un compteur
+figé »).
 
-#### Abandon anticipé au-delà de 3 emplacements impossibles (optionnel, actuellement désactivé)
+La vérification se fait au moment même où le budget est dépassé, puis
+seulement toutes les 500 vérifications ensuite (le rythme auquel chaque
+tentative rafraîchit sa propre case, donc vérifier plus souvent ne verrait
+rien de plus frais). Dès qu'aucune autre tentative ne tourne encore sous
+son budget, le verdict passe à « stop » et **y reste** pour le reste de la
+tentative (`_deadline_extension_denied`) : un « stop » transitoire ne
+ferait que rejeter un candidat et laisserait la boucle en poser un autre
+juste après, sur un compteur ne tombant plus sur un point de contrôle,
+sans jamais dérouler la recherche. Ce mécanisme ne change rien au budget
+lui-même : il ne retarde l'arrêt d'une tentative en avance que tant que
+cela profite réellement à l'occupation du processeur.
 
-Une tentative peut aussi, en principe, être abandonnée bien plus tôt : dès
-que plus de 3 emplacements de la grille sont jugés impossibles, la
-tentative en cours serait jugée sans espoir raisonnable et arrêtée
-immédiatement, plutôt que de continuer à chercher ailleurs sur un motif
-déjà aussi largement compromis (vérifié de temps en temps, toutes les 500
-étapes de recherche, pas en continu ; `backend/crossword_gen.py`,
-`Filler._backtrack`, constante `UNFILLABLE_ABANDON_ENABLED` — voir aussi
-l'étape 3, "Reprise telle quelle", pour un cas où ce signal se propagerait
-entre plusieurs tentatives parallèles). Ce mécanisme est optionnel et
-actuellement désactivé : tant que `UNFILLABLE_ABANDON_ENABLED` vaut faux,
-une tentative n'est jamais interrompue pour cette seule raison — elle ne
-s'arrête que via son budget de vérifications, une annulation, ou en
-épuisant réellement son propre arbre de recherche.
+Pour une tentative sans visibilité sur des sœurs (mode Interactif,
+minimisation des cases noires, exécution CLI solitaire), c'est la règle
+simple et inconditionnelle « budget épuisé, on s'arrête ».
 
-#### Qu'est-ce qu'un emplacement « impossible » ?
+#### Le pourcentage de budget affiché en direct
 
-Un emplacement n'est jugé "impossible" (ici comme dans tout le reste du
-document — surlignage rouge de l'aperçu, retrait de mot/case noire à
-l'étape 3, etc.) qu'à partir de lettres réellement imposées par un mot
-croisé confirmé **ou déjà verrouillées d'un palier précédent** — jamais à
-partir d'une simple graine statistique (`sample_letter_biases`, voir plus
-haut) : une graine reste une supposition non vérifiée, qui ne redevient
-plus jamais pertinente une fois la recherche arrêtée, et ne doit donc
-jamais, à elle seule, faire conclure qu'un emplacement n'a aucune
-solution. Les lettres verrouillées, à l'inverse, ne sont jamais ignorées
-pour cette décision, même si elles n'ont jamais été redécouvertes par un
-vrai mot croisé assigné *pendant cette tentative précise* : un emplacement
-entièrement verrouillé d'un palier précédent, dont la combinaison ne
-correspond à aucun mot réel, doit être signalé injouable exactement comme
-n'importe quel autre — sinon le nettoyage entre paliers ne voit jamais de
-problème à corriger, et la même combinaison invalide se reconstruit à
-l'identique, cycle après cycle, sans jamais progresser ni jamais être
-signalée (`backend/crossword_gen.py`, `Filler.locked_letters`, distinct de
-`Filler.forced_letters`).
+Pendant une recherche, la ligne de statut affiche le pourcentage de ce
+budget déjà consommé, **en moyenne**, par l'ensemble des tentatives
+parallèles du palier (`generate_grid`) — libellé en pourcentage de
+**générations** (« … — 42 % des générations »), republié toutes les 2
+secondes (`BUDGET_PROGRESS_REPORT_INTERVAL_S`). La valeur provient d'un
+compteur par tentative (une case dédiée d'un tableau partagé entre les
+processus du palier, remise à 0 au début de chaque palier), que chaque
+tentative met à jour dès que `CHECKS_PROGRESS_REPORT_INTERVAL` (500)
+vérifications se sont écoulées depuis sa dernière mise à jour —
+indépendamment de tout nouveau record, si bien qu'une tentative qui avance
+et recule sans battre son record fait quand même progresser sa valeur au
+rythme réel de sa consommation.
 
-Second cas, qui s'ajoute au premier plutôt que de le remplacer : deux
-emplacements encore vides qui se croisent sur une case sont eux aussi tous
-les deux jugés impossibles dès lors que leurs lettres encore atteignables
-à cette case précise (celles de leurs candidats respectifs, mot défi
-compris s'il en reste un disponible) n'ont **aucune lettre en commun** —
-aucune combinaison des deux ne pourra jamais être complétée ensemble,
-même si chacun des deux emplacements, pris isolément, a l'air parfaitement
-sain (un vrai domaine non vide). Un emplacement dont le domaine est déjà
-vide à lui seul ne peut jamais être la cause d'un tel blocage croisé
-(c'est déjà le premier cas ci-dessus qui le couvre) — seul un emplacement
-au domaine sain peut se retrouver signalé impossible pour cette raison,
-à cause d'un voisin tout aussi sain avec lequel aucun accord n'est
-possible (`Filler._crossing_deadlock_slots` pendant une recherche en
-cours, `_crossing_deadlock_indices` en dehors de toute recherche — pour
-le mode Interactif). Ce second cas alimente exactement les mêmes
-mécanismes de détection que le premier, sans dispositif séparé :
-surlignage rouge vif de l'aperçu et du mode Interactif, seuil d'abandon à
-plus de 3 emplacements impossibles (quand ce dernier est activé — voir
-plus haut). Le noircissement d'une case est en
-revanche un mécanisme distinct du nettoyage simple : le bouton
-« Nettoyer » d'Interactif, comme le nettoyage automatique entre deux
-paliers, ne fait jamais que retirer les mots qui croisent un emplacement
-impossible (que ce retrait résolve ou non le blocage réel) — jamais
-noircir de case pour ce cas précis, `_clean_blocked_slots` excluant
-explicitement un tel emplacement de sa propre alternative « case noire ».
-Quand les deux emplacements du blocage sont encore entièrement vides (le
-cas le plus fréquent), il n'y a donc rien à retirer et le nettoyage
-simple reste sans effet sur cette paire — elle reste signalée impossible
-jusqu'à une modification manuelle, ou jusqu'à ce que la génération
-automatique (dont le remodelage du motif de cases noires est un mécanisme
-entièrement différent, déjà mutable par nature) la résolve autrement.
+Toutes les actions périodiques de la recherche (cette mise à jour, le
+battement de cœur ci-dessous, la prise en compte du bouton Stop, l'arrêt
+provoqué par une tentative sœur) se déclenchent sur un **seuil écoulé**,
+jamais sur un multiple exact du compteur, et sont évaluées aussi bien à
+l'entrée de `_backtrack` qu'après chaque candidat compté dans sa boucle
+(`Filler._periodic_checkpoints`, `Filler._checkpoint_due`). Le compteur de
+vérifications avance d'une unité par candidat essayé, et la plupart des
+candidats sont rejetés sans descendre plus loin : une grille bien avancée
+peut enchaîner de longues séries de rejets sans jamais rentrer dans
+`_backtrack`, et le compteur y enjambe n'importe quel multiple exact. Ces
+actions restent donc régulières quelle que soit la proportion de
+candidats rejetés.
 
-En mode Interactif, la case précise où le conflit a lieu (celle qui n'a
-aucune lettre en commun entre les deux sens) s'affiche dans un rouge plus
-vif que le reste des deux emplacements impossibles qui la traversent —
-ce sous-ensemble reste toujours inclus dans l'ensemble plus large des
-cases impossibles, jamais une catégorie séparée (`Filler._crossing_
-deadlock_slots`/`_crossing_deadlock_indices` renvoient les deux : les
-emplacements concernés, et la ou les cases de conflit elles-mêmes).
+Aucun pourcentage n'est plafonné à 100 % : le budget d'une tentative étant
+élastique (voir ci-dessus), une tentative qui a dépassé son propre budget
+continue de chercher tant qu'une sœur n'a pas atteint le sien, et sa
+valeur — comme la moyenne du palier — peut dépasser 100 %.
 
-#### Affichage : lettres verrouillées vs. graines statistiques
+C'est la **moyenne** de ces cases qui est affichée, jamais la plus élevée :
+une seule tentative en difficulté (typiquement celle qui accumule le plus
+vite des vérifications, un candidat rejeté comptant autant qu'un candidat
+productif) ne peut donc pas, à elle seule, faire croire que tout le palier
+a épuisé son budget alors que les autres progressent confortablement en
+dessous du leur. Le pourcentage disparaît dès que la phase de remplissage
+se termine.
 
-Les cases verrouillées (contenu réellement confirmé, porté d'un palier au
-suivant) et les cases forcées (une simple graine statistique de
-`sample_letter_biases`) restent deux ensembles strictement disjoints dans
-tout aperçu affiché — jamais une même case dans les deux à la fois. Une
-case verrouillée reste visible dans l'aperçu (sa lettre réelle s'affiche)
-même si aucun mot croisé ne l'a encore redécouverte pendant cette
-tentative précise, mais elle n'est jamais comptée comme "graine
-statistique" pour autant : `Filler`/`try_fill` transmettent les deux
-notions séparément à `build_partial_letters_grid`, qui superpose les deux
-sur la grille affichée mais ne renvoie que les vraies graines statistiques
-comme "cases forcées". Aucune fusion des deux ensembles n'a plus lieu
-nulle part dans le pipeline — une case verrouillée n'a donc plus aucune
-raison de s'afficher, même un instant, avec le liseré bleu réservé aux
-graines statistiques.
+Chaque grille de l'aperçu affiche en plus, sur sa propre ligne d'info, ce
+même pourcentage **pour elle seule** — la valeur brute de sa case dédiée,
+jamais moyennée. Pour une tentative encore en calcul, elle est relue
+dans le tableau partagé toutes les 2 secondes, en même temps que la
+moyenne, sans attendre que la tentative publie un nouveau record ou un
+battement de cœur (`generate_grid`, `_refresh_computing_budget_percents`).
+Pour une tentative arrêtée (réussie ou échouée), elle reste figée à la
+valeur réellement atteinte au moment de l'arrêt ; un aperçu de début de
+cycle part de 0 %, le tableau venant d'être remis à zéro.
 
-#### Emplacements condamnés dès le départ
+#### La grille de l'aperçu continue de bouger même sans nouveau record
 
-Un emplacement condamné dès le départ (par exemple une case noire qui coupe
-un emplacement déjà partiellement verrouillé d'une façon qui ne correspond
-à aucun mot du dictionnaire) est repéré juste avant que la recherche ne
-commence et mis de côté comme les emplacements impossibles hérités d'un
-palier précédent : la recherche continue à essayer de remplir tout le reste
-de la grille au lieu de s'arrêter net à la première vérification.
+Un second mécanisme republie périodiquement (dès que
+`LIVE_STATE_HEARTBEAT_INTERVAL` — 5 000 — vérifications se sont écoulées
+depuis la précédente publication, plus rare que le
+pourcentage ci-dessus puisqu'il coûte la construction d'une grille
+complète) l'état **courant** de chaque tentative, qu'elle batte ou non son
+record (`Filler.on_live_state`, marqué `"kind": "heartbeat"`). Sans lui,
+une tentative traversant un long plateau sans nouveau record affichait une
+grille figée, indiscernable à l'écran d'une recherche réellement bloquée,
+alors que le programme continue de poser et retirer de nombreux mots. Un
+battement de cœur est volontairement allégé : il ne recalcule pas les
+blocages croisés (dont le coût est proportionnel au domaine de chaque
+emplacement ouvert) et n'est **jamais** ajouté au vivier qui alimente la
+sélection de fin de palier — il peut être moins complet que le dernier
+record, et ne doit donc jamais y concourir.
 
-### Fermeture des derniers emplacements implicites
+#### Abandon anticipé au-delà de 3 emplacements impossibles (désactivé)
 
-Une fois la recherche terminée — succès, budget dépassé, abandon pour
-trop d'emplacements impossibles, ou interruption par une tentative sœur —
-un dernier passage, bon marché,
-referme les emplacements qui restent formellement non assignés alors que
-toutes leurs lettres sont déjà déterminées par de vrais mots croisants
-réellement placés, et qu'il ne leur reste plus qu'un seul mot du
-dictionnaire encore disponible (pas déjà utilisé ailleurs dans la grille) :
-ce mot est confirmé directement, sans attendre que la recherche elle-même
-ait eu l'occasion de le sélectionner explicitement (`backend/
-crossword_gen.py`, `_close_implied_slots`, appelée depuis `try_fill`).
-Contrairement aux "emplacements à une seule possibilité" (voir plus haut,
-qui agit *avant* que la recherche ne commence, uniquement à partir des
-lettres déjà verrouillées d'un palier précédent), celle-ci agit *après*
-et tient compte des mots déjà placés pendant cette même tentative — un mot
-déjà utilisé ailleurs ne peut jamais être confirmé une seconde fois, même
-s'il correspond exactement aux lettres déjà en place. Répétée jusqu'à un
-point fixe : refermer un emplacement peut, par une case de croisement, en
-déterminer un autre à son tour.
+Une tentative peut en principe être abandonnée bien plus tôt : dès que plus
+de `UNFILLABLE_ABANDON_SLOT_COUNT` (3) emplacements sont jugés impossibles,
+elle serait considérée sans espoir raisonnable et arrêtée, plutôt que de
+continuer sur un motif aussi largement compromis (vérifié toutes les 500
+étapes, pas en continu). Ce mécanisme est optionnel et **actuellement
+désactivé** (`UNFILLABLE_ABANDON_ENABLED`) : une tentative ne s'arrête que
+par son budget, une annulation, ou en épuisant réellement son arbre de
+recherche.
+
+### Fin de la recherche : fermer les emplacements implicites
+
+Une fois la recherche terminée — succès, budget dépassé, abandon, ou
+interruption par une tentative sœur — un dernier passage, bon marché,
+referme les emplacements restés formellement non assignés alors qu'il ne
+leur reste plus qu'un seul mot du dictionnaire encore disponible (pas déjà
+utilisé ailleurs) compte tenu des lettres déjà déterminées par de vrais
+mots croisants (`_close_implied_slots`, appelée depuis `try_fill`). Ce mot
+est confirmé directement, sans attendre que la recherche ait eu l'occasion
+de le sélectionner. Répété jusqu'à un point fixe : refermer un emplacement
+peut, par une case de croisement, en déterminer un autre.
 
 Sans cette fermeture, une grille pouvait apparaître entièrement remplie
-(chaque case blanche déjà pourvue d'une vraie lettre confirmée) et sans
-aucun emplacement injouable, tout en étant encore comptée comme échouée —
-il suffisait qu'un ou deux emplacements, déjà implicitement déterminés,
-n'aient simplement jamais été explicitement choisis par la recherche avant
-la fin de la tentative. Ce dernier pas trivial ne fait jamais progresser
-la recherche elle-même (aucun mot deviné ou statistique n'est jamais
-placé ici) — il ne fait que confirmer ce qui, par construction, est déjà
-la seule possibilité restante.
+(chaque case blanche pourvue d'une vraie lettre) et sans aucun emplacement
+injouable, tout en étant comptée comme échouée — il suffisait qu'un ou deux
+emplacements, déjà implicitement déterminés, n'aient jamais été
+explicitement choisis avant la fin de la tentative. Ce pas ne fait jamais
+progresser la recherche : aucun mot deviné ou statistique n'y est placé, il
+ne confirme que ce qui est déjà, par construction, la seule possibilité
+restante.
 
-## Étape 3 — Simplifier une tentative échouée
+Deux garde-fous :
 
-Cette étape intervient quand un palier échoue, pour en récupérer ce qui
-reste exploitable avant de continuer plutôt que de tout recommencer de
-zéro. Elle retire du contenu (mots, cases noires) plutôt que d'en
-ajouter — d'où son nom. Une seconde étape, distincte, fait la même chose
-sur la grille *finale* une fois entièrement remplie — voir "Étape 4 —
-Optimiser la grille finale" plus bas.
+- contrairement aux « emplacements à une seule possibilité » (qui agissent
+  *avant* la recherche, sur les seules lettres verrouillées), celui-ci
+  tient compte des mots déjà placés pendant cette tentative : un mot déjà
+  utilisé ailleurs ne peut jamais être confirmé une seconde fois, même s'il
+  correspond exactement aux lettres en place ;
+- la confirmation n'a pas besoin que **toutes** les cases soient déjà
+  connues (il suffit qu'il n'en reste qu'un candidat), donc elle peut
+  écrire de vraies lettres — et elle est pour cela soumise à la même règle
+  que la recherche : elle est **refusée** si elle laisserait bloqué un
+  emplacement croisé encore ouvert. Renoncer à la confirmation ne coûte
+  rien : le candidat unique de cet emplacement était de toute façon sa
+  seule option, donc la grille n'était complétable dans aucun des deux
+  cas — et laisser les deux emplacements ouverts garde le nettoyage du
+  chapitre 5 capable d'agir sur de vraies cases vides.
+
+### Affichage : lettres verrouillées vs. graines statistiques
+
+Les cases verrouillées (contenu réellement confirmé, porté d'un palier au
+suivant) et les cases forcées (une graine statistique) restent deux
+ensembles strictement disjoints dans tout aperçu — jamais une même case
+dans les deux. Une case verrouillée reste visible avec sa vraie lettre même
+si aucun mot croisé ne l'a redécouverte pendant cette tentative, mais elle
+n'est jamais comptée comme graine pour autant : `Filler`/`try_fill`
+transmettent les deux notions séparément à `build_partial_letters_grid`,
+qui les superpose sur la grille affichée mais ne renvoie que les vraies
+graines comme « cases forcées » — une case verrouillée ne s'affiche donc
+jamais avec le liseré bleu réservé aux graines.
+
+### Le mode Interactif : poser un seul mot
+
+Le bouton **Suivant** (`interactive_place_word`) pose exactement un mot de
+plus. Il réutilise la même cascade à 9 niveaux et la même précédence à
+trois familles (Mots Défi, puis glossaire thématique, puis dictionnaire
+général), mais sans recherche récursive : une seule décision est prise, et
+elle doit être bonne du premier coup, puisqu'il n'y a pas de palier suivant
+pour réparer.
+
+**Le choix de l'emplacement évite les emplacements bloqués.** Un mot n'est
+jamais posé **sur** un emplacement bloqué tant qu'un autre emplacement peut
+en recevoir un : la liste des emplacements bloqués est calculée une fois par
+clic, au sens rouge du terme — blocages par case croisée bloquée compris
+(`_impossible_indices`) — et ces emplacements sortent du tirage de la
+cascade ; ils n'y reviennent que si plus rien d'autre n'est sélectionnable,
+pour que **Suivant** ne reste jamais coincé.
+
+**Une vérification de sécurité élargie.** Un candidat est écarté dès qu'il
+laisse sans aucun mot disponible un emplacement encore ouvert
+(`_word_breaks_open_slot`), et la vérification distingue deux cas :
+
+- **un emplacement qu'il croise, qui était sain avant la pose** : ce
+  candidat vient de le rendre bloqué. Refusé, sauf dans la passe de tout
+  dernier recours décrite ci-dessous — exactement la distinction que fait
+  la génération automatique entre `crossing_broken` et `crossing_still_
+  impossible` ;
+- **un emplacement qu'il croise, déjà bloqué avant la pose et qui le
+  reste** : ce mot croise un emplacement bloqué. Refusé à tous les
+  niveaux, sans aucune exception : la dérogation de dernier recours
+  autorise à créer un emplacement bloqué, jamais à écrire en travers d'un
+  emplacement qui l'est déjà ;
+- **un emplacement totalement disjoint** ailleurs dans la grille, dont ce
+  mot était le dernier candidat disponible : refusé aussi — un glossaire
+  thématique typiquement restreint fait qu'un même mot est souvent la
+  dernière option de deux emplacements sans aucune case commune. Mais ce
+  cas-là, lui, est toléré dès le niveau intermédiaire, faute de quoi une
+  seule zone bloquée ailleurs dans la grille suffirait à bloquer
+  **Suivant** pour de bon. Un emplacement disjoint **déjà** bloqué avant
+  ce clic n'est jamais imputé au candidat en cours
+  (`_open_slot_baseline`, calculé une fois par emplacement candidat puis
+  réutilisé pour chacun de ses mots).
+
+La génération automatique, elle, garde délibérément un contrôle limité aux
+croisements directs, puisque son nettoyage entre paliers répare de toute
+façon ce genre de zone.
+
+**Trois niveaux de tolérance, balayés l'un après l'autre**
+(`_placement_accepted`, `PLACEMENT_LEVEL_STRICT`/`_DISJOINT`/`_BREAKING`).
+Le mode Interactif ne peut pas exprimer par la récursion les trois étapes
+du nœud de `Filler._backtrack` (emplacements non écartés, puis écartés
+libérés, puis `allow_breaking`), puisqu'un clic ne prend qu'une seule
+décision : il rejoue donc sa recherche à trois familles entière, une fois
+par niveau, du plus strict au plus tolérant.
+
+1. **strict** : seuls les candidats qui ne cassent rien ;
+2. **disjoint** : en plus, un candidat qui laisse sans mot un emplacement
+   totalement disjoint ;
+3. **dernier recours** : en plus, un candidat qui rend bloqué un
+   emplacement encore sain qu'il croise — la seule dérogation à la règle
+   « ne jamais créer d'emplacement impossible », et la même que celle de
+   la recherche automatique.
+
+Un niveau entier est épuisé — les trois familles, tous les emplacements
+encore ouverts — avant que le suivant soit essayé : une pose plus sûre,
+où qu'elle soit dans la grille, l'emporte donc toujours sur une pose plus
+dommageable, et les Mots Défi gardent leur priorité sur le glossaire
+thématique et sur le dictionnaire général à chaque niveau. Tous les
+emplacements écartés au niveau précédent sont du même coup *libérés* au
+niveau suivant, comme le fait l'étape 2 du nœud automatique. Le dernier
+niveau est ce qui évite qu'une grille encore largement vide soit déclarée
+impossible : mieux vaut continuer à la remplir en y créant une zone
+impossible — que **Nettoyer**, une correction à la main ou **Finir la
+grille** répareront, la zone devant bien exister pour pouvoir être
+nettoyée — que de s'arrêter là. Un candidat accepté à un niveau tolérant
+ne consomme aucun budget d'abandon, comme un mot accepté sous
+`allow_breaking` dans la recherche automatique.
+
+**Une seule notion de blocage, partagée avec la recherche automatique.**
+Le mode Interactif est la version pas à pas du mode automatique : il doit se
+comporter exactement pareil, le retour en arrière étant fait à la main avec
+**Précédent**. La vérification ne raisonne donc pas sur le seul domaine de
+chaque emplacement croisé — elle appelle `Filler.slot_is_blocked`, la
+définition unique d'« emplacement bloqué » (`DOC_ALGO/FR/Lexicon.md`), celle
+que peint déjà le rouge à l'écran : plus aucun mot possible, **ou** case
+croisée bloquée. C'est exactement le même appel, avec les mêmes arguments,
+que fait `Filler._backtrack` pour ses propres candidats. Un emplacement
+rouge à l'écran est donc toujours vu comme tel par le code, et un mot n'est
+jamais posé en travers, qu'il ait trouvé le blocage ou qu'il vienne de le
+créer.
+
+Le coût de ce contrôle — un parcours du domaine des emplacements
+concernés — est tenu par un cache par nœud (`options_cache`,
+`Filler._letter_options_cached`), qui rend toujours exactement le même
+résultat qu'un recalcul complet :
+
+- les lettres encore possibles sur un emplacement ne changent que si un mot
+  tombe sur un emplacement qui le croise ; tout le reste est calculé une
+  fois par nœud et réutilisé pour chaque candidat ;
+- un emplacement qui croise l'emplacement visé change avec chaque
+  candidat, mais seulement par la lettre posée sur leur case commune : il
+  est mis en cache par sa **signature de lettres connues**
+  (`_known_letters_signature`), soit au plus une entrée par lettre
+  distincte à cette case, au lieu d'un recalcul par candidat ;
+- chaque entrée garde, par position, le **nombre** de mots disponibles
+  portant chaque lettre. Le mot en cours d'essai, désormais utilisé, ne
+  retire donc une lettre à un emplacement dont il appartient au domaine
+  que s'il en était le dernier porteur — ce que les compteurs disent
+  directement, sans reparcourir le domaine ;
+- un emplacement encore vierge a pour domaine toute la liste de sa
+  longueur : ses compteurs sont calculés une seule fois par longueur
+  (`_blank_letter_counts`), les mots déjà posés en étant simplement
+  déduits.
+
+Un cache périmé lirait « cet emplacement a encore des options » et
+masquerait un blocage réel : chaque entrée mémorise l'ensemble des mots
+utilisés pour lequel elle a été calculée, et est recalculée, jamais
+réutilisée, s'il ne correspond plus.
+
+**Deux phases, chacune isolée** (`_find_priority_word_placement`, partagée
+par la famille Mots Défi et la famille thématique) :
+
+1. toutes les combinaisons (mot, emplacement encore ouvert) géométriquement
+   possibles sont d'abord essayées sur le motif de base **intact**, en ne
+   considérant que les emplacements déjà existants et déjà viables pour le
+   dictionnaire — celles de l'emplacement désigné par la cascade d'abord,
+   puis celles de tout autre emplacement ouvert (les emplacements suivant
+   leur meilleur mot, et les mots de chacun tirés par la règle unique de
+   tirage, `Filler.ordered_candidates` — voir « Choisir quel mot
+   essayer »), toute combinaison cassant un emplacement étant écartée
+   immédiatement ;
+2. seulement ensuite, et pour la seule famille Mots Défi (la famille
+   thématique s'arrête à la phase 1), un mot qui ne correspond à **aucun**
+   emplacement existant de sa longueur reçoit sa propre tentative de
+   remaniement de
+   case noire (`_try_reshape_for_word`, élargissement puis
+   raccourcissement — voir chapitre 3), **entièrement isolée sur sa propre
+   copie du motif de base**, jetée aussitôt si elle n'est pas retenue. Un
+   `Filler` jetable est construit sur cette seule copie
+   (`_build_interactive_filler`) et la même vérification de sécurité y est
+   rejouée : le contrôle porte donc toujours sur l'état réel et final que
+   ce candidat précis laisserait derrière lui, jamais sur un état mélangé à
+   celui d'un autre candidat. Sans cette isolation, le remaniement d'un mot
+   totalement étranger (un déplacement de case noire qui redessine les
+   limites d'un emplacement) faussait la vérification d'un autre candidat,
+   avant d'être lui-même annulé une fois le mot réellement posé
+   déterminé — révélant alors, trop tard, un emplacement en réalité
+   impossible.
+
+**Le budget d'abandon**, faute de `deadline_checks` à ce stade, se calcule
+sur le nombre total de combinaisons plus tentatives de remaniement
+envisagées pour cet appel : chaque Mot Défi est abandonné, pour ce seul
+clic, dès qu'il a cassé un emplacement à hauteur de 10 % de ce total. Le
+bookkeeping d'abandon (`_register_challenge_word_break`/
+`_register_theme_word_break`) est toujours appliqué au `Filler` de la
+grille elle-même, jamais à une copie isolée, pour qu'il persiste
+correctement d'une phase à l'autre. L'exemption vérifiée par
+`_word_breaks_open_slot` (un autre Mot Défi encore actif capable de sauver
+un emplacement que ce candidat casserait) est toujours tirée du vivier Mots
+Défi courant de la grille, quelle que soit la famille en cours.
+
+**Le repli final** se fait sur le dictionnaire général, en balayant tous les
+emplacements encore ouverts dans l'ordre de la cascade — celui qu'elle a
+désigné d'abord, puis les autres — et non ce seul emplacement : un
+emplacement où aucun candidat n'est acceptable au niveau en cours est
+écarté (voir « emplacement écarté » dans `DOC_ALGO/FR/Lexicon.md`) et la
+recherche passe au suivant. La grille n'est déclarée impossible qu'une fois
+qu'aucun emplacement encore ouvert ne peut recevoir de mot, à aucun des
+trois niveaux. Dans chaque passe, un emplacement réputé bloqué (rouge)
+n'est essayé qu'après tous les autres. Chaque emplacement exclut d'entrée tout Mot Défi ou
+mot thématique encore présent dans son domaine : un tel mot a nécessairement
+déjà été essayé, sur tous les emplacements de la grille, par l'une des deux
+familles précédentes, et s'y est révélé cassant à chaque fois — sauf si
+exclure les deux familles ne laisse absolument rien, seul cas où l'un d'eux
+est posé en tout dernier recours plutôt que de laisser **Suivant** bloqué.
+Les emplacements écartés pendant ce balayage sont renvoyés au panneau
+(`excluded_cells`) et affichés en fond jaune, comme dans les
+prévisualisations de la génération automatique. Sur chaque emplacement
+balayé, les candidats sont tirés par la même règle unique de tirage que la
+recherche automatique (`Filler.ordered_candidates` — mélange, classement
+statistique, tirage dans la fenêtre glissante, voir « Choisir quel mot
+essayer ») et le premier acceptable est retenu.
+
+Une fois un gagnant désigné, son propre motif (le motif de base intact pour
+un choix ordinaire, l'unique copie remaniée pour un choix qui en avait
+besoin) est reporté dans la grille réelle et les lettres du mot y sont
+écrites — aucune passe d'annulation des remaniements inutilisés n'est
+nécessaire, puisque seul celui du gagnant a jamais été appliqué.
+
+### Les autres outils du mode Interactif
+
+Toutes ces fonctions travaillent sur une grille ordinaire, sans aucune des
+machineries de tentatives parallèles :
+
+- `interactive_slot_candidates` (**Mots**) — les mots du dictionnaire
+  compatibles avec les lettres connues d'un emplacement ; les mots
+  thématiques sans plafond, les autres plafonnés à
+  `INTERACTIVE_SLOT_CANDIDATES_LIMIT` (300).
+- `interactive_crossing_words` (**Croisés**) — les lettres et mots
+  possibles à une case, dans les deux directions à la fois.
+- `interactive_boundary_candidates` (**Début**/**Fin**) — les mots pouvant
+  commencer ou finir un emplacement, de 2 lettres jusqu'à sa longueur
+  complète, en respectant les lettres déjà posées. Un candidat plus court
+  n'est proposé que si la case frontière juste au-delà peut devenir noire
+  (pas déjà lettrée, et structurellement valide à `min_interior_free=1`) ;
+  le plafond de 300 s'applique par longueur, pour que les longueurs courtes
+  ne saturent pas la liste.
+- Ces trois fonctions renvoient chaque mot avec ses **positions
+  dangereuses** (`_words_with_unsafe_positions`) : les positions où écrire
+  cette lettre rendrait **nouvellement** un emplacement croisé impossible à
+  remplir (`_unsafe_letter_positions` compare le domaine du croisement
+  avant et après, hors mots déjà utilisés ; un croisement déjà impossible
+  n'est jamais reporté, et un Mot Défi encore disponible l'exempte). Ces
+  positions s'affichent soulignées en rouge ; le bouton « œil » de chaque
+  bloc de résultats masque tous les candidats portant au moins une position
+  dangereuse, pour ne comparer que les mots sûrs.
+- `_interactive_fill_diagnostics` (**Impossibles**) — les cases rouges et
+  orange du panneau, en attrapant aussi un mot inventé par les seuls
+  croisements et qui n'existe pas. Un Mot Défi y est considéré comme
+  faisant partie du dictionnaire : un emplacement que seul un Mot Défi
+  pourrait remplir est compté comme « pauvre » (orange) plutôt
+  qu'impossible, et un emplacement épelant exactement un Mot Défi n'est
+  jamais signalé invalide.
+- `_interactive_letter_stats` (**Stats**) — pour chaque case blanche encore
+  vide, la lettre la plus fréquente de son sondage statistique
+  (`sample_letter_biases` avec `force_fraction=0.0`, donc rien n'est jamais
+  forcé dans la grille), relevés horizontal et vertical croisés
+  (`_most_probable_letter` : lettres communes aux deux sens, au plus bas
+  des deux décomptes), affichée en gris clair. Une case dont tous les
+  emplacements croisés sont déjà impossibles, ou dont les deux sens ne
+  partagent aucune lettre, est omise. Le bouton est bistable, activé par
+  défaut : tant qu'il l'est, les lettres sont redemandées à chaque
+  changement de la grille (`frontend/static/script.js`,
+  `scheduleInteractiveStatsRefresh`).
+- `interactive_clean_impossible_zones`/`interactive_minimize_black_cells`
+  (**Nettoyer** / **Nettoyer (+noires)**) — les équivalents manuels du
+  nettoyage automatique, le second essayant en plus de retirer chaque case
+  noire.
+- **Vérifier** — contrôle que chaque mot posé est bien dans le
+  dictionnaire ; comme les précédents, il n'a jamais un Mot Défi
+  validement posé pour invalide.
+
+---
+
+## Chapitre 5 — Phase 3 : simplifier une tentative échouée
+
+Cette phase intervient quand un palier échoue (aucune de ses tentatives
+parallèles n'a donné une grille complète), pour en récupérer ce qui reste
+exploitable avant de continuer. Elle **retire** du contenu (mots, cases
+noires) plutôt que d'en ajouter — d'où son nom.
+
+Elle se déroule dans cet ordre :
+
+1. une **optimisation** propre à chaque tentative, avant tout nettoyage ;
+2. un **dernier recours** : boucher les cases isolées, qui peut sauver une
+   grille de justesse ;
+3. le choix entre **reprise « telle quelle »** (garder le motif et n'en
+   retirer que ce qui bloque) et **nettoyage complet puis motif neuf** ;
+4. dans les cas extrêmes, un retour à la **grille entièrement vierge**.
 
 ### Optimisation avant nettoyage
 
-Avant même le nettoyage proprement dit (que la reprise soit "telle
-quelle" ou par motif neuf — voir plus bas), chaque tentative distincte du
-palier passe par une optimisation dédiée, appliquée séparément à chacune
-(`backend/crossword_gen.py`, `_optimize_before_cleanup`) :
+Avant même le nettoyage, chaque tentative distincte du palier passe par une
+optimisation dédiée, appliquée séparément à chacune
+(`_optimize_before_cleanup`) :
 
-1. tout emplacement **entièrement vide** — aucune case ne porte de
-   lettre, ni directement ni via un croisement — est verrouillé, ainsi
-   que la ou les cases noires qui le bordent immédiatement ;
-2. un remplissage complémentaire est tenté sur tout le reste de la
-   grille (les emplacements déjà connus impossibles restent, eux aussi,
-   de côté pour cette tentative, sans quoi leur seule présence ferait
-   échouer tout le remplissage) — un budget de recherche resté inexploité
-   par la recherche d'origine peut ainsi acheter un progrès réel, gratuit ;
-3. puis un cycle de retrait de cases noires, exactement comme l'étape 4
-   plus bas, mais restreint aux cases noires non verrouillées — aucune
-   case blanche ou noire verrouillée n'est jamais touchée par ce retrait.
+1. tout emplacement **entièrement vide** — aucune case ne porte de lettre,
+   ni directement ni via un croisement — est verrouillé, ainsi que la ou
+   les cases noires qui le bordent immédiatement ;
+2. un remplissage complémentaire est tenté sur tout le reste de la grille
+   (les emplacements déjà connus impossibles restent de côté, sans quoi
+   leur seule présence ferait échouer tout le remplissage) — un budget
+   resté inexploité par la recherche d'origine peut ainsi acheter un
+   progrès réel, gratuit ;
+3. puis un cycle de retrait de cases noires, exactement comme au
+   chapitre 6, mais restreint aux cases noires **non** verrouillées : aucune
+   case blanche ou noire verrouillée n'est jamais touchée ;
+4. enfin une **passe de dernière chance**, la dernière chose faite avant
+   que le nettoyage prenne la main.
 
-Contrairement à l'étape 4 (jamais exécutée qu'une seule fois, sur la
-grille finale déjà réussie), cette optimisation tourne à *chaque*
-tentative distincte de *chaque* palier — un vrai coût sur une grille
-dense en cases noires. Au-delà de `PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE`
-(50) cases noires candidates au retrait, seul un échantillon aléatoire de
-50 d'entre elles est essayé par tour, plutôt que la totalité ; dès que
-l'une d'elles est effectivement retirée, ce tour s'arrête aussitôt et un
-nouveau tirage de 50, recalculé sur l'état à jour de la grille, prend
-immédiatement sa place. Sous ce seuil, le comportement reste exhaustif :
-toutes les cases candidates d'un même tour sont essayées avant de
-vérifier si un nouveau tour est nécessaire. Seule l'étape 4 (la grille
-finale) reste une optimisation complète, sans échantillonnage.
+**La passe de dernière chance.** À cet instant précis, le palier a échoué
+et la grille est sur le point d'être déclarée « échouée » : c'est le seul
+moment où un mot peut être posé **en travers d'un emplacement déjà connu
+impossible** (voir « emplacement bloqué » dans `DOC_ALGO/FR/Lexicon.md`).
+Plus la grille porte de mots quand le nettoyage s'applique, plus il en
+survit pour le palier suivant. Trois différences avec l'étape 2, et
+chacune est ce qui permet à cette passe d'ajouter quelque chose :
 
-Le résultat de cette optimisation remplace la tentative d'origine pour
+- les emplacements **entièrement vides ne sont plus écartés**, donc la
+  recherche essaie réellement de les remplir au lieu de les laisser
+  verrouillés ;
+- les emplacements **impossibles restent écartés**, et c'est précisément
+  ce qui autorise à les croiser : `Filler._backtrack` saute un emplacement
+  écarté structurellement dans son contrôle de croisement, donc ni
+  `crossing_broken` ni `crossing_still_impossible` ne peut rejeter un
+  candidat à cause de lui ;
+- le résultat est absorbé **même si le remplissage n'aboutit pas** :
+  `try_fill` ne renvoie une grille qu'une fois tous les emplacements requis
+  résolus, ce que cette grille-là ne peut justement pas faire, alors que
+  son propre diagnostic porte le meilleur état partiel atteint — et c'est
+  cet état partiel qui est recherché.
+
+Cette passe ne fait qu'**ajouter** des lettres : rien de ce qui est déjà
+posé ne peut être perdu ou contredit, et aucune case noire n'est touchée.
+Un mot qu'elle pose peut sceller un emplacement impossible en une suite de
+lettres complète ne formant aucun mot réel ; le recalcul décrit plus bas
+le repère comme n'importe quel autre, si bien qu'un tel emplacement arrive
+au nettoyage signalé impossible plutôt que de passer pour valide.
+
+Contrairement au chapitre 6 (exécuté une seule fois, sur la grille finale
+déjà réussie), cette optimisation tourne à *chaque* tentative de *chaque*
+palier — un vrai coût sur une grille dense en cases noires. Au-delà de
+`PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE` (50) cases noires candidates au
+retrait, seul un échantillon aléatoire de 50 est essayé par tour ; dès que
+l'une est effectivement retirée, le tour s'arrête et un nouveau tirage de
+50, recalculé sur l'état à jour, prend sa place. Sous ce seuil, le
+comportement reste exhaustif.
+
+Le résultat de cette optimisation **remplace** la tentative d'origine pour
 tout le reste du palier : c'est sur cette grille optimisée, jamais sur
-l'état brut, que le nettoyage habituel ci-dessous s'applique ensuite.
-L'interface web affiche l'état de chaque tentative avant cette
-optimisation (l'aperçu de fin de palier habituel) puis après (un aperçu
-dédié, avant tout nettoyage), pour que le joueur puisse comparer les
-deux directement.
+l'état brut, que le nettoyage s'applique. L'interface affiche l'état de
+chaque tentative avant cette optimisation puis après, pour que le joueur
+puisse comparer.
 
-Les cases affichées comme verrouillées pour cet aperçu "après
-optimisation" ne reprennent jamais celles d'un état antérieur : la grille
-entière repart de zéro (aucune case verrouillée), puis seules les cases
-des emplacements entièrement vides et leurs cases noires bordantes
-(l'étape 1 ci-dessus) sont reverrouillées — la seule définition du
-"verrouillé" qui ait un sens pour cette étape précise. Une case ainsi
-verrouillée peut malgré tout finir par porter une lettre réelle (si
-l'étape 2 la remplit) sans perdre son statut verrouillé : ce statut
-signifie "la zone est restée hors de portée du retrait de cases noires",
-pas "la case est encore vide". Ces cases verrouillées incluent aussi bien
-des cases blanches (celles de l'emplacement vide lui-même) que des cases
-noires (celles qui le bordent) — les deux sont mises en évidence dans
-l'aperçu, avec le même liseré orange.
+**Les cases verrouillées de l'aperçu « après optimisation »** ne reprennent
+jamais celles d'un état antérieur : la grille entière repart de zéro (aucune
+case verrouillée), puis seules les cases des emplacements entièrement vides
+et leurs cases noires bordantes sont reverrouillées — la seule définition du
+« verrouillé » qui ait un sens pour cette étape. Une case ainsi verrouillée
+peut malgré tout finir par porter une lettre réelle sans perdre ce statut :
+il signifie « la zone est restée hors de portée du retrait de cases
+noires », pas « la case est encore vide ». Ces cases incluent aussi bien des
+cases blanches que des cases noires, toutes deux mises en évidence avec le
+même liseré orange. Le même principe s'applique à l'aperçu de début du
+palier suivant : il repart d'une grille entièrement déverrouillée, puis
+reverrouille exactement les cases portant une lettre réellement confirmée à
+cet instant — jamais un reliquat d'un palier antérieur.
 
-Le même principe s'applique au tout début du palier suivant : l'aperçu
-montré avant même que la recherche ne démarre repart lui aussi d'une
-grille entièrement déverrouillée, puis reverrouille exactement les cases
-qui portent une lettre réellement confirmée à cet instant — jamais un
-reliquat d'un palier antérieur.
+**Les emplacements impossibles sont recalculés après optimisation.** Les
+mots pouvant changer pendant les étapes 2 à 4 ci-dessus, la liste n'est
+jamais reprise telle quelle : elle est intégralement recalculée sur l'état
+final. Un emplacement reste (ou redevient) impossible s'il n'a toujours
+aucun candidat réel une fois ses lettres connues appliquées, ou si ses
+cases sont désormais toutes couvertes mais que la combinaison obtenue ne
+correspond à aucun mot du dictionnaire (voir « Validation des mots
+recomposés par croisement » plus bas) ; dans ce dernier cas le mot n'est pas
+conservé, l'emplacement reste vide. À l'inverse, un emplacement dont
+l'optimisation a fourni un mot valide n'est plus signalé impossible.
 
-#### Emplacements impossibles recalculés après optimisation
+### Dernier recours : boucher les cases isolées
 
-Les mots pouvant changer pendant les étapes 2 et 3 ci-dessus (un
-remplissage complémentaire, ou un retrait de case noire, peuvent achever
-de couvrir un emplacement autrefois signalé impossible par ses seuls
-croisements), la liste des emplacements impossibles n'est jamais reprise
-telle quelle depuis avant l'optimisation : elle est intégralement
-recalculée sur l'état final (`backend/crossword_gen.py`,
-`_optimize_before_cleanup`) — un emplacement reste (ou redevient)
-impossible s'il n'a toujours aucun candidat réel une fois ses lettres
-connues appliquées, ou si ses cases sont désormais toutes couvertes mais
-que la combinaison qui en résulte ne correspond à aucun mot du
-dictionnaire (un mot assemblé lettre par lettre à partir de croisements
-individuellement corrects, mais jamais vérifié comme un tout — voir
-"Validation des mots recomposés par croisement" plus bas) ; dans ce
-dernier cas, le mot n'est pas conservé, l'emplacement reste vide. À
-l'inverse, un emplacement dont l'optimisation a réellement fourni un mot
-valide n'est plus signalé impossible.
-
-### Quand un palier échoue
-
-Quand un palier échoue entièrement (aucune des tentatives parallèles n'a
-donné une grille complète), le programme choisit entre deux cas : reprendre
-le motif tel quel pour lui laisser une chance de plus, ou le simplifier en
-vue d'un motif neuf. Un dernier recours, et un cas qui force
-systématiquement l'un des deux, s'intercalent aussi — voir les sections
-ci-dessous.
-
-#### Dernier recours : boucher les cases isolées
-
-Avant même de choisir entre les deux cas ci-dessous, un tout dernier
-recours est tenté sur la meilleure tentative
-échouée de ce palier (celle qui minimise le nombre de caractères
-injouables — la même grille qui sert de base aux deux cas ci-dessous) : si
-tout ce qu'il reste encore sans lettre n'est rien de plus que des **cases
-isolées** — des cases blanches sans lettre dont aucun des 4 voisins directs
-n'est, lui non plus, sans lettre (tous ses voisins sont déjà soit noirs,
-soit pourvus d'une vraie lettre) —, chacune de ces cases isolées est
-bouchée d'une case noire (`backend/crossword_gen.py`,
-`_plug_isolated_cells`). Une case isolée ne peut, par construction, jamais
+Avant même de choisir entre reprise et nettoyage, un dernier recours est
+tenté sur la meilleure tentative échouée de ce palier : si tout ce qui
+reste sans lettre n'est rien de plus que des **cases isolées** — des cases
+blanches sans lettre dont aucun des 4 voisins directs n'est lui non plus
+sans lettre —, chacune est bouchée d'une case noire
+(`_plug_isolated_cells`). Une case isolée ne peut, par construction, jamais
 faire partie d'un emplacement d'au moins 2 lettres encore ouvert : dès
-qu'une case sans lettre a ne serait-ce qu'un seul voisin également sans
-lettre, cela révèle un vrai emplacement encore à remplir quelque part, et
-ce dernier recours n'y touche alors pas du tout — ni à cette case, ni à
-aucune autre de la grille.
+qu'une case sans lettre a ne serait-ce qu'un voisin également sans lettre,
+cela révèle un vrai emplacement encore à remplir, et ce dernier recours n'y
+touche alors pas du tout.
 
-Si le résultat, une fois ces cases bouchées, reste une grille valide (pas
-de case blanche orpheline créée ailleurs, grille blanche toujours connexe)
-**et** que chaque emplacement de ce nouveau motif est entièrement rempli
-d'un vrai mot du dictionnaire, la grille est directement déclarée
-**réussie** — exactement comme un remplissage CSP qui aurait abouti
-normalement, sans passer par la reprise "telle quelle" ni par le
-nettoyage. Sinon (au moins une case sans lettre n'est pas isolée, ou le
-résultat bouché n'est pas entièrement valide), rien n'est modifié et le
-palier suit son cours normal, entre les deux cas suivants, dans cet ordre :
+Si le résultat reste une grille valide (pas de case blanche orpheline créée
+ailleurs, grille blanche toujours connexe) **et** que chaque emplacement du
+nouveau motif est entièrement rempli d'un vrai mot du dictionnaire, la
+grille est directement déclarée **réussie**, exactement comme un
+remplissage abouti. Sinon, rien n'est modifié et le palier suit son cours.
 
-#### Reprise « telle quelle »
+### Reprise « telle quelle »
 
-Parmi les tentatives échouées de ce palier,
-on regarde la meilleure d'entre elles — celle qui minimise le nombre de
-caractères considérés comme injouables : s'il lui reste encore au moins
-un emplacement non rempli qui n'est ni signalé comme impossible, ni un
-emplacement qui en croise un (un tel emplacement ne sera de toute façon
-jamais tenté, donc il ne compte pas non plus comme un espoir de
-progrès), **et que moins de `MAX_CONSECUTIVE_CONTINUE_PALIERS` paliers
-"telle quelle" consécutifs se sont déjà enchaînés sans nettoyage**
-(passé ce nombre, un nettoyage est déclenché systématiquement, même si
-un espoir de progrès subsiste encore), le palier suivant repart, **pour
-chaque tentative parallèle non réinitialisée**, du **motif rigoureusement
-identique à celui d'ORIGINE de sa propre tentative de ce palier**, sans
-régénérer aucun nouveau motif — jamais du seul motif de la "meilleure"
-tentative rediffusé identiquement à tous.
+Parmi les tentatives échouées, on regarde la meilleure — celle qui minimise
+le nombre de caractères injouables. S'il lui reste au moins un emplacement
+non rempli qui n'est ni signalé impossible, ni un emplacement qui en croise
+un (un tel emplacement ne sera de toute façon jamais tenté, donc il ne
+compte pas comme espoir de progrès), **et** que moins de
+`MAX_CONSECUTIVE_CONTINUE_PALIERS` paliers « telle quelle » consécutifs se
+sont déjà enchaînés sans nettoyage, le palier suivant repart, **pour chaque
+tentative parallèle non réinitialisée**, du motif rigoureusement identique à
+celui d'**origine de sa propre tentative** (`_pattern_continue`, jamais
+`make_pattern`) — jamais du seul motif de la « meilleure » tentative
+rediffusé à toutes.
 
-##### Chaque tentative repart de sa propre grille, partiellement nettoyée
+#### Chaque tentative repart de sa propre grille, partiellement nettoyée
 
-**Chaque** tentative distincte de ce palier (jusqu'à `PARALLEL_ATTEMPTS`,
-pas seulement la meilleure) est nettoyée individuellement — exactement le
-même principe que pour le nettoyage complet (voir "Score et sélection
-parmi les tentatives nettoyées" plus bas) : retrait des mots croisant un
-emplacement impossible (voir "Nettoyage automatique des emplacements
-bloqués" plus bas), puis tri par le même score (somme des carrés des
-longueurs des mots en place — thématique et Mots Défi compris, voir
-"Score et sélection parmi les tentatives nettoyées" plus bas — départagée
-par le nombre de cases noires).
-Les moins bonnes sont éliminées, autant qu'il y a de "grilles nouvelles"
-configurées (voir "Une tentative repart d'une grille entièrement vierge"
-plus bas) ; chacune des grilles nettoyées survivantes sert de point de
-départ à l'un des workers non réinitialisés du palier suivant — une
-grille distincte par worker, jamais celle d'un autre.
+**Chaque** tentative distincte du palier (pas seulement la meilleure) est
+nettoyée individuellement : retrait des mots croisant un emplacement
+impossible, puis tri par le score de contenu (chapitre 2), départagé par le
+nombre de cases noires. Les moins bonnes sont éliminées, autant qu'il y a de
+« grilles nouvelles » configurées (voir plus bas), et jamais plus de
+grilles ne sont gardées qu'il n'y a de processus non réinitialisés au
+palier suivant — N-1 sur N processus, les tentatives de remplacement
+(chapitre 2) pouvant rendre davantage de grilles que de processus ;
+chacune des grilles
+nettoyées survivantes sert de point de départ à l'un des processus non
+réinitialisés du palier suivant (`carry_seed_pool_continue`) — une grille
+distincte par processus, jamais celle d'un autre.
 
-##### Raccourcissement préalable des emplacements impossibles
+#### Raccourcissement préalable des emplacements impossibles
 
-Avant tout retrait de mot classique (voir "Nettoyage automatique des
-emplacements bloqués" plus bas), et uniquement sur ce chemin de reprise
-"telle quelle" — jamais sur le nettoyage complet, pour la même raison
-que l'exception case noire à 1/10 plus bas —, chaque emplacement
-impossible d'une tentative est d'abord examiné pour un mot plus court :
-en tête ou en fin de la zone, de longueur maximale (longueur de
-l'emplacement moins un) et minimale de 3 lettres (jamais 2 ni moins),
-laissant au moins une case vide de l'autre côté. Tous les candidats
-valables sont d'abord rassemblés — toutes longueurs et les deux côtés
-(tête/fin) confondus, en excluant tout mot déjà utilisé ailleurs dans la
-grille, tout mot dont aucune lettre ne serait réellement nouvelle (déjà
-toutes connues d'avance, ce qui n'apporterait aucun progrès), et dont la
-case frontière (celle qui sépare le mot de la case vide restante) n'est
-pas déjà couverte par une lettre confirmée et reste noircissable sans
-casser la validité structurelle de la grille — puis un candidat est tiré
-au hasard dans cet ensemble complet : la longueur elle-même est tirée au
-hasard, jamais préférée la plus longue possible. Une case déjà couverte
-par une lettre confirmée n'est jamais retenue comme case frontière : la
-noircir détruirait le mot croisant qui la fixe.
+Avant tout retrait de mot classique, et **uniquement sur ce chemin de
+reprise** (jamais sur le nettoyage complet, qui régénère de toute façon un
+motif neuf), chaque emplacement impossible est d'abord examiné pour un mot
+plus court (`_shorten_impossible_zones`) : en tête ou en fin de la zone, de
+longueur maximale (longueur de l'emplacement moins un) et minimale de 3
+lettres (jamais 2 ni moins), en laissant au moins une case vide de l'autre
+côté.
 
-Les deux morceaux résultants de la zone initiale — le mot posé et, s'il y
-en a un, le reste de l'autre côté de la case frontière — sont l'un et
-l'autre contrôlés dès lors qu'ils se trouvent entièrement déterminés. Le
-mot posé l'est toujours, par construction. Le reste, s'il compte au moins
-deux cases (en dessous, ce n'est de toute façon jamais un vrai
-emplacement) et se trouve déjà entièrement couvert par des lettres
-confirmées — par d'autres croisements, indépendamment de ce placement
-précis —, doit lui aussi correspondre à un mot réel ; sinon, toute la
-combinaison (longueur, côté) est écartée d'un coup, avant même de
-chercher un mot pour l'autre morceau.
+Tous les candidats valables sont d'abord rassemblés — toutes longueurs et
+les deux côtés confondus, en excluant tout mot déjà utilisé ailleurs, tout
+mot dont aucune lettre ne serait réellement nouvelle (aucun progrès), et
+tout candidat dont la case frontière (celle qui sépare le mot de la case
+vide restante) est déjà couverte par une lettre confirmée ou ne peut pas
+devenir noire sans casser la validité structurelle. Un candidat est ensuite
+tiré **au hasard** dans cet ensemble complet : la longueur elle-même est
+tirée au hasard, jamais préférée la plus longue. Une case déjà couverte par
+une lettre confirmée n'est jamais retenue comme case frontière — la noircir
+détruirait le mot croisant qui la fixe.
 
-Avant de retenir ce candidat, on vérifie qu'il ne crée pas un NOUVEL
-emplacement croisant impossible — un emplacement croisant qui avait
-encore au moins un candidat réel avant ce placement précis, et n'en a
-plus aucun une fois la lettre ajoutée. Un emplacement croisant déjà
-impossible avant ce placement n'est jamais compté comme une nouvelle
-dégradation. Si le candidat tiré créerait un tel blocage, il est
-écarté et un autre candidat est tiré, jusqu'à épuisement de l'ensemble.
-Si aucun candidat ne convient — parce qu'aucun mot plus court n'existe,
-ou parce que chacun créerait un nouveau blocage ailleurs — cet
-emplacement n'est pas touché du tout (ni case noire, ni mot posé) et
-l'examen passe à l'emplacement impossible suivant. Le motif, les
-emplacements croisants et les mots déjà utilisés sont recalculés à neuf
-avant l'examen de chaque emplacement, pas seulement une fois par tour —
-l'examen d'un emplacement tient donc toujours compte du mot que
-l'emplacement précédent vient tout juste de poser dans le même tour.
+Les deux morceaux résultants — le mot posé et, s'il y en a un, le reste de
+l'autre côté de la case frontière — sont contrôlés dès lors qu'ils sont
+entièrement déterminés. Le mot posé l'est toujours par construction ; le
+reste, s'il compte au moins deux cases et se trouve déjà entièrement
+couvert par des lettres confirmées, doit lui aussi correspondre à un mot
+réel, sinon toute la combinaison (longueur, côté) est écartée d'un coup.
 
-Une fois tous les emplacements impossibles de ce tour ainsi examinés, la
-détection des emplacements impossibles est relancée sur le motif mis à
-jour — un emplacement raccourci peut redevenir jouable, ou rester encore
-trop contraint pour l'être, auquel cas il peut à son tour être raccourci
-davantage lors d'un nouveau tour ; les vérifications de croisement
-peuvent aussi avoir révélé de nouveaux emplacements bloqués ailleurs.
-Le cycle s'arrête dès qu'aucun emplacement encore impossible ne peut
+Avant de retenir un candidat, on vérifie qu'il ne crée pas un **nouvel**
+emplacement croisant impossible — un emplacement qui avait encore au moins
+un candidat réel avant ce placement précis et n'en a plus aucun après. Un
+emplacement croisant déjà impossible avant n'est jamais compté comme une
+nouvelle dégradation (`_new_crossing_impossibility`). Si le candidat tiré
+créerait un tel blocage, il est écarté et un autre est tiré, jusqu'à
+épuisement. Si aucun ne convient, cet emplacement n'est pas touché du tout.
+
+Le motif, les emplacements croisants et les mots déjà utilisés sont
+recalculés à neuf avant l'examen de **chaque** emplacement, pas seulement
+une fois par tour : l'examen tient donc toujours compte du mot que
+l'emplacement précédent vient de poser. Une fois tous les emplacements
+impossibles du tour examinés, la détection est relancée sur le motif mis à
+jour — un emplacement raccourci peut redevenir jouable, rester trop
+contraint (et être raccourci davantage au tour suivant), et les
+vérifications de croisement peuvent avoir révélé de nouveaux blocages
+ailleurs. Le cycle s'arrête dès qu'aucun emplacement impossible ne peut
 plus être raccourci nulle part.
 
-Un emplacement croisant peut devenir entièrement déterminé — chacune de
-ses cases fixée par un mot croisant différent — sans qu'aucun mot n'ait
-jamais été explicitement choisi ni vérifié pour lui : avant de le
-considérer résolu, sa combinaison de lettres est validée contre le
-dictionnaire ; si elle ne correspond à aucun mot réel, elle n'est jamais
-retenue comme mot posé — l'emplacement reste signalé impossible et sera
-traité par la phase de nettoyage habituelle (retrait de mots croisants,
-ou son alternative case noire) comme n'importe quel autre emplacement
-encore bloqué à la fin du cycle.
+#### Allongement préalable des emplacements impossibles
 
-##### Allongement préalable des emplacements impossibles
+Complément exact du raccourcissement (`_lengthen_impossible_zones`/
+`_find_longer_word_for_zone`), tenté juste après lui sur ce qu'il n'a pas
+résolu, et lui aussi réservé à la reprise « telle quelle ». Là où le
+raccourcissement rétrécit la zone en ajoutant une case noire à l'intérieur,
+l'allongement l'agrandit en repoussant vers l'extérieur l'une de ses cases
+noires bordantes : soit en la déplaçant de quelques cases plus loin, soit en
+la supprimant purement et simplement quand l'obstacle naturel suivant (une
+autre case noire, ou le bord) suffit déjà à borner la zone allongée.
 
-Complément exact du raccourcissement ci-dessus (`backend/crossword_gen.py`,
-`_lengthen_impossible_zones` / `_find_longer_word_for_zone`), tenté juste
-après lui sur ce qu'il n'a pas résolu, et lui aussi réservé au chemin de
-reprise "telle quelle". Là où le raccourcissement rétrécit la zone en
-ajoutant une case noire à l'intérieur, l'allongement l'agrandit en
-repoussant vers l'extérieur l'une de ses deux cases noires bordantes
-existantes : soit en la déplaçant de quelques cases plus loin (une
-nouvelle case noire posée plus loin dans la même direction), soit en la
-supprimant purement et simplement quand l'obstacle naturel suivant (une
-autre case noire, ou le bord de la grille) suffit déjà à borner la zone
-allongée.
+Une case bordante n'est candidate que si elle est effectivement noire (sinon
+la zone touche déjà le bord de ce côté), si elle ne borne pas déjà un mot
+différent réellement posé — même double critère que la conservation des
+cases noires du nettoyage complet : une case qui borne directement un mot
+entièrement connu, ou qui a une lettre connue des deux côtés d'un même
+axe —, et s'il y a de la place derrière elle. Le nombre de cases blanches
+disponibles détermine combien de longueurs sont essayées : allonger de 1
+case, de 2, …, jusqu'à absorber toute la place sans poser aucune nouvelle
+case noire.
 
-Une case bordante n'est candidate à ce déplacement que si elle est
-effectivement noire (sinon la zone touche déjà le bord de ce côté), si
-elle ne borne pas déjà un mot différent réellement posé — même double
-critère que la conservation des cases noires du nettoyage complet : une
-case qui borne directement un mot entièrement connu, ou qui a une lettre
-connue des deux côtés d'un même axe —, et s'il y a de la place derrière
-elle (au moins une case blanche avant la prochaine case noire ou le
-bord). Le nombre de cases blanches ainsi disponibles détermine combien de
-longueurs différentes sont essayées : allonger de 1 case, de 2, …, jusqu'à
-absorber toute la place disponible sans poser aucune nouvelle case noire.
+Comme pour le raccourcissement, tous les candidats valables sont rassemblés
+(les deux côtés, toutes les longueurs, tous les mots réels compatibles avec
+les lettres connues sur la zone allongée, hors mots déjà utilisés), puis un
+candidat est tiré au hasard. Une nouvelle case noire n'est jamais posée sur
+une case déjà couverte par une lettre confirmée et doit garder la grille
+structurellement valide ; supprimer une case noire sans en reposer ne peut,
+à l'inverse, jamais violer cette validité. Le contrôle de nouvelle
+impossibilité croisée s'applique aussi, d'une part aux cases qui
+appartenaient déjà à un emplacement, d'autre part à la case bordante
+elle-même — jusque-là noire, donc absente de l'index des croisements — dont
+le parcours perpendiculaire est recalculé directement. Motif, croisements et
+cases protégées sont recalculés avant chaque emplacement, et la détection
+est relancée après chaque tour.
 
-Comme pour le raccourcissement, tous les candidats valables sont
-rassemblés (les deux côtés, toutes les longueurs d'allongement, tous les
-mots réels compatibles avec les lettres déjà connues sur la zone
-allongée, en excluant les mots déjà utilisés ailleurs), puis un candidat
-est tiré au hasard. Une nouvelle case noire n'est jamais posée sur une
-case déjà couverte par une lettre confirmée, et doit garder la grille
-structurellement valide (connexité, pas de case blanche orpheline) ;
-supprimer une case noire sans en reposer, à l'inverse, ne peut jamais
-violer cette validité. Avant de retenir un candidat, on vérifie qu'il ne
-crée pas de nouvel emplacement croisant impossible : d'une part pour les
-cases qui appartenaient déjà à un emplacement avant l'allongement, d'autre
-part pour la case bordante elle-même — jusque-là noire, donc absente de
-l'index des croisements — dont le parcours perpendiculaire est recalculé
-directement. Si aucun candidat ne convient, l'emplacement n'est pas touché.
+#### Nettoyage automatique des emplacements bloqués
 
-Le motif, les croisements et les cases protégées sont recalculés à neuf
-avant l'examen de chaque emplacement, et la détection des emplacements
-impossibles est relancée après chaque tour, jusqu'à ce qu'aucun
-allongement ne soit plus possible nulle part.
+Sur le chemin de reprise, cette étape ne traite que les emplacements encore
+impossibles une fois le raccourcissement et l'allongement épuisés ; sur le
+nettoyage complet, elle s'applique directement. Avant de transmettre le
+motif au palier suivant, tout mot qui croise directement un emplacement
+impossible est retiré — ses cases redeviennent libres pour la recherche du
+palier suivant — mais, sauf exception (ci-dessous), **aucune case noire
+n'est touchée**. Les emplacements déjà connus impossibles sont eux-mêmes mis
+de côté (ignorés plutôt que redemandés), pour laisser la recherche continuer
+là où elle s'était arrêtée.
 
-##### Fréquence des nettoyages complets
-
-Bornée par `MAX_CONSECUTIVE_CONTINUE_PALIERS` (valeur actuelle : 4) — un
-nettoyage peut toujours survenir plus tôt (dès que le motif courant n'a
-plus aucun espoir de progrès, voir "Simplification puis motif neuf"
-ci-dessous), mais jamais plus tard que `MAX_CONSECUTIVE_CONTINUE_
-PALIERS` paliers "telle quelle" consécutifs — ce plafond est
-systématique, même si la reprise "telle quelle" aurait encore, en
-théorie, un espoir de progrès à ce moment-là. Avec cette valeur, jusqu'à
-4 paliers "telle quelle" peuvent s'enchaîner avant qu'un nettoyage ne
-soit déclenché systématiquement.
-
-##### Une tentative va jusqu'au bout avant que le palier ne se termine
-
-Une tentative de remplissage doit aller jusqu'au bout avant qu'un
-palier ne se termine — jusqu'à ce qu'il n'y ait plus aucun emplacement
-jouable (chaque emplacement restant est soit assigné, soit signalé
-injouable), que le budget de vérifications soit dépassé, ou que la
-tentative soit interrompue par une sœur du même palier (voir
-"Plusieurs tentatives en parallèle par palier" plus bas). La décision
-"reprise telle quelle" / "nettoyage complet" n'intervient qu'*après*
-coup, une fois cette tentative réellement terminée — jamais pour
-raccourcir la tentative elle-même. Un emplacement dont les lettres déjà
-en place (par de vrais mots croisants confirmés) ne correspondent plus
-qu'à un seul mot réel et encore disponible est explicitement confirmé
-avant la fin de la tentative, même si la recherche elle-même n'a pas eu
-l'occasion de le sélectionner — voir "Fermeture des derniers
-emplacements implicites" plus bas. Si, une fois la tentative
-effectivement terminée, plus aucune case blanche n'est indéterminée et
-tous les mots en place sont valides, la grille est réputée réussie.
-
-##### Nettoyage automatique des emplacements bloqués
-
-Sur le chemin de reprise "telle quelle", cette étape ne traite que les
-emplacements encore impossibles une fois le raccourcissement préalable
-(voir "Raccourcissement préalable des emplacements impossibles"
-plus haut) épuisé — sur le nettoyage complet, elle s'applique
-directement, sans étape préalable. Avant de transmettre le motif au
-palier suivant, on nettoie automatiquement les emplacements bloqués —
-mais, sauf exception (voir plus bas), jamais les cases noires : tout mot
-qui croise directement un emplacement impossible est retiré — les cases qu'il occupait
-redeviennent libres pour la recherche du palier suivant. Les
-emplacements déjà connus comme impossibles sont eux-mêmes mis de côté
-(ignorés plutôt que redemandés), pour laisser la recherche continuer là
-où elle s'était arrêtée plutôt que de repartir de zéro sur le même
-motif.
-
-##### Validation des mots recomposés par croisement
-
-Avant ce retrait, tout emplacement encore sans mot mais dont toutes les
-cases sont déjà verrouillées par une lettre confirmée est d'abord
-recomposé (`backend/crossword_gen.py`, `_clean_blocked_slots`) — mais
-uniquement si la combinaison obtenue correspond à un vrai mot du
-dictionnaire ; sinon, l'emplacement reste sans mot plutôt que de porter
-une combinaison jamais vérifiée. Un emplacement ainsi laissé de côté
-n'a pas besoin d'être explicitement signalé impossible ici : ses
-lettres restent verrouillées, donc la toute prochaine recherche
+**Validation des mots recomposés par croisement.** Avant ce retrait, tout
+emplacement encore sans mot mais dont toutes les cases sont déjà
+verrouillées par une lettre confirmée est d'abord recomposé
+(`_clean_blocked_slots`) — mais uniquement si la combinaison obtenue
+correspond à un vrai mot du dictionnaire ; sinon l'emplacement reste sans
+mot plutôt que de porter une combinaison jamais vérifiée. Un emplacement
+ainsi laissé de côté n'a pas besoin d'être explicitement signalé impossible
+ici : ses lettres restent verrouillées, donc la prochaine recherche
 redécouvre d'elle-même que la combinaison ne mène à aucun mot
-(`Filler.exclude_immediately_impossible_slots`), et le signale par la
-voie normale.
+(`mark_immediately_impossible_slots`).
 
-##### Exception : ajout d'une case noire (probabilité 1/10)
-
-Uniquement sur ce chemin de
-reprise "telle quelle" — jamais sur le nettoyage complet
-("Simplification puis motif neuf" ci-dessous), qui régénère déjà un
-motif neuf et peut donc déjà ajouter des cases noires par ce biais.
-Concrètement, avant de retirer un mot croisant un emplacement
-impossible, on tire au sort : sur un dixième des cas, on cherche plutôt
-une case de l'emplacement lui-même à noircir, en priorité une case qui
-ne porte pas déjà une lettre confirmée par un autre mot (noircir une
-case déjà confirmée détruirait ce mot-là aussi, un résultat plus
-destructeur qu'une case encore libre), mais aussi, en second recours,
-une case déjà connue si l'emplacement est entièrement croisé (le cas le
-plus fréquent en fin de partie, quand peu de cases restent réellement
-libres) — dans ce cas, la case noire retire alors, comme effet de bord,
-le mot croisant qui l'occupait. Au sein de chacun de ces deux groupes de
-cases, la case retenue en priorité est celle qui appartient au plus
-grand nombre d'autres emplacements également impossibles à ce même
-palier (une intersection de plusieurs impossibles plutôt qu'un
-impossible dans une seule direction) — une seule case noire a ainsi une
-chance de résoudre plusieurs emplacements impossibles à la fois ; à
-priorité égale, le choix reste un tirage au hasard sans biais de
-position. La case retenue doit garder la grille
-valide (connexe, aucune case isolée) une fois noircie ; si aucune case
-de l'emplacement (libre ou déjà connue) ne convient, on retombe sur le
-retrait de mot habituel. Poser une case noire ne libère aucune
-contrainte sur l'emplacement (contrairement au retrait de mot) : elle
-le fait disparaître purement et simplement sous sa forme actuelle, ses
-fragments réels n'étant redécouverts qu'au palier suivant, une fois le
-motif mis à jour.
+**Exception : ajout d'une case noire (probabilité 1/10).** Uniquement sur ce
+chemin de reprise — jamais sur le nettoyage complet, qui régénère déjà un
+motif neuf et peut donc déjà ajouter des cases noires par ce biais
+(`BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY`). Avant de retirer un mot
+croisant un emplacement impossible, on tire au sort : dans un dixième des
+cas, on cherche plutôt une case de l'emplacement lui-même à noircir, en
+priorité une case qui ne porte pas déjà une lettre confirmée par un autre
+mot (noircir une case confirmée détruirait ce mot-là aussi), mais aussi, en
+second recours, une case déjà connue si l'emplacement est entièrement croisé
+(le cas le plus fréquent en fin de partie) — la case noire retire alors,
+comme effet de bord, le mot croisant qui l'occupait. Au sein de chacun de
+ces deux groupes, la case retenue en priorité est celle qui appartient au
+plus grand nombre d'**autres** emplacements également impossibles à ce
+palier : une seule case noire a ainsi une chance de résoudre plusieurs
+emplacements à la fois ; à priorité égale, tirage au hasard sans biais de
+position. La case retenue doit garder la grille valide une fois noircie ; si
+aucune ne convient, on retombe sur le retrait de mot habituel. Poser une
+case noire ne libère aucune contrainte sur l'emplacement (contrairement au
+retrait de mot) : elle le fait disparaître sous sa forme actuelle, ses
+fragments réels n'étant redécouverts qu'au palier suivant.
 
 Le nouveau motif, une fois cette case ajoutée, peut faire apparaître un
-tout nouvel emplacement — un fragment de l'emplacement scindé, ou tout
-autre emplacement recoupé — entièrement couvert par des lettres déjà
-confirmées ailleurs dans la grille. Ce mot n'est transmis comme lettres
-pré-définies du palier suivant que s'il correspond réellement à un mot du
-dictionnaire (`backend/crossword_gen.py`, `_clean_continue_candidate`,
-`_invalid_fully_known_indices`) — sinon l'emplacement reste sans mot,
-plutôt que de porter une combinaison jamais vérifiée (même principe que
-"Validation des mots recomposés par croisement" plus haut).
+emplacement entièrement couvert par des lettres déjà confirmées ailleurs. Ce
+mot n'est transmis comme lettres pré-définies du palier suivant que s'il
+correspond réellement à un mot du dictionnaire (`_clean_continue_candidate`,
+`_invalid_fully_known_indices`) — sinon l'emplacement reste sans mot.
 
-##### Zone strictement sans issue
+**Zone strictement sans issue.** Une fois tous les mots croisants retirés,
+si l'emplacement n'a *toujours* strictement aucun candidat réel une fois
+toute contrainte de croisement levée — typiquement une longueur que le
+dictionnaire ne couvre pas du tout —, plus aucun retrait de mot ne pourra
+jamais le débloquer : chacune de ses cases restantes est alors directement
+noircie (toujours sous réserve de garder la grille valide, case par case),
+plutôt que de laisser cette zone resurgir identique à chaque nettoyage
+futur.
 
-Toutes ses cases restantes sont
-noircies d'un coup. Une fois tous les mots croisants effectivement
-retirés (ci-dessus), si l'emplacement n'a *toujours* strictement aucun
-candidat réel une fois toute contrainte de croisement ainsi levée —
-typiquement une longueur que le dictionnaire ne couvre pas du tout —,
-plus aucun retrait de mot ne pourra jamais débloquer cette zone :
-chacune de ses cases restantes est alors directement noircie (toujours
-sous réserve de garder la grille valide, case par case), plutôt que de
-laisser cette même zone resurgir identique à chaque nettoyage futur.
+**Le mot et sa case noire associée forment une unité.** Le raccourcissement
+et l'allongement autorisent délibérément un mot posé à croiser un
+emplacement **déjà** impossible ailleurs (seule une nouvelle dégradation
+rejette un candidat). Un tel mot peut donc, quelques lignes plus loin dans
+ce même nettoyage, se retrouver retiré par le retrait des mots croisants. La
+case noire posée ou déplacée spécifiquement pour lui est alors annulée dans
+le même mouvement — remise blanche (raccourcissement), ou remise noire à son
+ancien emplacement et sa nouvelle case remise blanche (allongement) —
+plutôt que de rester en place sans plus aucun mot pour la justifier : l'un
+ne survit jamais au retrait de l'autre.
 
-##### Le mot et sa case noire associée forment une unité
+#### Fréquence des nettoyages complets
 
-Le raccourcissement et l'allongement préalables (voir plus haut)
-autorisent délibérément un mot posé à croiser un emplacement déjà
-impossible ailleurs dans la grille — seule une NOUVELLE dégradation
-rejette le candidat, jamais un blocage préexistant (`backend/crossword_
-gen.py`, `_new_crossing_impossibility`). Un tel mot peut donc, quelques
-lignes plus loin dans ce même nettoyage, se retrouver retiré par le
-retrait des mots croisants ci-dessus, une fois traité l'emplacement
-impossible qu'il croise. La case noire posée ou déplacée spécifiquement
-pour lui est alors annulée dans le même mouvement — remise blanche
-(cas du raccourcissement), ou remise noire à son ancien emplacement et
-sa nouvelle case éventuelle remise blanche (cas de l'allongement) —
-plutôt que de rester en place sans plus aucun mot pour la justifier
-(`backend/crossword_gen.py`, `_clean_blocked_slots`). Le mot et sa case
-noire associée forment ainsi une unité : l'un ne peut jamais survivre au
-retrait de l'autre.
+Bornée par `MAX_CONSECUTIVE_CONTINUE_PALIERS` (4) : un nettoyage peut
+toujours survenir plus tôt (dès que le motif courant n'a plus aucun espoir
+de progrès), mais jamais plus tard que 4 paliers « telle quelle »
+consécutifs — ce plafond est systématique, même si la reprise aurait encore,
+en théorie, un espoir de progrès.
 
-##### Interruption anticipée du lot (mécanisme aujourd'hui désactivé)
+### Simplification puis motif neuf
 
-Un mécanisme existe pour arrêter, dès qu'une tentative parallèle d'un
-palier est jugée bloquée (voir l'étape 2, "Limites de la recherche" —
-plus de 3 emplacements de la grille jugés impossibles, un seuil lui-même
-optionnel et actuellement désactivé), toutes les autres
-tentatives de ce même palier aussitôt elle aussi, sans attendre
-d'atteindre individuellement leur propre seuil d'abandon ou leur propre
-budget (`backend/crossword_gen.py`, `Filler._backtrack`,
-`_worker_batch_abandoned_event`). Tant que ce seuil reste désactivé, ce
-mécanisme ne se déclenche donc jamais non plus. Il n'a de sens que si **toutes les
-tentatives parallèles du palier partagent rigoureusement le même
-motif** — un motif partagé jugé bloqué par une tentative l'est tout
-autant pour les autres — jamais si chacune peut explorer un motif
-différent, auquel cas la conclusion de l'une ne dit rien de fiable sur
-celui, différent, d'une autre.
+Si, au contraire, plus aucun emplacement non rempli n'a de chance d'aboutir
+(tous ceux qui restent sont impossibles), on simplifie la tentative en
+**deux temps, toujours dans cet ordre** : d'abord on retire les mots qui
+croisent directement un emplacement impossible ; ce n'est **qu'ensuite**
+qu'on décide quelles cases noires garder — on rouvre (repasse en blanc)
+toute case noire qui ne borde plus aucun des mots ayant survécu, et on ne
+garde noire qu'une case strictement entre deux lettres confirmées, ou juste
+avant/après un mot conservé. Cet ordre compte : décider des cases noires se
+fait à partir de ce qui reste *après* le retrait des mots, jamais avant
+(`_build_retry_seed`).
 
-C'est pourquoi il n'est **transmis nulle part** : ni au cas
-"Simplification puis motif neuf" ci-dessous (chacune des tentatives
-parallèles y génère son propre motif indépendant), ni à la reprise
-"telle quelle" (voir "Chaque tentative repart de sa propre grille,
-partiellement nettoyée" plus haut) — deux tentatives parallèles d'un
-même palier "telle quelle" peuvent en effet recevoir des entrées
-différentes du vivier `carry_seed_pool_continue` (ou même un motif
-entièrement neuf pour les tentatives réinitialisées), donc partager un
-motif rigoureusement identique entre toutes ses tentatives parallèles
-n'est plus garanti pour ce cas non plus : la même contamination entre
-motifs indépendants qui écarte ce signal pour le "motif neuf" s'applique
-donc aussi ici. En pratique, ce raccourci n'aurait de toute façon plus
-grand-chose à apporter : l'arrêt
-général une fois la fraction réglable de tentatives terminées atteinte
-(voir "Plusieurs tentatives en parallèle par palier" plus haut — pour
-l'instant fixée à 100 %) coupe déjà court, quel que soit le motif de
-chacune.
+Ce premier retrait retire **tous** les mots croisant un emplacement
+impossible, d'un coup — jamais un seul à la fois. La même exception que
+ci-dessus subsiste : avec une probabilité d'1/10, ce retrait est remplacé
+par l'ajout d'une case noire sur l'emplacement impossible lui-même, tentée
+une seule fois par emplacement ; ce n'est que si cette alternative n'est pas
+tentée ou échoue que le retrait a lieu. Une case noire déjà présente dans le
+motif reçu en entrée du palier reste toujours noire, quoi qu'il arrive à son
+propre mot.
 
-#### Simplification puis motif neuf
-
-Si, au contraire, plus aucun
-emplacement non rempli n'a de chance d'aboutir (tous ceux qui restent
-sont impossibles), on simplifie la tentative en **deux temps, toujours
-dans cet ordre précis** : d'abord, on retire les mots qui croisent
-directement un emplacement impossible ; ce n'est **qu'ensuite**, une
-fois ce retrait fait, qu'on décide quelles cases noires garder — on
-rouvre (repasse en blanc) toute case noire qui ne borde plus aucun des
-mots ayant survécu au premier retrait, et on ne garde noire qu'une case
-strictement entre deux lettres confirmées, ou juste avant/après un mot
-conservé. Cet ordre compte : décider des cases noires à garder se fait à
-partir de ce qui reste *après* le retrait des mots, jamais avant.
-
-Ce premier retrait retire TOUS les mots croisant un emplacement
-impossible, d'un coup — jamais un seul à la fois. Une exception
-subsiste, la même que celle décrite plus haut pour la reprise "telle
-quelle" : avec une probabilité d'1/10, ce retrait est remplacé par
-l'ajout d'une case noire sur l'emplacement impossible lui-même, tentée
-une seule fois par emplacement ; ce n'est que si cette alternative
-n'est pas tentée ou échoue que le retrait de tous les mots croisants a
-lieu.
-
-Une case noire déjà présente dans le motif reçu en entrée de ce palier
-reste toujours noire, quoi qu'il arrive à son propre mot pendant la
-recherche de cette tentative précise.
-
-##### Score et sélection parmi les tentatives nettoyées
+#### Score et sélection parmi les tentatives nettoyées
 
 Ces deux temps sont appliqués à **toutes** les tentatives échouées et
-distinctes de ce palier (jusqu'à `PARALLEL_ATTEMPTS`, une par
-tentative — exactement les mêmes que celles montrées à l'écran,
-également sans plafond, voir "Aperçu affiché pendant la génération"
-plus bas), pas seulement à la meilleure — la meilleure grille de tous
-les process, soit N grilles pour N process. Chacune, une fois nettoyée,
-reçoit exactement le même score (`backend/crossword_gen.py`,
-`_content_score`) que celui utilisé plus haut pour départager les
-tentatives parallèles réussies — la **somme des carrés des longueurs
-des mots en place** (un mot n'est "en place" que si toutes ses cases
-sont confirmées, sa longueur plafonnée à 7 lettres avant la mise au
-carré), départagée à score égal par le **nombre de cases noires** de la
-candidate (la plus noire l'emporte, pour laisser plus de marge de
-manœuvre structurelle au palier suivant sur une grille très largement
-verrouillée). Cette somme porte sur **tous** les mots en place,
-thématiques ou non (comme pour les tentatives réussies) ; un mot en place
-appartenant au glossaire thématique reçoit un bonus de +2 sur sa longueur
-plafonnée, un mot de la liste **Mots Défi** un bonus de +4 à la place
-(les deux ne se cumulant jamais) — la même logique de score s'applique
-donc, à l'identique, que le palier ait réussi ou échoué.
+distinctes du palier, pas seulement à la meilleure. Chacune, une fois
+nettoyée, reçoit le score de contenu du chapitre 2 (un mot n'est « en
+place » que si toutes ses cases sont confirmées), départagé à score égal par
+le **nombre de cases noires** de la candidate — la plus noire l'emporte,
+pour laisser plus de marge de manœuvre structurelle au palier suivant sur
+une grille très largement verrouillée.
 
 Triées du meilleur score au moins bon, les grilles nettoyées les moins
-bonnes sont ensuite **éliminées** — autant qu'il y a de "grilles
-nouvelles" configurées (voir juste en dessous), jamais plus, et jamais
-au point de vider entièrement la sélection (il en reste toujours au
-moins une, la meilleure). Chacune des grilles nettoyées survivantes
-sert alors de point de départ à l'un des workers non réinitialisés du
-palier suivant — une grille distincte par worker, pas une seule grille
-reprise identiquement par tous : dans le cas normal (autant de
-tentatives échouées distinctes que de workers), le nombre de grilles
-qui survivent à l'élimination correspond exactement au nombre de
-workers non réinitialisés à pourvoir, chacun recevant ainsi sa propre
-grille de départ, jamais celle d'un autre.
+bonnes sont **éliminées** — autant qu'il y a de « grilles nouvelles »
+configurées, et au-delà toutes celles qui dépassent le nombre de processus
+non réinitialisés du palier suivant (N-1 sur N processus, moins une par
+grille écartée ; les tentatives de remplacement du chapitre 2 peuvent
+rendre plus de grilles que de processus), jamais au point de vider la
+sélection (il en reste toujours au moins une) (`_seed_pool`). Chacune des survivantes sert alors de point de
+départ à l'un des processus non réinitialisés du palier suivant : dans le
+cas normal (autant de tentatives échouées distinctes que de processus), le
+nombre de survivantes correspond exactement au nombre de places à pourvoir,
+chacune recevant sa propre grille de départ.
 
-##### Mémorisation des nettoyages successifs et grille jugée infaisable
+#### Une tentative repart d'une grille entièrement vierge
 
-Le programme retient
-l'état obtenu (motif noir/blanc **et** contenu confirmé, fusionnés en
-une seule grille comparable) à l'issue de chaque **nettoyage complet**
-(jamais d'une reprise "telle quelle") ; si ce même état, sans le
-moindre changement, se reproduit sur `GRID_REPEAT_INFEASIBLE_THRESHOLD`
-(3) nettoyages consécutifs, il est déclaré infaisable et le palier
-suivant repart d'une **grille entièrement vierge** — motif, contenu,
-viviers de grilles candidates et compteur de série "telle quelle" tous
-réinitialisés à zéro, exactement l'état du tout premier palier de
-l'appel.
+Juste après un nettoyage complet, **une seule** des tentatives parallèles du
+palier suivant repart d'une grille entièrement vierge
+(`FULL_RESET_ATTEMPT_COUNT`) ; les autres reprennent chacune sa propre
+grille nettoyée parmi les survivantes. Le nombre de grilles nouvelles ainsi
+réservées est précisément le nombre de grilles nettoyées éliminées, pour que
+chaque place du palier suivant soit pourvue exactement une fois.
 
-C'est un garde-fou plus profond que celui déjà en place juste au-dessus
-(voir "Score et sélection parmi les tentatives nettoyées") : ce dernier
-ne compare que les seules lettres verrouillées d'un nettoyage à l'autre
-et, dès qu'il détecte une identité stricte, ne retente qu'**une seule
-fois** un nettoyage plus agressif (retirant aussi tout emplacement
-verrouillé dont la combinaison ne correspond à aucun mot réel) avant de
-poursuivre quoi qu'il arrive — un blocage qui survit même à cette
-relance unique n'a alors, à lui seul, aucune autre issue que d'épuiser
-tous les paliers restants à l'identique. Cette mémorisation-ci comble
-exactement ce cas, en comptant les répétitions sur plusieurs nettoyages
-plutôt qu'une seule relance.
-
-Cette détection se limite au seul nettoyage complet, jamais à la
-reprise "telle quelle" : comparer uniquement le motif noir/blanc sur les
-deux branches confondrait un motif qui reste stable plusieurs cycles
-"reprise telle quelle" de suite (normal — une case noire n'y est ajoutée
-qu'une fois sur dix, voir plus haut) avec un vrai blocage ; comparer
-motif+contenu sur les deux branches ferait doublon avec
-`MAX_CONSECUTIVE_CONTINUE_PALIERS`, qui borne déjà "reprise telle
-quelle" avec une réponse plus douce (un nettoyage classique, pas une
-grille vierge).
-
-##### Une tentative repart d'une grille entièrement vierge
-
-Juste après un tel nettoyage complet, une des tentatives parallèles du
-palier suivant repart d'une **grille entièrement vierge** plutôt que
-d'une grille nettoyée — **une seule d'entre elles** (`backend/
-crossword_gen.py`, `generate_grid`, `FULL_RESET_ATTEMPT_COUNT`) : les
-autres tentatives, elles, reprennent chacune sa propre grille nettoyée
-parmi les survivantes ci-dessus (et non plus toutes la même grille de
-départ) — le nombre de grilles nouvelles ainsi réservées est
-précisément le nombre de grilles nettoyées éliminées juste au-dessus,
-pour que chaque place du palier suivant soit pourvue exactement une
-fois.
-
-**S'applique aussi à la reprise "telle quelle"** (voir "Chaque tentative
-repart de sa propre grille, partiellement nettoyée" ci-dessus) —
-contrairement au nettoyage complet, ceci s'applique ici à **chaque**
-palier "telle quelle", pas seulement au premier d'une série : une tentative
-réinitialisée d'un tel palier repart d'un motif entièrement neuf via
-`_pattern_attempt` (jamais `_pattern_continue`, puisqu'il n'y a alors
-plus de motif ni de verrouillage antérieur à reprendre), exactement le
-même mécanisme que pour un nettoyage complet.
+Ceci s'applique aussi à la reprise « telle quelle » — mais, contrairement au
+nettoyage complet, à **chaque** palier « telle quelle », pas seulement au
+premier d'une série : une tentative réinitialisée repart d'un motif
+entièrement neuf via `_pattern_attempt` (jamais `_pattern_continue`,
+puisqu'il n'y a alors plus de motif ni de verrouillage antérieur à
+reprendre).
 
 Aucune case noire n'est jamais ajoutée par le nettoyage de la reprise
-"telle quelle" ni par celui du nettoyage complet lui-même — seuls les
-mots/cases noires déjà présents dans le motif choisi survivent ou
-disparaissent selon ce que le nettoyage retire ; une tentative
-réinitialisée (motif entièrement neuf, voir ci-dessus), elle, peut bien
-sûr en poser de nouvelles, comme n'importe quel autre motif neuf.
+« telle quelle » ni par le nettoyage complet lui-même — seuls les mots et
+cases noires déjà présents survivent ou disparaissent selon ce que le
+nettoyage retire ; une tentative réinitialisée, elle, peut bien sûr en poser
+de nouvelles, comme n'importe quel motif neuf.
 
-#### Un cas force systématiquement le nettoyage
+#### Grilles qui se répètent : nettoyage profond, puis grille écartée
 
-Sans même regarder la
-condition du cas "Reprise « telle quelle »" ci-dessus : si toutes les
-tentatives réellement conclues
-de ce palier (hors celles interrompues par la fin d'une autre, voir
-plus haut) ont été abandonnées tôt pour la même raison (plus de 3
-emplacements de la grille jugés impossibles, voir l'étape 2) — un signal
-fort qu'aucune d'elles
-n'a de raison de croire qu'une reprise "telle quelle" sur son propre motif
-aboutirait un jour — le nettoyage se déclenche directement, sur la
-meilleure de ces grilles (`backend/crossword_gen.py`, `generate_grid`).
-Ce déclencheur reste lui aussi sans effet tant que ce seuil d'abandon est
-désactivé (voir l'étape 2) : aucune tentative ne peut alors être
-abandonnée pour cette raison, donc cette règle ne se déclenche jamais.
-Avec la fraction d'interruption actuellement fixée à 100 % (voir
-"Plusieurs tentatives en parallèle par palier" plus haut), toutes les
-tentatives du lot ont le temps de se conclure d'elles-mêmes avant cette
-vérification, donc cette règle porte sur le lot complet ; avec une
-fraction plus basse, elle ne porterait que sur la poignée de tentatives
-déjà conclues au moment de l'interruption anticipée.
+Chaque grille nettoyée est suivie individuellement d'un **nettoyage
+complet** au suivant (une reprise « telle quelle » intercalée ne compte
+pas et ne remet rien à zéro). Son état après le nettoyage ordinaire —
+motif noir/blanc **et** contenu confirmé, fusionnés en une seule grille
+comparable — est comparé à tous les états produits par le nettoyage
+complet précédent (`backend/crossword_gen.py`, `generate_grid`,
+`carry_cleanup_streaks`).
 
-#### Rappel : qu'est-ce qu'un emplacement « impossible » ?
+- **Deuxième fois le même état** (`GRID_REPEAT_DEEP_CLEANUP_STREAK`, 2) :
+  la grille est nettoyée **plus en profondeur**. En plus des mots qui
+  croisent un emplacement impossible, on retire aussi tous les mots qui
+  croisent un mot ainsi retiré — un niveau de plus —, ainsi que tout
+  emplacement entièrement verrouillé dont la combinaison ne forme aucun
+  mot réel (`_build_retry_seed`/`_clean_blocked_slots`, `deep=True`). Ce
+  niveau supplémentaire libère les lettres qui, tenues par les mots
+  voisins, imposaient à nouveau exactement le même mot et donc la même
+  impasse.
+- **Troisième fois le même état malgré ce nettoyage profond**
+  (`GRID_REPEAT_DISCARD_STREAK`, 3) : la grille est **écartée**. Elle ne
+  fait plus partie des grilles reprises au palier suivant, et sa place
+  revient à une tentative supplémentaire repartant d'une grille
+  entièrement vierge, en plus de celle réservée à chaque nettoyage complet
+  (`carry_discarded_count`). Toutes les autres grilles — celles qui
+  progressent encore — sont conservées telles quelles.
 
-Un emplacement est "impossible" au sens ci-dessus quand, à l'endroit où la
-recherche s'est arrêtée, aucun mot du dictionnaire ne peut plus s'y placer
-compte tenu des lettres déjà imposées par ses croisements — y compris quand
-tous les mots qui correspondraient encore aux lettres imposées sont déjà
-utilisés ailleurs dans cette même grille.
+L'état comparé est toujours celui du nettoyage **ordinaire** : une grille
+passée au nettoyage profond est donc bien reconnue si sa tentative
+suivante reconstruit la même impasse. Si toutes les grilles d'un palier
+sont écartées en même temps, la recherche repart entièrement d'une grille
+vierge — motif, contenu, viviers de grilles candidates et compteur de
+série « telle quelle » réinitialisés, exactement l'état du premier palier.
 
-## Étape 4 — Optimiser la grille finale
+Le suivi se limite au nettoyage complet, jamais à la reprise « telle
+quelle » : sur cette branche, un motif stable plusieurs cycles de suite
+est normal (une case noire n'y est ajoutée qu'une fois sur dix), et
+`MAX_CONSECUTIVE_CONTINUE_PALIERS` la borne déjà.
+
+### Un cas force systématiquement le nettoyage
+
+Sans même regarder la condition de la reprise « telle quelle » : si toutes
+les tentatives réellement conclues du palier (hors celles interrompues par
+la fin d'une autre) ont été abandonnées tôt pour la même raison (plus de 3
+emplacements impossibles, voir chapitre 4) — un signal fort qu'aucune n'a de
+raison de croire qu'une reprise aboutirait —, le nettoyage se déclenche
+directement, sur la meilleure de ces grilles. Ce déclencheur reste sans
+effet tant que ce seuil d'abandon est désactivé, ce qui est le cas
+aujourd'hui.
+
+### Interruption anticipée du lot (mécanisme désactivé)
+
+Un mécanisme existe pour arrêter, dès qu'une tentative parallèle est jugée
+bloquée (plus de 3 emplacements impossibles — seuil lui-même désactivé),
+toutes les autres tentatives du même palier aussitôt, sans attendre leur
+propre seuil ou leur propre budget (`_worker_batch_abandoned_event`). Il n'a
+de sens que si **toutes les tentatives du palier partagent rigoureusement le
+même motif** — un motif partagé jugé bloqué par l'une l'est tout autant pour
+les autres — jamais si chacune explore un motif différent, auquel cas la
+conclusion de l'une ne dit rien de fiable sur celui d'une autre.
+
+C'est pourquoi il n'est **transmis nulle part** : ni au cas « motif neuf »
+(chaque tentative y génère son propre motif indépendant), ni à la reprise
+« telle quelle » (chaque tentative y repart de sa propre grille nettoyée, ou
+d'un motif entièrement neuf si elle est réinitialisée). En pratique, ce
+raccourci n'aurait de toute façon plus grand-chose à apporter : l'arrêt
+général une fois la fraction d'interruption atteinte (aujourd'hui 100 %,
+chapitre 2) coupe déjà court, quel que soit le motif de chacune.
+
+---
+
+## Chapitre 6 — Optimiser la grille finale
 
 Une fois qu'un palier a réussi (une grille entièrement remplie, un vrai mot
 dans chaque emplacement), une dernière passe essaie d'**enlever encore des
-cases noires** de cette grille déjà valide, pour la densifier davantage
-(moins de cases noires = plus de lettres visibles = grille plus
-intéressante à résoudre) — `backend/crossword_gen.py`,
-`minimize_black_squares`.
+cases noires** de cette grille déjà valide, pour la densifier davantage —
+moins de cases noires, donc plus de lettres visibles, donc une grille plus
+intéressante à résoudre (`minimize_black_squares`).
 
-Le principe : pour chaque case noire encore présente dans la grille, prise
-individuellement, on la retire temporairement (elle redevient une case
-blanche) et on relance un remplissage complet à cet endroit
-(`try_fill`, avec un budget de vérifications propre à cette phase,
-`deadline_checks=6_000` — nettement plus petit que le budget de la
-recherche principale, puisqu'il ne s'agit ici que de reconfirmer une
-grille déjà quasiment remplissable, pas de partir de rien). Deux issues
-possibles :
-- si la grille reste structurellement valide (mêmes règles qu'à l'étape 1,
-  mais avec la variante la plus permissive, `min_interior_free=1` : la
-  seule chose qui compte encore ici est qu'aucune case ne se retrouve
-  orpheline et que la grille reste connexe — la préférence esthétique pour
-  des zones d'au moins 8 cases, elle, ne s'applique qu'à la *pose* initiale
-  des cases noires, jamais à ce retrait) **et** qu'un remplissage complet
-  réussit **et** que chacun des mots du résultat existe bien dans le
-  dictionnaire, le retrait est conservé ;
+Le principe : pour chaque case noire encore présente, prise
+individuellement, on la retire temporairement et on relance un remplissage
+complet à cet endroit (`try_fill`, avec un budget propre à cette phase,
+`deadline_checks=6_000` — nettement plus petit que celui de la recherche
+principale, puisqu'il ne s'agit que de reconfirmer une grille déjà
+quasiment remplissable). Deux issues :
+
+- si la grille reste structurellement valide (mêmes règles qu'au
+  chapitre 3, mais avec la variante la plus permissive,
+  `min_interior_free=1` : seules comptent encore l'absence de case
+  orpheline et la connexité — la préférence esthétique pour des zones d'au
+  moins 8 cases ne s'applique qu'à la *pose* des cases noires, jamais à ce
+  retrait) **et** qu'un remplissage complet réussit **et** que chacun des
+  mots du résultat existe bien dans le dictionnaire, le retrait est
+  conservé ;
 - sinon (grille invalide, remplissage échoué, ou au moins un mot absent du
   dictionnaire), la case noire est remise en place et on passe à la
   suivante.
 
-L'ordre dans lequel les cases noires sont essayées est mélangé (`rng.shuffle`)
-à chaque passage, pour ne jamais favoriser systématiquement une case parce
-qu'elle apparaît plus tôt dans la grille. Toute la grille est repassée en
-revue en boucle tant qu'au moins un retrait a réussi lors du dernier tour
-complet — un retrait peut en effet rendre un autre retrait, auparavant
-impossible, réalisable à son tour (une case noire qui bloquait un
-allongement d'emplacement peut elle-même disparaître une fois une case
-voisine déjà retirée).
+L'ordre dans lequel les cases noires sont essayées est mélangé à chaque
+passage, pour ne jamais favoriser systématiquement une case parce qu'elle
+apparaît plus tôt dans la grille. Toute la grille est repassée en revue en
+boucle tant qu'au moins un retrait a réussi au dernier tour complet — un
+retrait peut en effet rendre réalisable un autre retrait auparavant
+impossible (une case noire qui bloquait un allongement d'emplacement peut
+elle-même disparaître une fois une voisine retirée).
 
-Cette étape ne peut donc **jamais dégrader** une grille déjà valide — elle
-ne fait que l'améliorer quand c'est possible, jamais l'inverse : à tout
-moment, la dernière solution connue et valide est conservée, et une
-tentative de retrait qui échoue n'a d'autre effet que de remettre la case
-noire concernée en place. Le bouton "Stop" de l'interface web reste actif
-pendant cette phase : un point de contrôle (`cancel_event`) est vérifié
-entre deux cases noires candidates.
+Cette étape ne peut donc **jamais dégrader** une grille déjà valide : à tout
+moment la dernière solution connue et valide est conservée, et une tentative
+de retrait qui échoue n'a d'autre effet que de remettre la case noire en
+place. Un mot **Mots Défi** déjà posé bénéficie d'une protection
+supplémentaire : ses cases sont verrouillées et pré-remplies dans chaque
+essai, et exemptées du contrôle final « chaque mot doit être une vraie
+entrée du dictionnaire », pour qu'optimiser une grille ne puisse jamais
+remplacer ni rejeter un mot Défi déjà en place. Le bouton **Stop** de
+l'interface reste actif pendant cette phase : un point de contrôle
+(`cancel_event`) est vérifié entre deux cases noires candidates.
 
-### Aperçu affiché pendant la génération
+---
 
-L'interface web affiche, en direct, un aperçu de la recherche en cours
-pour chaque palier : d'abord le motif de départ (le motif repris du palier
-précédent, avec ses éventuelles cases/lettres verrouillées) ; puis, dès
-que les cases noires de ce palier sont posées mais avant que la recherche
-de mots ne démarre, le motif noir/blanc obtenu ; puis, si le palier
-échoue, toutes les meilleures tentatives échouées distinctes de ce
-palier, sans plafond, avec leurs lettres réelles et leurs diagnostics
-complets (cases injouables, cases verrouillées) ; puis, juste avant le
-nettoyage, l'état de chacune de ces mêmes tentatives une fois passées par
-l'optimisation dédiée (voir "Optimisation avant nettoyage" plus haut).
+## Chapitre 7 — L'aperçu affiché pendant la génération
 
-#### Cas particulier : palier « motif neuf »
+L'interface affiche, en direct, un aperçu de la recherche pour chaque
+palier, dans cet ordre : d'abord le **motif de départ** (celui repris du
+palier précédent, avec ses éventuelles cases et lettres verrouillées) ;
+puis, dès que les cases noires de ce palier sont posées mais avant que la
+recherche de mots ne démarre, le **motif noir/blanc** obtenu ; puis, si le
+palier échoue, **toutes les meilleures tentatives échouées distinctes**, sans
+plafond, avec leurs lettres réelles et leurs diagnostics complets ; puis,
+juste avant le nettoyage, l'état de chacune de ces mêmes tentatives une fois
+passée par l'optimisation dédiée (chapitre 5).
 
-Pour un palier « motif neuf » qui suit un nettoyage complet — celui qui
-peut désormais repartir de plusieurs grilles nettoyées distinctes plutôt
-que d'une seule (voir "Quand un palier échoue" plus haut) — le tout
-premier de ces deux aperçus (le motif de départ, avant même la pose de
-nouvelles cases noires) montre lui aussi une grille par grille nettoyée
-survivante du vivier, pas une seule : chaque tentative parallèle non
-réinitialisée de ce palier démarre déjà, à cet instant précis, sur sa
-propre grille de départ distincte, donc l'aperçu la montre telle quelle.
-Dédupliqué par motif réel, sans aucun plafond, comme partout ailleurs
-dans ce mécanisme de vivier. Sur le tout premier palier d'une génération
-(rien encore reporté d'un palier à l'autre), une seule grille suffit — il
-n'y a, dans ce cas précis, rien de plus à montrer (aucune tentative
-précédente à diversifier).
+Chaque tentative dispose de sa propre vignette, bleue tant qu'elle
+calcule, puis figée en or (réussie) ou en orange (échouée) quand elle se
+termine. Une fois figée, la vignette ignore les derniers aperçus de cette
+même tentative qui arriveraient encore : une tentative envoie son dernier
+aperçu juste avant de rendre son résultat, et le résultat peut arriver le
+premier (`backend/crossword_gen.py`, `generate_grid`,
+`_drain_best_state_queue_continuously`).
 
-Un palier de reprise « telle quelle » a désormais lui aussi son propre
-aperçu par grille du vivier (`carry_seed_pool_continue` — voir "Chaque
-tentative repart de sa propre grille, partiellement nettoyée" plus haut),
-exactement le même principe : chaque tentative parallèle non réinitialisée
-démarre sur sa propre affectation nettoyée, distincte de celle des autres,
-donc l'aperçu montre chacune séparément. Seule une tentative
-*réinitialisée* d'un tel palier (motif entièrement neuf, voir "Une
-tentative repart d'une grille entièrement vierge" plus haut) n'est
-volontairement pas préviewée séparément ici — même convention que pour le
-nettoyage complet.
+### Mise en évidence des cases
+
+- **Contour rouge** : la case appartient à un emplacement au moins
+  partiellement fixé par un croisement réellement assigné ou par une lettre
+  reportée d'un palier précédent.
+- **Fond orange** (emplacement pauvre) : la case appartient à un
+  emplacement *partiellement* verrouillé (jamais un emplacement entièrement
+  verrouillé, déjà un mot confirmé) dont l'intersection avec les lettres
+  verrouillées laisse moins de 3 candidats réels dans le dictionnaire.
+- **Fond violet** (case croisée injouable) : aucune lettre ne satisfait à la
+  fois l'emplacement horizontal et l'emplacement vertical qui s'y croisent —
+  chacun des deux peut très bien avoir des candidats bien réels, mais si
+  aucun de leurs mots réellement *jouables* (ni déjà posé ailleurs, ni une
+  entrée quasi nulle en fréquence, donc probablement pas un vrai mot) ne
+  partage la même lettre à cette case, elle reste injouable telle quelle.
+- **Fond rouge** (emplacement bloqué) et **rouge vif** (case croisée
+  bloquée) : voir « Qu'est-ce qu'un emplacement impossible ? », chapitre 4.
+- **Fond jaune** (emplacement écarté) : voir « Rouge, jaune : deux signaux
+  distincts », chapitre 4.
+- **Lettre gris clair** (lettre statistique) : dans chaque case encore
+  vide, la lettre la plus probable d'après le relevé statistique croisé
+  des deux sens (voir « Les graines », chapitre 4), tel qu'il se trouve au
+  moment de l'aperçu (`Filler.stat_letters`, `Filler.best_stat_letters_for`
+  pour l'état record, figé à l'instant où ce record a été atteint).
+  Présente sur les aperçus en direct d'une tentative et sur son étape clef
+  (échec ou réussite de la tentative, avant optimisation), jamais sur les
+  aperçus de début de cycle ni après le nettoyage. Comme les vraies
+  lettres, elle ne s'affiche que lorsque le bouton **Voir** est activé
+  (`frontend/static/script.js`, `renderAttemptPreview`).
+
+### Cas particulier : palier « motif neuf »
+
+Pour un palier « motif neuf » qui suit un nettoyage complet — celui qui peut
+repartir de plusieurs grilles nettoyées distinctes — le premier aperçu (le
+motif de départ) montre lui aussi **une grille par grille nettoyée
+survivante**, pas une seule : chaque tentative parallèle non réinitialisée
+démarre déjà, à cet instant, sur sa propre grille de départ. Dédupliqué par
+motif réel, sans aucun plafond. Sur le tout premier palier d'une génération,
+une seule grille suffit — il n'y a rien de plus à montrer.
+
+Un palier de reprise « telle quelle » a lui aussi son propre aperçu par
+grille du vivier, exactement le même principe. Seule une tentative
+*réinitialisée* n'est volontairement pas prévisualisée séparément ici.
 
 Pour ce même palier « motif neuf », le second aperçu — « cases noires
-posées » — est calculé et publié par le processus parent lui-même, avant
-même de soumettre les tentatives parallèles — en reconstruisant
-exactement le motif que le worker réel à qui cette grille de départ sera
-effectivement assignée va lui-même calculer dans son propre processus (la
-pose des cases noires étant une fonction pure de ses paramètres, l'appeler
-une seconde fois avec la même graine produit le motif identique, au bit
-près). Sur le tout premier palier d'une génération comme sur tout palier
-suivant un nettoyage complet, ce calcul se fait une fois par grille de
-départ distincte sur le point d'être lancée — une par tentative parallèle
-sur une grille vierge pour le tout premier palier, une par grille
-nettoyée survivante pour tout palier suivant un nettoyage — dédupliqué
-par motif réel, sans aucun plafond, dans les deux cas. Ce mécanisme ne
-s'applique jamais à une reprise « telle quelle », dont l'aperçu coïncide
-déjà avec le motif de départ du cycle.
+posées » — est calculé et publié par le processus parent lui-même, avant de
+soumettre les tentatives parallèles, en reconstruisant exactement le motif
+que le processus réel calculera de son côté (la pose des cases noires étant
+une fonction pure de ses paramètres, l'appeler une seconde fois avec la même
+graine produit le motif identique, au bit près). Ce calcul se fait une fois
+par grille de départ distincte sur le point d'être lancée, dédupliqué par
+motif réel, sans plafond. Il ne s'applique jamais à une reprise « telle
+quelle », dont l'aperçu coïncide déjà avec le motif de départ du cycle.
 
-Cette reconstruction, purement destinée à l'affichage, ne peut en aucun
-cas altérer les lettres réellement verrouillées transmises au palier —
-la pose des cases noires reçoit toujours sa propre copie indépendante des
-lettres verrouillées, jamais l'objet original partagé par le reste de la
-génération, précisément pour qu'une simple prévisualisation ne puisse
-jamais faire disparaître, même partiellement, du contenu réellement
-confirmé.
+Cette reconstruction, purement destinée à l'affichage, ne peut en aucun cas
+altérer les lettres réellement verrouillées transmises au palier : la pose
+des cases noires reçoit toujours sa propre copie indépendante des lettres
+verrouillées, jamais l'objet original partagé par le reste de la
+génération.
 
-#### Mise en évidence des cases
+### Numéro de la grille (lignée) qui a produit chaque aperçu
 
-Sur ces aperçus, une case est mise en évidence par un contour rouge si
-elle appartient à un emplacement au moins partiellement fixé par un
-croisement réellement assigné ou par une lettre reportée d'un palier
-précédent. Une case est mise en évidence par un fond orange si elle
-appartient à un emplacement *partiellement* verrouillé (jamais un
-emplacement entièrement verrouillé, déjà un mot confirmé) dont
-l'intersection avec les lettres déjà verrouillées laisse moins de 3
-candidats réels dans le dictionnaire.
+Au-dessus de chaque grille d'aperçu, un préfixe en gras (« Process N : »)
+indique le numéro de sa propre **lignée**, ce qui permet de suivre une
+grille précise d'un cycle à l'autre même si son classement change. Ce numéro
+n'est **pas** le PID du processus qui l'a calculée (une même lignée peut
+être traitée par un processus différent d'un palier à l'autre, le pool ne
+garantissant aucune affectation fixe) : il suit la **position** de la grille
+dans le vivier de départ de chaque palier, héritée d'un palier au suivant
+tant que cette lignée existe.
 
-Une case est mise en évidence par un fond violet si aucune lettre ne
-satisfait à la fois l'emplacement horizontal et l'emplacement vertical
-qui s'y croisent — chacun des deux, pris séparément, peut très bien avoir
-des mots candidats bien réels (un fond orange/rouge ne s'y déclencherait
-donc pas), mais si aucun de leurs mots réellement jouables (ni déjà posé
-ailleurs dans la grille, ni une entrée quasi nulle en fréquence — donc
-probablement pas un vrai mot) ne partage la même lettre à cette case
-précise, elle reste en pratique injouable telle quelle.
-
-#### Numéro de la grille (lignée) qui a produit chaque aperçu
-
-Au-dessus de chaque grille d'aperçu, un préfixe en gras ("Process N :")
-indique le numéro de sa propre **lignée** — permet de suivre une grille
-précise d'un cycle à l'autre, même si son classement change. Ce numéro
-n'est PAS le PID du processus qui l'a calculée (une même lignée peut très
-bien être traitée par un processus différent d'un palier à l'autre, le
-pool de workers ne garantissant aucune affectation fixe) : il suit la
-POSITION de la grille dans le vivier de départ de chaque palier, héritée
-d'un palier au suivant tant que cette lignée continue d'exister.
-
-Chaque grille du tout premier palier reçoit directement son propre numéro
-(1..N, un par tentative indépendante). À chaque palier suivant, chaque
-tentative non réinitialisée hérite du numéro de l'entrée du vivier dont
-elle repart ; une tentative réinitialisée (grille entièrement nouvelle,
-voir plus bas) n'a par définition aucun numéro à hériter — si elle
-survit au tri par score qui construit le vivier du palier suivant, elle
-reprend alors le numéro d'une lignée qui, elle, n'a pas survécu ce
-palier-là (la moins bonne, éliminée par ce même tri) — jamais un numéro
-tout neuf tant qu'un numéro existant s'est justement libéré. Une grille
-réinitialisée n'a donc, le temps de son tout premier aperçu (avant que ce
-tri n'ait eu lieu), encore aucun numéro à afficher — un cas isolé,
-attendu, distinct du bug historique de numéros manquants documenté
-ci-dessus.
+Chaque grille du premier palier reçoit directement son propre numéro
+(1..N). À chaque palier suivant, chaque tentative non réinitialisée hérite
+du numéro de l'entrée du vivier dont elle repart ; une tentative
+réinitialisée n'a par définition aucun numéro à hériter — si elle survit au
+tri par score qui construit le vivier du palier suivant, elle reprend alors
+le numéro d'une lignée qui, elle, n'a pas survécu (la moins bonne, éliminée
+par ce même tri), jamais un numéro tout neuf tant qu'un numéro existant
+s'est libéré. Une grille réinitialisée n'a donc, le temps de son premier
+aperçu, encore aucun numéro à afficher.
 
 Les grilles d'un même aperçu s'affichent toujours **dans l'ordre des
-lignées** (1 à N), jamais par score — ce dernier continue de décider en
+lignées** (1 à N), jamais par score : ce dernier continue de décider en
 coulisses laquelle est réellement conservée comme base du palier suivant,
-mais n'influence plus du tout l'ordre d'affichage : une grille précise
-(identifiée par son numéro de lignée) reste donc toujours à la même
-position relative d'un cycle à l'autre, plutôt que de changer de place
-selon son classement. La grille effectivement retenue comme la meilleure
-est signalée par un filet vert autour d'elle-même — le seul indice visuel
-de son statut, puisque sa position dans la liste ne l'indique plus.
+mais n'influence pas l'ordre d'affichage — une grille précise reste donc
+toujours à la même position relative d'un cycle à l'autre. La grille
+effectivement retenue comme la meilleure est signalée par un filet vert
+autour d'elle, seul indice visuel de son statut.
 
-Seul le tout premier aperçu du tout premier palier d'une génération n'a
-aucun numéro à afficher : à cet instant précis, il est reconstruit dans le
-processus parent lui-même, avant même qu'une seule tentative parallèle
-n'ait été soumise à un worker réel.
+Seul le tout premier aperçu du tout premier palier n'a aucun numéro à
+afficher : il est reconstruit dans le processus parent, avant qu'une seule
+tentative parallèle n'ait été soumise.
 
-Avant même le tout premier palier, une phase de **pré-chauffage** force
-tous les `PARALLEL_ATTEMPTS` processus du pool à démarrer réellement,
-plutôt que de laisser le premier palier découvrir progressivement combien
-de workers sont déjà prêts. Sans elle, un pool tout juste créé ne spawn
-ses processus que paresseusement : seule une poignée sont réellement
-disponibles pour les premiers paliers, ce qui répartit les tâches de
-façon inégale entre eux (un même process peut en traiter plusieurs à la
-fois pendant que d'autres restent inactifs) — un numéro de process
-apparaît alors plusieurs fois dans un même aperçu, jusqu'à ce que le pool
-finisse par se stabiliser tout seul au bout de quelques paliers. Le
-pré-chauffage soumet exactement `PARALLEL_ATTEMPTS` tâches factices d'un
-coup, chacune bloquée dans une barrière de synchronisation partagée tant
-que toutes ne sont pas arrivées — un process qui en attrape une reste
-donc occupé (jamais "au repos" pour le pool) tant que les autres n'ont
-pas eux aussi fini de démarrer, ce qui force le pool à en spawn un
-nouveau pour chaque tâche restante plutôt que de laisser un process déjà
-prêt les absorber toutes. La répartition est donc déjà parfaitement 1:1
-dès le tout premier palier.
+---
 
 ## Résumé en une phrase
 
 CrossWordFalcon place des cases noires indépendamment les unes des autres en
 visant très peu de cases noires au départ, tente plusieurs fois en parallèle
-(autant que de processeurs par défaut, réglable) de remplir la grille obtenue avec un vrai
-dictionnaire en revenant en arrière dès qu'un emplacement se bloque ; si tout
-échoue, il ne repart pas forcément de zéro — il reprend telle quelle la
-meilleure tentative tant qu'elle garde un espoir de progresser, et ne la
-simplifie (retirer les mots bloqués, puis rouvrir les cases noires devenues
-inutiles) en vue d'un motif entièrement neuf qu'en dernier recours ; puis,
-une fois une grille valide trouvée, il essaie d'en retirer encore le plus de
-cases noires possible pour la rendre plus dense — sans jamais revenir sur une
-grille qui fonctionne déjà.
+(autant que de processeurs par défaut, réglable) de remplir la grille
+obtenue avec un vrai dictionnaire en revenant en arrière dès qu'un
+emplacement se bloque — sans jamais poser un mot qui croise un emplacement
+bloqué, ni qui en rend un bloqué tant qu'une autre possibilité subsiste ;
+si tout échoue, il ne repart pas
+forcément de zéro — il reprend telle quelle la meilleure tentative tant
+qu'elle garde un espoir de progresser, et ne la simplifie (retirer les mots
+bloqués, puis rouvrir les cases noires devenues inutiles) en vue d'un motif
+entièrement neuf qu'en dernier recours ; puis, une fois une grille valide
+trouvée, il essaie d'en retirer encore le plus de cases noires possible pour
+la rendre plus dense — sans jamais revenir sur une grille qui fonctionne
+déjà.

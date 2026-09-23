@@ -126,7 +126,7 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   you build the rest yourself (see "Interactive authoring mode" below).
 - **Précision thématique / Theme precision** (`#theme-precision`) — the
   minimum closeness a word must have to the theme to enter the theme
-  glossary, a number from 0 to 1 (0.75 by default; use a **point**, not a
+  glossary, a number from 0 to 1 (0.78 by default; use a **point**, not a
   comma, for the decimal — a typed comma is converted automatically).
   Higher means a tighter, more on-topic glossary with fewer words; lower
   means a broader one. It only affects grid generation when the
@@ -217,7 +217,13 @@ when relevant.
   verification" table underneath them (a dictionary/root-form lookup for
   each placed word — see that table's own entry further below). Off by
   default, so a generation in progress never spoils the puzzle before
-  it's ready to play. IMPORTANT — do not confuse this with the
+  it's ready to play. With it on, every still-empty cell of a live
+  preview (and of an attempt's own concluding step) also shows, in light
+  gray, its statistically most likely letter — the same figure as
+  Interactive mode's "Stats" button (`renderAttemptPreview`). Letters
+  really placed by the search are shown in bold black, so the two never
+  get confused.
+  IMPORTANT — do not confuse this with the
   "Vérification / Check" button described a few bullets below: that is a
   COMPLETELY DIFFERENT feature (it colors the PLAYER's own typed letters
   correct/incorrect once a grid is finished and being played) that merely
@@ -457,14 +463,54 @@ attempt, which cells are involved — a still-open slot with no candidate
 word left at all shows in red, and the exact crossing cell of two
 still-open slots that could never agree on a single letter (the same
 condition "Impossibles"/"Nettoyer" flag in Interactive mode, see below)
-shows in an even more vivid red than the rest of either one. A word
+shows in an even more vivid red than the rest of either one. A slot the
+search has set aside this round — one whose candidates ran out at least
+once, so the search only comes back to it once no other slot can take a
+word, but which is not necessarily still a genuine dead end — shows in a
+lighter yellow instead, a weaker signal than either red; this covers
+both a slot whose candidates ran out earlier in this same attempt and a
+still-open crossing-letter deadlock like the vivid-red one above, so a
+deadlock can show both colors together. Only the three slots most
+recently set aside stay yellow, and a slot stops being yellow as soon as
+a word placed across it makes it fillable again. Yellow never appears on a slot
+that already holds a word, only on still-empty ones. On the grid shown
+at the very start of a step (the black-cell pattern itself), two further
+warnings appear: orange for a slot already down to fewer than three
+possible words, and violet for a crossing cell where the two slots that
+meet there share no letter among the words either one could realistically
+still take. A word
 coming from the theme
 glossary is shown in bold magenta letters; a word coming from the "Mots
 Défi (personnalisation)" list is shown in bold green letters instead —
 the same green already used for a challenge word on the Interactive
 mode grid (see "Mots Défi (personnalisation) / Challenge Words" below).
 A green outline marks whichever preview is currently considered the
-best candidate. Next to each preview's own stats line, a small pencil
+best candidate. While a preview grid is still actively being searched
+(not yet a recorded step of the back/forward history below, just the
+live, in-progress state — see `renderLivePreview`), its own border is
+colored instead: blue while it's still computing, yellow once it stopped
+because it succeeded, orange once it stopped because it reached a failed
+state, light blue once it was stopped from outside — a replacement attempt
+launched on a freed process, cut short because every original attempt of
+the round had finished or used up its budget. Once every attempt has
+stopped, the status line says so explicitly and gives the number of
+successful grids now being optimized and compared to keep the best one
+(`frontend/static/script.js`, `describeStep`). A still-computing (blue-bordered) grid keeps visibly changing —
+its own letter count and content genuinely fluctuate — even through a
+long stretch where the search hasn't beaten its own best result yet: the
+generator periodically shares its current, real progress this way, not
+only whenever a new record is actually reached, so a slow-moving search
+never looks indistinguishable from a stuck one. While a preview is live
+(blue/yellow/orange-bordered), its stats line also names what percentage
+of its own search budget that specific attempt has consumed so far
+(`budget_percent`, `renderAttemptPreview`), refreshed every 2 seconds
+while it runs and frozen at whatever it reached once the attempt stops.
+It can go above 100%: an attempt that has used up its own budget keeps
+searching as long as another attempt of the same step is still under
+its own, so no processor core sits idle while the step waits for that
+slower attempt. The status line's own "% of generations" figure, their
+average, can exceed 100% for the same reason. Next to
+each preview's own stats line, a small pencil
 icon (`.attempt-preview-interactive-btn`, `renderAttemptPreview`, the
 same icon as the Library's own "Ouvrir en mode Interactif" button) opens
 that specific attempt — whatever it looks like at that exact moment,
@@ -476,8 +522,22 @@ it cancels the current job first. **⏮ ◀ ▶ ⏭** buttons
 `catchUpPreviewToEnd`) and a "Étape X/Y" position indicator
 (`#attempt-preview-position`, `renderPreviewPosition`) let a player step
 back through earlier moments of the search rather than only ever seeing
-the latest one; it keeps auto-advancing on its own (`autoFollowPreview`)
-unless a player has manually stepped back.
+the latest one.
+
+As long as a player hasn't manually stepped back, each status refresh
+updates the panel following one rule (`advanceLiveDisplay`): if a
+recorded step of the back/forward history hasn't been shown yet, that
+step is shown next (one at a time, oldest first, so a burst of several
+completed steps between two refreshes is never skipped over); only once
+every recorded step has been shown does the panel switch to the live,
+continuously-updating search state described above (the blue/yellow/
+orange-bordered grids) — which stops updating on its own, with nothing
+further to show, once the search itself ends and the last recorded step
+(clue generation) is reached. The moment a player steps back with
+**◀**/**⏮**, this whole live-following behavior freezes on the step they
+moved to; it only resumes once they return all the way to the latest
+recorded step (clicking **▶** past every step in between, or **⏭** to
+jump there directly).
 
 Once clue writing starts, a live list of definitions (`#live-clues-wrap`,
 `frontend/static/script.js`, `renderLiveClues`) grows underneath these
@@ -573,8 +633,10 @@ to the left of **Mots / Words** to open it as an overlay panel.
 - The **Suivant / Next** button automatically generates a new word (taking
   any "Mots Défi (personnalisation)" list into account first, then any
   theme glossary — see "Mots Défi (personnalisation) / Challenge Words
-  (customization)" below). The **Précédent / Back** button undoes a step
-  (for example so Next generates a different word).
+  (customization)" below). The word is drawn at random from among the
+  slot's best-ranked candidates, exactly as automatic generation draws
+  its own, so undoing a step with **Précédent / Back** and clicking
+  **Suivant / Next** again generally offers a different word.
 - The **Mots Défi (personnalisation) / Challenge Words (customization)**
   panel, to the right of the grid, lets you list words you want to force
   into the grid: they are shown first (in green) by the **Mots / Words**,
@@ -590,13 +652,15 @@ to the left of **Mots / Words** to open it as an overlay panel.
   selected slot, even shorter than its full length.
 - Two buttons clean up the grid's impossible zones, with or without
   removing black cells.
-- The **Stats** button shows, in light gray inside every still-empty
-  cell, the single letter that is statistically most likely to belong
-  there — the same statistical mechanism behind the "Graines / Seeds"
-  option on the automatic-generation form, just read out for every empty
-  cell instead of forcing a few of them. Purely informational: it never
-  places a letter itself, and the suggestions disappear the moment you
-  edit the grid.
+- The **Stats** button is an on/off toggle, on by default. While on, it
+  shows, in light gray inside every still-empty cell, the single letter
+  that is statistically most likely to belong there — sampled separately
+  for the across and the down word through that cell, keeping only the
+  letters both directions agree on — and keeps them up to date after
+  every change to the grid (`frontend/static/script.js`,
+  `scheduleInteractiveStatsRefresh`). A cell where the two directions
+  share no letter shows none. Purely informational: it never places a
+  letter itself. Click it again to hide the letters.
 - The **Impossibles / Impossible** button identifies zones where no word
   fits any more — including two still-open crossing words that could
   never agree on a single letter where they meet, even if each one still
@@ -667,8 +731,23 @@ real letter. Both update after every edit.
 
 - **Suivant / Next** (`#interactive-next-btn`, `POST /api/interactive/
   step`) — places exactly one more word, choosing the spot where the
-  fewest words still fit and preferring a theme word where one does. If
-  no word fits anywhere, it leaves the grid unchanged and shows either
+  fewest words still fit and preferring a theme word where one does. A
+  spot where every candidate word would leave some other word impossible
+  to complete is set aside — its still-empty cells turn yellow, and
+  **Suivant** simply looks at the next spot instead, coming back to a
+  set-aside one only once nothing can be placed anywhere else. A yellow
+  spot is only deprioritised, never walled off: words crossing it are
+  still placed normally, unlike a red (impossible) one. Once no spot in
+  the whole grid has a completely safe word left, **Suivant** widens what
+  it will accept rather than stopping: first a word that leaves some
+  unrelated, separate spot elsewhere with nothing to fill it, and finally
+  — as an absolute last resort — a word that makes a spot it crosses
+  impossible. That keeps a nearly-empty grid growing instead of stalling:
+  the resulting red zone is something **Nettoyer**, a manual edit or
+  **Finir la grille** can repair afterwards, and it has to exist before it
+  can be cleaned up. A word is still never placed across a spot that was
+  already impossible before the click. If no word fits
+  anywhere at all even then, the grid is left unchanged and the panel shows either
   "Grid complete and valid" (when every white cell is filled and every
   word is a real dictionary entry) or "Grid has become impossible"
   (otherwise — edit it or step back, then try again).
@@ -782,10 +861,10 @@ real letter. Both update after every edit.
   one still fitting this exact slot was necessarily already tried and
   found unsafe above), **Suivant** prefers a word that doesn't leave any
   other still-open word impossible to complete, only settling for the
-  best-ranked one that does once nothing safer is available in that
-  list — and only reaches for a challenge word here, as an absolute last
-  resort, on the rare slot where literally nothing else, safe or not,
-  can go at all. Only once a challenge or theme word has no existing slot
+  best-ranked one that does once nothing safer is available anywhere in
+  the grid — and only reaches for a challenge word here, as an absolute
+  last resort, on the rare slot where literally nothing else, safe or
+  not, can go at all. Only once a challenge word has no existing slot
   of its own length anywhere at all does **Suivant** try reshaping the
   black-cell layout for it specifically — first nudging a black cell over
   to carve out a right-sized empty slot, then, if that doesn't work,
@@ -1014,14 +1093,14 @@ rather than forcing an adjacent one.
 
 Once this fresh pattern is in place but before any word has actually been
 placed into it, the generator makes one more pass specifically for any
-"Mots Défi (personnalisation)" / "Challenge Words" or theme word that has
-no slot of its own length anywhere yet: it looks for a black cell that
+"Mots Défi (personnalisation)" / "Challenge Words" word that has
+no slot of its own length anywhere yet (theme words never get this
+treatment: they only go into slots the pattern already offers): it looks for a black cell that
 can be nudged over to the far side of that word instead of its current
 spot — carving out a right-sized empty slot — as long as doing so keeps
 the grid's own hard rules intact and never disturbs a word that's already
-been placed. Once every word of one group (Challenge Words, then the
-theme glossary) has had its own turn at this, a second pass looks at
-whichever of that group's own words are still without a slot and tries a
+been placed. Once every Challenge Word has had its own turn at this, a
+second pass looks at whichever of them are still without a slot and tries a
 different adjustment for them: finding an existing empty slot that's
 already longer than the word, and casing the word flush against its
 start or its end by dropping a brand new black cell right past it,
@@ -1048,13 +1127,29 @@ cleanup pass shorten it with a black cell instead; among what's left, a
 slot that's already partly determined by a real crossing letter is
 preferred over one that's still completely blank, so the generator tends
 to finish what it's already started rather than opening new fronts
-everywhere at once; ties are then broken by physical position (roughly
-closing in from the grid's own center outward), and, as a final
+everywhere at once; the ten slots of that group closest to the grid's
+own center are then kept (so the fill closes in from the center
+outward); within those three, the choice narrows to whichever long slots
+own the single most constrained cell (only slots of 7 letters or more
+are looked at first; if none has a free cell left to measure, the bar
+drops to 6 letters, then 5, and so on down to 2) — the cell with the
+fewest letters still possible on it, counted separately for its across
+and its down word and keeping only the letters both agree on, the same
+figure the interactive "Stats" button shows — since the tightest cell
+is where the fill can go wrong soonest and is best settled while there
+is still room to manoeuvre; ties are then broken by how many letters are
+already placed and, as a final
 tie-break among a handful of similarly-placed slots, by which one's
 still-open cells look statistically the most promising to fill (see the
 next paragraph). A slot that crosses another slot already known to be
 unfillable is skipped entirely — a word placed there would likely just
-be removed again the moment the grid gets cleaned up.
+be removed again the moment the grid gets cleaned up. Separately, the
+generator also keeps its own running memory, within the current attempt
+only, of every slot it has already caught briefly running out of real
+candidates at some point, and steers away from picking such a slot again
+first, even once it looks fillable again, preferring to make progress
+elsewhere in the grid; it only comes back to it once literally nothing
+else remains to choose from.
 
 **Choosing which candidate word to try for that slot.** Before any real
 search even begins, the generator takes a quick statistical peek at what
@@ -1071,12 +1166,21 @@ same sampling is used to rank the real dictionary candidates for a slot
 before trying them: a candidate whose letters line up well with the
 statistical consensus on the slot's own still-undetermined cells is tried
 before one that doesn't, though the very first word actually attempted is
-still drawn at random from among a wide window of the best-ranked
+still drawn at random from among a narrow window of the best-ranked
 candidates, not strictly the single best one — this keeps different
-attempts from converging on the exact same choice every time. Separately
+attempts from converging on the exact same choice every time, without
+letting a rare word slip in ahead of a well-scored one. Interactive
+mode's **Suivant / Next** draws its word from that very same window, so
+undoing a step and clicking it again genuinely offers the slot's other
+candidates instead of returning the same word every time. Separately
 again, before any of this even runs, any slot whose already-known letters
 leave exactly one real dictionary word possible has that word locked in
-directly, as a plain fact rather than a mere statistical guess.
+directly, as a plain fact rather than a mere statistical guess. This
+statistical picture is not left frozen on that first peek either: each
+time a word is actually written into the grid, every still-open slot it
+crosses is re-sampled against what is genuinely still possible there, so
+the guidance stays in step with the grid as it fills rather than
+describing the grid as it was before the search started.
 
 **Filling the grid by trial and backtracking.** With a slot and a
 ranked/seeded list of candidate words in hand, the generator tries each
@@ -1097,17 +1201,48 @@ or a theme word that keeps breaking crossings is set aside for the rest
 of the current attempt once it has failed too many times, freeing the
 rest of that attempt's own search budget for the rest of the grid (a
 fresh attempt gets a fresh chance at the same word); the plain dictionary
-has no further tier to fall back to, so once a given slot itself has
-racked up too many such failures, the generator stops insisting on a
-safe candidate there and accepts the next one anyway, deliberately
-leaving a known trouble spot behind rather than exhaustively searching
-for a perfect fit — the same cross-cycle cleanup that already handles a
-whole failed attempt (see below) fixes this kind of spot up on a later
-cycle too. If none of a slot's own candidates work out, the whole attempt to
+has no such per-word bookkeeping and simply keeps trying its remaining
+candidates. Only as an absolute last resort — once undoing and retrying
+has exhausted every option across the whole grid, the words placed first
+included, and not merely run out of search budget — does it start the
+search over and, this time, accept a word that does leave a neighbor
+with no word left; in practice that only happens on very small grids or
+on grids whose letters are already largely fixed by earlier cycles. It
+deliberately keeps a known trouble spot rather than declaring the whole attempt failed and leaving the grid
+nearly empty; the same cross-cycle cleanup that already handles a whole
+failed attempt (see below) fixes that spot up on a later cycle. Even
+then, one thing is never allowed: no word may cross a spot that has no
+possible entry and leave it that way. Creating such a spot is what the
+last resort licenses; writing letters into one that is already stuck is
+not, at any point. A spot that the new letter itself puts back in play
+(because the letter replaces one of the statistical guesses the generator
+seeded the grid with, for instance) is not stuck any more, so it is no
+obstacle: what counts is the state a word leaves behind, never which of
+its neighbours happened to be stuck before it. If none of a slot's own candidates work out, the whole attempt to
 fill that particular slot fails, and whichever slot was chosen just
 before it gets its own placed word undone so a different candidate can
 be tried there instead — this "undo and try something else" behavior can
-ripple back through several slots at once if needed. The search finishes
+ripple back through several slots at once if needed. Undoing goes
+straight to the cause: when a step fails, the generator notes which
+already-placed words its failure depends on (the words crossing the slot
+it could not fill), and every word placed since then that has nothing to
+do with it is removed in one go, without being retried, until the most
+recent word actually involved gets a different candidate. Undoing also starts
+the moment the generator notices that some still-empty slot can no longer
+be filled at all as the grid stands, since a word placed earlier is to
+blame — unless that slot was already unfillable before the search placed
+anything, which no undoing could fix. A slot set aside this way is not
+forgotten afterwards: it merely loses its priority, and is tried again
+once nothing else can be placed, in case the grid has changed enough
+around it to make it fillable again. Each step of the
+search gives itself only a handful of real tries (five at the moment:
+candidates that passed the neighbor check and were explored further,
+across every slot and every stage of that step) before it gives up and hands control back to the step above.
+Without that limit, a step would only give up once every combination
+below it had been tried, which never happens within the search budget,
+so an awkward word placed early on would never be revisited; with it,
+undoing climbs back towards those early words quickly enough to replace
+them. The search finishes
 successfully the moment every slot in the grid holds a real word, and
 fails outright only if the very first slot ever chosen runs out of
 candidates with nothing placed yet at all — meaning the current pattern,
@@ -1118,7 +1253,13 @@ anywhere) counts against a budget of "checks" (300,000 by default on a
 15×10 grid, or a fixed value chosen directly through the "Mode" selector
 in the interface) — once that budget runs out, the current attempt is
 abandoned and the generator moves on rather than grinding away
-indefinitely on a hopeless case.
+indefinitely on a hopeless case. This budget stretches, though, whenever
+it would otherwise waste a processor core: since a cycle can only
+conclude once its slowest parallel attempt finishes anyway (see the next
+paragraph), an attempt that reaches its own budget first keeps searching
+past it for as long as some other attempt of the same cycle is still
+genuinely working towards its own — stopping it right away would only
+leave its own core sitting idle in the meantime for no benefit.
 
 **Many attempts running in parallel, and carrying progress forward
 between cycles.** Rather than only ever trying one pattern-and-fill
@@ -1127,10 +1268,13 @@ attempts in parallel as the machine has processor cores, each running in
 its own process. A single successful grid is never enough on its own —
 the generator always waits for at least two genuinely successful grids,
 counted across the whole search rather than just one cycle, before it
-will settle on a winner; the moment one attempt succeeds while a second
-is still needed, whichever processor core it was using is immediately
-put to work on a brand-new, from-scratch attempt instead of sitting idle
-for the rest of that cycle. Once enough successes are in hand — which
+will settle on a winner; the moment one attempt finishes (succeeded or
+failed) while others of the same cycle are still running, whichever
+processor core it was using is immediately put to work on a brand-new,
+from-scratch attempt instead of sitting idle for the rest of that cycle.
+These extra attempts are a bonus chance within the cycle, not extra
+grids to carry along: with N cores, only the N-1 best grids of the cycle
+move on to the next one, plus 1 brand-new grid. Once enough successes are in hand — which
 happens more often than one might expect within a single cycle alone —
 the generator doesn't just keep the first one that finished: every
 successful attempt is genuinely optimized on its own (see the next
@@ -1145,17 +1289,31 @@ at least one slot worth trying and a cycle-count limit hasn't been
 reached yet, the very next cycle simply picks the search back up on the
 exact same pattern, still holding onto everything already confirmed —
 this can repeat for several cycles in a row before a deeper cleanup ever
-becomes necessary. Only once a pattern genuinely has no realistic path
+becomes necessary. Whichever of those two roads a failed
+cycle takes, one step always runs first, on every one of that cycle's own
+attempts: a last-chance pass that tries to pack in as many extra words as
+it can before anything is cleaned up. This is the single moment where the
+generator will write a word straight across a slot it already knows is
+hopeless — normally an absolute no — because a fuller grid means more
+words survive the cleanup and reach the next cycle. A word placed this
+way can leave a hopeless slot spelling something that isn't a real word
+at all; the generator re-checks the whole grid immediately afterwards, so
+such a slot is handed to the cleanup flagged as a problem rather than
+passing for valid. Only once a pattern genuinely has no realistic path
 left forward does the generator actually simplify it: it removes every
 word that crosses a now-hopeless slot, decides afterward which black
 cells are still needed to bound whatever survived, and hands that leaner,
 smaller pattern to the next cycle instead of a blank one — real words and
 black cells that were never part of the problem are preserved throughout.
-Only when even that cleanup keeps producing the exact same stuck state
-several times in a row does the generator finally give up on the pattern
-entirely and restart one fresh, independent attempt from a completely
-blank grid (never all of them at once, so most of the next cycle's
-attempts still build on whatever already-cleaned progress exists). If an
+Each cleaned grid is watched on its own: when one reproduces the exact
+same stuck state twice in a row, the generator cleans it deeper, also
+removing the words that cross the ones just removed, since those are
+what keep forcing the same dead end back in. If that grid still comes
+back to the same state a third time, the generator gives up on that one
+grid only and replaces it with a fresh attempt from a completely blank
+grid, while every other grid still making progress carries on as it was.
+Only when every grid of a cycle is stuck this way does the whole search
+start over from a blank grid. If an
 entire generation exhausts its full budget of cycles (200 by default)
 without ever succeeding, the "Continuer" button lets the player relaunch
 another full budget of cycles picking up from exactly that same

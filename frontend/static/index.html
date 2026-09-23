@@ -161,7 +161,7 @@
              display a comma, a source of confusion. -->
         <input type="text" id="theme-precision" name="theme_precision"
                inputmode="decimal" autocomplete="off" spellcheck="false"
-               pattern="[0-9]*([.,][0-9]+)?" value="0.75"
+               pattern="[0-9]*([.,][0-9]+)?" value="0.78"
                data-i18n-title="themePrecisionTitle">
       </label>
 
@@ -792,14 +792,13 @@
                         data-i18n="interactiveCleanDeepBtn">Nettoyer (+noires)</button>
                </div>
                <div class="interactive-arrows-row">
-                <!-- "Stats": a read-only statistical preview, in light gray, of
-                     the single most probable letter for every still-empty
-                     cell — the same statistical mechanism `generate_grid` uses
-                     to pick its own "graines" preview letters
-                     (`sample_letter_biases`), just read out for every cell
-                     instead of only forcing a few of them. Placed just before
+                <!-- "Stats": a two-state toggle, on by default, showing in
+                     light gray the single most probable letter of every
+                     still-empty cell (the across/down statistical tallies
+                     crossed, see `_interactive_letter_stats`), refreshed on
+                     every grid change while on. Placed just before
                      "Impossibles". See POST /api/interactive/stats. -->
-                <button type="button" id="interactive-stats-btn"
+                <button type="button" id="interactive-stats-btn" class="toggle-btn active"
                         data-i18n="interactiveStatsBtn">Stats</button>
                 <!-- "Impossibles": a read-only check (no cleanup) of the
                      impossible slots (including a fully-filled word absent

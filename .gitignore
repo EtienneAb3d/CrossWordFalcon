@@ -3,6 +3,7 @@
 /sglang-src/
 env.sh
 *__pycache__*
+/backend_java/target/
 /models/
 /data/hunspell_cache/
 /data/reference_corpus/
@@ -14,6 +15,7 @@ env.sh
 /GRID_STORE/
 /GRID_WORK/
 /GRID_GAME/
+/STOP_DUMP/
 /SECRET/
 /LOG_LLM/
 /LOG_CHAT/
@@ -34,3 +36,4 @@ renew-https.sh
 
 nohup.out
 TODO.txt
+/CrossWordFalcon_PROD/

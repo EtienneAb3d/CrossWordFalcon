@@ -17,6 +17,17 @@
   --locked: #ea580c;
   --low-candidates-bg: #fed7aa;
   --noise-bg: #e9d5ff;
+  /* Attempt previews: a slot temporarily set aside from this attempt's
+     own search (carried over from a previous cycle's own diagnosis, not
+     yet retried — see backend/crossword_gen.py's Filler.excluded_zone_
+     cells), at the user's explicit request: "montrer en fond jaune les
+     emplacements temporairement écartés des recherches (car impossible
+     détecté, mais non définitif)." A pastel yellow fill, matching the
+     --incorrect-bg/--low-candidates-bg/--noise-bg pastel-fill convention
+     — deliberately its own token, not a reuse of --live-succeeded (also
+     yellow, but an unrelated "this whole attempt tile succeeded"
+     concept). */
+  --excluded-bg: #fef08a;
   --best: #16a34a;
   --theme-fg: #ff00fb;
   --finish-locked: #4ade80;
@@ -43,6 +54,25 @@
      reinforce the indication that they open an external URL rather than
      an action internal to the application. */
   --external-link: #7c3aed;
+  /* Live attempt-preview tile border (script.js's renderLivePreview(),
+     .attempt-preview-grid.live-succeeded/.live-failed below), at the
+     user's explicit request: "encadrer en jaune les étapes qui sont
+     arrêtées parce qu'elle ont réussies... en orange ... échouées." Own
+     dedicated tokens rather than reusing --best (green, an unrelated
+     "overall winning grid" concept) or --locked (orange, an unrelated
+     "carried-over letter" concept) — same reasoning already applied to
+     --finish-locked vs. --locked elsewhere in this file: two concepts
+     that only coincidentally might share a hue stay independently
+     tunable. The third state ("still computing", blue) reuses --accent
+     directly instead, the same way .forced's own border already does —
+     genuinely the same "in progress" meaning, no new token needed there. */
+  --live-succeeded: #eab308;
+  --live-failed: #f97316;
+  /* A tile whose attempt was interrupted (the palier's original attempts
+     had all finished or used up their budget) rather than concluding on
+     its own: light blue, a paler cousin of the "still computing" accent,
+     since the search simply stopped, it neither succeeded nor failed. */
+  --live-interrupted: #93c5fd;
 }
 
 * {
@@ -1056,11 +1086,37 @@ button:disabled {
   border: 3px solid var(--best);
 }
 
+/* Live-preview tile borders (script.js's renderLivePreview(), the
+   `live_status` field on each backend/crossword_gen.py `on_live_preview`
+   entry — see CLAUDE.md), at the user's explicit request: "encadrer en
+   bleu les étapes qui calculent encore quelque chose, en jaune celles
+   arrêtées parce qu'elles ont réussies, en orange celles arrêtées parce
+   qu'elles sont arrivées en état échouées." Never set on a previewHistory
+   entry (navigable history) — only on the ephemeral, continuously-
+   overwritten live channel, whose entries alone carry `live_status`.
+   Same 3px-border-on-the-whole-tile technique as `.attempt-preview-best`
+   right above (not a per-cell overlay), since this marks the tile's own
+   overall status, not a specific cell. */
+.attempt-preview-grid.live-computing {
+  border: 3px solid var(--accent);
+}
+.attempt-preview-grid.live-succeeded {
+  border: 3px solid var(--live-succeeded);
+}
+.attempt-preview-grid.live-failed {
+  border: 3px solid var(--live-failed);
+}
+.attempt-preview-grid.live-interrupted {
+  border: 3px solid var(--live-interrupted);
+}
+
 .attempt-preview-grid .cell {
   width: 1.1rem;
   height: 1.1rem;
   font-size: 0.6rem;
-  font-weight: 500;
+  /* Bold: a letter really placed stands apart from the normal-weight gray
+     statistical letters (.preview-stat-letter below). */
+  font-weight: 700;
   cursor: default;
 }
 
@@ -1077,6 +1133,14 @@ button:disabled {
    --accent (the same blue already used for that .word-highlight border on
    the real, playable grid) rather than --selected, since --selected is a
    pastel meant specifically for background fills, not a border color. */
+/* Statistical letter of a still-empty preview cell (script.js's
+   renderAttemptPreview(), backend's `Filler.stat_letters`) — the same
+   light gray as Interactive mode's "Stats" letters. */
+.attempt-preview-grid .cell .preview-stat-letter {
+  color: var(--stats-fg);
+  font-weight: 400;
+}
+
 .attempt-preview-grid .cell.white.forced {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
@@ -1101,6 +1165,23 @@ button:disabled {
    left" orange. */
 .attempt-preview-grid .cell.white.low-candidates {
   background: var(--low-candidates-bg);
+}
+
+/* Cells of a slot this attempt's own search has set aside — "emplacement
+   écarté" (`DOC_ALGO/FR/Lexicon.md`, backend/crossword_gen.py's
+   `Filler.excluded_zone_cells`): a slot that went dry at least once this
+   attempt, or whose every candidate was refused for leaving a crossing
+   slot impossible, so the search only comes back to it once nothing can
+   be placed anywhere else. Declared AFTER `.low-candidates` and BEFORE
+   `.noise`/`.impossible`/`.deadlock`, which is exactly its rank in the
+   severity order: "no word can go here right now" genuinely outranks
+   "few candidates left" (orange), while an unplayable crossing (violet)
+   and a confirmed blocked slot (red/vivid red) still outrank it. The
+   sets are never subtracted from each other on the backend side
+   specifically so this cascade alone arbitrates a cell carrying
+   several. */
+.attempt-preview-grid .cell.white.excluded {
+  background: var(--excluded-bg);
 }
 
 /* Cells where no letter satisfies both the horizontal slot and the
@@ -2395,12 +2476,31 @@ button:disabled {
    fill-option threshold (script.js's interactiveImpossibleCells /
    interactiveLowCells, backend's _interactive_fill_diagnostics). Declared
    BEFORE .selected so the currently-selected cell always keeps its blue
-   fill — the diagnostic still shows on every other cell of the slot. */
-.cell.white.interactive-impossible {
-  background: var(--incorrect-bg);
-}
+   fill — the diagnostic still shows on every other cell of the slot.
+   Orange comes first here, as the mildest of the three: see
+   .interactive-excluded right below for the full severity order. */
 .cell.white.interactive-low {
   background: var(--low-candidates-bg);
+}
+
+/* "Interactif" mode: an "emplacement écarté" (DOC_ALGO/FR/Lexicon.md) —
+   a slot the last "Suivant" click set aside because no word could go on
+   it without creating an impossible one (script.js's
+   interactiveExcludedCells, backend's `interactive_place_word`). Same
+   yellow as the attempt previews' own `.excluded`, and the same rank in
+   the same severity order: declared AFTER `.interactive-low` (yellow
+   outranks orange — "no word can go here right now" is a stronger
+   statement than "few candidates left") and BEFORE `.interactive-
+   impossible`/`.interactive-deadlock` (a confirmed blocked slot still
+   outranks it). The sets are never subtracted from each other on the
+   backend side specifically so this cascade alone arbitrates a cell
+   carrying several. */
+.cell.white.interactive-excluded {
+  background: var(--excluded-bg);
+}
+
+.cell.white.interactive-impossible {
+  background: var(--incorrect-bg);
 }
 
 /* The exact crossing cell of a deadlock (two still-open slots whose own

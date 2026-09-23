@@ -94,6 +94,13 @@ export EMBED_N_GPU_LAYERS="${EMBED_N_GPU_LAYERS:-0}"
 # process.
 export CROSSWORDFALCON_FRONTEND_WORKERS="${CROSSWORDFALCON_FRONTEND_WORKERS:-10}"
 
+# Interface the middleware binds to (read by run_Falcon.sh, applies to both
+# the HTTP and the HTTPS instance). 0.0.0.0 = reachable from other machines;
+# 127.0.0.1 = this machine only — the setting for a development checkout
+# running next to a public production one (give it its own ports too, e.g.
+# 5000/5001, and leave its TLS variables unset).
+export CROSSWORDFALCON_FRONTEND_HOST="${CROSSWORDFALCON_FRONTEND_HOST:-0.0.0.0}"
+
 # Derived from CROSSWORDFALCON_BACKEND_PORT just above — change the port
 # there, not here, and this follows automatically. Read by
 # frontend/server.py to know where to proxy /api/* requests.
@@ -139,15 +146,21 @@ export CROSSWORDFALCON_BACKEND_URL="http://127.0.0.1:${CROSSWORDFALCON_BACKEND_P
 # a specific number regardless of core count:
 # export CROSSWORDFALCON_PARALLEL_ATTEMPTS=10
 
-# crossword_gen.py's own CSP-search worker processes run at a lower OS
-# scheduling priority by default (a niceness increment of 10, applied via
-# os.nice() once per worker — see GENERATION_PROCESS_NICE_INCREMENT), at
+# crossword_gen.py's own CSP-search worker processes (the Java back end's
+# search threads, on Linux) run at a lower OS scheduling priority by default
+# (a niceness increment of 10, applied via os.nice() once per worker — see
+# GENERATION_PROCESS_NICE_INCREMENT), at
 # the user's explicit request, so a quick interface request (ChatBot,
 # Dictionnaire, Paraphraseur — anything that only needs a brief round-trip
 # to the LLM/embedding server) isn't left waiting behind a generation's own
 # CPU-heavy search when every core is busy. Uncomment to change it, or set
 # to 0 to disable entirely and restore the OS default priority:
 # export CROSSWORDFALCON_GENERATION_NICE=10
+
+# Extra JVM options for the Java back end (run_FalconJ.sh only — the
+# Python back end, run_Falcon.sh, ignores it), e.g. an explicit heap cap.
+# Unset by default: the JVM then sizes its heap from the machine's RAM.
+# export CROSSWORDFALCON_JAVA_OPTS="-Xmx8g"
 
 # run_llm.sh uses a GPU by default when one is detected (Metal on Apple
 # Silicon, CUDA on Linux with an NVIDIA card — see run_llm.sh's own

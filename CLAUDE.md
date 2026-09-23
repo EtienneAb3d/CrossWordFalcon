@@ -31,6 +31,14 @@ endpoint (`backend/clues.py`/`backend/chatbot.py`); "Thématique"/
 (`backend/embedder.py`) plus a Qdrant vector database (`backend/
 qdrant_store.py`), both optional.
 
+The API server exists in two interchangeable implementations: Python
+(`backend/`, started by `run_Falcon.sh`) and Java (`backend_java/`,
+started by `run_FalconJ.sh`) — same port, routes, request validation, JSON
+responses, on-disk stores and LLM prompts, so the middleware and the web UI
+work identically with either. The two evolve together (`project-best-
+practices` SKILL, permanent rule 23); everything below that names a
+`backend/*.py` function holds for its Java mirror too (see "Java back end").
+
 Engineering language is English (code, comments, this file, the SKILLs,
 `README.md`); product content — crossword words/clues and every UI string
 — is written in whichever of the six supported languages applies.
@@ -40,6 +48,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | Path | Contents |
 |---|---|
 | `backend/` | All Python business logic: the API server, the generation engine, LLM/chat/embedding clients, persistence, export. No subpackages — every `.py` file sits directly under `backend/`. |
+| `backend_java/` | The Java back end (Java 21, Maven, `pom.xml`): `src/main/java/falcon/` mirrors `backend/` (see "Java back end"), `build.sh` builds `target/crosswordfalcon-backend.jar` (gitignored). |
 | `frontend/` | `server.py` (proxy + static host) and `static/` (the whole single-page app: `index.html`, `script.js`, `style.css`, `i18n.js`, logo assets). |
 | `data_builder/` | One-off/periodic scripts that build each language's dictionary artifacts (corpus → wordlist → gloss dictionary → inflection table → Qdrant embeddings), plus one orchestration shell script per language. |
 | `scrapper/` | Daily-refreshed content scrapers feeding the web UI's "Actu Croisée" panel (RSS feeds, aggregated crossword-publisher links). |
@@ -47,6 +56,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `data/` | Per-language dictionaries (`wordlist_<lang>_full.tsv`, `gloss_dictionary/`, `inflection/`), the reference sentence corpus, and Qdrant's on-disk storage. |
 | `DOC_ALGO/FR/`, `DOC_DIC/FR/`, `DOC_USER/EN/` | Hand-maintained, present-tense-only reference docs (see intro). |
 | `GRID_STORE/`, `GRID_WORK/`, `GRID_GAME/` | Persisted grids: published library grids, in-progress "Interactif" authoring drafts, per-player play state. All gitignored. |
+| `STOP_DUMP/` | One diagnostic snapshot per automatic-generation job interrupted via the "Stop" button: last known cell/slot state of every attempt still running at that moment. Gitignored. |
 | `GRID_SVG/`, `GRID_PNG/` | Generated SVG/PNG exports of every finished grid. Gitignored. `GRID_SAMPLES/` (committed) is a small, hand-curated set of examples — never written automatically. |
 | `LOG_LLM/`, `LOG_CHAT/`, `LOG_THEME/`, `LOG_USERS/` | Diagnostic/audit logs (LLM call traces, chat transcripts, theme pre-search traces, daily presence headcount). Gitignored. |
 | `RSS/`, `SCRAPP/` | Daily-refreshed scraper output caches. Gitignored. |
@@ -130,7 +140,13 @@ json`. Holds all server-side state in plain module dicts/lists:
   evicted first) — every generation/interactive-authoring job. An entry
   carries `status` (`running`/`done`/`cancelled`/`error`), a live `step`
   progress dict, `result` once finished, `examples_history` (an append-
-  only log of attempt-preview snapshots the web UI replays), `clues_
+  only log of attempt-preview snapshots the web UI replays), `live_preview`
+  (a single, continuously OVERWRITTEN attempt-preview snapshot — every new
+  best state the CSP search reaches on any still-running attempt, never
+  appended, `None` for a job type that never produces one; each entry
+  additionally carries the snapshot it replaced under its own `previous`
+  field, a STOP_DUMP-only diagnostic `GET /api/generate/status/{job_id}`
+  drops from its own response), `clues_
   progress`, `resume_state` (set only on total failure, feeds the
   "Continuer" button), the original `request`, and `interactive` (JSON-
   safe session metadata, `None` for an ordinary generation). A companion
@@ -231,7 +247,20 @@ gloss-filtered lexicon kept (not fixed counts, so the effect is
 comparable across languages with very different vocabulary sizes); "easy"
 additionally requires a findable Wiktionary gloss and excludes likely
 proper nouns; "medium" allows up to `MAX_PROPER_NOUNS["medium"]=2` and
-"hard" up to 5 (never restricted otherwise).
+"hard" up to 5 (never restricted otherwise). `MAX_NON_GLOSS_WORDS` mirrors
+this same per-difficulty cap for words absent from the gloss dictionary.
+Both are enforced by `try_fill` as a final safety net, after an otherwise
+fully successful fill (every slot holds a real word, no empty domain, no
+crossing deadlock): exceeding either cap flips `truly_complete` back to
+`False` (`reason` becomes `"too_many_proper_nouns"`/`"too_many_non_gloss_
+words"`) exactly like any other failure, and every offending word actually
+present in the grid (not just the excess beyond the quota) is folded into
+`impossible_slots`/`impossible_cells` (`_quota_overflow_slot_indices`) —
+so this kind of rejection gets the same red highlighting in the preview,
+and the same cross-palier repair (`_clean_blocked_slots`/`_build_retry_
+seed` strips the flagged word(s) and retries with a different candidate)
+as any other impossible slot, rather than showing a seemingly "clean,"
+fully-lettered grid marked failed for no visible reason.
 
 **Grid generation is a three-phase pipeline**, run inside `generate_grid`
 across up to `attempts` (default 200) *paliers*, each running
@@ -262,12 +291,14 @@ via `ProcessPoolExecutor`:
    a black cell adjacent to an existing one when repairing an
    already-impossible zone requires it. The
    overall black-cell rate (web UI "Taux noir", `black_enrichment_
-   fraction`, default `POST_PREFILL_BLACK_FRACTION=0.10`) is scaled by
-   how much of the grid is still white at the start of *this* palier, so
-   later paliers add proportionally less.
+   fraction`, default `POST_PREFILL_BLACK_FRACTION=0.10`) is a share of
+   the WHOLE grid: `target = round(fraction * rows * cols)`, compared
+   against the black cells already there (the carried-forward seed's
+   own plus pre-fill's), so only the shortfall is added; the same
+   unscaled rate is pre-fill's curative-cleanup zone budget.
 2. **CSP fill** (`Filler`/`_backtrack`, via `try_fill`) — a standard
    recursive backtracking solver. Slot selection (`_select_target_slot`,
-   also reused verbatim by `interactive_place_word`) is a fixed 8-level
+   also reused verbatim by `interactive_place_word`) is a fixed 9-level
    cascade: (1) optional, currently disabled
    (`ALTERNATE_DIRECTION_ENABLED=False`) — when enabled, draw across-vs-
    down weighted by remaining open-slot count; while disabled, this level
@@ -286,23 +317,62 @@ via `ProcessPoolExecutor`:
    theme glossary specifically; (6) score the remaining group
    geometrically (squared distance between the slot's own CLOSEST cell to
    the grid's own center, and that center itself — not the slot's own
-   midpoint) and take a random draw among the
-   `SLOT_SELECTION_WINDOW_SIZE=3` lowest-scored; (7)
+   midpoint), shuffle, and keep the
+   `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored as a window; (7) within
+   that window, among slots of at least
+   `MOST_CONSTRAINED_START_LENGTH=7` letters — a threshold lowered one
+   letter at a time, down to `MOST_CONSTRAINED_MIN_LENGTH=2`, until some
+   slot of the window has a measurable free cell (no-op when none has one
+   even at 2) — find
+   the smallest number of letters
+   still possible on any one still-free cell (`_slot_min_letter_options`,
+   reading the same per-direction tally Interactive mode's "Stats"
+   button displays, `Filler.letter_scores_by_dir`: the across and the
+   down slot through a cell each keep their own letter tally there, and
+   the count is that of the letters BOTH directions observed,
+   `_crossed_letter_option_count`/`_crossed_letter_counts`, each kept at
+   the lower of its two counts — 0 when the two share none, the tightest
+   possible, which only makes that slot selected first: being a sample,
+   a 0 never marks the cell a "case croisée bloquée" — only the real-
+   domain check, `Filler.slot_is_blocked`, decides that; a cell in a single slot keeps that slot's tally alone; a cell
+   already determined by a real letter is skipped, so a partially-filled
+   slot never reports 1) and keep only the
+   slots owning a cell with that count, resolving the grid's tightest
+   cell while the search still has room. That tally is kept current
+   rather than frozen on the pre-search sampling: every time a word is
+   written, `_refresh_letter_scores_around` re-samples each still-open
+   slot it CROSSES (skipping one whose domain is empty — nothing left to
+   measure) against that slot's own current `_domain`, replacing its
+   cells' summed tally (`letter_scores`, what `_candidate_score`/`_slot_
+   letter_frequency_score` read) rather than adding to it, since the other
+   contributor to those cells is the word just placed, whose letters are
+   now fixed, and replacing only that slot's own direction entry in
+   `letter_scores_by_dir`, the other direction's left as it stands;
+   `_restore_letter_scores` undoes it as the placement is reverted, so a
+   tally never outlives its own assignment. Bounded by construction: at
+   most one crossing slot per cell of the placed word, each costing one
+   `_domain` call `_backtrack` already pays for every unassigned slot on
+   every node; (8)
    re-sort that window by letters-already-placed (most first), keep the
-   top `SLOT_SELECTION_REFINE_FRACTION=1/2`; (8) re-sort by statistical
+   top `SLOT_SELECTION_REFINE_FRACTION=1/2`; (9) re-sort by statistical
    fill-option richness (`_slot_letter_frequency_score`), highest wins.
    Candidate word order
-   within the chosen slot: shuffled, then ranked by `_candidate_score`
+   within the chosen slot is `Filler.ordered_candidates` — this engine's
+   single candidate-ordering rule, shared verbatim with Interactive
+   mode's own "Suivant" (see "Priority-tier search in Interactive mode"
+   below): shuffled, then ranked by `_candidate_score`
    (sum of squared per-cell statistical letter scores from `sample_
    letter_biases`) with a random draw inside a `CANDIDATE_SCORE_
-   WINDOW=20000`-word sliding window; a themed grid's matching words are
+   WINDOW=50`-word sliding window — deliberately far narrower than a
+   slot's own domain, so the statistical ranking stays in charge while two
+   attempts on the same state still diverge; a themed grid's matching words are
    pulled to the front as a stable block first, then any still-unused
    "Mots Défi" word geometrically fitting the chosen slot is injected
    ahead of that block (even when absent from the loaded lexicon
    entirely) — the same precedence `interactive_place_word`'s own
    candidate draw already gives it. A slot whose real dictionary domain
    is empty is not treated as a dead end (`Filler.
-   exclude_immediately_impossible_slots`/`_backtrack`'s own per-node
+   mark_immediately_impossible_slots`/`_backtrack`'s own per-node
    domain check) as long as an unused, not-yet-abandoned challenge word
    still fits it (`Filler._active_challenge_words()` — see "Crossing-
    safety retry, all three candidate tiers" below for what "abandoned"
@@ -318,7 +388,52 @@ via `ProcessPoolExecutor`:
    `CANCEL_CHECK_INTERVAL=500` calls), and, when `UNFILLABLE_ABANDON_
    ENABLED` is true (optional, currently disabled), self-abandons
    (`UNFILLABLE_ABANDON_SLOT_COUNT=3`) once more than that many
-   still-unassigned slots belong to an already-impossible zone.
+   still-unassigned slots belong to an already-impossible zone. Before
+   handing `unassigned` to the 9-level cascade, `_backtrack` also
+   deprioritizes every slot already in `Filler._impossible_this_attempt` —
+   slots observed as impossible earlier in this same attempt, excluded
+   from `unassigned` unless doing so would leave nothing selectable (in
+   which case the cascade runs over the full, unfiltered list instead, as
+   a last resort). Fed for free, whenever the ordinary per-node domain
+   check (right above the cascade) finds an unassigned slot dry — never by
+   a dedicated, proactive `_crossing_deadlock_slots` scan run on every
+   node (the other way a slot can be impossible: non-empty domain in
+   isolation, yet jointly unfillable with a slot it crosses): that scan's
+   own cost scales with every open slot's full domain size, which can
+   reach tens of thousands of candidate words on an early, still-mostly-
+   empty grid, stalling visible search progress for a long time on
+   exactly the grids with the most empty space left. A deadlock IS still
+   fed in, but only at the coarser cadence `Filler.excluded_zone_cells`'s
+   own `include_deadlock=True` callers already pay this same cost at
+   (`_publish_new_best`/the final diagnostics snapshot, see below) — one
+   arising and resolving entirely between two such snapshots is simply
+   never caught this way. The set keeps only the `MAX_EXCLUDED_SLOTS` (3)
+   most recently flagged slots (`_RecentSlots`: re-flagging a slot makes it
+   the most recent again, a fourth one evicts the oldest), and a flagged
+   slot leaves it as soon as a word placed across it leaves it not blocked
+   — `_backtrack`'s per-candidate crossing check already calls
+   `slot_is_blocked` on every open crossing slot of an accepted candidate,
+   so the re-evaluation costs nothing (`unblocked_crossers`). A removal is
+   not undone when that word is later backtracked; the slot is flagged
+   again if it goes dry again. Scoped to `_backtrack`
+   alone — `interactive_place_word`'s own call into `_select_target_slot`
+   builds its own `viable` list directly and never consults this set,
+   since it runs no recursive search of its own to observe a slot going
+   dry over.
+   Once the search ends (whatever the outcome), `_close_implied_slots`
+   runs one cheap final pass over `filler.best_assignment`, confirming
+   every still-unassigned slot down to a single real, unused candidate
+   given the letters real crossing words already determine — a slot the
+   search simply never got to select, which would otherwise leave a
+   visually complete grid formally incomplete. It needs only ENOUGH cells
+   known to leave one candidate, not all of them, so it can write real
+   letters, and is therefore held to the same crossing rule as
+   `_backtrack`: a confirmation that would leave a crossing open slot
+   with no available word at all is skipped (that slot's single candidate
+   was its only option either way, so the grid was not completable
+   whichever of the two gave way — leaving both open keeps
+   `_clean_blocked_slots` able to repair real empty cells instead of a
+   sealed run of garbage).
 3. **Minimization** (`minimize_black_squares`) — once a fill succeeds,
    iteratively removes black cells one at a time, keeping a removal only
    if the grid stays fillable (at the loosest structural bound,
@@ -330,19 +445,40 @@ successful grid is never enough to conclude the search: `generate_grid`
 only stops once at least `MIN_SUCCESSFUL_ATTEMPTS=2` attempts have
 genuinely succeeded, counted cumulatively across the *whole* search (every
 palier, not just the one that just ran). While harvesting a palier's
-`PARALLEL_ATTEMPTS` parallel futures, the moment one of them succeeds and
-the running total is still below that threshold, the worker process it
-just freed is immediately reassigned to a brand-new, from-scratch attempt
-(the same shape as an ordinary "reset" attempt — never a continuation of
-the grid that just succeeded) instead of sitting idle for the rest of the
-palier. A palier that ends with fewer than `MIN_SUCCESSFUL_ATTEMPTS`
+`PARALLEL_ATTEMPTS` parallel futures, the moment any of them finishes
+(success or failure) while some ORIGINAL attempt of the palier is still
+racing, the worker process it just freed is immediately reassigned to a
+brand-new, from-scratch attempt (the same shape as an ordinary "reset"
+attempt — never a continuation of the grid that just finished) instead of
+sitting idle. A replacement runs with `racing=False` (`_pattern_attempt`):
+it never flags `attempt_active`, so it never counts as a sibling still
+racing and never extends an original's elastic budget. The harvest loop
+polls every 0.5s and sets `attempt_done_event` — interrupting every
+replacement still running — as soon as every original has finished
+(`interrupt_threshold`) or every original still pending has used up its
+budget (`checks_progress` of its slot ≥ `resolved_deadline_checks`); no
+replacement is dispatched after that. A palier that ends with fewer than `MIN_SUCCESSFUL_ATTEMPTS`
 successes in hand (0 or 1) does not stop the search: it falls through to
 the ordinary cross-palier retry machinery below for its own failed
 attempts, and whatever single success it did find stays remembered for
 comparison against a later palier's own. Once the threshold is reached,
 the best candidate is picked among every genuinely successful attempt
 found anywhere in the search so far (see "Content scoring" below) and the
-search stops. If the whole `attempts` budget (200 paliers by default) is
+search stops. That choice minimizes every success in parallel on the
+palier's own pool (`_minimize_trial`, one task per success, the
+"minimizing" step published as they start with every success as its
+examples) and keeps the winner's minimized grid as the final grid
+(`best_minimized`) instead of minimizing it again; only a lone success
+accepted at the end of the budget goes through the separate final
+`minimize_black_squares` call. A mid-palier replacement attempt takes the
+next free lineage number (`next_lineage_number`, used then advanced), so
+tiles are numbered 1…`PARALLEL_ATTEMPTS`, then `PARALLEL_ATTEMPTS`+1 for
+the replacement. Replacements make a palier return more candidates than it
+has workers; only the best `PARALLEL_ATTEMPTS - reset_count` cleaned grids
+(N-1 of N, fewer by one per discarded grid after a full cleanup) are
+carried into the next palier, alongside its blank-grid worker(s) —
+`_seed_pool` caps the pool at the next palier's non-reset slots, both on
+the "reprise telle quelle" and the full-cleanup path. If the whole `attempts` budget (200 paliers by default) is
 exhausted with only one success ever found, that one success is accepted
 rather than the search reporting total failure.
 
@@ -375,9 +511,147 @@ crossing an impossible slot, keep every surviving letter as the next
 palier's locked constraint, and reopen any black cell that neither
 bounds a surviving word nor sits sandwiched between two confirmed
 letters on the same axis — then generate a brand new pattern
-(`_pattern_attempt`) from that state. `GRID_REPEAT_INFEASIBLE_
-THRESHOLD=3` caps how many consecutive full-cleanup paliers may produce
-an identical grid state before a hard reset to a blank grid.
+(`_pattern_attempt`) from that state. Each cleaned candidate is tracked
+on its own across consecutive full cleanups ("reprise telle quelle"
+paliers in between neither count nor reset it): its ordinary cleanup's
+state (pattern + confirmed content, `_cycle_start_preview`) is compared
+with every state the previous full cleanup produced
+(`carry_cleanup_streaks`). At `GRID_REPEAT_DEEP_CLEANUP_STREAK=2`
+consecutive identical states it is cleaned deeper instead
+(`_build_retry_seed(deep=True, exclude_impossible_locked=True)`:
+`_clean_blocked_slots` also removes every word crossing a word the
+ordinary removal took out, freeing the letters that forced that word
+straight back in, plus any fully-locked slot spelling no real word); at
+`GRID_REPEAT_DISCARD_STREAK=3` it is dropped from the pool, and the next
+palier gives its place to one more blank-grid worker (`carry_discarded_
+count`, added to `FULL_RESET_ATTEMPT_COUNT` in `reset_count`) while every
+other candidate is kept. Only when every candidate is dropped does the
+whole search restart from a blank grid.
+
+**An "emplacement écarté" (yellow) is a pure deprioritization, and is
+reset to nothing at the start of every new palier.** `Filler._impossible_
+this_attempt` is the single set that holds them, and is the single
+definition of the term throughout the engine (see `DOC_ALGO/FR/Lexicon.
+md`): a slot recently found blocked during THIS attempt (at most the
+`MAX_EXCLUDED_SLOTS` latest, and only until a crossing word unblocks it) is set aside
+so the search only comes back to it once no other slot can take a word,
+but it is never walled off and is
+never inherited from a previous palier (`generate_grid` always dispatches
+`_pattern_continue` with `excluded_slots=None`; a fresh `Filler` starts
+with the set empty). Three things feed it: `Filler.mark_immediately_
+impossible_slots()`, run once before the search starts for a slot already
+dry under the definitive constraints alone (purely a head start — the
+per-node check below would find the same slots on its first call anyway);
+`_backtrack`'s own per-node domain check, the instant a slot's domain goes
+dry; and `_backtrack`'s own candidate loop running out, when every one of
+the chosen slot's candidates was rejected for leaving some crossing slot
+impossible — free to detect, since that loop has just paid for every one
+of them. That third source leaves a slot with a genuinely non-empty
+domain, so it keeps being crossed freely by neighbouring words; only its
+selection priority changes, unlike a blocked (red) slot, which is never
+crossed at all. A crossing-letter deadlock is NOT one of them: `excluded_zone_cells`'s
+own `include_deadlock=True` calls report it for that one snapshot only.
+A deadlock is a property of the assignment being examined, not a lasting
+fact about the slot — the next placement can dissolve it — so memorising
+it would let a display call permanently rewrite the search's own
+scheduling set, flooding it until every slot is écarté and the
+deprioritization means nothing. Finding a slot unfillable in the current
+state makes the node backtrack (`return False`), since a placement of this
+search caused it: a dry slot at the node's domain check, and a chosen slot
+whose candidates were all rejected with at least one of them for blocking
+a still-healthy crossing slot (`blameable_rejection`). What does NOT
+backtrack is what no backtracking can repair — `Filler._tolerated_dry`:
+the slots already dry before the search placed anything (`solve()`,
+`_dry_open_slots`) and, in the last-resort pass only, the slots an
+accepted `allow_breaking` word dried (added on placement, removed on
+revert). A tolerated dry slot is just left out of that node's `domains`;
+a slot whose candidates were all rejected only for crossing a tolerated
+one lets the node move on to its next slot; and in the last-resort pass
+the all-rejected case never backtracks, so the node can still reach its
+`allow_breaking` stage. The écarté FLAG survives the backtrack: a slot
+flagged in an earlier configuration may be viable again, and stays
+selectable in the node's released stage. `_backtrack` runs each node in three
+ordered stages: (1) try to place a word on a NON-écarté slot, taking them
+in cascade order until one accepts a candidate; (2) if none does, release
+the écarté slots and carry on, still without backtracking; (3) only once
+nothing can be placed even on those does the node fail and ordinary
+backtracking resume. `released` is a plain `_backtrack` parameter, so it
+is inherited by everything placed below a release and restores itself as
+the backtrack unwinds back above the node that released it.
+Every stage of a node (the `allow_breaking` pass included) shares one cap,
+`MAX_DESCENTS_PER_NODE` (3; `<= 0` disables it) — raised to
+`EARLY_MAX_DESCENTS_PER_NODE` (10) for a node entered while fewer than
+`EARLY_DESCENTS_WORD_COUNT` (5) words are in place on top of the
+attempt's initial state (`Filler._initial_assigned_count`, the words
+already assigned when `solve()` starts): once the node has made
+that many recursive descents without success — a descent being a
+candidate that passed the crossing check and was recursed into, never one
+rejected on the spot, and never a "Mots Défi" or theme-glossary candidate
+(`challenged_set`/`pri_set`), whose hypotheses are all explored whatever
+the count — it returns `False` at once, whatever stage it has
+reached. Without it a node only fails once its whole subtree is
+exhausted, which never happens within the budget on a real dictionary, so
+backtracking climbs only a few levels and a hard word placed early stays
+for the whole attempt; with it, backtracking climbs back to those early
+words. On top of it, `_backtrack` does conflict-directed backjumping
+(`BACKJUMPING_ENABLED`): every `return False` goes through `Filler._fail`,
+which leaves in `_last_conflict` the slots holding the placed words the
+failure depends on — a dry slot's assigned crossers plus the slots holding
+a word of its (fully used) domain (`_dry_slot_conflict`); for a slot whose
+candidates were all rejected blameably, the assigned crossers of that slot
+and of the slots each rejection would have blocked (`_assigned_crossers`);
+for an exhausted node, the union over everything it tried, minus its own
+slot. A parent whose slot is not in the child's conflict set undoes its
+word and returns that same set without trying other candidates, so
+backtracking jumps straight to the most recent word actually involved
+instead of replaying the same failure under every unrelated intermediate
+level. `None` (budget, abandon, periodic stop, disabled) falls back to
+chronological backtracking; an empty set (only root-dry slots left) jumps
+to the root. A flagged
+slot therefore stays fully reusable for the rest of the attempt and is
+picked back up automatically, with no special bookkeeping, the moment
+some other slot's own assignment changes and its domain becomes non-empty
+again (`_domain` is recomputed fresh on every node); it stops showing
+yellow as soon as a word is actually placed on it (`excluded_zone_cells`
+filters to still-unassigned slots).
+
+`Filler.excluded_slots` is a separate, unrelated mechanism and is NOT an
+"emplacement écarté": it drops a slot out of the grid the search has to
+solve at all — never selected, never required by `truly_complete`, never
+counted as a broken crossing, and never surfaced by any diagnostic or
+overlay. `_optimize_before_cleanup` is its only caller, on both of its
+own fills: the ordinary one (completing what it can while deliberately
+leaving an entirely-empty or already-impossible zone untouched) and the
+last-chance one right below, where naming the impossible slots here is
+exactly what lets a word cross them — `_backtrack` skips an excluded slot
+in its per-candidate crossing check, so neither `crossing_broken` nor
+`crossing_still_impossible` can reject a candidate on its account. Every
+generation palier leaves it `None`.
+
+**Last-chance enrichment before cleanup**: the final thing
+`_optimize_before_cleanup` does, once its ordinary fill and its
+black-cell removal loop are finished and the failed palier's grid is
+about to be handed to the cleanup, is one more `try_fill` whose whole
+purpose is to add words across an emplacement already known impossible —
+the one moment that is allowed (`DOC_ALGO/FR/Lexicon.md`, "emplacement
+bloqué"), since the more words the grid carries when `_clean_blocked_
+slots`/`_build_retry_seed` run, the more of them survive into the next
+palier. It differs from the ordinary fill on exactly three points, each
+load-bearing: the entirely-empty slots are NOT excluded (so the search
+genuinely tries to fill them instead of leaving them locked), the
+impossible ones still ARE (which is what makes them crossable, per
+`excluded_slots` above), and its result is absorbed from
+`diagnostics["assignment"]` even when the fill never completes —
+`try_fill` only returns a grid once every required slot is solved, which
+is precisely what this grid cannot do, while its best partial state is
+the whole point. It only ever adds letters: `preseed_assignment` locks
+every fully-confirmed slot, no black cell is touched, and nothing already
+placed can be lost or contradicted. A word it places may seal an
+impossible emplacement into a fully-lettered run spelling nothing real;
+the `_invalid_fully_known_indices`/`_impossible_indices` recomputation
+that follows in the same function catches that like any other case, so
+such a slot reaches the cleanup flagged impossible rather than passing
+for valid.
 
 **"Impossible" also covers a crossing-letter deadlock**, on top of the
 plain empty-domain case above: two still-open slots crossing at a cell
@@ -394,7 +668,88 @@ re-checks, `interactive_clean_impossible_zones`/`interactive_minimize_
 black_cells` — inherits it automatically; also excludes a word already
 fully spelled out elsewhere in the grid, matching the Filler-based
 version — a word already placed once can't paper over a real deadlock by
-still counting as "achievable" for a different slot). Blackening is a distinct
+still counting as "achievable" for a different slot). `Filler.impossible_
+zone_cells()` (the preview-facing set of cells) deliberately never treats
+an "emplacement écarté" as impossible on that basis alone: that set only
+records that a slot went dry at least once during this attempt, and
+backtracking routinely makes such a slot viable again, so painting it red
+would conflate "deprioritized" with "unfixable".
+`Filler.excluded_zone_cells(assignment=None)` gives such
+a cell its own signal instead — rendered as a yellow background
+(`.attempt-preview-grid .cell.white.excluded`, `frontend/static/style.
+css`) — distinct from `.impossible`/`.deadlock`'s red, and never
+subtracted from those two: a cell can be both excluded and (freshly,
+genuinely) impossible at once, and the CSS cascade (`.low-candidates`,
+then `.excluded`, then `.noise`/`.impossible`/`.deadlock`) lets the
+stronger, more severe signal win the background whenever several apply —
+yellow outranks the orange "emplacement pauvre" (having no placeable word
+at all says more than having few candidates), and is in turn outranked by
+violet and red. The same order applies to Interactive mode's own
+`.cell.white.interactive-low`/`.interactive-excluded`/`.interactive-
+impossible`/`.interactive-deadlock`.
+It renders exactly
+`_impossible_this_attempt`, filtered to still-unassigned slots in
+`assignment` (`self.assignment` by default) so a slot later filled via a
+different path never shows this overlay on top of its own real letters —
+so the overlay and the search's own deprioritization can never disagree.
+On top of the two sources that feed that set directly (see above), a
+crossing-letter deadlock (`_crossing_deadlock_slots`) currently found in
+`assignment` is merged in when `excluded_zone_cells`'s own
+`include_deadlock` argument is `True`: the plain empty-domain case
+already gets this "temporarily set aside" treatment live, the instant
+`_backtrack` notices it, but a deadlock can only ever be noticed OUTSIDE
+the search's own hot per-node loop (see `_crossing_deadlock_slots`'s own
+cost, scaling with every open slot's domain size), so without this third
+source such a slot showed red (`impossible_zone_cells`/`deadlock_zone_cells`, both already
+fold it in) but never also yellow. `include_deadlock` defaults to `False`
+so every pre-existing caller (in particular `_publish_live_state`'s own
+tight heartbeat cadence, see right below) stays exactly as cheap as
+before — only `_publish_new_best` and the final diagnostics snapshot pass
+`True`, since both already pay for `deadlock_zone_cells()`'s own
+equivalent cost on the very same call. A slot found this way is reported
+for THAT snapshot only and is never merged into `Filler._impossible_this_
+attempt`: a crossing deadlock is a property of the assignment being
+examined, not a lasting fact about the slot, and nothing on a display
+path may write to that set (`DOC_ALGO/FR/Lexicon.md`). Memorising it let
+a display call permanently rewrite the search's own scheduling set —
+replaying a STOP_DUMP with and without the preview queue, all else
+identical, gave 44 slots set aside vs 0 and 7991 of 8967 slot selections
+with nothing but écarté slots to choose from vs 0, i.e. the grid froze
+into a block of yellow and the deprioritization became vacuous. The
+consequence to keep in mind is that a deadlock's yellow only shows on the
+snapshots that pass `include_deadlock=True`, never on the heartbeat's own
+cheaper ones.
+
+Scoped to one attempt's own lifecycle, not merely to a display channel:
+valid only "pendant une étape," reset "en fin d'étape, avant la phase
+d'optimisation" — at the user's own explicit framing, with one exception
+named directly: "ils peuvent éventuellement être visibles sur l'étape
+clef avant optimisation, mais plus ensuite." Concretely, real (non-empty
+when applicable) on exactly three things: `try_fill`'s two live
+callbacks (`_publish_new_best(best_assignment)`/`_publish_live_state
+(current_assignment)`, the latter cheaply, since this method costs only
+plain set lookups, no domain iteration); the harvesting loop's own "just
+finished" live tile; and `last_examples` — the `pattern_attempt_failed`/
+`pattern_found` navigable-history entry, which is precisely that named
+exception (this same attempt's own concluding snapshot,
+`excluded_zone_cells(filler.best_assignment)`, published before
+`_optimize_before_cleanup`/cleanup ever run — the same `d`/diagnostics
+dict backs both this entry and the harvesting loop's live tile). Always
+`[]` everywhere published *after* that point: the next attempt's own
+cycle-start preview (`pattern`/`pattern_generated`, whether following a
+"reprise telle quelle" or a fresh pattern — `_impossible_this_attempt`
+belongs to a `Filler` that doesn't exist yet at cycle-start), and a fully
+successful search's own `minimizing` step (nothing left excluded to
+show). This scoping also happens to sidestep a real display-priority
+detail: `pollJob`/`advanceLiveDisplay` (`frontend/static/script.js`)
+prioritizes draining any `previewHistory` backlog over rendering the bare
+`live_preview` channel, and in a fast mode (many paliers/second) that
+backlog rarely empties — so a signal confined to `live_preview` alone
+would rarely reach the screen; `last_examples` carrying it too means the
+signal still reaches the screen during exactly such a backlog. `Filler.
+on_checks_progress`/`on_live_state`
+(below) are what prove, live, that such an attempt is still genuinely
+working rather than stuck. Blackening is a distinct
 mechanism from plain "nettoyage" cleanup, at the user's explicit request:
 `_clean_blocked_slots` never blackens a cell for a slot in its own
 `deadlocked_slots` subset (recomputed fresh by each caller that passes
@@ -531,8 +886,79 @@ forward-check to every one of them: placing a candidate that leaves some
 slot it CROSSES with no viable word left (dictionary-dry, and no other
 unused/not-yet-abandoned challenge word able to fill it either) reverts
 the placement on the spot, with no further recursion, and the candidate
-loop simply tries the next entry of the same or a lower tier. What
-differs between tiers is what happens once a tier keeps failing this way:
+loop simply tries the next entry of the same or a lower tier. The rule
+holds on every tier, with exactly one last-resort exception, and its
+trigger is global to the attempt, never local to a node. `Filler.solve`
+runs the search in two passes: a strict one from the root, where no node
+may create an impossible slot and backtracking climbs back to the first
+words placed (within `MAX_DESCENTS_PER_NODE` per node); then, only if that
+strict search was exhausted from the root — the root itself failed, not
+the budget running out (`_budget_exhausted`) nor an abandon — a second
+pass from the root with `Filler.breaking_permitted` on. Only in that
+second pass does a node that has explored the whole strict subtree of
+every one of its slots (non-écarté, then released écarté) without success
+come back round with `allow_breaking` and DOES accept a word that creates an
+impossible slot, rather than failing and leaving the grid sparse — a
+well-filled grid carrying one impossible zone, which the cross-palier
+cleanup repairs next palier, beats a grid declared failed early and left
+nearly empty. That pass relaxes `crossing_broken` and nothing else:
+CREATING an impossible slot is what it licenses, never writing into one
+that is impossible already — `crossing_still_impossible` (below) keeps
+rejecting a candidate that leaves an already-impossible crossing slot
+impossible, at every stage including this one — the one place in the
+engine where crossing an already-impossible slot IS allowed is the
+last-chance enrichment `_optimize_before_cleanup` runs once a palier has
+already failed (see "Last-chance enrichment before cleanup" below), and
+it gets there through `excluded_slots` rather than by relaxing this
+check. `allow_breaking` is never
+inherited by a child node: each one must exhaust its own strict options
+first. Candidates keep their normal priority order in the relaxed pass,
+so a crossing-safe one is always preferred and is only overtaken once its
+own subtree has failed too.
+
+The check is measured against a baseline, and that baseline is free:
+`domains`, built at the top of the node before any candidate was placed,
+already omits every slot found dry there (those are flagged "écarté"), so
+`j in domains` means exactly "j still had a real candidate before this
+word was placed". A slot that goes dry only now is the candidate's own
+doing and rejects it; one that was already dry is never blamed on
+whichever candidate happens to be tried next. This is what makes the
+absolute rule workable — without a baseline, one already-dry neighbour
+made every candidate at every adjacent slot look unsafe. An "écarté"
+slot that is healthy again right now is in `domains` and is therefore
+fully protected, exactly like any other open slot.
+
+The same per-candidate check splits into two verdicts, and the baseline is
+what separates them. A crossing slot that WAS in `domains` was fine before
+the candidate, so this candidate is what made it impossible
+(`crossing_broken` — rejected unless `allow_breaking`). A crossing slot
+that was NOT in `domains` was impossible already, and finding it still
+impossible after the placement means this word crosses an impossible slot
+(`crossing_still_impossible` — rejected at every stage, `allow_breaking`
+included). A slot the candidate's own letter puts back in play (superseding
+a statistical seed, say) is not impossible afterwards and so lands in
+neither: what both verdicts judge is the state the candidate LEAVES, never
+which neighbour happened to be blocked beforehand. An "emplacement écarté"
+that is healthy again is in `domains`, so it may be crossed freely as long
+as the placement does not block it again; its only remaining restriction is
+the selection deprioritization above.
+
+Placing a word is never the whole picture: `_close_implied_slots`'s own
+crossing check (phase 2 above) applies the same rule at the one other place
+a word is written.
+
+Every one of these per-candidate checks goes through `Filler.slot_is_
+blocked`, whose cost is held down by a per-node `options_cache`
+(`Filler._letter_options_cached`, always equal to a from-scratch
+`_slot_letter_options`): entries hold per-position letter counts over the
+domain minus the node's own used words, so the candidate only removes a
+letter it was the last supporter of; a slot crossing the target is keyed
+by its known-letter signature (`_known_letters_signature`), one entry per
+distinct crossing letter; a blank slot's counts are precomputed once per
+length (`_blank_letter_counts`); an entry whose recorded used-word set no
+longer matches is recomputed, never reused.
+
+What differs between tiers is only the per-word give-up budget:
 
 - A challenge word or a theme word that breaks a crossing this often
   keeps its own per-word budget (`Filler._challenge_word_budget`/`_theme_
@@ -549,17 +975,10 @@ differs between tiers is what happens once a tier keeps failing this way:
   tree is what eventually offers a still-active word a different slot
   elsewhere, since `_select_target_slot`'s own level 2 (challenge)/level 5
   (theme) keeps preferring any slot it still fits.
-- The general dictionary has no further tier to fall back to. Its own
-  budget (`Filler._domain_word_budget`, same fraction) is tracked per
-  SLOT rather than per word (an ordinary candidate has no identity worth
-  tracking): once a given slot's own share of the budget has been spent
-  on candidates that all broke some crossing, `_backtrack` stops
-  insisting on a crossing-safe candidate for that slot
-  (`Filler._domain_break_abandoned`) and accepts the next one anyway —
-  deliberately creating a known "impossible" zone rather than paying for
-  exhaustive backtracking first. The cross-palier retry machinery
-  (`_clean_blocked_slots`/`_build_retry_seed`) repairs this kind of zone
-  on the next palier regardless of how it arose.
+- The general dictionary has no word identity worth tracking that way,
+  and needs none: it simply keeps trying its remaining candidates. A word
+  accepted under `allow_breaking` never counts against any budget — it
+  was not given up on.
 
 Interactive mode's "Suivant" (`interactive_place_word`) applies a
 broadened version of this exemption (`_word_breaks_open_slot`), but runs
@@ -574,7 +993,7 @@ challenge_word_break`/`_challenge_abandoned` exactly like the automatic
 search does; only once every such combination (ordinary or, failing that,
 individually reshaped — see "Priority-tier search in Interactive mode"
 below) has been tried does the search fall through to the theme glossary,
-then the general dictionary at `target` alone — full detail, including
+then the general dictionary — full detail, including
 why each candidate's own black-cell reshape (if any) must be evaluated in
 total isolation from every other candidate's, is in that section.
 
@@ -590,16 +1009,36 @@ stays crossing-only, since automatic generation's cross-palier retry
 machinery (`_clean_blocked_slots`/`_build_retry_seed`) already repairs
 that broader class of zone on the next palier regardless of how it
 arose — `interactive_place_word` has no such follow-up palier, so each
-"Suivant" click needs to get this right on its own. A slot already
-impossible before this call, for an unrelated reason, is never treated as
-broken by whatever candidate ends up tried (`_open_slot_baseline`,
-computed once per candidate slot and reused across every candidate tried
-there) — otherwise one pre-existing impossible zone anywhere in the grid
-would make every single candidate at every other slot look unsafe too.
+"Suivant" click needs to get this right on its own.
+
+The cases are told apart by what the candidate CROSSES, against the same
+`_open_slot_baseline` snapshot (computed once per candidate slot and
+reused across every candidate tried there) `_backtrack` gets for free
+from its own per-node `domains`. A crossed slot that was alive in the
+baseline and is blocked after the placement was blocked BY this candidate
+(`"crossing"`, the exact counterpart of `crossing_broken`); one already
+dead in the baseline and still blocked afterwards means the candidate
+crosses an "emplacement bloqué" (`"crossing_blocked"`, the counterpart of
+`crossing_still_impossible`). A DISJOINT slot left with no candidate is
+`"other"`; one already blocked before the call is never blamed on
+whatever candidate ends up tried — otherwise one pre-existing impossible
+zone anywhere in the grid would make every single candidate at every
+other slot look unsafe too. `_word_breaks_open_slot` returns
+`"crossing_blocked"`/`"crossing"`/`"other"`/`None`, and `_placement_
+accepted` maps each verdict onto the `PLACEMENT_LEVEL_*` at which it
+becomes acceptable (see "Staged acceptance levels in Interactive mode"
+below); `"crossing_blocked"` is accepted at none of them. It
+reasons on each crossing slot's own domain, so it catches a slot left with
+no word at all but NOT a crossing deadlock the placement creates — the
+same domain-iteration cost that keeps `_crossing_deadlock_slots` out of
+`_backtrack`'s per-node loop.
 
 **Floating-black-cell widening**: `_widen_floating_black_cells_for_
 priority_words` tries to carve out a right-sized slot for every "Mots
-Défi" word, then every theme-glossary word, that has no free, letter-
+Défi" word (never a theme-glossary word — those only ever take a slot the
+pattern already offers: `_pattern_attempt` passes the challenge list
+alone, and `interactive_place_word`'s theme tier calls
+`_find_priority_word_placement` with `allow_reshape=False`) that has no free, letter-
 compatible empty slot of its own exact length available anywhere in the
 pattern yet (`_has_free_matching_slot`: a same-length empty slot only
 counts as "available" for a word if every cell it already carries a
@@ -643,11 +1082,10 @@ falls through to the shortening fallback below before ultimately falling
 back to the ordinary geometric-fit placement (or no placement at all) —
 never a corrupting one.
 
-**Shortening fallback**: once every word of one glossary group ("Mots
-Défi", then the theme glossary) has had its own widening attempt above,
-`_widen_floating_black_cells_for_priority_words` runs a second pass
-(`_shorten_one_slot_for_word`) over whichever of that group's words are
-still unplaced, before moving on to the next, lower-priority group — the
+**Shortening fallback**: once every "Mots Défi" word has had its own
+widening attempt above, `_widen_floating_black_cells_for_priority_words`
+runs a second pass (`_shorten_one_slot_for_word`) over whichever of them
+are still unplaced — the
 mirror operation of widening: instead of relocating an existing black
 cell to grow a run up to the word's own length, it scans up to
 `SHORTEN_SLOT_WINDOW` shuffled existing EMPTY slots already longer than
@@ -707,10 +1145,13 @@ grid whenever more than one is under consideration at once.
 theme tier) is what enforces this: it first tries every ordinary,
 already-dictionary-viable slot the word pool fits, purely against the
 grid's own untouched base pattern/`Filler` (`target`'s own combos first,
-ranked by the same statistical score/frequency the final word draw uses,
+each slot's own words drawn by `Filler.ordered_candidates` and the slots
+themselves following their own best-scored word,
 `_word_breaks_open_slot` rejecting any that breaks a crossing) — nothing
-here can ever be contaminated, since no reshape is involved at all. Only
-once every ordinary combo has failed does it give each remaining word
+here can ever be contaminated, since no reshape is involved at all. For
+the "Mots Défi" tier only (the theme tier passes `allow_reshape=False` and
+stops here), and only
+once every ordinary combo has failed, does it give each remaining word
 with no natural or ordinary slot anywhere its own, fully ISOLATED
 widen-then-shorten attempt (`_try_reshape_for_word`, one independent copy
 of the base pattern per word, discarded immediately if unused — never a
@@ -736,12 +1177,71 @@ one isolated reshape copy, for a "Mots Défi"/theme pick that needed one)
 straight into the real letter grid and writes the word's own letters in
 — no revert-unused-reshapes pass is needed any more, since nothing but
 the eventual winner's own single reshape (if any) was ever applied to
-begin with. The general-dictionary tier at `target` excludes every
-"Mots Défi"/theme word from its own candidate pool outright (any such
-word still present in `target`'s domain was necessarily already tried,
-across every slot in the grid, by one of the two tiers above) — falling
-back to the raw, unfiltered domain only if excluding both pools would
-leave nothing at all, so "Suivant" never gets stuck.
+begin with. The general-dictionary tier sweeps every still-open slot in
+`_select_target_slot`'s own cascade order (`_cascade_slot_order`, with
+`target` yielded first so the slot the two tiers above were built around
+is still tried before any other), not `target` alone; each swept slot
+orders its own candidates through `Filler.ordered_candidates` — the same
+shuffle/statistical-sort/sliding-window draw the automatic search uses,
+never a strict argmax, which would make "Suivant" return the same word on
+every click for a given grid state — and keeps the first acceptable one.
+A slot whose every
+candidate is refused becomes an "emplacement écarté" (`_general_dictionary_
+pick` returning `None`) and the sweep moves on, so the whole grid is
+declared impossible only once no still-open slot can take a word at all,
+at any acceptance level (see right below). Within each sweep, a slot
+already deemed blocked (`blocked_targets`) is tried only after every other
+one. Each slot excludes every "Mots Défi"/theme word from its own candidate
+pool outright (any such word still present in its domain was necessarily
+already tried, across every slot in the grid, by one of the two tiers
+above) — falling back to the raw, unfiltered domain only if excluding both
+pools would leave nothing at all, so "Suivant" never gets stuck. The slots
+set aside this way come back as `excluded_cells` (`_slot_cells_of`, every
+cell of the slot, letters included — an "emplacement écarté" is a property
+of a whole emplacement, exactly what `Filler.excluded_zone_cells` reports
+for the automatic previews; reporting only the still-empty cells scatters
+the overlay into disconnected squares instead), threaded through `POST /api/
+interactive/step` into `frontend/static/script.js`'s `interactiveExcludedCells` and
+rendered as a yellow background (`.cell.white.interactive-excluded`,
+declared before `.interactive-impossible`/`.interactive-low` so a stronger
+signal wins the cell) — the same "emplacement écarté" notion, and the same
+colour, automatic generation's own previews already use.
+
+**Staged acceptance levels in Interactive mode**: `interactive_place_
+word` cannot express `_backtrack`'s own three-stage node (non-écarté
+slots, then released écarté ones, then `allow_breaking`) by recursing,
+since one "Suivant" click makes exactly one decision — so it re-runs its
+whole three-tier search, over the whole grid, once per acceptance level
+(`_placement_accepted`, `PLACEMENT_LEVEL_STRICT`/`_DISJOINT`/
+`_BREAKING`), threading `level` through `_find_priority_word_placement`
+and `_general_dictionary_pick`:
+
+- `PLACEMENT_LEVEL_STRICT` — only a candidate whose verdict is `None`;
+- `PLACEMENT_LEVEL_DISJOINT` — additionally `"other"` (a disjoint slot
+  left with no word), tolerated because one pre-existing impossible zone
+  elsewhere would otherwise stall "Suivant" for good;
+- `PLACEMENT_LEVEL_BREAKING` — additionally `"crossing"`, the one and
+  only exception to "never create an impossible emplacement"
+  (`DOC_ALGO/FR/Lexicon.md`, "case croisée bloquée"): once nothing else
+  can be placed anywhere, a well-filled grid carrying an impossible zone
+  — which "Nettoyer", a manual edit or "Finir la grille" then repairs,
+  the zone having to exist before it can be cleaned — beats a grid
+  declared impossible and left half empty.
+
+A whole level is exhausted, across all three tiers and every still-open
+slot, before the next is tried, so a stricter placement anywhere in the
+grid always outranks a more damaging one and "Mots Défi" keeps its
+precedence over the theme glossary and the general dictionary at every
+level; every slot set aside at one level is released at the next, exactly
+as `_backtrack`'s own stage 2 releases its écarté slots. A slot the sweep
+finally places on at a later level is dropped from `excluded_cells`
+rather than reported yellow. A candidate accepted at a tolerant level
+never counts against a tier's own give-up budget (`_register_challenge_
+word_break`/`_register_theme_word_break`), the same rule `_backtrack`
+applies to a word accepted under `allow_breaking`. `"crossing_blocked"`
+is refused at every level, so `interactive_place_word` still reports the
+grid impossible when every candidate of every still-open slot would cross
+an already-blocked emplacement.
 
 On the frontend, `interactiveNextBtn`'s click handler (`script.js`)
 replaces the whole `interactiveGrid` from `POST /api/interactive/step`'s
@@ -757,33 +1257,166 @@ else a "Suivant" click changed.
 
 **`GenerationCancelled`**/**`GenerationPaused`** are cooperative
 exceptions checked at palier boundaries, inside `_backtrack` (every
-`CANCEL_CHECK_INTERVAL` calls), inside `minimize_black_squares`'s
+`CANCEL_CHECK_INTERVAL` checks, see `Filler._periodic_checkpoints`
+below), inside `minimize_black_squares`'s
 removal loop, and between words during clue generation — no worker
 process is ever force-killed; a check simply returns/raises at its next
 natural checkpoint.
+
+**Live progress reporting during a still-running attempt** — two
+cooperative callbacks on `Filler`, both fired from inside `_backtrack`
+independently of whether a new record is ever reached, since `Filler.
+on_new_best` alone (fired only when `best_assigned_count` improves) can
+stay silent for tens of thousands of checks during a genuine plateau (see
+"Limites de la recherche" in `DOC_ALGO/FR/ReadMe.md`), which otherwise
+made a slow-but-alive search visually indistinguishable from a stuck one:
+`Filler.on_checks_progress` (every `CHECKS_PROGRESS_REPORT_INTERVAL=500`
+checks) reports the raw `checks` count into a `multiprocessing.Array`
+(`_worker_checks_progress`, one cell per concurrent slot of the current
+palier, `0..PARALLEL_ATTEMPTS-1`, every cell reset to 0 at the start of
+every palier) — each attempt writes only into the one slot (`checks_slot`,
+passed as a plain per-task argument alongside the array reference) it was
+dispatched into, a slot a freed worker's replacement attempt inherits
+(reset to 0 first) when reassigned mid-palier. The parent's own periodic
+"% budget consumed" status-line report (`BUDGET_PROGRESS_REPORT_INTERVAL_S`
+= 2s) reads the AVERAGE of every slot's own value, never the single
+highest one — a max-based reading let one struggling attempt (typically
+the one accumulating checks fastest, since a rejected candidate counts as
+a check the same as a productive one) pin the report at 100% on its own
+while every other attempt of the same palier was still comfortably below
+its own budget and genuinely improving the grids shown in the live
+preview — instead of the `best_state_queue` messages `on_new_best` alone
+produces. `Filler.on_live_state` (every
+`LIVE_STATE_HEARTBEAT_INTERVAL=5000` checks, coarser since it costs a
+real `build_partial_letters_grid` call) publishes the CURRENT `self.
+assignment` — which can be less complete than the last record, since
+backtracking freely retreats — onto the same `best_state_queue` as
+`on_new_best`, tagged `"kind": "heartbeat"`; `generate_grid`'s drain
+thread forwards a heartbeat straight to the live preview exactly like a
+real record, but never appends it to `best_state_buffer` (which feeds the
+end-of-palier candidate selection — a heartbeat must never compete there,
+since it can be a genuine regression relative to an already-published
+best). A heartbeat skips `impossible_zone_cells()`/`deadlock_zone_cells()`
+entirely (each iterates every open slot's own domain — too costly at this
+tighter cadence, the same cost profile responsible for a real, separately
+fixed slowdown) — its own tile simply shows no red/orange highlighting
+for the instant it's displayed.
+
+Every interval-throttled signal of the search (`cancel_event`,
+`on_checks_progress`, `on_live_state`, `batch_abandoned_event`,
+`attempt_done_event`, the optional unfillable-abandon check) lives in
+`Filler._periodic_checkpoints`, called both at `_backtrack`'s entry and
+right after every `self.checks += 1` of its candidate loop. Each fires via
+`Filler._checkpoint_due` — once at least its interval has ELAPSED since it
+last fired (tracked per signal in `_last_checkpoint_checks`), never on an
+exact `checks % N == 0` match: `checks` advances once per candidate, most
+candidates are rejected without recursing, so an entry-only exact-match
+test was skipped over for arbitrarily long stretches — a worker then
+published no heartbeat, no progress, and noticed neither "Stop" nor a
+sibling's early-stop signal, while its live tile stayed blue and frozen.
+
+Every live-preview example dict (`on_live_preview`'s own `examples`
+argument) also carries `budget_percent` — that one process's own share of
+`checks_progress` (via `seed_to_checks_slot`, mirrored by `seed_to_
+lineage`), expressed as a percentage of `resolved_deadline_checks` and never capped
+at 100 (the elastic budget below lets an attempt run past its own
+deadline; the palier-wide average is uncapped too), shown
+on the live tile's own stats line next to the pencil icon. Unlike the
+parent's palier-wide average above, this is read straight off the
+process's own array slot, unaveraged — a "computing" entry gets it fresh
+on every publish (via `current_seed_to_checks_slot_ref`, mirroring
+`current_seed_to_lineage_ref`'s own reference-publishing convention) AND
+every `BUDGET_PROGRESS_REPORT_INTERVAL_S` from the drain thread
+(`_refresh_computing_budget_percents`, resolving each tile by its process
+number through both refs, since a cycle-start tile carries no current
+seed), republishing the preview when a value changed; a
+"succeeded"/"failed"/"interrupted" entry's own value is read once, right when that
+attempt's final live tile is built, before the mid-palier worker-
+reassignment logic resets that same array slot to 0 for whichever new
+attempt inherits it — so the frozen tile keeps the real percentage that
+specific attempt actually consumed. Every cycle-start ("pattern")
+preview starts at 0%, since `checks_progress` is reset to all zeros
+for the new palier before that preview is even built.
+
+A finished attempt's frozen tile ("succeeded"/"failed") carries its
+`attempt_id`, and the drain thread drops any record or heartbeat of that
+same attempt that reaches it afterwards: a worker queues its last messages
+on `best_state_queue` just before returning, and the harvest loop can get
+the result through the executor first, so without this check the late
+message turned the finished tile back to "computing" for good.
+
+**Elastic per-attempt budget** — `Filler._deadline_reached_without_
+extension` is the single source of truth both of `_backtrack`'s own
+deadline checkpoints consult (the cheap one at the top of the function,
+and the per-candidate one inside the `for w in cands:` loop, which is
+the one that actually bounds a slot whose candidates mostly get rejected
+without ever recursing back into the top-of-function check). For a
+caller with no sibling visibility (`_checks_slot`/`_sibling_checks_
+progress`/`_sibling_attempt_active` all `None` — interactive mode,
+`minimize_black_squares`, a solitary CLI run), this is the plain,
+unconditional "budget's up" rule, unchanged. For a palier's own parallel
+attempts, the budget is elastic instead: an attempt whose own `checks`
+has exceeded its `deadline_checks` keeps searching past it as long as
+some sibling attempt of the same palier is still genuinely racing
+towards its own deadline — stopping this one right now would just leave
+its CPU core idle until that slower sibling finishes anyway, since the
+palier's own harvesting loop already waits for every one of its futures
+regardless. `Filler._siblings_still_racing` answers this by reading two
+`multiprocessing.Array`s shared for the whole palier: `checks_progress`
+(one cell per concurrent slot, each attempt's own live `checks` count —
+already existed for the palier-wide average above) and the new
+`attempt_active` (one byte per slot, 1 while that slot's own attempt is
+genuinely still running, 0 once it returns or before it's ever
+dispatched — `checks_progress` alone can't tell "still racing" apart
+from "already stopped early with a low, now-frozen count"). Both are
+reset to all zeros at the start of every palier; `_pattern_attempt`/
+`_pattern_continue` set their own `checks_slot` cell of `attempt_active`
+to 1 right before calling `try_fill` and back to 0 in a `finally` once it
+returns, whatever the outcome.
+
+The "keep going" verdict is checked immediately the first time the
+deadline is crossed (`self.checks += 1` in the per-candidate loop makes
+this exact-match reliable there), then only every `CHECKS_PROGRESS_
+REPORT_INTERVAL` checks past that point (the same cadence every
+sibling's own `checks_progress` cell is itself refreshed at, so checking
+more often couldn't see fresher data regardless) — not on every check
+past the deadline, keeping the extension's own cost negligible. Once a
+periodic re-check finds no sibling still racing, the verdict flips to
+"stop" and STAYS there for the rest of this attempt
+(`Filler._deadline_extension_denied`) — this stickiness is essential,
+not an optimization: ordinary backtracking only ever reacts to a `False`
+return by trying the NEXT candidate at that same slot, so a transient,
+non-sticky "stop" would reject only one candidate and let the loop place
+a different one right after, on a check count that no longer falls on a
+checkpoint — never actually unwinding the search the way the plain,
+irreversible `self.checks > deadline_checks` condition this replaces
+always did (confirmed live: an early version without the sticky flag let
+an attempt with no racing sibling run to full, unconstrained completion
+instead of stopping within a handful of checks past its own deadline).
 
 **Interactive-authoring module functions** (backing the web UI's
 "Interactif" word-by-word mode, all operating on a plain `grid`/`rows`/
 `cols`/`index` without any of the parallel-attempt machinery above):
 `interactive_place_word` (places exactly one more word — no backtracking
-for an ordinary candidate, reusing the same 8-level slot-selection
+for an ordinary candidate, reusing the same 9-level slot-selection
 cascade, except for the bounded "Mots Défi" crossing-safety retry
 described above, the one case where several (word, slot) combinations
 genuinely are tried in sequence before this call commits to one; before
 selecting a slot it first runs the same "Floating-black-cell widening"
 mechanism automatic generation's own `_pattern_attempt` uses (see that
 section above) to try to carve out a right-sized slot for any "Mots
-Défi"/theme word with no matching-length slot yet, passing this call's
+Défi" word (never a theme word) with no matching-length slot yet, passing this call's
 own already-placed letters as `locked_letters` so an existing crossing
 letter can never be destroyed; its own word draw prefers an unused,
 crossing-safe "Mots Défi" word over an unused theme word, which in turn
 comes before every ordinary candidate — and, once no challenge word can
 be safely placed this round, the theme-glossary/general-dictionary
-fallback at its one chosen slot is itself crossing-safety-aware too (see
-"Crossing-safety retry, all three candidate tiers" above): it prefers
-whichever crossing-safe candidate ranks highest within the applicable
-tier, only accepting one that breaks a crossing if nothing in either
-tier avoids it. `challenge_words`, a plain
+fallback is itself crossing-safety-aware too (see "Crossing-safety retry,
+all three candidate tiers" above): the whole three-tier search is re-run
+over the whole grid once per acceptance level (see "Staged acceptance
+levels in Interactive mode" above), so a candidate that creates an
+impossible emplacement is only ever placed once no tier, at any
+still-open slot, has anything safer to offer. `challenge_words`, a plain
 frozenset of bare uppercase words, built by `POST /api/interactive/step`'s
 own handler from `InteractiveStepRequest.challenge_words` (the author's
 own typed spelling, accents/case kept — see that field's own docstring)
@@ -865,14 +1498,39 @@ still-empty white cell it runs `sample_letter_biases` (`force_
 fraction=0.0`, so nothing is ever forced into the grid — see "Les
 graines" above) with `known_letters` built from the grid's own
 already-placed letters, and returns the single most common letter of
-each cell's own `letter_scores` tally (`[[row, col, letter], ...]`,
-omitting a cell whose every crossing slot is already impossible and so
-contributes nothing to the tally). `frontend/static/script.js` renders
-each returned letter as a light-gray overlay `<span>`
-(`.interactive-stat-letter`) inside the otherwise-still-empty cell,
-alongside the existing `.cell-number` overlay — cleared, like every
-other diagnostic in this panel, the moment the player edits the grid by
-hand (`clearInteractiveDiagnostics()`).
+each cell's crossed tally (`_most_probable_letter` over
+`_crossed_letter_counts`: letters both the across and the down slot
+observed, each at the lower of its two counts — `[[row, col, letter],
+...]`, omitting a cell whose every crossing slot is already impossible
+and so contributes nothing to the tally, or whose two directions share
+no letter). `frontend/static/script.js` renders each returned letter as
+a light-gray overlay `<span>` (`.interactive-stat-letter`) inside the
+otherwise-still-empty cell, alongside the existing `.cell-number`
+overlay. "Stats" is a two-state toggle (`.toggle-btn`, `interactiveStatsOn`,
+on by default): while on, `renderInteractive()` calls
+`scheduleInteractiveStatsRefresh()`, which refetches the letters
+(debounced, `INTERACTIVE_STATS_DEBOUNCE_MS`) whenever the grid on screen
+differs from the one they were fetched for (`interactiveStatsGridKey`,
+reset by `clearInteractiveDiagnostics()`); a response arriving for a grid
+no longer on screen is dropped.
+
+The automatic-generation previews carry the same letters: `Filler.
+stat_letters(assignment)` returns the most likely letter of every white
+cell `assignment` leaves undetermined (no assigned word, locked letter or
+seed on it), read from the live crossed tally;
+`Filler.best_stat_letters` snapshots it whenever `best_assignment` is
+recorded (the tally follows the CURRENT assignment and is unwound with
+it), read back through `best_stat_letters_for()`, which drops any cell
+`_close_implied_slots` has filled since. `try_fill` puts it in
+every preview dict as `stat_letters` — `_publish_new_best` (the record's
+snapshot), `_publish_live_state` (the current assignment's), and the
+final failure diagnostics (the record's) — and `generate_grid` forwards it
+on the live tiles (computing, and the "failed" whitelist) and on the
+`pattern_attempt_failed`/`pattern_found` key step (`last_examples`),
+never on cycle-start, post-cleanup or `minimizing` previews.
+`renderAttemptPreview()` shows each as a `.preview-stat-letter` span in
+a still-empty (".") cell, only while "Voir" (`showPreviewLetters`) is on,
+like the real letters.
 
 "Finir la grille"/"Finir la zone" reuses the ordinary automatic pipeline
 via `permanent_locked_letters`/`permanent_black_cells` (every already-
@@ -939,7 +1597,7 @@ the reply incrementally (server-sent-events style) and strips `<think>...
 
 ### `grid_store.py` — persistence
 
-Three independent filesystem stores, one JSON file shape shared with the
+Four independent filesystem stores, one JSON file shape shared with the
 `generate_grid()` result dict plus metadata:
 
 - **`GRID_STORE/<language|bilingual>/`** — one file per published grid,
@@ -957,10 +1615,53 @@ Three independent filesystem stores, one JSON file shape shared with the
   the player to hit "Précédent" first purely to hand over a "before"
   snapshot. Every reader of this record keeps reading the top-level fields
   for the CURRENT state; `previous` is never itself the active session
-  state a resume rebuilds from.
+  state a resume rebuilds from. A `diagnostics` field pairs with it,
+  holding everything the editable grid was SHOWING at that save beyond its
+  own letters — `impossible_cells`/`deadlock_cells`/`low_candidate_cells`/
+  `excluded_cells`/`invalid_cells`/`theme_cells`/`challenge_cells`/`zone_
+  cells`, the "Stats" letters (`stat_letters`, `[row, col, letter]`
+  triples), and `last_placed` (the `placed` object of the last "Suivant"
+  step: word, cells, direction, `from_theme`/`from_challenge`) — sent by
+  the client on every autosave and on "Sauvegarder"/"Publier"
+  (`InteractiveSaveWorkRequest`/`InteractiveSaveRequest.diagnostics`,
+  `None` from any caller with no display of its own). None of it is
+  recomputable from the saved grid: an "emplacement écarté" in particular
+  exists only in the one `POST /api/interactive/step` response that
+  reported it, since `interactive_place_word` rebuilds that list from
+  scratch on every click (see "Priority-tier search in Interactive mode"
+  above). With `previous["diagnostics"]`, a record therefore holds both
+  displayed states — the one on screen and the one right before the last
+  click. Diagnostic-only, and absent from `_iter_stored_grid_work`'s own
+  "Créations" listing whitelist.
 - **`GRID_GAME/<grid_id>/<pseudo-slug>.json`** — one file per (grid,
   player) pair holding that player's own typed letters + elapsed timer.
   `save_grid_game`/`get_grid_game`.
+- **`STOP_DUMP/`** — one file per automatic-generation job interrupted via
+  the "Stop" button, named `<timestamp>_<pseudo-slug>_<job_id>.json`,
+  written once by `save_stop_dump`. `backend/app.py`'s `_run_generate_job`
+  calls it from its own `except GenerationCancelled:` handler, since
+  nothing in `crossword_gen.py` catches that exception to build a final
+  snapshot itself — the dump instead reuses `JOBS[job_id]`'s own
+  already-published state: `live_preview` (the continuously-overwritten,
+  one-entry-per-still-running-attempt snapshot list the attempt-preview UI
+  itself already renders live — each entry's `example_grid` plus its
+  `impossible_cells`/`deadlock_cells`/`excluded_cells`/`forced_cells`/
+  `locked_cells`/`theme_cells`/`challenge_cells`, i.e. every cell-state/
+  slot-state overlay the live preview draws — each entry also carrying,
+  under its own `previous` field, the snapshot that exact tile replaced,
+  one step only and `None` for a process's own first tile, the same
+  convention `GRID_WORK/` already uses), `examples_history` (every
+  completed palier so far, same shape, for context), plus `step`/
+  `request`/`resume_state` and the job id/pseudo/timestamp. Best-effort: a
+  write failure is logged and never turns a clean Stop into an error.
+  Both states of a tile name the channel that published them (`reason`:
+  a new record, a heartbeat, a cycle start, a just-finished attempt) and
+  the attempt they belong to (`attempt_id`), so a difference between them
+  can be attributed to a genuine search step rather than to a change of
+  publication channel or of attempt — the two channels publish different
+  overlay sets (a heartbeat skips the crossing-deadlock computation
+  entirely, see "Live progress reporting during a still-running attempt"
+  above).
 
 ### `svg_export.py`
 
@@ -1006,6 +1707,49 @@ for the "Dictionnaire" panel — distinct from `gloss_lookup.py`'s single-
 lemma lookup), `secret_store.py` (`verify_or_claim`: PBKDF2-hashed
 nickname secret words under `SECRET/`, anti-pseudo-theft only, not a
 real auth system).
+
+## Java back end (`backend_java/`)
+
+A port of `backend/` to Java 21 (package `falcon`, one Maven module, the
+only third-party dependency being Jackson for JSON). Module mapping:
+`app.py` → `App.java` (routes, jobs, queues, schedulers) on top of
+`Web.java` (JDK `HttpServer`, virtual threads, FastAPI-style `{"detail":
+...}` errors and 404/405/422), `Body.java`/`GenReq.java` (Pydantic-style
+validation) and `Job.java` (one `JOBS` entry, mutated and serialized under
+its own lock); the theme-glossary/Qdrant part of `app.py` → `Themes.java`;
+`clues.py` → `Clues.java`; `chatbot.py` → `ChatBot.java` (SSE streaming);
+`grid_store.py` → `GridStore.java`; `svg_export.py` → `SvgExport.java`;
+`embedder.py`/`qdrant_store.py`/`system_info.py`/`gloss_lookup.py`/
+`inflection_lookup.py`/`example_sentences.py`/`dictionary_lookup.py`/
+`secret_store.py` → one class each; `crossword_gen.py` → package
+`falcon.gen` (`Words`: lexicon loading, `DualIndex`/`PW`, slot candidates;
+`Grids`: structure, slots, black-cell patterns; `Filler`: the CSP solver;
+`Fill`: seeding, `tryFill`, minimization, overlays, content score;
+`Cleanup`: impossible-zone analysis and every cross-palier repair, widen/
+shorten; `Generator`: the palier loop and its CLI; `Interactive`: every
+`interactive_*` function).
+
+Representation choices that differ from Python without changing behavior:
+a cell is one `int` (`row << 16 | col`, `Cells`), a slot an `int[]`; each
+length's words are indexed by (position, letter) as `BitSet`s over word ids
+(`LenIndex`), so a slot's domain is a `Dom` (the whole length, or a
+`BitSet`) and constraint intersection is a bitwise AND; letter tallies are
+`int[]` indexed by a process-wide letter registry (`Alpha`). A palier's
+`PARALLEL_ATTEMPTS` attempts run as threads of one fixed pool (256 MB
+stacks for the recursive search), sharing the read-only index; the
+cancel/"attempt done" events are `AtomicBoolean`s, `checks_progress`/
+`attempt_active` are `AtomicLongArray`/`AtomicIntegerArray`, the
+best-state queue a `BlockingQueue`, and each search thread lowers its own
+priority by `CROSSWORDFALCON_GENERATION_NICE` (`renice` of its Linux thread
+id). Loaded lexicons + indices are cached per (wordlist, difficulty) for
+the process lifetime. RNGs are seeded per attempt like Python's, but with
+Java's generator, so a given seed does not reproduce Python's exact grid.
+The daily RSS/SCRAPP refresh runs the Python scrapers through `.venv`.
+Python text semantics are reproduced where Java differs (`Py.strip`/
+`Py.split`: Unicode whitespace; `Py.fmt`/`Py.round`: half-even rounding of
+the exact binary value; Unicode-aware regexes), which keeps every
+deterministic output — endpoint JSON, SVG/PDF sheets, LLM prompts, response
+filters — byte-identical to the Python back end.
 
 ## Frontend (`frontend/`)
 
@@ -1118,7 +1862,9 @@ local embedding server 3003, a second interactive-dedicated LLM instance
 `env_default.sh` and derived into every URL built from them.
 `CROSSWORDFALCON_PARALLEL_ATTEMPTS` overrides `crossword_gen.py`'s
 per-palier worker count (default: CPU count). `CROSSWORDFALCON_FRONTEND_
-WORKERS` (default 10) is the frontend's own uvicorn `--workers` count —
+WORKERS` (default 10) is the frontend's own uvicorn `--workers` count,
+and `CROSSWORDFALCON_FRONTEND_HOST` (default `0.0.0.0`; `127.0.0.1` keeps
+the UI local to this machine) the interface it binds to —
 the backend must never be given `--workers`, since its `JOBS`/queues/
 schedulers live in one process's memory. `CROSSWORDFALCON_EXPERIMENTAL_
 NOTICE` (`backend/app.py`'s `EXPERIMENTAL_NOTICE`, on by default) toggles
@@ -1129,11 +1875,23 @@ the `project-best-practices` SKILL's "Ports and environment variables"
 section for the full variable list and the dual-GPU LLM routing scheme.
 
 - **`Install.sh`** — installs `rsvg-convert` (runtime dependency), sets
-  up the Python venv, and interactively configures which local LLM
-  engine/model to run based on detected hardware.
+  up the Python venv, installs a JDK 21 + Maven (system package manager,
+  or a user-local Temurin JDK/Apache Maven under `~/.local` without root)
+  and builds the Java back end, and interactively configures which local
+  LLM engine/model to run based on detected hardware.
 - **`run_Falcon.sh`** — launches the backend (single process) and
   frontend (multiple workers), stopping any prior listener on those
-  ports first, including orphaned CSP-worker child processes.
+  ports first, including orphaned CSP-worker child processes, and any
+  Java back end started from this checkout (a `java` process running
+  `crosswordfalcon-backend.jar` whose working directory is this checkout).
+- **`run_FalconJ.sh`** — the same launcher for the Java back end: builds
+  the jar if a source is newer than it (`backend_java/build.sh`), stops the
+  listeners on both ports and any Python back end started from this
+  checkout (`uvicorn backend.app:app`, same working-directory scoping),
+  then starts `java -jar backend_java/target/crosswordfalcon-backend.jar
+  --port $CROSSWORDFALCON_BACKEND_PORT` (extra JVM options from
+  `CROSSWORDFALCON_JAVA_OPTS`) plus the same Python middleware. Both
+  launchers write to `logs/backend.log`.
 - **`run_llm.sh`** — launches the default local clue-generation LLM
   server (llama.cpp's `llama_cpp.server`), or dispatches to `run_sglang.
   sh` when `LLM_ENGINE=sglang`. Supports dual-GPU (two independent
@@ -1166,7 +1924,12 @@ python3 backend/crossword_gen.py --width 15 --height 15 --difficulty hard --seed
 python3 backend/crossword_gen.py --wordlist data/wordlist_en_full.tsv
 
 # Web UI: run both servers, then open http://127.0.0.1:3000
-./run_Falcon.sh
+./run_Falcon.sh            # Python back end
+./run_FalconJ.sh           # or the Java back end (stops the Python one)
+
+# Java back end: build / CLI generator
+backend_java/build.sh [--force]
+java -cp backend_java/target/crosswordfalcon-backend.jar falcon.gen.Generator --width 15 --height 10 --deadline-checks 1000 --seed 2
 
 # Local LLM for clue generation (needed for the web UI, not the bare CLI)
 pip install -r requirements-llama.txt

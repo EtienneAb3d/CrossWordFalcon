@@ -120,13 +120,20 @@ stop_port() {
     fi
 }
 
+# Build the jar first (no-op when already up to date), before stopping
+# anything: a build failure then leaves whatever is currently running
+# untouched.
+BACKEND_JAR="backend_java/target/crosswordfalcon-backend.jar"
+backend_java/build.sh
+JAVA_BIN="$(backend_java/build.sh --print-java)"
+
 stop_port "$BACKEND_PORT"
 stop_port "$FRONTEND_PORT"
 if [ "$HTTPS_ENABLED" -eq 1 ]; then
     stop_port "$FRONTEND_HTTPS_PORT"
 fi
 
-# The Java back end (run_FalconJ.sh) is the same server in another
+# The Python back end (run_Falcon.sh) is the same server in another
 # language: stop any instance of it started from THIS checkout, even on a
 # port other than $BACKEND_PORT, so only one back end version runs at a
 # time. Scoped to this checkout's own directory (the process's working
@@ -158,16 +165,18 @@ stop_checkout_processes() {
     return 0
 }
 
-stop_checkout_processes "crosswordfalcon-backend.jar" "java"
+stop_checkout_processes "uvicorn backend.app:app" "uvicorn|python[0-9.]*"
 
-echo "Starting back end on port $BACKEND_PORT..."
-# `nohup` alone only ignores SIGHUP — it doesn't detach from the shell's job
-# table, so some shells/terminals still signal it on exit. `disown` removes
-# it from that table too, and stdin is redirected from /dev/null since a
-# fully detached process has no legitimate terminal to read from — together
-# this is what lets the server keep running after the launching shell/
-# terminal closes, not just across a background `&`.
-nohup uvicorn backend.app:app --port "$BACKEND_PORT" < /dev/null > "$BACKEND_LOG" 2>&1 &
+echo "Starting Java back end on port $BACKEND_PORT..."
+# Same detached launch as the Python back end (nohup + disown + stdin from
+# /dev/null). Single JVM process, like the Python back end: JOBS, the
+# GRID/CLUES queues and the schedulers live in its memory. The parallel
+# grid-search attempts run as threads inside it (CROSSWORDFALCON_PARALLEL_
+# ATTEMPTS), so stopping this one process stops every attempt.
+# CROSSWORDFALCON_JAVA_OPTS (env.sh) passes extra JVM options (e.g. -Xmx8g).
+# shellcheck disable=SC2086
+nohup "$JAVA_BIN" ${CROSSWORDFALCON_JAVA_OPTS:-} -jar "$BACKEND_JAR" --port "$BACKEND_PORT" \
+    < /dev/null > "$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 disown "$BACKEND_PID"
 
@@ -197,7 +206,7 @@ fi
 
 LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || (hostname -I 2>/dev/null | awk '{print $1}') || true)
 
-echo "Back end started (pid $BACKEND_PID, log: $BACKEND_LOG)"
+echo "Java back end started (pid $BACKEND_PID, log: $BACKEND_LOG)"
 echo "Middleware started (pid $FRONTEND_PID, log: $FRONTEND_LOG)"
 echo "UI available at http://127.0.0.1:$FRONTEND_PORT (this machine)"
 if [ -n "$LAN_IP" ] && [ "$FRONTEND_HOST" != "127.0.0.1" ]; then

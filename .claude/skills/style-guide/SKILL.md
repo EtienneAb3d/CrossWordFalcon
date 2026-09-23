@@ -3704,14 +3704,20 @@ end through the real running API (interactive start/step/save,
   no real letter yet), so the suggested letter needs its own element to
   render at all — plain unstyled button, same shared accent-blue look as
   "Nettoyer"/"Impossibles"/"Vérifier" beside it, no dedicated button CSS.
-  **Visually confirmed** with Playwright/Chromium (permanent rule 4): a
-  real Interactive-mode session (6×6, French) — clicking "Stats" on a
-  grid with 25 still-empty cells populated all 25 with a gray suggested
-  letter, each one's computed `color` matching `--stats-fg`
-  (`rgb(163, 163, 163)`) exactly, visibly lighter than the black/green
-  already-placed letters in the same grid; a follow-up edit clears the
-  suggestions the same way every other diagnostic overlay in this panel
-  does (`clearInteractiveDiagnostics()`).
+  The button is a two-state `.toggle-btn`, `active` by default (the
+  same pressed look as "Voir"/the direction toggles), so the letters are
+  on screen from the start and follow every grid change; clicking it off
+  hides them.
+- **Preview statistical letters** (`.preview-stat-letter`): the same
+  `--stats-fg` light gray, in each still-empty cell of an automatic-
+  generation preview grid (live tiles and an attempt's key step), shown
+  only while "Voir" is on, like the real letters; normal weight (400)
+  rather than the Interactive grid's 600, since the preview cells are
+  tiny (0.6rem) and a bold gray letter reads as a real one there.
+  The letters really placed by the search are, conversely, bold (700,
+  the base `.attempt-preview-grid .cell` weight, up from 500), at the
+  user's request for a clearer split from the gray statistical ones;
+  theme/challenge letters keep their heavier 800.
 
 - **"Eye" toggle button** on every "Mots"/"Croisés"/"Début"/"Fin" results
   block, at the user's explicit request: "ajouter un bouton icône 'voir'
@@ -4062,3 +4068,313 @@ end through the real running API (interactive start/step/save,
   an actual browser** — same tooling limitation noted throughout this
   file; verified structurally (JS syntax check, CSS brace-balance check)
   and via the real backend data reaching the preview `examples`.
+
+- **Live attempt-preview tile borders** (`.attempt-preview-grid.live-
+  computing`/`.live-succeeded`/`.live-failed`), at the user's explicit
+  request: "encadrer en bleu les étapes qui calculent encore quelque
+  chose. encadrer en jaune les étapes qui sont arrêtées parce qu'elle ont
+  réussi. encadrer en orange les étapes qui sont arrêtées parce qu'elle
+  sont arrivée en état échouées." Same 3px-border-on-the-whole-tile
+  technique as the pre-existing `.attempt-preview-best` green outline
+  right above it in `style.css` (a tile-level marker, not a per-cell
+  overlay). "Computing" reuses `--accent` directly (the same blue
+  `.forced`'s own cell border already uses — genuinely the same "in
+  progress" meaning, no new token needed); "succeeded"/"failed" get two
+  new dedicated tokens, `--live-succeeded` (`#eab308`, yellow) and
+  `--live-failed` (`#f97316`, orange) — deliberately not reusing `--best`
+  (green, an unrelated "overall batch winner" concept) or `--locked`
+  (orange, an unrelated "carried-over letter" concept), same
+  independently-tunable-tokens-per-concept convention already established
+  for `--finish-locked` vs. `--locked` elsewhere in this file. Only ever
+  set on the *live* channel (`script.js`'s `renderLivePreview()`, backed
+  by a new `live_status` field backend/crossword_gen.py's `on_live_preview`
+  publishes — see CLAUDE.md/`project-best-practices`) — a `previewHistory`
+  entry never carries `live_status` at all, so none of these three classes
+  can ever apply there; `renderAttemptPreview()` reads the field the same
+  `|| []`-style optional-and-no-op way as every other preview overlay.
+  Verified live end to end: a direct, non-mocked `generate_grid()` call
+  (in-process, `on_live_preview` collecting every publication) observed
+  all three `live_status` values in real use on a genuine 6×6 search —
+  2329 "computing", 41 "succeeded", 178 "failed" — confirming the
+  backend side reaches the frontend-consumed shape correctly. **Not yet
+  visually confirmed in an actual browser** — same tooling limitation
+  noted throughout this file; verified structurally otherwise (`py_
+  compile`, a CSS brace-balance check).
+
+- **`.attempt-preview-grid .cell.white.excluded`** — a pastel-yellow
+  background (`--excluded-bg: #fef08a`) for cells of a slot this
+  attempt's own search won't try this round at all (backend's
+  `excluded_slots`/`_crossing_excluded_slots`, carried over from a
+  previous cycle's own diagnosis, never retried yet), at the user's
+  explicit request: "montrer en fond jaune les emplacements
+  temporairement écartés des recherches (car impossible détecté, mais
+  non définitif)." Own dedicated token rather than reusing `--live-
+  succeeded` (also yellow, but an unrelated "this attempt tile
+  succeeded" concept — same independently-tunable-tokens convention as
+  `--finish-locked` vs. `--locked`). Deliberately the WEAKEST signal in
+  the whole cascade — being excluded is a scheduling decision, not a
+  confirmed dead end (the slot's domain may well be genuinely fillable
+  again by now) — so `.excluded` is declared FIRST in style.css, before
+  `.low-candidates`/`.noise`/`.impossible`/`.deadlock`: the backend
+  never subtracts a freshly-confirmed-impossible cell out of its own
+  `excluded_cells` list, it just relies on this CSS cascade order to let
+  the stronger, more severe signal win the background whenever a cell
+  carries both. Backend: `Filler.excluded_zone_cells()` (mirrors
+  `impossible_zone_cells()`/`deadlock_zone_cells()`'s own shape) is a
+  plain set lookup, no domain iteration — cheap enough for every one of
+  `try_fill`'s live callbacks, including the otherwise deliberately
+  bare-bones heartbeat. `renderAttemptPreview()` reads the resulting
+  `excluded_cells` field the same `|| []`-style optional-and-no-op
+  convention as every other preview overlay.
+
+  **Scoped to one attempt's own lifecycle, not to a display channel**,
+  at the user's own explicit framing, across three rounds of correction:
+  (1) "les cases jaune ne s'affichent que sur les grilles clefs (fin
+  d'étape)... on ne doit voir des cases jaunes que sur les grilles Live,
+  et aucune sur les grilles de fin d'étape" — a first version had
+  already stripped `excluded_cells` down to only `try_fill`'s two live
+  callbacks (`_publish_new_best`/`_publish_live_state`) and the
+  harvesting loop's own "just finished" live tile, hard-coding `[]` on
+  every navigable `previewHistory` entry (cycle-start *and*
+  `pattern_attempt_failed`/`pattern_found`). (2) That version was
+  reported as showing red (`.impossible`) constantly but yellow never —
+  root-caused with Playwright network/DOM capture directly against the
+  real polling pipeline (not a synthetic data injection): `pollJob`/
+  `advanceLiveDisplay` (`script.js`) prioritizes draining any
+  `previewHistory` backlog (via `showNextPreview()`) over ever rendering
+  the bare `live_preview` channel, and in a fast mode (many paliers/
+  second) that backlog essentially never empties — so the live channel
+  alone was almost never the thing actually reaching the screen, even
+  though the backend was genuinely publishing `excluded_cells` (236 of
+  38 real network responses carried it in one clean, uncontended run).
+  Fixed by restoring it on `last_examples` too (`d.get("excluded_cells",
+  [])`), which — unlike the ephemeral live channel — reliably reaches
+  the screen during exactly this kind of backlog. (3) The user then
+  clarified this isn't merely a display-priority fix but a real
+  semantic boundary: "les exclusions temporaires ne sont valables que
+  pendant une étape... réinitialisées en fin d'étape, avant la phase
+  d'optimisation... elles peuvent éventuellement être visibles sur
+  l'étape clef avant optimisation, mais plus ensuite" — so `last_
+  examples` (this same attempt's own concluding snapshot, published
+  before `_optimize_before_cleanup`/cleanup run) is exactly the named
+  exception, while the NEXT attempt's own cycle-start preview
+  (`pattern`/`pattern_generated`) stays hard-coded `[]` regardless of
+  whether it inherits the very same `excluded_slots` verbatim (a
+  `_excluded_cells_from_preview_state()` helper was added, then removed
+  again, for this branch across these corrections — no other caller
+  survives, per this project's no-dead-code convention). Final shape:
+  real on exactly `try_fill`'s two live callbacks, the harvesting loop's
+  live tile, and `last_examples`; always `[]` on cycle-start previews
+  and on a fully successful `minimizing` step.
+
+  Verified end to end at each stage: a real, non-mocked `generate_grid()`
+  run (15×10/hard, seed 7) produced entries carrying non-empty
+  `excluded_cells` at the raw data level throughout. **Visually
+  confirmed** with Playwright/Chromium (permanent rule 4): a real
+  captured example (130 excluded cells, 91 also impossible) injected via
+  `renderAttemptPreview()` rendered `rgb(254, 240, 138)` (`--excluded-bg`)
+  on excluded-only cells and `rgb(254, 202, 202)` (`--incorrect-bg`) on
+  cells both excluded and impossible (confirming the CSS cascade lets
+  red win), every 1px grid-line border intact throughout; and, after the
+  `last_examples` fix, a real end-to-end run through the actual polling
+  pipeline (no injected data) on a clean, uncontended server showed 459
+  `.excluded` cells genuinely rendered in the DOM, screenshotted directly
+  from the running page — yellow, red, and orange cells all visible
+  together with clean borders throughout every tile.
+
+  A separate report from the same round — "presque toutes les grilles
+  Live ont des lignes horizontales qui manquent" (missing/erased
+  horizontal grid lines) — was never reproduced across any of these
+  controlled tests (heavy yellow/red coverage included, every row's own
+  1px separator stayed intact) and was not mentioned again once real
+  yellow cells were confirmed visible; left as an unconfirmed, likely
+  stale report (probably observed against a since-superseded intermediate
+  version) rather than a standing known issue.
+
+  **Round 4**: reported again, this time with a screenshot showing every
+  tile's own impossible (pink/red) zones but genuinely zero yellow
+  anywhere, plus the real mechanism: "dans le mécanisme, les emplacements
+  impossibles deviennent temporairement écartés des recherches, et
+  doivent s'afficher en jaune." This named the wrong backend source all
+  along: `excluded_slots`/`_crossing_excluded_slots` (cross-palier
+  carry-forward, comparatively rare) was never what the user meant —
+  `Filler._impossible_this_attempt` is: a set `_backtrack` itself
+  maintains live, adding a slot the instant its domain first goes fully
+  dry, deprioritizing it in slot-selection for the rest of that one
+  attempt even once backtracking later makes it viable again (see
+  CLAUDE.md) — a much more frequent, `try_fill`-node-level event that
+  correlates directly with ordinary red "impossible" moments, not the
+  much rarer palier-boundary carry-forward alone. `Filler.excluded_zone_
+  cells()` gained an `assignment=None` parameter and now unions both
+  sources, filtering `_impossible_this_attempt` to slots still
+  unassigned in that snapshot (a slot later filled via a different path
+  must never show this overlay over its own real letters) — every call
+  site updated to pass the right snapshot (`best_assignment` for
+  `_publish_new_best`/the final diagnostics, `current_assignment` for
+  `_publish_live_state`). No CSS/JS change needed — the same `.excluded`
+  class and cascade priority already handled the (now much more common)
+  overlap with `.impossible` correctly.
+
+  Verified quantitatively before chasing a screenshot: on one clean,
+  uncontended real generation, 134 `excluded_cells` occurrences turned up
+  across just 8 attempts (was a handful before, confined to cross-palier
+  retries). A direct DOM-level set comparison in a real browser session
+  (`.cell.white.excluded` vs. `.cell.white.impossible`) found real,
+  substantial non-overlap — one sample: 115 excluded, 118 impossible, 76
+  in both, 39 excluded-only — confirming yellow-only cells (not just
+  yellow-under-red) genuinely occur. **Visually confirmed** with
+  Playwright/Chromium (permanent rule 4): a tight screenshot of one
+  isolated attempt-preview tile shows two clean horizontal bands of pure
+  yellow (`--excluded-bg`), visually distinct from a separate pink/red
+  vertical `.impossible` band elsewhere in the same grid, every cell
+  border intact.
+
+- **Per-process budget-consumption percentage** added to each live
+  attempt-preview tile's own stats line (`.attempt-preview-stats-text`),
+  at the user's explicit request: "Afficher le taux de budget consommé
+  par le process sur la ligne d'info de chaque grille Live (à gauche du
+  bouton icône crayon)." No new CSS: the percentage is a plain text
+  suffix appended to the same dimmed `statsText` span already holding
+  "X % noir, Y % rempli, Z % injouable" — still left of the pencil button
+  (a sibling of `statsText`, not a descendant, per the existing opacity-
+  isolation split documented above), so it reads as one more clause of
+  the same secondary-stat line rather than a new visual element. Only
+  ever present on the live channel (`typeof budgetPercent === "number"`,
+  a no-op elsewhere) — `budget_percent` rides alongside `live_status` on
+  every live-preview example dict (see CLAUDE.md's own "Live progress
+  reporting" section for the backend mechanism: each process's own share
+  of `checks_progress`, unaveraged, unlike the palier-wide status-line
+  percentage that already existed). New `attemptPreviewBudgetPercent(percent)`
+  i18n function in all 6 languages, formatted as a trailing " — N%"
+  clause with no other wording (fr with the language's own space-before-
+  `%` convention, matching `attemptPreviewStats`'s own per-language
+  spacing already established) — the word "budget" was tried first, then
+  removed at the user's own explicit follow-up request, matching this
+  project's own pre-existing convention for the palier-wide averaged
+  percentage on the status line (`DOC_ALGO/FR/ReadMe.md`'s own "Pourcentage
+  de budget affiché en direct" section already avoids that word for a
+  French-speaking user, for whom "budget" evokes money rather than a
+  search-check allowance — the per-process figure now follows the same
+  convention).
+  Verified end to end with a real, non-mocked `generate_grid()` call
+  (6×6, French, `on_live_preview` collecting every publication): every
+  "computing"/"succeeded"/"failed" entry carried a numeric `budget_
+  percent` (no `None`s), growing over time for "computing" entries (up
+  to 97%) and pinned at 100% for "failed" ones that genuinely exhausted
+  their own budget before giving up — confirming the field reaches the
+  frontend-consumed shape correctly. **Not yet visually confirmed in an
+  actual browser** — same tooling limitation noted throughout this file;
+  verified structurally otherwise (`py_compile`, a real JS syntax check
+  via a temporarily installed `esprima`, removed again afterward).
+
+- **Two real bugs fixed in the yellow `.excluded` overlay** (see the
+  `--excluded-bg` entry above), both reported directly by the user from
+  actual use — no CSS/JS change for either, both are backend `Filler`
+  fixes (`backend/crossword_gen.py`'s `excluded_zone_cells`), since the
+  yellow/red overlay classes themselves were already correctly wired to
+  whatever cells the backend names:
+  1. **An already-locked slot (orange `.locked` border, a genuinely valid
+     word) was also painted yellow underneath it.** Root cause: a locked
+     slot carried over from an earlier palier can geometrically cross a
+     slot freshly excluded THIS round — `excluded_zone_cells` painted the
+     whole union of "excluded slots" and "slots merely crossing an
+     excluded slot" yellow with no filter, wrongly assuming (per its own
+     pre-existing comment) that neither category could ever already carry
+     a real word. True for the first category, false for the second: a
+     slot crossing an excluded one is only ever protected from being
+     newly *targeted* by the search, never from a word it already had
+     before the search started. Fixed by applying the same "still
+     unassigned" filter the OTHER yellow source (`_impossible_this_
+     attempt`) already had.
+  2. **A crossing-letter deadlock (the vivid-red crossing cell) never
+     also showed yellow**, unlike a plain empty-domain impossible slot,
+     which does. Root cause: yellow's "temporarily set aside" signal is
+     fed live by `_backtrack` for the empty-domain case (cheap, checked
+     anyway), but a deadlock can only be noticed by a separate scan too
+     costly to run inside the search's own hot loop — so a deadlock
+     discovered mid-attempt simply had no yellow-side counterpart yet.
+     Fixed by adding that scan as a third, opt-in source
+     (`excluded_zone_cells(assignment, include_deadlock=True)`), gated
+     off by default so the one caller running at a much tighter cadence
+     (`_publish_live_state`'s heartbeat) keeps paying zero extra cost —
+     only the two callers that already pay for the equivalent
+     `deadlock_zone_cells()` cost on the same call (`_publish_new_best`,
+     the final diagnostics snapshot) opt in.
+
+  Both verified with hand-built synthetic `Filler` instances (a tiny
+  2-word dictionary, explicit `locked_letters`/`excluded_slots`) isolating
+  exactly the reported scenario: a locked slot crossing an excluded one no
+  longer contributes its own cells to `excluded_zone_cells()`'s result,
+  and a manufactured deadlock pair (two crossing slots whose own forced
+  letters share nothing) is included only when `include_deadlock=True`,
+  matching `deadlock_zone_cells()`'s own already-correct output on the
+  same instance. Also re-timed a handful of real `generate_grid()` runs
+  after gating the new scan behind `include_deadlock` specifically to
+  confirm it doesn't reintroduce the exact heartbeat-cadence slowdown
+  `_publish_live_state`'s own pre-existing comment already warns about.
+
+- **`.cell.white.interactive-excluded`** — the "emplacement écarté"
+  (`DOC_ALGO/FR/Lexicon.md`) yellow background, extended from the
+  automatic-generation attempt previews to Interactive mode's own grid, at
+  the user's explicit request: "quand un emplacement ne permet plus de
+  poser un mot sans créer des impossibles, l'ajouter à la liste des
+  écartés : il doit donc s'afficher en jaune... mais ne pas empêcher de
+  poser des mots le croisant (contrairement aux impossibles en rouge)."
+  Reuses `--excluded-bg` (`#fef08a`) verbatim — the same token
+  `.attempt-preview-grid .cell.white.excluded` already uses, per permanent
+  rule 2 — so the same concept reads the same colour in both places.
+  Declared AFTER `.interactive-low` and BEFORE
+  `.interactive-impossible`/`.interactive-deadlock` — at the user's
+  explicit request, "affiche jaune en priorité sur orange": yellow
+  outranks the orange "emplacement pauvre" (having no placeable word at
+  all says more than having few candidates left) and is in turn outranked
+  by red. The attempt previews' own cascade was reordered to match in the
+  same change (`.low-candidates`, then `.excluded`, then `.noise`/
+  `.impossible`/`.deadlock`), so the one shared notion keeps one shared
+  severity rank in both places. Applied on its own in `renderGrid()`,
+  never in the impossible/low else-chain, precisely so both can land on
+  one cell and the cascade alone arbitrates.
+  Backend: `interactive_place_word` returns the slots its
+  general-dictionary sweep set aside as `excluded_cells`
+  (`_slot_cells_of`, every cell of the slot, letters included — the same
+  whole-emplacement rule `Filler.excluded_zone_cells` applies to the
+  automatic previews; painting only the still-empty cells scattered the
+  overlay into isolated squares instead of showing the emplacement),
+  threaded through
+  `POST /api/interactive/step` into `interactiveExcludedCells`, with the
+  same staleness lifecycle as every other diagnostic here (cleared by
+  `clearInteractiveDiagnostics()` on any manual edit).
+  **Visually confirmed** with Playwright/Chromium (permanent rule 4): a
+  real resumed Interactive session (15×10, French) — an isolated probe
+  confirmed the cascade resolves to `rgb(254, 240, 138)` (`--excluded-bg`)
+  for an excluded-only cell and `rgb(254, 202, 202)` (`--incorrect-bg`)
+  once `.interactive-impossible` also applies; a real "Suivant" click on
+  that session marked 8 cells `.interactive-excluded`; and replaying a
+  genuine `/step` payload (4 écarté-only cells, 1 also low-candidate)
+  through `setInteractiveDiagnostics()`/`renderInteractive()` rendered the
+  4 in yellow and the 1 in `rgb(254, 215, 170)` (`--low-candidates-bg`),
+  screenshotted directly from the running page. After the reorder, a
+  second probe confirmed the full severity chain in both cascades:
+  low+excluded resolves to `rgb(254, 240, 138)` (yellow wins over
+  orange), excluded+noise to `rgb(233, 213, 255)` (violet),
+  excluded+impossible to `rgb(254, 202, 202)` (red) and
+  excluded+deadlock to `rgb(179, 38, 30)` (vivid red) — and the same
+  real `/step` payload now renders its also-low-candidate cell yellow
+  instead of orange.
+
+- **`.attempt-preview-grid.live-interrupted`** — a light-blue tile border
+  (`--live-interrupted: #93c5fd`), at the user's explicit request
+  ("Affiche les grilles arrêtées en bleu clair"), for an attempt stopped
+  from outside (`live_status: "interrupted"`, backend reason
+  `interrupted_other_attempt_done` — a mid-palier replacement cut short
+  once every original attempt finished or used up its budget) rather than
+  concluding on its own. A paler cousin of the "computing" `--accent`
+  blue, its own token like `--live-succeeded`/`--live-failed`. Alongside
+  it, the "minimizing" status line carries `count` when several successes
+  are optimized in parallel (`statusMinimizingMany(n)`, all 6 languages:
+  "Recherche terminée : toutes les grilles sont arrêtées. Optimisation et
+  évaluation des N grilles réussies…") and drops the search-budget suffix
+  (`describeStep`), meaningless once every attempt has stopped.
+  **Visually confirmed** with Playwright/Chromium: a real 15×10 run showed
+  4 `.live-interrupted` tiles with computed border `rgb(147, 197, 253)`
+  and the status line reading the new message with 33 successful grids.

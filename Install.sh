@@ -114,6 +114,84 @@ if [ ! -f SCRAPP/combined.json ]; then
         || echo "Warning: echec de l'initialisation de SCRAPP — le planificateur quotidien reessaiera demain."
 fi
 
+# ===========================================================================
+# Java back end (backend_java/, launched by run_FalconJ.sh)
+# ===========================================================================
+# The Java back end is the same API server as backend/app.py, written in
+# Java; run_Falcon.sh (Python) and run_FalconJ.sh (Java) are interchangeable.
+# It needs a JDK 21+ (javac — a runtime alone is not enough to build it) and
+# Maven. Both are installed from the system package manager when possible;
+# without root access (or without a supported package manager), a
+# user-local Temurin JDK and Apache Maven are downloaded into ~/.local,
+# where backend_java/build.sh looks for them. Any failure here is only a
+# warning: the Python back end does not need Java at all.
+JAVA_MAVEN_VERSION="3.9.9"
+
+install_local_jdk() {
+    local os arch url
+    case "$(uname -s)" in
+        Darwin) os="mac" ;;
+        *) os="linux" ;;
+    esac
+    case "$(uname -m)" in
+        arm64|aarch64) arch="aarch64" ;;
+        *) arch="x64" ;;
+    esac
+    url="https://api.adoptium.net/v3/binary/latest/21/ga/${os}/${arch}/jdk/hotspot/normal/eclipse"
+    echo "Downloading a user-local JDK 21 (Temurin) into ~/.local ..."
+    mkdir -p "$HOME/.local"
+    curl -fsSL "$url" | tar -xz -C "$HOME/.local" \
+        || { echo "Warning: JDK download failed — install a JDK 21 manually."; return 1; }
+    # macOS archives nest the JDK home under Contents/Home: expose it as a
+    # plain ~/.local/jdk-21* home so build.sh finds bin/javac directly.
+    for d in "$HOME"/.local/jdk-21*; do
+        if [ -d "$d/Contents/Home" ] && [ ! -e "$d-home" ]; then
+            ln -s "$d/Contents/Home" "$d-home"
+        fi
+    done
+}
+
+install_local_maven() {
+    local url="https://archive.apache.org/dist/maven/maven-3/${JAVA_MAVEN_VERSION}/binaries/apache-maven-${JAVA_MAVEN_VERSION}-bin.tar.gz"
+    echo "Downloading Apache Maven ${JAVA_MAVEN_VERSION} into ~/.local ..."
+    mkdir -p "$HOME/.local"
+    curl -fsSL "$url" | tar -xz -C "$HOME/.local" \
+        || { echo "Warning: Maven download failed — install Maven manually."; return 1; }
+}
+
+have_maven() {
+    command -v mvn >/dev/null 2>&1 && return 0
+    for c in "$HOME"/.local/apache-maven-*/bin/mvn; do
+        [ -x "$c" ] && return 0
+    done
+    return 1
+}
+
+if ! backend_java/build.sh --print-java >/dev/null 2>&1 || ! have_maven; then
+    echo "Installing a JDK 21 and Maven (Java back end)..."
+    if [ "$(uname -s)" = "Darwin" ] && command -v brew >/dev/null 2>&1; then
+        brew install openjdk@21 maven || echo "Warning: 'brew install openjdk@21 maven' failed."
+    elif command -v apt-get >/dev/null 2>&1; then
+        { sudo apt-get update && sudo apt-get install -y openjdk-21-jdk-headless maven; } \
+            || echo "Warning: 'apt-get install openjdk-21-jdk-headless maven' failed."
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y java-21-openjdk-devel maven \
+            || echo "Warning: 'dnf install java-21-openjdk-devel maven' failed."
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm jdk21-openjdk maven \
+            || echo "Warning: 'pacman -S jdk21-openjdk maven' failed."
+    fi
+    if ! backend_java/build.sh --print-java >/dev/null 2>&1; then
+        install_local_jdk || true
+    fi
+    if ! have_maven; then
+        install_local_maven || true
+    fi
+fi
+echo "Building the Java back end (backend_java/)..."
+backend_java/build.sh --force \
+    || echo "Warning: the Java back end could not be built — run_FalconJ.sh will not start; run_Falcon.sh (Python) is unaffected."
+
 echo
 
 # ===========================================================================
@@ -545,7 +623,9 @@ echo "==================================================================="
 echo " Installation terminee."
 echo "==================================================================="
 echo "  - Activer le venv : source .venv/bin/activate"
-echo "  - Lancer l'app    : ./run_Falcon.sh"
+echo "  - Lancer l'app    : ./run_Falcon.sh   (back end Python)"
+echo "                      ou ./run_FalconJ.sh (meme back end, en Java ; chacun des"
+echo "                      deux lanceurs arrete l'autre version avant de demarrer)"
 echo "  - Lancer le LLM   : ./run_llm.sh   (moteur/modele choisi ci-dessus ; le modele"
 echo "                      est telecharge au premier lancement)"
 echo "  - Verifier le LLM : ./test_llm.sh  (liste les modeles + une generation de test,"

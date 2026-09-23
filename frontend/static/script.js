@@ -845,14 +845,42 @@ let interactiveLowCells = new Set();
 // impossibles qui passent par cette case)." Same staleness rule as
 // interactiveImpossibleCells/LowCells above.
 let interactiveDeadlockCells = new Set();
+// "Emplacements écartés" (DOC_ALGO/FR/Lexicon.md): slots the last
+// "Suivant" click set aside because no word could go on them without
+// creating an impossible one. Shown on a weaker yellow background than
+// the red/orange above, and never subtracted from them — a cell can be
+// both écarté and (genuinely) impossible at once, in which case the
+// stronger signal wins the background through the CSS cascade, exactly
+// as in the attempt previews. Unlike an impossible slot, an écarté one
+// never forbids placing a word that crosses it. Same staleness rule as
+// interactiveImpossibleCells/LowCells above.
+let interactiveExcludedCells = new Set();
+// The word the last "Suivant" click placed, exactly as the backend
+// reported it (`POST /api/interactive/step`'s own `placed`: the word, its
+// cells, its direction, and which glossary it came from) — kept only so
+// the autosave can record it alongside the diagnostics below (see
+// interactiveDiagnosticsPayload), never used for rendering: the grid
+// already shows the letters, and their theme/"Mots Défi" colouring comes
+// from interactiveThemeCells/interactiveChallengeCells. Same staleness
+// rule as interactiveImpossibleCells/LowCells above.
+let interactiveLastPlaced = null;
 // "Stats" button: "row,col" -> the statistically most probable letter for
 // that still-empty cell, from POST /api/interactive/stats (backend's
-// `_interactive_letter_stats`, the same statistical mechanism `generate_
-// grid` uses for its own "graines" preview letters). Shown in light gray
-// in renderGrid(). Same staleness rule as interactiveImpossibleCells/
+// `_interactive_letter_stats`, the same crossed across/down tally the
+// automatic search and its previews read). Shown in light gray in
+// renderGrid(). Same staleness rule as interactiveImpossibleCells/
 // LowCells above: cleared on any manual edit, since it describes a grid
 // state the backend may no longer recognize.
 let interactiveStatLetters = new Map();
+// "Stats" is a two-state toggle, on by default: while on, every
+// renderInteractive() whose grid differs from the one the letters above
+// were fetched for (`interactiveStatsGridKey`, reset to null whenever the
+// letters are cleared) refetches them, debounced, so they always describe
+// the grid on screen (scheduleInteractiveStatsRefresh).
+let interactiveStatsOn = true;
+let interactiveStatsGridKey = null;
+let interactiveStatsTimer = null;
+const INTERACTIVE_STATS_DEBOUNCE_MS = 300;
 // "Vérifier" button: cells of every complete word flagged as a problem —
 // either not a real dictionary word (checked server-side, POST /api/
 // interactive/verify) or missing a definition (checked client-side against
@@ -1316,6 +1344,7 @@ function renderAttemptPreview(examples) {
     example_grid: exampleGrid,
     impossible_cells: impossibleCells,
     deadlock_cells: deadlockCells,
+    excluded_cells: excludedCells,
     forced_cells: forcedCells,
     locked_cells: lockedCells,
     low_candidate_cells: lowCandidateCells,
@@ -1324,11 +1353,19 @@ function renderAttemptPreview(examples) {
     challenge_cells: challengeCells,
     process_number: processNumber,
     is_best: isBest,
+    live_status: liveStatus,
+    budget_percent: budgetPercent,
+    stat_letters: statLetters,
   } of examples) {
     if (!exampleGrid || !exampleGrid.length) continue;
     const height = exampleGrid.length;
     const width = exampleGrid[0].length;
     const impossibleSet = new Set((impossibleCells || []).map(([r, c]) => `${r},${c}`));
+    // The most probable letter of every still-empty cell (backend/
+    // crossword_gen.py's `Filler.stat_letters`, the same crossed across/
+    // down tally as Interactive mode's "Stats"), carried by the live tiles
+    // and the attempt's own key step only — `|| []` everywhere else.
+    const statLetterMap = new Map((statLetters || []).map(([r, c, l]) => [`${r},${c}`, l]));
     const item = document.createElement("div");
     item.className = "attempt-preview-item";
     const miniGrid = document.createElement("div");
@@ -1341,6 +1378,17 @@ function renderAttemptPreview(examples) {
     // own position in the list no longer says anything about rank on its
     // own.
     if (isBest) miniGrid.classList.add("attempt-preview-best");
+    // Live-preview-only tile border (`live_status`, see backend/
+    // crossword_gen.py's `on_live_preview` and style.css's own
+    // `.live-computing`/`.live-succeeded`/`.live-failed` rules), at the
+    // user's explicit request — `undefined` on every previewHistory
+    // entry (that field only ever rides on the ephemeral live channel),
+    // so this is a no-op there, same `|| []`-style convention as every
+    // other optional field this function already reads.
+    if (liveStatus === "computing") miniGrid.classList.add("live-computing");
+    else if (liveStatus === "succeeded") miniGrid.classList.add("live-succeeded");
+    else if (liveStatus === "failed") miniGrid.classList.add("live-failed");
+    else if (liveStatus === "interrupted") miniGrid.classList.add("live-interrupted");
     miniGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
     const cellElementsByCoord = new Map();
     // Rates shown above each grid, at the user's explicit request — black
@@ -1378,6 +1426,18 @@ function renderAttemptPreview(examples) {
           cell.className = "cell white";
           if (ch !== ".") filledCount++;
           if (showPreviewLetters && ch !== ".") cell.textContent = ch;
+          // Light-gray statistical letter in a still-empty cell — a hint
+          // about the solution like the real letters, so it follows the
+          // same "Voir" toggle.
+          if (showPreviewLetters && ch === ".") {
+            const suggested = statLetterMap.get(`${r},${c}`);
+            if (suggested) {
+              const hint = document.createElement("span");
+              hint.className = "preview-stat-letter";
+              hint.textContent = suggested;
+              cell.appendChild(hint);
+            }
+          }
           if (impossibleSet.has(`${r},${c}`)) cell.classList.add("impossible");
           cellElementsByCoord.set(`${r},${c}`, cell);
         }
@@ -1395,6 +1455,21 @@ function renderAttemptPreview(examples) {
     for (const [r, c] of lockedCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("locked");
+    }
+    // An "emplacement écarté": a slot this attempt found unable to take
+    // any word at least once, so its own search only comes back to it
+    // once no other slot can take one (backend/crossword_gen.py's
+    // `Filler.excluded_zone_cells`) — "impossible détecté, mais non
+    // définitif". Never subtracted
+    // from `impossibleCells`/`deadlockCells` on the backend side — a cell
+    // in both simply ends up with both classes, and the CSS cascade order
+    // (`.low-candidates` then `.excluded` then `.noise`/`.impossible`/
+    // `.deadlock` in style.css) lets whichever stronger signal applies
+    // win the background, regardless of the order these classes are
+    // added here: yellow outranks orange, red still outranks yellow.
+    for (const [r, c] of excludedCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("excluded");
     }
     // Only ever non-empty on the "pattern" (cycle-start) preview — see
     // backend/crossword_gen.py's _low_candidate_slot_cells, which scopes
@@ -1490,6 +1565,22 @@ function renderAttemptPreview(examples) {
     statsText.appendChild(
       document.createTextNode(I18N[uiLanguage].attemptPreviewStats(blackPercent, fillPercent, impossiblePercent))
     );
+    // Per-process budget-consumption percentage, at the user's explicit
+    // request: "Afficher le taux de budget consommé par le process sur la
+    // ligne d'info de chaque grille Live (à gauche du bouton icône
+    // crayon)." Only ever present on the live channel (`live_status` is
+    // `undefined` on every navigable `previewHistory` entry — see
+    // CLAUDE.md's own "Scoped to one attempt's own lifecycle" section),
+    // so `typeof budgetPercent === "number"` is a no-op there, the same
+    // optional-field convention as every other example field this
+    // function reads. Appended to the same dimmed `statsText` span (not a
+    // separate sibling) so it reads as part of the same secondary-stat
+    // line, still to the left of the pencil button appended below.
+    if (typeof budgetPercent === "number") {
+      statsText.appendChild(
+        document.createTextNode(I18N[uiLanguage].attemptPreviewBudgetPercent(budgetPercent))
+      );
+    }
     stats.appendChild(statsText);
     // Pencil icon button, at the user's explicit request: "à droite des
     // mentions de remplissage des prévisualisations... ajouter un bouton
@@ -1606,22 +1697,33 @@ attemptPreviewRevealBtn.addEventListener("click", togglePreviewLetters);
 // shown grid can always be paired with which cycle/attempt it actually
 // came from, not just the grid on its own.
 let previewHistory = [];
-// Index into previewHistory currently shown on screen. Stays pinned to the
-// newest entry (auto-follow) as long as the player hasn't navigated back
-// manually — pollJob() advances it one step at a time via showNextPreview()
-// as it records new entries (see autoFollowPreview just below); showPrevious
-// Preview()/showNextPreview() also move it explicitly on a manual click.
+// Index into previewHistory currently shown on screen — or, while caught
+// up (`previewHistoryIndex === previewHistory.length - 1`) and following
+// live, only the *last entry actually rendered*: the live view itself,
+// past that point, is driven by the separate live_preview channel (see
+// renderLivePreview()), not by this index moving any further. As long as
+// the player hasn't navigated back manually, advanceLiveDisplay() (called
+// from pollJob() on every poll) steps this forward by exactly one entry
+// per poll while any unseen key step remains (`showNextPreview()`), at
+// the user's explicit request: "si il existe une étape clef qui n'a pas
+// encore été affichée, afficher cette étape clef" — so a player who falls
+// behind still sees every recorded step in turn, not just the latest one
+// each time. showPreviousPreview()/showNextPreview() also move it
+// explicitly on a manual click.
 let previewHistoryIndex = -1;
-// Whether the live view should keep stepping forward through
-// `previewHistory` on its own, one entry per poll, as pollJob() records
-// new ones — true by default (and reset on every new generation, see
-// hideAttemptPreview()). Set to `false` the moment the player clicks "◀"
-// to look back at an earlier entry (showPreviousPreview()), so a poll
-// landing in between doesn't yank their view forward again while they're
-// reviewing something — the same "pause autoscroll while scrolled up"
-// courtesy a chat/log viewer gives. Resumed by manually clicking "▶"
-// (see its own click listener below) — clicking "forward" is read as "I
-// want to keep following again from here."
+// Whether the live view should keep advancing — one key step at a time
+// while behind, the live_preview channel once caught up (see
+// advanceLiveDisplay()) — true by default (and reset on every new
+// generation, see hideAttemptPreview()). Set to `false` the moment the
+// player clicks "◀" to look back at an earlier entry (showPreviousPreview()),
+// so a poll landing in between doesn't yank their view forward again while
+// they're reviewing something — the same "pause autoscroll while scrolled
+// up" courtesy a chat/log viewer gives, and exactly the user's own explicit
+// request: "si l'utilisateur revient en arrière dans l'historique, l'affichage
+// temps réel ne doit pas se faire, jusqu'à ce qu'il revienne sur la dernière
+// étape." Resumed by manually clicking "▶" (see its own click listener
+// below) — clicking "forward" is read as "I want to keep following again
+// from here."
 let autoFollowPreview = true;
 // The `step` half of whichever previewHistory entry is currently on
 // screen (or null) — kept separately from `lastPreviewExamples` (the
@@ -1826,53 +1928,96 @@ function showPreviewEntry(entry) {
   renderWordTable(entry.word_table);
 }
 
+// Renders `data.live_preview` (backend/app.py's `_on_live_preview`, see
+// generate_grid(on_live_preview=...) in crossword_gen.py) — a
+// continuously OVERWRITTEN "what does each grid currently being built
+// look like right now" snapshot, published on every new backtrack state
+// the search reaches, entirely distinct from `previewHistory`: it never
+// touches `previewHistoryIndex`/`previewHistory` itself, at the user's
+// explicit request: "Cet état s'affiche dans l'interface au moment de la
+// mise à jour du statut (mais pas stocké dans l'historique navigable)."
+// Called from advanceLiveDisplay() (itself called from pollJob() on every
+// poll), only once the player has caught up to the newest recorded key
+// step — see that function's own comment for the full priority order — and
+// only while `autoFollowPreview` is true, the user's own further explicit
+// requirement: "Si l'utilisateur est remonté dans l'historique navigable,
+// l'affichage temps réelle ne doit pas se faire, jusqu'à ce que
+// l'utilisateur revienne au dernier état de l'historique" — reusing the
+// exact same flag that already pauses previewHistory's own auto-follow
+// (showPreviousPreview()), so stepping back to review an earlier state
+// also freezes this live channel until the player returns to the live
+// edge. `lastPreviewStep` is still updated (from the job's own current
+// `step`, not a previewHistory entry's) so #attempt-preview-status
+// reflects the true current progress
+// rather than whichever historical entry was shown last; no word_table —
+// only the "clues" step ever carries one, and that step publishes no
+// live_preview of its own (see crossword_gen.py, which only wires this
+// callback into the grid-search phase).
+function renderLivePreview(examples, step) {
+  if (!examples || !examples.length || !autoFollowPreview) return;
+  renderAttemptPreview(examples);
+  lastPreviewStep = step || lastPreviewStep;
+  renderPreviewStatus();
+}
+
 // Called from pollJob() with every new attempt-preview state examples_
-// history produced since the last poll, however many that is. Purely a
-// recording step — every one of `newEntries` is unconditionally pushed
-// into `previewHistory` and the nav buttons' enabled state is refreshed,
-// but nothing is rendered here. What (if anything) gets shown live this
-// poll is decided by pollJob()'s own caller, right after this returns —
-// see its own comment for why "just render whatever's most recent",
-// tried first, doesn't work for this specific backend.
-//
-// This used to also render live (the last of `newEntries`, only when the
-// player was already following along) — reverted at the user's explicit
-// report: "je ne vois plus qu'une seule grille, jamais plus" / "le
-// stream des états en Live ne montre que les fins de cycles [en fait,
-// les débuts] ; il ne stream pas les phases intermédiaires." Root cause,
-// confirmed live by simulating this exact poll loop against a real job's
-// raw `examples_history`: `generate_grid()`'s own palier loop
-// (backend/crossword_gen.py) runs almost entirely inside one blocking
-// worker thread (`asyncio.to_thread`) with no `await` point of its own —
-// the *only* moment that thread ever actually blocks (and so the only
-// moment the event loop thread can get scheduled to serve an HTTP poll)
-// is while waiting on the `ProcessPoolExecutor` results for a palier's
-// own CSP search. `progress("pattern_generated", ...)` (up to 6 grids)
-// and `progress("pattern_attempt_failed", ...)` (up to 6 grids) both fire
-// immediately once those results come back, followed *immediately* — no
-// blocking point in between — by `progress("pattern", ...)` (1 grid) for
-// the *next* palier, right before that thread blocks again waiting on the
-// next batch of results. So whenever an HTTP poll actually gets to run,
-// `examples_history`'s own newest entry is — deterministically, not just
-// by chance — almost always that next palier's own "pattern" event: a
-// single grid, the state carried forward from the previous cycle, not
-// the richer up-to-6-grid state a completed search just produced.
-// Rendering only ever "whatever's most recent" therefore meant the live
-// view got stuck cycling through single-grid "pattern" snapshots, never
-// the 6-grid ones — confirmed directly: 21 new entries recorded between
-// two consecutive 2-second polls of a real job, every one of them ending
-// in a "pattern" event.
+// history produced since the last poll, however many that is. Every one
+// of `newEntries` is unconditionally pushed into `previewHistory` — the
+// full, real record, never shortened or skipped, so prev/next navigation
+// always has access to everything the backend actually produced. Purely a
+// recording step — nothing is rendered here; see advanceLiveDisplay()'s
+// own comment, called right after this on every poll, for what (if
+// anything) actually reaches the screen this tick.
 function recordPreviewHistory(newEntries) {
   if (!newEntries.length) return;
   for (const entry of newEntries) previewHistory.push(entry);
   updatePreviewNavButtons();
 }
 
-// Jumps the live view straight to the newest recorded entry, with no
-// pacing — used once a job reaches a terminal status (done/error/
-// cancelled), so the final, true end state is shown immediately rather
-// than however far behind the paced one-per-poll reveal below happened
-// to still be (no more polls are coming to keep draining it forward).
+// Decides what the live view shows on THIS poll, at the user's explicit
+// request, in priority order:
+// 1. "quand le statut est réfraîchi dans l'interface, si il existe une
+//    étape clef (enregistrée dans l'historique) qui n'a pas encore été
+//    affichée, afficher cette étape clef" — if the player hasn't caught
+//    up to the newest recorded `previewHistory` entry yet, step forward
+//    by exactly one (`showNextPreview()`, the same function "▶" already
+//    uses) rather than jumping straight to the end — so a player who
+//    just fell behind (several key steps recorded since the last poll)
+//    still gets to see each one in turn, one per poll, rather than only
+//    ever the very latest.
+// 2. "si aucune nouvelle étape clef n'est disponible, afficher l'étape
+//    Live" — once caught up, render whatever `data.live_preview` (the
+//    continuously-overwritten backtrack state, see renderLivePreview()'s
+//    own comment) currently holds.
+// 3. "quand on arrive à la dernière étape clef ... n'afficher que cette
+//    dernière étape clef" — needs no special case here at all: once the
+//    search genuinely ends, backend/crossword_gen.py stops publishing
+//    live_preview and clears it (see generate_grid's own end-of-search
+//    cleanup), so step 2 above naturally renders nothing further —
+//    renderLivePreview() already no-ops on an empty/absent `examples`.
+// 4. "si l'utilisateur revient en arrière ... n'afficher que l'étape
+//    demandée ... jusqu'à ce qu'il revienne sur la dernière étape" —
+//    already the existing `autoFollowPreview` contract (set `false` by
+//    showPreviousPreview()/showFirstPreview(), resumed once "▶"/"⏭"
+//    genuinely lands back on the tail): both showNextPreview() and
+//    renderLivePreview() already gate on it themselves, so this function
+//    only needs its own outer check to skip the work entirely while
+//    paused.
+function advanceLiveDisplay(data) {
+  if (!autoFollowPreview) return;
+  if (previewHistoryIndex < previewHistory.length - 1) {
+    showNextPreview();
+  } else {
+    renderLivePreview(data.live_preview, data.step);
+  }
+}
+
+// Jumps the live view straight to the newest recorded entry and resumes
+// auto-follow unconditionally — used once a job reaches a terminal status
+// (done/error/cancelled), so the final, true end state is always shown,
+// even if the player had paused on an earlier entry to look back at it
+// (recordPreviewHistory() alone only snaps forward while already
+// following along).
 function catchUpPreviewToEnd() {
   autoFollowPreview = true;
   if (previewHistory.length === 0) return;
@@ -2209,6 +2354,12 @@ function renderGrid() {
       // in the previews (see interactiveImpossibleCells/LowCells).
       if (interactiveMode) {
         const dk = `${r},${c}`;
+        // Added on its own, never in the else-chain below: an écarté cell
+        // can also be impossible/low, and the CSS cascade arbitrates —
+        // yellow outranks .interactive-low's orange, and is in turn
+        // outranked by .interactive-impossible/.interactive-deadlock's
+        // red (see their declaration order in style.css).
+        if (interactiveExcludedCells.has(dk)) cell.classList.add("interactive-excluded");
         if (interactiveImpossibleCells.has(dk)) cell.classList.add("interactive-impossible");
         else if (interactiveLowCells.has(dk)) cell.classList.add("interactive-low");
         // Always a subset of interactiveImpossibleCells above — the exact
@@ -3064,29 +3215,6 @@ const POLL_INTERVAL_MS = 2000;
 // risks launching a second, redundant generation).
 const POLL_RECONNECT_ATTEMPTS = 3;
 
-// How often the live attempt-preview advances by one more previewHistory
-// entry (see pollJob() below) — deliberately its own, faster-ticking timer,
-// independent of POLL_INTERVAL_MS, at the user's explicit report: "quand le
-// Back est en avance sur le Front, le Front continue à télécharger les
-// grilles d'aperçu, mais n'avance plus dans la séquence... tant que
-// l'utilisateur ne revient pas en arrière, il faut que le Front continue à
-// avancer dans l'affichage au fur et à mesure que les nouvelles grilles de
-// l'aperçu arrivent." A real, structural gap, not a perception issue:
-// tying the reveal to the poll loop itself (one `showNextPreview()` call
-// per `GET /api/generate/status` round trip) caps the reveal rate at 1
-// entry per POLL_INTERVAL_MS no matter how large a backlog piles up — and
-// a real burst regularly produces far more than that in a single poll
-// window (21 new entries measured between two consecutive 2s polls of a
-// real job), so the displayed sequence falls further and further behind
-// the true live edge over time, never catching back up on its own — a
-// player would have needed to click "▶" by hand, over and over, to make
-// any further visible progress. Ticking this reveal on its own faster
-// timer lets it drain a backlog considerably quicker than it typically
-// accumulates, while a caught-up, no-backlog run still only ever has one
-// new entry to reveal every couple of seconds anyway, so it isn't made to
-// look rushed either.
-const PREVIEW_REVEAL_INTERVAL_MS = 500;
-
 // Hard ceiling on any single fetch to this origin (the /api/generate and
 // /api/generate/status polls) — without this, a fetch left hanging (server
 // process killed mid-connection rather than cleanly refusing it, or any
@@ -3298,7 +3426,9 @@ function describeStep(t, step) {
       message = t.statusPatternFound(step.attempt, formatAttemptCount(step.total_attempts));
       break;
     case "minimizing":
-      message = t.statusMinimizing;
+      // `count` is set when every attempt has stopped and several
+      // successful grids are being optimized to pick the best one.
+      message = step.count ? t.statusMinimizingMany(step.count) : t.statusMinimizing;
       break;
     case "grid_ready":
       message = t.statusGridReady(step.word_count);
@@ -3323,7 +3453,9 @@ function describeStep(t, step) {
   // pourcentage du budget déjà consommé"), so every existing message stays
   // untouched and only gains this one extra fragment when the data is
   // actually available.
-  if (typeof step.budget_percent === "number") {
+  // Not while the successful grids are being evaluated: the search budget
+  // no longer means anything once every attempt has stopped.
+  if (typeof step.budget_percent === "number" && step.code !== "minimizing") {
     message = t.statusBudgetPercent(message, step.budget_percent);
   }
   return message;
@@ -3397,15 +3529,13 @@ let currentJobId = null;
 async function pollJob(jobId, t) {
   // How many of `examples_history`'s entries this loop has already
   // recorded into `previewHistory` — every new entry is always recorded
-  // in full, right away, however many arrived since the last poll (see
-  // recordPreviewHistory's own comment). What actually gets *revealed*
-  // live is handled by a wholly separate timer (see PREVIEW_REVEAL_
-  // INTERVAL_MS's own comment for why this loop's own POLL_INTERVAL_MS
-  // cadence turned out to be the wrong thing to tie it to) started right
-  // below and stopped again in the `finally` once this loop ends, one way
-  // or another. catchUpPreviewToEnd() jumps straight to the true final
-  // entry the moment the job reaches a terminal status, so a large
-  // remaining backlog never delays the actual result.
+  // in full, right away, however many arrived since the last poll. Each
+  // recordPreviewHistory() call also snaps the live view straight to the
+  // newest of them (when following along — see its own comment), so the
+  // on-screen preview is always whatever this poll just learned, with no
+  // separate reveal pacing of its own. catchUpPreviewToEnd() still forces
+  // that same jump unconditionally once the job reaches a terminal status,
+  // covering the case where the player had paused on an earlier entry.
   let nextExampleIndex = 0;
   // Same incremental-read cursor as nextExampleIndex just above, but for
   // job["clues_progress"] (backend/app.py) — every definition the LLM has
@@ -3425,114 +3555,111 @@ async function pollJob(jobId, t) {
   // ToEnd()/setStatus() calls would overwrite the new session's UI with this
   // now-irrelevant job's own final state a moment after it was shown.
   const isCurrentJob = () => jobId === currentJobId;
-  const revealTimer = setInterval(() => {
-    if (autoFollowPreview && isCurrentJob()) showNextPreview();
-  }, PREVIEW_REVEAL_INTERVAL_MS);
-  try {
-    while (true) {
-      let response;
-      try {
-        response = await fetchWithTimeout(`/api/generate/status/${jobId}`, {}, FETCH_TIMEOUT_MS);
-      } catch (err) {
-        // Covers both a hard timeout (AbortError, see FETCH_TIMEOUT_MS) and an
-        // outright connection failure (e.g. the server process died) — either
-        // way there's no response to read a structured error code from, so a
-        // dedicated, translated message stands in for describeErrorCode's
-        // usual backend-error-code lookup. Deliberately a distinct string
-        // from the plain errorConnectionLost used by the initial POST
-        // /api/generate(/continue) calls below: unlike those (where no job
-        // was ever created, so there's nothing to look for later), this poll
-        // loss happens once a real job_id already exists and is running on
-        // the backend independently of this browser tab's own connection —
-        // generation keeps going server-side and, on success, still gets
-        // saved to GRID_STORE/ (see backend/app.py's _run_generate_job), so
-        // it's worth telling the player it may still show up in the library.
-        consecutivePollFailures += 1;
-        if (consecutivePollFailures <= POLL_RECONNECT_ATTEMPTS) {
-          setStatus(t.statusReconnecting(consecutivePollFailures, POLL_RECONNECT_ATTEMPTS), false);
-          await sleep(POLL_INTERVAL_MS);
-          continue;
-        }
-        throw new Error(t.errorConnectionLostDuringGeneration);
+  while (true) {
+    let response;
+    try {
+      response = await fetchWithTimeout(`/api/generate/status/${jobId}`, {}, FETCH_TIMEOUT_MS);
+    } catch (err) {
+      // Covers both a hard timeout (AbortError, see FETCH_TIMEOUT_MS) and an
+      // outright connection failure (e.g. the server process died) — either
+      // way there's no response to read a structured error code from, so a
+      // dedicated, translated message stands in for describeErrorCode's
+      // usual backend-error-code lookup. Deliberately a distinct string
+      // from the plain errorConnectionLost used by the initial POST
+      // /api/generate(/continue) calls below: unlike those (where no job
+      // was ever created, so there's nothing to look for later), this poll
+      // loss happens once a real job_id already exists and is running on
+      // the backend independently of this browser tab's own connection —
+      // generation keeps going server-side and, on success, still gets
+      // saved to GRID_STORE/ (see backend/app.py's _run_generate_job), so
+      // it's worth telling the player it may still show up in the library.
+      consecutivePollFailures += 1;
+      if (consecutivePollFailures <= POLL_RECONNECT_ATTEMPTS) {
+        setStatus(t.statusReconnecting(consecutivePollFailures, POLL_RECONNECT_ATTEMPTS), false);
+        await sleep(POLL_INTERVAL_MS);
+        continue;
       }
-      const data = await response.json();
-      if (!response.ok) {
-        consecutivePollFailures += 1;
-        if (consecutivePollFailures <= POLL_RECONNECT_ATTEMPTS) {
-          setStatus(t.statusReconnecting(consecutivePollFailures, POLL_RECONNECT_ATTEMPTS), false);
-          await sleep(POLL_INTERVAL_MS);
-          continue;
-        }
-        throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail, true));
-      }
-      consecutivePollFailures = 0;
-      const cluesFeed = data.clues_progress || [];
-      if (cluesFeed.length > nextClueIndex) {
-        if (isCurrentJob()) {
-          liveClues = liveClues.concat(cluesFeed.slice(nextClueIndex));
-          renderLiveClues();
-        }
-        nextClueIndex = cluesFeed.length;
-      }
-      const history = data.examples_history || [];
-      if (history.length > nextExampleIndex) {
-        if (isCurrentJob()) recordPreviewHistory(history.slice(nextExampleIndex));
-        nextExampleIndex = history.length;
-      }
-      // "Definitions count stuck at 0/27, even though the definitions
-      // themselves appear right below the grid" — a bug already reported
-      // several times, root-caused here: the clue-generation phase only
-      // ever gets ONE entry in examples_history/previewHistory (the very
-      // first progress("clues", current=0, ...) call, the only call of
-      // this phase to carry `examples` — see backend/app.py's
-      // progress()). Every later update (one more word defined) never
-      // carries `examples`, so it's never recorded; #attempt-preview-
-      // status (lastPreviewStep, fed only by showPreviewEntry() on a NEW
-      // entry) therefore stayed frozen on "0/N" the whole time, even
-      // though the "Définitions générées" list right below it (liveClues,
-      // fed separately above) was genuinely progressing word by word.
-      // "saving" (right after) doesn't carry `examples` either, so this
-      // "clues" entry stays the last one in previewHistory for the whole
-      // rest of the job — so it can be found and refreshed in place
-      // here, live, instead of being left frozen.
-      if (isCurrentJob() && data.step && data.step.code === "clues" && previewHistory.length) {
-        const cluesEntry = previewHistory[previewHistory.length - 1];
-        if (cluesEntry.step && cluesEntry.step.code === "clues") {
-          cluesEntry.step = {
-            ...cluesEntry.step, current: data.step.current, total: data.step.total,
-          };
-          // Only re-render if this entry is genuinely the one currently
-          // shown — if the player has navigated back in the history to
-          // review an earlier step, this live update must not change
-          // what's on screen out from under them; it will be picked up
-          // once they come back to this entry (see showNextPreview()/
-          // catchUpPreviewToEnd(), which always re-read `entry.step` at
-          // the moment of display).
-          if (previewHistoryIndex === previewHistory.length - 1) {
-            lastPreviewStep = cluesEntry.step;
-            renderPreviewStatus();
-          }
-        }
-      }
-      if (data.status === "error") {
-        if (isCurrentJob()) catchUpPreviewToEnd();
-        throw new GenerationFailedError(
-          describeErrorCode(t, data.error_code, data.error), jobId, data.error_code,
-        );
-      }
-      if (data.status === "cancelled") {
-        if (isCurrentJob()) catchUpPreviewToEnd();
-        throw new CancelledError(t.statusCancelled);
-      }
-      if (data.status === "done") {
-        if (isCurrentJob()) catchUpPreviewToEnd();
-        return data.result;
-      }
-      if (isCurrentJob()) setStatus(describeStep(t, data.step), false);
-      await sleep(POLL_INTERVAL_MS);
+      throw new Error(t.errorConnectionLostDuringGeneration);
     }
-  } finally {
-    clearInterval(revealTimer);
+    const data = await response.json();
+    if (!response.ok) {
+      consecutivePollFailures += 1;
+      if (consecutivePollFailures <= POLL_RECONNECT_ATTEMPTS) {
+        setStatus(t.statusReconnecting(consecutivePollFailures, POLL_RECONNECT_ATTEMPTS), false);
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+      throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail, true));
+    }
+    consecutivePollFailures = 0;
+    const cluesFeed = data.clues_progress || [];
+    if (cluesFeed.length > nextClueIndex) {
+      if (isCurrentJob()) {
+        liveClues = liveClues.concat(cluesFeed.slice(nextClueIndex));
+        renderLiveClues();
+      }
+      nextClueIndex = cluesFeed.length;
+    }
+    const history = data.examples_history || [];
+    if (history.length > nextExampleIndex) {
+      if (isCurrentJob()) recordPreviewHistory(history.slice(nextExampleIndex));
+      nextExampleIndex = history.length;
+    }
+    // Decides what this poll actually shows — a not-yet-seen key step if
+    // one is waiting, otherwise the live search state — see its own
+    // comment for the full priority order.
+    if (isCurrentJob()) advanceLiveDisplay(data);
+    // "Definitions count stuck at 0/27, even though the definitions
+    // themselves appear right below the grid" — a bug already reported
+    // several times, root-caused here: the clue-generation phase only
+    // ever gets ONE entry in examples_history/previewHistory (the very
+    // first progress("clues", current=0, ...) call, the only call of
+    // this phase to carry `examples` — see backend/app.py's
+    // progress()). Every later update (one more word defined) never
+    // carries `examples`, so it's never recorded; #attempt-preview-
+    // status (lastPreviewStep, fed only by showPreviewEntry() on a NEW
+    // entry) therefore stayed frozen on "0/N" the whole time, even
+    // though the "Définitions générées" list right below it (liveClues,
+    // fed separately above) was genuinely progressing word by word.
+    // "saving" (right after) doesn't carry `examples` either, so this
+    // "clues" entry stays the last one in previewHistory for the whole
+    // rest of the job — so it can be found and refreshed in place
+    // here, live, instead of being left frozen.
+    if (isCurrentJob() && data.step && data.step.code === "clues" && previewHistory.length) {
+      const cluesEntry = previewHistory[previewHistory.length - 1];
+      if (cluesEntry.step && cluesEntry.step.code === "clues") {
+        cluesEntry.step = {
+          ...cluesEntry.step, current: data.step.current, total: data.step.total,
+        };
+        // Only re-render if this entry is genuinely the one currently
+        // shown — if the player has navigated back in the history to
+        // review an earlier step, this live update must not change
+        // what's on screen out from under them; it will be picked up
+        // once they come back to this entry (see showNextPreview()/
+        // catchUpPreviewToEnd(), which always re-read `entry.step` at
+        // the moment of display).
+        if (previewHistoryIndex === previewHistory.length - 1) {
+          lastPreviewStep = cluesEntry.step;
+          renderPreviewStatus();
+        }
+      }
+    }
+    if (data.status === "error") {
+      if (isCurrentJob()) catchUpPreviewToEnd();
+      throw new GenerationFailedError(
+        describeErrorCode(t, data.error_code, data.error), jobId, data.error_code,
+      );
+    }
+    if (data.status === "cancelled") {
+      if (isCurrentJob()) catchUpPreviewToEnd();
+      throw new CancelledError(t.statusCancelled);
+    }
+    if (data.status === "done") {
+      if (isCurrentJob()) catchUpPreviewToEnd();
+      return data.result;
+    }
+    if (isCurrentJob()) setStatus(describeStep(t, data.step), false);
+    await sleep(POLL_INTERVAL_MS);
   }
 }
 
@@ -5383,6 +5510,7 @@ function setInteractiveDiagnostics(data) {
   interactiveImpossibleCells = new Set((data.impossible_cells || []).map(([r, c]) => `${r},${c}`));
   interactiveLowCells = new Set((data.low_candidate_cells || []).map(([r, c]) => `${r},${c}`));
   interactiveDeadlockCells = new Set((data.deadlock_cells || []).map(([r, c]) => `${r},${c}`));
+  interactiveExcludedCells = new Set((data.excluded_cells || []).map(([r, c]) => `${r},${c}`));
 }
 
 // The diagnostics describe the grid the backend last saw; drop them the
@@ -5391,9 +5519,43 @@ function clearInteractiveDiagnostics() {
   interactiveImpossibleCells = new Set();
   interactiveLowCells = new Set();
   interactiveDeadlockCells = new Set();
+  interactiveExcludedCells = new Set();
   interactiveInvalidCells = new Set();
   interactiveVerifyReport = [];
   interactiveStatLetters = new Map();
+  interactiveStatsGridKey = null;
+  interactiveLastPlaced = null;
+}
+
+// Everything the grid is SHOWING beyond its own letters: every diagnostic
+// overlay above, the theme/"Mots Défi" letter colouring, the "Stats"
+// letters, the selected zone, and the word the last "Suivant" placed.
+// Sent with every autosave (see autosaveInteractiveWork) so a GRID_WORK
+// record — and, through its own `previous` field, the state displayed
+// right before the last click — can be analysed afterwards exactly as the
+// player saw it. Several of these lists exist nowhere else: an
+// "emplacement écarté" in particular is rebuilt from scratch by each
+// `POST /api/interactive/step` call and kept nowhere afterwards, so it is
+// unrecoverable from the saved grid alone. Diagnostic-only — nothing
+// reads it back to rebuild a session.
+function interactiveDiagnosticsPayload() {
+  const cells = (set) => [...set].map((key) => key.split(",").map(Number));
+  return {
+    impossible_cells: cells(interactiveImpossibleCells),
+    deadlock_cells: cells(interactiveDeadlockCells),
+    low_candidate_cells: cells(interactiveLowCells),
+    excluded_cells: cells(interactiveExcludedCells),
+    invalid_cells: cells(interactiveInvalidCells),
+    theme_cells: cells(interactiveThemeCells),
+    challenge_cells: cells(interactiveChallengeCells),
+    // [row, col, letter] triples, the same shape POST /api/interactive/
+    // stats itself returns.
+    stat_letters: [...interactiveStatLetters].map(
+      ([key, letter]) => [...key.split(",").map(Number), letter],
+    ),
+    zone_cells: interactiveZoneSelection ? cells(interactiveZoneSelection) : null,
+    last_placed: interactiveLastPlaced,
+  };
 }
 
 function setInteractiveMessage(text, isError) {
@@ -5806,6 +5968,7 @@ function renderInteractive() {
   syncPuzzleFromInteractive();
   renderGrid();
   renderInteractiveCellStats();
+  scheduleInteractiveStatsRefresh();
   // "Mots Défi" list's own green/black coloring tracks the live grid — at
   // the user's explicit request (see gridContainsWord()'s own docstring).
   renderInteractiveChallengeList();
@@ -7422,6 +7585,7 @@ async function autosaveInteractiveWork() {
         // session, at the user's explicit request — see backend/app.py's
         // InteractiveSaveWorkRequest/grid_store.save_grid_work.
         challenge_words: interactiveChallengeWords,
+        diagnostics: interactiveDiagnosticsPayload(),
       }),
     }, FETCH_TIMEOUT_MS);
   } catch (err) {
@@ -7777,6 +7941,7 @@ interactiveNextBtn.addEventListener("click", async () => {
       for (const [r, c] of data.placed.cells) interactiveChallengeCells.add(`${r},${c}`);
     }
     setInteractiveDiagnostics(data);
+    interactiveLastPlaced = data.placed;
     selected = { row: data.placed.cells[0][0], col: data.placed.cells[0][1] };
     activeDirection = data.placed.direction || activeDirection;
     setActiveDirection(activeDirection);
@@ -8051,7 +8216,13 @@ async function fetchInteractiveStats(t) {
       return null;
     }
     const letters = data.letters || [];
+    // The grid may have changed while this request was in flight: its
+    // letters would then describe a state no longer on screen.
+    if (JSON.stringify(wireGrid) !== JSON.stringify(
+      interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch))),
+    )) return null;
     interactiveStatLetters = new Map(letters.map(([r, c, letter]) => [`${r},${c}`, letter]));
+    interactiveStatsGridKey = JSON.stringify(wireGrid);
     return letters;
   } catch (err) {
     setInteractiveMessage(t.errorConnectionLost, true);
@@ -8059,15 +8230,42 @@ async function fetchInteractiveStats(t) {
   }
 }
 
-// "Stats": a read-only statistical preview, in light gray, of the single
-// most probable letter for every still-empty cell — the same mechanism
-// `generate_grid` uses to pick its own "graines" preview letters, just
-// read out for every cell instead of only forcing a few of them. Placed
-// just before "Impossibles" (see index.html).
+// Called by renderInteractive(): while "Stats" is on, refetch the letters
+// once the grid on screen is no longer the one they were computed for.
+// Debounced so a burst of edits (typing a word) costs one request; silent
+// (no status message) since it runs on every change, not on a click.
+function scheduleInteractiveStatsRefresh() {
+  if (!interactiveStatsOn || !interactiveMode || !interactiveJobId) return;
+  const key = JSON.stringify(
+    interactiveGrid.map((row) => row.map((ch) => (ch === "" ? "." : ch))),
+  );
+  if (key === interactiveStatsGridKey) return;
+  clearTimeout(interactiveStatsTimer);
+  interactiveStatsTimer = setTimeout(async () => {
+    const letters = await fetchInteractiveStats(I18N[uiLanguage]);
+    if (letters) renderInteractive();
+  }, INTERACTIVE_STATS_DEBOUNCE_MS);
+}
+
+// "Stats": a two-state toggle, on by default (see interactiveStatsOn),
+// showing in light gray the single most probable letter of every
+// still-empty cell — the crossed across/down tally the automatic search
+// itself reads to pick its most constrained cell. Turning it on fetches
+// the letters right away and reports how many were found; turning it off
+// hides them. Placed just before "Impossibles" (see index.html).
 interactiveStatsBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
-  interactiveStatsBtn.disabled = true;
+  interactiveStatsOn = !interactiveStatsOn;
+  interactiveStatsBtn.classList.toggle("active", interactiveStatsOn);
   setInteractiveMessage("");
+  clearTimeout(interactiveStatsTimer);
+  if (!interactiveStatsOn) {
+    interactiveStatLetters = new Map();
+    interactiveStatsGridKey = null;
+    renderInteractive();
+    return;
+  }
+  interactiveStatsBtn.disabled = true;
   try {
     const letters = await fetchInteractiveStats(t);
     if (!letters) return;
@@ -8459,6 +8657,7 @@ interactiveDraftSaveBtn.addEventListener("click", async () => {
         title: interactiveTitleInput.value.trim(),
         pseudo: userPseudo || undefined,
         challenge_words: interactiveChallengeWords,
+        diagnostics: interactiveDiagnosticsPayload(),
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -8507,6 +8706,11 @@ interactiveSaveBtn.addEventListener("click", async () => {
         // words' own docstring, and the identical existing convention on
         // the "Sauvegarder"/save_work call just above).
         challenge_words: interactiveChallengeWords,
+        // Publishing also refreshes this session's own GRID_WORK draft,
+        // so the currently-displayed diagnostics travel with it exactly
+        // like the two calls above — otherwise that refresh would blank
+        // them out of the draft.
+        diagnostics: interactiveDiagnosticsPayload(),
       }),
     }, FETCH_TIMEOUT_MS);
     const data = await resp.json();

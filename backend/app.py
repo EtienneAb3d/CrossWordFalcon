@@ -60,7 +60,7 @@ from .crossword_gen import (
 from .grid_store import (
     _slugify_title, get_grid, list_grids, save_grid_json,
     save_grid_work, list_grid_work, get_grid_work, delete_grid_work,
-    save_grid_game, get_grid_game,
+    save_grid_game, get_grid_game, save_stop_dump,
 )
 from .svg_export import (
     render_puzzle_svg,
@@ -139,7 +139,7 @@ else:
 # importing this with Qdrant / the embed server down is harmless — the
 # endpoint just returns a clean 503. The Qdrant/embed timeouts stay short
 # (10s each — a per-keyword search pages the ranking only until the score
-# drops below the threshold, fast around THEME_MIN_SCORE = 0.75), but the
+# drops below the threshold, fast around THEME_MIN_SCORE = 0.78), but the
 # added LLM expansion makes the whole call slower than before, so the
 # frontend/proxy timeouts for this route are widened (see
 # SIMILAR_*_TIMEOUT in script.js / frontend/server.py, and
@@ -395,7 +395,7 @@ THEME_LENGTH_SEARCH_PAGE = 1000
 # _compiled_theme_words_by_length / _theme_words_by_length). The
 # Dictionary panel's "Thématique" button, meanwhile, always uses this
 # constant.
-THEME_MIN_SCORE = 0.75
+THEME_MIN_SCORE = 0.78
 
 # Grid glossary construction ONLY, at the user's explicit request: a word
 # preselected by `_compiled_theme_words_by_length` (against a single sharp
@@ -833,7 +833,7 @@ class GenerateRequest(BaseModel):
     # a word to enter THIS generation's theme glossary —
     # passed as `min_score` to _compiled_theme_words_by_length /
     # _theme_words_by_length. Defaults to the module
-    # constant THEME_MIN_SCORE (0.75). Has no effect if `theme` is empty.
+    # constant THEME_MIN_SCORE (0.78). Has no effect if `theme` is empty.
     theme_precision: float = Field(
         default=THEME_MIN_SCORE, ge=0.0, le=1.0,
         description="Minimum Qdrant similarity threshold for the theme glossary (0.0 to 1.0)",
@@ -1117,6 +1117,11 @@ class InteractiveSaveRequest(BaseModel):
     # so it's resent here too rather than read back from
     # `JOBS[job_id]["interactive"]`, which is never kept current).
     challenge_words: list[str] = []
+    # Same field as InteractiveSaveWorkRequest.diagnostics below, resent
+    # here for the same reason `challenge_words` is: publishing also
+    # refreshes this session's own GRID_WORK draft, and a field this call
+    # left out would be blanked out of it.
+    diagnostics: Optional[dict] = None
 
 
 class InteractiveSaveWorkRequest(BaseModel):
@@ -1135,13 +1140,21 @@ class InteractiveSaveWorkRequest(BaseModel):
     the client's current "Mots Défi" list — unlike the three fields just
     above, it genuinely changes within a session (the author edits it
     directly, no session-start value to fall back to), so it IS resent on
-    every autosave, exactly like `grid`/`definitions`/`title`."""
+    every autosave, exactly like `grid`/`definitions`/`title`.
+    `diagnostics` is everything the grid is currently SHOWING beyond its
+    own letters (every cell overlay, the "Stats" letters, the word the
+    last "Suivant" placed) — the client is the only authority on that,
+    since several of these lists exist nowhere else once the step
+    response that produced them has been rendered; persisted as-is by
+    `grid_store.save_grid_work` for later analysis, never read back to
+    rebuild a session."""
     job_id: str
     grid: list[list[str]]
     definitions: list[dict] = []
     title: str = ""
     pseudo: Optional[str] = None
     challenge_words: list[str] = []
+    diagnostics: Optional[dict] = None
 
 
 class InteractiveFinishRequest(BaseModel):
@@ -3012,6 +3025,18 @@ def _new_job():
         "status": "running", "step": {"code": "starting"}, "result": None,
         "error": None, "error_code": None,
         "examples_history": [],
+        # Continuously OVERWRITTEN "what does each grid currently being
+        # built look like right now" snapshot — see `_on_live_preview`/
+        # `generate_grid(on_live_preview=...)` — distinct from
+        # `examples_history`'s own append-only design: every new backtrack
+        # state replaces this field wholesale, never adding a new entry.
+        # `None` until the very first palier's own starting state is
+        # published, and for every job type that never wires this callback
+        # in (recompute, interactive authoring). Each entry also carries
+        # the snapshot it replaced under its own `previous` field — a
+        # STOP_DUMP-only diagnostic (see `grid_store.save_stop_dump`),
+        # dropped from `GET /api/generate/status/{job_id}`'s own response.
+        "live_preview": None,
         # Live feed of every definition the LLM has produced so far during
         # the "clues" step, one {"answer", "accented", "clue"} dict per
         # successfully-clued word, appended in arrival order — never
@@ -3396,6 +3421,53 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     # see crossword_gen.py.
     phase_times = {}
 
+    def _apply_zone_revert(examples):
+        # "Finir la zone" (`zone_revert`) — shared by every channel that can
+        # show a mid-search preview, at the user's explicit correction: "il
+        # met des lettres dans la zone qui était grisée, qui n'a pas été
+        # verrouillée" — the live attempt-preview shown DURING the search is
+        # exactly as visible to the player as the final saved grid, so every
+        # `example_grid` the search publishes gets the same cell-by-cell
+        # revert applied to it, right here, before it's ever stored into
+        # `job["step"]`/`job["examples_history"]`/`job["live_preview"]` — the
+        # search still explores the whole grid underneath (unavoidable — see
+        # this function's own docstring), but the player never sees any of
+        # its temporary answers outside the zone, at any point in the
+        # process, not only in the end. Every one of these cells is also
+        # added to `locked_cells` (merged, not replaced) so the existing
+        # green `.locked` highlight covers the whole zone boundary from the
+        # very first preview onward, not just the already-typed letters.
+        if not zone_revert or not examples:
+            return
+        for ex in examples:
+            eg = ex.get("example_grid")
+            if not eg:
+                continue
+            for (r, c), original in zone_revert.items():
+                eg[r][c] = original if original not in ("#", ".") else (
+                    "#" if original == "#" else "."
+                )
+            ex["locked_cells"] = sorted(
+                {tuple(cell) for cell in ex.get("locked_cells", [])} | set(zone_revert)
+            )
+
+    def _on_live_preview(examples):
+        # Backs `generate_grid(on_live_preview=...)` — see its own
+        # docstring in crossword_gen.py. A single, continuously OVERWRITTEN
+        # job field, deliberately never appended to `examples_history`, at
+        # the user's explicit request: "Le calcul doit publier chaque état
+        # du backtrack (écrasé à chaque nouveau backtrack). Cet état
+        # s'affiche dans l'interface au moment de la mise à jour du statut
+        # (mais pas stocké dans l'historique navigable)." The web UI
+        # (script.js's pollJob()) only ever renders this field while the
+        # player hasn't manually stepped back into `previewHistory` — see
+        # its own `autoFollowPreview` flag — satisfying that same request's
+        # second half: "Si l'utilisateur est remonté dans l'historique
+        # navigable, l'affichage temps réelle ne doit pas se faire, jusqu'à
+        # ce que l'utilisateur revienne au dernier état de l'historique."
+        _apply_zone_revert(examples)
+        job["live_preview"] = examples
+
     def progress(step, **data):
         if step == "budget_progress":
             # Enriches the status already shown (e.g. "Tentative
@@ -3415,34 +3487,11 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             # the next attempt.
             job["step"] = {**job["step"], "budget_percent": data.get("percent")}
             return
-        # "Finir la zone" (`zone_revert`) — applied here too, not just to
-        # the FINAL result (see below), at the user's explicit correction:
-        # "il met des lettres dans la zone qui était grisée, qui n'a pas
-        # été verrouillée" — the live attempt-preview shown DURING the
-        # search is exactly as visible to the player as the final saved
-        # grid, so every `example_grid` the search publishes gets the same
-        # cell-by-cell revert applied to it, right here, before it's ever
-        # stored into `job["step"]`/`job["examples_history"]` — the search
-        # still explores the whole grid underneath (unavoidable — see
-        # `_run_generate_job`'s own docstring), but the player never sees
-        # any of its temporary answers outside the zone, at any point in
-        # the process, not only in the end. Every one of these cells is
-        # also added to `locked_cells` (merged, not replaced) so the
-        # existing green `.locked` highlight covers the whole zone
-        # boundary from the very first preview onward, not just the
-        # already-typed letters.
-        if zone_revert and data.get("examples"):
-            for ex in data["examples"]:
-                eg = ex.get("example_grid")
-                if not eg:
-                    continue
-                for (r, c), original in zone_revert.items():
-                    eg[r][c] = original if original not in ("#", ".") else (
-                        "#" if original == "#" else "."
-                    )
-                ex["locked_cells"] = sorted(
-                    {tuple(cell) for cell in ex.get("locked_cells", [])} | set(zone_revert)
-                )
+        # "Finir la zone" (`zone_revert`) — see `_apply_zone_revert` above,
+        # applied here too, not just to the FINAL result (see below): every
+        # `example_grid` this job's own `examples_history` ever stores gets
+        # the same cell-by-cell revert as the live-preview channel does.
+        _apply_zone_revert(data.get("examples"))
         job["step"] = {"code": step, **data}
         if step in ("minimizing", "grid_ready"):
             phase_times[step] = time.monotonic()
@@ -3490,8 +3539,26 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # which would otherwise be carried twice per entry (once as the
         # step's own field, once as this entry's dedicated `examples` key)
         # for no benefit — nothing ever reads `entry["step"]["examples"]`.
+        #
+        # The "pattern" step itself is excluded here — at the user's
+        # explicit request: "seuls les états actuellement stockés dans
+        # l'historique navigable doivent être dans cet historique : les
+        # états intermédiaires ne sont pas mémorisés." It fires at the very
+        # START of a palier (crossword_gen.py's own `progress("pattern",
+        # ...)` call, right before that palier's own search even begins),
+        # previewing the exact same carried-forward/cleaned-up state the
+        # PREVIOUS palier's own "pattern_attempt_failed"/"pattern_found"
+        # entry already recorded — never new information, only a
+        # letterless echo of it. Because this event fires with no
+        # scheduling gap right after that previous entry (see
+        # `recordPreviewHistory`'s own comment in script.js), it is
+        # deterministically the newest `examples_history` entry every time
+        # a client happens to poll — recording it used to make the web
+        # UI's "jump straight to the latest known state" auto-follow (see
+        # script.js) show only these blank, just-starting grids, never the
+        # richer state a palier's own search actually reaches.
         examples = data.get("examples")
-        if examples:
+        if examples and step != "pattern":
             step_without_examples = {
                 k: v for k, v in job["step"].items() if k not in ("examples", "word_table")
             }
@@ -3695,6 +3762,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                             else None
                         ),
                         on_progress=progress,
+                        on_live_preview=_on_live_preview,
                         force_letters_fraction=req.force_letters_percent / 100,
                         black_enrichment_fraction=req.black_enrichment_percent / 100,
                         cancel_event=cancel_event,
@@ -4156,6 +4224,19 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # styling (see frontend/static/script.js's pollJob()).
         job["status"] = "cancelled"
         logger.info("[%s] cancelled by user", short_id)
+        # Diagnostic snapshot for analysis — see grid_store.py's own
+        # STOP_DUMP section for why job["live_preview"]/["examples_history"]
+        # (not a fresh read of the search's own live internal state,
+        # unreachable by the time this handler runs) is the right source.
+        try:
+            dump_id = await asyncio.to_thread(
+                save_stop_dump, job_id, req.pseudo, job.get("request"),
+                job.get("step"), job.get("live_preview"),
+                job.get("examples_history"), job.get("resume_state"),
+            )
+            logger.info("[%s] stop dump saved: %s", short_id, dump_id)
+        except Exception as e:
+            logger.warning("[%s] failed to save stop dump: %s", short_id, e)
     except ClueGenerationError as e:
         job["status"] = "error"
         job["error_code"] = "clue_generation_failed"
@@ -4350,6 +4431,7 @@ async def _run_interactive_job(job_id, req):
             "impossible_cells": placed.get("impossible_cells", []),
             "low_candidate_cells": placed.get("low_candidate_cells", []),
             "deadlock_cells": placed.get("deadlock_cells", []),
+            "excluded_cells": placed.get("excluded_cells", []),
             # The raw theme string this session started from (already set
             # on job["interactive"]["theme"] above — mirrored here too so
             # the frontend can read it straight off pollJob()'s own return
@@ -4667,7 +4749,23 @@ def generate_status(job_id: str):
     job = JOBS.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
-    return job
+    live_preview = job.get("live_preview")
+    if not live_preview:
+        return job
+    # Each live-preview entry carries the snapshot it replaced under its
+    # own `previous` field (see crossword_gen.generate_grid's `on_live_
+    # preview`) — a STOP_DUMP-only diagnostic, never rendered: dropped
+    # here so this response, polled every POLL_INTERVAL_MS while a
+    # generation runs, keeps carrying exactly one state per process.
+    # `job["live_preview"]` itself keeps it, which is what `save_stop_
+    # dump` writes further below.
+    return {
+        **job,
+        "live_preview": [
+            {k: v for k, v in entry.items() if k != "previous"}
+            for entry in live_preview
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -4737,12 +4835,18 @@ async def interactive_step(req: InteractiveStepRequest):
                 "placed": None, "impossible": True,
                 "impossible_cells": placed.get("impossible_cells", []),
                 "low_candidate_cells": placed.get("low_candidate_cells", []),
-                "deadlock_cells": placed.get("deadlock_cells", [])}
+                "deadlock_cells": placed.get("deadlock_cells", []),
+                "excluded_cells": placed.get("excluded_cells", [])}
     return {"width": cols, "height": rows, "grid": placed["grid"],
             "placed": placed["placed"], "impossible": False,
             "impossible_cells": placed.get("impossible_cells", []),
             "low_candidate_cells": placed.get("low_candidate_cells", []),
-            "deadlock_cells": placed.get("deadlock_cells", [])}
+            "deadlock_cells": placed.get("deadlock_cells", []),
+            # Slots this click set aside because no word could go on them
+            # without creating an impossible one — "emplacements écartés",
+            # shown yellow by the panel (see crossword_gen.py's own
+            # `interactive_place_word`).
+            "excluded_cells": placed.get("excluded_cells", [])}
 
 
 @app.post("/api/interactive/clean")
@@ -5168,6 +5272,7 @@ async def interactive_save(req: InteractiveSaveRequest):
                 # the session's last real autosave had already correctly
                 # saved it.
                 challenge_words=req.challenge_words,
+                diagnostics=req.diagnostics,
             )
         except Exception:
             logger.warning("interactive save: GRID_WORK snapshot skipped", exc_info=True)
@@ -5206,6 +5311,7 @@ async def interactive_save_work(req: InteractiveSaveWorkRequest):
         meta.get("bilingual_language"),
         generation_params=meta.get("generation_params"),
         challenge_words=req.challenge_words,
+        diagnostics=req.diagnostics,
     )
     return {"work_id": work_id}
 
@@ -5373,6 +5479,9 @@ async def _run_interactive_resume_job(job_id, record):
             "impossible_cells": imp,
             "low_candidate_cells": low,
             "deadlock_cells": deadlock,
+            # No placement search runs on a resume, so nothing has been
+            # set aside yet — the first "Suivant" click fills this in.
+            "excluded_cells": [],
             # Only ever set on a resume result (a fresh start's own result
             # has neither yet) — enterInteractiveMode() uses these two to
             # restore interactiveDefs/the title input, which a fresh

@@ -13,7 +13,8 @@ language, a size, and a difficulty level, and the app builds a full grid.
 
 ## What you need
 
-- **Python 3** installed on your computer.
+- **Python 3** installed on your computer (and, only for the optional Java
+  version of the server, Java 21 — installed by `./Install.sh`).
 - A small local language model generates the clues by default, and needs no
   account or key — see [Generating clues](#generating-clues) below for the
   (optional) cloud alternative.
@@ -106,6 +107,18 @@ the address to use for that when it finds one (something like
 This script also takes care of cleanly stopping any version of the app that
 might already be running before starting a new one — feel free to rerun it
 as often as you like.
+
+**Prefer Java?** The app's server side also exists in a Java version, which
+behaves exactly the same from the web page's point of view. Start it with:
+
+```bash
+./run_FalconJ.sh
+```
+
+It needs Java 21 (a JDK) and Maven, which `./Install.sh` installs for you.
+`./run_Falcon.sh` and `./run_FalconJ.sh` are interchangeable: each one
+stops the other version before starting, so only one runs at a time, and
+your grids, drafts and saved games are shared by both.
 
 ## Pre-filling the library (optional)
 
@@ -226,7 +239,9 @@ gives you a black-cell layout with a single word placed and lets you do
 the rest by hand. The **Dictionary** panel opens automatically as soon as
 you enter this mode, so you can look up words while you fill in the grid:
 
-- **"Next"** places one more word for you wherever it fits best;
+- **"Next"** places one more word for you wherever it fits best, picked
+  at random from among the best candidates for that spot — so undoing it
+  and clicking again usually offers a different word;
   **"Back"** undoes the last change, one step at a time.
 - You can click any cell and type a letter, press **Space** to add or
   remove a black cell, or **Delete** to clear a cell. **Ctrl** flips the

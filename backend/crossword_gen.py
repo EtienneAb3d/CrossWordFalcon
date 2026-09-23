@@ -1546,58 +1546,18 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     `--black-ratio`), but `generate_grid`'s own default (`0.0`, never
     escalated) means this floor contributes nothing in the common case.
 
-    Whether pre-fill's own cells count toward this fraction's target has
-    itself changed, at the user's explicit request. Originally, the
-    fraction was computed on the cells still white right *after* pre-fill
-    had already placed whatever was structurally necessary (not the
-    grid's total size), and added *on top* of `placed` (`placed` itself
-    recomputed right after pre-fill so `_place_black_cells` never
-    double-counted pre-fill's own cells as still-to-place) — meaning
-    pre-fill's own cells never counted toward this specific percentage
-    target: however many pre-fill needed, the same fixed fraction of
-    whatever remained was *always* added on top. Changed later, again at
-    the user's explicit request ("les cases noires ajoutées en
-    pré-remplissage comptent pour l'objectif de remplissage en noir"): the
-    fraction is now computed once, on the count of white cells *before*
-    pre-fill ever runs (`initial_white_count`, captured right after the
-    initial shuffle), and folded into the same `max(...)` as `placed` and
-    the `black_ratio` floor, rather than added on top of `placed`
-    unconditionally. Since `placed` already includes whatever pre-fill
-    itself placed, this means pre-fill's own cells now genuinely count
-    toward reaching this percentage: if pre-fill alone already placed more
-    cells than the target percentage of the *original* white-cell count
-    calls for, no further cells are added for this reason at all (`placed`
-    wins the `max`); if it placed fewer, only the shortfall is added on
-    top by `_place_black_cells` below.
-
-    This mechanism was briefly (mistakenly) removed entirely in the same
-    session, along with a separate, unrelated per-cycle single-cell lock
-    (`_impossible_cell_groups`/`_lock_one_impossible_cell`, see
-    `generate_grid`'s own history) — the user's own follow-up correction
-    clarified that only that separate lock was meant to go, not this
-    density-percentage mechanism, which is still meant to apply at the
-    very first palier and at every palier immediately following a full
-    cleanup, exactly as it always has.
-
-    `black_enrichment_fraction` is no longer applied as the fixed
-    percentage it's given as, at the user's explicit later request: it is
-    scaled by `initial_white_count / (rows * cols)` — the proportion of
-    the grid still white, measured on *this* call's own starting state
-    (including whatever `seed_grid` already carries forward), before this
-    call's own pre-fill runs — right after `initial_white_count` is
-    captured. This scaled value is what feeds both `fill_objective_
-    fraction` (and therefore the curative-cleanup zone budget inside
-    `_prefill_unfillable_slots`) and the `target` computation below — the
-    raw, caller-supplied `black_enrichment_fraction` is never used
-    directly again past this point. For the very first palier of a call
-    (`seed_grid is None`, an entirely white grid), this proportion is
-    always exactly 1 (`initial_white_count == rows * cols`), so the
-    scaled rate equals the raw one — the very first grid's own behavior
-    is unchanged. From then on, as successive paliers accumulate more
-    black cells (whatever `seed_grid` is carried forward already has), the
-    proportion — and so the effective rate applied by pre-fill — shrinks
-    accordingly, without any caller needing to compute or pass this
-    shrinking rate itself.
+    `black_enrichment_fraction` ("Taux noir") is a fraction of the WHOLE
+    grid (`rows * cols`), black cells already present included: `target`
+    is `round(black_enrichment_fraction * rows * cols)`, compared against
+    `placed`, which already counts `seed_grid`'s own black cells and
+    whatever pre-fill placed. Only the shortfall is added by
+    `_place_black_cells`; a grid already at or above the target gets no
+    further cell for this reason. The same unscaled rate is the curative-
+    cleanup zone budget inside `_prefill_unfillable_slots`
+    (`fill_objective_fraction`). The rate applies at the very first
+    palier and at every palier immediately following a full cleanup —
+    never at a "reprise telle quelle" palier, which never calls this
+    function.
 
     Adjacency between two black cells is never accepted at all, on any
     palier — not just the very first, entirely white one (`seed_grid is
@@ -1671,28 +1631,6 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         ]
         placed = 0
     rng.shuffle(candidates)
-    # Count of white cells *before* pre-fill — the base for the
-    # `black_enrichment_fraction` computation below, at the user's
-    # explicit request ("les cases noires ajoutées en pré-remplissage
-    # comptent pour l'objectif de remplissage en noir"): the target
-    # percentage is computed on this fixed total, not on however much
-    # white remains once pre-fill is done.
-    initial_white_count = len(candidates)
-
-    # At the user's explicit request: the fixed rate ("Taux noir",
-    # `black_enrichment_fraction`) is no longer applied as-is during the
-    # pre-fill phases — it's multiplied by the proportion of remaining
-    # white cells (remaining white cells / the grid's total cells),
-    # measured on THIS exact palier (via `seed_grid` if there is one)
-    # before its own pre-fill starts. For the very first grid (no `seed_
-    # grid`, entirely white), `initial_white_count == rows * cols` so this
-    # proportion equals 1 — "le taux reste donc 1 pour la toute première
-    # grille" — and it mechanically decreases, palier after palier, as
-    # the grid gets blacker, with no calling code needing to compute it
-    # itself: `initial_white_count` already reflected this reality, it
-    # simply wasn't yet used to modulate the rate itself.
-    white_proportion = initial_white_count / (rows * cols)
-    black_enrichment_fraction = black_enrichment_fraction * white_proportion
 
     # "Curative cleanup" (see _prefill_unfillable_slots): reuses this same
     # whole-grid black-fill objective as the threshold beyond which an
@@ -1713,20 +1651,13 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         )
 
     placed = sum(row.count(BLACK) for row in grid)
-    # `placed` already includes whatever pre-fill placed above — counting
-    # it toward the target means this last term
-    # (`black_enrichment_fraction * initial_white_count`, computed on the
-    # white total *before* pre-fill, never on what's left after it) is a
-    # third argument to `max`, on the same footing as `placed` and the
-    # `black_ratio` floor — no longer added on top unconditionally, at the
-    # user's explicit request: if pre-fill already placed more cells than
-    # this percentage calls for, no further cell is added for this reason
-    # (`placed` already wins the max); if it placed fewer, only the
-    # difference is completed.
+    # "Taux noir" is a fraction of the whole grid, black cells already
+    # present included: `placed` already counts the seed's own black cells
+    # and pre-fill's, so only the shortfall is added below.
     target = max(
         placed,
         round(rows * cols * black_ratio),
-        round(black_enrichment_fraction * initial_white_count),
+        round(black_enrichment_fraction * rows * cols),
     )
     _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
                         index=index, locked_letters=locked_letters, available_lengths=available_lengths,
@@ -1964,7 +1895,7 @@ def build_index(by_length, frequencies=None):
 # The real fix for this specific case doesn't involve MRV; see CLAUDE.md
 # for the solution eventually adopted.
 
-# Frequency (in number of calls to _backtrack) at which a CSP search checks
+# Frequency (in checks elapsed, see Filler._periodic_checkpoints) at which a CSP search checks
 # `cancel_event` (the "Stop" button, see Filler.__init__), at the user's
 # explicit request ("the Stop button doesn't apply quickly enough...
 # provide for stopping in every phase") — a search can call _backtrack
@@ -1977,6 +1908,36 @@ def build_index(by_length, frequencies=None):
 # of thousands of them.
 CANCEL_CHECK_INTERVAL = 500
 
+# Check frequency (in checks elapsed) for `Filler.on_checks_
+# progress` (see its own docstring and `_worker_checks_progress`): cheap
+# enough (a single shared-memory write, no lock contention worth avoiding)
+# to report far more often than `on_new_best` itself ever fires — the
+# whole point is to keep the web UI's "% budget consumed" indicator
+# genuinely live even through a long stretch with no new record to
+# publish, at the user's explicit request: "Ce n'est pas normal que rien
+# ne bouge... le Backtracking devrait tester des combinaisons
+# différentes" (it does; the previous indicator just couldn't show it).
+CHECKS_PROGRESS_REPORT_INTERVAL = 500
+
+# Check frequency (in checks elapsed) for `Filler.on_live_
+# state`: a periodic snapshot of the search's CURRENT assignment — as
+# opposed to `on_new_best`, which only fires on a new record — at the
+# user's explicit request: "La grille doit bouger aussi. L'algo doit
+# tester de nouvelles combinaisons [et ça doit se voir]." During a long
+# stretch with no new record (see CHECKS_PROGRESS_REPORT_INTERVAL above),
+# the live preview grid used to stay frozen on the last record reached,
+# even though `_backtrack` keeps placing and reverting many genuinely
+# different words underneath the whole time — indistinguishable, from the
+# player's own point of view, from the search having actually stopped.
+# Coarser than CHECKS_PROGRESS_REPORT_INTERVAL: each firing costs a real
+# (if cheap — no dictionary/domain lookup, purely a per-cell copy over the
+# already-known slots/cells) `build_partial_letters_grid` call, so this
+# stays roughly at the same order of magnitude as how often `on_new_best`
+# already fires in practice (~50-60 times over a 300 000-check attempt,
+# i.e. every ~5000-6000 checks) rather than piggy-backing on the much
+# tighter interval above.
+LIVE_STATE_HEARTBEAT_INTERVAL = 5000
+
 # Whether early abandonment of an attempt (see UNFILLABLE_ABANDON_SLOT_COUNT
 # right below) is active at all. Optional, at the user's explicit request,
 # and currently disabled: when False, Filler._backtrack's own checkpoint for
@@ -1987,7 +1948,7 @@ CANCEL_CHECK_INTERVAL = 500
 UNFILLABLE_ABANDON_ENABLED = False
 
 # Threshold (a fixed number of impossible slots) and check frequency (in
-# number of calls to _backtrack) for early abandonment of an attempt: the
+# checks elapsed) for early abandonment of an attempt: the
 # moment more than this many still-unassigned slots are deemed impossible
 # (see Filler.impossible_zone_slots), the attempt is judged to have no
 # reasonable hope left and is abandoned on the spot. See Filler._backtrack —
@@ -1999,7 +1960,7 @@ UNFILLABLE_ABANDON_ENABLED = False
 UNFILLABLE_ABANDON_SLOT_COUNT = 3
 UNFILLABLE_ABANDON_CHECK_INTERVAL = 500
 
-# Check frequency (in number of calls to _backtrack) for the "another
+# Check frequency (in checks elapsed) for the "another
 # attempt of the same palier has already finished" signal (see
 # attempt_done_event/generate_grid), at the user's explicit request:
 # "interrupt every search as soon as one search finishes (success or
@@ -2146,36 +2107,27 @@ BUDGET_PROGRESS_REPORT_INTERVAL_S = 2.0
 # budget (300 000+) or a larger `BUDGET_MODES` choice.
 MAX_CONSECUTIVE_CONTINUE_PALIERS = 4
 
-# Number of CONSECUTIVE full cleanups during which `generate_grid` may
-# produce exactly the same state (black/white pattern AND confirmed
-# content, see `_cycle_start_preview`) before being declared infeasible
-# and reset to an entirely blank grid on the next cycle — at the user's
-# explicit request: "Remember the grids at the end of each cycle. When the
-# same grid is produced for more than 3 cycles, declare that grid
-# infeasible, and remove it on the next cycle (it becomes the entirely
-# blank grid of the following palier)." See generate_grid, inside the
-# `else:` (full cleanup) branch of `if still_has_hope: ... else: ...`, for
-# the mechanism itself — deliberately restricted to this one branch, never
-# to "reprise telle quelle", after two regressions measured live on the
-# standard 15×10 (Flash) benchmark and two back-and-forths with the user
-# (see the mechanism's own comment for the full detail): comparing the
-# pattern alone across both branches confused a stable pattern (normal
-# under "reprise telle quelle", where a black cell is only ever added one
-# time in ten, see BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY) with a
-# genuine deadlock; comparing pattern+content across both branches always
-# duplicated MAX_CONSECUTIVE_CONTINUE_PALIERS, which already bounds
-# "reprise telle quelle" with a gentler response (an ordinary cleanup, not
-# a blank grid). Restricted to cleanup, this safety net covers a deeper
-# fixed point than the one already handled right next to it (comparing
-# only the confirmed letters, a single retry with `exclude_impossible_
-# locked=True`, see `previous_locked_letters` below) — which doesn't
-# always resolve the deadlock on the first try. Named separately from
-# MAX_CONSECUTIVE_CONTINUE_PALIERS above: the two ceilings answer two
-# different questions (how many "reprise telle quelle" cycles to chain
-# without any cleanup at all, vs. how many consecutive cleanups to
-# tolerate a state that still isn't changing despite them) and have no
-# relation to each other.
-GRID_REPEAT_INFEASIBLE_THRESHOLD = 3
+# Repetition thresholds of one cleaned grid across CONSECUTIVE full
+# cleanups (a "reprise telle quelle" palier in between neither counts nor
+# resets them). Each cleaned candidate of a full cleanup is compared, by
+# its own state (black/white pattern AND confirmed content, merged by
+# `_cycle_start_preview`), with every candidate of the previous full
+# cleanup; `streak` is how many consecutive cleanups have produced it.
+# Always measured on the ORDINARY cleanup's result, so a grid the deep
+# cleanup below has just reshaped is still recognized if its next attempt
+# rebuilds the same dead end. At `GRID_REPEAT_DEEP_CLEANUP_STREAK` (2) the
+# candidate is cleaned deeper instead (`_build_retry_seed(deep=True)`:
+# also removes every word crossing a word removed by the ordinary
+# cleanup, plus any fully-locked slot spelling no real word); at
+# `GRID_REPEAT_DISCARD_STREAK` (3) it is dropped from the pool and its
+# place in the next palier goes to a worker starting from a blank grid,
+# while every other candidate — the grids still progressing — is kept.
+# Only when every candidate is dropped does the whole search restart
+# from a blank grid. Scoped to the full cleanup: on "reprise telle
+# quelle" a stable pattern is normal, and MAX_CONSECUTIVE_CONTINUE_PALIERS
+# already bounds that branch.
+GRID_REPEAT_DEEP_CLEANUP_STREAK = 2
+GRID_REPEAT_DISCARD_STREAK = 3
 
 # Number of PARALLEL_ATTEMPTS workers that, right after a full cleanup
 # ("nettoyage complet" — see generate_grid's own `else:` branch, as opposed
@@ -2205,12 +2157,9 @@ FULL_RESET_ATTEMPT_COUNT = 1
 def _slots_touching(slots, target_indices):
     """Returns the set of slot indices (excluding `target_indices`
     themselves) that share at least one cell with one of the slots in
-    `target_indices` — used both by `Filler.__init__` (to never try to
-    fill a slot that crosses a slot already known impossible, see
-    `_crossing_excluded_slots`) and by `generate_grid` (so the
-    "still_has_hope" computation treats these same slots as hopeless too,
-    rather than as a still-promising slot — see below for why this second
-    use is necessary)."""
+    `target_indices` — used by `generate_grid` so the "still_has_hope"
+    computation treats a slot crossing an impossible one as hopeless too,
+    rather than as a still-promising slot (see below for why)."""
     target_indices = set(target_indices)
     if not target_indices:
         return set()
@@ -2228,40 +2177,101 @@ def _slots_touching(slots, target_indices):
 
 
 # Window for drawing at random among a slot's best candidate words, once
-# sorted by `_candidate_score` (see `Filler._backtrack`) — a bit like
-# `_place_black_cells`'s own 32-cell window for black cells: keeps overall
-# priority on the statistically best-scored words while avoiding trying
-# them in exactly the sort order, which would amount to an entirely
-# deterministic choice (for a given seed) rather than genuine exploration.
-# Raised from 20 to 200, at the user's explicit request: "avoids overly
-# rare words, while leaving more room for exploring varied solutions" — a
-# wider window still, in practice, mostly reaches statistically well-ranked
-# words (never the very last ones in the dictionary), but among a notably
-# wider pool than before, for more diversity from one attempt to the next.
+# sorted by `_candidate_score` (see `Filler.ordered_candidates`, the one
+# place this draw is implemented, used by the automatic search and by
+# Interactive mode's "Suivant" alike) — a bit like `_place_black_cells`'s
+# own 32-cell window for black cells: it keeps the overall priority on the
+# statistically best-scored words while avoiding trying them in exactly
+# the sort order, which would amount to an entirely deterministic choice
+# (for a given seed) rather than genuine exploration.
 #
-# Raised from 200 to 5000, at the user's explicit request: "The top 200
-# force starting from blank slots with a very restricted vocabulary. Relax
-# the constraint... (this will probably have the effect of cancelling out
-# the point of the scoring, but I'd like to see what it gives)" — the user
-# themselves anticipates that such a wide window, on a slot still entirely
-# blank (no cell fixed by a crossing, so `letter_scores` has no
-# discriminating effect at all on the sort — see `_candidate_score`),
-# amounts in practice to an almost uniform draw across the whole
-# dictionary of that length, rather than a genuine priority for the
-# best-scored words.
-#
-# Raised again from 5000 to 20000, at the user's explicit request, set
-# "for the time being" to "everything available for 8-letter words" — the
-# French dictionary has 19,066 8-letter words (counted live from data/
-# wordlist_fr_full.tsv), so 20000 already covers the entire dictionary for
-# any slot length up to and including 8 letters (and nearly the entire
-# dictionary beyond that — only a few much rarer/longer lengths have more)
-# : at this value, the window no longer excludes any word for the vast
-# majority of real slots, pushing the draw even further toward an almost
-# uniform choice over the whole dictionary of the length in question (the
-# same consequence already anticipated above when moving to 5000, only
-# more pronounced still).
-CANDIDATE_SCORE_WINDOW = 20000
+# The value is what arbitrates between those two ends. A window wider than
+# a slot's whole domain cancels the scoring out entirely — every candidate
+# is then in the window at every draw, so the order is a plain uniform
+# shuffle and a rare word is as likely as a well-scored one. A narrow
+# window keeps the statistical ranking genuinely in charge, letting only
+# the best-scored candidates be reached first, while still leaving enough
+# room for two attempts (or two "Suivant" clicks) on the same state to
+# diverge.
+CANDIDATE_SCORE_WINDOW = 50
+
+# Maximum number of recursive descents a single `Filler._backtrack` node
+# makes before giving up and handing control back to its parent. A
+# descent is a candidate that passed the crossing check and was recursed
+# into; a candidate rejected on the spot by that check does not count,
+# and neither does a "Mots Défi" or theme-glossary candidate (the node
+# tries every hypothesis from those two glossaries, whatever its count).
+# The count spans the whole node — every slot it tries, the released
+# "écarté" stage and the `allow_breaking` pass alike. Without this cap a
+# node only fails once its whole subtree is exhausted, which on a real
+# dictionary never happens within the budget, so backtracking never
+# climbs more than a few levels and a hard word placed early stays in
+# place for the rest of the attempt. `<= 0` disables the cap (every
+# option of the node is tried).
+MAX_DESCENTS_PER_NODE = 3
+
+# Early-attempt relaxation of MAX_DESCENTS_PER_NODE: a node reached while
+# the search has placed fewer than `EARLY_DESCENTS_WORD_COUNT` words on top
+# of the attempt's own initial state (the words already in place when
+# `Filler.solve` starts: preseeded/locked ones) may make up to
+# `EARLY_MAX_DESCENTS_PER_NODE` descents instead. Measured per node, from
+# the words in place when the node is entered.
+EARLY_DESCENTS_WORD_COUNT = 5
+EARLY_MAX_DESCENTS_PER_NODE = 10
+
+# Conflict-directed backjumping in `Filler._backtrack`. A node that fails
+# reports WHICH already-placed words its failure depends on (its conflict
+# set: the words crossing the slot it could not fill, or holding the last
+# word that slot could have taken). Each ancestor whose own word is not in
+# that set cannot be the cause — changing it would replay the very same
+# failure — so it passes the failure straight up instead of trying its
+# other candidates. Backtracking thereby jumps directly to the most recent
+# word actually involved, however many unrelated levels lie in between,
+# instead of re-exploring them one by one. False restores plain
+# chronological backtracking.
+BACKJUMPING_ENABLED = True
+
+# Maximum number of "emplacements écartés" `Filler._impossible_this_attempt`
+# holds at once: only the most recently added ones are kept, the oldest
+# being dropped as a new one comes in. The list exists to steer the search
+# away from the slots that just proved troublesome; once most of the grid
+# is in it, deprioritizing it no longer steers anything.
+MAX_EXCLUDED_SLOTS = 3
+
+
+class _RecentSlots:
+    """Set of slot indices capped at `capacity` members, keeping the most
+    recently added: adding a slot already present makes it the most recent
+    again, and adding one beyond capacity drops the oldest. Supports the
+    set operations the engine uses (`add`, `|=`, `discard`, `in`,
+    iteration, `len`)."""
+
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self._order = {}
+
+    def add(self, i):
+        self._order.pop(i, None)
+        self._order[i] = None
+        while len(self._order) > self.capacity:
+            del self._order[next(iter(self._order))]
+
+    def __ior__(self, other):
+        for i in other:
+            self.add(i)
+        return self
+
+    def discard(self, i):
+        self._order.pop(i, None)
+
+    def __contains__(self, i):
+        return i in self._order
+
+    def __iter__(self):
+        return iter(list(self._order))
+
+    def __len__(self):
+        return len(self._order)
 
 # Level 1 of the slot-selection cascade (see `Filler._select_target_slot`
 # below): whether to first split `unassigned` by direction and draw which
@@ -2279,10 +2289,23 @@ ALTERNATE_DIRECTION_ENABLED = False
 # computation right above) are kept, regardless of `selection_pool`'s own
 # size — never fewer if the group has fewer slots than this size (`[:N]`
 # on a shorter list simply returns the whole list).
-SLOT_SELECTION_WINDOW_SIZE = 3
+SLOT_SELECTION_WINDOW_SIZE = 10
+
+# Level 7 of the slot-selection cascade (most-constrained cell, see
+# `Filler._select_target_slot`): slot-length threshold, lowered one step
+# at a time. Only slots of at least `MOST_CONSTRAINED_START_LENGTH`
+# letters are measured first; if none of the window has a measurable free
+# cell at that threshold, the threshold drops by one and the measure is
+# repeated, down to `MOST_CONSTRAINED_MIN_LENGTH`. Applied within level
+# 6's geometric window, not the whole group. Long slots are thus
+# resolved on their tightest cell first, short ones only once no longer
+# slot is left to measure.
+MOST_CONSTRAINED_START_LENGTH = 7
+MOST_CONSTRAINED_MIN_LENGTH = 2
 
 # Once the window above is obtained (`window`, sorted by ascending
-# geometric score), `Filler._backtrack` re-sorts it a second time by the
+# geometric score, then narrowed to its most-constrained slots),
+# `Filler._backtrack` re-sorts it a second time by the
 # number of letters already placed in each slot (the most letters first —
 # `_placed_letter_count`, the same fait-acquis/mere-guess distinction as
 # `_has_known_letter`), then reduces it again to its own first `SLOT_
@@ -2290,13 +2313,12 @@ SLOT_SELECTION_WINDOW_SIZE = 3
 # known letters) before the final draw — at the user's explicit request,
 # who also raised this proportion from 1/4 to 1/2 in the same move (a
 # milder reduction, keeping half rather than a quarter of `window`).
-# Floor **always at 1 slot, never 0** (never 5 either, unlike the previous
-# window): `window` itself can be as small as its own floor of 5, and a
+# Floor **always at 1 slot, never 0**: `window` itself holds at most
+# `SLOT_SELECTION_WINDOW_SIZE` slots and can hold as few as one, and a
 # higher floor here would cancel out the requested reduction in this very
-# common case (half of 5 is 2, but a third or a quarter of 5 would already
-# be 1, under a floor of 5 that would then force the whole window to be
-# kept as-is) — this reduced window (`refined_window`) can therefore never
-# end up empty, whatever `window`'s size or this fraction's value.
+# common case (it would force the whole window to be kept as-is) — this
+# reduced window (`refined_window`) can therefore never end up empty,
+# whatever `window`'s size or this fraction's value.
 # Named separately from `SLOT_SELECTION_WINDOW_SIZE` above: one fixes a
 # window size, the other a proportion — they apply to two different
 # windows, one after the other (this one operates on `window`, not on
@@ -2344,6 +2366,47 @@ SLOT_SELECTION_REFINE_FRACTION = 1 / 2
 # exhaustively (see its own docstring for why no separate budget is needed
 # there).
 FALLBACK_PHASE_BUDGET_FRACTION = 0.10
+
+
+
+# Per-length letter counts of a whole index length list, keyed by the
+# list's own `id` (the dict is kept alongside, so a reused id can never be
+# mistaken for it): an entirely blank slot's domain is that whole list, and
+# counting it on every query cost 10+ ms per call on a large lexicon.
+# Built once per process per length, the lists being immutable for the
+# index's lifetime.
+_BLANK_LETTER_COUNTS = {}
+
+
+def _blank_letter_counts(idx, length):
+    """`(counts, members)` for `idx["words"]` (every word of `length`):
+    one `{letter: count}` dict per position, and the words as a
+    frozenset."""
+    entry = _BLANK_LETTER_COUNTS.get(id(idx))
+    if entry is None or entry[0] is not idx:
+        counts = [{} for _ in range(length)]
+        for w in idx["words"]:
+            for pos, ch in enumerate(w):
+                c = counts[pos]
+                c[ch] = c.get(ch, 0) + 1
+        entry = (idx, counts, frozenset(idx["words"]))
+        _BLANK_LETTER_COUNTS[id(idx)] = entry
+    return entry[1], entry[2]
+
+
+def _letters_from_counts(counts, removed_words):
+    """Per-position letter sets of `counts` once each word of
+    `removed_words` (all members of the counted domain, each counted
+    once) is taken out."""
+    deltas = [{} for _ in counts]
+    for w in removed_words:
+        for pos, ch in enumerate(w):
+            d = deltas[pos]
+            d[ch] = d.get(ch, 0) + 1
+    return [
+        {ch for ch, n in c.items() if n - d.get(ch, 0) > 0}
+        for c, d in zip(counts, deltas)
+    ]
 
 
 class Filler:
@@ -2419,17 +2482,6 @@ class Filler:
         self._theme_attempt_counts = Counter()
         self._theme_abandoned = set()
         self._theme_word_budget = None
-        # Same principle once more, but for the general dictionary tier,
-        # which has no word identity of its own to track (any candidate
-        # from the loaded lexicon is eligible) — keyed by SLOT index
-        # instead of by word: once a given slot's own share of the budget
-        # has been spent on candidates that all broke some crossing,
-        # `_backtrack` stops insisting on a crossing-safe candidate for
-        # that slot and accepts the next one anyway (see
-        # FALLBACK_PHASE_BUDGET_FRACTION).
-        self._domain_break_counts = Counter()
-        self._domain_break_abandoned = set()
-        self._domain_word_budget = None
         # Signal shared between the parallel attempts of the same batch,
         # see its own definition (`_worker_batch_abandoned_event`) — set by
         # any one of them the moment it abandons itself (see below),
@@ -2504,7 +2556,31 @@ class Filler:
         # letters` still does) — `or {}` here remains a safeguard for a
         # direct caller of Filler that doesn't supply one (e.g. a test), in
         # which case _backtrack simply falls back to a purely random draw.
-        self.letter_scores = letter_scores or {}
+        #
+        # `letter_scores` arrives per direction ({cell: {"across"/"down":
+        # Counter}}, see sample_letter_biases) and is kept that way in
+        # `letter_scores_by_dir` — refreshed direction by direction as
+        # words are placed (`_refresh_letter_scores_around`) and crossed
+        # (`_crossed_letter_counts`) wherever the letters actually still
+        # possible at a cell are wanted (`_slot_min_letter_options`,
+        # `stat_letters`). `self.letter_scores` is the summed view the
+        # candidate ordering reads (`_candidate_score`/`_slot_letter_
+        # frequency_score`).
+        self.letter_scores_by_dir = {
+            cell: dict(by_dir) for cell, by_dir in (letter_scores or {}).items()
+        }
+        self.letter_scores = {
+            cell: _combined_letter_counts(by_dir)
+            for cell, by_dir in self.letter_scores_by_dir.items()
+        }
+        # Direction of every slot, for `_refresh_letter_scores_around`.
+        self.slot_directions = [slot_direction(cells) for cells in slots]
+        # The previews' statistical letters (`stat_letters`) as they stood
+        # when `best_assignment` was recorded — `letter_scores` follows the
+        # search's CURRENT assignment and is unwound with it, so by the
+        # time a caller reports `best_assignment` it may no longer describe
+        # it. `None` until the first record (see `best_stat_letters_for`).
+        self.best_stat_letters = None
         # cell -> [(slot_index, position_within_that_slot), ...]. Precomputed
         # once here rather than looked up with list.index() inside _domain
         # (the hot path, called millions of times per grid) since a cell's
@@ -2531,6 +2607,28 @@ class Filler:
         # SLOT_COUNT) — once set, every following call to _backtrack fails
         # immediately, with no further exploration.
         self.abandoned = False
+        # Set when a `_backtrack` call returned because the check budget
+        # ran out (see `_deadline_reached_without_extension`), so `solve()`
+        # can tell a strict search cut short from one genuinely exhausted.
+        self._budget_exhausted = False
+        # Whether a node may enter its last-resort `allow_breaking` stage.
+        # False for the whole strict search; `solve()` turns it on only
+        # once that strict search has been exhausted from the root.
+        self.breaking_permitted = False
+        # Open slots whose dry domain is NOT a reason to backtrack: those
+        # already dry before the search placed anything (set in `solve()`
+        # — undoing this search's own placements can never revive them),
+        # plus, in the last-resort pass only, the slots an accepted
+        # `allow_breaking` word deliberately dried (added on placement,
+        # removed as it is reverted). Every other dry slot a node finds
+        # was dried by a placement of this search, and makes it backtrack.
+        self._tolerated_dry = set()
+        # Conflict set of the last `_backtrack` call that returned False
+        # (see BACKJUMPING_ENABLED): the slots holding the placed words its
+        # failure depends on, or None when the failure says nothing about
+        # the grid (budget, abandon, backjumping disabled) and the caller
+        # must backtrack chronologically.
+        self._last_conflict = None
         # Distinct from `self.abandoned` above (which it still reuses as a
         # fast short-circuit, see _backtrack): set specifically when this
         # attempt was cut short because ANOTHER attempt of the same palier
@@ -2550,35 +2648,67 @@ class Filler:
             for cells in slots
         ]
         self.assignment = [None] * len(slots)
-        # Slots outside every consideration of _backtrack — never selected
-        # for an assignment attempt, and never a source of immediate
-        # failure via the domain check below — at the user's explicit
-        # request: "before cleaning up the slot identified as blocked,
-        # keep adding words as long as it's possible." A slot already
-        # identified as impossible during a previous attempt on this same
-        # pattern, without this exclusion, would start by making the very
-        # first call to `_backtrack` fail (the domain check runs over
-        # *every* unassigned slot before even choosing which one to
-        # handle, so an empty domain for this one specific slot was enough
-        # to prevent any new assignment anywhere else in the grid, even
-        # with no relation to it at all) — seen live, `checks=1` on every
-        # attempt. An empty set by default (`set()` rather than `None`,
-        # never re-evaluated on every call) leaves every existing caller
-        # unchanged.
+        # Slots structurally outside this search's own scope: never
+        # selected for an assignment attempt, never required by
+        # `truly_complete` (see try_fill), and never counted as a broken
+        # crossing. This is NOT an "emplacement écarté" (see `_impossible_
+        # this_attempt` below and `DOC_ALGO/FR/Lexicon.md`) — an écarté
+        # slot always stays available as a last resort, whereas a slot
+        # named here is deliberately left out of the grid this search has
+        # to solve at all, and is never surfaced by any diagnostic.
+        # `_optimize_before_cleanup` is its only caller: it needs a fill
+        # that genuinely succeeds while leaving an entirely-empty or
+        # already-impossible zone untouched. Empty for every other caller,
+        # in which case this whole mechanism is a no-op.
         self.excluded_slots = excluded_slots if excluded_slots is not None else set()
-        # Slots that cross (share at least one cell with) a slot in
-        # `excluded_slots` — new selection rule, at the user's explicit
-        # request, taking priority over `_backtrack`'s own 8 levels: never
-        # try to fill such a slot. A word placed there would be removed
-        # again by the next cleanup anyway (`_build_retry_seed`, which
-        # removes any word directly crossing an impossible slot) if it was
-        # never reconsidered before then — better to never place it at all
-        # than to spend search budget on a word doomed to disappear.
-        # Computed once here, not on every call to _backtrack:
-        # `excluded_slots` never changes after __init__.
-        self._crossing_excluded_slots = _slots_touching(slots, self.excluded_slots)
         self.used_words = set()
         self.checks = 0
+        # "Emplacements écartés" (see `DOC_ALGO/FR/Lexicon.md`): slots
+        # found blocked at least once during THIS attempt. Set aside —
+        # tried only once no other slot can take a word — but never walled
+        # off: they stay available as a last resort, and never trigger a
+        # backtrack on their own. Reset to nothing at the start of every
+        # attempt, never inherited from a previous palier. Fed from three
+        # sources:
+        # - `mark_immediately_impossible_slots()`, run once before the
+        #   search starts, for a slot already dry under the definitive
+        #   constraints alone. Purely a head start: `_backtrack`'s own
+        #   per-node check below would find exactly the same slots on its
+        #   very first call anyway.
+        # - `_backtrack`'s own ordinary per-node domain check finding an
+        #   unassigned slot dry — that event already happens on every node
+        #   regardless of this feature, so recording it here costs nothing
+        #   extra. The frequent, common case.
+        # - `excluded_zone_cells`'s own `include_deadlock=True` calls (see
+        #   its docstring), which merge in the other way a slot can be
+        #   "impossible" — non-empty domain in isolation, yet jointly
+        #   unfillable with a slot it crosses (`_crossing_deadlock_slots`).
+        #   Deliberately NOT also scanned proactively inside `_backtrack`
+        #   itself on every node: that scan iterates every still-open
+        #   slot's own full domain, which can be tens of thousands of words
+        #   on an early, still-mostly-empty grid — even throttled to once
+        #   every few hundred calls, a search with a large check budget
+        #   (e.g. the web UI's "Ultra" mode) still triggers it often enough
+        #   for its cost to dwarf the search itself, stalling visible
+        #   progress for a long time on exactly the grids with the most
+        #   empty space left to fill. So a deadlock is only ever caught at
+        #   the comparatively rare cadence `_publish_new_best`/the final
+        #   diagnostics snapshot already pay this same cost at regardless —
+        #   one arising and resolving entirely between two such snapshots
+        #   is simply never seen.
+        # Capped at the MAX_EXCLUDED_SLOTS most recently added slots, and a
+        # slot leaves it as soon as a word placed across it leaves it no
+        # longer blocked (see `_backtrack`) — a slot that just went dry is a
+        # cheap, if imperfect, signal that it's worth avoiding as a search
+        # target while a less troublesome slot is still available.
+        # Only ever used to bias which of several already-viable slots
+        # `_backtrack` works on next, never to reject one outright: a slot
+        # in `unassigned` always has a genuinely non-empty domain regardless
+        # of this set's contents, and this set is dropped back to only
+        # deprioritizing (not excluding) the moment it would otherwise leave
+        # no slot selectable at all. This is also exactly the set surfaced
+        # as the yellow "écarté" overlay (`excluded_zone_cells`).
+        self._impossible_this_attempt = _RecentSlots(MAX_EXCLUDED_SLOTS)
         # Copy of the assignment at the moment the largest number of slots
         # were filled simultaneously across the whole search, regardless of
         # exactly where it eventually failed — unlike self.assignment
@@ -2590,6 +2720,9 @@ class Filler:
         # try_fill/diagnostics["example_grid"].
         self.best_assignment = list(self.assignment)
         self.best_assigned_count = 0
+        # Words already in place when `solve()` starts (see
+        # EARLY_DESCENTS_WORD_COUNT).
+        self._initial_assigned_count = 0
         # Called back (see _backtrack) every time best_assignment has just
         # been improved, with this new state as an argument — lets
         # try_fill publish this new state to the parent process in real
@@ -2598,6 +2731,152 @@ class Filler:
         # further down in this file, for the full history). `None` by
         # default — no effect for any pre-existing caller.
         self.on_new_best = on_new_best
+        # Called back (see _backtrack, CHECKS_PROGRESS_REPORT_INTERVAL)
+        # every so many checks, REGARDLESS of whether a new record was
+        # reached — unlike `on_new_best` above, so a caller can report
+        # genuine, continuous search progress (see `_worker_checks_
+        # progress`'s own docstring) even through a long stretch where no
+        # attempt beats its own previous best, which `on_new_best` alone
+        # would leave completely silent. Set directly on the instance by
+        # `try_fill`, never passed through this constructor — same
+        # convention already used for `on_new_best` itself. `None` by
+        # default — no effect for any caller that never sets it.
+        self.on_checks_progress = None
+        # Called back (see _backtrack, LIVE_STATE_HEARTBEAT_INTERVAL) every
+        # so many checks with `self.assignment` (the search's CURRENT
+        # state — can be LOWER than `self.best_assignment` at that exact
+        # moment, since backtracking freely retreats and re-advances)
+        # REGARDLESS of whether it's a new record — unlike `on_new_best`,
+        # which only ever sees the high-water mark. Lets a caller show the
+        # live preview grid genuinely changing while the search works
+        # through a long unproductive stretch, instead of freezing on the
+        # last record reached. Set directly on the instance by `try_fill`,
+        # same convention as `on_new_best`/`on_checks_progress` above.
+        # `None` by default — no effect for any caller that never sets it.
+        self.on_live_state = None
+        # Set directly on the instance by `try_fill`, same convention as
+        # `on_checks_progress`/`on_live_state` above — read-only shared
+        # references (`checks_progress`/`attempt_active`, see `generate_
+        # grid`'s own definitions) plus this attempt's own array slot,
+        # letting `_backtrack`'s deadline check (below) see whether any
+        # sibling attempt of the same palier is still genuinely racing
+        # towards its own `deadline_checks`, at the user's explicit
+        # request: "Autoriser les grilles à dépasser leur budget, tant
+        # qu'il reste des grilles qui ne l'ont pas atteint (CPU en attente
+        # pour rien)." All three stay `None` for every caller that never
+        # sets them (interactive mode, `minimize_black_squares`, etc.) —
+        # `_backtrack` then falls back to the original, unconditional
+        # "stop the instant the budget is exceeded" behavior.
+        self._sibling_checks_progress = None
+        self._sibling_attempt_active = None
+        self._checks_slot = None
+        # Once a periodic re-check (see `_deadline_reached_without_
+        # extension`) finds no sibling still racing, this flips to `True`
+        # and STAYS `True` for the rest of this attempt — a "stop" verdict
+        # must be sticky, exactly like the plain `self.checks > deadline_
+        # checks` condition it replaces: that plain condition is itself
+        # irreversibly true forever once `self.checks` first exceeds
+        # `deadline_checks` (a monotonic counter), which is what makes
+        # ordinary backtracking unwind the ENTIRE remaining search tree —
+        # every candidate at every level hits the same unconditional
+        # `return False`, not just the one candidate being tried at the
+        # moment the deadline was first crossed. A throttled, non-sticky
+        # re-check would only reject ONE candidate at a time: the very
+        # next candidate in that same slot's own loop calls `_backtrack`
+        # again on a check count that no longer happens to land on a
+        # checkpoint, sees no reason to stop, and gets placed — silently
+        # defeating the whole mechanism (found live: an attempt with no
+        # racing sibling ran to full completion regardless, instead of
+        # stopping within a handful of checks past its own deadline).
+        self._deadline_extension_denied = False
+        # Last `self.checks` value at which each periodic checkpoint of
+        # `_periodic_checkpoints` fired, keyed by its interval constant's
+        # role. `self.checks` advances once per candidate tried, most of
+        # which are rejected without recursing, so it routinely jumps over
+        # any exact multiple of an interval between two passes through a
+        # checkpoint — a checkpoint fires once at least its interval has
+        # elapsed since it last did, never on an exact-multiple match.
+        self._last_checkpoint_checks = {}
+
+    def _checkpoint_due(self, name, interval):
+        """True once `interval` checks have elapsed since checkpoint
+        `name` last fired (or on its very first call), recording the
+        current `self.checks` as its new reference when it does. A
+        `self.checks` lower than the recorded reference (the counter was
+        restarted) counts as due too."""
+        last = self._last_checkpoint_checks.get(name)
+        if last is None or self.checks - last >= interval or self.checks < last:
+            self._last_checkpoint_checks[name] = self.checks
+            return True
+        return False
+
+    def _periodic_checkpoints(self):
+        """Every periodic, interval-throttled signal of the search —
+        cancellation, progress/heartbeat reporting, sibling-driven early
+        stops — evaluated at `_backtrack`'s entry AND after every candidate
+        counted in its candidate loop, so a long stretch of rejected
+        candidates that never recurses still reports and still stops.
+        Raises `GenerationCancelled`; returns True when the search must
+        stop now (`self.abandoned` already set), False otherwise."""
+        if (
+            self.cancel_event is not None
+            and self._checkpoint_due("cancel", CANCEL_CHECK_INTERVAL)
+            and self.cancel_event.is_set()
+        ):
+            raise GenerationCancelled()
+        if (
+            self.on_checks_progress is not None
+            and self._checkpoint_due("progress", CHECKS_PROGRESS_REPORT_INTERVAL)
+        ):
+            self.on_checks_progress(self.checks)
+        if (
+            self.on_live_state is not None
+            and self._checkpoint_due("heartbeat", LIVE_STATE_HEARTBEAT_INTERVAL)
+        ):
+            self.on_live_state(self.assignment)
+        # Early stop of the WHOLE batch the moment a sibling attempt has
+        # abandoned itself (see _worker_batch_abandoned_event and
+        # UNFILLABLE_ABANDON_SLOT_COUNT): no point waiting for this attempt
+        # to reach its own abandon threshold or budget once another one has
+        # already judged the shared pattern hopeless.
+        if (
+            self.batch_abandoned_event is not None
+            and self._checkpoint_due("batch_abandoned", UNFILLABLE_ABANDON_CHECK_INTERVAL)
+            and self.batch_abandoned_event.is_set()
+        ):
+            self.abandoned = True
+            return True
+        # Early stop as soon as ANOTHER attempt of the same palier already
+        # answered (see attempt_done_event in generate_grid). Applies to
+        # both _pattern_attempt and _pattern_continue (see Filler.__init__'s
+        # own docstring); `interrupted_by_sibling` lets try_fill report this
+        # specific cause in `diagnostics["reason"]`.
+        if (
+            self.attempt_done_event is not None
+            and self._checkpoint_due("attempt_done", PALIER_ATTEMPT_DONE_CHECK_INTERVAL)
+            and self.attempt_done_event.is_set()
+        ):
+            self.abandoned = True
+            self.interrupted_by_sibling = True
+            return True
+        # Early abandonment of an attempt (see UNFILLABLE_ABANDON_ENABLED/
+        # UNFILLABLE_ABANDON_SLOT_COUNT): more than that many still-
+        # unassigned slots deemed impossible (impossible_zone_slots, on
+        # best_assignment) means no reasonable hope is left. Currently
+        # disabled, and throttled when enabled: impossible_zone_slots
+        # recomputes every unassigned slot's domain.
+        if (
+            UNFILLABLE_ABANDON_ENABLED
+            and self._checkpoint_due("unfillable", UNFILLABLE_ABANDON_CHECK_INTERVAL)
+            and len(self.impossible_zone_slots()) > UNFILLABLE_ABANDON_SLOT_COUNT
+        ):
+            self.abandoned = True
+            # Signals every other attempt of the same batch that it can
+            # stop too — see the batch_abandoned checkpoint above.
+            if self.batch_abandoned_event is not None:
+                self.batch_abandoned_event.set()
+            return True
+        return False
 
     def _domain(self, i, ignore_forced=False):
         """Set/list of words compatible with cell i's already-known letters
@@ -2762,25 +3041,6 @@ class Filler:
         if count >= self._theme_word_budget:
             self._theme_abandoned.add(word)
 
-    def _register_domain_break(self, slot_index):
-        """General-dictionary counterpart of `_register_challenge_word_
-        break`/`_register_theme_word_break` (see FALLBACK_PHASE_BUDGET_
-        FRACTION): counts one more crossing-slot break caused by trying an
-        ordinary candidate at `slot_index`, keyed by the SLOT rather than
-        by word (an ordinary candidate has no identity worth tracking on
-        its own — any dictionary word is as good as another). Once this
-        slot's own share of the budget is used up, `_backtrack` stops
-        insisting on a crossing-safe candidate for it and accepts the next
-        one anyway — see its own `domain_abandoned` check.
-        `self._domain_word_budget` is always set by the time this is
-        called (solve() resolves it unconditionally, unlike the challenge/
-        theme budgets, since the general dictionary is used on every
-        grid)."""
-        count = self._domain_break_counts[slot_index] + 1
-        self._domain_break_counts[slot_index] = count
-        if count >= self._domain_word_budget:
-            self._domain_break_abandoned.add(slot_index)
-
     def _placed_letter_count(self, i):
         """Number of cells of slot i already determined by a real letter —
         a crossing word already assigned during this same attempt, or a
@@ -2828,7 +3088,7 @@ class Filler:
         no fill option anymore, so it's not counted here, same exclusion
         as _placed_letter_count/_has_known_letter.
 
-        Used by _backtrack as level 8's final tie-break criterion (see its
+        Used by _backtrack as level 9's final tie-break criterion (see its
         own docstring), at the user's explicit request: favors the slot
         whose own zone statistically offers the most fill options — that
         is, for every still-free cell, several different real words fitting
@@ -2856,6 +3116,171 @@ class Filler:
                 total += max(counts.values()) ** 2
         return total
 
+    def _slot_min_letter_options(self, i):
+        """The smallest number of letters still possible on any STILL-FREE
+        cell of slot i, or `None` when it has no such cell to measure.
+
+        Reads `self.letter_scores_by_dir` — the very tally Interactive
+        mode's "Stats" button displays (`_interactive_letter_stats`, the
+        same `sample_letter_biases` sampling), crossed between the two
+        directions (`_crossed_letter_option_count`): how many distinct
+        letters were observed at that cell by BOTH the across and the down
+        slot through it, among real words compatible with the letters
+        already known. A cell whose two directions share no letter counts
+        0 — the tightest a cell can be, so its slot is taken first. Being
+        a sample, a 0 is never treated as a crossing deadlock: only the
+        real-domain check (`slot_is_blocked`) decides that. A cell already determined by a real letter
+        (a crossing word assigned this attempt, or `self.locked_letters`)
+        is skipped, exactly as in `_slot_letter_frequency_score`/`_placed_
+        letter_count` — its letter is settled, so it offers no remaining
+        choice to measure, and counting it would report 1 for every
+        partially-filled slot in the grid. A cell absent from `letter_
+        scores` (every slot through it sampled empty) is skipped too, the
+        same omission `_interactive_letter_stats` itself makes.
+
+        Used by `_select_target_slot`'s own most-constrained-cell level.
+        """
+        best = None
+        for cell in self.slots[i]:
+            if cell in self.locked_letters:
+                continue
+            fixed = False
+            for j, _ in self.cell_to_slots[cell]:
+                if j != i and self.assignment[j] is not None:
+                    fixed = True
+                    break
+            if fixed:
+                continue
+            by_dir = self.letter_scores_by_dir.get(cell)
+            if not by_dir:
+                continue
+            count = _crossed_letter_option_count(by_dir)
+            if count is None:
+                continue
+            if best is None or count < best:
+                best = count
+        return best
+
+    def stat_letters(self, assignment=None):
+        """The most likely letter of every white cell `assignment`
+        (`self.assignment` by default) leaves undetermined — neither
+        written by an assigned slot, nor in `self.locked_letters`, nor
+        carrying a seed (`self.forced_letters`, which the preview already
+        shows as a letter of its own) — read
+        from the cell's crossed tally (`_most_probable_letter`), as a
+        sorted `[r, c, letter]` list. What the automatic-generation
+        previews show in light gray, the same figure as Interactive mode's
+        "Stats" button. A cell with no tally, or whose two directions share
+        no letter, is omitted. Only meaningful for the assignment the
+        tally currently follows (see `best_stat_letters`)."""
+        if assignment is None:
+            assignment = self.assignment
+        fixed = set(self.locked_letters) | set(self.forced_letters)
+        for i, word in enumerate(assignment):
+            if word is not None:
+                fixed.update(self.slots[i])
+        out = []
+        for cell, by_dir in self.letter_scores_by_dir.items():
+            if cell in fixed:
+                continue
+            letter = _most_probable_letter(by_dir)
+            if letter is not None:
+                out.append([cell[0], cell[1], letter])
+        out.sort()
+        return out
+
+    def best_stat_letters_for(self):
+        """`stat_letters` for `best_assignment`: the snapshot taken when it
+        was recorded, or, before any record (a preseeded `best_
+        assignment`), the tally as it stands, which has not moved yet. The
+        snapshot is filtered against `best_assignment` as it is NOW, since
+        `_close_implied_slots` can still write words into it after the
+        search ends — a cell it filled no longer has a letter to guess."""
+        if self.best_stat_letters is None:
+            return self.stat_letters(self.best_assignment)
+        filled = set()
+        for i, word in enumerate(self.best_assignment):
+            if word is not None:
+                filled.update(self.slots[i])
+        return [entry for entry in self.best_stat_letters
+                if (entry[0], entry[1]) not in filled]
+
+    def _refresh_letter_scores_around(self, i):
+        """Re-sample the letter statistics of every still-open slot crossing
+        slot `i`, right after a word has been written on `i`, and return
+        what is needed to undo it (`_restore_letter_scores`).
+
+        `self.letter_scores` otherwise comes from one `sample_letter_
+        biases` pass run before the search starts, so it only ever knows
+        the letters that were locked back then. The cells a crossing slot
+        still has free are exactly the ones the word just placed on `i`
+        has newly constrained, so they are re-tallied here against that
+        slot's own CURRENT domain (`_domain`, which already accounts for
+        the new assignment): the same sampling `sample_letter_biases`
+        does, restricted to the slots the placement can actually have
+        changed anything for.
+
+        Bounded by construction: at most one crossing slot per cell of
+        `i`, each costing one `_domain` call plus `LETTER_BIAS_SAMPLE_
+        SIZE` draws — `_backtrack` already computes `_domain` for every
+        unassigned slot on every node, so this adds a small fraction of
+        what the node pays anyway. A slot with no valid letter left (an
+        empty domain) is skipped rather than re-tallied, as is one whose
+        every cell is already determined: there is nothing left to
+        measure, and the stale tally is simply left alone.
+
+        Each refreshed slot REPLACES the tally of its own cells rather
+        than adding to it. `sample_letter_biases` sums the contributions
+        of both slots crossing a cell, but the other contributor here is
+        `i`, whose letters are now fixed — its tally says nothing useful
+        about a cell whose letter is settled — so the crossing slot's own
+        fresh sample is the whole of what is still to be measured there.
+
+        The per-direction tally (`letter_scores_by_dir`) is updated in step:
+        the refreshed slot's own direction entry is replaced at each of its
+        cells, the other direction's entry left as it stands, so crossing
+        the two (`_crossed_letter_counts`) always confronts the freshest
+        sample of each side. Both views are restored together.
+        """
+        saved = {}
+        seen = set()
+        for cell in self.slots[i]:
+            for j, _pos in self.cell_to_slots[cell]:
+                if j == i or j in seen or self.assignment[j] is not None:
+                    continue
+                seen.add(j)
+                cands = self._domain(j)
+                if not cands:
+                    continue
+                sample = self.rng.choices(list(cands), k=LETTER_BIAS_SAMPLE_SIZE)
+                direction = self.slot_directions[j]
+                for pos, jcell in enumerate(self.slots[j]):
+                    if jcell not in saved:
+                        by_dir = self.letter_scores_by_dir.get(jcell)
+                        saved[jcell] = (
+                            self.letter_scores.get(jcell),
+                            dict(by_dir) if by_dir is not None else None,
+                        )
+                    fresh = Counter(word[pos] for word in sample)
+                    self.letter_scores[jcell] = fresh
+                    self.letter_scores_by_dir.setdefault(jcell, {})[direction] = fresh
+        return saved
+
+    def _restore_letter_scores(self, saved):
+        """Undo `_refresh_letter_scores_around` — called as the placement it
+        followed is reverted, so a tally never outlives the assignment it
+        was measured against. A cell that had no tally at all before is
+        removed again rather than left holding an empty Counter."""
+        for cell, (counts, by_dir) in saved.items():
+            if counts is None:
+                self.letter_scores.pop(cell, None)
+            else:
+                self.letter_scores[cell] = counts
+            if by_dir is None:
+                self.letter_scores_by_dir.pop(cell, None)
+            else:
+                self.letter_scores_by_dir[cell] = by_dir
+
     def _candidate_score(self, i, word):
         """Sum of the squares of the statistical scores (self.letter_
         scores, see sample_letter_biases) of `word` over slot i's cells
@@ -2882,68 +3307,128 @@ class Filler:
             total += self.letter_scores.get(cell, {}).get(word[pos], 0) ** 2
         return total
 
-    def exclude_immediately_impossible_slots(self):
-        """At the user's explicit request: "Le tour après une régénération
-        semble s'arrêter dès qu'un emplacement est impossible, ce qui peut
-        se produire immédiatement à cause du tirage des cases noires.
-        Tous les tours doivent se dérouler aussi longtemps qu'on peut
-        ajouter des mots en respectant les règles d'ajout."
+    def ordered_candidates(self, i, cands):
+        """The order in which slot `i`'s candidate words are to be tried —
+        the ONE candidate-ordering rule of this engine, shared by the
+        automatic search (`_backtrack`) and by Interactive mode's own
+        "Suivant" (`_general_dictionary_pick`/`_find_priority_word_
+        placement`), which is a step-by-step version of the same search
+        and must therefore draw its word exactly the same way.
+
+        Three stages, in this order:
+
+        1. the candidates are always shuffled first (with this search's
+           own seeded RNG, hence reproducible) — whether that shuffle
+           serves as the final draw (`letter_scores` empty, the case for
+           a direct `Filler` caller that supplies none) or only to break
+           ties in the sort right below, `sort` being stable;
+        2. they are sorted by `_candidate_score` (sum of squares of the
+           statistical letter scores over the cells no crossing word has
+           fixed yet), so a word matching the statistical consensus on
+           several free cells is tried before one that matches it nowhere;
+        3. the order is NOT strictly descending even so: each successive
+           pick is drawn at random among the `CANDIDATE_SCORE_WINDOW` best
+           words *still remaining* (not the first `CANDIDATE_SCORE_WINDOW`
+           of the original sort, fixed once and for all — the window
+           slides as words leave it). See that constant's own docstring
+           for what it balances.
+
+        `cands` is never modified: the returned list is a fresh one."""
+        cands = list(cands)
+        self.rng.shuffle(cands)
+        if not self.letter_scores:
+            return cands
+        cands.sort(key=lambda w: self._candidate_score(i, w), reverse=True)
+        window = CANDIDATE_SCORE_WINDOW
+        reordered = []
+        remaining = cands
+        while remaining:
+            take = min(window, len(remaining))
+            idx = self.rng.randrange(take)
+            reordered.append(remaining.pop(idx))
+        return reordered
+
+    def mark_immediately_impossible_slots(self):
+        """Flags as "écarté" (`_impossible_this_attempt`, see its own
+        docstring in `__init__` and `DOC_ALGO/FR/Lexicon.md`) every slot
+        already blocked under this search's definitive constraints alone,
+        before the search itself starts.
 
         To be called once, right before `solve()` (so after the caller
         has applied `preseed_assignment`, if any — see try_fill) and
         before any call to `_backtrack`: at this exact moment, `self.
         assignment` still only contains genuinely locked cells (no search
         decision has been made yet), so every still-unassigned slot's own
-        domain reflects only definitive constraints — if it's already
-        empty (or entirely already used) at this point, it will stay that
-        way for the rest of this search, whatever the search tries
-        elsewhere (`_domain` only depends on genuinely assigned/locked
-        crossings, never on a choice still to be made).
+        domain reflects only definitive constraints.
 
-        Without this fix, `_backtrack`'s own domain check (which runs for
-        *every* unassigned slot even before choosing which one to handle)
-        found this same slot empty at absolutely every call, whatever
-        search path was taken — the search then failed immediately
-        (`checks=1` or close to it), with no chance at all to try filling
-        the rest of the grid, which was often otherwise perfectly
-        fillable. Every slot identified this way is added to `excluded_
-        slots` (the same mechanism as for a slot already known impossible
-        from a previous palier, see `_pattern_continue`) — never assigned,
-        but letting the search continue freely on everything else;
-        `_crossing_excluded_slots` is recomputed accordingly, so the new
-        "never try to fill a slot crossing a slot deemed impossible" rule
-        also applies to these exclusions discovered here, not just to the
-        ones received as an argument.
+        Purely a head start for the deprioritization: `_backtrack`'s own
+        per-node domain check would flag exactly the same slots on its
+        very first call anyway. Flagging them here simply means the very
+        first slot selection already prefers a healthier slot, instead of
+        spending that one node discovering it. Like every other écarté
+        slot, one flagged here stays fully available as a last resort and
+        is picked back up on its own the moment backtracking makes its
+        domain non-empty again.
 
         A single pass is enough (no need to loop back to a fixed point):
-        excluding a slot never changes any other slot's own computed
-        domain — `_domain` never consults `excluded_slots` at all, it only
-        determines which ones `_backtrack` is allowed to select."""
+        flagging a slot never changes any other slot's own computed
+        domain — `_domain` never consults this set at all, it only biases
+        which slot `_backtrack` selects first."""
         # No word can have been abandoned yet (see _active_challenge_words):
         # this method only ever runs once, before solve()/_backtrack ever
         # gets a chance to break a crossing slot — resolved once here
         # regardless, for consistency with every other caller of this
         # method rather than reading self.challenge_words directly.
+        newly_flagged = self._dry_open_slots()
+        self._impossible_this_attempt |= newly_flagged
+        return newly_flagged
+
+    def _dry_open_slots(self):
+        """Every still-open slot (not in `excluded_slots`) with no
+        candidate left in the CURRENT assignment: dictionary domain minus
+        `used_words` empty, and no unused, still-active "Mots Défi" word
+        fitting it — the same test `_backtrack`'s own per-node domain
+        check applies."""
         active_challenge_words = self._active_challenge_words()
-        newly_excluded = {
+        return {
             i for i in range(len(self.slots))
             if self.assignment[i] is None
             and i not in self.excluded_slots
-            and i not in self._crossing_excluded_slots
             and all(w in self.used_words for w in self._domain(i))
             # Same "Mots Défi" exemption as _backtrack's own domain check
-            # (see its comment): a slot with a dry dictionary domain must
-            # not be excluded here, permanently, before the search even
-            # starts, if an unused challenge word still fits it.
+            # (see its comment): a slot with a dry dictionary domain is
+            # not dry if an unused challenge word still fits it — the
+            # challenge mechanism, not the dictionary, is what would fill
+            # it.
             and not (active_challenge_words and any(
                 w not in self.used_words and self._challenge_word_fits(i, w)
                 for w in active_challenge_words
             ))
         }
-        if newly_excluded:
-            self.excluded_slots = self.excluded_slots | newly_excluded
-            self._crossing_excluded_slots = _slots_touching(self.slots, self.excluded_slots)
-        return newly_excluded
+
+    def _assigned_crossers(self, i):
+        """Slots crossing slot `i` that currently hold a word — the
+        placements that fixed `i`'s known letters."""
+        return {k for k in self._crossing_slots[i] if self.assignment[k] is not None}
+
+    def _dry_slot_conflict(self, i):
+        """Conflict set of dry slot `i`: the words crossing it, plus the
+        slots holding a word `i` could otherwise have taken (its domain is
+        non-empty but every word of it is already used elsewhere)."""
+        conflict = self._assigned_crossers(i)
+        domain = self._domain(i)
+        if domain:
+            holder = {w: k for k, w in enumerate(self.assignment) if w is not None}
+            conflict.update(holder[w] for w in domain if w in holder)
+        return conflict
+
+    def _fail(self, conflict):
+        """Return False from `_backtrack`, reporting `conflict` (a set of
+        slots, or None for "unknown") to the caller."""
+        self._last_conflict = (
+            frozenset(conflict) if BACKJUMPING_ENABLED and conflict is not None else None
+        )
+        return False
 
     def solve(self, deadline_checks):
         # Resolved here (once, from the same `deadline_checks` every
@@ -2959,13 +3444,213 @@ class Filler:
             self._theme_word_budget = max(
                 1, round(FALLBACK_PHASE_BUDGET_FRACTION * deadline_checks)
             )
-        # Unlike the two budgets above, always resolved: the general
-        # dictionary is used on every grid, themed or not, challenge-word
-        # or not.
-        self._domain_word_budget = max(
-            1, round(FALLBACK_PHASE_BUDGET_FRACTION * deadline_checks)
-        )
+        # Strict search first: no node may create an impossible slot. Only
+        # if it is exhausted from the root — every word placed first having
+        # been put back into question, within MAX_DESCENTS_PER_NODE per
+        # node — and not merely cut short by the budget or an abandon, is
+        # the search replayed with the last-resort stage allowed. The first
+        # pass leaves the assignment exactly as it found it (every
+        # placement is reverted on the way back up), and `best_assignment`
+        # keeps whatever record it reached.
+        self._tolerated_dry = self._dry_open_slots()
+        self._initial_assigned_count = sum(1 for a in self.assignment if a is not None)
+        if self._backtrack(deadline_checks):
+            return True
+        if self.abandoned or self._budget_exhausted:
+            return False
+        self.breaking_permitted = True
         return self._backtrack(deadline_checks)
+
+    def _slot_letter_options(self, i, used_words, challenge_words=()):
+        """Per-position sets of letters slot `i` can still legitimately
+        take, given the CURRENT assignment: every letter appearing at that
+        position in one of its genuinely available candidates (`_domain(i,
+        ignore_forced=True)` minus `used_words`, plus any still-fitting
+        challenge word — exactly the sources `impossible_zone_slots`
+        itself reads).
+
+        The single place this computation lives: `_crossing_deadlock_
+        slots` (the whole-grid diagnostic) and `slot_is_blocked` (the
+        per-candidate check both the automatic search and Interactive
+        mode's "Suivant" go through) both call it, so "which letters can
+        still go here" can never mean two different things in two places.
+
+        A slot with no known letter at all has the whole length list as
+        its domain; its letters are then read from that list's
+        precomputed per-position counts (`_blank_letter_counts`) minus the
+        used words it contains, instead of a scan of tens of thousands of
+        words.
+
+        An empty set at position 0 means the slot has no candidate at all
+        — every other position is then empty too, so `not options[0]` is
+        the whole "plus aucun mot possible" test."""
+        cells = self.slots[i]
+        domain = self._domain(i, ignore_forced=True)
+        idx = self.index.for_cells(cells).get(len(cells))
+        if idx is not None and domain is idx["words"]:
+            base, members = _blank_letter_counts(idx, len(cells))
+            used_in_domain = [u for u in used_words if len(u) == len(cells) and u in members]
+            letters = _letters_from_counts(base, used_in_domain)
+        else:
+            letters = [set() for _ in cells]
+            for w in domain:
+                if w in used_words:
+                    continue
+                for pos, ch in enumerate(w):
+                    letters[pos].add(ch)
+        self._add_challenge_letters(i, letters, used_words, challenge_words)
+        return letters
+
+    def _add_challenge_letters(self, i, letters, used_words, challenge_words):
+        for cw in challenge_words:
+            if cw not in used_words and self._challenge_word_fits(i, cw):
+                for pos, ch in enumerate(cw):
+                    letters[pos].add(ch)
+
+    def slot_is_blocked(self, i, used_words, challenge_words=(), options_cache=None,
+                        fresh=(), placed_word=None):
+        """Is slot `i` an "emplacement bloqué" (red) in the CURRENT
+        assignment? The ONE definition of that term used everywhere in the
+        engine — `DOC_ALGO/FR/Lexicon.md`, and exactly what the red
+        overlay renders:
+
+        1. no candidate left at all (its own domain, minus words already
+           placed elsewhere, is empty and no unused challenge word fits);
+        2. or a crossing cell where it and the still-open slot crossing it
+           there agree on no letter at all ("case croisée bloquée") — each
+           slot's own domain can be perfectly healthy in isolation.
+
+        Case 2 is the reason this method exists rather than the plain
+        empty-domain test the per-candidate checks used to do on their
+        own: that test cannot see a deadlock, so a word could be placed
+        crossing a slot the interface was already painting red.
+
+        `options_cache` (a plain dict, one per search node) memoises
+        `_slot_letter_options` across the many candidates tried at the
+        same node. Two things can invalidate an entry, and both are
+        handled rather than approximated: placing a word on slot `k` only
+        ever changes the domain of a slot CROSSING `k`, so the caller
+        passes exactly `self._crossing_slots[k]` as `fresh` and those are
+        cached per known-letter signature rather than per slot; and the
+        word being tried is itself now used, so any
+        OTHER slot whose own domain happens to contain it loses whatever
+        letters only that word supplied — `placed_word` names it, and an
+        entry's per-letter counts say exactly which letters it was the last
+        supporter of (see `_letter_options_cached`). A
+        stale entry here would read as "this slot still has options",
+        i.e. would hide a real blockage, which is exactly what this
+        method exists to catch."""
+        opts = self._letter_options_cached(i, used_words, challenge_words,
+                                           options_cache, fresh, placed_word)
+        if not opts or not opts[0]:
+            return True
+        for pos, cell in enumerate(self.slots[i]):
+            own = opts[pos]
+            for j, jpos in self.cell_to_slots[cell]:
+                if j == i or self.assignment[j] is not None or j in self.excluded_slots:
+                    continue
+                other = self._letter_options_cached(j, used_words, challenge_words,
+                                                    options_cache, fresh, placed_word)
+                # A crossing slot with no option at all is blocked in its
+                # own right (case 1, reported when IT is examined) and is
+                # never made the cause of a deadlock here — same asymmetry
+                # `_crossing_deadlock_slots` applies.
+                if other and other[jpos] and not (own & other[jpos]):
+                    return True
+        return False
+
+    def _letter_options_cached(self, i, used_words, challenge_words, options_cache,
+                               fresh, placed_word=None):
+        """See `slot_is_blocked` for what this cache may and may not
+        reuse. Always returns exactly what `_slot_letter_options(i,
+        used_words, challenge_words)` would.
+
+        An entry holds the slot's per-position letter COUNTS over its
+        domain minus the node's own used words — `used_words` without the
+        candidate being tried (`placed_word`), the only word that varies
+        between two queries of one node — together with that used-word
+        set, the letters those counts yield and the domain itself. Placing
+        `placed_word` then removes a letter only where it was that
+        letter's last supporter, which the counts answer directly instead
+        of rescanning the domain. An entry whose recorded used-word set no
+        longer matches is recomputed, never reused. Challenge-word letters
+        are added fresh on every query: the active challenge pool can
+        shrink within a node.
+
+        A slot in `fresh` (crossing the slot the candidate was just placed
+        on) has a domain that changes with the candidate, so its entry is
+        keyed by its known-letter signature (`_known_letters_signature`)
+        rather than by the slot alone: that signature is exactly what its
+        domain depends on, and it only differs between candidates by the
+        one crossing letter, so a node computes at most one entry per
+        distinct letter there instead of one per candidate."""
+        if options_cache is None:
+            return self._slot_letter_options(i, used_words, challenge_words)
+        key = (i, self._known_letters_signature(i)) if i in fresh else i
+        node_used = used_words - {placed_word} if placed_word is not None else set(used_words)
+        entry = options_cache.get(key)
+        if entry is None or entry[0] != node_used:
+            entry = (frozenset(node_used),) + self._slot_letter_counts(i, node_used)
+            options_cache[key] = entry
+        _, counts, letters, domain = entry
+        if (placed_word is not None and placed_word not in node_used
+                and placed_word in domain
+                and any(counts[pos][ch] == 1 for pos, ch in enumerate(placed_word))):
+            letters = _letters_from_counts(counts, [placed_word])
+        elif challenge_words:
+            letters = [set(s) for s in letters]
+        else:
+            return letters
+        self._add_challenge_letters(i, letters, used_words, challenge_words)
+        return letters
+
+    def _known_letters_signature(self, i):
+        """The letters `_domain(i, ignore_forced=True)` constrains slot `i`
+        with, one entry per cell (`None` for a free one): an assigned
+        crossing slot's letter first, else a locked letter — the same
+        derivation, in the same order, so two equal signatures always mean
+        two equal domains."""
+        sig = []
+        for cell in self.slots[i]:
+            letter = None
+            for j, other_pos in self.cell_to_slots[cell]:
+                if j != i and self.assignment[j] is not None:
+                    letter = self.assignment[j][other_pos]
+                    break
+            if letter is None:
+                letter = self.locked_letters.get(cell)
+            sig.append(letter)
+        return tuple(sig)
+
+    def _slot_letter_counts(self, i, used_words):
+        """`(counts, letters, domain)` for slot `i`: per-position letter
+        counts over its dictionary domain minus `used_words`, the letters
+        with a non-zero count, and the domain as a set (for membership
+        tests). Challenge words are not included — see `_letter_options_
+        cached`."""
+        cells = self.slots[i]
+        domain = self._domain(i, ignore_forced=True)
+        idx = self.index.for_cells(cells).get(len(cells))
+        if idx is not None and domain is idx["words"]:
+            base, members = _blank_letter_counts(idx, len(cells))
+            counts = [dict(c) for c in base]
+            for u in used_words:
+                if len(u) == len(cells) and u in members:
+                    for pos, ch in enumerate(u):
+                        counts[pos][ch] -= 1
+            domain = members
+        else:
+            counts = [{} for _ in cells]
+            for w in domain:
+                if w in used_words:
+                    continue
+                for pos, ch in enumerate(w):
+                    c = counts[pos]
+                    c[ch] = c.get(ch, 0) + 1
+            if not isinstance(domain, (set, frozenset)):
+                domain = set(domain)
+        letters = [{ch for ch, n in c.items() if n > 0} for c in counts]
+        return counts, letters, domain
 
     def _crossing_deadlock_slots(self, used_words, challenge_words=()):
         """Indices of every still-unassigned slot that crosses another
@@ -3005,20 +3690,10 @@ class Filler:
         en rouge vif (plus vif que les mots impossibles qui passent par
         cette case)"."""
         open_slots = [i for i, w in enumerate(self.assignment) if w is None]
-        letters_by_slot = {}
-        for i in open_slots:
-            cells = self.slots[i]
-            letters = [set() for _ in cells]
-            for w in self._domain(i, ignore_forced=True):
-                if w in used_words:
-                    continue
-                for pos, ch in enumerate(w):
-                    letters[pos].add(ch)
-            for cw in challenge_words:
-                if cw not in used_words and self._challenge_word_fits(i, cw):
-                    for pos, ch in enumerate(cw):
-                        letters[pos].add(ch)
-            letters_by_slot[i] = letters
+        letters_by_slot = {
+            i: self._slot_letter_options(i, used_words, challenge_words)
+            for i in open_slots
+        }
         deadlocked = set()
         deadlock_cells = set()
         for cell, entries in self.cell_to_slots.items():
@@ -3053,8 +3728,8 @@ class Filler:
         already used by another word already placed in `best_assignment`
         — otherwise such a slot (a domain that looks non-empty, but with
         no candidate genuinely available anymore) stays invisible to this
-        diagnostic, wrongly preventing `generate_grid`'s "still_has_hope"/
-        `excluded_slots` from ever treating it as blocked (see _backtrack
+        diagnostic, wrongly preventing `generate_grid`'s "still_has_hope"
+        from ever treating it as blocked (see _backtrack
         below for the same fix on the search side). `used_at_best` is
         recomputed directly from `best_assignment` rather than reading
         `self.used_words` — the latter reflects `self.assignment`'s
@@ -3125,6 +3800,40 @@ class Filler:
         self.assignment = saved
         return result
 
+    def empty_domain_zone_cells(self, assignment):
+        """Cells of every still-unassigned slot whose domain is empty in
+        `assignment` — the plain empty-domain half of `impossible_zone_
+        cells` (same red overlay), deliberately WITHOUT the crossing-
+        deadlock scan.
+
+        Exists for `try_fill`'s live heartbeat, which publishes far too
+        often to afford `impossible_zone_cells()`: that method's cost is
+        almost entirely `_crossing_deadlock_slots`, which builds a letter
+        set out of every open slot's full domain. What is left here is one
+        `_domain` call per unassigned slot — the very same work
+        `_backtrack` already does on every single node, so paying it again
+        once per `LIVE_STATE_HEARTBEAT_INTERVAL` checks is negligible.
+
+        Without this, a heartbeat tile could never show red at all, so a
+        slot whose crossing letters had just spelled something impossible
+        showed only the weaker yellow "écarté" background — understating a
+        genuine dead end for as long as that attempt kept heartbeating."""
+        saved = self.assignment
+        self.assignment = assignment
+        used = {w for w in assignment if w is not None}
+        active_challenge_words = self._active_challenge_words()
+        cells = set()
+        for i, word in enumerate(assignment):
+            if word is not None or i in self.excluded_slots:
+                continue
+            if all(w in used for w in self._domain(i, ignore_forced=True)) and not any(
+                cw not in used and self._challenge_word_fits(i, cw)
+                for cw in active_challenge_words
+            ):
+                cells.update(self.slots[i])
+        self.assignment = saved
+        return sorted(cells)
+
     def impossible_zone_cells(self):
         """Cells belonging to an unassigned slot, in the self.best_
         assignment state (the most advanced point reached before
@@ -3136,7 +3845,25 @@ class Filler:
         isn't necessarily the one where the search eventually failed —
         for instance a failure from exhausting the check budget
         (`deadline_exceeded`) can occur while every domain at that moment
-        was still non-empty, just not yet resolved in time."""
+        was still non-empty, just not yet resolved in time.
+
+        Deliberately does NOT also include every cell of an "emplacement
+        écarté" (`_impossible_this_attempt`) on that basis alone: that set
+        only records that a slot went dry at least once during this
+        attempt, a scheduling signal — it says nothing about whether the
+        slot's domain is still empty right now, and backtracking routinely
+        makes such a slot viable again. Painting it red regardless would
+        conflate "deprioritized" with "impossible," breaking the very
+        invariant this method exists to uphold (a plain white cell always
+        means the attempt would still complete it, given enough budget) in
+        the other direction: a RED cell would no longer reliably mean
+        "unfixable" either. An écarté slot gets its own separate, weaker
+        signal instead — see `excluded_zone_cells` (yellow in the web UI,
+        distinct from this method's own red); see also
+        `Filler.on_checks_progress`/
+        `on_live_state` for the mechanism that proves, live, that a
+        stalled-looking attempt is still genuinely working rather than
+        stuck."""
         cells = set()
         for i in self.impossible_zone_slots():
             cells.update(self.slots[i])
@@ -3160,11 +3887,118 @@ class Filler:
         self.assignment = saved
         return sorted(cells)
 
+    def excluded_zone_cells(self, assignment=None, include_deadlock=False):
+        """Cells of every "emplacement écarté" of THIS attempt (see
+        `DOC_ALGO/FR/Lexicon.md`) — a slot found blocked at least once,
+        set aside so it is only retried once no other slot can take a
+        word, but never walled off. Highlighted with a distinct, weaker
+        signal than `impossible_zone_cells`/`deadlock_zone_cells` (yellow
+        rather than red in the web UI): "impossible détecté, mais non
+        définitif".
+
+        This is exactly `_impossible_this_attempt` — the one set
+        `_backtrack`'s own slot selection deprioritizes — so the overlay
+        and the search behavior can never disagree. Two things feed that
+        set (see its own docstring in `__init__`), plus one computed
+        here:
+
+        - `_backtrack`'s own per-node domain check, the moment a slot's
+          domain first goes dry, and `mark_immediately_impossible_slots`'s
+          pre-search pass for a slot already dry under the definitive
+          constraints alone — the common case. A slot stays flagged for
+          the rest of THIS attempt even once backtracking later makes it
+          viable again, which is exactly the "temporary, not definitive"
+          signal this overlay exists to show. Filtered to still-unassigned
+          slots in `assignment` (`self.assignment` if not given) — a slot
+          that went dry once but was later successfully filled via a
+          different path must never show this overlay on top of its own
+          real letters.
+        - A crossing-letter deadlock (`_crossing_deadlock_slots`)
+          currently found in `assignment`, ONLY when `include_deadlock` is
+          true — at the user's explicit follow-up request: the plain
+          empty-domain case above already gets this "temporarily set
+          aside" treatment live, the instant `_backtrack` notices it
+          (`_impossible_this_attempt`); a deadlock, without this third
+          source, would show red (`impossible_zone_cells`/`deadlock_zone_
+          cells`, both of which already fold it in) but never also
+          yellow, unlike its plain-empty-domain counterpart — an
+          inconsistency between two cases that both mean the same thing
+          here ("impossible right now, not yet definitive"). `include_
+          deadlock` defaults to `False`, matching every pre-existing
+          caller's own expectation that this method "never iterates a
+          domain... cheap enough for every cadence" (see `_publish_live_
+          state`'s own comment) — `_crossing_deadlock_slots` is exactly
+          the domain-iterating cost that comment refers to, the same one
+          already responsible for a real, separately-fixed slowdown when
+          run too often (see `impossible_zone_cells`/`deadlock_zone_
+          cells`/`impossible_zone_slots` already being skipped entirely at
+          `_publish_live_state`'s own tight heartbeat cadence). Pass `True`
+          only where the caller already pays for that same cost anyway on
+          the very same call (`_publish_new_best`, the final diagnostics
+          snapshot) — one more `_crossing_deadlock_slots` call there is a
+          bounded, proportionate addition; at the heartbeat's own much
+          tighter cadence it would reintroduce the exact slowdown these
+          three were deliberately skipped to avoid. Computed fresh on
+          every call (temporarily swapping `self.assignment` to whichever
+          snapshot this call examines, exactly like `deadlock_zone_cells`
+          itself does) — never cached, since the two callers that opt in
+          already recompute `deadlock_zone_cells()`'s own equivalent call
+          on every invocation too. `_crossing_deadlock_slots` only ever
+          reports still-*unassigned* slots (`open_slots`, computed
+          internally from `self.assignment`), so no extra filter is
+          needed here either. A slot found this way is reported for THIS
+          snapshot only and is NEVER merged into `_impossible_this_
+          attempt` (`DOC_ALGO/FR/Lexicon.md`: nothing on a display path
+          may write to that set). A crossing deadlock is a property of
+          the assignment being examined, not a lasting fact about the
+          slot — the next placement can dissolve it — so memorising it
+          would let a display call permanently rewrite the search's own
+          scheduling set; see the inline comment at the merge point below
+          for what that measured.
+
+        Every source here is a scheduling/deprioritization decision, not
+        a confirmed dead end — see `impossible_zone_cells`'s own docstring
+        for why this attempt never paints any of them red on that basis
+        alone, even though a slot's domain may well still be genuinely
+        empty right now. This can therefore legitimately overlap with a
+        fresh `impossible_zone_cells()`/`deadlock_zone_cells()` result —
+        the web UI lets the stronger red win via CSS cascade order rather
+        than this method subtracting one set from the other, so neither
+        list here needs the other's result to stay correct on its own."""
+        if assignment is None:
+            assignment = self.assignment
+        cells = set()
+        for i in self._impossible_this_attempt:
+            if assignment[i] is None:
+                cells.update(self.slots[i])
+        if include_deadlock:
+            used_words = {w for w in assignment if w is not None}
+            active_challenge_words = self._active_challenge_words()
+            saved_assignment = self.assignment
+            self.assignment = assignment
+            deadlocked, _deadlock_cells = self._crossing_deadlock_slots(used_words, active_challenge_words)
+            self.assignment = saved_assignment
+            # Reported for THIS snapshot only, never merged into
+            # `_impossible_this_attempt`. A crossing deadlock is a
+            # property of the assignment being examined, not a lasting
+            # fact about the slot: the very next placement can dissolve
+            # it. Memorising it made a display call permanently rewrite
+            # the search's own scheduling set — measured on a replayed
+            # STOP_DUMP, wiring the preview queue alone took a 100k-check
+            # attempt from 0 slots set aside to 44, until essentially
+            # every slot was écarté, the deprioritization was vacuous
+            # (7991 of 8967 selections had nothing but écarté slots to
+            # choose from, against 0 without the queue) and the grid
+            # showed as a frozen block of yellow.
+            for i in deadlocked:
+                cells.update(self.slots[i])
+        return sorted(cells)
+
     def _select_target_slot(self, unassigned, domains):
         """Chooses which slot to fill next among `unassigned` (already
         guaranteed non-empty, each with at least one genuinely available
         candidate — see the domain check right before this call, in
-        `_backtrack`), via the 8-level cascade documented below.
+        `_backtrack`), via the 9-level cascade documented below.
 
         Factored out of `_backtrack` to be reused as-is by `interactive_
         place_word` (the web UI's "Interactif" mode), at the user's
@@ -3178,8 +4012,19 @@ class Filler:
         Takes `unassigned`/`domains` as parameters (rather than
         recomputing them) since `interactive_place_word` has already built
         them in a slightly different shape (`viable`, filtered by `used_
-        words`) for its own use."""
-        # 8-level selection rule, at the user's explicit request (MRV was
+        words`) for its own use.
+
+        `_backtrack` deprioritizes a slot flagged in `self._impossible_
+        this_attempt` (see its own docstring in __init__) BEFORE calling
+        this method, by excluding it from its own `unassigned` argument
+        whenever at least one other slot remains selectable — this method
+        itself has no notion of that set and simply runs the 9-level
+        cascade below over whatever list it's handed. `interactive_place_
+        word`'s own call site builds its own `viable` list directly and
+        never applies this deprioritization at all — there's no `_backtrack`
+        recursion there to observe a slot going dry over the course of a
+        search in the first place (see that function's own docstring)."""
+        # 9-level selection rule, at the user's explicit request (MRV was
         # removed — see the comment further up, before the Filler class,
         # for why):
         # 1. **Optional, currently disabled** (`ALTERNATE_DIRECTION_
@@ -3268,18 +4113,21 @@ class Filler:
         #    next level then applies to the whole group;
         # 6. among the slots of the group obtained at the previous level, a
         #    purely **geometric** score is computed for each: the squared
-        #    distance between the slot's own CENTRAL position (the midpoint
-        #    of its own span, from `self.slots[i][0]`/`self.slots[i][-1]`
-        #    — see `extract_slots`) and the grid's own center (the same
-        #    `(row, col)` origin as everywhere else in this file) — see the
-        #    computation itself further below for the detail. This score
+        #    distance between the slot's own CLOSEST cell to the grid's own
+        #    center (every cell of `self.slots[i]` is considered
+        #    individually, the smallest of their own squared distances
+        #    being the slot's score — NOT the midpoint of its own span, so
+        #    a long slot only needs to REACH toward the center to score
+        #    well) and that center itself (the same `(row, col)` origin as
+        #    everywhere else in this file) — see the computation itself
+        #    further below for the detail. This score
         #    doesn't depend at all on the slot's own fill state (neither
         #    its known letters nor its domain) — only on its fixed position
         #    in the grid — which tends to make the fill progress along a
-        #    geometric front rather than by each slot's own difficulty. A
-        #    uniform random draw is then made **among the `SLOT_SELECTION_
-        #    WINDOW_SIZE` (10) slots with the smallest score** (the closest
-        #    to the grid's own center) — a fixed window size, not a
+        #    geometric front rather than by each slot's own difficulty.
+        #    Only **the `SLOT_SELECTION_WINDOW_SIZE` (10) slots with the
+        #    smallest score** (the closest to the grid's own center) are
+        #    kept — a fixed window size, not a
         #    proportion of the group (see its own docstring). The slots are
         #    shuffled (with this attempt's own
         #    seeded RNG, hence reproducible) before being sorted by score:
@@ -3291,13 +4139,30 @@ class Filler:
         #    relevant here since the score is geometric, so many slots can
         #    share exactly the same score (the whole ring at a given
         #    Euclidean distance from the center). This geometric window
-        #    (`window`) is then re-sorted twice more, each time reducing
-        #    it further, before the final choice is made:
-        # 7. by the number of letters already placed in each slot
+        #    (`window`) is then narrowed three more times before the final
+        #    choice is made:
+        # 7. **Most-constrained cell**: among the slots of the geometric
+        #    window obtained at the previous level, the smallest number of
+        #    letters still possible on any one STILL-FREE cell is found
+        #    (`_slot_min_letter_options`, reading the same `letter_scores`
+        #    tally Interactive mode's own "Stats" button displays — see
+        #    `_interactive_letter_stats`), and the choice is restricted to
+        #    the slots that actually own a cell with that count. The
+        #    tightest cell in the grid is where the fill can go wrong
+        #    soonest, so it gets resolved while the search still has room
+        #    to manoeuvre, instead of being left for some crossing word to
+        #    settle by accident. Only slots of at least
+        #    `MOST_CONSTRAINED_START_LENGTH` (7) letters are measured
+        #    first; when none has a measurable free cell, the length
+        #    threshold drops by one, down to `MOST_CONSTRAINED_MIN_LENGTH`
+        #    (2). If no slot of the window has a measurable free cell even
+        #    then, this level changes nothing: the next one then applies
+        #    to the whole window;
+        # 8. by the number of letters already placed in each slot
         #    (`_placed_letter_count`, the most letters first), reduced to
         #    its own first `SLOT_SELECTION_REFINE_FRACTION` slots (see this
         #    constant's own docstring);
-        # 8. by `_slot_letter_frequency_score` (see its own docstring), the
+        # 9. by `_slot_letter_frequency_score` (see its own docstring), the
         #    highest score first — the slot whose own zone statistically
         #    offers the most fill options — whose very first entry directly
         #    becomes the chosen slot. Each of these two reductions
@@ -3452,6 +4317,42 @@ class Filler:
         shuffled_pool = list(selection_pool)
         self.rng.shuffle(shuffled_pool)
         window = sorted(shuffled_pool, key=lambda i: scores[i])[:SLOT_SELECTION_WINDOW_SIZE]
+        # Most-constrained-cell level: among the geometric window obtained
+        # at the previous level, find the smallest number of letters still
+        # possible on any one still-free cell (`_slot_min_letter_options`,
+        # reading the same `letter_scores` tally Interactive mode's
+        # "Stats" button displays), and restrict the choice to the slots
+        # that actually own a cell with that count. The tightest cell in
+        # the grid is where the fill can go wrong soonest, so it is
+        # resolved while the search still has room to manoeuvre rather
+        # than left to a crossing word to settle by accident. Skipped when
+        # no slot of the window has a measurable free cell (nothing to
+        # restrict), and it can never empty the pool: whichever slot owns
+        # the minimum is in the result by construction. The measure is
+        # scoped by a decreasing slot-length threshold: only slots of at
+        # least `MOST_CONSTRAINED_START_LENGTH` (7) letters are measured
+        # first; when none of the window has a measurable free cell at that
+        # threshold, it drops by one (6, 5, ...) down to `MOST_CONSTRAINED_
+        # MIN_LENGTH` (2), and the first threshold yielding a measurable
+        # slot is the one applied. Long slots are thus resolved on their
+        # tightest cell before short ones, whose naturally narrow
+        # vocabulary makes a tight cell a weaker signal.
+        all_counts = {}
+        for i in window:
+            if len(self.slots[i]) < MOST_CONSTRAINED_MIN_LENGTH:
+                continue
+            count = self._slot_min_letter_options(i)
+            if count is not None:
+                all_counts[i] = count
+        for threshold in range(MOST_CONSTRAINED_START_LENGTH, MOST_CONSTRAINED_MIN_LENGTH - 1, -1):
+            option_counts = {
+                i: count for i, count in all_counts.items()
+                if len(self.slots[i]) >= threshold
+            }
+            if option_counts:
+                fewest = min(option_counts.values())
+                window = [i for i in window if option_counts.get(i) == fewest]
+                break
         # New, at the user's explicit request: re-sort this window by the
         # number of letters already placed in each slot (the most letters
         # first), then reduce it again to its own first SLOT_SELECTION_
@@ -3480,7 +4381,92 @@ class Filler:
         freq_scores = {i: self._slot_letter_frequency_score(i) for i in refined_window}
         return sorted(shuffled_refined, key=lambda i: -freq_scores[i])[0]
 
-    def _backtrack(self, deadline_checks):
+    def _siblings_still_racing(self, deadline_checks):
+        """True iff some OTHER slot of `_sibling_attempt_active` is both
+        active (a real attempt currently running there, not merely a slot
+        never dispatched or already freed) and still below its own
+        `deadline_checks` — see `_backtrack`'s own deadline-check comment
+        for why this governs whether this attempt may keep searching past
+        its nominal budget. `_sibling_checks_progress` alone can't answer
+        this: a slot whose own attempt already stopped early (`search_
+        exhausted`, cancelled, abandoned) keeps its last-reported, possibly
+        low `checks` value forever, which would otherwise look exactly
+        like "still racing" — `_sibling_attempt_active` is what tells the
+        two apart."""
+        active = self._sibling_attempt_active
+        progress = self._sibling_checks_progress
+        for i in range(len(active)):
+            if i == self._checks_slot:
+                continue
+            if active[i] and progress[i] < deadline_checks:
+                return True
+        return False
+
+    def _deadline_reached_without_extension(self, deadline_checks):
+        """True once `self.checks` has exceeded `deadline_checks` AND no
+        extension applies — the single source of truth both deadline
+        checkpoints in `_backtrack` below consult (the cheap one at the
+        top of the function, evaluated once per recursive call, and the
+        per-candidate one inside the `for w in cands:` loop, evaluated far
+        more often — a search that mostly rejects candidates without ever
+        recursing further would otherwise never re-consult the top-level
+        check at all, see that loop's own comment). Returns `False`
+        immediately if `self.checks` hasn't reached `deadline_checks` yet
+        — nothing to decide.
+
+        For a caller with no visibility into its siblings (`_checks_slot`/
+        `_sibling_checks_progress`/`_sibling_attempt_active` all `None` —
+        interactive mode, `minimize_black_squares`, a solitary CLI run),
+        this is the plain, original, unconditional "budget's up" rule.
+
+        For a palier's own parallel attempts, at the user's explicit
+        request ("Autoriser les grilles à dépasser leur budget, tant
+        qu'il reste des grilles qui ne l'ont pas atteint"), the budget is
+        elastic: this attempt may keep going past its own `deadline_
+        checks` as long as some sibling attempt of the same palier is
+        still genuinely racing towards its own deadline — stopping this
+        one right now would just leave its CPU core idle until that
+        slower sibling finishes anyway, since the palier can't conclude
+        before it does. The "stop" verdict, once reached, is STICKY for
+        the rest of this attempt (`self._deadline_extension_denied`) —
+        essential, not a mere optimization: ordinary backtracking only
+        ever reacts to a `False` return by trying the NEXT candidate at
+        that same slot, so a single, transient "stop" would just reject
+        one candidate and let the loop move on to place a different one
+        right after, on a check count that no longer happens to fall on a
+        checkpoint — never actually unwinding the search the way the
+        plain, irreversible `self.checks > deadline_checks` condition
+        this replaces always did. Re-evaluated (while not yet denied)
+        immediately the first time the deadline is crossed (`self.checks
+        += 1` in the per-candidate loop makes this exact-match reliable
+        there — a genuinely solo attempt still stops right away, exactly
+        like before this feature), then only every `CHECKS_PROGRESS_
+        REPORT_INTERVAL` checks past that point (the same cadence every
+        sibling's own `checks_progress` cell is itself refreshed at, so
+        checking more often couldn't see fresher data regardless) — not
+        on every check past the deadline, to keep this extension's own
+        cost negligible."""
+        if self._deadline_extension_denied:
+            return True
+        if self.checks <= deadline_checks:
+            return False
+        if (
+            self._checks_slot is None
+            or self._sibling_checks_progress is None
+            or self._sibling_attempt_active is None
+        ):
+            self._deadline_extension_denied = True
+            return True
+        checks_past_deadline = self.checks - deadline_checks
+        if (
+            checks_past_deadline == 1
+            or checks_past_deadline % CHECKS_PROGRESS_REPORT_INTERVAL == 0
+        ) and not self._siblings_still_racing(deadline_checks):
+            self._deadline_extension_denied = True
+            return True
+        return False
+
+    def _backtrack(self, deadline_checks, released=False):
         # `self.checks` is no longer incremented here (once per call/node)
         # but once per candidate word genuinely attempted, in the `for w in
         # cands:` loop further below — see its own comment for the reason
@@ -3489,84 +4475,24 @@ class Filler:
         # solve()`) therefore starts with `self.checks` still at its entry
         # value (0 for a fresh search); the checks below remain correct
         # with this value as-is.
+        # Every early exit below reports no conflict (see `_fail`).
+        self._last_conflict = None
         if self.abandoned:
             return False
-        if self.checks > deadline_checks:
+        # See `_deadline_reached_without_extension`'s own docstring — the
+        # per-candidate check further below (`for w in cands:`) is the one
+        # that actually bounds a slot whose candidates mostly get rejected
+        # without ever recursing back here; this one covers every other
+        # path back into `_backtrack`.
+        if self._deadline_reached_without_extension(deadline_checks):
+            self._budget_exhausted = True
             return False
-        if (
-            self.cancel_event is not None
-            and self.checks % CANCEL_CHECK_INTERVAL == 0
-            and self.cancel_event.is_set()
-        ):
-            raise GenerationCancelled()
-        # Early stop of the WHOLE batch the moment a sibling attempt has
-        # abandoned itself (see _worker_batch_abandoned_event and
-        # UNFILLABLE_ABANDON_SLOT_COUNT below) — at the user's explicit
-        # request: don't wait for this attempt to also reach its own
-        # abandon threshold or its own budget once another one has already
-        # judged the shared pattern hopeless. Same check frequency as the
-        # other signals above/below — a real cost not worth paying at
-        # every node.
-        if (
-            self.batch_abandoned_event is not None
-            and self.checks % UNFILLABLE_ABANDON_CHECK_INTERVAL == 0
-            and self.batch_abandoned_event.is_set()
-        ):
-            self.abandoned = True
-            return False
-        # Early stop as soon as ANOTHER attempt of the same palier already
-        # answered (success or failure), at the user's explicit request
-        # ("interrupt every search as soon as one search finishes (success
-        # or failure) to move on to the next palier") — see
-        # attempt_done_event in generate_grid. Unlike the batch_abandoned_
-        # event checkpoint above, this one applies to both _pattern_attempt
-        # and _pattern_continue (see Filler.__init__'s own docstring for why
-        # the distinction made for batch_abandoned_event doesn't apply
-        # here). Reuses `self.abandoned` as a fast short-circuit (same
-        # mechanism as just above), but also sets
-        # `self.interrupted_by_sibling` so try_fill can distinguish this
-        # specific cause in `diagnostics["reason"]`.
-        if (
-            self.attempt_done_event is not None
-            and self.checks % PALIER_ATTEMPT_DONE_CHECK_INTERVAL == 0
-            and self.attempt_done_event.is_set()
-        ):
-            self.abandoned = True
-            self.interrupted_by_sibling = True
-            return False
-        # Early abandonment of an attempt (see UNFILLABLE_ABANDON_ENABLED/
-        # UNFILLABLE_ABANDON_SLOT_COUNT above): the moment more than
-        # `UNFILLABLE_ABANDON_SLOT_COUNT` still-unassigned slots are deemed
-        # impossible (in the sense of impossible_zone_slots, computed on
-        # best_assignment), this attempt is judged to have no reasonable
-        # hope left and is abandoned on the spot — no point continuing to
-        # try adding words elsewhere on a pattern already this badly
-        # compromised. Optional, at the user's explicit request, and
-        # currently disabled (UNFILLABLE_ABANDON_ENABLED = False): while
-        # disabled this whole check is a no-op and an attempt is never cut
-        # short for this reason alone. When enabled, checked only every
-        # UNFILLABLE_ABANDON_CHECK_INTERVAL times (like cancel_event above),
-        # not on every call: impossible_zone_slots recomputes every
-        # unassigned slot's domain, a real cost not worth paying at every
-        # node.
-        if (
-            UNFILLABLE_ABANDON_ENABLED
-            and self.checks % UNFILLABLE_ABANDON_CHECK_INTERVAL == 0
-            and len(self.impossible_zone_slots()) > UNFILLABLE_ABANDON_SLOT_COUNT
-        ):
-            self.abandoned = True
-            # Signals to every other attempt of the same batch that they
-            # too can stop — see _worker_batch_abandoned_event's own
-            # comment and the matching checkpoint further up in this same
-            # method.
-            if self.batch_abandoned_event is not None:
-                self.batch_abandoned_event.set()
+        if self._periodic_checkpoints():
             return False
         unassigned = [
             i for i in range(len(self.slots))
             if self.assignment[i] is None
             and i not in self.excluded_slots
-            and i not in self._crossing_excluded_slots
         ]
         # Counted directly from self.assignment (not derived from
         # `len(self.slots) - len(unassigned)`): with `excluded_slots`
@@ -3577,6 +4503,7 @@ class Filler:
         if assigned_count > self.best_assigned_count:
             self.best_assigned_count = assigned_count
             self.best_assignment = list(self.assignment)
+            self.best_stat_letters = self.stat_letters(self.assignment)
             if self.on_new_best is not None:
                 self.on_new_best(self.best_assignment)
         if not unassigned:
@@ -3619,230 +4546,465 @@ class Filler:
                 # slot — a challenge word is trusted purely geometrically
                 # (_challenge_word_fits), never against this domain at
                 # all, so a slot reserved for one (a real surname, say,
-                # absent from the lexicon) must not abort this whole
-                # branch just because _domain(i) itself came back dry.
+                # absent from the lexicon) must not be treated as dry just
+                # because _domain(i) itself came back dry.
                 if not (active_challenge_words and any(
                     w not in self.used_words and self._challenge_word_fits(i, w)
                     for w in active_challenge_words
                 )):
-                    return False
+                    # Flags `i` "écarté" (see `_impossible_this_attempt`'s
+                    # own docstring in __init__). A slot that cannot be
+                    # filled in the current state was dried by a placement
+                    # of this search, so the node backtracks at once:
+                    # continuing below it could only build on a grid that
+                    # already has a hole. The exceptions are the slots in
+                    # `_tolerated_dry` — dry before the search started, or
+                    # deliberately dried by a last-resort word — which no
+                    # backtracking can revive: those are simply left out of
+                    # `domains` and the node carries on. The flag itself
+                    # stays: once the slot is viable again, it is still
+                    # only picked up in the node's released stage.
+                    self._impossible_this_attempt.add(i)
+                    if i not in self._tolerated_dry:
+                        return self._fail(self._dry_slot_conflict(i))
+                    continue
             domains[i] = domain
+        if not domains:
+            # Every remaining unassigned slot is dry at once, and all of
+            # them are tolerated (dry before the search started): no
+            # placement of this search is to blame.
+            return self._fail(set())
+        # Memoises `_slot_letter_options` for this node across every
+        # candidate tried here (see `slot_is_blocked`): a slot's own
+        # options only change when a word lands on a slot CROSSING it, so
+        # everything outside the chosen slot's own crossings is stable for
+        # the whole node and computed at most once.
+        options_cache = {}
 
-        # Selects which slot to fill next via the 8-level cascade,
-        # factored out into _select_target_slot (reused as-is by
-        # interactive_place_word — see its own docstring for the full
-        # history of every level).
-        best_i = self._select_target_slot(unassigned, domains)
-        # Resolved once for the whole node, same timing as
-        # active_challenge_words above: whether the general-dictionary
-        # tier's own budget for THIS slot is already spent (see
-        # FALLBACK_PHASE_BUDGET_FRACTION/_register_domain_break) — if so,
-        # the crossing_broken forward-check below is relaxed for this
-        # slot's ordinary candidates instead of rejecting them forever.
-        domain_abandoned = best_i in self._domain_break_abandoned
-
-        cands = [w for w in domains[best_i] if w not in self.used_words]
-        # Always shuffled first (with this attempt's own seeded RNG, hence
-        # reproducible) — whether this shuffle serves as the final draw
-        # (letter_scores empty, unchanged behavior) or only to break ties
-        # in the sort right below, `sort` being stable: without letter_
-        # scores, a word never shares the same score twice (always 0), so
-        # the shuffle's own order is what decides.
-        self.rng.shuffle(cands)
-        if self.letter_scores:
-            # At the user's explicit request: try the chosen slot's
-            # candidate words in priority order of the sum of squares of
-            # their statistical scores over still-free cells (see
-            # _candidate_score), instead of a purely random draw — applied
-            # systematically as soon as `letter_scores` is supplied, which
-            # is now the case on every attempt, whether `force_letters_
-            # fraction` is 0 or not (see __init__ and _pattern_attempt):
-            # only `forced_letters` (genuinely fixed cells) still depends
-            # on that setting. This block only ever stays inactive — with
-            # the shuffle right above then acting as the final draw,
-            # exactly as before this feature existed — for a direct
-            # caller of Filler that supplies no `letter_scores` at all.
-            cands.sort(key=lambda w: self._candidate_score(best_i, w), reverse=True)
-            # Not a strictly descending test order even so, at the user's
-            # explicit request: at every draw, a random pick is made among
-            # the `CANDIDATE_SCORE_WINDOW` best words *still remaining* in
-            # the sort (not the first `CANDIDATE_SCORE_WINDOW` of the
-            # original sort, fixed once and for all — the window slides as
-            # words get removed from it) — see the constant's own
-            # docstring for the detail of what it balances.
-            window = CANDIDATE_SCORE_WINDOW
-            reordered = []
-            remaining = cands
-            while remaining:
-                take = min(window, len(remaining))
-                idx = self.rng.randrange(take)
-                reordered.append(remaining.pop(idx))
-            cands = reordered
-        pri_set = frozenset()
-        if self.priority_words:
-            # Theme preselection: the order already obtained above is
-            # stabilized into two blocks — theme candidates first, then
-            # the rest — so `for w in cands:` tries every theme word that
-            # fits this slot before moving on to an ordinary dictionary
-            # word. Backtracking does the rest: a non-theme word is only
-            # reached if no theme word led to a solution here (nor
-            # further down). Skipped if every candidate — or none of
-            # them — is thematic (nothing to reorder). `_active_priority_
-            # words_for` (rather than `_priority_words_for` directly)
-            # excludes a theme word already abandoned this attempt (see
-            # FALLBACK_PHASE_BUDGET_FRACTION). `pri_set` is kept regardless
-            # of whether `cands` was actually reordered, so the crossing-
-            # break registration below can still recognize a theme word
-            # even in the (rare) case every candidate here is thematic.
-            _pw = self._active_priority_words_for(self.slots[best_i])
-            pri = [w for w in cands if w in _pw]
-            if pri:
-                pri_set = frozenset(pri)
-                if len(pri) != len(cands):
-                    cands = pri + [w for w in cands if w not in pri_set]
-        challenged_set = frozenset()
-        if active_challenge_words:
-            # "Mots Défi" win over both the theme reorder above and the
-            # ordinary dictionary domain — exactly the same precedence as
-            # `interactive_place_word`'s own `pool = challenged or themed
-            # or cands`. Unlike that one-shot placement, injected here
-            # into `cands` rather than replacing it outright, so a
-            # challenge word that turns out to make some crossing slot
-            # unfillable still lets backtracking fall back to `cands`'
-            # other entries instead of failing this slot outright — the
-            # "chercher un autre Mot Défi ou un autre emplacement" retry
-            # described at FALLBACK_PHASE_BUDGET_FRACTION: another
-            # challenge word fitting this same slot (if any) is simply the
-            # next entry of `challenged` itself, tried right below; another
-            # LOCATION for this same word is instead found across separate
-            # recursive calls, as `_select_target_slot`'s own level 2 keeps
-            # preferring any slot it still fits, for as long as it stays
-            # unused and unabandoned.
-            challenged = [
-                w for w in active_challenge_words
-                if w not in self.used_words and self._challenge_word_fits(best_i, w)
-            ]
-            if challenged:
-                challenged_set = frozenset(challenged)
-                cands = challenged + [w for w in cands if w not in challenged_set]
-        for w in cands:
-            # Count this placement attempt immediately, whether or not it
-            # leads to a further recursive descent — at the user's
-            # explicit request ("change it so the budget count is
-            # incremented every time a word is attempted, whether it
-            # triggers a recursive descent or not"), to avoid spending a
-            # long time iterating over hopeless cases. Before this change,
-            # `self.checks` was only incremented right at the top of
-            # `_backtrack`, so only when the recursion genuinely went
-            # further (see the comment right above the crossing check,
-            # further below): a slot whose candidates almost all break a
-            # crossing (see that same check) never recurses back into
-            # `_backtrack`, so this counter didn't move at all while this
-            # loop potentially went through hundreds of rejected candidates
-            # one by one — neither the budget (`deadline_checks`) nor
-            # `self.abandoned` was ever re-consulted while the loop kept
-            # going, since these two checks are otherwise only evaluated
-            # at `_backtrack`'s own entry. Counting — and checking — right
-            # at this attempt, even before placing the word, finally
-            # bounds this case: the loop now stops at most `deadline_
-            # checks` attempts after its last pass through the top of the
-            # function, rather than being able to continue indefinitely on
-            # a doomed slot. `self.abandoned` is re-checked here for the
-            # same reason: it may have been set to `True` by a sibling
-            # attempt already explored earlier in this same loop (a
-            # candidate that recursed, declared the search hopeless deeper
-            # down, then yielded control back) — without this check, the
-            # following candidates would keep being tried (and their own
-            # crossing check computed, a real cost) before the next
-            # recursive call finally notices via its own `if self.
-            # abandoned: return False`.
-            self.checks += 1
-            if self.abandoned or self.checks > deadline_checks:
-                return False
-            self.assignment[best_i] = w
-            self.used_words.add(w)
-            # Evaluate right away, before descending further into the
-            # recursion, whether the word just placed makes one of the
-            # slots CROSSING it (self._crossing_slots, precomputed in
-            # __init__) impossible to fill — the same impossibility
-            # criterion as the domain check above (empty domain, or
-            # entirely already used elsewhere), but restricted to only the
-            # slots this word could genuinely have affected, at the user's
-            # explicit request. Placing a word can never change the domain
-            # of a slot sharing no cell with it (`_domain` only reads the
-            # slot's own cells) — checking only the neighbors therefore
-            # gives exactly the same result as the next recursive call's
-            # own "every still-open slot" domain check, without having to
-            # trigger it (neither its own `checks` counter nor its own
-            # scan of the whole grid) for a word already doomed: if even
-            # one neighbor has become impossible, this word is removed
-            # immediately and the next one is tried, never descending any
-            # further. A slot already set aside (`excluded_slots`/
-            # `_crossing_excluded_slots`) is never affected by this — it
-            # already never blocks anything for this same pattern.
-            crossing_broken = False
-            for j in self._crossing_slots[best_i]:
-                if (
-                    self.assignment[j] is None
-                    and j not in self.excluded_slots
-                    and j not in self._crossing_excluded_slots
-                ):
-                    domain = self._domain(j)
-                    if all(w2 in self.used_words for w2 in domain) and not (
-                        # Same "Mots Défi" exemption as the domain check
-                        # above and at the top of this method: a crossing
-                        # slot left with no real dictionary candidate is
-                        # only a genuine break if no unused, not-yet-
-                        # abandoned challenge word can still fill IT in
-                        # turn — otherwise placing `w` here hasn't actually
-                        # closed off that neighbor, it's merely handed it
-                        # to the "Mots Défi" mechanism instead of the
-                        # ordinary dictionary.
-                        active_challenge_words and any(
-                            w2 not in self.used_words
-                            and self._challenge_word_fits(j, w2)
-                            for w2 in active_challenge_words
-                        )
+        # Crossing a slot that is dry right now is NOT, in itself, a
+        # reason to refuse a placement: what a candidate is judged on is
+        # the STATE IT LEAVES BEHIND, never which of its neighbours
+        # already happened to be blocked. The two per-candidate checks
+        # below are the whole rule, and both judge the state the candidate
+        # LEAVES: it is rejected when it newly blocks a crossing slot that
+        # was healthy right before it (`crossing_broken`, relaxed only by
+        # the last-resort pass below), and when a crossing slot that was
+        # blocked already is still blocked after it (`crossing_still_
+        # impossible`, relaxed nowhere, so a word never crosses a slot
+        # that is blocked already). Sealing a still-healthy crossing slot
+        # into a fully-lettered run spelling nothing real is `crossing_
+        # broken` like any other way of blocking it — the strict rule
+        # refuses it, and the last-resort pass below accepts it along
+        # with the rest, so a failed attempt's own grid can carry a few
+        # such runs. The cleanup between paliers is what removes them:
+        # `_invalid_fully_known_indices` flags every one of them
+        # impossible before the next palier ever sees the grid. A
+        # placement valid on both counts is always allowed, even right
+        # next to a blocked slot, since such a slot comes back into play
+        # the same way either way — the moment backtracking frees one of
+        # its crossing letters.
+        #
+        # An "emplacement écarté" is an ordinary slot in every respect —
+        # its domain is recomputed from scratch on every node, it is
+        # protected by the `crossing_broken` check below exactly like any
+        # other open slot, and once a word goes on it, it is filled like
+        # any other. Its one and only difference is that it is not
+        # considered for a new placement while a word can still be placed
+        # elsewhere; the staged loop right below is what implements that,
+        # and what guarantees it is never walled off.
+        # The écarté release (see `DOC_ALGO/FR/Lexicon.md`) followed by
+        # the last-resort relaxation. Four stages, in order:
+        #   1. place a word on a NON-écarté slot — écarté slots are
+        #      temporarily out of the running, the one and only way a
+        #      blocked slot ever restricts anything;
+        #   2. nothing placeable that way: release the écarté slots and
+        #      carry on, still without backtracking;
+        #   3. still nothing, and `self.breaking_permitted` is on — i.e.
+        #      `solve()`'s second pass, reached only once the whole strict
+        #      search had been exhausted from the root: accept a word that
+        #      creates an impossible slot rather than failing the grid and
+        #      leaving it sparse. This is the ONLY case where the "never
+        #      create an impossible slot" rule yields, and it yields only
+        #      once backtracking has run out of alternatives across the
+        #      whole grid, not merely below this node;
+        #   4. only if even that places nothing does the node fail.
+        # All four stages share one cap, MAX_DESCENTS_PER_NODE: once the
+        # node has recursed that many times without success it fails right
+        # away, whatever stage it has reached.
+        # `released` is a plain recursion parameter, so it is inherited by
+        # everything placed below a release and restores itself as the
+        # backtrack unwinds back above the node that released — precisely
+        # "réactivés à l'étape où ils avaient été libérés".
+        # `allow_breaking` is deliberately NOT inherited: every node makes
+        # its own decision, and only after exhausting its own strict
+        # options, so relaxing here never licenses a child to relax before
+        # it has itself explored everything.
+        selectable = list(domains)
+        set_aside = [i for i in selectable if i in self._impossible_this_attempt]
+        primary = selectable if released else [i for i in selectable if i not in set_aside]
+        if not primary:
+            # Only écarté slots left: release them at once rather than
+            # leaving this node with nothing to try.
+            primary, released = selectable, True
+        allow_breaking = False
+        tried_slots = set()
+        # Recursive descents made by this node so far, and this node's own
+        # cap (see MAX_DESCENTS_PER_NODE/EARLY_DESCENTS_WORD_COUNT).
+        descents = 0
+        max_descents = MAX_DESCENTS_PER_NODE
+        if 0 < max_descents and (
+            assigned_count - self._initial_assigned_count < EARLY_DESCENTS_WORD_COUNT
+        ):
+            max_descents = max(max_descents, EARLY_MAX_DESCENTS_PER_NODE)
+        # Union of the conflict sets of every alternative this node has
+        # tried and seen fail (see BACKJUMPING_ENABLED); `conflict_unknown`
+        # once one of them reported none.
+        node_conflict = set()
+        conflict_unknown = False
+        while True:
+            avail = [i for i in primary if i not in tried_slots]
+            if not avail:
+                if not released:
+                    # Stage 2: release the écarté slots for the rest of
+                    # this descent and carry on without backtracking.
+                    primary, released = selectable, True
+                    continue
+                if not allow_breaking and self.breaking_permitted:
+                    # Stage 3, only in `solve()`'s second pass: the strict
+                    # search has already been exhausted from the root, so
+                    # every backtracking possibility that creates no
+                    # impossible slot — the words placed first included —
+                    # has been tried, which is exactly the one condition
+                    # under which creating one is allowed: re-run
+                    # every slot with `crossing_broken` relaxed. Candidates
+                    # keep their normal priority order, so a crossing-safe
+                    # one is always preferred and only gets overtaken once
+                    # its own subtree has failed too. `crossing_still_
+                    # impossible` is NOT relaxed here (nor anywhere): a
+                    # word never crosses a slot that stays blocked.
+                    allow_breaking = True
+                    primary = list(domains)
+                    tried_slots = set()
+                    continue
+                # Stage 4: nothing at all, even allowing damage.
+                return self._fail(None if conflict_unknown else node_conflict)
+            best_i = self._select_target_slot(avail, domains)
+            tried_slots.add(best_i)
+            # `ordered_candidates` is the one candidate-ordering rule of
+            # this engine (shuffle, statistical sort, sliding-window random
+            # draw), shared verbatim with Interactive mode's own "Suivant".
+            cands = self.ordered_candidates(
+                best_i, [w for w in domains[best_i] if w not in self.used_words],
+            )
+            pri_set = frozenset()
+            if self.priority_words:
+                # Theme preselection: the order already obtained above is
+                # stabilized into two blocks — theme candidates first, then
+                # the rest — so `for w in cands:` tries every theme word that
+                # fits this slot before moving on to an ordinary dictionary
+                # word. Backtracking does the rest: a non-theme word is only
+                # reached if no theme word led to a solution here (nor
+                # further down). Skipped if every candidate — or none of
+                # them — is thematic (nothing to reorder). `_active_priority_
+                # words_for` (rather than `_priority_words_for` directly)
+                # excludes a theme word already abandoned this attempt (see
+                # FALLBACK_PHASE_BUDGET_FRACTION). `pri_set` is kept regardless
+                # of whether `cands` was actually reordered, so the crossing-
+                # break registration below can still recognize a theme word
+                # even in the (rare) case every candidate here is thematic.
+                _pw = self._active_priority_words_for(self.slots[best_i])
+                pri = [w for w in cands if w in _pw]
+                if pri:
+                    pri_set = frozenset(pri)
+                    if len(pri) != len(cands):
+                        cands = pri + [w for w in cands if w not in pri_set]
+            challenged_set = frozenset()
+            if active_challenge_words:
+                # "Mots Défi" win over both the theme reorder above and the
+                # ordinary dictionary domain — exactly the same precedence as
+                # `interactive_place_word`'s own `pool = challenged or themed
+                # or cands`. Unlike that one-shot placement, injected here
+                # into `cands` rather than replacing it outright, so a
+                # challenge word that turns out to make some crossing slot
+                # unfillable still lets backtracking fall back to `cands`'
+                # other entries instead of failing this slot outright — the
+                # "chercher un autre Mot Défi ou un autre emplacement" retry
+                # described at FALLBACK_PHASE_BUDGET_FRACTION: another
+                # challenge word fitting this same slot (if any) is simply the
+                # next entry of `challenged` itself, tried right below; another
+                # LOCATION for this same word is instead found across separate
+                # recursive calls, as `_select_target_slot`'s own level 2 keeps
+                # preferring any slot it still fits, for as long as it stays
+                # unused and unabandoned.
+                challenged = [
+                    w for w in active_challenge_words
+                    if w not in self.used_words and self._challenge_word_fits(best_i, w)
+                ]
+                if challenged:
+                    challenged_set = frozenset(challenged)
+                    cands = challenged + [w for w in cands if w not in challenged_set]
+            # Set to True by the first candidate this slot actually
+            # accepts (see the "emplacement écarté" flagging right after
+            # this loop ends).
+            placed_any = False
+            blameable_rejection = False
+            # Words the rejections of this slot's candidates depend on.
+            slot_conflict = set()
+            for w in cands:
+                # Count this placement attempt immediately, whether or not it
+                # leads to a further recursive descent — at the user's
+                # explicit request ("change it so the budget count is
+                # incremented every time a word is attempted, whether it
+                # triggers a recursive descent or not"), to avoid spending a
+                # long time iterating over hopeless cases. Before this change,
+                # `self.checks` was only incremented right at the top of
+                # `_backtrack`, so only when the recursion genuinely went
+                # further (see the comment right above the crossing check,
+                # further below): a slot whose candidates almost all break a
+                # crossing (see that same check) never recurses back into
+                # `_backtrack`, so this counter didn't move at all while this
+                # loop potentially went through hundreds of rejected candidates
+                # one by one — neither the budget (`deadline_checks`) nor
+                # `self.abandoned` was ever re-consulted while the loop kept
+                # going, since these two checks are otherwise only evaluated
+                # at `_backtrack`'s own entry. Counting — and checking — right
+                # at this attempt, even before placing the word, finally
+                # bounds this case: the loop now stops at most `deadline_
+                # checks` attempts after its last pass through the top of the
+                # function, rather than being able to continue indefinitely on
+                # a doomed slot. `self.abandoned` is re-checked here for the
+                # same reason: it may have been set to `True` by a sibling
+                # attempt already explored earlier in this same loop (a
+                # candidate that recursed, declared the search hopeless deeper
+                # down, then yielded control back) — without this check, the
+                # following candidates would keep being tried (and their own
+                # crossing check computed, a real cost) before the next
+                # recursive call finally notices via its own `if self.
+                # abandoned: return False`.
+                self.checks += 1
+                if self.abandoned:
+                    return self._fail(None)
+                if self._deadline_reached_without_extension(deadline_checks):
+                    self._budget_exhausted = True
+                    return self._fail(None)
+                if self._periodic_checkpoints():
+                    return self._fail(None)
+                self.assignment[best_i] = w
+                self.used_words.add(w)
+                # Evaluate right away, before descending further into the
+                # recursion, whether the word just placed makes one of the
+                # slots CROSSING it (self._crossing_slots, precomputed in
+                # __init__) impossible to fill — the same impossibility
+                # criterion as the domain check above (empty domain, or
+                # entirely already used elsewhere), but restricted to only the
+                # slots this word could genuinely have affected, at the user's
+                # explicit request. Placing a word can never change the domain
+                # of a slot sharing no cell with it (`_domain` only reads the
+                # slot's own cells) — checking only the neighbors therefore
+                # gives exactly the same result as the next recursive call's
+                # own "every still-open slot" domain check, without having to
+                # trigger it (neither its own `checks` counter nor its own
+                # scan of the whole grid) for a word already doomed: if even
+                # one neighbor has become impossible, this word is removed
+                # immediately and the next one is tried, never descending any
+                # further. A slot structurally outside this search's scope
+                # (`excluded_slots`) is never affected by this — nothing is
+                # ever required to fill it in the first place.
+                #
+                # `j in domains` is the baseline this check is measured
+                # against, and it is free: `domains` was built at the top of
+                # this node, BEFORE any candidate was placed, and a slot found
+                # dry there was deliberately left out of it (and flagged
+                # "écarté"). So `j in domains` means exactly "j still had a
+                # real candidate before `w` was placed" — a slot that goes dry
+                # only now is `w`'s own doing and rejects it, while one that
+                # was already dry is never blamed on whichever candidate
+                # happens to be tried next. Without this baseline, a single
+                # already-dry neighbour made EVERY candidate at `best_i` look
+                # unsafe, which is what forced the budget-based escape hatch
+                # that used to let a genuinely destructive word through.
+                # An "écarté" slot that is still healthy right now (flagged
+                # earlier in this attempt, non-dry again since) IS in
+                # `domains`, and so IS protected: the search may legitimately
+                # come back to it, so emptying it is a real break.
+                # `crossing_broken`: this candidate has NEWLY made a
+                # crossing slot impossible (it was fine right before it).
+                crossing_broken = False
+                # `crossing_still_impossible`: after this candidate, a
+                # crossing slot that was ALREADY impossible still is — i.e.
+                # `w` crosses an "emplacement bloqué" (red) and leaves it
+                # blocked. Rejected at every stage, with no exception: the
+                # last-resort relaxation below covers only CREATING a new
+                # impossible slot, never writing into one that is blocked
+                # already. A slot that this candidate's own letter puts
+                # back in play (a statistical seed it supersedes, say) is
+                # not blocked afterwards, so it never lands here — what
+                # both flags judge is the state the candidate LEAVES.
+                crossing_still_impossible = False
+                # Crossing slots this candidate newly blocks; only kept
+                # beyond the rejection when `allow_breaking` accepts it.
+                broken_slots = []
+                # Crossing slots found NOT blocked once this candidate is in
+                # place (see the écarté re-evaluation below).
+                unblocked_crossers = []
+                for j in self._crossing_slots[best_i]:
+                    if self.assignment[j] is not None or j in self.excluded_slots:
+                        continue
+                    # ONE definition of "emplacement bloqué" for the whole
+                    # engine (`Filler.slot_is_blocked`, shared verbatim
+                    # with Interactive mode's own "Suivant"): no candidate
+                    # left at all — the "Mots Défi" exemption included, a
+                    # crossing slot handed to the challenge mechanism is
+                    # not closed off — OR a crossing cell where this slot
+                    # and the still-open slot crossing it there agree on no
+                    # letter. The second case is what a plain empty-domain
+                    # test could never see, letting a word be placed across
+                    # a slot the interface was already painting red.
+                    if self.slot_is_blocked(
+                        j, self.used_words, active_challenge_words,
+                        options_cache, self._crossing_slots[best_i], w,
                     ):
-                        crossing_broken = True
-                        break
-            # "Backtrack immédiat" (see FALLBACK_PHASE_BUDGET_FRACTION):
-            # every candidate here, whichever of the three tiers it comes
-            # from, already gets reverted on the spot the moment it breaks
-            # a crossing slot (`crossing_broken`, checked right above) —
-            # the loop then simply moves on to the next entry of `cands`,
-            # which is exactly "try another candidate of the same tier, or
-            # fall through to the next one" for this slot. What's tracked
-            # here on top of that is each tier's own budget: a challenge
-            # or theme word that has spent its own share of the whole
-            # attempt's `deadline_checks` on nothing but broken crossings
-            # is abandoned for the rest of this attempt, so it stops being
-            # offered anywhere else in the grid too (`_register_challenge_
-            # word_break`/`_register_theme_word_break`). The general
-            # dictionary has no further tier to fall back to: once THIS
-            # slot's own share of the budget is spent the same way
-            # (`_register_domain_break`), `domain_abandoned` (resolved
-            # once at the top of this node) lets an ordinary candidate
-            # through anyway instead of rejecting it forever — accepting a
-            # known "impossible" crossing rather than paying for
-            # exhaustive backtracking first; the cross-palier retry
-            # machinery (`_clean_blocked_slots`/`_build_retry_seed`)
-            # already repairs this kind of zone on the next palier
-            # regardless of how it arose.
-            if crossing_broken:
-                if w in challenged_set:
-                    self._register_challenge_word_break(w)
-                elif w in pri_set:
-                    self._register_theme_word_break(w)
-                elif domain_abandoned:
-                    crossing_broken = False
-                else:
-                    self._register_domain_break(best_i)
-            if not crossing_broken and self._backtrack(deadline_checks):
-                return True
-            self.assignment[best_i] = None
-            self.used_words.discard(w)
-        return False
+                        if j in domains:
+                            # `j` was fine before `w` was placed (see the
+                            # baseline reasoning below), so blocking it is
+                            # this candidate's own doing.
+                            crossing_broken = True
+                            broken_slots.append(j)
+                            if not allow_breaking:
+                                break
+                        else:
+                            crossing_still_impossible = True
+                            break
+                    else:
+                        unblocked_crossers.append(j)
+                # "Backtrack immédiat": a candidate that NEWLY makes a
+                # crossing slot unfillable is reverted on the spot, whichever
+                # of the three tiers it comes from, and the loop moves on to
+                # the next entry of `cands` — "try another candidate of the
+                # same tier, or fall through to the next one" for this slot.
+                # This rule is absolute and has no escape hatch: a word is
+                # never placed where it would create an impossible slot, so a
+                # grid can never end up holding a run of letters that spells
+                # nothing real. If every candidate at `best_i` breaks
+                # something, the staged loop above moves on to the next
+                # slot, then to the released écarté ones, and only then —
+                # every strict subtree of this node having been explored
+                # and failed — comes back round with `allow_breaking`, at
+                # which point a breaking word IS accepted rather than
+                # leaving the grid sparse.
+                # What each tier tracks on top of that is only a per-word
+                # give-up budget: a challenge or theme word that has spent its
+                # own share of the attempt's `deadline_checks` on nothing but
+                # broken crossings is abandoned for the rest of the attempt,
+                # so it stops being offered anywhere else in the grid
+                # (`_register_challenge_word_break`/`_register_theme_word_
+                # break`). Only counted when the break actually causes a
+                # rejection — a word accepted under `allow_breaking` was
+                # not given up on, so it must not count against its own
+                # budget. The general dictionary has no word identity worth
+                # tracking that way, and needs none: it simply keeps trying
+                # its remaining candidates.
+                # Crossing a slot that stays blocked rejects the candidate
+                # on its own, whatever stage this is (see `crossing_still_
+                # impossible` above); newly blocking a slot that was fine
+                # only rejects it while the strict rule still applies.
+                rejected = crossing_still_impossible or (crossing_broken and not allow_breaking)
+                if rejected and crossing_broken:
+                    # Rejected for blocking a slot that was still healthy:
+                    # a failure the state above this node is responsible
+                    # for, as opposed to crossing a tolerated dead slot.
+                    # It depends on the words fixing this slot's letters
+                    # and those fixing the letters of the slot it blocks.
+                    blameable_rejection = True
+                    slot_conflict |= self._assigned_crossers(best_i) - {best_i}
+                    for j in broken_slots:
+                        slot_conflict |= self._assigned_crossers(j) - {best_i}
+                if rejected:
+                    if w in challenged_set:
+                        self._register_challenge_word_break(w)
+                    elif w in pri_set:
+                        self._register_theme_word_break(w)
+                if not rejected:
+                    placed_any = True
+                    # Re-evaluate the écarté slots this word crosses: the
+                    # check above has just established, for every open one,
+                    # whether it is still blocked with this word in place.
+                    # One that no longer is leaves the list for good (it
+                    # is flagged again if it goes dry later on).
+                    for j in unblocked_crossers:
+                        self._impossible_this_attempt.discard(j)
+                    # The letters this word just wrote constrain every slot
+                    # it crosses: re-tally those, so the levels reading
+                    # `letter_scores` (`_slot_min_letter_options`, `_slot_
+                    # letter_frequency_score`, `_candidate_score`) see the
+                    # grid as it is now rather than as it was before the
+                    # search started. Restored as the placement is reverted,
+                    # so a tally never outlives its own assignment.
+                    saved_scores = self._refresh_letter_scores_around(best_i)
+                    # A last-resort word dries the slots it breaks on
+                    # purpose: the nodes below must not backtrack on them.
+                    newly_tolerated = [j for j in broken_slots if j not in self._tolerated_dry]
+                    self._tolerated_dry.update(newly_tolerated)
+                    if self._backtrack(deadline_checks, released):
+                        return True
+                    child_conflict = self._last_conflict
+                    self._tolerated_dry.difference_update(newly_tolerated)
+                    self._restore_letter_scores(saved_scores)
+                    # A "Mots Défi" or theme-glossary candidate never counts
+                    # toward MAX_DESCENTS_PER_NODE: the node explores every
+                    # such hypothesis before its cap can end it.
+                    if w not in challenged_set and w not in pri_set:
+                        descents += 1
+                    if child_conflict is None:
+                        conflict_unknown = True
+                    elif best_i not in child_conflict:
+                        # Backjump: the failure below does not depend on
+                        # this word, so no other candidate here could
+                        # avoid it — pass it straight up.
+                        self.assignment[best_i] = None
+                        self.used_words.discard(w)
+                        return self._fail(child_conflict)
+                    else:
+                        node_conflict |= child_conflict - {best_i}
+                self.assignment[best_i] = None
+                self.used_words.discard(w)
+                if 0 < max_descents <= descents:
+                    # This node has used up its own share of descents:
+                    # hand control back to the parent, which then tries
+                    # its own next candidate — so backtracking climbs
+                    # toward the words placed early instead of staying
+                    # stuck exploring the bottom of the tree.
+                    return self._fail(None if conflict_unknown else node_conflict | slot_conflict)
+            if not placed_any:
+                # Every candidate of `best_i` was rejected: this slot can
+                # no longer take a word without creating an impossible
+                # one, so it becomes an "emplacement écarté" (see `DOC_ALGO/
+                # FR/Lexicon.md`) exactly like a slot whose domain went dry
+                # above — set aside from the selection cascade until
+                # nothing can be placed anywhere else, shown yellow in the
+                # previews, and in every other respect an ordinary slot: it
+                # keeps a real, non-empty domain, so a word crossing it is
+                # still placed freely as long as it does not block it
+                # (`crossing_broken`), unlike a slot that is blocked (red)
+                # and may never be crossed at all.
+                #
+                # Free to detect here: the candidate loop just above has
+                # already paid for every one of this slot's own candidates.
+                # A third feed into the same set, still purely internal to
+                # the search — no display path ever writes to it.
+                self._impossible_this_attempt.add(best_i)
+                if blameable_rejection and not self.breaking_permitted:
+                    # The slot cannot be filled in the current state
+                    # because every candidate would block a slot that is
+                    # still healthy: backtrack, exactly as for a dry slot.
+                    # When every rejection only came from crossing a
+                    # tolerated dead slot, backtracking cannot help, so the
+                    # node moves on to its next slot instead. In the
+                    # last-resort pass the node carries on too, so that it
+                    # can still reach its `allow_breaking` stage. The
+                    # failure depends only on why THIS slot is unfillable.
+                    return self._fail(slot_conflict)
+            node_conflict |= slot_conflict
 
 
 # ---------- Statistical pre-fill before the CSP ----------
@@ -3888,8 +5050,8 @@ def _force_single_candidate_slots(slots, index, known_letters, excluded_slots=No
     single pass could miss this kind of chain reaction depending on the
     scan order.
 
-    A slot from `excluded_slots` (already known impossible — see `Filler.
-    excluded_slots`) is never tested: it will never be tried by the search
+    A slot from `excluded_slots` (a slot this attempt already knows it
+    will never fill — see `Filler.excluded_slots`) is never tested
     anyway, no point looking for a deduction there. A slot already
     entirely known (every cell already in `known_letters`) also has
     nothing left to deduce — all that remains is to check, elsewhere (see
@@ -3975,6 +5137,16 @@ def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=No
         if word is not None:
             for pos, cell in enumerate(cells):
                 known[cell] = word[pos]
+    # Crossing map, built once: a confirmation here can write letters on
+    # cells the slot did not already know (`known` only has to determine
+    # ENOUGH of them to leave a single candidate, not all of them), so it
+    # can affect the slots crossing it exactly like an ordinary placement
+    # would — and must be held to the same rule (see the crossing check
+    # right below).
+    cell_to_slots = {}
+    for i, cells in enumerate(slots):
+        for cell in cells:
+            cell_to_slots.setdefault(cell, []).append(i)
     changed = True
     while changed:
         changed = False
@@ -3988,11 +5160,100 @@ def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=No
             if len(real_candidates) != 1:
                 continue
             word = real_candidates[0]
+            # Same absolute rule as `Filler._backtrack`'s own crossing
+            # check: a word is never written where it would leave a still-
+            # open slot it crosses with no available word at all. Without
+            # it, this closure could fill a crossing slot's last empty
+            # cell with a letter spelling nothing real — sealing it for
+            # good, since this pass runs once the search is over and
+            # nothing downstream can ever reopen it, and leaving the
+            # preview showing a red zone already full of letters
+            # (`SRUA`, `EOFU`…) instead of an empty, genuinely repairable
+            # one. Skipping the confirmation costs nothing: this slot's
+            # single candidate was its only option either way, so the grid
+            # was not completable whichever of the two slots gave way —
+            # leaving both open simply keeps the cleanup's own repair
+            # (`_clean_blocked_slots`) able to act on real empty cells.
+            # Cheap: only ever reached by a slot already narrowed down to
+            # exactly one available candidate.
+            trial = dict(known)
+            for pos, cell in enumerate(cells):
+                trial[cell] = word[pos]
+            breaks_crossing = False
+            for cell in cells:
+                for j in cell_to_slots.get(cell, ()):
+                    if j == i or j in excluded or assignment[j] is not None:
+                        continue
+                    if all(
+                        w2 == word or w2 in used_words
+                        for w2 in _slot_candidates(index, len(slots[j]), slots[j], trial)
+                    ):
+                        breaks_crossing = True
+                        break
+                if breaks_crossing:
+                    break
+            if breaks_crossing:
+                continue
             assignment[i] = word
             used_words.add(word)
             for pos, cell in enumerate(cells):
                 known[cell] = word[pos]
             changed = True
+
+
+def _combined_letter_counts(by_dir):
+    """Sum of a cell's per-direction letter tallies (see `sample_letter_
+    biases`'s `letter_scores`): every letter either crossing slot observed
+    there, with both slots' occurrences added up."""
+    total = Counter()
+    for counts in by_dir.values():
+        total.update(counts)
+    return total
+
+
+def _crossed_letter_counts(by_dir):
+    """A cell's per-direction letter tallies (see `sample_letter_biases`'s
+    `letter_scores`) crossed with each other: only the letters observed by
+    BOTH the across and the down slot through that cell, each kept at the
+    lower of its two counts — a letter only one direction can take is not
+    really possible at a crossing cell, and the scarcer side is the one
+    that limits it. A cell tallied in a single direction (a 1-letter run in
+    the other direction is not a slot, or that slot has no candidate left
+    to sample) has nothing to cross with and keeps that one tally as is."""
+    tallies = [counts for counts in by_dir.values() if counts]
+    if not tallies:
+        return Counter()
+    if len(tallies) == 1:
+        return Counter(tallies[0])
+    first, second = tallies
+    return Counter({
+        letter: min(count, second[letter])
+        for letter, count in first.items()
+        if second.get(letter)
+    })
+
+
+def _crossed_letter_option_count(by_dir):
+    """`len(_crossed_letter_counts(by_dir))`, without building the Counter
+    — `Filler._slot_min_letter_options` asks this for every free cell of
+    every candidate slot on every search node."""
+    tallies = [counts for counts in by_dir.values() if counts]
+    if not tallies:
+        return None
+    if len(tallies) == 1:
+        return len(tallies[0])
+    first, second = tallies
+    return sum(1 for letter in first if second.get(letter))
+
+
+def _most_probable_letter(by_dir):
+    """The single most likely letter of a cell, read from its crossed
+    tally (`_crossed_letter_counts`), or `None` when the two directions
+    share no letter at all."""
+    crossed = _crossed_letter_counts(by_dir)
+    if not crossed:
+        return None
+    return crossed.most_common(1)[0][0]
 
 
 def sample_letter_biases(grid, rows, cols, index, rng,
@@ -4036,10 +5297,11 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     effect for a caller that doesn't supply one), at the user's explicit
     request: "seeds must only be placed on slots deemed playable (if
     possible), i.e. not locked as unfillable." A slot from this set
-    (already known impossible — see `Filler.excluded_slots`) never offers
-    any of its own cells as a candidate to become a seed anymore —
-    placing a seed there would be a wasted hint, since this slot will
-    never be tried by the search anyway. Only affects `forced`: `letter_
+    (`_pattern_attempt`'s own `locked_impossible_slots`: entirely locked,
+    yet spelling no real word) never offers any of its own cells as a
+    candidate to become a seed — placing a seed there would be a wasted
+    hint on a slot that has no letter left to choose. Only affects
+    `forced`: `letter_
     scores` keeps being fed for *every* slot without exception, excluded
     ones included — a crossing cell shared with a non-excluded slot
     always needs its full statistical contribution to correctly sort that
@@ -4071,11 +5333,10 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     request ("don't test slots deemed impossible... the change must make
     a valid draw impossible"), this filtering alone is enough to
     guarantee no valid draw is possible on such a slot, with no need for
-    a separate explicit check — unlike `excluded_slots` above (whose role
-    remains necessary for `_pattern_continue`: a slot listed there can be
-    impossible for a broader structural reason than just its own
-    already-known letters taken in isolation, in which case this
-    filtering alone isn't enough to exclude it from sampling). A cell
+    a separate explicit check — unlike `excluded_slots` above, which
+    covers a slot whose own already-known letters spell no real word at
+    all, a case this length-and-letter filtering alone doesn't catch. A
+    cell
     already present in `known_letters` is also never offered as an
     `eligible` candidate (see below): the word already known at that
     position needs no further statistical hint, and keeping it would have
@@ -4086,15 +5347,19 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     - `forced`: a {cell: letter} dict — the "hints" Filler treats as
       constraints as long as no crossing slot is genuinely assigned at
       that cell (see Filler._domain), not as definitively placed letters;
-    - `letter_scores`: a {cell: Counter(letter -> occurrences)} dict —
-      the *complete* tally of the sampling above at every white cell of
-      the grid (not just the winning letter kept for `forced`), combining
-      both slots of a crossing cell (each contributes its own sample to
-      that same cell). At the user's explicit request: used by `Filler.
-      _backtrack` to sort a slot's candidate words by the sum of squares
-      of these scores over its still-free cells, highest to lowest,
-      instead of a purely random draw — see `Filler.__init__`/
-      `_candidate_score`."""
+    - `letter_scores`: a {cell: {direction: Counter(letter ->
+      occurrences)}} dict — the *complete* tally of the sampling above at
+      every white cell of the grid (not just the winning letter kept for
+      `forced`), kept SEPARATELY for each of the two slots crossing a
+      cell (`"across"`/`"down"`, `slot_direction`), each contributing its
+      own sample. `_combined_letter_counts` sums both directions — what
+      `Filler._candidate_score` sorts a slot's candidate words by (sum of
+      squares over its still-free cells) and what `Filler._slot_letter_
+      frequency_score` reads; `_crossed_letter_counts` keeps only the
+      letters BOTH directions observed, each at the lower of its two
+      counts — what `Filler._slot_min_letter_options`, the "Stats" button
+      (`_interactive_letter_stats`) and the previews' statistical letters
+      (`Filler.stat_letters`) read."""
     slots = extract_slots(grid, rows, cols)
     cell_to_slots = defaultdict(list)
     for slot_idx, cells in enumerate(slots):
@@ -4104,9 +5369,10 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     excluded = excluded_slots or set()
     known = known_letters or {}
     eligible = []  # (count, cell, letter) — cells exceeding LETTER_BIAS_MIN_COUNT
-    letter_scores = defaultdict(Counter)
+    letter_scores = defaultdict(dict)
     for slot_idx, cells in enumerate(slots):
         length = len(cells)
+        direction = slot_direction(cells)
         idx = index.for_cells(cells).get(length)
         if not idx or not idx["words"]:
             continue
@@ -4126,7 +5392,7 @@ def sample_letter_biases(grid, rows, cols, index, rng,
         sample = rng.choices(list(pool), k=sample_size)
         for pos, cell in enumerate(cells):
             counts = Counter(word[pos] for word in sample)
-            letter_scores[cell].update(counts)
+            letter_scores[cell][direction] = counts
             letter, count = counts.most_common(1)[0]
             if cell not in known and count > LETTER_BIAS_MIN_COUNT and slot_idx not in excluded:
                 eligible.append((count, cell, letter))
@@ -4166,11 +5432,34 @@ def sample_letter_biases(grid, rows, cols, index, rng,
     return forced, dict(letter_scores)
 
 
+def _quota_overflow_slot_indices(assignment, offending_words):
+    """Indices of every slot whose assigned word is one of `offending_
+    words` — used by `try_fill` to flag, as genuinely impossible, the
+    exact word(s) responsible for a grid being rejected by its own
+    proper-noun/non-gloss quota safety net alone (see `MAX_PROPER_NOUNS`/
+    `MAX_NON_GLOSS_WORDS`), at the user's explicit request: such a grid is
+    otherwise perfectly filled and internally consistent — every domain
+    check passes, no crossing deadlock — so without this, the rejected
+    attempt's own preview showed no red/yellow highlighting at all,
+    looking inexplicably "clean" while still being marked failed, and the
+    cross-palier retry machinery (`impossible_slots`, `_clean_blocked_
+    slots`/`_build_retry_seed`) had no signal at all to remove and replace
+    the offending word(s) with a different candidate. `offending_words`
+    is every word from `proper_noun_words`/`non_gloss_words` actually
+    present in `assignment` — the whole set over quota, not only the
+    excess beyond the allowed count, since there is no principled way to
+    single out which specific instance(s) are "the extra ones"."""
+    if not offending_words:
+        return []
+    return [i for i, word in enumerate(assignment) if word in offending_words]
+
+
 def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=None,
              forced_letters=None, letter_scores=None, preseed_assignment=None,
              excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
              attempt_done_event=None, locked_letters=None, best_state_queue=None,
-             attempt_id=None, proper_noun_words=None, max_proper_nouns=None,
+             checks_progress=None, checks_slot=None, attempt_active=None, attempt_id=None,
+             proper_noun_words=None, max_proper_nouns=None,
              non_gloss_words=None, max_non_gloss=None, priority_words=None,
              challenge_words=None, required_cells=None):
     """`non_gloss_words`/`max_non_gloss` (both `None` by default — every
@@ -4213,12 +5502,16 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     with the previous palier's already-known state instead of starting
     from a blank grid — every already-assigned slot stays locked there,
     `_backtrack` never reconsiders it. `excluded_slots` (see `Filler.
-    excluded_slots`) ignores, for the duration of this search, any slot
-    already identified as impossible in the previous palier — without
-    this exclusion, `_backtrack`'s own plain domain check (which runs for
-    *every* unassigned slot even before choosing which one to handle)
-    would make the entire search fail on the very first call, even for
-    slots with no relation to that one at all.
+    excluded_slots`) drops a slot out of the grid this search has to solve
+    at all: never selected, never required by `truly_complete`, never
+    counted as a broken crossing, never surfaced by any diagnostic. It is
+    NOT an "emplacement écarté" (`Filler._impossible_this_attempt`, the
+    yellow overlay — see `DOC_ALGO/FR/Lexicon.md`), which is only ever a
+    deprioritization and always stays available as a last resort.
+    `_optimize_before_cleanup` is the only caller that passes it, to
+    complete whatever else it can while deliberately leaving an
+    entirely-empty or already-impossible zone untouched; every generation
+    palier (`_pattern_attempt`/`_pattern_continue`) leaves it `None`.
 
     With `excluded_slots` non-empty, a deliberately excluded slot can never
     be assigned by this search anymore: `Filler.solve()` can therefore
@@ -4376,6 +5669,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             diagnostics["example_grid"] = grid
             diagnostics["impossible_cells"] = []
             diagnostics["deadlock_cells"] = []
+            diagnostics["excluded_cells"] = []
+            diagnostics["stat_letters"] = []
             diagnostics["forced_cells"] = []
             diagnostics["assigned_letter_count"] = 0
             diagnostics["assignment"] = []
@@ -4431,6 +5726,33 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                      attempt_done_event=attempt_done_event, locked_letters=locked_letters,
                      priority_words=priority_words, challenge_words=challenge_words,
                      rows=rows, cols=cols)
+    if checks_progress is not None and checks_slot is not None:
+        # See `_worker_checks_progress`'s own docstring — `checks_progress`
+        # is a `multiprocessing.Array`, one cell per concurrent slot of the
+        # current palier (0..PARALLEL_ATTEMPTS-1); this one attempt owns
+        # `checks_slot` exclusively for as long as it runs (no other task
+        # writes to the same cell concurrently), so a plain overwrite is
+        # enough — no need to guard against going backwards the way a
+        # single value shared by every attempt at once would. The parent's
+        # periodic budget-percentage report reads the AVERAGE of every
+        # cell, not any one attempt's own value. Wired unconditionally
+        # whenever a caller supplies both, independent of `best_state_
+        # queue` right below — this is real, continuous progress, not a
+        # "new record" event.
+        def _publish_checks_progress(checks):
+            checks_progress[checks_slot] = checks
+        filler.on_checks_progress = _publish_checks_progress
+    if checks_progress is not None and attempt_active is not None and checks_slot is not None:
+        # Lets `Filler._backtrack`'s own deadline check (see its own
+        # comment) see every sibling attempt's live progress — at the
+        # user's explicit request: "Autoriser les grilles à dépasser leur
+        # budget, tant qu'il reste des grilles qui ne l'ont pas atteint."
+        # Plain references to the same shared arrays `_publish_checks_
+        # progress` above already writes into — read-only from this
+        # Filler's own point of view, no new synchronization needed.
+        filler._sibling_checks_progress = checks_progress
+        filler._sibling_attempt_active = attempt_active
+        filler._checks_slot = checks_slot
     if best_state_queue is not None:
         # Assigned after construction, not passed to Filler(...) directly
         # above: the closure below needs `filler` itself (to read filler.
@@ -4464,6 +5786,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "example_grid": example_grid,
                 "impossible_cells": filler.impossible_zone_cells(),
                 "deadlock_cells": filler.deadlock_zone_cells(),
+                "excluded_cells": filler.excluded_zone_cells(best_assignment, include_deadlock=True),
+                "stat_letters": filler.best_stat_letters_for(),
                 "impossible_slots": filler.impossible_zone_slots(),
                 "forced_cells": forced_cells,
                 "locked_cells": locked_cells,
@@ -4481,12 +5805,71 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "attempt_id": attempt_id,
             })
         filler.on_new_best = _publish_new_best
+        # Sibling of `_publish_new_best` above, for `Filler.on_live_state`
+        # (see its own docstring): a periodic snapshot of the CURRENT
+        # assignment, regardless of whether it's a new record — at the
+        # user's explicit request: "La grille doit bouger aussi. L'algo
+        # doit tester de nouvelles combinaisons [et ça doit se voir]."
+        # Deliberately cheap, unlike `_publish_new_best`: skips `filler.
+        # deadlock_zone_cells()`/`impossible_zone_slots()` entirely, and
+        # publishes the cheaper `empty_domain_zone_cells()` in place of
+        # `impossible_zone_cells()` (see that method): what is skipped is
+        # exactly `_crossing_deadlock_slots`, which builds a letter set
+        # out of every open slot's full domain — the cost profile that
+        # already caused a real, separately-fixed slowdown when run too
+        # often. The plain empty-domain red IS shown, so a heartbeat tile
+        # never understates a genuine dead end as a mere yellow "écarté";
+        # only the more vivid crossing-deadlock red is missing until the
+        # next real record.
+        # `excluded_zone_cells()` is included regardless, but with its own
+        # `include_deadlock` left at its default `False` — unlike the
+        # three skipped above, its DEFAULT source
+        # (`_impossible_this_attempt`, already maintained for free by
+        # `_backtrack` itself) is a plain set lookup, cheap enough for
+        # every cadence — its OPTIONAL extra
+        # source (`include_deadlock=True`, see its own docstring) is
+        # exactly the same domain-iterating cost as the three skipped
+        # above, so it stays off here, at this heartbeat's own much
+        # tighter cadence. Marked `"kind":
+        # "heartbeat"` so the parent's
+        # drain thread (`_drain_best_state_queue_continuously`) forwards it
+        # straight to the live display without ever appending it to
+        # `best_state_buffer` — that buffer feeds the end-of-palier
+        # candidate selection (`display_unique`/`_playable_score`), which
+        # must only ever see genuine recorded bests, never a mid-
+        # backtracking state that can be LESS complete than one already
+        # reported. Carries neither `grid` nor `assignment` (never read for
+        # a message excluded from that buffer) nor `impossible_slots`
+        # (same reason `_publish_new_best`'s own comment gives it — only
+        # relevant to a message that can actually win the selection).
+        def _publish_live_state(current_assignment):
+            example_grid, forced_cells, _ = build_partial_letters_grid(
+                grid, slots, current_assignment, forced_letters, locked_letters
+            )
+            best_state_queue.put({
+                "example_grid": example_grid,
+                "impossible_cells": filler.empty_domain_zone_cells(current_assignment),
+                "deadlock_cells": [],
+                "excluded_cells": filler.excluded_zone_cells(current_assignment),
+                "stat_letters": filler.stat_letters(current_assignment),
+                "forced_cells": forced_cells,
+                "locked_cells": locked_cells,
+                "theme_cells": _theme_word_cells(slots, current_assignment, priority_words),
+                "challenge_cells": _challenge_word_cells_from_assignment(
+                    slots, current_assignment, challenge_words
+                ),
+                "checks": filler.checks,
+                "reason": "live_heartbeat",
+                "attempt_id": attempt_id,
+                "kind": "heartbeat",
+            })
+        filler.on_live_state = _publish_live_state
     if preseed_assignment is not None:
         filler.assignment = list(preseed_assignment)
         filler.used_words = {w for w in preseed_assignment if w is not None}
         filler.best_assignment = list(preseed_assignment)
         filler.best_assigned_count = sum(1 for w in preseed_assignment if w is not None)
-    filler.exclude_immediately_impossible_slots()
+    filler.mark_immediately_impossible_slots()
     solved_internally = filler.solve(deadline_checks)
     # Closes every slot already entirely determined by real crossing words
     # but never explicitly confirmed by `_backtrack` itself — see `_close_
@@ -4528,9 +5911,12 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     # too many words present in `proper_noun_words` is NOT accepted as a
     # genuine success — `truly_complete` flips to `False`, which makes
     # this function return `None` further below exactly like any other
-    # fill failure, with no separate recovery code to write: the cross-
-    # palier retry mechanism already in place (generate_grid) already
-    # retries normally on any `None`.
+    # fill failure; the cross-palier retry mechanism already in place
+    # (generate_grid) already retries normally on any `None`, and the
+    # offending word(s) are folded into `impossible_slots`/`impossible_
+    # cells` below (see `_quota_overflow_slot_indices`) so that machinery
+    # — and the preview — treat them exactly like any other impossible
+    # slot, rather than needing a separate recovery path of their own.
     over_proper_noun_budget = False
     if truly_complete and max_proper_nouns is not None and proper_noun_words:
         proper_noun_count = sum(1 for w in filler.assignment if w in proper_noun_words)
@@ -4565,9 +5951,35 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             diagnostics["forced_cells"] = forced_cells
             diagnostics["impossible_cells"] = filler.impossible_zone_cells()
             diagnostics["deadlock_cells"] = filler.deadlock_zone_cells()
+            diagnostics["excluded_cells"] = filler.excluded_zone_cells(
+                filler.best_assignment, include_deadlock=True
+            )
+            diagnostics["stat_letters"] = filler.best_stat_letters_for()
             diagnostics["assigned_letter_count"] = assigned_letter_count
             diagnostics["assignment"] = list(filler.best_assignment)
             diagnostics["impossible_slots"] = filler.impossible_zone_slots()
+            # Quota-overflow safety net (see over_proper_noun_budget/
+            # over_non_gloss_budget above): a grid rejected only for this
+            # reason has no unassigned or crossing-deadlocked slot at all
+            # in the CSP sense — `impossible_zone_slots()` above comes back
+            # empty. The word(s) actually responsible are folded in here
+            # too, so this kind of rejection gets the same red highlighting
+            # in the preview, and the same cross-palier repair (removed by
+            # `_clean_blocked_slots`/`_build_retry_seed` like any other
+            # impossible slot, then replaced by a different candidate on
+            # retry) as any other failed attempt — see
+            # `_quota_overflow_slot_indices`'s own docstring.
+            if over_proper_noun_budget or over_non_gloss_budget:
+                offending_words = set()
+                if over_proper_noun_budget:
+                    offending_words |= {w for w in filler.best_assignment if w in proper_noun_words}
+                if over_non_gloss_budget:
+                    offending_words |= {w for w in filler.best_assignment if w in non_gloss_words}
+                quota_slots = _quota_overflow_slot_indices(filler.best_assignment, offending_words)
+                diagnostics["impossible_slots"] = sorted(set(diagnostics["impossible_slots"]) | set(quota_slots))
+                diagnostics["impossible_cells"] = sorted(
+                    set(diagnostics["impossible_cells"]) | {cell for i in quota_slots for cell in slots[i]}
+                )
             diagnostics["locked_cells"] = locked_cells
             diagnostics["theme_cells"] = _theme_word_cells(
                 slots, filler.best_assignment, priority_words
@@ -4937,9 +6349,14 @@ def _interactive_letter_stats(grid, rows, cols, index):
     uses to pick its own "graines" preview letters (`sample_letter_biases`,
     `force_fraction=0.0` so nothing is ever forced, only tallied), just
     read out for every cell instead of only the few crossing the sampling
-    threshold. Returns a sorted `[r, c, letter]` list; a cell whose every
-    crossing slot is already impossible contributes nothing to `letter_
-    scores` and is simply omitted.
+    threshold. The letter is read from the cell's crossed tally
+    (`_crossed_letter_counts`: only letters both the across and the down
+    slot observed there, each at the lower of its two counts), the same
+    figure the slot-selection cascade's most-constrained-cell level reads.
+    Returns a sorted `[r, c, letter]` list; a cell whose every crossing
+    slot is already impossible contributes nothing to `letter_scores`, and
+    a cell whose two directions share no letter has none to show — both
+    are simply omitted.
     """
     pattern = [["#" if ch == BLACK else "." for ch in row] for row in grid]
     slots = extract_slots(pattern, rows, cols)
@@ -4960,12 +6377,50 @@ def _interactive_letter_stats(grid, rows, cols, index):
         for c in range(cols):
             if grid[r][c] != WHITE:
                 continue
-            counts = letter_scores.get((r, c))
-            if not counts:
+            by_dir = letter_scores.get((r, c))
+            if not by_dir:
                 continue
-            letter, _count = counts.most_common(1)[0]
+            letter = _most_probable_letter(by_dir)
+            if letter is None:
+                continue
             out.append([r, c, letter])
     return out
+
+
+# Severity order of `_word_breaks_open_slot`'s own verdicts, worst last:
+# a candidate that both empties a disjoint slot and blocks one it crosses
+# is reported on the worse of the two, so a scan can keep looking for a
+# worse verdict without ever downgrading what it already found.
+_BREAK_VERDICT_RANK = {"other": 1, "crossing": 2, "crossing_blocked": 3}
+
+# How tolerant one pass of `interactive_place_word`'s own three-tier
+# search is, from strictest to last resort — the step-by-step equivalent
+# of `Filler._backtrack`'s own staged node (strict slots, then released
+# "emplacements écartés", then `allow_breaking`), which Interactive mode
+# reaches by re-running the whole three-tier search at the next level
+# instead of by recursing.
+PLACEMENT_LEVEL_STRICT = 0       # only a candidate that breaks nothing
+PLACEMENT_LEVEL_DISJOINT = 1     # + one that empties a DISJOINT slot
+PLACEMENT_LEVEL_BREAKING = 2     # + one that blocks a slot it CROSSES
+
+
+def _placement_accepted(verdict, level):
+    """Whether `_word_breaks_open_slot`'s `verdict` may be accepted at
+    this `PLACEMENT_LEVEL_*`.
+
+    `"crossing_blocked"` is never accepted, at any level: the last-resort
+    relaxation covers CREATING an "emplacement bloqué", never writing
+    across one that is blocked already (`DOC_ALGO/FR/Lexicon.md`, "case
+    croisée bloquée") — exactly the line `Filler._backtrack` draws
+    between `crossing_broken` (relaxed by `allow_breaking`) and
+    `crossing_still_impossible` (rejected at every stage)."""
+    if verdict is None:
+        return True
+    if verdict == "crossing_blocked":
+        return False
+    if verdict == "other":
+        return level >= PLACEMENT_LEVEL_DISJOINT
+    return level >= PLACEMENT_LEVEL_BREAKING
 
 
 def _open_slot_baseline(filler, exclude_index):
@@ -5012,10 +6467,32 @@ def _word_breaks_open_slot(filler, i, w, active_challenge_words, baseline):
     slot's own domain, exactly the "impossible zone" this whole mechanism
     exists to avoid, whether or not the two slots ever touch.
 
+    Returns `"crossing_blocked"`, `"crossing"`, `"other"` or `None`
+    (falsy) — every caller may still use it as a plain bool, but
+    `interactive_place_word`'s own staged search needs to tell them
+    apart, since each one is accepted at a different, later stage (see
+    `_placement_accepted`): `None` always, `"other"` once no fully safe
+    candidate exists anywhere, `"crossing"` (this candidate NEWLY blocks
+    an emplacement it crosses) only as the very last resort, and
+    `"crossing_blocked"` (the crossed emplacement was blocked already and
+    stays blocked) never.
+
     `baseline` (see `_open_slot_baseline`, computed once by the caller for
-    this same `i`) is what tells a slot genuinely broken BY this candidate
-    apart from one that was already broken beforehand for an unrelated
-    reason — only the former counts. For a slot `j` sharing a cell with
+    this same `i`) tells a slot genuinely broken BY this candidate apart
+    from one already broken beforehand for an unrelated reason. For a slot
+    `i` does NOT cross, only the former counts: `w` cannot touch it, and
+    blaming a pre-existing blocked zone anywhere in the grid on every
+    candidate everywhere would leave "Suivant" permanently stuck. For a
+    slot `i` DOES cross, both count, but they are reported apart: a slot
+    alive in the baseline and blocked afterwards was blocked BY this
+    candidate (`"crossing"`), while one already dead in the baseline and
+    still blocked afterwards means this word crosses an "emplacement
+    bloqué" (`"crossing_blocked"`, `DOC_ALGO/FR/Lexicon.md`) — the same
+    split `Filler._backtrack` makes between `crossing_broken` and
+    `crossing_still_impossible`, and for the same reason: only the former
+    may ever be accepted, and only in the last-resort pass. Such a slot is
+    therefore examined even when its own baseline is already empty. For a
+    slot `j` sharing a cell with
     `i` (`filler._crossing_slots[i]`), `w`'s own letters can change `j`'s
     domain, so it's recomputed fresh from the tentative assignment; for
     every other still-open slot, its domain never depends on what ends up
@@ -5035,26 +6512,49 @@ def _word_breaks_open_slot(filler, i, w, active_challenge_words, baseline):
     slot. Unlike `_backtrack`'s own version (scoped to direct crossings
     only, and self-healed palier to palier by the cross-palier retry
     machinery `interactive_place_word` has no equivalent of), there is no
-    `excluded_slots`/`_crossing_excluded_slots` to check here —
-    `interactive_place_word` never builds a `Filler` with either
-    non-empty."""
+    `excluded_slots` to check here — `interactive_place_word` never builds
+    a `Filler` with it non-empty."""
     filler.assignment[i] = w
     filler.used_words.add(w)
-    broken = False
+    broken = None
+    options_cache = {}
+
+    def _challenge_can_fill(j):
+        return bool(active_challenge_words) and any(
+            w2 not in filler.used_words and filler._challenge_word_fits(j, w2)
+            for w2 in active_challenge_words
+        )
+
     for j, before in baseline.items():
-        if not before:
+        crossing = j in filler._crossing_slots[i]
+        if not before and not crossing:
             continue
-        if j in filler._crossing_slots[i]:
-            remaining = set(filler._domain(j)) - filler.used_words
-        else:
-            remaining = before - {w}
-        if not remaining and not (
-            active_challenge_words and any(
-                w2 not in filler.used_words and filler._challenge_word_fits(j, w2)
-                for w2 in active_challenge_words
+        if crossing:
+            # Exactly the same call `Filler._backtrack` makes for its own
+            # per-candidate check — one definition of "emplacement
+            # bloqué", crossing deadlocks included, so Interactive mode
+            # can never place a word across a slot the automatic search
+            # would have refused (and that the interface is already
+            # painting red).
+            blocked = filler.slot_is_blocked(
+                j, filler.used_words, active_challenge_words,
+                options_cache, filler._crossing_slots[i], w,
             )
-        ):
-            broken = True
+        else:
+            blocked = not (before - {w}) and not _challenge_can_fill(j)
+        if not blocked:
+            continue
+        if not crossing:
+            verdict = "other"
+        elif before or _challenge_can_fill(j):
+            verdict = "crossing"
+        else:
+            verdict = "crossing_blocked"
+        if broken is None or _BREAK_VERDICT_RANK[verdict] > _BREAK_VERDICT_RANK[broken]:
+            broken = verdict
+        if verdict == "crossing_blocked":
+            # Nothing outranks it, so no later slot could change the
+            # answer: stop scanning at once.
             break
     filler.assignment[i] = None
     filler.used_words.discard(w)
@@ -5130,13 +6630,14 @@ def _build_interactive_filler(pattern, rows, cols, index, rng, known, priority_w
 def _find_priority_word_placement(
     pool_flat, viable, filler, slots, target, base_pattern, rows, cols, rng, index,
     known, priority_words, challenge_words, fits_ordinary, is_eligible, register_break,
-    set_budget,
+    set_budget, level, allow_reshape=True,
 ):
     """Shared search behind BOTH of `interactive_place_word`'s priority
     tiers ("Mots Défi" first, then the theme glossary): tries every
     ordinary, already-dictionary-viable slot this word pool fits
-    (`target`'s own combos first, each ranked by the same statistical
-    score/frequency the final word draw uses) purely against `filler`/
+    (`target`'s own combos first, each slot's own words drawn by `Filler.
+    ordered_candidates`, the same rule the automatic search uses) purely
+    against `filler`/
     `slots` — the grid's own base pattern, never touched by any reshape,
     so nothing here can ever be contaminated by another candidate's own
     speculative change. Only once every ordinary combo has failed does it
@@ -5161,17 +6662,43 @@ def _find_priority_word_placement(
     always drawn fresh from `filler`'s own current challenge pool,
     regardless of which tier is running — that check is hard-coded to
     challenge words specifically, not to whichever pool this call happens
-    to be searching. Returns `(target_index, word, cells, pattern_to_
+    to be searching.
+
+    `level` (a `PLACEMENT_LEVEL_*`) is how tolerant this pass is: which
+    `_word_breaks_open_slot` verdicts count as acceptable here
+    (`_placement_accepted`). `interactive_place_word` re-runs its whole
+    three-tier search once per level, so a "Mots Défi" word keeps its
+    priority over the theme glossary and the general dictionary at every
+    level, and a word is only ever accepted at a tolerant level once the
+    grid has no stricter option left anywhere. A candidate accepted at
+    this level never counts against the tier's own give-up budget — only
+    a real rejection does, the same rule `Filler._backtrack` applies to a
+    word accepted under `allow_breaking`.
+
+    `allow_reshape=False` skips the reshape phase entirely: only the
+    "Mots Défi" tier reshapes the grid for a word, the theme tier passes
+    `False` and only ever takes a slot the base pattern already offers.
+
+    Returns `(target_index, word, cells, pattern_to_
     commit)` on success, `None` once every ordinary and reshaped candidate
     has been tried and rejected."""
-    combos = [(i, w) for i in viable for w in pool_flat if fits_ordinary(i, w)]
-
-    def _combo_key(iw):
-        i, w = iw
-        freq = index.for_cells(slots[i]).get(len(slots[i]), {}).get("freq", {})
-        return (i != target, -filler._candidate_score(i, w), -freq.get(w, 0.0))
-
-    combos.sort(key=_combo_key)
+    # One group per slot, `target`'s own first (the cascade already chose
+    # it), and inside each group the pool's words are drawn by `Filler.
+    # ordered_candidates` — the same shuffle/statistical-sort/sliding-
+    # window draw `_backtrack` applies to the slot it selects, so a tier
+    # never returns the same word on every click for a given grid state.
+    # The groups themselves keep following their own best-scored word, so
+    # the slot a strong candidate belongs to is still tried early.
+    by_slot = {}
+    for i in viable:
+        words = [w for w in pool_flat if fits_ordinary(i, w)]
+        if words:
+            by_slot[i] = filler.ordered_candidates(i, words)
+    order = sorted(
+        by_slot,
+        key=lambda i: (i != target, -max(filler._candidate_score(i, w) for w in by_slot[i])),
+    )
+    combos = [(i, w) for i in order for w in by_slot[i]]
 
     claimed = set()
     by_length = _slots_by_length(base_pattern, rows, cols)
@@ -5180,7 +6707,7 @@ def _find_priority_word_placement(
         w for w in pool_flat
         if w not in ordinary_words and len(w) >= 2
         and _free_matching_slot(by_length, w, known, claimed) is None
-    ]
+    ] if allow_reshape else []
     rng.shuffle(reshape_words)
     reshape_words = reshape_words[:WIDEN_PRIORITY_WORDS_LIMIT]
 
@@ -5194,7 +6721,8 @@ def _find_priority_word_placement(
         baseline = baseline_cache.get(i)
         if baseline is None:
             baseline = baseline_cache[i] = _open_slot_baseline(filler, i)
-        if _word_breaks_open_slot(filler, i, w, exemption_pool, baseline):
+        verdict = _word_breaks_open_slot(filler, i, w, exemption_pool, baseline)
+        if not _placement_accepted(verdict, level):
             register_break(w)
             continue
         return i, w, slots[i], base_pattern
@@ -5219,12 +6747,117 @@ def _find_priority_word_placement(
         j = next(k for k, c in enumerate(cand_slots) if tuple(c) == cand_cells)
         exemption_pool = filler._active_challenge_words() - filler.used_words
         baseline = _open_slot_baseline(cand_filler, j)
-        if _word_breaks_open_slot(cand_filler, j, w, exemption_pool, baseline):
+        verdict = _word_breaks_open_slot(cand_filler, j, w, exemption_pool, baseline)
+        if not _placement_accepted(verdict, level):
             register_break(w)
             continue
         return j, w, cand_cells, cand_pattern
 
     return None
+
+
+def _slot_cells_of(slots, slot_indices):
+    """Every cell of every slot of `slot_indices`, as `[[row, col], ...]`
+    — the wire shape every other interactive diagnostic uses.
+
+    An "emplacement écarté" is a property of a whole EMPLACEMENT, so the
+    whole emplacement is reported, letters included: exactly what
+    `Filler.excluded_zone_cells` does for the automatic previews
+    (`cells.update(self.slots[i])`). Reporting only the still-empty cells
+    instead would scatter the overlay into isolated cells — an écarté
+    emplacement crossed by placed words would show as a few disconnected
+    squares rather than as the emplacement it actually is."""
+    cells = []
+    seen = set()
+    for i in sorted(slot_indices):
+        for cell in slots[i]:
+            if cell in seen:
+                continue
+            seen.add(cell)
+            cells.append([cell[0], cell[1]])
+    return cells
+
+
+def _cascade_slot_order(filler, candidates, domains, first=None):
+    """Yield every index of `candidates` in `Filler._select_target_slot`'s
+    own 9-level cascade order, best first — repeatedly re-selecting from
+    the shrinking pool rather than sorting once, so each successive pick
+    is made by the exact same cascade automatic generation uses (its
+    level-3/4/5 groupings are relative to the pool it is handed, so they
+    only stay meaningful when recomputed after every removal).
+
+    `first`, when given and present in `candidates`, is yielded before
+    anything else: `interactive_place_word` already resolved its own
+    `target` through the same cascade before its three tiers ran, and the
+    cascade draws at random within its final window, so re-selecting from
+    scratch would otherwise hand tier 3 a different slot than the one the
+    two tiers above were built around."""
+    remaining = list(candidates)
+    if first is not None and first in remaining:
+        remaining.remove(first)
+        yield first
+    while remaining:
+        i = filler._select_target_slot(remaining, domains)
+        yield i
+        remaining.remove(i)
+
+
+def _general_dictionary_pick(filler, viable, i, exclude, baselines, level):
+    """General-dictionary candidate drawn for slot `i`, or `None` if every
+    one of them is refused — the per-slot half of `interactive_place_
+    word`'s own tier 3, factored out so the same choice can be retried on
+    another slot instead of declaring the whole grid impossible (see that
+    function's own tier-3 sweep).
+
+    The candidates are ordered by `Filler.ordered_candidates` — the very
+    rule `_backtrack` applies to the slot it selects (shuffle, statistical
+    sort, random draw inside the sliding `CANDIDATE_SCORE_WINDOW`) — and
+    the first acceptable one wins. Interactive mode is the step-by-step
+    version of the automatic search, so it draws its word from the same
+    window rather than always taking the single best-scored candidate:
+    a strict argmax makes "Suivant" deterministic, returning the same
+    word on every click for a given grid state, with no way to reach the
+    other candidates a slot genuinely has.
+
+    `exclude` is the union of the "Mots Défi" and theme pools: any such
+    word still present in `viable[i]` was necessarily already tried,
+    across every slot in the grid, by one of the two tiers above, so
+    reconsidering it here would just re-select the exact word already
+    rejected. Excluding both pools leaving nothing at all is the one case
+    this must not apply: `viable[i]` unfiltered is then tried too, so
+    "Suivant" never gets stuck on a slot only such a word can fill.
+
+    `level` (a `PLACEMENT_LEVEL_*`) is how tolerant this pass of the sweep
+    is: `_placement_accepted` decides which `_word_breaks_open_slot`
+    verdict may be accepted here. A candidate that leaves an emplacement
+    it crosses blocked when it was blocked ALREADY is refused at every
+    level, with no exception (`DOC_ALGO/FR/Lexicon.md`, "case croisée
+    bloquée").
+
+    `baselines` caches `_open_slot_baseline` per slot index across both
+    phases of the sweep (it is candidate-independent, so one computation
+    per slot is enough however many times that slot is revisited)."""
+    cands = viable[i]
+    plain_cands = cands - exclude if exclude else cands
+    active_challenge_words = filler._active_challenge_words() - filler.used_words
+    if i not in baselines:
+        baselines[i] = _open_slot_baseline(filler, i)
+    baseline = baselines[i]
+
+    def _rank(pool):
+        return filler.ordered_candidates(i, pool)
+
+    def _first_acceptable(ranked):
+        for w in ranked:
+            verdict = _word_breaks_open_slot(filler, i, w, active_challenge_words, baseline)
+            if _placement_accepted(verdict, level):
+                return w
+        return None
+
+    word = _first_acceptable(_rank(plain_cands))
+    if word is None and plain_cands != cands:
+        word = _first_acceptable(_rank(cands))
+    return word
 
 
 def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
@@ -5311,10 +6944,25 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
         imp, low, deadlock = _interactive_fill_diagnostics(grid, rows, cols, index, challenge_words)
         return {
             "impossible": True, "impossible_cells": imp, "low_candidate_cells": low,
-            "deadlock_cells": deadlock,
+            "deadlock_cells": deadlock, "excluded_cells": [],
         }
 
-    # Target slot: the same 8-level cascade as automatic generation (see
+    # A word is never placed ON an "emplacement bloqué" (red) while any
+    # other emplacement can still take one — the same staging automatic
+    # generation applies to an "emplacement écarté" (`DOC_ALGO/FR/
+    # Lexicon.md`): such a slot is out of the running first, and only
+    # becomes selectable again once nothing else is left, so "Suivant" is
+    # never stuck. `_impossible_indices` is the red notion itself, crossing
+    # deadlocks included (`_crossing_deadlock_indices`) — which is exactly
+    # the case a plain per-slot domain check misses: a slot whose own
+    # domain is fine, but which shares a cell with another open slot no
+    # letter can satisfy for both at once.
+    blocked_targets = set(
+        _impossible_indices(slots, index, known, challenge_words=challenge_words)
+    )
+    selectable_targets = [i for i in viable if i not in blocked_targets] or list(viable)
+
+    # Target slot: the same 9-level cascade as automatic generation (see
     # Filler._select_target_slot), reused as-is rather than a hand-rolled,
     # simple MRV — at the user's explicit request, after confirming live
     # that this MRV (smallest domain first) made Interactive mode start
@@ -5324,107 +6972,177 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     # ever resolved against the grid's own BASE pattern — never against a
     # reshaped one, since which reshape (if any) ends up mattering is only
     # known once a specific tier below actually settles on one.
-    target = filler._select_target_slot(list(viable.keys()), domains)
+    target = filler._select_target_slot(selectable_targets, domains)
 
-    # Tier 1: "Mots Défi", at the user's explicit request: a challenge word
-    # is never placed without first checking it leaves every OTHER
-    # still-open slot in the grid still fillable (`_word_breaks_open_slot`,
-    # the same exemption `Filler._backtrack`'s own `crossing_broken` check
-    # applies) — not only a slot it directly crosses, but also a disjoint
-    # one whose own domain this word happened to be the last unused
-    # candidate for. A combination that would break either kind is
-    # abandoned on the spot ("backtrack immédiat") in favor of the next
-    # one — see `_find_priority_word_placement`'s own docstring for the
-    # full two-phase search (ordinary slots first, each ranked by
-    # statistical score/frequency, `target`'s own combos first; then an
-    # isolated reshape attempt for any word left with no slot at all).
+    # Three tiers ("Mots Défi", then the theme glossary, then the general
+    # dictionary), swept once per acceptance level — the step-by-step
+    # equivalent of `Filler._backtrack`'s own staged node, which
+    # Interactive mode cannot express by recursing since a click only ever
+    # makes one decision:
+    #
+    #   PLACEMENT_LEVEL_STRICT   — only a candidate that breaks nothing;
+    #   PLACEMENT_LEVEL_DISJOINT — + one that leaves a DISJOINT slot with
+    #                              no word left;
+    #   PLACEMENT_LEVEL_BREAKING — + one that NEWLY blocks an emplacement
+    #                              it crosses.
+    #
+    # A whole level is exhausted, across all three tiers and every
+    # still-open slot, before the next one is even tried, so a stricter
+    # placement anywhere in the grid always wins over a more damaging one,
+    # and "Mots Défi" keeps its precedence over the theme glossary and the
+    # general dictionary at every level. The last level is the one and only
+    # exception to "never create an impossible emplacement" (`DOC_ALGO/FR/
+    # Lexicon.md`, "case croisée bloquée"): once nothing else can be
+    # placed, a well-filled grid carrying an impossible zone — which
+    # "Nettoyer", a manual edit or "Finir la grille" can then repair, since
+    # the zone has to exist before it can be cleaned — beats a grid
+    # declared impossible and left half empty. Crossing an emplacement that
+    # is blocked ALREADY stays refused at every level, here as in the
+    # automatic search (`_placement_accepted`).
     placed_from = None
     placed_target = placed_word = cells = pattern_to_commit = None
+    # Slots this call finds unable to take any word without creating an
+    # impossible one — "emplacements écartés" (see `DOC_ALGO/FR/Lexicon.
+    # md`), collected by the general-dictionary sweep below and reported
+    # to the panel as `excluded_cells`. Only that sweep feeds it: the two
+    # priority tiers above reject a (word, slot) combination on the
+    # word's own account, which says nothing about whether the slot could
+    # take some OTHER word. Accumulated across every level, since a slot
+    # set aside at a strict level really was set aside — unless a later,
+    # more tolerant level ends up placing this round's word on it.
+    set_aside_slots = set()
 
-    challenge_pool = filler._active_challenge_words() - filler.used_words
-    if challenge_pool:
-        found = _find_priority_word_placement(
-            challenge_pool, viable, filler, slots, target, pattern, rows, cols, rng, index,
-            known, priority_words, challenge_words,
-            fits_ordinary=filler._challenge_word_fits,
-            is_eligible=lambda w: w not in filler._challenge_abandoned,
-            register_break=filler._register_challenge_word_break,
-            set_budget=lambda v: setattr(filler, "_challenge_word_budget", v),
-        )
-        if found is not None:
-            placed_target, placed_word, cells, pattern_to_commit = found
-            placed_from = "challenge"
+    # Tier 3's own sweep state, built once and reused at every level:
+    # `exclude` is the union of the two priority pools (any such word in a
+    # slot's domain was necessarily already tried there by a tier above),
+    # `blocked_viable` the slots deemed "bloqué" (red), tried only after
+    # every other one, and `baselines` the per-slot `_open_slot_baseline`
+    # cache (candidate-independent, so one computation per slot is enough
+    # however many levels revisit it).
+    exclude = set(challenge_words or ()) | _flatten_priority_words(priority_words)
+    selectable_set = set(selectable_targets)
+    blocked_viable = [i for i in viable if i not in selectable_set]
+    baselines = {}
 
-    # Tier 2: the theme glossary, tried only once every "Mots Défi"
-    # combination and reshape attempt has failed (or none was typed) —
-    # same two-phase search, restricted to genuine dictionary candidates
-    # (`w in viable[i]`) belonging to the glossary applicable to slot i's
-    # own direction (`_priority_words_for`), so a bilingual grid's two
-    # per-language glossaries are never mixed up.
-    if placed_from is None and priority_words:
-        theme_pool = _flatten_priority_words(priority_words) - filler.used_words
-        if theme_pool:
-            def _theme_fits(i, w):
-                return w in viable[i] and w in _priority_words_for(filler.priority_words, slots[i])
-
+    for level in (PLACEMENT_LEVEL_STRICT, PLACEMENT_LEVEL_DISJOINT,
+                  PLACEMENT_LEVEL_BREAKING):
+        # Tier 1: "Mots Défi", at the user's explicit request: a challenge
+        # word is never placed without first checking what it leaves every
+        # OTHER still-open slot in the grid (`_word_breaks_open_slot`, the
+        # same exemption `Filler._backtrack`'s own `crossing_broken` check
+        # applies) — not only a slot it directly crosses, but also a
+        # disjoint one whose own domain this word happened to be the last
+        # unused candidate for. A combination rejected at this level is
+        # abandoned on the spot ("backtrack immédiat") in favor of the next
+        # one — see `_find_priority_word_placement`'s own docstring for the
+        # full two-phase search (ordinary slots first, each ranked by
+        # statistical score/frequency, `target`'s own combos first; then an
+        # isolated reshape attempt for any word left with no slot at all).
+        challenge_pool = filler._active_challenge_words() - filler.used_words
+        if challenge_pool:
             found = _find_priority_word_placement(
-                theme_pool, viable, filler, slots, target, pattern, rows, cols, rng, index,
+                challenge_pool, viable, filler, slots, target, pattern, rows, cols, rng, index,
                 known, priority_words, challenge_words,
-                fits_ordinary=_theme_fits,
-                is_eligible=lambda w: w not in filler._theme_abandoned,
-                register_break=filler._register_theme_word_break,
-                set_budget=lambda v: setattr(filler, "_theme_word_budget", v),
+                fits_ordinary=filler._challenge_word_fits,
+                is_eligible=lambda w: w not in filler._challenge_abandoned,
+                register_break=filler._register_challenge_word_break,
+                set_budget=lambda v: setattr(filler, "_challenge_word_budget", v),
+                level=level,
             )
             if found is not None:
                 placed_target, placed_word, cells, pattern_to_commit = found
-                placed_from = "theme"
+                placed_from = "challenge"
 
-    # Tier 3: the general dictionary, at `target` only (this tier's own
-    # candidates are never reshaped for — automatic generation's own
-    # widening never reshapes for a plain dictionary word either, only for
-    # "Mots Défi"/theme words). Both other pools are excluded outright: any
-    # "Mots Défi"/theme word still present in `viable[target]` was
-    # necessarily already tried, across every slot in the grid, by one of
-    # the two tiers above — reconsidering it here would just let the
-    # "accept anyway" compromise below re-select that exact same word for
-    # the exact same reason it was already rejected. Excluding both pools
-    # empty is the one case this must not apply: if nothing else at all can
-    # go here, `viable[target]` (unfiltered) is still tried as an absolute
-    # last resort, so "Suivant" never gets stuck.
+        # Tier 2: the theme glossary, tried only once every "Mots Défi"
+        # combination and reshape attempt has failed at this level (or none
+        # was typed) — same two-phase search, restricted to genuine
+        # dictionary candidates (`w in viable[i]`) belonging to the glossary
+        # applicable to slot i's own direction (`_priority_words_for`), so a
+        # bilingual grid's two per-language glossaries are never mixed up.
+        if placed_from is None and priority_words:
+            theme_pool = _flatten_priority_words(priority_words) - filler.used_words
+            if theme_pool:
+                def _theme_fits(i, w):
+                    return w in viable[i] and w in _priority_words_for(filler.priority_words, slots[i])
+
+                found = _find_priority_word_placement(
+                    theme_pool, viable, filler, slots, target, pattern, rows, cols, rng, index,
+                    known, priority_words, challenge_words,
+                    fits_ordinary=_theme_fits,
+                    is_eligible=lambda w: w not in filler._theme_abandoned,
+                    register_break=filler._register_theme_word_break,
+                    set_budget=lambda v: setattr(filler, "_theme_word_budget", v),
+                    level=level,
+                    allow_reshape=False,
+                )
+                if found is not None:
+                    placed_target, placed_word, cells, pattern_to_commit = found
+                    placed_from = "theme"
+
+        # Tier 3: the general dictionary (this tier's own candidates are
+        # never reshaped for — automatic generation's own widening never
+        # reshapes for a plain dictionary word either, only for "Mots Défi"/
+        # theme words). Unlike the two tiers above, which already search the
+        # WHOLE grid for their own pool, this one sweeps every still-open
+        # slot in cascade order (`_cascade_slot_order`, `target` first so the
+        # slot the tiers above were built around is still tried before any
+        # other) rather than considering `target` alone: `target` is only
+        # ever the cascade's own FIRST choice, not the only legal one, so a
+        # slot whose every candidate is refused is merely set aside and the
+        # sweep moves on. Within the sweep, a slot deemed "bloqué" (red) is
+        # tried only after every other one, the same staging
+        # `selectable_targets` already applies to the cascade's own pick.
+        if placed_from is None:
+            word = None
+            for group in (selectable_targets, blocked_viable):
+                for i in _cascade_slot_order(
+                    filler, group, domains, first=target if group is selectable_targets else None,
+                ):
+                    word = _general_dictionary_pick(
+                        filler, viable, i, exclude, baselines, level,
+                    )
+                    if word is None:
+                        # This slot can no longer take any word at this
+                        # level: it becomes an "emplacement écarté" (see
+                        # `DOC_ALGO/FR/Lexicon.md`) — reported yellow in the
+                        # panel, and already set aside by this very sweep,
+                        # which never comes back to a slot it has failed on
+                        # before every untested one has had its turn. It
+                        # stays an ordinary slot otherwise: its domain is
+                        # genuinely non-empty, so a word crossing it is
+                        # still placed freely as long as it does not block
+                        # it, unlike a blocked slot (red), which may never
+                        # be crossed. The next level releases it along with
+                        # every other one, exactly as `Filler._backtrack`'s
+                        # own stage 2 releases its écarté slots.
+                        set_aside_slots.add(i)
+                        continue
+                    placed_target = i
+                    break
+                if word is not None:
+                    break
+            if word is not None:
+                placed_word, cells, pattern_to_commit = word, slots[placed_target], pattern
+                placed_from = "dictionary"
+
+        if placed_from is not None:
+            break
+
+    # A slot finally placed on at a later level was never really set aside.
+    set_aside_slots.discard(placed_target)
+    excluded = _slot_cells_of(slots, set_aside_slots)
+
     if placed_from is None:
-        target_cells = slots[target]
-        cands = viable[target]
-        exclude = set(challenge_words or ()) | _flatten_priority_words(priority_words)
-        plain_cands = cands - exclude if exclude else cands
-        freq = index.for_cells(target_cells).get(len(target_cells), {}).get("freq", {})
-        active_challenge_words = filler._active_challenge_words() - filler.used_words
-        baseline = _open_slot_baseline(filler, target)
-
-        def _rank(pool):
-            return sorted(
-                pool,
-                key=lambda w: (filler._candidate_score(target, w), freq.get(w, 0.0)),
-                reverse=True,
-            )
-
-        def _first_crossing_safe(ranked):
-            return next(
-                (w for w in ranked
-                 if not _word_breaks_open_slot(filler, target, w, active_challenge_words, baseline)),
-                None,
-            )
-
-        ranked_plain = _rank(plain_cands)
-        word = _first_crossing_safe(ranked_plain)
-        if word is None:
-            # Every plain candidate available at this slot breaks some
-            # crossing: accept the best one anyway rather than leaving
-            # "Suivant" stuck — the same final compromise `_backtrack`'s
-            # own general-dictionary tier falls back to once its own
-            # budget is spent. Still never a "Mots Défi"/theme word here,
-            # unless `plain_cands` was empty to begin with.
-            word = ranked_plain[0] if ranked_plain else _rank(cands)[0]
-        placed_target, placed_word, cells, pattern_to_commit = target, word, target_cells, pattern
+        # Not one still-open slot can take a word, even allowing one that
+        # creates an impossible emplacement: nothing is placed this round.
+        imp, low, deadlock = _interactive_fill_diagnostics(
+            grid, rows, cols, index, challenge_words
+        )
+        return {
+            "impossible": True, "impossible_cells": imp,
+            "low_candidate_cells": low, "deadlock_cells": deadlock,
+            "excluded_cells": excluded,
+        }
 
     word = placed_word
 
@@ -5455,6 +7173,11 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
         "impossible_cells": imp,
         "low_candidate_cells": low,
         "deadlock_cells": deadlock,
+        # Computed on the grid BEFORE this placement (see `excluded`
+        # above): an "emplacement écarté" is a slot this call set aside
+        # while looking for somewhere to place its word, and the one it
+        # finally placed is never one of them.
+        "excluded_cells": excluded,
         "placed": {
             "cells": [[r, c] for (r, c) in cells],
             "word": word,
@@ -7286,7 +9009,7 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
     ou noires verrouillées." Applied to EVERY distinct attempt of a failed
     palier (`failed_pairs`), not just the best one — at the user's
     explicit request, the same principle already established for
-    `_clean_continue_candidate`/`_clean_all_candidates`.
+    `_clean_continue_candidate`/`_clean_candidate`.
 
     An "entirely empty" slot is one where NO cell carries a letter,
     whether from its own assignment or from a crossing (read directly
@@ -7460,6 +9183,58 @@ def _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
                         break
                     continue
             grid[r][c] = saved
+
+    # Last-chance enrichment, the final thing this step does before the
+    # cleanup takes over: the palier has failed and this grid is about to
+    # be declared "échouée", which is the one moment a word may be placed
+    # ACROSS an emplacement already known impossible (`DOC_ALGO/FR/
+    # Lexicon.md`, "emplacement bloqué"). The more words the grid carries
+    # when the cleanup runs, the more of them survive it and reach the
+    # next palier; outside this moment the refusal stays absolute.
+    #
+    # Three differences from `_try_complete` above, and each one is what
+    # makes this pass able to add anything at all:
+    #   - the entirely-empty slots are NOT excluded, so the search
+    #     genuinely tries to fill them instead of leaving them locked;
+    #   - the impossible slots ARE still excluded, which is precisely what
+    #     lets a word cross them: `Filler._backtrack` skips an excluded
+    #     slot in its own per-candidate crossing check, so neither
+    #     `crossing_broken` nor `crossing_still_impossible` can reject a
+    #     candidate on its account;
+    #   - the result is absorbed even when the fill never completes.
+    #     `try_fill` only RETURNS a grid once every required slot is
+    #     solved, which is exactly what this grid cannot do — but its own
+    #     `diagnostics["assignment"]` carries the best partial state it
+    #     reached either way, and that partial state is the whole point.
+    #
+    # Nothing here can remove or contradict what is already placed
+    # (`preseed_assignment` locks every fully-confirmed slot, and a
+    # partially-confirmed one keeps its letters through those same
+    # crossings), and no black cell is touched — this pass only ever adds
+    # letters. A word it places may well seal an impossible emplacement
+    # into a fully-lettered run spelling nothing real; the recomputation
+    # right below catches that case like any other
+    # (`_invalid_fully_known_indices`), so such a slot still reaches the
+    # cleanup flagged impossible rather than silently passing for valid.
+    last_chance_slots = extract_slots(grid, rows, cols)
+    last_chance_diag = {}
+    try_fill(
+        grid, rows, cols, index, rng, deadline_checks,
+        preseed_assignment=[
+            "".join(confirmed[cell] for cell in cells)
+            if all(cell in confirmed for cell in cells) else None
+            for cells in last_chance_slots
+        ],
+        excluded_slots={
+            j for j, cells in enumerate(last_chance_slots)
+            if tuple(cells) in impossible_cell_tuples
+        },
+        cancel_event=cancel_event,
+        locked_letters=permanent_locked_letters or None,
+        diagnostics=last_chance_diag,
+    )
+    if last_chance_diag.get("assignment"):
+        _absorb((last_chance_slots, last_chance_diag["assignment"]))
 
     final_slots = extract_slots(grid, rows, cols)
     final_assignment = [
@@ -7919,7 +9694,7 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
 def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=None,
                           exclude_impossible_locked=False, index=None, rng=None,
                           grid=None, rows=None, cols=None, permanent_locked_letters=None,
-                          black_cell_links=None, deadlocked_slots=None):
+                          black_cell_links=None, deadlocked_slots=None, deep=False):
     """Steps 1 and 2 of `_build_retry_seed` (see its own docstring for the
     complete history), extracted into their own function at the user's
     explicit request: "à la fin d'un tour, nettoyer automatiquement les
@@ -8088,7 +9863,15 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     empty (both sides of the deadlock still open), leaving it flagged
     impossible until resolved some other way (a manual edit, or
     automatic generation's own pattern-reshaping, which already treats
-    black cells as fully mutable on its own terms)."""
+    black cells as fully mutable on its own terms).
+
+    `deep` (`False` by default): the deep cleanup `generate_grid` applies
+    to a cleaned grid that has reproduced the same state on
+    GRID_REPEAT_DEEP_CLEANUP_STREAK consecutive full cleanups. After the
+    ordinary removal above, every still-assigned word crossing a word that
+    removal took out is removed in turn — one extra level, so the letters
+    that forced the removed word straight back in (held by those crossing
+    words) are freed too."""
     if locked_letters:
         assignment = list(assignment)
         impossible_set = set(impossible_slots) if exclude_impossible_locked else set()
@@ -8115,6 +9898,8 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                 assignment[i] = "".join(locked_letters[cell] for cell in cells)
     else:
         assignment = list(assignment)
+
+    assignment_before_removal = list(assignment)
 
     cell_to_slots = defaultdict(list)
     for i, cells in enumerate(slots):
@@ -8304,6 +10089,18 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                         assignment[j] = None
                         _revert_black_cell_link(j)
 
+    if deep:
+        first_level_removed = [
+            j for j, word in enumerate(assignment)
+            if word is None and assignment_before_removal[j] is not None
+        ]
+        for j in first_level_removed:
+            for cell in slots[j]:
+                for k in cell_to_slots[cell]:
+                    if k != j and assignment[k] is not None:
+                        assignment[k] = None
+                        _revert_black_cell_link(k)
+
     confirmed = {}
     for i, word in enumerate(assignment):
         if word is None:
@@ -8412,7 +10209,8 @@ def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_l
 
 def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, locked_letters=None,
                        exclude_impossible_locked=False, seed_grid=None, index=None, rng=None,
-                       permanent_locked_letters=None, permanent_black_cells=None):
+                       permanent_locked_letters=None, permanent_black_cells=None,
+                       deep=False):
     """Builds the next palier's starting point from the current palier's
     own best failed attempt, at the user's explicit request — a new
     cross-palier resume algorithm, distinct from the "patch" mechanism
@@ -8599,17 +10397,15 @@ def _build_retry_seed(grid, rows, cols, slots, assignment, impossible_slots, loc
     content that was otherwise recoverable. `exclude_impossible_locked`
     (`False` by default, so the normal behavior — no exclusion, which
     wins in the majority of real scenarios observed) is therefore only
-    used as a last resort, at the user's explicit request: only when
-    `generate_grid` detects that a palier produced *no* change at all
-    compared to the previous one (the confirmed letters are rigorously
-    identical, a genuine fixed point), it reruns this same cleanup a
-    second time for that palier, this time with `exclude_impossible_
-    locked=True`, solely to unblock this specific case rather than
-    applying the more aggressive rule everywhere."""
+    used as a last resort: only for a cleaned grid that has reproduced
+    the same state on GRID_REPEAT_DEEP_CLEANUP_STREAK consecutive full
+    cleanups, where `generate_grid` passes it together with `deep=True`
+    (see `_clean_blocked_slots`, one extra level of word removal).
+    Neither is applied to a grid that is still progressing."""
     assignment, confirmed, _, _ = _clean_blocked_slots(
         slots, assignment, impossible_slots, locked_letters=locked_letters,
         exclude_impossible_locked=exclude_impossible_locked, index=index, rng=rng,
-        permanent_locked_letters=permanent_locked_letters,
+        permanent_locked_letters=permanent_locked_letters, deep=deep,
     )
 
     def _direction_has_confirmed_letter(r, c, dr, dc):
@@ -8775,16 +10571,22 @@ def _sorted_by_score(cleaned_candidates, priority_words=None, challenge_words=No
 # this eliminated count exactly matches the number of attempts the next
 # palier will reserve anyway for a completely fresh, blank start (see
 # `reset_count` in `generate_grid`), the surviving grids then filling, one
-# by one, exactly the rest of the next palier's own slots. `max(1, ...)`:
-# never fully empty the pool, even if `FULL_RESET_ATTEMPT_COUNT` exceeds
-# the number of available candidates — at least the best grid itself
-# always remains. `extract` picks out, from each candidate tuple, exactly
-# what the next palier needs to relaunch an attempt from this entry —
-# `(seed_grid, locked_letters)` by default (the full nettoyage, a fresh
-# pattern), `(seed_grid, preseed_assignment, excluded_slots)` for "reprise
-# telle quelle" (see `_continue_seed_pool`).
-def _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[1])):
-    keep = max(1, len(sorted_candidates) - FULL_RESET_ATTEMPT_COUNT)
+# by one, exactly the rest of the next palier's own slots. The pool is
+# also capped at those slots (`PARALLEL_ATTEMPTS - reset_count`): a
+# palier's mid-palier replacement attempts can hand back more candidates
+# than it has workers, and only the best `PARALLEL_ATTEMPTS - reset_count`
+# of them are carried forward. `max(1, ...)`: never fully empty the pool,
+# even if `FULL_RESET_ATTEMPT_COUNT` exceeds the number of available
+# candidates — at least the best grid itself always remains. `extract`
+# picks out, from each candidate tuple, exactly what the next palier needs
+# to relaunch an attempt from this entry — `(seed_grid, locked_letters)`
+# by default (the full nettoyage, a fresh pattern), `(seed_grid,
+# preseed_assignment, excluded_slots)` for "reprise telle quelle" (see
+# `_continue_seed_pool`).
+def _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[1]),
+               reset_count=FULL_RESET_ATTEMPT_COUNT):
+    keep = max(1, min(len(sorted_candidates) - FULL_RESET_ATTEMPT_COUNT,
+                      PARALLEL_ATTEMPTS - reset_count))
     return [extract(sc) for sc in sorted_candidates[:keep]]
 
 
@@ -8863,7 +10665,7 @@ def _reassign_lineage_numbers(raw_lineage, previous_lineage, next_lineage_number
 # chaque process doit repartir à l'étape suivante avec sa grille
 # partiellement nettoyée (sauf le pourcentage de grilles entièrement
 # neuves)" — the same principle already in place for the full nettoyage
-# (see `_clean_all_candidates`, in `generate_grid`) now extended to
+# (see `_clean_candidate`, in `generate_grid`) now extended to
 # "reprise telle quelle", which until now was the only mode keeping just
 # one single grid (`selected_grid`/`selected_diag`, the "best" in
 # `failed_pairs`'s sense) for every non-reset worker of the next palier.
@@ -8957,7 +10759,7 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
     "UI"): a combination matching no real dictionary word, even entirely
     covered by individually correct letters, is never promoted — the slot
     stays `None`, and will be rediscovered on its own as impossible at the
-    very next search (`Filler.exclude_immediately_impossible_slots`),
+    very next search (`Filler.mark_immediately_impossible_slots`),
     rather than being locked in as-is for the rest of the generation."""
     cand_slots = extract_slots(cand_grid, rows, cols)
     cand_grid, cand_slots, cand_assignment, cand_impossible, cand_black_cell_links = (
@@ -9165,6 +10967,49 @@ _worker_attempt_done_event = None
 # real number of `_backtrack` calls (potentially hundreds of thousands) —
 # see `Filler._backtrack` for the exact call site.
 _worker_best_state_queue = None
+# `multiprocessing.Array('l', PARALLEL_ATTEMPTS)`, one cell per concurrent
+# slot of the current palier — each attempt periodically overwrites its
+# own slot (`checks_slot`, passed as a plain task argument, unlike this
+# array reference itself) with its current `Filler.checks` count, at the
+# user's explicit request: "Ce n'est pas normal que rien ne bouge... le
+# Backtracking devrait tester des combinaisons différentes" — the web
+# UI's live "% budget consumed" indicator (see BUDGET_PROGRESS_REPORT_
+# INTERVAL_S below) used to be derived exclusively from `_worker_best_
+# state_queue`'s own messages, which only get published on a NEW record
+# (`Filler.on_new_best`) — during a long stretch where no attempt beats
+# its own previous best (a normal, expected occurrence for a genuinely
+# hard pattern, see DOC_ALGO/FR/ReadMe.md's own "Limites de la
+# recherche"), that queue goes silent, so the percentage froze right
+# along with the grid preview, even though `_backtrack` was still
+# genuinely working through hundreds of thousands of candidates
+# underneath — giving a false impression the search had stopped. This
+# array, written far more often (see CHECKS_PROGRESS_REPORT_INTERVAL)
+# and completely independent of whether any record is ever beaten, lets
+# the parent report real, continuous progress instead — as the AVERAGE of
+# every slot's own value, not the single busiest one: a single shared
+# scalar (the original design) let one struggling attempt — typically the
+# one accumulating checks fastest, since each rejected candidate counts
+# as one check — pin the reported percentage at 100% on its own, even
+# while every other attempt of the same palier was still comfortably
+# below its own budget and genuinely improving the grids shown in the
+# live preview. Each slot is reset to 0 at the start of every palier by
+# the parent (its meaning, like `attempt_done_event`, only ever applies
+# to the palier currently running), and again whenever a freed slot is
+# reassigned mid-palier (see `generate_grid`'s own worker-reassignment
+# comment) — same technical constraint as every other global here (the
+# array itself passed once via the pool's initializer, never as a
+# submitted-task argument, to avoid the macOS "spawn" RuntimeError a raw
+# `multiprocessing` primitive
+# triggers as a plain task argument).
+_worker_checks_progress = None
+# `multiprocessing.Array('b', PARALLEL_ATTEMPTS)` mirroring `checks_
+# progress` above — see `attempt_active`'s own definition in
+# `generate_grid` for the full reasoning (letting an attempt exceed its
+# own `deadline_checks` while a sibling is still genuinely racing, so a
+# freed CPU core never idles for nothing). `_pattern_attempt`/`_pattern_
+# continue` set their own `checks_slot` cell to 1 right before calling
+# `try_fill` and back to 0 once it returns, whatever the outcome.
+_worker_attempt_active = None
 # Warm-up `multiprocessing.Barrier` (see `_warmup_worker`), passed once
 # via the pool's initializer like the other globals above — never reused
 # after this worker's very first call to `_warmup_worker` (the real
@@ -9259,7 +11104,8 @@ def _warmup_worker():
 
 
 def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_done_event=None,
-                  best_state_queue=None, warmup_barrier=None, proper_noun_words=None,
+                  best_state_queue=None, checks_progress=None, attempt_active=None, warmup_barrier=None,
+                  proper_noun_words=None,
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
                   priority_words=None, challenge_words=None):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
@@ -9281,7 +11127,9 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         except OSError:
             pass
     global _worker_index, _worker_cancel_event, _worker_batch_abandoned_event, \
-        _worker_attempt_done_event, _worker_best_state_queue, _worker_warmup_barrier, \
+        _worker_attempt_done_event, _worker_best_state_queue, _worker_checks_progress, \
+        _worker_attempt_active, \
+        _worker_warmup_barrier, \
         _worker_proper_noun_words, _worker_max_proper_nouns, \
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
         _worker_challenge_words
@@ -9292,6 +11140,8 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
     _worker_batch_abandoned_event = batch_abandoned_event
     _worker_attempt_done_event = attempt_done_event
     _worker_best_state_queue = best_state_queue
+    _worker_checks_progress = checks_progress
+    _worker_attempt_active = attempt_active
     _worker_warmup_barrier = warmup_barrier
     _worker_proper_noun_words = proper_noun_words
     _worker_max_proper_nouns = max_proper_nouns
@@ -9732,12 +11582,38 @@ def _widen_floating_black_cells_for_priority_words(
     return reshapes
 
 
+def _minimize_trial(grid, result, rows, cols, seed, permanent_locked_letters,
+                    permanent_black_cells):
+    """Pool-side `minimize_black_squares` of one successful attempt, for
+    `generate_grid`'s choice among several successes: run in the worker
+    processes so every success is optimized in parallel, with the lexicon
+    and word sets the pool initializer already installed."""
+    return minimize_black_squares(
+        grid, result, rows, cols, _worker_index, random.Random(seed),
+        cancel_event=_worker_cancel_event,
+        proper_noun_words=_worker_proper_noun_words,
+        max_proper_nouns=_worker_max_proper_nouns,
+        non_gloss_words=_worker_non_gloss_words,
+        max_non_gloss=_worker_max_non_gloss,
+        priority_words=_worker_priority_words,
+        permanent_locked_letters=permanent_locked_letters,
+        permanent_black_cells=permanent_black_cells,
+        challenge_words=_worker_challenge_words,
+    )
+
+
 def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                       seed_grid=None, locked_letters=None,
                       black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
                       deadline_checks=None, permanent_locked_letters=None,
-                      permanent_black_cells=None, required_cells=None):
-    """Une tentative indépendante (motif + remplissage CSP complet), exécutée
+                      permanent_black_cells=None, required_cells=None,
+                      checks_slot=None, racing=True):
+    """`racing=False` marks a mid-palier replacement attempt (see
+    `generate_grid`): it never flags its slot in `attempt_active`, so it
+    never counts as a sibling still racing and never extends the budget of
+    the palier's original attempts.
+
+    Une tentative indépendante (motif + remplissage CSP complet), exécutée
     dans un processus worker séparé — voir PARALLEL_ATTEMPTS/generate_grid().
     Each attempt has its own `random.Random(seed)`, derived from the
     global seed by the caller, to stay reproducible while differing from
@@ -9870,15 +11746,16 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
                          black_enrichment_fraction=black_enrichment_fraction)
-    # Floating-black-cell widening for "Mots Défi"/theme words — see that
+    # Floating-black-cell widening for "Mots Défi" words — see that
     # section's own docstring just above `_pattern_attempt`. Runs on this
     # freshly generated pattern, before any word exists anywhere in it, so
-    # it can never damage an already-placed word; "Mots Défi" tried before
-    # the theme glossary, at the user's explicit request.
-    if _worker_challenge_words or _worker_priority_words:
+    # it can never damage an already-placed word. Theme-glossary words never
+    # get a slot widened or shortened for them: they only take a slot the
+    # pattern already offers.
+    if _worker_challenge_words:
         _widen_floating_black_cells_for_priority_words(
             grid, rows, cols, rng,
-            (_worker_challenge_words, _worker_priority_words), _worker_index,
+            (_worker_challenge_words,), _worker_index,
             locked_letters=locked_letters, permanent_black_cells=permanent_black_cells,
         )
     # Retrieves, even before launching the search (and even before the
@@ -9986,28 +11863,47 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     # independent pattern; the shared signal only makes sense for
     # `_pattern_continue`, where the pattern is rigorously the same
     # everywhere).
-    result = try_fill(grid, rows, cols, _worker_index, rng, deadline_checks=deadline_checks,
-                       diagnostics=diag,
-                       forced_letters=forced_letters, letter_scores=letter_scores,
-                       preseed_assignment=preseed_assignment, cancel_event=_worker_cancel_event,
-                       batch_abandoned_event=None,
-                       attempt_done_event=_worker_attempt_done_event,
-                       locked_letters=locked_letters,
-                       best_state_queue=_worker_best_state_queue,
-                       attempt_id=seed,
-                       proper_noun_words=_worker_proper_noun_words,
-                       max_proper_nouns=_worker_max_proper_nouns,
-                       non_gloss_words=_worker_non_gloss_words,
-                       max_non_gloss=_worker_max_non_gloss,
-                       priority_words=_worker_priority_words,
-                       challenge_words=_worker_challenge_words,
-                       required_cells=required_cells)
+    # Marks this attempt's own `checks_progress`/`checks_active` slot as
+    # genuinely running for as long as `try_fill` is executing — see
+    # `attempt_active`'s own definition in `generate_grid` and `Filler.
+    # _siblings_still_racing` for why: a sibling attempt past its own
+    # `deadline_checks` reads this flag to decide whether it may keep
+    # searching (some slot still marked active and below budget) or
+    # should stop now (every slot either finished or itself over budget).
+    # Cleared in `finally` so it's reset whatever the outcome — a normal
+    # return, a raised `GenerationCancelled`, or anything else.
+    if racing and checks_slot is not None and _worker_attempt_active is not None:
+        _worker_attempt_active[checks_slot] = 1
+    try:
+        result = try_fill(grid, rows, cols, _worker_index, rng, deadline_checks=deadline_checks,
+                           diagnostics=diag,
+                           forced_letters=forced_letters, letter_scores=letter_scores,
+                           preseed_assignment=preseed_assignment, cancel_event=_worker_cancel_event,
+                           batch_abandoned_event=None,
+                           attempt_done_event=_worker_attempt_done_event,
+                           locked_letters=locked_letters,
+                           best_state_queue=_worker_best_state_queue,
+                           checks_progress=_worker_checks_progress,
+                           checks_slot=checks_slot,
+                           attempt_active=_worker_attempt_active,
+                           attempt_id=seed,
+                           proper_noun_words=_worker_proper_noun_words,
+                           max_proper_nouns=_worker_max_proper_nouns,
+                           non_gloss_words=_worker_non_gloss_words,
+                           max_non_gloss=_worker_max_non_gloss,
+                           priority_words=_worker_priority_words,
+                           challenge_words=_worker_challenge_words,
+                           required_cells=required_cells)
+    finally:
+        if racing and checks_slot is not None and _worker_attempt_active is not None:
+            _worker_attempt_active[checks_slot] = 0
     return grid, result, diag
 
 
 def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_slots,
                        force_letters_fraction=0.0, deadline_checks=None,
-                       permanent_locked_letters=None, required_cells=None):
+                       permanent_locked_letters=None, required_cells=None,
+                       checks_slot=None):
     """Attempt at the "reprise telle quelle" (carry-forward-as-is) mechanism
     between paliers, at the user's explicit request ("New version") —
     runs in its own separate worker process, like _pattern_attempt, but
@@ -10024,33 +11920,48 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     None per slot) locks in every already-filled slot as-is — `try_fill`
     initializes `Filler.assignment` (and used_words/best_assignment)
     directly from it instead of starting over from a blank grid.
-    `excluded_slots` (the slots already identified as impossible at the
-    previous palier, see `Filler.excluded_slots`) is left ignored by this
-    search: "le tour N+1 doit ignorer les situations de blocage sur les
-    cases verrouillées, et essayer de continuer à remplir la grille" —
-    without this, `_backtrack`'s own plain domain check would fail the
-    search on the very first call (`checks=1`), even for slots with
-    nothing at all to do with the already-known blockage.
+    `excluded_slots` (see `Filler.excluded_slots`) is always `None` here —
+    `generate_grid` never populates it from the previous palier's own
+    search diagnosis, at the user's explicit, repeated request: an
+    "emplacement écarté" (yellow) is reset to nothing at the start of
+    every new cycle, "JAMAIS REPRIS" — the slot(s) that were impossible at
+    the previous palier are simply unassigned, ordinary slots again as far
+    as this brand-new search is concerned (still real progress carried
+    forward is `preseed_assignment` above and, separately, whatever
+    `_clean_blocked_slots` already stripped out before this palier even
+    started — see `_clean_continue_candidate`). Whichever of them turns
+    out to still genuinely be dry right now is simply rediscovered live,
+    the same way any brand-new pattern's own dead slot would be: `Filler.
+    _backtrack`'s own per-node domain check flags it (`_impossible_this_
+    attempt`) the moment it's found dry, but — at the user's own further,
+    explicit correction — never lets that single dry slot alone abort the
+    whole search node (`return False`) the way it once did; it's simply
+    left non-priority this round (see that check's own comment) and stays
+    fully REUSABLE for the rest of THIS SAME attempt the moment some other
+    slot's own assignment changes and its domain becomes non-empty again —
+    exactly as available as any other still-open slot, just never
+    preferred over one with no such history, and never itself a reason to
+    backtrack.
 
     Each parallel attempt of the same palier receives its own seed, like
-    _pattern_attempt — `seed_grid`/`preseed_assignment`/`excluded_slots`
-    stay, for ONE given call, rigorously identical from one `Filler`/
-    `try_fill` call to the next inside this same search (nothing new to
-    generate once this attempt is launched), only the exploration order
-    differs (`sample_letter_biases`'s own statistical sampling, `_
-    backtrack`'s own candidate-word sorting/drawing): enough for several
-    parallel attempts, starting from the same point, to reach different
-    states of progress.
+    _pattern_attempt — `seed_grid`/`preseed_assignment` stay, for ONE
+    given call, rigorously identical from one `Filler`/`try_fill` call to
+    the next inside this same search (nothing new to generate once this
+    attempt is launched), only the exploration order differs (`sample_
+    letter_biases`'s own statistical sampling, `_backtrack`'s own
+    candidate-word sorting/drawing): enough for several parallel
+    attempts, starting from the same point, to reach different states of
+    progress.
 
     This no longer means, since the `carry_seed_pool_continue` pool
     exists (see `generate_grid`), that ALL parallel attempts of the same
     "reprise telle quelle" palier necessarily receive the same `(seed_
-    grid, preseed_assignment, excluded_slots)` triple — at the user's
-    explicit request ("chaque process doit repartir à l'étape suivante
-    avec sa grille partiellement nettoyée"), the parent can now dispatch a
-    different pool entry to each non-reset attempt of the same palier;
-    only an *individual* attempt (a single call to this function) keeps a
-    fixed starting point for itself.
+    grid, preseed_assignment)` pair — at the user's explicit request
+    ("chaque process doit repartir à l'étape suivante avec sa grille
+    partiellement nettoyée"), the parent can now dispatch a different pool
+    entry to each non-reset attempt of the same palier; only an
+    *individual* attempt (a single call to this function) keeps a fixed
+    starting point for itself.
 
     `required_cells` (`None` by default — no effect for any pre-existing
     caller) is passed straight through to `try_fill`, see its own
@@ -10060,20 +11971,23 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     below then simply stay as they are, exempt from ever needing to be
     "closed" by a further palier.
 
-    A complete `try_fill` (`truly_complete`, see its docstring) implies
-    here that even the excluded slots ended up filled — impossible as
-    long as they stay in `excluded_slots` (never assigned by
-    construction), so `result` is always None here UNLESS `required_cells`
-    is given and every excluded (or otherwise unresolved) slot happens to
-    touch none of it (see below) — this function's only other useful
-    output is `diag` (up-to-date assignment/impossible_slots),
-    which generate_grid re-examines to decide whether a slot still
-    remains where a word could be added (in which case "reprise telle-
-    quelle" continues at the next palier, with a possibly widened
-    `excluded_slots`) or whether it's a genuine total blockage (no
-    non-excluded slot has a non-empty domain left), in which case the
-    next palier goes back through the existing cleanup (`_build_retry_
-    seed`) and a fresh pattern."""
+    Since `excluded_slots` is always empty here (see above), `truly_
+    complete` coincides with the plain internal `solved`: a "reprise telle
+    quelle" attempt CAN reach a genuine, complete success directly —
+    `result` non-`None` — if the search manages to fill literally every
+    remaining slot, whether or not `required_cells` is given (unlike the
+    old design, where a non-empty `excluded_slots` made a clean success
+    from this function structurally impossible outside of `required_
+    cells`, always deferring full completion to some later, fresh-pattern
+    palier). When the search instead ends without a complete fill (the
+    common case for a still-hard grid), this function's other useful
+    output is `diag` (up-to-date assignment/impossible_slots), which
+    `generate_grid` re-examines to decide whether a slot still remains
+    where a word could be added (in which case "reprise telle-quelle"
+    continues at the next palier) or whether it's a genuine total
+    blockage (no still-open slot has a non-empty domain left), in which
+    case the next palier goes back through the existing cleanup
+    (`_build_retry_seed`) and a fresh pattern."""
     rng = random.Random(seed)
     # Letters already known for certain at this point (see `known_letters`
     # in `sample_letter_biases`'s own docstring): every slot already
@@ -10172,23 +12086,34 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     # that already motivated disabling it for `_pattern_attempt` (see
     # right above) — disabled here too for the same reason, before a
     # real live failure ever confirmed it.
-    result = try_fill(seed_grid, rows, cols, _worker_index, rng, deadline_checks=deadline_checks,
-                       diagnostics=diag,
-                       forced_letters=forced_letters, letter_scores=letter_scores,
-                       preseed_assignment=preseed_assignment, excluded_slots=excluded_slots,
-                       cancel_event=_worker_cancel_event,
-                       batch_abandoned_event=None,
-                       attempt_done_event=_worker_attempt_done_event,
-                       locked_letters=known_letters,
-                       best_state_queue=_worker_best_state_queue,
-                       attempt_id=seed,
-                       proper_noun_words=_worker_proper_noun_words,
-                       max_proper_nouns=_worker_max_proper_nouns,
-                       non_gloss_words=_worker_non_gloss_words,
-                       max_non_gloss=_worker_max_non_gloss,
-                       priority_words=_worker_priority_words,
-                       challenge_words=_worker_challenge_words,
-                       required_cells=required_cells)
+    # See `_pattern_attempt`'s own matching comment for why this is set/
+    # cleared around the `try_fill` call.
+    if checks_slot is not None and _worker_attempt_active is not None:
+        _worker_attempt_active[checks_slot] = 1
+    try:
+        result = try_fill(seed_grid, rows, cols, _worker_index, rng, deadline_checks=deadline_checks,
+                           diagnostics=diag,
+                           forced_letters=forced_letters, letter_scores=letter_scores,
+                           preseed_assignment=preseed_assignment, excluded_slots=excluded_slots,
+                           cancel_event=_worker_cancel_event,
+                           batch_abandoned_event=None,
+                           attempt_done_event=_worker_attempt_done_event,
+                           locked_letters=known_letters,
+                           best_state_queue=_worker_best_state_queue,
+                           checks_progress=_worker_checks_progress,
+                           checks_slot=checks_slot,
+                           attempt_active=_worker_attempt_active,
+                           attempt_id=seed,
+                           proper_noun_words=_worker_proper_noun_words,
+                           max_proper_nouns=_worker_max_proper_nouns,
+                           non_gloss_words=_worker_non_gloss_words,
+                           max_non_gloss=_worker_max_non_gloss,
+                           priority_words=_worker_priority_words,
+                           challenge_words=_worker_challenge_words,
+                           required_cells=required_cells)
+    finally:
+        if checks_slot is not None and _worker_attempt_active is not None:
+            _worker_attempt_active[checks_slot] = 0
     return seed_grid, result, diag
 
 
@@ -10245,6 +12170,25 @@ def _deserialize_resume_state(state):
     return seed_grid, locked_letters, preseed_assignment, excluded_slots
 
 
+def _one_step_previous(entry):
+    """The live-preview snapshot `entry` as it must be kept under a newer
+    snapshot's own `previous` field: a shallow copy without its own,
+    now-stale `previous`, so a tile only ever carries ONE step of history
+    rather than a full chain back to the palier's own start. `None` for a
+    process whose tile has never been published yet.
+
+    Same convention as `grid_store.save_grid_work`'s own `previous`
+    field, and for the same reason: an interrupted job's STOP_DUMP is
+    replayable on its own, without having to ask which state each tile
+    replaced. Which channel published a tile (`reason`) and which attempt
+    it belongs to (`attempt_id`) are both already part of the snapshot,
+    so a comparison can tell a genuine search step apart from a change of
+    publication channel or of attempt."""
+    if entry is None:
+        return None
+    return {k: v for k, v in entry.items() if k != "previous"}
+
+
 def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    max_words=None, black_ratio=0.0, attempts=200, seed=None,
                    wordlist_path="data/wordlist_fr_full.tsv", on_progress=None,
@@ -10253,7 +12197,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    deadline_checks=None, resume_state=None, should_pause=None,
                    bilingual_wordlist_path=None, priority_words=None,
                    bilingual_priority_words=None, permanent_locked_letters=None,
-                   permanent_black_cells=None, required_cells=None, challenge_words=None):
+                   permanent_black_cells=None, required_cells=None, challenge_words=None,
+                   on_live_preview=None):
     """`challenge_words` (`None`/empty by default — no effect for any
     pre-existing caller): "Mots Défi", the same free-form, author-typed
     word list as Interactive mode's own panel (see `Filler.challenge_
@@ -10447,6 +12392,30 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     backend.log and to expose a progress status to the interface via the
     polling API) — no effect on the generation itself, purely an
     observation point.
+
+    `on_live_preview`, if given, is called `on_live_preview(examples)` —
+    same per-process preview shape as `on_progress`'s own `examples`
+    lists — every time the search reaches a new best state on any still-
+    running attempt (`Filler.on_new_best`/`best_state_queue`, see the
+    palier loop below), so the caller can hold a single, continuously
+    OVERWRITTEN "what does each grid currently being built look like
+    right now" snapshot, distinct from `on_progress`'s own once-per-
+    palier, append-only history — at the user's explicit request: "Le
+    calcul doit publier chaque état du backtrack (écrasé à chaque nouveau
+    backtrack)." Also called once at the very start of each palier, with
+    that palier's own freshly-generated (or carried-forward) starting
+    grid per process, before any backtracking has happened yet — the
+    same content `on_progress`'s own "pattern" step reports, so the live
+    view is never left showing a now-discarded previous palier's grid
+    once a new one has actually started.
+
+    Every entry additionally carries `previous`: the snapshot this exact
+    tile replaced, one step only and `None` for a process's own first
+    tile (`_one_step_previous`/`_store_live_state`). Diagnostic-only —
+    what `grid_store.save_stop_dump` writes, so an interrupted job's dump
+    holds both states of every tile rather than only the last one; the
+    web UI never reads it (`backend/app.py` drops it from the polled job
+    status).
 
     `deadline_checks` (`None` by default — no effect for any pre-existing
     caller, CLI included), at the user's explicit request: passed
@@ -10704,6 +12673,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     )
     ratio = black_ratio
     best, best_result = None, None
+    # The winner's already-minimized (grid, slots, assignment) when it was
+    # picked among several successes (each one is minimized to compare
+    # them), so the final optimization does not redo it.
+    best_minimized = None
     # Genuine successes found so far, cumulative across the WHOLE search
     # (every palier included), never reset by the failure-side retry
     # machinery below — see MIN_SUCCESSFUL_ATTEMPTS.
@@ -10784,7 +12757,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # being taken over by a brand-new grid that replaces it.
     carry_seed_pool_lineage = None
     # A counter persisting for the whole duration of a `generate_grid()`
-    # call (never reset, including by GRID_REPEAT_INFEASIBLE_THRESHOLD's
+    # call (never reset, including by GRID_REPEAT_DISCARD_STREAK's
     # own full-reset mechanism further below) — only ever serves as a
     # safety net for `_reassign_lineage_numbers` when no number was freed
     # this palier (a degenerate case, not encountered in practice). Starts
@@ -10858,18 +12831,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # the current streak, not a cumulative total over the whole
     # generation.
     consecutive_continue_paliers = 0
-    # Remembering the state (pattern + confirmed content) obtained at the
-    # end of every FULL NETTOYAGE, at the user's explicit request —
-    # see GRID_REPEAT_INFEASIBLE_THRESHOLD's own docstring for the full
-    # request and the history of the two regressions measured before
-    # reaching this final scope (nettoyage only, never "reprise telle
-    # quelle"). `last_cycle_end_grid` keeps the state (in hashable form, a
-    # tuple of tuples produced by `_cycle_start_preview`) of the last
-    # cleanup; `same_grid_streak` counts how many CONSECUTIVE cleanups (no
-    # "reprise telle quelle" in between ever resets or increments it —
-    # this branch never touches it) have reproduced this same state.
-    last_cycle_end_grid = None
-    same_grid_streak = 0
+    # Per-candidate repetition tracking across consecutive full cleanups
+    # (see GRID_REPEAT_DEEP_CLEANUP_STREAK/GRID_REPEAT_DISCARD_STREAK):
+    # `carry_cleanup_streaks` maps each cleaned state produced by the last
+    # full cleanup (a hashable `_cycle_start_preview` grid) to how many
+    # consecutive full cleanups have produced it ("reprise telle quelle"
+    # paliers in between neither count nor reset it);
+    # `carry_discarded_count` is how many cleaned grids that cleanup
+    # dropped, each replaced by one extra blank-grid worker next palier.
+    carry_cleanup_streaks = {}
+    carry_discarded_count = 0
     # True right after a palier that did a full cleanup ("nettoyage
     # complet", the `else:` branch below), False right after one that did
     # "reprise telle quelle" instead — at the user's explicit request (see
@@ -10925,6 +12896,37 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # `RuntimeError` on macOS ("spawn"). A single object for the whole
     # generation, never recreated palier after palier.
     best_state_queue = multiprocessing.Queue()
+    # See `_worker_checks_progress`'s own docstring: one cell per
+    # concurrent slot of the palier (not a `multiprocessing.Queue`, unlike
+    # `best_state_queue` above — a plain overwrite per slot is all this
+    # needs, no per-message backlog to preserve), each written by whichever
+    # attempt currently owns that slot with its own current `Filler.checks`
+    # count, letting the parent report genuine, continuous search progress
+    # — averaged across every slot, not just the busiest one — even
+    # through a long stretch with no new record to publish on `best_state_
+    # queue`. One object for the whole generation, like every other
+    # `multiprocessing` primitive here — every cell reset to 0 at the
+    # start of each palier (see below), since its meaning only ever
+    # applies to the palier currently running.
+    checks_progress = multiprocessing.Array("l", PARALLEL_ATTEMPTS)
+    # Mirrors `checks_progress` above, one byte per concurrent slot: 1
+    # while that slot's own attempt is genuinely still running, 0 once it
+    # has returned (or before it's ever been dispatched) — at the user's
+    # explicit request: "Autoriser les grilles à dépasser leur budget,
+    # tant qu'il reste des grilles qui ne l'ont pas atteint (CPU en
+    # attente pour rien)." `checks_progress` alone can't answer "is this
+    # slot's attempt still racing towards the deadline, or has it already
+    # stopped early (search_exhausted/cancelled/abandoned) with a low,
+    # now-frozen checks count" — this array disambiguates the two, so
+    # `Filler._backtrack` (see its own deadline-check comment) can tell
+    # whether letting itself run past `deadline_checks` still buys
+    # anything (some sibling is genuinely still working) or would just be
+    # burning CPU nobody needs (every sibling already finished or also
+    # over its own budget). Reset to 0 at the start of every palier
+    # (alongside `checks_progress`, see below) and set/cleared by
+    # `_pattern_attempt`/`_pattern_continue` themselves, around their own
+    # call to `try_fill`.
+    attempt_active = multiprocessing.Array("b", PARALLEL_ATTEMPTS)
     # A genuine deadlock was observed live (workers' own CPU time frozen
     # from one reading to the next, the user themselves observing "il n'y
     # a plus que 2 process qui tourne") with a first version that only
@@ -10963,6 +12965,98 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # list (not a plain variable) purely to stay mutable from inside the
     # loop below without `nonlocal`.
     last_budget_progress_report = [0.0]
+    # `on_live_preview`'s own backing state (see this function's own
+    # docstring) — one entry per still-alive process, keyed by
+    # process_number and unconditionally OVERWRITTEN as new states arrive,
+    # never appended: this is a "what does it look like right now" snapshot,
+    # not a history. `live_state_lock` guards it, since it's written both
+    # from this drain thread (below) and from the palier loop's own thread
+    # (the palier-start reset, right where `progress("pattern", ...)` is
+    # called) — unlike `best_state_buffer`, which only this thread ever
+    # writes to. `current_seed_to_lineage_ref` is a single-element list
+    # holding the CURRENT palier's own `seed_to_lineage` dict (reassigned
+    # by the palier loop each palier, right after it's computed) — needed
+    # here to translate a `best_state_queue` message's own `attempt_id`
+    # (a seed) into the stable process_number `live_state_by_process` is
+    # keyed by; a plain single-element list, no lock, since the palier
+    # loop only ever REASSIGNS it wholesale (a single reference write) and
+    # every later in-place mutation of that same dict (a mid-palier worker
+    # reassignment, see `seed_to_lineage` itself further below) is already
+    # visible through this same reference with nothing more to do.
+    live_state_by_process = {}
+    live_state_lock = threading.Lock()
+    current_seed_to_lineage_ref = [{}]
+    # Mirrors `current_seed_to_lineage_ref` above, but resolving a seed to
+    # its own `checks_progress` array slot instead of its display lineage
+    # number — lets `_drain_best_state_queue_continuously` attach a live
+    # "% budget consumed" reading to each individual process's own tile
+    # (`budget_percent`, at the user's explicit request: "Afficher le taux
+    # de budget consommé par le process sur la ligne d'info de chaque
+    # grille Live"), the same per-slot `checks_progress` value the
+    # PALIER-wide average (`BUDGET_PROGRESS_REPORT_INTERVAL_S`) already
+    # reads, just reported per-process instead of averaged away.
+    current_seed_to_checks_slot_ref = [{}]
+
+    # Not capped at 100: a palier's per-attempt budget is elastic (see
+    # `Filler._siblings_still_racing`), so an attempt keeps searching past
+    # its own `deadline_checks` while a sibling is still racing, and its
+    # reading legitimately climbs above 100 %.
+    def _budget_percent_for_slot(slot):
+        if slot is None:
+            return None
+        return round(100 * checks_progress[slot] / resolved_deadline_checks)
+
+    def _refresh_computing_budget_percents():
+        """Re-reads `checks_progress` into every still-"computing" live
+        tile's own `budget_percent`, returning whether any value changed.
+        A tile's other fields only change when its worker publishes a
+        record or a heartbeat; without this, a worker searching through a
+        long stretch with neither kept showing the percentage of its last
+        message (0 % for a tile still carrying its palier-start preview)
+        while `checks_progress` itself kept climbing."""
+        # Resolved through the process (lineage) number rather than the
+        # tile's own `attempt_id`: a palier-start tile is built before that
+        # palier's seeds are even drawn, so it carries no current seed. A
+        # lineage number is unique among a palier's dispatched attempts,
+        # including mid-palier replacements (each gets a fresh one).
+        # `list(...)` snapshots each dict in one step, since the harvesting
+        # loop mutates both in place.
+        seed_to_slot = current_seed_to_checks_slot_ref[0]
+        process_to_slot = {
+            process_number: seed_to_slot.get(seed)
+            for seed, process_number in list(current_seed_to_lineage_ref[0].items())
+        }
+        changed = False
+        with live_state_lock:
+            for process_number, entry in live_state_by_process.items():
+                if entry.get("live_status") != "computing":
+                    continue
+                percent = _budget_percent_for_slot(process_to_slot.get(process_number))
+                if percent is not None and percent != entry.get("budget_percent"):
+                    entry["budget_percent"] = percent
+                    changed = True
+        return changed
+
+    def _store_live_state(process_number, entry):
+        """The one way a process's own live tile is replaced (the palier
+        reset below writes the whole map at once instead, applying the
+        same rule inline): the snapshot being overwritten is kept under
+        the new one's `previous` field — see `_one_step_previous`."""
+        with live_state_lock:
+            entry["previous"] = _one_step_previous(
+                live_state_by_process.get(process_number)
+            )
+            live_state_by_process[process_number] = entry
+
+    def _publish_live_preview():
+        if on_live_preview is None:
+            return
+        with live_state_lock:
+            snapshot = sorted(
+                live_state_by_process.values(),
+                key=lambda e: (e["process_number"] is None, e["process_number"]),
+            )
+        on_live_preview(snapshot)
 
     def _drain_best_state_queue_continuously():
         while not stop_best_state_drain.is_set():
@@ -10971,25 +13065,88 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             except queue.Empty:
                 msg = None
             if msg is not None:
-                with best_state_buffer_lock:
-                    best_state_buffer.append(msg)
+                # A `"kind": "heartbeat"` message (see `Filler.on_live_
+                # state`/`_publish_live_state`) is a mid-backtracking
+                # snapshot, not a genuine record — it must never enter
+                # `best_state_buffer`, which feeds the end-of-palier
+                # candidate selection (`display_unique`/`_playable_score`
+                # further below) and carries neither `grid` nor
+                # `assignment` besides (that code's own `pop("grid")`
+                # would raise `KeyError` on one). It still reaches the
+                # live display below exactly like a genuine record does —
+                # that's its entire purpose.
+                if msg.get("kind") != "heartbeat":
+                    with best_state_buffer_lock:
+                        best_state_buffer.append(msg)
+                if on_live_preview is not None:
+                    process_number = current_seed_to_lineage_ref[0].get(msg.get("attempt_id"))
+                    with live_state_lock:
+                        current = live_state_by_process.get(process_number)
+                    if (
+                        current is not None
+                        and current.get("live_status") in ("succeeded", "failed", "interrupted")
+                        and current.get("attempt_id") == msg.get("attempt_id")
+                    ):
+                        # A record or heartbeat of an attempt whose final
+                        # tile is already in place: the worker queued it
+                        # just before returning, and the harvest loop got
+                        # the result first. Displaying it would turn the
+                        # finished tile back to "computing" for good.
+                        continue
+                    entry = {k: v for k, v in msg.items() if k not in ("grid", "assignment")}
+                    entry["process_number"] = process_number
+                    # "Encadrer en bleu les étapes qui calculent encore
+                    # quelque chose" (style-guide SKILL) — every state
+                    # published from inside `_backtrack` (see `Filler.
+                    # on_new_best`/`_publish_new_best`) is, by construction,
+                    # from an attempt that hasn't finished yet.
+                    entry["live_status"] = "computing"
+                    entry["budget_percent"] = _budget_percent_for_slot(
+                        current_seed_to_checks_slot_ref[0].get(msg.get("attempt_id"))
+                    )
+                    _store_live_state(process_number, entry)
+                    _publish_live_preview()
             # Checked on every iteration of this loop (~10 times per
             # second, see get()'s own timeout above), not only when a
             # message has just arrived — otherwise, a palier where no
             # attempt improves its own record for a long stretch would
             # never publish anything again at all, even though `deadline_
             # checks` itself keeps genuinely being consumed in the
-            # background inside the workers.
+            # background inside the workers. Reads `checks_progress`
+            # (see its own docstring) directly, NOT `best_state_buffer`'s
+            # own `checks` fields: those are only ever recorded on a NEW
+            # record (`Filler.on_new_best`), so during exactly the long
+            # unproductive stretch this comment already describes, they
+            # stayed frozen at the last record's own checks count — the
+            # percentage looked stalled right along with the live preview,
+            # even though this very code path already ran, on schedule,
+            # the whole time. `checks_progress` is written far more often
+            # and completely independently of whether any record is ever
+            # beaten, so it keeps climbing through such a stretch instead.
             now = time.monotonic()
             if now - last_budget_progress_report[0] >= BUDGET_PROGRESS_REPORT_INTERVAL_S:
                 last_budget_progress_report[0] = now
-                with best_state_buffer_lock:
-                    checks_seen = [m["checks"] for m in best_state_buffer]
-                if checks_seen:
-                    percent = min(
-                        100, round(100 * max(checks_seen) / resolved_deadline_checks)
-                    )
+                # The AVERAGE across every one of this palier's own
+                # PARALLEL_ATTEMPTS slots, not the single busiest one — a
+                # max-based reading let one attempt alone (typically the
+                # one thrashing hardest, since each rejected candidate
+                # counts as a check) pin the display at 100% while every
+                # other, genuinely progressing attempt of the same palier
+                # was still comfortably below its own budget, giving the
+                # false impression that the whole palier's own budget was
+                # already spent. A still-unused slot (0, either not yet
+                # dispatched or freed and not yet reassigned) legitimately
+                # counts as 0 in this average, since it isn't consuming any
+                # of the palier's own search budget right now.
+                checks_so_far = sum(checks_progress)
+                if checks_so_far:
+                    average_checks = checks_so_far / PARALLEL_ATTEMPTS
+                    # Uncapped, like `_budget_percent_for_slot`: the
+                    # elastic per-attempt budget can push it past 100.
+                    percent = round(100 * average_checks / resolved_deadline_checks)
                     progress("budget_progress", percent=percent)
+                if on_live_preview is not None and _refresh_computing_budget_percents():
+                    _publish_live_preview()
 
     # Started even before the pool is created, `daemon=True`: this thread
     # must never prevent the process from ending, including on an early
@@ -11007,7 +13164,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
-                  warmup_barrier, proper_noun_words, max_proper_nouns,
+                  checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
                   non_gloss_words, max_non_gloss, priority_words, challenge_words)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
@@ -11050,6 +13207,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 )
             batch_abandoned_event.clear()
             attempt_done_event.clear()
+            checks_progress[:] = [0] * PARALLEL_ATTEMPTS
+            attempt_active[:] = [0] * PARALLEL_ATTEMPTS
             # Pool of candidate starting grids for this palier (see
             # `carry_seed_pool`, its own definition above) — computed
             # here, even before knowing whether this palier will be a
@@ -11108,6 +13267,25 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         "example_grid": start_grid,
                         "impossible_cells": [],
                         "deadlock_cells": [],
+                        # Never populated here, at the user's own explicit
+                        # correction: "les exclusions temporaires ne sont
+                        # valables que pendant une étape, et ne doivent
+                        # être visibles que sur les grilles Live [...] ces
+                        # exclusions temporaires doivent être réinitialisées
+                        # en fin d'étape, avant la phase d'optimisation
+                        # (qui précède le nettoyage). Ils peuvent
+                        # éventuellement être visibles sur l'étape clef
+                        # avant optimisation, mais plus ensuite." A genuine
+                        # per-attempt lifecycle rule, not merely a display-
+                        # priority workaround: this cycle-start preview
+                        # belongs to the UPCOMING attempt, past the reset
+                        # point (end of the previous attempt, before ITS
+                        # own optimization ran) — the last point allowed to
+                        # still show it is that previous attempt's own
+                        # `pattern_attempt_failed`/`pattern_found` snapshot
+                        # (see `last_examples` below), never anything
+                        # published afterward.
+                        "excluded_cells": [],
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
                         "theme_cells": _theme_cells_from_preview_state(
@@ -11175,6 +13353,15 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         "example_grid": start_grid,
                         "impossible_cells": [],
                         "deadlock_cells": [],
+                        # Always empty here, like every `cycle_start_
+                        # examples`/`early_examples` entry in this
+                        # function — a fresh pattern never carries an
+                        # `excluded_slots` set of its own, and regardless,
+                        # a cycle-start preview always falls past this
+                        # per-attempt signal's own reset point (see the
+                        # "reprise telle quelle" branch's own comment
+                        # above for the full lifecycle rule).
+                        "excluded_cells": [],
                         "forced_cells": [],
                         "locked_cells": start_locked_cells,
                         "theme_cells": _theme_cells_from_preview_state(
@@ -11198,6 +13385,49 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             progress("pattern", attempt=attempt + 1, attempts=attempts, parallel=PARALLEL_ATTEMPTS,
                      total_attempts=total_attempts_tried,
                      examples=_sort_examples_by_process(cycle_start_examples))
+            # Resets the live-preview snapshot to this palier's own
+            # freshly-generated (or carried-forward) starting state, at the
+            # user's explicit request — see `on_live_preview`'s own
+            # docstring above: without this, a still-running process's own
+            # entry in `live_state_by_process` would keep showing the
+            # PREVIOUS palier's grid (already discarded) until that
+            # process's own first `_publish_new_best` call of the new
+            # palier happens to arrive.
+            if on_live_preview is not None:
+                with live_state_lock:
+                    # Each process's own last tile of the palier that just
+                    # ended is kept under the new one's `previous` field,
+                    # exactly like every other replacement (`_store_live_
+                    # state`/`_one_step_previous`) — this reset writes the
+                    # whole map at once, so it applies the rule inline
+                    # rather than through that helper (whose own lock is
+                    # already held here).
+                    carried_previous = {
+                        pn: _one_step_previous(e)
+                        for pn, e in live_state_by_process.items()
+                    }
+                    live_state_by_process.clear()
+                    for ex in cycle_start_examples:
+                        if ex.get("process_number") is not None:
+                            # A shallow copy (never `ex` itself), so tagging
+                            # it "computing" here can never leak onto the
+                            # `examples_history` entry `progress("pattern",
+                            # ...)` just above built from the very same
+                            # `cycle_start_examples` list — moot today since
+                            # backend/app.py already excludes the "pattern"
+                            # step from `examples_history` entirely, but
+                            # kept defensive rather than relying on that.
+                            live_state_by_process[ex["process_number"]] = {
+                                # `checks_progress` is reset to all zeros
+                                # for this new palier a few lines above
+                                # (before `progress("pattern", ...)` even
+                                # runs — see that reset's own comment), so
+                                # every process genuinely starts this
+                                # palier's own budget consumption at 0%.
+                                **ex, "live_status": "computing", "budget_percent": 0,
+                                "previous": carried_previous.get(ex["process_number"]),
+                            }
+                _publish_live_preview()
             seeds = [rng.randrange(2**31) for _ in range(PARALLEL_ATTEMPTS)]
             if carry_preseed_assignment is not None:
                 # `reset_count` attempts of this "reprise telle quelle"
@@ -11241,18 +13471,30 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             None, None,
                             black_enrichment_fraction, deadline_checks,
                             permanent_locked_letters, permanent_black_cells,
-                            required_cells=required_cells,
+                            required_cells=required_cells, checks_slot=i,
                         ))
                     else:
-                        task_seed_grid, task_preseed_assignment, task_excluded_slots = (
+                        # The 3rd tuple element (`_task_excluded_slots`) is
+                        # this pool entry's OWN previous palier's own
+                        # diagnosis — deliberately never forwarded to
+                        # `_pattern_continue` below, at the user's explicit,
+                        # repeated request: an "emplacement écarté" (yellow)
+                        # is reset to nothing at the start of every new
+                        # cycle, never carried over from the one before
+                        # ("JAMAIS REPRIS") — seeded instead, fresh, by this
+                        # new attempt's own `Filler.mark_immediately_
+                        # impossible_slots()`/live per-node domain check,
+                        # from whatever the state genuinely is right now
+                        # (see `_pattern_continue`'s own docstring).
+                        task_seed_grid, task_preseed_assignment, _task_excluded_slots = (
                             continue_pool[(i - reset_count) % len(continue_pool)]
                         )
                         futures.append(executor.submit(
                             _pattern_continue, rows, cols, s, task_seed_grid,
-                            task_preseed_assignment, task_excluded_slots,
+                            task_preseed_assignment, None,
                             force_letters_fraction, deadline_checks,
                             permanent_locked_letters,
-                            required_cells=required_cells,
+                            required_cells=required_cells, checks_slot=i,
                         ))
             else:
                 # A fraction of this palier's own workers start from a
@@ -11268,7 +13510,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # palier (`just_cleaned` is only ever True right after the
                 # `else:`/nettoyage branch below) nor on the very first
                 # palier of a call with no prior cleanup at all.
-                reset_count = FULL_RESET_ATTEMPT_COUNT if just_cleaned else 0
+                # Plus one blank-grid worker per cleaned grid the cleanup
+                # dropped for repeating the same state (see GRID_REPEAT_
+                # DISCARD_STREAK), taking over that grid's own place.
+                reset_count = (
+                    min(PARALLEL_ATTEMPTS, FULL_RESET_ATTEMPT_COUNT + carry_discarded_count)
+                    if just_cleaned else 0
+                )
                 # `pool` (see `carry_seed_pool`'s own definition above)
                 # already computed at the very start of this palier, for
                 # the "Génération du motif de cases noires" preview —
@@ -11381,6 +13629,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             "example_grid": early_pattern_grid,
                             "impossible_cells": [],
                             "deadlock_cells": [],
+                            # A fresh pattern (`_pattern_attempt`) never
+                            # carries an `excluded_slots` set of its own
+                            # at all — and, regardless, a cycle-start
+                            # preview is always past this session's own
+                            # reset point (see the "reprise telle quelle"
+                            # branch's own comment above for the full
+                            # per-attempt lifecycle rule).
+                            "excluded_cells": [],
                             "forced_cells": [],
                             "locked_cells": early_pattern_locked,
                             # Very first palier: nothing is locked or
@@ -11462,6 +13718,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             "example_grid": early_pattern_grid,
                             "impossible_cells": [],
                             "deadlock_cells": [],
+                            # A fresh pattern (`_pattern_attempt`) never
+                            # carries an `excluded_slots` set of its own
+                            # at all — and, regardless, a cycle-start
+                            # preview is always past this session's own
+                            # reset point (see the "reprise telle quelle"
+                            # branch's own comment above for the full
+                            # per-attempt lifecycle rule).
+                            "excluded_cells": [],
                             "forced_cells": [],
                             "locked_cells": early_pattern_locked,
                             "theme_cells": _theme_cells_from_preview_state(
@@ -11507,8 +13771,17 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         task_seed_grid, task_locked_letters,
                         black_enrichment_fraction, deadline_checks,
                         permanent_locked_letters, permanent_black_cells,
-                        required_cells=required_cells,
+                        required_cells=required_cells, checks_slot=i,
                     ))
+            # Future -> seed map, for `on_live_preview`'s own use in the
+            # harvesting loop below (see its own comment there) — built
+            # here, once both branches above have converged on a final
+            # `futures` list, always index-aligned with `seeds` regardless
+            # of which branch built it. Unlike `d.get("attempt_id")` (only
+            # ever set by `try_fill` on the FAILURE branch — see `diag`'s
+            # own construction), this mapping is available for every
+            # outcome, success included.
+            future_seed = dict(zip(futures, seeds))
             # Collected in completion order (`concurrent.futures.wait`,
             # see below), not submission order, at the user's explicit
             # request ("le bouton Stop ne s'applique pas rapidement... prévoir l'arrêt
@@ -11569,13 +13842,29 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # the right number for either one, with no need to know which
             # worker (PID) produced it.
             seed_to_lineage = {seeds[i]: dispatch_lineage[i] for i in range(PARALLEL_ATTEMPTS)}
+            # Mirrors `seed_to_lineage` above, but for `checks_progress`'s
+            # own array slot rather than the display lineage number: at
+            # dispatch time slot `i` and `seeds[i]` are the same submission,
+            # so this is just the identity mapping — kept as an explicit
+            # dict (like `seed_to_lineage`) so the mid-palier reassignment
+            # below can look a freed slot back up by seed alone, the same
+            # way it already does for lineage.
+            seed_to_checks_slot = {seeds[i]: i for i in range(PARALLEL_ATTEMPTS)}
+            # Published for `_drain_best_state_queue_continuously`'s own
+            # use (see `current_seed_to_lineage_ref`'s own comment above) —
+            # a single reference write; every later in-place mutation of
+            # this same dict (the mid-palier reassignment further below)
+            # is already visible through it with nothing more to do here.
+            current_seed_to_lineage_ref[0] = seed_to_lineage
+            # Same reference-publishing convention as `current_seed_to_
+            # lineage_ref` right above, for `seed_to_checks_slot` instead.
+            current_seed_to_checks_slot_ref[0] = seed_to_checks_slot
             interrupt_threshold = max(1, math.ceil(PALIER_ATTEMPT_INTERRUPT_FRACTION * len(futures)))
             # Harvests this palier's futures with `concurrent.futures.wait`
             # (not the simpler `as_completed`) specifically so `pending` can
-            # grow mid-palier: every time a worker's future completes with a
-            # genuine SUCCESS while `accumulated_successes` (across the
-            # whole search, MIN_SUCCESSFUL_ATTEMPTS) still hasn't reached
-            # its threshold, the process this success just freed is
+            # grow mid-palier: every time a worker's future completes
+            # (success or failure) while some original attempt is still
+            # racing, the process it just freed is
             # immediately reassigned to a brand-new, from-scratch attempt
             # (the same shape as the "reset" tasks built above — never a
             # continuation of the successful grid) instead of sitting idle
@@ -11591,10 +13880,20 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             pending = set(futures)
             outcomes = []
             orig_done_count = 0
+            def _originals_all_spent():
+                # Every original attempt still running is already past its
+                # own budget: none of them is racing any more, so the
+                # replacements must stop (see the reassignment below).
+                return all(
+                    checks_progress[seed_to_checks_slot[future_seed[f]]] >= resolved_deadline_checks
+                    for f in pending if f in orig_futures
+                )
             while pending:
                 done, pending = concurrent.futures.wait(
-                    pending, return_when=concurrent.futures.FIRST_COMPLETED
+                    pending, timeout=0.5, return_when=concurrent.futures.FIRST_COMPLETED
                 )
+                if not attempt_done_event.is_set() and _originals_all_spent():
+                    attempt_done_event.set()
                 for f in done:
                     result = f.result()
                     outcomes.append(result)
@@ -11603,20 +13902,137 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         if orig_done_count == interrupt_threshold:
                             attempt_done_event.set()
                     g, r, d = result
-                    total_successes = len(accumulated_successes) + sum(
-                        1 for _, rr, _ in outcomes if rr is not None
-                    )
-                    if r is not None and total_successes < MIN_SUCCESSFUL_ATTEMPTS:
+                    # Needed unconditionally below (checks_progress slot
+                    # reassignment), not only when a live preview is wired
+                    # up — computed once here rather than duplicated in
+                    # both places.
+                    seed = future_seed.get(f)
+                    if on_live_preview is not None:
+                        # "Encadrer en jaune les étapes qui sont arrêtées
+                        # parce qu'elle ont réussies, en orange ... elles
+                        # sont arrivées en état échouées" (style-guide
+                        # SKILL) — this specific attempt (process) just
+                        # finished, one way or the other; its own live
+                        # tile is updated one final time to reflect that,
+                        # frozen until the next palier's own reset (see
+                        # `progress("pattern", ...)`'s own sibling block
+                        # above) replaces it. `future_seed` (built once per
+                        # palier, see its own comment above), never `d.
+                        # get("attempt_id")` — `try_fill` only ever sets
+                        # `attempt_id` in its own diagnostics dict on the
+                        # FAILURE branch, so it's simply absent on a
+                        # genuine success.
+                        process_number = seed_to_lineage.get(seed)
+                        if r is not None:
+                            # `r` is `try_fill`'s own raw return value on
+                            # success — a `(slots, assignment)` 2-tuple, NOT
+                            # the assignment alone (see `try_fill`'s own
+                            # `return slots, filler.assignment`). Every
+                            # function below this point expects a plain
+                            # per-slot assignment list, so `r`'s own
+                            # assignment half must be unpacked first —
+                            # passing `r` itself corrupted the live preview:
+                            # `zip(slots, r)` (a 2-element tuple) only ever
+                            # paired the first two slots, one against `r`'s
+                            # own `slots` list and one against its
+                            # `assignment` list, writing whole lists/words
+                            # into single grid cells for those two slots
+                            # while leaving every other cell at `build_
+                            # letters_grid`'s initial all-black fill —
+                            # exactly the "grille presque entièrement noire,
+                            # avec des mots en sur-impression en haut à
+                            # gauche" symptom reported live.
+                            _, assignment = r
+                            finished_slots = extract_slots(g, rows, cols)
+                            live_entry = {
+                                "example_grid": build_letters_grid(rows, cols, finished_slots, assignment),
+                                "impossible_cells": [],
+                                "deadlock_cells": [],
+                                # A genuine success leaves no slot excluded
+                                # in a way still worth flagging — and `r`
+                                # here carries no live `Filler` to compute
+                                # it from regardless.
+                                "excluded_cells": [],
+                                "forced_cells": [],
+                                "locked_cells": [],
+                                "theme_cells": _theme_word_cells(finished_slots, assignment, priority_words),
+                                "challenge_cells": _challenge_word_cells_from_assignment(
+                                    finished_slots, assignment, challenge_words
+                                ),
+                                "live_status": "succeeded",
+                            }
+                        else:
+                            live_entry = {
+                                k: v for k, v in d.items()
+                                if k in (
+                                    "example_grid", "impossible_cells", "deadlock_cells",
+                                    "excluded_cells", "forced_cells", "locked_cells",
+                                    "theme_cells", "challenge_cells", "stat_letters",
+                                )
+                            }
+                            # An attempt stopped by `attempt_done_event`
+                            # (every original attempt of the palier done or
+                            # out of budget) did not fail on its own.
+                            live_entry["live_status"] = (
+                                "interrupted"
+                                if d.get("reason") == "interrupted_other_attempt_done"
+                                else "failed"
+                            )
+                        live_entry["process_number"] = process_number
+                        # Identifies the attempt this final tile belongs to,
+                        # so the drain thread can drop that same attempt's
+                        # messages still in flight (see
+                        # `_drain_best_state_queue_continuously`).
+                        live_entry["attempt_id"] = seed
+                        # Read from `checks_progress` (via `seed_to_checks_
+                        # slot`, still valid here — the mid-palier
+                        # reassignment below that resets/repurposes this
+                        # same slot for a brand-new attempt hasn't run yet
+                        # at this point) BEFORE that reassignment zeroes it
+                        # out, so this frozen tile keeps the real final
+                        # percentage this specific attempt actually
+                        # consumed, not the replacement attempt's fresh 0%.
+                        live_entry["budget_percent"] = _budget_percent_for_slot(
+                            seed_to_checks_slot.get(seed)
+                        )
+                        _store_live_state(process_number, live_entry)
+                        _publish_live_preview()
+                    # Any finished attempt, succeeded or failed, frees its
+                    # process: it is handed a brand-new, from-scratch
+                    # replacement attempt for as long as some ORIGINAL
+                    # attempt of the palier is still racing
+                    # (`attempt_done_event` is set once every original has
+                    # finished or used up its budget, which also interrupts
+                    # every replacement still running). A replacement never
+                    # counts as racing itself (`racing=False`), so it never
+                    # extends the palier.
+                    if not attempt_done_event.is_set():
                         new_seed = rng.randrange(2**31)
-                        pending.add(executor.submit(
+                        # The freed slot (the one the just-finished attempt
+                        # owned) is handed to its replacement, reset to 0
+                        # first — the replacement is a brand-new attempt
+                        # with nothing yet checked, and must not inherit the
+                        # finished attempt's own high checks count into the
+                        # palier's own average.
+                        freed_slot = seed_to_checks_slot.get(seed)
+                        if freed_slot is not None:
+                            checks_progress[freed_slot] = 0
+                        new_future = executor.submit(
                             _pattern_attempt, rows, cols, ratio, new_seed,
                             force_letters_fraction, None, None,
                             black_enrichment_fraction, deadline_checks,
                             permanent_locked_letters, permanent_black_cells,
-                            required_cells=required_cells,
-                        ))
-                        next_lineage_number += 1
+                            required_cells=required_cells, checks_slot=freed_slot,
+                            racing=False,
+                        )
+                        pending.add(new_future)
+                        future_seed[new_future] = new_seed
+                        seed_to_checks_slot[new_seed] = freed_slot
+                        # `next_lineage_number` is the next FREE number
+                        # (see `_reassign_lineage_numbers`): use it, then
+                        # advance it.
                         seed_to_lineage[new_seed] = next_lineage_number
+                        next_lineage_number += 1
             # Attaches, to every diag of this palier (successes and
             # failures alike), the lineage number inherited from the task
             # that produced it (`seed_to_lineage`, see its own
@@ -11777,19 +14193,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # sum-of-squares-of-word-lengths score as a tie-break at
                 # equal black-cell count.
                 #
-                # `best`/`best_result` are still set to the WINNING
-                # candidate's own state BEFORE optimization, exactly as
-                # before this change — the trial optimization above is only
-                # used to rank candidates against each other, its own
-                # result is thrown away. The single, real optimization that
-                # actually produces the grid used downstream still happens
-                # exactly once, in the unchanged minimize_black_squares
-                # call right after this whole palier loop — so the
-                # "minimizing" preview built from `best_result` there still
-                # faithfully shows the true pre-optimization state of
-                # whichever candidate really does end up chosen, and
-                # `optimization_duration_seconds` (backend/app.py) still
-                # measures exactly one real optimization pass, not several.
+                # Every success is minimized in parallel on the palier's own
+                # pool (`_minimize_trial`, one task per success), and the
+                # winner's minimized grid is kept as the final one
+                # (`best_minimized`), so the optimization runs once per
+                # success and never twice for the winner. The "minimizing"
+                # step is published here, before the trials, showing every
+                # success being optimized — `optimization_duration_seconds`
+                # (backend/app.py) therefore measures this parallel pass.
                 #
                 # `accumulated_successes` always holds at least
                 # MIN_SUCCESSFUL_ATTEMPTS (>= 2) entries here — the gate
@@ -11797,22 +14208,41 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # compare; unlike before MIN_SUCCESSFUL_ATTEMPTS existed,
                 # the single-success shortcut can no longer apply at this
                 # point.
-                scored = []
-                for g, r, d in accumulated_successes:
-                    cand_slots, cand_assignment = r
-                    trial_grid = [row[:] for row in g]
-                    opt_grid, opt_slots, opt_assignment = minimize_black_squares(
-                        trial_grid, (cand_slots, cand_assignment), rows, cols,
-                        index, rng, cancel_event=cancel_event,
-                        proper_noun_words=proper_noun_words,
-                        max_proper_nouns=max_proper_nouns,
-                        non_gloss_words=non_gloss_words,
-                        max_non_gloss=max_non_gloss,
-                        priority_words=priority_words,
-                        permanent_locked_letters=permanent_locked_letters,
-                        permanent_black_cells=permanent_black_cells,
-                        challenge_words=challenge_words,
+                progress(
+                    "minimizing",
+                    # Number of successes being optimized/compared: the
+                    # frontend's status line says every attempt has stopped
+                    # and these grids are now being evaluated.
+                    count=len(accumulated_successes),
+                    examples=[
+                        {
+                            "example_grid": build_letters_grid(rows, cols, r[0], r[1]),
+                            "impossible_cells": [],
+                            "deadlock_cells": [],
+                            "excluded_cells": [],
+                            "forced_cells": [],
+                            "locked_cells": [],
+                            "theme_cells": _theme_word_cells(r[0], r[1], priority_words),
+                            "challenge_cells": _challenge_word_cells_from_assignment(
+                                r[0], r[1], challenge_words
+                            ),
+                            "process_number": d.get("process_number"),
+                            "is_best": False,
+                        }
+                        for g, r, d in accumulated_successes
+                    ],
+                )
+                trial_futures = [
+                    executor.submit(
+                        _minimize_trial, [row[:] for row in g], r, rows, cols,
+                        rng.randrange(2**31), permanent_locked_letters,
+                        permanent_black_cells,
                     )
+                    for g, r, d in accumulated_successes
+                ]
+                scored = []
+                for (g, r, d), fut in zip(accumulated_successes, trial_futures):
+                    opt_grid, opt_slots, opt_assignment = fut.result()
                     opt_black = sum(row.count(BLACK) for row in opt_grid)
                     # Tie-break — see `_content_score`'s own docstring
                     # for the shared formula (also used by the FAILED-
@@ -11830,8 +14260,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     opt_score = _content_score(
                         zip(opt_assignment, opt_slots), priority_words, challenge_words,
                     )
-                    scored.append((opt_black, -opt_score, g, r, d))
-                _, _, best, best_result, best_diag = min(scored, key=lambda t: (t[0], t[1]))
+                    scored.append((opt_black, -opt_score, g, r, d, (opt_grid, opt_slots, opt_assignment)))
+                _, _, best, best_result, best_diag, best_minimized = min(
+                    scored, key=lambda t: (t[0], t[1])
+                )
                 break
             # Every genuinely distinct attempt of this palier, sorted by
             # ascending black-cell count — at the user's explicit
@@ -12079,6 +14511,31 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     "example_grid": d["example_grid"],
                     "impossible_cells": d["impossible_cells"],
                     "deadlock_cells": d.get("deadlock_cells", []),
+                    # `d.get("excluded_cells", [])` — at the user's own
+                    # explicit framing, exclusion is valid "pendant une
+                    # étape," reset only "en fin d'étape, avant la phase
+                    # d'optimisation," with this exact snapshot named as
+                    # the last one still allowed to show it: "ils peuvent
+                    # éventuellement être visibles sur l'étape clef avant
+                    # optimisation, mais plus ensuite." This entry
+                    # (`pattern_attempt_failed`/`pattern_found`) is
+                    # precisely that snapshot — THIS attempt's own
+                    # concluding state, published before `_optimize_
+                    # before_cleanup`/cleanup ever run; the NEXT attempt's
+                    # own cycle-start preview is what resets it back to
+                    # `[]` (see `cycle_start_examples` above). This also
+                    # happens to sidestep a real display-priority detail:
+                    # `pollJob`/`advanceLiveDisplay` (`frontend/static/
+                    # script.js`) prioritizes draining any `previewHistory`
+                    # backlog over rendering the bare `live_preview`
+                    # channel, and in a fast mode (many paliers/second)
+                    # that backlog rarely empties — so a signal confined to
+                    # `live_preview` alone would rarely reach the screen.
+                    "excluded_cells": d.get("excluded_cells", []),
+                    # The attempt's own statistical letters, same lifecycle
+                    # as `excluded_cells` right above: shown on this key
+                    # step and on the live tiles, never past the cleanup.
+                    "stat_letters": d.get("stat_letters", []),
                     "forced_cells": d["forced_cells"],
                     "locked_cells": d.get("locked_cells", []),
                     "theme_cells": d.get("theme_cells", []),
@@ -12157,19 +14614,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 best, best_result = new_grid, (new_slots, new_assignment)
                 break
             selected_impossible = set(selected_diag["impossible_slots"])
-            # `_slots_touching`, at the user's explicit request ("ne pas
-            # essayer de remplir les emplacements qui croisent un
-            # emplacement réputé impossible", see Filler.__init__'s own
-            # `_crossing_excluded_slots`): a slot crossing an impossible
-            # slot will never be attempted at the next "continue" palier
-            # anyway, so it doesn't represent a genuine hope of progress —
-            # a real bug found live without this fix: `still_has_hope`
-            # stayed `True` indefinitely (these slots counted as non-
-            # impossible, so "still promising", even though they would
-            # never be attempted), wrongly preventing cleanup from ever
-            # triggering — confirmed by 3 real generations failing
-            # entirely (200 "continue" paliers exhausted without ever
-            # cleaning up) before this fix.
+            # `_slots_touching`: a slot crossing an impossible one is
+            # counted as hopeless too. Its own words are stripped by
+            # `_clean_blocked_slots` at every "continue" palier anyway, so
+            # treating it as a genuine hope of progress lets
+            # `still_has_hope` stay `True` indefinitely and prevents
+            # cleanup from ever triggering.
             selected_slots = extract_slots(selected_grid, rows, cols)
             selected_dead = selected_impossible | _slots_touching(selected_slots, selected_impossible)
             still_has_hope = any(
@@ -12415,33 +14865,36 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # resume-with-exclusion on top of a pattern still
                 # regenerated every palier — see the project-best-
                 # practices SKILL for the complete history.
-                def _clean_all_candidates(force_exclude):
+                def _clean_candidate(cand_grid, cand_diag, deep):
                     # EVERY distinct attempt of this palier (up to
                     # PARALLEL_ATTEMPTS, not just the FAILED_ATTEMPT_
                     # EXAMPLES (6) shown on screen — that cap remains a
                     # DISPLAY cap, see `display_pairs`/`last_examples`
-                    # above, unrelated to the real selection here), at the
-                    # user's explicit request: "on garde la meilleure
-                    # grille de tous les process, soit N grilles pour N
-                    # process." `failed_pairs` already carries, by
-                    # construction, at most one entry per attempt (see its
-                    # own comment above) — no need for an extra per-
-                    # attempt dedup here.
-                    result = []
-                    for cand_grid, cand_diag in optimized_pairs:
-                        cand_slots = extract_slots(cand_grid, rows, cols)
-                        cand_seed, cand_confirmed = _build_retry_seed(
-                            cand_grid, rows, cols, cand_slots,
-                            cand_diag["assignment"], cand_diag["impossible_slots"],
-                            locked_letters=carry_locked_letters,
-                            exclude_impossible_locked=force_exclude,
-                            seed_grid=carry_seed_grid, index=index, rng=rng,
-                            permanent_locked_letters=permanent_locked_letters,
-                            permanent_black_cells=permanent_black_cells,
-                        )
-                        result.append((cand_seed, cand_confirmed, cand_slots,
-                                        cand_diag.get("process_number")))
-                    return result
+                    # above, unrelated to the real selection here) is
+                    # cleaned through this function; `failed_pairs`
+                    # already carries at most one entry per attempt.
+                    # `deep` is the deep cleanup of a grid repeating the
+                    # same state (see GRID_REPEAT_DEEP_CLEANUP_STREAK).
+                    cand_slots = extract_slots(cand_grid, rows, cols)
+                    cand_seed, cand_confirmed = _build_retry_seed(
+                        cand_grid, rows, cols, cand_slots,
+                        cand_diag["assignment"], cand_diag["impossible_slots"],
+                        locked_letters=carry_locked_letters,
+                        exclude_impossible_locked=deep, deep=deep,
+                        seed_grid=carry_seed_grid, index=index, rng=rng,
+                        permanent_locked_letters=permanent_locked_letters,
+                        permanent_black_cells=permanent_black_cells,
+                    )
+                    return (cand_seed, cand_confirmed, cand_slots,
+                            cand_diag.get("process_number"))
+
+                def _cleaned_state_key(cand):
+                    # Pattern + confirmed content merged into one
+                    # comparable grid (`_cycle_start_preview`, the same
+                    # merge the cycle-start preview shows), as a hashable
+                    # tuple of tuples.
+                    state_grid, _ = _cycle_start_preview(rows, cols, cand[0], cand[1], None)
+                    return tuple(tuple(row) for row in state_grid)
 
                 # Among the cleaned grids, the winner maximizes the sum of
                 # squares of the lengths of words in place *after*
@@ -12470,130 +14923,66 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # break, added after a real stuck state observed live on a
                 # large, heavily locked 30×30 grid).
 
-                previous_locked_letters = carry_locked_letters
-                cleaned_candidates = _sorted_by_score(
-                    _clean_all_candidates(force_exclude=False),
-                    priority_words=priority_words, challenge_words=challenge_words,
-                )
-                carry_seed_pool = _seed_pool(cleaned_candidates)
-                carry_seed_grid, carry_locked_letters = carry_seed_pool[0]
-                # See `carry_seed_pool_lineage`'s own definition (before
-                # the palier loop) for this list's own role — the same
-                # mechanism as for "reprise telle quelle" above (see
-                # `raw_continue_lineage`), but on `cleaned_candidates`
-                # (position 3 = inherited lineage number, see `_clean_all_
-                # candidates`). Rebuilt a second time further below if the
-                # fixed point below forces a second, more aggressive
-                # cleanup, so it always reflects whichever `cleaned_
-                # candidates` was actually used last.
-                raw_lineage = _seed_pool(cleaned_candidates, extract=lambda sc: sc[3])
-                carry_seed_pool_lineage, next_lineage_number = _reassign_lineage_numbers(
-                    raw_lineage, dispatch_lineage, next_lineage_number
-                )
-                # A fixed point detected: this palier produced no change
-                # at all (the confirmed letters are rigorously identical
-                # to the previous palier's own) — a genuine blockage that,
-                # without intervention, would reproduce identically
-                # forever (see `_build_retry_seed`'s own docstring for the
-                # complete history of this case). At the user's explicit
-                # request, this is only handled as a last resort, only
-                # once this blockage is genuinely observed: the same
-                # cleanup is rerun on all the same candidates with
-                # `exclude_impossible_locked=True`, which specifically
-                # removes any locked slot whose combination matches no
-                # real word — breaking the fixed point without ever
-                # applying this more aggressive rule to paliers that are
-                # progressing normally.
-                #
-                # A finer version (comparing, for every raw parallel
-                # attempt rather than just the winner, whether a real
-                # assignment happened) was tried then abandoned at the
-                # user's explicit request ("il n'essaye pas vraiment de
-                # remplir les grilles partielles... revenir à la situation
-                # précédente") — back to this simpler comparison on the
-                # winner alone (the pool's own new diversity above, by
-                # contrast, covers EVERY cleaned grid, not just the
-                # winner — two distinct concerns, one about fixed-point
-                # detection, the other about diversity for the next
-                # launch).
-                if previous_locked_letters is not None and carry_locked_letters == previous_locked_letters:
+                # Per-candidate repetition tracking (see GRID_REPEAT_DEEP_
+                # CLEANUP_STREAK/GRID_REPEAT_DISCARD_STREAK): the ordinary
+                # cleanup's state is compared with the previous full
+                # cleanup's states; a grid repeating it is cleaned deeper,
+                # and one that still repeats it despite that is dropped,
+                # its place going to a blank-grid worker next palier
+                # (`carry_discarded_count`). Every other candidate — a
+                # grid still progressing — is kept untouched.
+                cleanup_streaks = {}
+                kept_candidates = []
+                discarded_count = 0
+                for cand_grid, cand_diag in optimized_pairs:
+                    cand = _clean_candidate(cand_grid, cand_diag, deep=False)
+                    key = _cleaned_state_key(cand)
+                    streak = carry_cleanup_streaks.get(key, 0) + 1
+                    cleanup_streaks[key] = max(cleanup_streaks.get(key, 0), streak)
+                    if streak >= GRID_REPEAT_DISCARD_STREAK:
+                        discarded_count += 1
+                        continue
+                    if streak >= GRID_REPEAT_DEEP_CLEANUP_STREAK:
+                        cand = _clean_candidate(cand_grid, cand_diag, deep=True)
+                    kept_candidates.append(cand)
+                carry_cleanup_streaks = cleanup_streaks
+                just_cleaned = True
+                if kept_candidates:
                     cleaned_candidates = _sorted_by_score(
-                        _clean_all_candidates(force_exclude=True),
+                        kept_candidates,
                         priority_words=priority_words, challenge_words=challenge_words,
                     )
-                    carry_seed_pool = _seed_pool(cleaned_candidates)
+                    # Blank-grid workers of the next palier (see
+                    # `reset_count` in the "fresh pattern" branch), which
+                    # bound how many cleaned grids it can resume.
+                    next_reset_count = min(
+                        PARALLEL_ATTEMPTS, FULL_RESET_ATTEMPT_COUNT + discarded_count
+                    )
+                    carry_seed_pool = _seed_pool(
+                        cleaned_candidates, reset_count=next_reset_count
+                    )
                     carry_seed_grid, carry_locked_letters = carry_seed_pool[0]
-                    raw_lineage = _seed_pool(cleaned_candidates, extract=lambda sc: sc[3])
+                    # See `carry_seed_pool_lineage`'s own definition
+                    # (before the palier loop) for this list's own role —
+                    # the same mechanism as for "reprise telle quelle"
+                    # above (see `raw_continue_lineage`), but on
+                    # `cleaned_candidates` (position 3 = inherited lineage
+                    # number, see `_clean_candidate`).
+                    raw_lineage = _seed_pool(
+                        cleaned_candidates, extract=lambda sc: sc[3],
+                        reset_count=next_reset_count,
+                    )
                     carry_seed_pool_lineage, next_lineage_number = _reassign_lineage_numbers(
                         raw_lineage, dispatch_lineage, next_lineage_number
                     )
-                # No black cell is added here any more either (the
-                # single-cell lock that used to run at this exact point,
-                # shared with the "reprise telle quelle" branch above, was
-                # removed entirely at the user's explicit request — see
-                # CLAUDE.md for its full history) — a full cleanup now only
-                # ever changes which words/black cells survive from the
-                # already-generated pattern, never adds a new one.
-                just_cleaned = True
-                # Remembering the state obtained at the end of THIS
-                # cleanup (black/white pattern AND confirmed content) and
-                # detecting a state that repeats identically from one
-                # cleanup to the next — see GRID_REPEAT_INFEASIBLE_
-                # THRESHOLD's own docstring for the full request and its
-                # history. Reserved for this branch alone (`if still_has_
-                # hope:` above, "reprise telle quelle", never touches it)
-                # — at the user's explicit request, after TWO regressions
-                # measured live on the standard 15×10 (Flash) benchmark: a
-                # first version only compared the black/white pattern, on
-                # both branches — the pattern very often stays identical
-                # across several consecutive "reprise telle quelle" cycles
-                # by construction (cleanup only adds a black cell one time
-                # in ten, see BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY)
-                # even while content is progressing normally, mistaking
-                # this for a genuine blockage. A second version compared
-                # pattern+content, still on both branches — a detailed
-                # diagnostic (branch + the consecutive_continue_paliers
-                # counter at every trigger) showed most triggers coincided,
-                # on the "reprise telle quelle" branch, almost exactly with
-                # the moment MAX_CONSECUTIVE_CONTINUE_PALIERS already
-                # forces a cleanup on its own — this mechanism was then
-                # duplicating an already-tuned safeguard, but with a far
-                # more destructive response (an entirely blank grid instead
-                # of an ordinary cleanup that keeps the valid content).
-                # Restricting detection to this branch alone fixes both
-                # problems at once: a "reprise telle quelle" cycle never
-                # counts toward the streak (already bounded elsewhere),
-                # and only a genuine fixed point of the cleanup ITSELF
-                # (one the single relaunch with `exclude_impossible_
-                # locked=True`, right above, doesn't always resolve)
-                # triggers the reset. Reuses `_cycle_start_preview`
-                # (already called elsewhere in this same loop for the
-                # "cycle start" preview) to merge pattern + content into a
-                # single comparable grid — `carry_preseed_assignment` is
-                # always `None` on this branch, so `_cycle_start_preview`
-                # always builds from `carry_locked_letters` here. Compared
-                # as a tuple of tuples (hashable, content comparison, not
-                # identity) rather than the list itself — `locked_cells`
-                # (the 2nd return value) isn't useful here, only the
-                # merged grid serves as the key.
-                current_state_grid, _ = _cycle_start_preview(
-                    rows, cols, carry_seed_grid, carry_locked_letters, carry_preseed_assignment,
-                )
-                current_pattern_key = tuple(tuple(row) for row in current_state_grid)
-                if current_pattern_key == last_cycle_end_grid:
-                    same_grid_streak += 1
+                    carry_discarded_count = discarded_count
                 else:
-                    last_cycle_end_grid = current_pattern_key
-                    same_grid_streak = 1
-                if same_grid_streak > GRID_REPEAT_INFEASIBLE_THRESHOLD:
-                    # Pattern deemed infeasible: a full reset, the next
-                    # cycle starts again from an entirely blank grid —
-                    # exactly this function's own initial state (see
+                    # Every cleaned grid was dropped: the next cycle
+                    # starts again from an entirely blank grid — exactly
+                    # this function's own initial state (see
                     # `carry_seed_grid = None` at the very top), including
                     # both pools and the "reprise telle quelle" streak
-                    # counter, so a "fresh pattern" palier genuinely
-                    # starts from scratch rather than reusing a pool
-                    # built from the now-abandoned pattern.
+                    # counter.
                     carry_seed_grid = None
                     carry_locked_letters = None
                     carry_preseed_assignment = None
@@ -12602,14 +14991,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     carry_seed_pool_continue = None
                     carry_seed_pool_lineage = None
                     carry_seed_pool_continue_lineage = None
-                    # `next_lineage_number` itself is deliberately NOT reset
-                    # here: a grid born from a future palier must never
-                    # reuse the number of a lineage abandoned by this
-                    # reset, at the risk of making the user think it's the
-                    # same grid as before.
+                    # `next_lineage_number` itself is deliberately NOT
+                    # reset: a grid born from a future palier must never
+                    # reuse the number of an abandoned lineage.
                     consecutive_continue_paliers = 0
-                    last_cycle_end_grid = None
-                    same_grid_streak = 0
+                    carry_cleanup_streaks = {}
+                    carry_discarded_count = 0
             # The target ratio no longer progresses from one palier to the
             # next (stays fixed at `black_ratio`, 0.0 by default), at the
             # user's explicit request: pre-fill (at least PREFILL_MIN_
@@ -12629,6 +15016,17 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # correctness depends on.
     stop_best_state_drain.set()
     best_state_drain_thread.join(timeout=1.0)
+    # Clears the live-preview channel now that the search itself is over —
+    # at the user's explicit request: once the last key step (history
+    # entry) is reached, "il ne devrait plus y avoir de nouvelle étape
+    # Live." Without this, `job["live_preview"]` would keep holding
+    # whichever per-process state was published last (a real, but now
+    # frozen, search state), and the frontend's own "no new key step yet,
+    # fall back to showing Live" rule (script.js's pollJob()) would keep
+    # re-rendering that stale snapshot forever instead of simply leaving
+    # the last key step on screen.
+    if on_live_preview is not None:
+        on_live_preview([])
 
     if best is None and accumulated_successes:
         # The `attempts` budget (200 paliers by default) ran out before
@@ -12694,29 +15092,39 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # into the "minimizing" preview below and into the final result, so
     # backend/app.py can also attach it to the "clues" preview.
     winning_process_number = best_diag.get("process_number") if best_diag else None
-    progress(
-        "minimizing",
-        examples=[{
-            "example_grid": build_letters_grid(rows, cols, best_slots, best_assignment),
-            "impossible_cells": [],
-            "deadlock_cells": [],
-            "forced_cells": [],
-            "locked_cells": [],
-            "theme_cells": _theme_word_cells(best_slots, best_assignment, priority_words),
-            "challenge_cells": _challenge_word_cells_from_assignment(
-                best_slots, best_assignment, challenge_words
-            ),
-            "process_number": winning_process_number,
-            "is_best": True,
-        }],
-    )
-    grid, slots, assignment = minimize_black_squares(
-        best, best_result, rows, cols, index, rng, cancel_event=cancel_event,
-        proper_noun_words=proper_noun_words, max_proper_nouns=max_proper_nouns,
-        non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
-        priority_words=priority_words, permanent_locked_letters=permanent_locked_letters,
-        permanent_black_cells=permanent_black_cells, challenge_words=challenge_words,
-    )
+
+    def _final_minimize():
+        progress(
+            "minimizing",
+            examples=[{
+                "example_grid": build_letters_grid(rows, cols, best_slots, best_assignment),
+                "impossible_cells": [],
+                "deadlock_cells": [],
+                "excluded_cells": [],
+                "forced_cells": [],
+                "locked_cells": [],
+                "theme_cells": _theme_word_cells(best_slots, best_assignment, priority_words),
+                "challenge_cells": _challenge_word_cells_from_assignment(
+                    best_slots, best_assignment, challenge_words
+                ),
+                "process_number": winning_process_number,
+                "is_best": True,
+            }],
+        )
+        return minimize_black_squares(
+            best, best_result, rows, cols, index, rng, cancel_event=cancel_event,
+            proper_noun_words=proper_noun_words, max_proper_nouns=max_proper_nouns,
+            non_gloss_words=non_gloss_words, max_non_gloss=max_non_gloss,
+            priority_words=priority_words, permanent_locked_letters=permanent_locked_letters,
+            permanent_black_cells=permanent_black_cells, challenge_words=challenge_words,
+        )
+
+    if best_minimized is not None:
+        # Already optimized, in parallel with the other successes, while
+        # picking the winner (the "minimizing" step was published then).
+        grid, slots, assignment = best_minimized
+    else:
+        grid, slots, assignment = _final_minimize()
     n_black = sum(row.count(BLACK) for row in grid)
     words = build_word_entries(grid, rows, cols, slots, assignment)
     # `required_cells` (see this function's own docstring/try_fill's own)

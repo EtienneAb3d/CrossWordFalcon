@@ -400,7 +400,8 @@ def _slugify_pseudo(pseudo):
 
 def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme,
                     priority_words, seed, pseudo=None, resumed_from=None, origin=None,
-                    bilingual_language=None, generation_params=None, challenge_words=None):
+                    bilingual_language=None, generation_params=None, challenge_words=None,
+                    diagnostics=None):
     """Autosaves (or updates) the in-progress state of one "Interactif"
     session. The very first call for a given `job_id` creates
     `GRID_WORK/<timestamp>_<pseudo slug>_<job_id>.json`; every later call
@@ -487,6 +488,24 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
     bare-uppercase grid form from it on demand wherever one is actually
     needed, rather than storing that derived form itself.
 
+    `diagnostics` (`None` by default) is everything the editable grid was
+    SHOWING at the moment of this save, beyond its own letters: each
+    overlay of cells the web UI renders (`impossible_cells`/`deadlock_
+    cells`/`low_candidate_cells`/`excluded_cells`/`invalid_cells`/`theme_
+    cells`/`challenge_cells`/`zone_cells`), the "Stats" letters, and the
+    word the last "Suivant" placed (`last_placed`). None of it is
+    recomputable from the saved grid alone — an "emplacement écarté" in
+    particular only ever exists in one `POST /api/interactive/step`
+    response, since `interactive_place_word` rebuilds that list from
+    scratch on every click and keeps nothing between two of them — so
+    without this field a question about what the player actually saw has
+    no answer once the page is gone. Diagnostic-only, exactly like
+    `previous` below (with which it pairs: `previous["diagnostics"]` is
+    the state displayed right before the last click): no reader of a work
+    record ever rebuilds a session from it. `None` from a caller with no
+    display of its own to report (a session's first save, a publish, a
+    grid filed into "Créations" by an automatic generation).
+
     `record["previous"]`: whatever this exact record held right before
     this call overwrites it (every field except its own, now-stale
     `previous` — never nested more than one level deep, so this only ever
@@ -555,6 +574,7 @@ def save_grid_work(job_id, grid, definitions, title, language, difficulty, theme
         # list shown in the order it was typed in, so that order must
         # survive a save/resume round trip unchanged.
         "challenge_words": list(challenge_words or ()),
+        "diagnostics": diagnostics,
         "previous": previous,
         "created_at": created_at or now,
         "updated_at": now,
@@ -740,3 +760,84 @@ def get_grid_game(grid_id, pseudo):
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# STOP_DUMP — a one-shot diagnostic snapshot written when a running
+# automatic-generation job is interrupted by the "Stop" button (project
+# root, gitignored, same convention as GRID_STORE/GRID_WORK/GRID_GAME — a
+# generated artifact, not source content), at the user's explicit request:
+# a full backup of the last known state of the grid(s) — cell states
+# (blank, letter, black/blocked, crossing-deadlock, ...) and slot states
+# (valid, impossible, excluded, low-candidates, ...) — for analysis of
+# what the search was doing at the moment it was stopped.
+#
+# Unlike GRID_WORK (continuously overwritten across many autosaves of one
+# session) this is written exactly once, right when `backend/app.py`'s
+# `_run_generate_job` catches `GenerationCancelled` — never updated
+# afterwards. It reuses `JOBS[job_id]`'s own already-published state
+# rather than reaching into the CSP search itself: by the time
+# `GenerationCancelled` is caught, whatever the search was doing at the
+# exact instant the cancel_event was noticed is already gone (nothing in
+# backend/crossword_gen.py catches this exception to build a final
+# snapshot — it's a bare, cooperative unwind straight through every
+# frame) — the richest surviving picture is `job["live_preview"]` (see
+# `_new_job`/`_on_live_preview`), the same continuously-overwritten
+# per-process snapshot list the "Créations"/attempt-preview UI itself
+# already renders live, one entry per still-alive parallel attempt of the
+# palier that was running, each carrying its own `example_grid` +
+# `impossible_cells`/`deadlock_cells`/`excluded_cells`/`forced_cells`/
+# `locked_cells`/`theme_cells`/`challenge_cells` (plus `low_candidate_
+# cells`/`noise_cells` on a cycle-start entry) — exactly the cell-state/
+# slot-state overlays `frontend/static/script.js`'s `renderAttemptPreview`
+# already draws from this same shape. Every one of those entries also
+# carries, under its own `previous` field, the snapshot that exact tile
+# replaced — one step of history only, `None` for a process's own first
+# tile, same convention as `save_grid_work`'s own `previous` (see
+# `crossword_gen._one_step_previous`): a tile is only ever overwritten,
+# so without this the dump held the last state of each attempt and no way
+# to tell what changed to reach it. Each state names both the channel
+# that published it (`reason`: a new record, a heartbeat, a cycle start,
+# a just-finished attempt) and the attempt it belongs to (`attempt_id`),
+# which is what lets a comparison of the two tell a genuine search step
+# apart from a mere change of publication channel or of attempt.
+# `job["examples_history"]` (every
+# COMPLETED palier so far, same shape) is included alongside it for
+# context on how the search got there.
+# ---------------------------------------------------------------------------
+
+STOP_DUMP_DIR = Path(__file__).resolve().parent.parent / "STOP_DUMP"
+
+
+def save_stop_dump(job_id, pseudo, request, step, live_preview, examples_history,
+                    resume_state=None):
+    """Writes `STOP_DUMP/<timestamp>_<pseudo slug>_<job_id>.json` and
+    returns its id (filename stem) — best-effort: the one caller (backend/
+    app.py's `_run_generate_job`, right in its `except GenerationCancelled:`
+    handler) wraps this in its own try/except, so a dump failure can never
+    turn a clean user-requested Stop into an error. `request` is the
+    original `GenerateRequest.model_dump()` (already held as `job
+    ["request"]`), `step`/`live_preview`/`examples_history`/`resume_state`
+    are read straight off `JOBS[job_id]` at the moment of cancellation —
+    see this module's own STOP_DUMP section comment above for why
+    `live_preview` (not a fresh read of the search's own live internal
+    state, unreachable by the time this runs) is the richest available
+    snapshot."""
+    STOP_DUMP_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    slug = _slugify_pseudo(pseudo)
+    dump_id = f"{timestamp}_{slug}_{job_id}"
+    record = {
+        "id": dump_id,
+        "job_id": job_id,
+        "pseudo": (pseudo or "").strip() or None,
+        "stopped_at": datetime.now().isoformat(),
+        "request": request,
+        "step": step,
+        "live_preview": live_preview,
+        "examples_history": examples_history,
+        "resume_state": resume_state,
+    }
+    path = STOP_DUMP_DIR / f"{dump_id}.json"
+    path.write_text(json.dumps(record, ensure_ascii=False), encoding="utf-8")
+    return dump_id
