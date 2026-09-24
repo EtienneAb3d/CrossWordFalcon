@@ -120,10 +120,11 @@ stop_port() {
     fi
 }
 
-# Build the jar first (no-op when already up to date), before stopping
+# Build the jar first (no-op when the committed jar in backend_java/dist/
+# matches the sources, see backend_java/build.sh), before stopping
 # anything: a build failure then leaves whatever is currently running
 # untouched.
-BACKEND_JAR="backend_java/target/crosswordfalcon-backend.jar"
+BACKEND_JAR="backend_java/dist/crosswordfalcon-backend.jar"
 backend_java/build.sh
 JAVA_BIN="$(backend_java/build.sh --print-java)"
 

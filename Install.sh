@@ -119,8 +119,9 @@ fi
 # ===========================================================================
 # The Java back end is the same API server as backend/app.py, written in
 # Java; run_Falcon.sh (Python) and run_FalconJ.sh (Java) are interchangeable.
-# It needs a JDK 21+ (javac — a runtime alone is not enough to build it) and
-# Maven. Both are installed from the system package manager when possible;
+# Its jar is committed (backend_java/dist/), so running it only needs a Java
+# 21+ runtime; a JDK 21+ (javac) and Maven are still installed so the jar
+# can be rebuilt whenever backend_java/ changes locally. Both are installed from the system package manager when possible;
 # without root access (or without a supported package manager), a
 # user-local Temurin JDK and Apache Maven are downloaded into ~/.local,
 # where backend_java/build.sh looks for them. Any failure here is only a
@@ -188,8 +189,8 @@ if ! backend_java/build.sh --print-java >/dev/null 2>&1 || ! have_maven; then
         install_local_maven || true
     fi
 fi
-echo "Building the Java back end (backend_java/)..."
-backend_java/build.sh --force \
+echo "Checking the Java back end jar (backend_java/dist/)..."
+backend_java/build.sh \
     || echo "Warning: the Java back end could not be built — run_FalconJ.sh will not start; run_Falcon.sh (Python) is unaffected."
 
 echo

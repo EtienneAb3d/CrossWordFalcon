@@ -115,7 +115,8 @@ behaves exactly the same from the web page's point of view. Start it with:
 ./run_FalconJ.sh
 ```
 
-It needs Java 21 (a JDK) and Maven, which `./Install.sh` installs for you.
+It comes ready to run and only needs Java 21, which `./Install.sh` installs
+for you (along with Maven, used only if you modify the Java code itself).
 `./run_Falcon.sh` and `./run_FalconJ.sh` are interchangeable: each one
 stops the other version before starting, so only one runs at a time, and
 your grids, drafts and saved games are shared by both.

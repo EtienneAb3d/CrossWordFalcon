@@ -48,7 +48,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | Path | Contents |
 |---|---|
 | `backend/` | All Python business logic: the API server, the generation engine, LLM/chat/embedding clients, persistence, export. No subpackages — every `.py` file sits directly under `backend/`. |
-| `backend_java/` | The Java back end (Java 21, Maven, `pom.xml`): `src/main/java/falcon/` mirrors `backend/` (see "Java back end"), `build.sh` builds `target/crosswordfalcon-backend.jar` (gitignored). |
+| `backend_java/` | The Java back end (Java 21, Maven, `pom.xml`): `src/main/java/falcon/` mirrors `backend/` (see "Java back end"), `build.sh` builds `dist/crosswordfalcon-backend.jar`, committed with `dist/sources.sha256` (the fingerprint of the sources it was built from) so a checkout runs it without rebuilding; `target/` (Maven's own output) is gitignored. |
 | `frontend/` | `server.py` (proxy + static host) and `static/` (the whole single-page app: `index.html`, `script.js`, `style.css`, `i18n.js`, logo assets). |
 | `data_builder/` | One-off/periodic scripts that build each language's dictionary artifacts (corpus → wordlist → gloss dictionary → inflection table → Qdrant embeddings), plus one orchestration shell script per language. |
 | `scrapper/` | Daily-refreshed content scrapers feeding the web UI's "Actu Croisée" panel (RSS feeds, aggregated crossword-publisher links). |
@@ -1928,11 +1928,12 @@ section for the full variable list and the dual-GPU LLM routing scheme.
   ports first, including orphaned CSP-worker child processes, and any
   Java back end started from this checkout (a `java` process running
   `crosswordfalcon-backend.jar` whose working directory is this checkout).
-- **`run_FalconJ.sh`** — the same launcher for the Java back end: builds
-  the jar if a source is newer than it (`backend_java/build.sh`), stops the
+- **`run_FalconJ.sh`** — the same launcher for the Java back end: rebuilds
+  the jar only when the sources' fingerprint differs from the committed
+  `backend_java/dist/sources.sha256` (`backend_java/build.sh`), stops the
   listeners on both ports and any Python back end started from this
   checkout (`uvicorn backend.app:app`, same working-directory scoping),
-  then starts `java -jar backend_java/target/crosswordfalcon-backend.jar
+  then starts `java -jar backend_java/dist/crosswordfalcon-backend.jar
   --port $CROSSWORDFALCON_BACKEND_PORT` (extra JVM options from
   `CROSSWORDFALCON_JAVA_OPTS`) plus the same Python middleware. Both
   launchers write to `logs/backend.log`.
@@ -1971,9 +1972,9 @@ python3 backend/crossword_gen.py --wordlist data/wordlist_en_full.tsv
 ./run_Falcon.sh            # Python back end
 ./run_FalconJ.sh           # or the Java back end (stops the Python one)
 
-# Java back end: build / CLI generator
-backend_java/build.sh [--force]
-java -cp backend_java/target/crosswordfalcon-backend.jar falcon.gen.Generator --width 15 --height 10 --deadline-checks 1000 --seed 2
+# Java back end: build (only when the sources changed) / check / CLI generator
+backend_java/build.sh [--force|--check]
+java -cp backend_java/dist/crosswordfalcon-backend.jar falcon.gen.Generator --width 15 --height 10 --deadline-checks 1000 --seed 2
 
 # Local LLM for clue generation (needed for the web UI, not the bare CLI)
 pip install -r requirements-llama.txt

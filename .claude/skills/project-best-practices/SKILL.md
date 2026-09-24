@@ -331,7 +331,7 @@ project's engineering language.
   CLI (`python3 backend/crossword_gen.py ...`, run from the project root so
   its default wordlist path resolves) and a library imported by
   `backend/app.py` via a relative import; the Java one has an equivalent CLI
-  (`java -cp backend_java/target/crosswordfalcon-backend.jar
+  (`java -cp backend_java/dist/crosswordfalcon-backend.jar
   falcon.gen.Generator ...`).
 - English is this project's engineering language (code, comments, this
   SKILL, `CLAUDE.md`, `README.md`); product content (crossword words/clues,
@@ -2300,8 +2300,20 @@ the current defaults/behavior to know before touching this code.
       `String.format`/`Math.round`), and regular expressions need
       `Pattern.UNICODE_CHARACTER_CLASS` to match Python's Unicode `\w`/`\s`.
     - Build: `backend_java/build.sh` (JDK 21+ and Maven, installed by
-      `Install.sh`); `run_FalconJ.sh` rebuilds the jar automatically when
-      a source file is newer than it. Permanent rule 8 applies to the Java
+      `Install.sh`). The jar is committed —
+      `backend_java/dist/crosswordfalcon-backend.jar`, next to
+      `backend_java/dist/sources.sha256`, the fingerprint of the `src/`
+      tree and `pom.xml` it was built from — so a deployment (`git pull`)
+      runs it without compiling. `build.sh` (called by `run_FalconJ.sh`
+      and `Install.sh`) rebuilds only when the sources' fingerprint
+      differs from that file, never on file dates (a checkout gives every
+      file the checkout's own date); `build.sh --check` reports whether
+      the committed jar is current. Every commit touching `backend_java/`
+      must carry the rebuilt jar and its `sources.sha256` (run
+      `backend_java/build.sh` and `git add backend_java/dist/` before
+      committing) — a stale committed jar forces a rebuild on every
+      deployment. `backend_java/target/` (Maven's own output) stays
+      gitignored. Permanent rule 8 applies to the Java
       back end too: after editing `backend_java/`, restart a running Java
       back end with `./run_FalconJ.sh`.
     - Scope: the back end only. The middleware stays Python
