@@ -185,7 +185,9 @@ On the page:
    definitions). Next to each snapshot's own stats, a small pencil button
    opens that exact attempt in Interactive mode, so you can take over by
    hand instead of waiting for the search to finish — this cancels the
-   ongoing generation if it's still running.
+   ongoing generation if it's still running. A gold medal in the left
+   margin counts how many grids the search has successfully completed so
+   far; the best of them is the one you get.
 4. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
    ready to be filled in. Above it, a short generated title for the puzzle

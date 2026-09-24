@@ -126,6 +126,10 @@ const checkBtn = document.getElementById("check-btn");
 const definitionsBtn = document.getElementById("definitions-btn");
 const recomputeBtn = document.getElementById("recompute-btn");
 const stopBtn = document.getElementById("stop-btn");
+// Gold-medal counter of genuinely successful grids, shown in the left
+// margin while an automatic generation runs (job["success_count"]).
+const successMedal = document.getElementById("success-medal");
+const successMedalCount = document.getElementById("success-medal-count");
 const continueBtn = document.getElementById("continue-btn");
 const cluesEl = document.getElementById("clues");
 const downCluesSection = document.getElementById("down-clues-section");
@@ -855,6 +859,12 @@ let interactiveDeadlockCells = new Set();
 // never forbids placing a word that crosses it. Same staleness rule as
 // interactiveImpossibleCells/LowCells above.
 let interactiveExcludedCells = new Set();
+// The candidate slots of the last "Suivant" click — the level-6 window of
+// the slot-selection cascade (backend `Filler._select_target_slot`), the
+// slots closest to the grid's center the cascade chose among — each shown
+// by its own cell closest to the center, outlined blue. Same staleness
+// rule as the sets above.
+let interactiveWindowCells = new Set();
 // The word the last "Suivant" click placed, exactly as the backend
 // reported it (`POST /api/interactive/step`'s own `placed`: the word, its
 // cells, its direction, and which glossary it came from) — kept only so
@@ -2360,6 +2370,7 @@ function renderGrid() {
         // outranked by .interactive-impossible/.interactive-deadlock's
         // red (see their declaration order in style.css).
         if (interactiveExcludedCells.has(dk)) cell.classList.add("interactive-excluded");
+        if (interactiveWindowCells.has(dk)) cell.classList.add("interactive-window");
         if (interactiveImpossibleCells.has(dk)) cell.classList.add("interactive-impossible");
         else if (interactiveLowCells.has(dk)) cell.classList.add("interactive-low");
         // Always a subset of interactiveImpossibleCells above — the exact
@@ -3592,6 +3603,7 @@ async function pollJob(jobId, t) {
       throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail, true));
     }
     consecutivePollFailures = 0;
+    if (isCurrentJob()) successMedalCount.textContent = String(data.success_count || 0);
     const cluesFeed = data.clues_progress || [];
     if (cluesFeed.length > nextClueIndex) {
       if (isCurrentJob()) {
@@ -5511,6 +5523,7 @@ function setInteractiveDiagnostics(data) {
   interactiveLowCells = new Set((data.low_candidate_cells || []).map(([r, c]) => `${r},${c}`));
   interactiveDeadlockCells = new Set((data.deadlock_cells || []).map(([r, c]) => `${r},${c}`));
   interactiveExcludedCells = new Set((data.excluded_cells || []).map(([r, c]) => `${r},${c}`));
+  interactiveWindowCells = new Set((data.window_cells || []).map(([r, c]) => `${r},${c}`));
 }
 
 // The diagnostics describe the grid the backend last saw; drop them the
@@ -5520,6 +5533,7 @@ function clearInteractiveDiagnostics() {
   interactiveLowCells = new Set();
   interactiveDeadlockCells = new Set();
   interactiveExcludedCells = new Set();
+  interactiveWindowCells = new Set();
   interactiveInvalidCells = new Set();
   interactiveVerifyReport = [];
   interactiveStatLetters = new Map();
@@ -5545,6 +5559,7 @@ function interactiveDiagnosticsPayload() {
     deadlock_cells: cells(interactiveDeadlockCells),
     low_candidate_cells: cells(interactiveLowCells),
     excluded_cells: cells(interactiveExcludedCells),
+    window_cells: cells(interactiveWindowCells),
     invalid_cells: cells(interactiveInvalidCells),
     theme_cells: cells(interactiveThemeCells),
     challenge_cells: cells(interactiveChallengeCells),
@@ -8755,6 +8770,8 @@ async function runGeneration(startJob) {
   attemptPreviewRevealBtn.hidden = false;
   stopBtn.hidden = false;
   stopBtn.disabled = false;
+  successMedalCount.textContent = "0";
+  successMedal.hidden = false;
   // Hidden on every fresh attempt (a new form submission or a "Continuer"
   // click alike) — only shown again if *this* run itself ends in the
   // specific "no_fillable_grid" failure the button exists for (see the
@@ -8816,6 +8833,7 @@ async function runGeneration(startJob) {
   } finally {
     button.disabled = false;
     stopBtn.hidden = true;
+    successMedal.hidden = true;
     currentJobId = null;
     generationInProgress = false;
     syncRssPanelVisibility();

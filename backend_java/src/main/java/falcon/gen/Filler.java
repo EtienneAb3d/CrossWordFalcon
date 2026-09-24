@@ -36,11 +36,14 @@ public final class Filler {
     public static final int MAX_DESCENTS_PER_NODE = 3;
     public static final int EARLY_DESCENTS_WORD_COUNT = 5;
     public static final int EARLY_MAX_DESCENTS_PER_NODE = 10;
+    // An attempt starting from locked cells (inherited from a previous
+    // palier) applies no descent cap at all.
     public static final boolean BACKJUMPING_ENABLED = true;
+    public static final int MAX_BACKGHOSTS_PER_DESCENT = 0;
     public static final int MAX_EXCLUDED_SLOTS = 3;
     public static final boolean ALTERNATE_DIRECTION_ENABLED = false;
     public static final int SLOT_SELECTION_WINDOW_SIZE = 10;
-    public static final int MOST_CONSTRAINED_START_LENGTH = 7;
+    public static final int MOST_CONSTRAINED_START_LENGTH = 12;
     public static final int MOST_CONSTRAINED_MIN_LENGTH = 2;
     public static final double SLOT_SELECTION_REFINE_FRACTION = 0.5;
     public static final double FALLBACK_PHASE_BUDGET_FRACTION = 0.1;
@@ -107,6 +110,8 @@ public final class Filler {
     public final Map<Integer, int[]> letterScores;
     final boolean[] slotAcross;
     List<Object> bestStatLetters;
+    /** Level 6's geometric window of the last selectTargetSlot call (mirrors last_selection_window). */
+    public List<Integer> lastSelectionWindow = new ArrayList<>();
     /** For slot i and position p: the crossing slot (or -1) and its position there. */
     final int[][] crossSlot, crossPos;
     /** cell -> [(slot, pos)...] in insertion order. */
@@ -115,6 +120,10 @@ public final class Filler {
     public boolean abandoned, budgetExhausted, breakingPermitted, interruptedBySibling;
     public Set<Integer> toleratedDry = new HashSet<>();
     Set<Integer> lastConflict;
+    /** Words placed by backtrack still on the grid: slot -> placement sequence number. */
+    Map<Integer, Long> placementSeq = new HashMap<>();
+    long placementCounter;
+    int ghostsInDescent;
     public String[] assignment;
     public Set<Integer> excludedSlots;
     public Set<String> usedWords = new HashSet<>();
@@ -123,6 +132,7 @@ public final class Filler {
     public String[] bestAssignment;
     public int bestAssignedCount;
     int initialAssignedCount;
+    boolean inherited;
     public Consumer<String[]> onNewBest;
     public LongConsumer onChecksProgress;
     public Consumer<String[]> onLiveState;
@@ -525,6 +535,45 @@ public final class Filler {
         return false;
     }
 
+    /** Slot a backghost should take the word off, or -1 (mirrors _backghost_target). */
+    int backghostTarget(Set<Integer> conflict) {
+        if (conflict == null || placementSeq.isEmpty() || ghostsInDescent >= MAX_BACKGHOSTS_PER_DESCENT) return -1;
+        int target = -1;
+        long targetSeq = -1, latest = -1;
+        for (Map.Entry<Integer, Long> e : placementSeq.entrySet()) latest = Math.max(latest, e.getValue());
+        for (int k : conflict) {
+            Long q = placementSeq.get(k);
+            if (q != null && q > targetSeq) {
+                targetSeq = q;
+                target = k;
+            }
+        }
+        if (target < 0 || targetSeq == latest) return -1;
+        return target;
+    }
+
+    /** Report a failure, backghosting first when allowed (mirrors _fail_or_backghost). */
+    boolean failOrBackghost(Set<Integer> conflict, long deadlineChecks, boolean released) {
+        int target = backghostTarget(conflict);
+        if (target < 0) return fail(conflict);
+        String w = assignment[target];
+        placementSeq.remove(target);
+        assignment[target] = null;
+        usedWords.remove(w);
+        Map<Integer, Object[]> savedScores = refreshLetterScoresAround(target);
+        ghostsInDescent++;
+        boolean solved = backtrack(deadlineChecks, released);
+        ghostsInDescent--;
+        if (solved) return true;
+        Set<Integer> retryConflict = lastConflict;
+        restoreLetterScores(savedScores);
+        if (retryConflict == null) return fail(null);
+        Set<Integer> merged = new HashSet<>(conflict);
+        merged.remove(target);
+        merged.addAll(retryConflict);
+        return fail(merged);
+    }
+
     public boolean solve(long deadlineChecks) {
         if (!challengeWords.isEmpty()) challengeWordBudget = (int) Math.max(1, Math.rint(FALLBACK_PHASE_BUDGET_FRACTION * deadlineChecks));
         if (!priorityWords.isEmpty()) themeWordBudget = (int) Math.max(1, Math.rint(FALLBACK_PHASE_BUDGET_FRACTION * deadlineChecks));
@@ -532,6 +581,9 @@ public final class Filler {
         int count = 0;
         for (String a : assignment) if (a != null) count++;
         initialAssignedCount = count;
+        inherited = !lockedLetters.isEmpty() || count > 0;
+        placementSeq = new HashMap<>();
+        ghostsInDescent = 0;
         if (backtrack(deadlineChecks, false)) return true;
         if (abandoned || budgetExhausted) return false;
         breakingPermitted = true;
@@ -887,6 +939,7 @@ public final class Filler {
         rng.shuffle(shuffled);
         shuffled.sort((a, b) -> Double.compare(scores.get(a), scores.get(b)));
         List<Integer> window = new ArrayList<>(shuffled.subList(0, Math.min(SLOT_SELECTION_WINDOW_SIZE, shuffled.size())));
+        lastSelectionWindow = window;
         Map<Integer, Integer> allCounts = new LinkedHashMap<>();
         for (int i : window) {
             if (slots.get(i).length < MOST_CONSTRAINED_MIN_LENGTH) continue;
@@ -949,6 +1002,7 @@ public final class Filler {
 
     boolean backtrack(long deadlineChecks, boolean released) {
         lastConflict = null;
+        final boolean entryReleased = released;
         if (abandoned) return false;
         if (deadlineReachedWithoutExtension(deadlineChecks)) {
             budgetExhausted = true;
@@ -974,7 +1028,7 @@ public final class Filler {
             Dom d = domain(i);
             if (d.allIn(usedWords) && !challengeCanFill(i, active)) {
                 impossibleThisAttempt.add(i);
-                if (!toleratedDry.contains(i)) return fail(drySlotConflict(i));
+                if (!toleratedDry.contains(i)) return failOrBackghost(drySlotConflict(i), deadlineChecks, released);
                 continue;
             }
             domains.put(i, d);
@@ -996,7 +1050,7 @@ public final class Filler {
         boolean allowBreaking = false;
         Set<Integer> triedSlots = new HashSet<>();
         int descents = 0;
-        int maxDescents = MAX_DESCENTS_PER_NODE;
+        int maxDescents = inherited ? 0 : MAX_DESCENTS_PER_NODE;
         if (0 < maxDescents && assignedCount - initialAssignedCount < EARLY_DESCENTS_WORD_COUNT) {
             maxDescents = Math.max(maxDescents, EARLY_MAX_DESCENTS_PER_NODE);
         }
@@ -1017,7 +1071,7 @@ public final class Filler {
                     triedSlots = new HashSet<>();
                     continue;
                 }
-                return fail(conflictUnknown ? null : nodeConflict);
+                return failOrBackghost(conflictUnknown ? null : nodeConflict, deadlineChecks, entryReleased);
             }
             int bestI = selectTargetSlot(avail, domains);
             triedSlots.add(bestI);
@@ -1061,6 +1115,7 @@ public final class Filler {
                 if (periodicCheckpoints()) return fail(null);
                 assignment[bestI] = w;
                 usedWords.add(w);
+                boolean owned = true;
                 boolean crossingBroken = false, crossingStillImpossible = false;
                 List<Integer> brokenSlots = new ArrayList<>();
                 List<Integer> unblockedCrossers = new ArrayList<>();
@@ -1102,33 +1157,42 @@ public final class Filler {
                     List<Integer> newlyTolerated = new ArrayList<>();
                     for (int j : brokenSlots) if (!toleratedDry.contains(j)) newlyTolerated.add(j);
                     toleratedDry.addAll(newlyTolerated);
+                    long seq = placementCounter++;
+                    placementSeq.put(bestI, seq);
                     if (backtrack(deadlineChecks, released)) return true;
                     Set<Integer> childConflict = lastConflict;
                     toleratedDry.removeAll(newlyTolerated);
                     restoreLetterScores(savedScores);
+                    Long current = placementSeq.get(bestI);
+                    owned = current != null && current == seq;
+                    if (owned) placementSeq.remove(bestI);
                     if (!challengedSet.contains(w) && !priSet.contains(w)) descents++;
                     if (childConflict == null) {
                         conflictUnknown = true;
                     } else if (!childConflict.contains(bestI)) {
-                        assignment[bestI] = null;
-                        usedWords.remove(w);
+                        if (owned) {
+                            assignment[bestI] = null;
+                            usedWords.remove(w);
+                        }
                         return fail(childConflict);
                     } else {
                         for (int k : childConflict) if (k != bestI) nodeConflict.add(k);
                     }
                 }
-                assignment[bestI] = null;
-                usedWords.remove(w);
+                if (owned) {
+                    assignment[bestI] = null;
+                    usedWords.remove(w);
+                }
                 if (0 < maxDescents && maxDescents <= descents) {
-                    if (conflictUnknown) return fail(null);
+                    if (conflictUnknown) return failOrBackghost(null, deadlineChecks, entryReleased);
                     Set<Integer> merged = new HashSet<>(nodeConflict);
                     merged.addAll(slotConflict);
-                    return fail(merged);
+                    return failOrBackghost(merged, deadlineChecks, entryReleased);
                 }
             }
             if (!placedAny) {
                 impossibleThisAttempt.add(bestI);
-                if (blameableRejection && !breakingPermitted) return fail(slotConflict);
+                if (blameableRejection && !breakingPermitted) return failOrBackghost(slotConflict, deadlineChecks, entryReleased);
             }
             nodeConflict.addAll(slotConflict);
         }

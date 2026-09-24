@@ -3046,6 +3046,12 @@ def _new_job():
         # grille aperçu." A word whose clue generation ultimately failed
         # never gets an entry here at all (nothing to show).
         "clues_progress": [],
+        # Running count of the genuinely successful attempts the current
+        # automatic generation has produced so far (every palier included),
+        # updated live by generate_grid's "success_count" progress event —
+        # the web UI's gold-medal badge. Stays 0 for every job type that
+        # never runs the palier search.
+        "success_count": 0,
         # "Continuer" button (see POST /api/generate/continue/{job_id}
         # below), at the user's explicit request: set once generate_grid()
         # exhausts every one of its `attempts` without finding a fillable
@@ -3486,6 +3492,11 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             # `budget_percent` disappear until a new report arrives for
             # the next attempt.
             job["step"] = {**job["step"], "budget_percent": data.get("percent")}
+            return
+        if step == "success_count":
+            # A counter, not a status: never replaces `job["step"]` (same
+            # reasoning as "budget_progress" right above).
+            job["success_count"] = data.get("count", 0)
             return
         # "Finir la zone" (`zone_revert`) — see `_apply_zone_revert` above,
         # applied here too, not just to the FINAL result (see below): every
@@ -4432,6 +4443,7 @@ async def _run_interactive_job(job_id, req):
             "low_candidate_cells": placed.get("low_candidate_cells", []),
             "deadlock_cells": placed.get("deadlock_cells", []),
             "excluded_cells": placed.get("excluded_cells", []),
+            "window_cells": placed.get("window_cells", []),
             # The raw theme string this session started from (already set
             # on job["interactive"]["theme"] above — mirrored here too so
             # the frontend can read it straight off pollJob()'s own return
@@ -4836,7 +4848,8 @@ async def interactive_step(req: InteractiveStepRequest):
                 "impossible_cells": placed.get("impossible_cells", []),
                 "low_candidate_cells": placed.get("low_candidate_cells", []),
                 "deadlock_cells": placed.get("deadlock_cells", []),
-                "excluded_cells": placed.get("excluded_cells", [])}
+                "excluded_cells": placed.get("excluded_cells", []),
+                "window_cells": placed.get("window_cells", [])}
     return {"width": cols, "height": rows, "grid": placed["grid"],
             "placed": placed["placed"], "impossible": False,
             "impossible_cells": placed.get("impossible_cells", []),
@@ -4846,7 +4859,10 @@ async def interactive_step(req: InteractiveStepRequest):
             # without creating an impossible one — "emplacements écartés",
             # shown yellow by the panel (see crossword_gen.py's own
             # `interactive_place_word`).
-            "excluded_cells": placed.get("excluded_cells", [])}
+            "excluded_cells": placed.get("excluded_cells", []),
+            # Each candidate slot's cell closest to the grid's center —
+            # the level-6 window the placement's target was drawn from.
+            "window_cells": placed.get("window_cells", [])}
 
 
 @app.post("/api/interactive/clean")
@@ -5482,6 +5498,7 @@ async def _run_interactive_resume_job(job_id, record):
             # No placement search runs on a resume, so nothing has been
             # set aside yet — the first "Suivant" click fills this in.
             "excluded_cells": [],
+            "window_cells": [],
             # Only ever set on a resume result (a fresh start's own result
             # has neither yet) — enterInteractiveMode() uses these two to
             # restore interactiveDefs/the title input, which a fresh

@@ -349,8 +349,29 @@ public final class Interactive {
         return null;
     }
 
+    /** Each slot's cell(s) closest to the grid's center (mirrors _center_closest_cells). */
+    static List<Object> centerClosestCells(Filler f, Collection<Integer> slotIndices) {
+        double cr = (f.rows - 1) / 2.0, cc = (f.cols - 1) / 2.0;
+        TreeSet<Long> out = new TreeSet<>();
+        for (int i : slotIndices) {
+            int[] slot = f.slots.get(i);
+            double best = Double.MAX_VALUE;
+            for (int cell : slot) {
+                double dr = Cells.r(cell) - cr, dc = Cells.c(cell) - cc;
+                best = Math.min(best, dr * dr + dc * dc);
+            }
+            for (int cell : slot) {
+                double dr = Cells.r(cell) - cr, dc = Cells.c(cell) - cc;
+                if (dr * dr + dc * dc == best) out.add(((long) Cells.r(cell) << 32) | Cells.c(cell));
+            }
+        }
+        List<Object> cells = new ArrayList<>();
+        for (long k : out) cells.add(List.of((int) (k >> 32), (int) k));
+        return cells;
+    }
+
     static Map<String, Object> impossibleResult(char[][] grid, int rows, int cols, DualIndex index, Set<String> challenge,
-                                                List<Object> excluded) {
+                                                List<Object> excluded, List<Object> windowCells) {
         List<Object>[] d = fillDiagnostics(grid, rows, cols, index, challenge);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("impossible", true);
@@ -358,6 +379,7 @@ public final class Interactive {
         m.put("low_candidate_cells", d[1]);
         m.put("deadlock_cells", d[2]);
         m.put("excluded_cells", excluded);
+        m.put("window_cells", windowCells);
         return m;
     }
 
@@ -385,12 +407,13 @@ public final class Interactive {
                 viable.put(i, cands);
             }
         }
-        if (viable.isEmpty()) return impossibleResult(grid, rows, cols, index, challenge, new ArrayList<>());
+        if (viable.isEmpty()) return impossibleResult(grid, rows, cols, index, challenge, new ArrayList<>(), new ArrayList<>());
         Set<Integer> blockedTargets = new HashSet<>(Cleanup.impossibleIndices(slots, index, known, challenge));
         List<Integer> selectable = new ArrayList<>();
         for (int i : viable.keySet()) if (!blockedTargets.contains(i)) selectable.add(i);
         if (selectable.isEmpty()) selectable = new ArrayList<>(viable.keySet());
         int target = f.selectTargetSlot(selectable, domains);
+        List<Object> windowCells = centerClosestCells(f, f.lastSelectionWindow);
         String placedFrom = null;
         Integer placedTarget = null;
         String placedWord = null;
@@ -461,7 +484,7 @@ public final class Interactive {
         }
         if (placedTarget != null) setAside.remove(placedTarget);
         List<Object> excluded = slotCellsOf(slots, setAside);
-        if (placedFrom == null) return impossibleResult(grid, rows, cols, index, challenge, excluded);
+        if (placedFrom == null) return impossibleResult(grid, rows, cols, index, challenge, excluded, windowCells);
         char[][] newGrid = new char[rows][cols];
         for (int r = 0; r < rows; r++) {
             for (int c = 0; c < cols; c++) {
@@ -483,6 +506,7 @@ public final class Interactive {
         m.put("low_candidate_cells", d[1]);
         m.put("deadlock_cells", d[2]);
         m.put("excluded_cells", excluded);
+        m.put("window_cells", windowCells);
         m.put("placed", placed);
         return m;
     }

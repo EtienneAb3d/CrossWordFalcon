@@ -4378,3 +4378,39 @@ end through the real running API (interactive start/step/save,
   **Visually confirmed** with Playwright/Chromium: a real 15×10 run showed
   4 `.live-interrupted` tiles with computed border `rgb(147, 197, 253)`
   and the status line reading the new message with 33 successful grids.
+
+- **`.cell.white.interactive-window`** — a 2px blue outline (`outline:
+  2px solid var(--accent); outline-offset: -2px`) on the candidate slots
+  of the last "Suivant" click in Interactive mode, at the user's explicit
+  request: the slots of the slot-selection cascade's level-6 geometric
+  window, each marked only by its own cell(s) closest to the grid's center
+  (the cell that gives it its score), never by the whole slot — "entourer
+  les cases les plus proches du centre (et non la totalité des cases des
+  emplacements)". An `outline` rather than a background or a box-shadow:
+  every diagnostic here is a background fill and the hover/selection
+  marks are inset box-shadows, so an outline is the one property that
+  composes with all of them on the same cell. Reuses `--accent` (no new
+  token). Fed by `window_cells` (`POST /api/interactive/step`) into
+  `interactiveWindowCells`, cleared with the other diagnostics on any
+  manual edit. **Visually confirmed** with Playwright/Chromium (permanent
+  rule 4): a real 9×7 Interactive session after three "Suivant" clicks
+  rendered 9 `.interactive-window` cells with computed outline `solid 2px
+  rgb(37, 99, 235) -2px`, clearly visible on top of letters, the orange
+  low-candidate fill and the blue selected cell alike.
+
+- **Gold-medal success counter** (`#success-medal`/`#success-medal-count`),
+  at the user's explicit request: fixed in the page's left margin
+  (`left: 1rem`, `top: 50%` + `translateY(-50%)`, `z-index: 5` like the
+  chatbot/keyboard), shown only while an automatic generation runs
+  (`runGeneration()` shows it at 0, hides it in its `finally`), fed by
+  `job["success_count"]` on every poll. A 4rem gold disc (radial gradient
+  `--medal-gold-light` → `--medal-gold` → `--medal-gold-dark`, darker rim,
+  inset light ring) hanging from a short `--medal-ribbon` blue ribbon
+  (`::before`, a white stripe down its middle, V-notched via
+  `clip-path`), the count in bold dark-brown tabular digits. Four new
+  tokens, all gold/ribbon-only. `#success-medal[hidden]` override needed
+  (the bare-id `display: flex` trap). **Visually confirmed** with
+  Playwright/Chromium: at 1400×900 the disc sits at x=16px, vertically
+  centered, clear of `main`'s 10% margin, counting 0 → 33 on a 9×7 Flash
+  run.
+

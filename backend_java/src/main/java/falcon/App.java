@@ -642,6 +642,11 @@ public final class App {
                 });
                 return;
             }
+            if (step.equals("success_count")) {
+                // A counter, not a status: never replaces "step".
+                job.update(d -> d.put("success_count", data.getOrDefault("count", 0)));
+                return;
+            }
             applyZoneRevert(a.zoneRevert, data.get("examples"));
             Map<String, Object> newStep = new LinkedHashMap<>();
             newStep.put("code", step);
@@ -1039,6 +1044,7 @@ public final class App {
             result.put("low_candidate_cells", placed.getOrDefault("low_candidate_cells", List.of()));
             result.put("deadlock_cells", placed.getOrDefault("deadlock_cells", List.of()));
             result.put("excluded_cells", placed.getOrDefault("excluded_cells", List.of()));
+            result.put("window_cells", placed.getOrDefault("window_cells", List.of()));
             result.put("theme", theme.isEmpty() ? null : theme);
             result.put("language", req.language);
             result.put("bilingual_language", meta.get("bilingual_language"));
@@ -1120,6 +1126,7 @@ public final class App {
             result.put("low_candidate_cells", diag[1]);
             result.put("deadlock_cells", diag[2]);
             result.put("excluded_cells", List.of());
+            result.put("window_cells", List.of());
             result.put("definitions", Json.listOrEmpty(record.get("definitions")));
             Object title = record.get("title");
             result.put("title", Json.truthy(title) ? title : "");
@@ -1800,6 +1807,7 @@ public final class App {
             out.put("low_candidate_cells", placed.getOrDefault("low_candidate_cells", List.of()));
             out.put("deadlock_cells", placed.getOrDefault("deadlock_cells", List.of()));
             out.put("excluded_cells", placed.getOrDefault("excluded_cells", List.of()));
+            out.put("window_cells", placed.getOrDefault("window_cells", List.of()));
             return out;
         });
         w.post("/api/interactive/clean", r -> {

@@ -1205,7 +1205,10 @@ the current defaults/behavior to know before touching this code.
   a candidate rejected by the crossing check is not a descent, nor is a
   "Mots Défi" or theme-glossary candidate (every hypothesis from those
   two glossaries is explored); `<= 0`
-  disables the cap. It exists so backtracking climbs back to words placed
+  disables the cap, and so does an attempt inherited from a previous
+  palier (starting from locked cells, `Filler._inherited`): the user's
+  rule is that such a grid must be finished as well as possible, every
+  possibility explored. It exists so backtracking climbs back to words placed
   early in an attempt: an uncapped node only fails after exhausting its
   whole subtree, which never happens within the budget.
 - **`Filler._backtrack` backjumps on conflict sets** (`BACKJUMPING_ENABLED`):
@@ -1214,6 +1217,17 @@ the current defaults/behavior to know before touching this code.
   and a local failure is replayed under every unrelated intermediate word.
   Every failure path goes through `Filler._fail` so `_last_conflict` is
   never stale; `None` means "backtrack chronologically".
+- **A failure is backghosted before it backjumps**
+  (`Filler._fail_or_backghost`, `MAX_BACKGHOSTS_PER_DESCENT`, currently 0 — disabled, kept for testing): only
+  the most recent word of the conflict set is taken off the grid, in
+  place, with no node unwound and every later word kept; the node that
+  placed it later finds nothing to remove. The rule, as the user framed
+  it: a backjump strips too much of the grid during the early filling
+  phases, so the lighter move comes first, up to `MAX_BACKGHOSTS_PER_DESCENT` pending per descent,
+  then the backjump that unwinds for good. Applied only where a failure
+  arises (never to a child's failure passed up), only to words this
+  search placed, and only when that word is not the one placed right
+  above (ordinary backtracking reaches it without loss).
 - **The last-resort `allow_breaking` stage is gated globally, not per
   node.** `Filler.solve` runs a strict pass from the root first; only if
   the root itself fails (not the budget, not an abandon) is the search
@@ -1264,8 +1278,8 @@ the current defaults/behavior to know before touching this code.
   partially-filled slot would report 1. Level 7 runs inside level 6's
   geometric window (the `SLOT_SELECTION_WINDOW_SIZE` (10) slots closest to
   the grid's center), not over the whole group, and measures slots through a
-  decreasing length threshold: 7 letters and more first
-  (`MOST_CONSTRAINED_START_LENGTH`), then 6, 5… down to 2
+  decreasing length threshold: 12 letters and more first
+  (`MOST_CONSTRAINED_START_LENGTH`), then 11, 10… down to 2
   (`MOST_CONSTRAINED_MIN_LENGTH`), stopping at the first threshold where
   some slot of the window has a measurable free cell.
   The older 2-tier rule this cascade grew out of is kept below for the

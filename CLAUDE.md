@@ -147,7 +147,12 @@ json`. Holds all server-side state in plain module dicts/lists:
   additionally carries the snapshot it replaced under its own `previous`
   field, a STOP_DUMP-only diagnostic `GET /api/generate/status/{job_id}`
   drops from its own response), `clues_
-  progress`, `resume_state` (set only on total failure, feeds the
+  progress`, `success_count` (genuine successful attempts so far, every
+  palier included, updated live by `generate_grid`'s `"success_count"`
+  progress event — one per attempt finishing with a grid, emitted from the
+  palier's harvest loop — without replacing `step`, like
+  `"budget_progress"`; shown by the web UI's gold-medal badge
+  `#success-medal`), `resume_state` (set only on total failure, feeds the
   "Continuer" button), the original `request`, and `interactive` (JSON-
   safe session metadata, `None` for an ordinary generation). A companion
   `CANCEL_EVENTS[job_id]` (a real `multiprocessing.Event`, since worker
@@ -269,9 +274,14 @@ override, else `os.cpu_count()`) independent worker processes in parallel
 via `ProcessPoolExecutor`:
 
 1. **Black-cell placement** (`make_pattern`) — places black cells one at
-   a time (never symmetric pairs), via `_place_black_cells`: a 32-cell
-   look-ahead window preferring the row/column with the fewest black
-   cells so far, restricted to non-adjacent candidates satisfying
+   a time (never symmetric pairs), via `_place_black_cells`: before
+   every draw the pool is restricted to the candidates lying both in a
+   least-loaded column and in a least-loaded row (`_least_loaded_pool`:
+   minimum over the rows/columns still owning a candidate, both bounds
+   raised together one black cell at a time while that intersection is
+   empty), then a 32-cell look-ahead window of that pool prefers the
+   row/column with the fewest black cells so far, restricted to
+   non-adjacent candidates satisfying
    `STRUCTURAL_MIN_INTERIOR_FREE=8` (an interior white zone must be at
    least this long), relaxed down to 1 — but adjacency itself is never
    accepted at all, on any palier (`forbid_adjacency=True`, always, not
@@ -320,7 +330,7 @@ via `ProcessPoolExecutor`:
    midpoint), shuffle, and keep the
    `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored as a window; (7) within
    that window, among slots of at least
-   `MOST_CONSTRAINED_START_LENGTH=7` letters — a threshold lowered one
+   `MOST_CONSTRAINED_START_LENGTH=12` letters — a threshold lowered one
    letter at a time, down to `MOST_CONSTRAINED_MIN_LENGTH=2`, until some
    slot of the window has a measurable free cell (no-op when none has one
    even at 2) — find
@@ -583,7 +593,11 @@ Every stage of a node (the `allow_breaking` pass included) shares one cap,
 `EARLY_MAX_DESCENTS_PER_NODE` (10) for a node entered while fewer than
 `EARLY_DESCENTS_WORD_COUNT` (5) words are in place on top of the
 attempt's initial state (`Filler._initial_assigned_count`, the words
-already assigned when `solve()` starts): once the node has made
+already assigned when `solve()` starts), and removed entirely for an
+attempt inherited from a previous palier — one starting from locked
+cells (`locked_letters` non-empty or words already assigned when
+`solve()` starts, `Filler._inherited`), which must be finished as well as
+possible and so explores every option of every node: once the node has made
 that many recursive descents without success — a descent being a
 candidate that passed the crossing check and was recursed into, never one
 rejected on the spot, and never a "Mots Défi" or theme-glossary candidate
@@ -607,7 +621,23 @@ backtracking jumps straight to the most recent word actually involved
 instead of replaying the same failure under every unrelated intermediate
 level. `None` (budget, abandon, periodic stop, disabled) falls back to
 chronological backtracking; an empty set (only root-dry slots left) jumps
-to the root. A flagged
+to the root. Before backjumping, a failure is first backghosted
+(`Filler._fail_or_backghost`, `MAX_BACKGHOSTS_PER_DESCENT`, currently 0 — disabled): at each
+place a failure arises with a conflict set (a dry slot, a slot whose
+candidates were all rejected blameably, a node exhausted or at its descent
+cap — never a child's failure merely passed up), if the most recent word of
+that set placed by this search (`Filler._placement_seq`, slot → placement
+sequence number; words already there when `solve()` starts are never
+ghosted) is not the word placed right above — so a backjump would unwind
+other placed words to reach it — that word alone is taken off the grid in
+place (its crossers' letter tallies re-sampled, restored afterwards), and a
+fresh `_backtrack` node carries on from there, with every word in between
+still placed. The node that placed a ghosted word finds its entry gone once
+the search really unwinds to it and has nothing left to remove (`owned`).
+At most `MAX_BACKGHOSTS_PER_DESCENT` backghosts can be pending on the
+current descent (`_ghosts_in_descent`, nested retries); past that the
+failure backjumps as above. A failed retry reports the union of both
+conflict sets minus the ghosted slot. A flagged
 slot therefore stays fully reusable for the rest of the attempt and is
 picked back up automatically, with no special bookkeeping, the moment
 some other slot's own assignment changes and its domain becomes non-empty
@@ -1207,6 +1237,20 @@ declared before `.interactive-impossible`/`.interactive-low` so a stronger
 signal wins the cell) — the same "emplacement écarté" notion, and the same
 colour, automatic generation's own previews already use.
 
+Each "Suivant" also reports the slots its `target` was drawn from:
+`Filler._select_target_slot` keeps its level-6 geometric window in
+`Filler.last_selection_window` (a plain attribute assignment, overwritten
+by every call), which `interactive_place_word` reads right after resolving
+`target` — before the tier-3 sweep re-runs the cascade — and turns into
+`window_cells` (`_center_closest_cells`: for each window slot, its cell(s)
+closest to the grid's center, i.e. the cell that gives it its level-6
+score, ties included). Threaded through `POST /api/interactive/step` (and
+the start job's result; empty on a resume) into `script.js`'s
+`interactiveWindowCells`, rendered as a blue outline
+(`.cell.white.interactive-window`, `outline` so it composes with every
+background and box-shadow state), with the same staleness lifecycle as
+`interactiveExcludedCells`.
+
 **Staged acceptance levels in Interactive mode**: `interactive_place_
 word` cannot express `_backtrack`'s own three-stage node (non-écarté
 slots, then released écarté ones, then `allow_breaking`) by recursing,
@@ -1618,8 +1662,8 @@ Four independent filesystem stores, one JSON file shape shared with the
   state a resume rebuilds from. A `diagnostics` field pairs with it,
   holding everything the editable grid was SHOWING at that save beyond its
   own letters — `impossible_cells`/`deadlock_cells`/`low_candidate_cells`/
-  `excluded_cells`/`invalid_cells`/`theme_cells`/`challenge_cells`/`zone_
-  cells`, the "Stats" letters (`stat_letters`, `[row, col, letter]`
+  `excluded_cells`/`window_cells`/`invalid_cells`/`theme_cells`/
+  `challenge_cells`/`zone_cells`, the "Stats" letters (`stat_letters`, `[row, col, letter]`
   triples), and `last_placed` (the `placed` object of the last "Suivant"
   step: word, cells, direction, `from_theme`/`from_challenge`) — sent by
   the client on every autosave and on "Sauvegarder"/"Publier"

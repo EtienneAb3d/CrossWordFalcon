@@ -470,9 +470,17 @@ esthétique, qu'il n'est pas de son rôle de faire respecter.
 Pour éviter que les cases noires se regroupent en petits paquets (ce qui
 créerait des murs disgracieux et forcerait beaucoup de mots voisins à avoir
 la même longueur), chaque nouvelle case n'est pas tirée au hasard sur toute
-la grille : on tire un groupe de **32** positions candidates, et on retient
-celle qui se trouve dans la ligne et la colonne les moins déjà chargées en
-cases noires.
+la grille. Avant chaque tirage, on compte les cases noires de chaque ligne
+et de chaque colonne, et le tirage est limité aux cases situées à la fois
+dans une des colonnes et dans une des lignes qui en comptent le moins (le
+minimum étant pris parmi les lignes et colonnes possédant encore au moins
+une case candidate). Si aucune case candidate ne se trouve au croisement
+d'une telle ligne et d'une telle colonne, les deux seuils sont relevés
+ensemble d'une case noire à la fois jusqu'à en trouver une
+(`backend/crossword_gen.py`, `_least_loaded_pool`). Dans ce lot restreint,
+on tire un groupe de **32** positions candidates, et on retient celle qui se
+trouve dans la ligne et la colonne les moins déjà chargées en cases noires
+(`backend/crossword_gen.py`, `_place_black_cells`).
 
 **Éviter l'isolement.** Parmi ces 32 candidates, on cherche d'abord la
 meilleure (au sens du critère ci-dessus) qui **ne touche aucune autre case
@@ -935,7 +943,12 @@ chose.
    `Filler.solve`) peut faire jusqu'à `EARLY_MAX_DESCENTS_PER_NODE` (10)
    descentes. Le compte est pris à l'entrée du nœud, sur les mots alors
    en place (`backend/crossword_gen.py`, `Filler._backtrack`,
-   `EARLY_MAX_DESCENTS_PER_NODE`).
+   `EARLY_MAX_DESCENTS_PER_NODE`). Une grille héritée d'une étape
+   précédente — une tentative qui démarre avec des cases verrouillées
+   (lettres verrouillées, ou mots déjà en place au lancement de
+   `Filler.solve`) — n'applique aucun plafond : elle doit être finie au
+   mieux, et chacun de ses nœuds explore toutes ses possibilités
+   (`backend/crossword_gen.py`, `Filler.solve`, `Filler._inherited`).
 7. **Le retour en arrière saute directement à la cause (backjumping).**
    Un nœud qui échoue indique quels mots déjà posés sont à l'origine de
    son échec — son **ensemble de conflit** :
@@ -965,6 +978,31 @@ chose.
    remonte jusqu'à la racine (`backend/crossword_gen.py`,
    `Filler._backtrack`, `Filler._fail`, `_last_conflict`,
    `BACKJUMPING_ENABLED`).
+8. **Retrait fantôme (backghost), actuellement désactivé
+   (`MAX_BACKGHOSTS_PER_DESCENT` = 0).** Quand il est actif, avant de
+   sauter, la recherche tente un retrait fantôme. Là où un échec naît avec un ensemble de conflit connu —
+   un emplacement vide, un emplacement dont tous les candidats rendraient
+   bloqué un emplacement croisé sain, un nœud qui a épuisé ses
+   possibilités ou atteint son plafond de descentes, mais jamais un échec
+   simplement transmis par un nœud inférieur —, la recherche regarde le
+   mot le plus récent de cet ensemble parmi ceux qu'elle a posés elle-même
+   (`Filler._placement_seq` : les mots déjà présents au lancement de
+   `Filler.solve` ne sont jamais retirés ainsi). Si ce n'est pas le mot
+   posé juste au-dessus — c'est-à-dire si un saut arrière devrait retirer
+   d'autres mots pour l'atteindre —, ce seul mot est retiré de la grille
+   sur place : aucun nœud n'est dépilé, tous les mots posés depuis restent
+   en place, les relevés de lettres des emplacements qu'il croisait sont
+   ré-échantillonnés, et un nouveau nœud reprend la recherche sur la
+   grille ainsi libérée. Quand le retour en arrière dépile réellement
+   jusqu'au nœud qui avait posé ce mot, ce nœud constate qu'il n'est plus
+   là et n'a rien à retirer. Au plus `MAX_BACKGHOSTS_PER_DESCENT`
+   retraits fantômes peuvent être en cours sur la même descente (imbriqués
+   l'un dans l'autre) ; au-delà, l'échec déclenche le saut arrière
+   ordinaire, qui dépile pour de bon. Si la reprise échoue à son tour,
+   l'échec remonte avec la réunion des deux ensembles de conflit, sans
+   l'emplacement retiré. Une valeur `<= 0` supprime le mécanisme
+   (`backend/crossword_gen.py`, `Filler._fail_or_backghost`,
+   `Filler._backghost_target`, `MAX_BACKGHOSTS_PER_DESCENT`).
 
 Vérifier les voisins directs avant de redescendre suffit : poser un mot ne
 peut jamais affecter le domaine d'un emplacement qui ne partage aucune case
@@ -1185,9 +1223,9 @@ propre liste d'emplacements sélectionnables.
    d'une case croisée bloquée ; une case qui n'appartient qu'à un seul emplacement garde le
    relevé de ce seul sens. La mesure est limitée par un **seuil de
    longueur décroissant** : on ne mesure d'abord que les emplacements de
-   **7 lettres et plus** (`MOST_CONSTRAINED_START_LENGTH`) ; si aucun
+   **12 lettres et plus** (`MOST_CONSTRAINED_START_LENGTH`) ; si aucun
    n'a de case libre mesurable (sélection vide ou épuisée), le seuil
-   descend à 6 lettres et plus, puis 5, et ainsi de suite jusqu'à **2**
+   descend à 11 lettres et plus, puis 10, et ainsi de suite jusqu'à **2**
    (`MOST_CONSTRAINED_MIN_LENGTH`) ; le premier seuil qui retient au
    moins un emplacement mesurable est celui appliqué. Les longs
    emplacements sont ainsi résolus sur leur case la plus serrée avant les
@@ -1834,7 +1872,15 @@ exclure les deux familles ne laisse absolument rien, seul cas où l'un d'eux
 est posé en tout dernier recours plutôt que de laisser **Suivant** bloqué.
 Les emplacements écartés pendant ce balayage sont renvoyés au panneau
 (`excluded_cells`) et affichés en fond jaune, comme dans les
-prévisualisations de la génération automatique. Sur chaque emplacement
+prévisualisations de la génération automatique. Chaque clic renvoie aussi
+les **emplacements candidats** parmi lesquels l'emplacement cible a été
+tiré : la fenêtre géométrique du niveau 6 de la cascade (au plus
+`SLOT_SELECTION_WINDOW_SIZE` emplacements, mémorisée par
+`Filler._select_target_slot` dans `Filler.last_selection_window`), chacun
+représenté par sa ou ses cases les plus proches du centre de la grille —
+celles qui lui donnent son score (`window_cells`,
+`backend/crossword_gen.py`, `_center_closest_cells`) —, entourées en bleu
+dans le panneau. Sur chaque emplacement
 balayé, les candidats sont tirés par la même règle unique de tirage que la
 recherche automatique (`Filler.ordered_candidates` — mélange, classement
 statistique, tirage dans la fenêtre glissante, voir « Choisir quel mot

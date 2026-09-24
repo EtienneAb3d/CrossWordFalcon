@@ -265,6 +265,28 @@ public final class Grids {
         return false;
     }
 
+    /**
+     * Indices into {@code remaining} (shuffled order kept) of the candidates lying both in a column and in a row
+     * holding the fewest black cells, the minimum being taken over the rows/columns that still own a candidate.
+     * When no candidate sits at the intersection of such a row and such a column, both bounds are raised together,
+     * one black cell at a time, until one does.
+     */
+    static List<Integer> leastLoadedPool(List<Integer> remaining, int[] rowBlack, int[] colBlack) {
+        int rowMin = Integer.MAX_VALUE, colMin = Integer.MAX_VALUE;
+        for (int cell : remaining) {
+            rowMin = Math.min(rowMin, rowBlack[Cells.r(cell)]);
+            colMin = Math.min(colMin, colBlack[Cells.c(cell)]);
+        }
+        for (int slack = 0; ; slack++) {
+            List<Integer> pool = new ArrayList<>();
+            for (int i = 0; i < remaining.size(); i++) {
+                int cell = remaining.get(i);
+                if (rowBlack[Cells.r(cell)] <= rowMin + slack && colBlack[Cells.c(cell)] <= colMin + slack) pool.add(i);
+            }
+            if (!pool.isEmpty()) return pool;
+        }
+    }
+
     /** Returns the cells still unplaced (rejected ones, then untried ones). */
     static List<Integer> placeBlackCells(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
                                          List<Integer> candidates, int target, int placed, DualIndex index,
@@ -274,9 +296,8 @@ public final class Grids {
         List<Integer> rejected = new ArrayList<>();
         List<Integer> remaining = candidates;
         while (!remaining.isEmpty() && placed < target) {
-            int sampleSize = Math.min(window, remaining.size());
-            List<Integer> order = new ArrayList<>(sampleSize);
-            for (int i = 0; i < sampleSize; i++) order.add(i);
+            List<Integer> pool = leastLoadedPool(remaining, rowBlack, colBlack);
+            List<Integer> order = new ArrayList<>(pool.subList(0, Math.min(window, pool.size())));
             final List<Integer> rem = remaining;
             order.sort((a, b) -> Integer.compare(rowBlack[Cells.r(rem.get(a))] + colBlack[Cells.c(rem.get(a))],
                     rowBlack[Cells.r(rem.get(b))] + colBlack[Cells.c(rem.get(b))]));

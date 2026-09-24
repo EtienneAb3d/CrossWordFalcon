@@ -499,6 +499,9 @@ public final class Generator {
         Fill.Result bestResult = null;
         Object[] bestMinimized = null;
         List<Outcome> accumulatedSuccesses = new ArrayList<>();
+        // Genuine successes counted the moment each attempt finishes,
+        // published live as the "success_count" progress event.
+        int[] liveSuccessCount = {0};
         Diag bestDiag = null;
         Diag lastDiag = null;
         List<Object> lastExamples = new ArrayList<>();
@@ -877,6 +880,10 @@ public final class Generator {
                             throw new GenerationCancelled();
                         }
                         outcomes.add(res);
+                        if (res.result() != null) {
+                            liveSuccessCount[0]++;
+                            progress.on("success_count", data("count", liveSuccessCount[0]));
+                        }
                         if (origFutures.contains(f)) {
                             origDone++;
                             if (origDone == interruptThreshold) attemptDoneEvent.set(true);

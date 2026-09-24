@@ -25,6 +25,7 @@ public final class Job {
         data.put("examples_history", new ArrayList<>());
         data.put("live_preview", null);
         data.put("clues_progress", new ArrayList<>());
+        data.put("success_count", 0);
         data.put("resume_state", null);
         data.put("request", null);
         data.put("interactive", null);

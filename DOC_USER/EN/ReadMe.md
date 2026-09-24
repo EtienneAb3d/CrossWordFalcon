@@ -235,6 +235,13 @@ when relevant.
   generation has started; asks the server to abandon it. Takes effect at
   the next safe checkpoint (search, optimization, or clue writing), not
   necessarily instantly.
+- **Gold medal counter** (`#success-medal`, `frontend/static/script.js`,
+  `runGeneration`/`pollJob`) — while an automatic generation runs, a gold
+  medal sits fixed in the page's left margin, vertically centered, showing
+  how many grids the search has completed successfully so far (0 at the
+  start). The search keeps going until at least two grids have succeeded,
+  then keeps the best one, so this number tells how many finished
+  candidates it is choosing from. Hidden again once the generation ends.
 - **Continuer / Continue** (`#continue-btn`, `frontend/static/script.js`,
   `continueBtn` click handler, `POST /api/generate/continue/{job_id}`) —
   appears only after a generation fails specifically because no fillable
@@ -737,7 +744,11 @@ real letter. Both update after every edit.
   **Suivant** simply looks at the next spot instead, coming back to a
   set-aside one only once nothing can be placed anywhere else. A yellow
   spot is only deprioritised, never walled off: words crossing it are
-  still placed normally, unlike a red (impossible) one. Once no spot in
+  still placed normally, unlike a red (impossible) one. After each click,
+  a blue frame marks the spots the generator was choosing among when it
+  picked where to go next — the ones closest to the grid's center — each
+  by its own square nearest that center (`frontend/static/script.js`,
+  `interactiveWindowCells`). Once no spot in
   the whole grid has a completely safe word left, **Suivant** widens what
   it will accept rather than stopping: first a word that leaves some
   unrelated, separate spot elsewhere with nothing to fill it, and finally
@@ -1083,8 +1094,8 @@ words gets shortened the same way, by removing a black cell from right
 within that slot's own cells (never from some unrelated part of the
 grid), or, if that isn't enough, by removing one of the crossing words
 that pinned those letters in place to begin with. Each new black cell is
-chosen, among a small batch of candidate positions, to fall in whichever
-row and column already has the fewest black cells of its own — spreading
+drawn only among the cells lying both in one of the columns and in one of
+the rows that currently hold the fewest black cells — spreading
 them out rather than letting them clump into ugly "walls" — and the
 generator never places a black cell right next to another one, on any
 cycle: a cycle whose black-cell density target can't be reached without
@@ -1130,9 +1141,9 @@ to finish what it's already started rather than opening new fronts
 everywhere at once; the ten slots of that group closest to the grid's
 own center are then kept (so the fill closes in from the center
 outward); within those three, the choice narrows to whichever long slots
-own the single most constrained cell (only slots of 7 letters or more
+own the single most constrained cell (only slots of 12 letters or more
 are looked at first; if none has a free cell left to measure, the bar
-drops to 6 letters, then 5, and so on down to 2) — the cell with the
+drops to 11 letters, then 10, and so on down to 2) — the cell with the
 fewest letters still possible on it, counted separately for its across
 and its down word and keeping only the letters both agree on, the same
 figure the interactive "Stats" button shows — since the tightest cell
@@ -1225,8 +1236,13 @@ be tried there instead — this "undo and try something else" behavior can
 ripple back through several slots at once if needed. Undoing goes
 straight to the cause: when a step fails, the generator notes which
 already-placed words its failure depends on (the words crossing the slot
-it could not fill), and every word placed since then that has nothing to
-do with it is removed in one go, without being retried, until the most
+it could not fill). The generator also has a lighter fix, currently switched off: if the
+most recent of them is not the word placed just before, it takes that one word off the
+grid, leaves every word placed since then where it is, and simply carries
+on filling from there (backend/crossword_gen.py, `Filler._fail_or_
+backghost`). When it is on, a set number of these lighter fixes can be stacked
+on one line of search; past that, or while it is off, every word placed since the cause that has nothing
+to do with it is removed in one go, without being retried, until the most
 recent word actually involved gets a different candidate. Undoing also starts
 the moment the generator notices that some still-empty slot can no longer
 be filled at all as the grid stands, since a word placed earlier is to
@@ -1235,7 +1251,8 @@ anything, which no undoing could fix. A slot set aside this way is not
 forgotten afterwards: it merely loses its priority, and is tried again
 once nothing else can be placed, in case the grid has changed enough
 around it to make it fillable again. Each step of the
-search gives itself only a handful of real tries (five at the moment:
+search gives itself only a handful of real tries (three at the moment,
+ten while the attempt has placed fewer than five words:
 candidates that passed the neighbor check and were explored further,
 across every slot and every stage of that step) before it gives up and hands control back to the step above.
 Without that limit, a step would only give up once every combination

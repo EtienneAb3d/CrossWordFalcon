@@ -255,8 +255,11 @@ plusieurs signaux) :
   rester à explorer le bas de l'arbre. Une valeur `<= 0` supprime le
   plafond. Tant que la recherche a posé moins de 5 mots en plus de ceux
   de l'état initial de la tentative, le plafond d'un nœud est porté à 10
-  descentes. (`backend/crossword_gen.py`, `MAX_DESCENTS_PER_NODE`,
-  `EARLY_DESCENTS_WORD_COUNT`, `EARLY_MAX_DESCENTS_PER_NODE`.)
+  descentes. Une grille héritée d'une étape précédente (tentative qui
+  démarre avec des cases verrouillées) n'a aucun plafond : tous ses
+  nœuds explorent toutes leurs possibilités. (`backend/crossword_gen.py`,
+  `MAX_DESCENTS_PER_NODE`, `EARLY_DESCENTS_WORD_COUNT`,
+  `EARLY_MAX_DESCENTS_PER_NODE`, `Filler._inherited`.)
 
 - **Ensemble de conflit** : ensemble des mots déjà posés dont dépend
   l'échec d'une étape de la recherche — ceux qui croisent l'emplacement
@@ -270,6 +273,27 @@ plusieurs signaux) :
   plus récent de l'ensemble de conflit, en retirant au passage sans les
   remplacer tous les mots posés entre-temps qui n'y figurent pas.
   (`backend/crossword_gen.py`, `Filler._backtrack`, `BACKJUMPING_ENABLED`.)
+
+- **Emplacements candidats** : en mode Interactif, les emplacements de la
+  fenêtre géométrique du niveau 6 de la cascade de choix d'emplacement —
+  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du centre de la grille
+  parmi ceux retenus par les niveaux précédents — dans laquelle
+  l'emplacement cible d'un clic sur « Suivant » a été tiré. Chacun est
+  signalé par sa ou ses cases les plus proches du centre, entourées en
+  bleu. (`backend/crossword_gen.py`, `Filler.last_selection_window`,
+  `_center_closest_cells` ; `frontend/static/script.js`,
+  `interactiveWindowCells`.)
+
+- **Retrait fantôme** (*backghost*) : alternative légère au saut arrière,
+  tentée avant lui : seul le mot le plus récent de l'ensemble de conflit
+  est retiré de la grille, sur place, sans dépiler aucun nœud ni retirer
+  les mots posés depuis ; la recherche continue sur la grille ainsi
+  libérée, et le nœud qui avait posé ce mot n'a plus rien à retirer quand
+  le retour en arrière finit par l'atteindre. Au plus `MAX_BACKGHOSTS_PER_DESCENT`
+  retraits fantômes en cours sur une même descente ; au-delà, c'est le
+  saut arrière. Actuellement désactivé (valeur 0).
+  (`backend/crossword_gen.py`, `Filler._fail_or_backghost`,
+  `MAX_BACKGHOSTS_PER_DESCENT`.)
 
 ## Statistiques de lettres
 
