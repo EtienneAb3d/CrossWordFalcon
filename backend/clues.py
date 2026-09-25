@@ -2468,6 +2468,83 @@ class LLMClueGenerator:
             "commentary before, between, or after them."
         )
 
+    def correct_text(self, text, language="fr", timeout=90.0):
+        """"Corriger" buttons next to "Proposer une définition" and
+        "Proposer un titre" in Interactive mode (frontend/static/
+        script.js): asks the LLM to fix the typed definition or title
+        while keeping its wording — number/gender
+        agreement, typos (wrong or swapped letters), missing spaces
+        (merged words) and a lowercase first letter, nothing else.
+
+        One best-effort call via `_call()`, like `generate_paraphrases()`
+        (clicking again is the retry). The first non-empty line of the
+        answer is the corrected text; an empty answer returns `text`
+        unchanged. Raises `ClueGenerationError` only for a connection
+        failure (from `_call`)."""
+        text = " ".join(str(text).split())
+        if not text:
+            return ""
+        system_prompt = self._build_correction_system_prompt(language)
+        user_message = f"Text: {text}"
+        max_tokens = REASONING_TOKEN_BUDGET + 100 + 2 * len(text)
+        content = self._call(
+            text[:60].upper(), text, 1, system_prompt, user_message, max_tokens,
+            timeout, total_rounds=1,
+        )
+        lines = self._parse_response(content)
+        corrected = lines[0] if lines else text
+        logger.info("correct: %r (%s) -> %r", text, language, corrected)
+        return corrected
+
+    @staticmethod
+    def _build_correction_system_prompt(language):
+        """Compact, standalone system prompt for `correct_text()`."""
+        language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
+        return (
+            f"You are a proofreader for short texts written in {language_name}.\n\n"
+            "The user message gives you one short text (a crossword clue or a "
+            "crossword grid title). "
+            "Return the same text with its mistakes corrected.\n\n"
+            "Correct ONLY these mistakes:\n"
+            "1. Grammatical agreement errors: number (singular/plural) and "
+            "gender (masculine/feminine) between words that must agree.\n"
+            "2. Typing errors: a wrong letter, a missing or extra letter, two "
+            "letters swapped.\n"
+            "3. Missing spaces: two words accidentally merged into one must be "
+            "split back into separate words.\n"
+            "4. Missing or wrong accents: accents and other diacritics are part "
+            "of the spelling. A word written without the accent(s) its correct "
+            "spelling requires, or with a wrong one, is a mistake: restore the "
+            "correct accented spelling (for example, in French, \"Releve\" -> "
+            "\"Relève\", \"eleve\" -> \"élève\", \"foret\" -> \"forêt\"). Check every "
+            "word of the text for this.\n"
+            "5. A lowercase first letter: the VERY FIRST character of the text "
+            "must be a capital letter. Capitalize only that first letter — "
+            "never any other word.\n"
+            "6. Wrong word order: an order that is not natural in the text's "
+            "language, typically from a non-native writer following the rules "
+            "of another language — above all an adjective on the wrong side of "
+            "its noun (for example, in French, \"une noire voiture\" -> \"une "
+            "voiture noire\"; in English, \"a car red\" -> \"a red car\"). A moved "
+            "adjective stays with the noun it describes: only its side of that "
+            "noun changes, never the noun it belongs to, and it is never replaced "
+            "by another adjective. Move "
+            "only the misplaced words; an order that is already correct in the "
+            "language (e.g. French \"une grande maison\") stays as it is.\n\n"
+            "Rules:\n"
+            "- Keep the original wording as closely as possible: never "
+            "rephrase, never replace a correct word with a synonym, never "
+            "reorder words (except to fix mistake 6), never add or remove "
+            "information.\n"
+            "- Apart from the first letter, keep the original capitalization "
+            "and punctuation unless they are part of a mistake listed above.\n"
+            "- If the text has no mistake, return it exactly as it is.\n"
+            f"- Write in {language_name}.\n\n"
+            "OUTPUT FORMAT — exactly one line: the corrected text, starting "
+            "with a capital letter, and nothing else — no label, no quotes, no "
+            "explanation."
+        )
+
     @staticmethod
     def _build_examples_block(entry, language, difficulty):
         """Real sentences (from the OpenSubtitles+Wikipedia reference

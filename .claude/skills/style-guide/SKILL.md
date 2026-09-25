@@ -123,13 +123,17 @@ English (see `project-best-practices`).
   enlarged from `2.75rem` to `4rem`. Confirmed `position: static` (normal
   document flow) — it's a static brand mark, not a fixed/sticky overlay.
 
-- "Vérification" and "Solution" moved out of the separate
-  `#toolbar` (removed) and into `#generate-form` itself, right after the
-  "Générer la grille" submit button, in that order — so all three buttons
-  read left-to-right as one action group instead of two disconnected
-  clusters. They're plain `hidden` HTML buttons (not a wrapper div) toggled
-  by `script.js` alongside `#result`'s own hidden state, since they only
-  make sense once a grid exists.
+- The play-mode buttons — "Vérification", "Solution", "Définitions",
+  "Recalculer", in that order — live on their own row, `#play-actions`,
+  a sibling placed right after `#generate-form` (so below the main form
+  block and above the grid), not inside `#form-actions`. Plain flex row
+  (`gap: 0.5rem`, `margin-bottom: 1rem`, `justify-content: center` —
+  centered in the page column); each button keeps its own
+  `hidden` attribute toggled by `script.js`, and the row itself collapses
+  (`#play-actions:not(:has(> button:not([hidden]))) { display: none }`)
+  while none is shown, so no empty gap remains outside play mode.
+  Keeping them apart from the generation/panel buttons separates "act on
+  the grid being played" from "generate / open a panel".
 
 - version badge (`#version-badge`, reads `VERSION.txt` via `/api/version`)
   sits top-right of `#page-header`, pushed there by `margin-right: auto` on
@@ -4413,3 +4417,27 @@ end through the real running API (interactive start/step/save,
   centered, clear of `main`'s 10% margin, counting 0 → 33 on a 9×7 Flash
   run.
 
+- **"Corriger" buttons** — `#interactive-correct-btn` in Interactive mode's
+  `#interactive-definition-row`, immediately left of "Proposer une
+  définition", and `#interactive-title-correct-btn` in `#interactive-
+  title-row`, immediately left of "Proposer un titre" (its comparison
+  goes to `#interactive-title-propose-results`, cleared by that row's
+  sponge). Each is a plain unstyled `<button>` (shared accent-blue look, no
+  dedicated CSS), disabled while its LLM call runs. Its outcome goes to
+  `#interactive-message` like every other interactive action (plain style
+  for "corrected"/"nothing to correct", `.error` for a failure). **Visually
+  confirmed** with Playwright/Chromium: the button renders left of
+  "Proposer une définition" on the same row, and a click rewrote the field.
+  Each click also shows a before/after comparison in
+  `#interactive-propose-results` (so the existing sponge clears it):
+  `.interactive-correct-diff`, two `.interactive-correct-line` rows
+  ("Avant :"/"Après :" grey label, then the text in `white-space:
+  pre-wrap`). Letters changed per a character-level Levenshtein alignment
+  (`editDistanceDiff`) are `.interactive-correct-removed` on the "before"
+  row (`--error` text on `--incorrect-bg`) and `.interactive-correct-added`
+  on the "after" row (`--correct-fg` on `--correct-bg`), both bold — the
+  same red/green pairs as the playable grid's Vérification states. The
+  pastel background is what makes a changed space visible (a merged pair
+  split in two). Confirmed live: "Capitaledela Frence" → "Capitale de la
+  France" shows the "e" red above, the two inserted spaces and the "a"
+  green below.

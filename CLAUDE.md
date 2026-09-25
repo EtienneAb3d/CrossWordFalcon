@@ -189,7 +189,8 @@ json`. Holds all server-side state in plain module dicts/lists:
   `POST /api/game/save` (autosave play state to `GRID_GAME`).
 - *Dictionary/paraphrase*: `GET /api/dictionary` (root-family search),
   `GET /api/dictionary/define` (LLM candidate definitions), `GET /api/
-  paraphrase` (LLM paraphrases), `GET /api/similar_words` (LLM-expanded +
+  paraphrase` (LLM paraphrases), `GET /api/correct` (LLM proofreading of
+  one typed definition or title, Interactive mode's "Corriger"), `GET /api/similar_words` (LLM-expanded +
   Qdrant "Thématique"), `GET /api/synonyms` (plain Qdrant nearest-
   neighbor, no LLM), `GET /api/theme/random` (a random dictionary word
   handed to the LLM as an inspiration seed, returning an invented theme
@@ -1619,7 +1620,12 @@ an optional random "indicative word" folded into the prompt purely to
 perturb the model into a different answer each call — backs `GET /api/
 theme/random`, used by `Automation/Populate.py`), `generate_definitions`
 (free-text dictionary lookups for the "Définir" button), `generate_
-paraphrases` (the "Paraphraseur" panel). Every clue-generation call
+paraphrases` (the "Paraphraseur" panel), `correct_text` (Interactive
+mode's two "Corriger" buttons: one call returning the typed definition or title with its
+agreement errors, typos, missing accents, missing spaces, lowercase first
+letter and unnatural word order (an adjective on the wrong side of its noun)
+fixed and its wording kept;
+the first line of the answer, the input unchanged if it is empty). Every clue-generation call
 writes a Markdown trace to `LOG_LLM/<timestamp>_<ANSWER>_<SUCCES|
 ERROR>.md` (full prompt, raw output, every candidate's verdict).
 

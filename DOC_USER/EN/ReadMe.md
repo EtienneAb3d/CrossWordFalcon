@@ -250,6 +250,10 @@ when relevant.
   exactly where it left off, with a fresh full budget, instead of
   starting over from a blank grid. Clicking it again after a further
   failure keeps resuming from the most recent attempt.
+- **Play-mode buttons row** (`#play-actions`, `frontend/static/index.html`)
+  — "Vérification", "Solution", "Définitions" and "Recalculer" sit on
+  their own centered row right below the main form, above the grid, and only show
+  while a finished grid is on screen in play mode.
 - **Vérification / Check** (`#check-btn`, `frontend/static/script.js`,
   `toggleChecking`) — while playing (a finished grid, never during
   generation), colors every filled cell green (correct) or red
@@ -953,6 +957,22 @@ real letter. Both update after every edit.
 - The text field below the grid holds the definition of the currently
   selected word; typing there stores it for that word, and it comes back
   when you reselect the word.
+- **Corriger / Correct** (`#interactive-correct-btn`, `frontend/static/
+  script.js`, `GET /api/correct`) — just left of "Proposer une
+  définition": asks the language model to correct the definition typed
+  in the field, keeping its wording as close as possible to yours. It
+  fixes only agreement errors (number/gender), typing errors (wrong,
+  missing, extra or swapped letters, accents), missing spaces between
+  merged words, a lowercase first letter (the text always starts with
+  a capital) and an unnatural word order — typically an adjective on the
+  wrong side of its noun, as a non-native writer might put it — then puts the corrected text back in the field (stored
+  like a typed edit). A message says whether anything was changed, and
+  below the field the text is shown before and after correction, one
+  line above the other (`renderInteractiveCorrection`): the letters that
+  changed — found by a letter-by-letter edit-distance comparison — are
+  red on the "before" line and green on the "after" one (a space added
+  between two merged words shows as a green block). The sponge button
+  clears it.
 - **Proposer une définition / Suggest a definition**
   (`#interactive-propose-btn`) — asks the language
   model for several possible definitions of the selected word (it must be
@@ -1010,6 +1030,12 @@ real letter. Both update after every edit.
   model suggestion the first time — you can edit it freely from there,
   or pick a different one from the list right below it (see the next
   bullet).
+- **Corriger / Correct** (`#interactive-title-correct-btn`, `frontend/
+  static/script.js`, `correctInteractiveField`) — just left of "Proposer
+  un titre": the same correction as the definition field's own
+  "Corriger" (see above), applied to the title, with the same red/green
+  before/after comparison shown below the title field and cleared by its
+  sponge button.
 - **Proposer un titre / Suggest a title** (`#interactive-title-propose-btn`,
   `POST /api/interactive/title`) — asks the language model for up to 10
   distinct title ideas for the whole grid and lists them right below the

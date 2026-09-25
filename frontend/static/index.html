@@ -230,10 +230,6 @@
                 data-i18n="attemptPreviewRevealBtn">Voir</button>
         <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
-        <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
-        <button type="button" id="solution-btn" class="toggle-btn" data-i18n="solutionBtn" hidden>Solution</button>
-        <button type="button" id="definitions-btn" class="toggle-btn" data-i18n="definitionsBtn" hidden>Définitions</button>
-        <button type="button" id="recompute-btn" data-i18n="recomputeBtn" hidden>Recalculer</button>
         <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
         <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
         <!-- "Paraphraseur": asks the LLM for 5 rewordings of the typed
@@ -255,6 +251,16 @@
         <button type="button" id="qdrant-admin-btn" data-i18n="qdrantAdminBtn" hidden>Qdrant (admin)</button>
       </div>
     </form>
+
+    <!-- Play-mode buttons, on their own row below the main form (above
+         the grid). The row collapses entirely while all four are hidden
+         (see #play-actions in style.css). -->
+    <div id="play-actions">
+      <button type="button" id="check-btn" class="toggle-btn" data-i18n="checkBtn" hidden>Vérification</button>
+      <button type="button" id="solution-btn" class="toggle-btn" data-i18n="solutionBtn" hidden>Solution</button>
+      <button type="button" id="definitions-btn" class="toggle-btn" data-i18n="definitionsBtn" hidden>Définitions</button>
+      <button type="button" id="recompute-btn" data-i18n="recomputeBtn" hidden>Recalculer</button>
+    </div>
 
     <!-- "Actu Croisée" panel: always visible, never hidden by the
          central sections (#library/#attempt-preview/#result), which
@@ -985,6 +991,11 @@
         <div id="interactive-definition-row">
           <input type="text" id="interactive-definition-input" autocomplete="off"
                  data-i18n-placeholder="interactiveDefinitionPlaceholder">
+          <!-- "Corriger": asks the LLM to fix agreement errors, typos and
+               missing spaces in the typed definition, keeping its wording
+               (GET /api/correct, backend/clues.py correct_text). -->
+          <button type="button" id="interactive-correct-btn"
+                  data-i18n="interactiveCorrectBtn">Corriger</button>
           <button type="button" id="interactive-propose-btn"
                   data-i18n="interactiveProposeBtn">Proposer une définition</button>
           <!-- Resets #interactive-propose-results without re-running a
@@ -1002,6 +1013,10 @@
         <div id="interactive-title-row" hidden>
           <label for="interactive-title-input" data-i18n="interactiveTitleLabel">Titre</label>
           <input type="text" id="interactive-title-input" autocomplete="off">
+          <!-- "Corriger": same as the definition row's own button, for the
+               title (see correctInteractiveField() in script.js). -->
+          <button type="button" id="interactive-title-correct-btn"
+                  data-i18n="interactiveCorrectBtn">Corriger</button>
           <button type="button" id="interactive-title-propose-btn"
                   data-i18n="interactiveTitleProposeBtn">Proposer un titre</button>
           <!-- Resets #interactive-title-propose-results without

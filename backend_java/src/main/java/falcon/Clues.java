@@ -1123,6 +1123,66 @@ public final class Clues {
                 + "commentary before, between, or after them.";
     }
 
+    /** "Corriger" button (Interactive mode) — mirrors clues.py's correct_text. */
+    public String correctText(String text, String language, double timeout) {
+        text = collapseWs(text);
+        if (text.isEmpty()) return "";
+        String system = buildCorrectionSystemPrompt(language);
+        int maxTokens = REASONING_TOKEN_BUDGET + 100 + 2 * text.length();
+        String head = text.length() > 60 ? text.substring(0, 60) : text;
+        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1);
+        List<String> lines = parseResponse(content);
+        String corrected = lines.isEmpty() ? text : lines.get(0);
+        Log.info("correct: %s (%s) -> %s", Log.repr(text), language, Log.repr(corrected));
+        return corrected;
+    }
+
+    public static String buildCorrectionSystemPrompt(String language) {
+        String languageName = LANGUAGE_NAMES.getOrDefault(language, LANGUAGE_NAMES.get("fr"));
+        return "You are a proofreader for short texts written in " + languageName + ".\n\n"
+                + "The user message gives you one short text (a crossword clue or a "
+                + "crossword grid title). "
+                + "Return the same text with its mistakes corrected.\n\n"
+                + "Correct ONLY these mistakes:\n"
+                + "1. Grammatical agreement errors: number (singular/plural) and "
+                + "gender (masculine/feminine) between words that must agree.\n"
+                + "2. Typing errors: a wrong letter, a missing or extra letter, two "
+                + "letters swapped.\n"
+                + "3. Missing spaces: two words accidentally merged into one must be "
+                + "split back into separate words.\n"
+                + "4. Missing or wrong accents: accents and other diacritics are part "
+                + "of the spelling. A word written without the accent(s) its correct "
+                + "spelling requires, or with a wrong one, is a mistake: restore the "
+                + "correct accented spelling (for example, in French, \"Releve\" -> "
+                + "\"Relève\", \"eleve\" -> \"élève\", \"foret\" -> \"forêt\"). Check every "
+                + "word of the text for this.\n"
+                + "5. A lowercase first letter: the VERY FIRST character of the text "
+                + "must be a capital letter. Capitalize only that first letter — "
+                + "never any other word.\n"
+                + "6. Wrong word order: an order that is not natural in the text's "
+                + "language, typically from a non-native writer following the rules "
+                + "of another language — above all an adjective on the wrong side of "
+                + "its noun (for example, in French, \"une noire voiture\" -> \"une "
+                + "voiture noire\"; in English, \"a car red\" -> \"a red car\"). A moved "
+                + "adjective stays with the noun it describes: only its side of that "
+                + "noun changes, never the noun it belongs to, and it is never replaced "
+                + "by another adjective. Move "
+                + "only the misplaced words; an order that is already correct in the "
+                + "language (e.g. French \"une grande maison\") stays as it is.\n\n"
+                + "Rules:\n"
+                + "- Keep the original wording as closely as possible: never "
+                + "rephrase, never replace a correct word with a synonym, never "
+                + "reorder words (except to fix mistake 6), never add or remove "
+                + "information.\n"
+                + "- Apart from the first letter, keep the original capitalization "
+                + "and punctuation unless they are part of a mistake listed above.\n"
+                + "- If the text has no mistake, return it exactly as it is.\n"
+                + "- Write in " + languageName + ".\n\n"
+                + "OUTPUT FORMAT — exactly one line: the corrected text, starting "
+                + "with a capital letter, and nothing else — no label, no quotes, no "
+                + "explanation.";
+    }
+
     // ================================================================== grounding blocks
 
     static String buildExamplesBlock(Entry entry, String language, String difficulty) {

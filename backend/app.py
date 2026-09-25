@@ -2169,6 +2169,35 @@ async def paraphrase(q: str, lang: str = "fr"):
     return {"query": text, "lang": lang, "paraphrases": paraphrases}
 
 
+CORRECT_TIMEOUT_S = 90.0
+
+
+@app.get("/api/correct")
+async def correct(q: str, lang: str = "fr"):
+    """"Corriger" button next to "Proposer une définition" in Interactive
+    mode (see frontend/static/script.js): asks the LLM to fix agreement
+    errors, typos and missing spaces in the typed text while keeping its
+    wording (backend/clues.py, LLMClueGenerator.correct_text — a single
+    best-effort call). A ClueGenerationError (LLM unreachable) becomes a
+    clean 503."""
+    if lang not in WORDLISTS:
+        raise HTTPException(status_code=400, detail=f"langue inconnue : {lang!r}")
+    text = q.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="texte vide")
+    try:
+        corrected = await asyncio.to_thread(
+            interactive_clue_generator.correct_text, text, lang, timeout=CORRECT_TIMEOUT_S,
+        )
+    except ClueGenerationError as exc:
+        logger.warning("correct unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "correct_unavailable", "message": str(exc)},
+        )
+    return {"query": text, "lang": lang, "corrected": corrected}
+
+
 # Length window (in letters, counted on the wordlist's own ACCENTUE
 # column) for the random "indicative word" GET /api/theme/random embeds
 # into the LLM prompt (see LLMClueGenerator.generate_random_theme's own

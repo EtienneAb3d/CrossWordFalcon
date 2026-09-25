@@ -392,6 +392,22 @@ form {
   margin-top: 1.55rem;
 }
 
+/* Play-mode buttons (Vérification, Solution, Définitions, Recalculer) on
+   their own row right below #generate-form, above the grid. Hidden as a
+   whole while none of its buttons is shown, so no empty gap remains.
+   Centered horizontally in the page column. */
+#play-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+#play-actions:not(:has(> button:not([hidden]))) {
+  display: none;
+}
+
 /* Optional "Thématique" field and "Mots Défi (personnalisation)" mini-form,
    both on the main generation form, side by side in #form-actions's own
    flex-wrap toolbar (no `flex-basis: 100%` here, unlike #form-actions
@@ -2892,6 +2908,38 @@ button:disabled {
 #interactive-definition-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+/* "Corriger" before/after comparison (inside #interactive-propose-results):
+   letters changed per the edit-distance alignment are red on the "before"
+   line, green on the "after" one; the pastel background keeps a changed
+   space (merged words split) visible. */
+.interactive-correct-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.interactive-correct-line {
+  margin: 0;
+  display: flex;
+  gap: 0.5rem;
+}
+.interactive-correct-label {
+  flex: 0 0 auto;
+  min-width: 3.5rem;
+  color: #777;
+}
+.interactive-correct-text {
+  white-space: pre-wrap;
+}
+.interactive-correct-removed {
+  color: var(--error);
+  background: var(--incorrect-bg);
+  font-weight: 700;
+}
+.interactive-correct-added {
+  color: var(--correct-fg);
+  background: var(--correct-bg);
+  font-weight: 700;
 }
 #interactive-propose-results {
   display: flex;

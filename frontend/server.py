@@ -499,6 +499,19 @@ async def proxy_paraphrase(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/correct")
+async def proxy_correct(request: Request):
+    """Relays Interactive mode's "Corriger" button (see script.js) to the
+    back end — query string (`q`, `lang`) passed through verbatim, same
+    single-LLM-call timeout as proxy_paraphrase."""
+    try:
+        async with httpx.AsyncClient(timeout=PARAPHRASE_PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/correct", params=request.query_params)
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # GET /api/theme/random makes one LLM round-trip (LLMClueGenerator.
 # generate_random_theme) — same "one meaningfully heavier single call"
 # reasoning as PARAPHRASE_PROXY_TIMEOUT_S above.

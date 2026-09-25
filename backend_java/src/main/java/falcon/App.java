@@ -87,6 +87,7 @@ public final class App {
     static final int DEFINE_COUNT = 10;
     static final int PARAPHRASE_COUNT = 5;
     static final double PARAPHRASE_TIMEOUT_S = 90.0;
+    static final double CORRECT_TIMEOUT_S = 90.0;
     static final int RANDOM_THEME_WORD_MIN_LEN = 5;
     static final int RANDOM_THEME_WORD_MAX_LEN = 10;
 
@@ -1584,6 +1585,20 @@ public final class App {
             } catch (Clues.ClueGenerationError e) {
                 Log.warning("paraphrase unavailable: %s", e.getMessage());
                 throw http(503, Json.obj("code", "paraphrase_unavailable", "message", e.getMessage()));
+            }
+        });
+        w.get("/api/correct", r -> {
+            String q = r.qRequired("q");
+            String lang = r.q("lang", "fr");
+            requireLang(lang);
+            String text = Py.strip(q);
+            if (text.isEmpty()) throw http(400, "texte vide");
+            try {
+                return Json.obj("query", text, "lang", lang, "corrected",
+                        INTERACTIVE_CLUE_GENERATOR.correctText(text, lang, CORRECT_TIMEOUT_S));
+            } catch (Clues.ClueGenerationError e) {
+                Log.warning("correct unavailable: %s", e.getMessage());
+                throw http(503, Json.obj("code", "correct_unavailable", "message", e.getMessage()));
             }
         });
         w.get("/api/theme/random", r -> {

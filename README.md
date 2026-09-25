@@ -269,11 +269,15 @@ you enter this mode, so you can look up words while you fill in the grid:
   of them work.
 - Once the grid is full, write a definition for each word (a **"Suggest a
   definition"** button asks the language model for a handful of ideas you
-  can click through and pick from, **"Definitions"**
+  can click through and pick from, **"Correct"** next to it fixes the
+  typos, agreement mistakes, missing accents, missing spaces, a missing
+  initial capital and a wrong word order in the definition you
+  typed while keeping your wording, **"Definitions"**
   fills in one
   automatically for every valid word that still lacks one, and **"Check"**
   points you at any word still missing one), pick a title — **"Suggest a
-  title"** offers up to 10 clickable ideas the same way — then click
+  title"** offers up to 10 clickable ideas the same way, and its own
+  **"Correct"** button fixes the title you typed — then click
   **"Publish"** — your creation goes into the Library, shown with your
   nickname and a "(Création)" tag. A **"Save"** button (left of
   "Publish", available at any point) keeps a draft in your "Créations"

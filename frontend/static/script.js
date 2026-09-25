@@ -288,6 +288,7 @@ const interactiveCleanBtn = document.getElementById("interactive-clean-btn");
 const interactiveCleanDeepBtn = document.getElementById("interactive-clean-deep-btn");
 const interactiveDefinitionInput = document.getElementById("interactive-definition-input");
 const interactiveProposeBtn = document.getElementById("interactive-propose-btn");
+const interactiveCorrectBtn = document.getElementById("interactive-correct-btn");
 const interactiveProposeClearBtn = document.getElementById("interactive-propose-clear-btn");
 const interactiveStatsBtn = document.getElementById("interactive-stats-btn");
 const interactiveImpossibleBtn = document.getElementById("interactive-impossible-btn");
@@ -312,6 +313,7 @@ const interactiveVerifyReportEl = document.getElementById("interactive-verify-re
 const interactiveTitleRow = document.getElementById("interactive-title-row");
 const interactiveTitleInput = document.getElementById("interactive-title-input");
 const interactiveTitleProposeBtn = document.getElementById("interactive-title-propose-btn");
+const interactiveTitleCorrectBtn = document.getElementById("interactive-title-correct-btn");
 const interactiveTitleProposeClearBtn = document.getElementById("interactive-title-propose-clear-btn");
 const interactiveTitleProposeResults = document.getElementById("interactive-title-propose-results");
 const interactiveDraftSaveBtn = document.getElementById("interactive-draft-save-btn");
@@ -8122,6 +8124,65 @@ function dictionaryDefineUrl(word, direction) {
   return url;
 }
 
+// "Corriger" (next to "Proposer une définition" and "Proposer un titre"):
+// sends `input`'s text to GET /api/correct (the LLM fixes agreement errors,
+// typos and missing spaces, keeping the wording), shows the before/after
+// comparison in `results` and writes the corrected text back into `input`,
+// firing its "input" event so it is stored like a typed edit. The text is
+// only written back if the field still shows what was sent (the player may
+// have moved to another word meanwhile).
+async function correctInteractiveField(input, btn, results, lang, needsTextMsg) {
+  const t = I18N[uiLanguage];
+  const text = input.value.trim();
+  if (input.disabled || !text) {
+    setInteractiveMessage(needsTextMsg, true);
+    return;
+  }
+  btn.disabled = true;
+  setInteractiveMessage("");
+  try {
+    const resp = await fetchWithTimeout(
+      `/api/correct?q=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`,
+      {}, DEFINE_FETCH_TIMEOUT_MS,
+    );
+    if (!resp.ok) throw new Error(t.interactiveCorrectError);
+    const data = await resp.json();
+    const corrected = ((data && data.corrected) || "").trim();
+    if (!corrected || input.value.trim() !== text) return;
+    renderInteractiveCorrection(results, text, corrected);
+    if (corrected === text) {
+      setInteractiveMessage(t.interactiveCorrectUnchanged, false);
+      return;
+    }
+    input.value = corrected;
+    input.dispatchEvent(new Event("input"));
+    setInteractiveMessage(t.interactiveCorrectDone, false);
+  } catch (err) {
+    setInteractiveMessage(t.interactiveCorrectError, true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Definition: language follows the selected word's direction, like
+// dictionaryDefineUrl(). Title: the session language.
+interactiveCorrectBtn.addEventListener("click", () => {
+  const w = selectedInteractiveWord();
+  const lang = (w && w.direction === "down" && interactiveBilingualLanguage)
+    ? interactiveBilingualLanguage
+    : interactiveLanguage;
+  correctInteractiveField(
+    interactiveDefinitionInput, interactiveCorrectBtn, interactiveProposeResults,
+    lang, I18N[uiLanguage].interactiveCorrectNeedsText,
+  );
+});
+interactiveTitleCorrectBtn.addEventListener("click", () => {
+  correctInteractiveField(
+    interactiveTitleInput, interactiveTitleCorrectBtn, interactiveTitleProposeResults,
+    interactiveLanguage, I18N[uiLanguage].interactiveCorrectNeedsTitle,
+  );
+});
+
 interactiveProposeBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   const w = selectedInteractiveWord();
@@ -8157,6 +8218,88 @@ interactiveProposeBtn.addEventListener("click", async () => {
     interactiveProposeBtn.disabled = false;
   }
 });
+
+// Character-level Levenshtein alignment of `before` and `after` (code
+// points). Returns two flag arrays: `removed[i]` marks a character of
+// `before` deleted or substituted, `added[j]` a character of `after`
+// inserted or substituted — the letters "Corriger" changed.
+function editDistanceDiff(before, after) {
+  const a = Array.from(before);
+  const b = Array.from(after);
+  const n = a.length;
+  const m = b.length;
+  const d = [];
+  for (let i = 0; i <= n; i++) {
+    d.push(new Array(m + 1).fill(0));
+    d[i][0] = i;
+  }
+  for (let j = 0; j <= m; j++) d[0][j] = j;
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + cost);
+    }
+  }
+  const removed = new Array(n).fill(false);
+  const added = new Array(m).fill(false);
+  let i = n;
+  let j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && d[i][j] === d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)) {
+      if (a[i - 1] !== b[j - 1]) {
+        removed[i - 1] = true;
+        added[j - 1] = true;
+      }
+      i--;
+      j--;
+    } else if (i > 0 && d[i][j] === d[i - 1][j] + 1) {
+      removed[i - 1] = true;
+      i--;
+    } else {
+      added[j - 1] = true;
+      j--;
+    }
+  }
+  return { a, b, removed, added };
+}
+
+// "Corriger" result: the text before and after correction, one above the
+// other, in `results` (#interactive-propose-results or #interactive-title-
+// propose-results, so that row's sponge clears it too) — changed letters
+// in red on the "before" line, in green on the "after" one.
+function renderInteractiveCorrection(results, before, after) {
+  const t = I18N[uiLanguage];
+  const { a, b, removed, added } = editDistanceDiff(before, after);
+  const line = (label, chars, flags, cls) => {
+    const p = document.createElement("p");
+    p.className = "interactive-correct-line";
+    const tag = document.createElement("span");
+    tag.className = "interactive-correct-label";
+    tag.textContent = label;
+    p.appendChild(tag);
+    const body = document.createElement("span");
+    body.className = "interactive-correct-text";
+    chars.forEach((ch, k) => {
+      if (flags[k]) {
+        const s = document.createElement("span");
+        s.className = cls;
+        s.textContent = ch;
+        body.appendChild(s);
+      } else {
+        body.appendChild(document.createTextNode(ch));
+      }
+    });
+    p.appendChild(body);
+    return p;
+  };
+  results.innerHTML = "";
+  const box = document.createElement("div");
+  box.className = "interactive-correct-diff";
+  box.appendChild(line(t.interactiveCorrectBefore, a, removed, "interactive-correct-removed"));
+  box.appendChild(line(t.interactiveCorrectAfter, b, added, "interactive-correct-added"));
+  results.appendChild(box);
+  results.hidden = false;
+}
 
 // "Effacer": resets #interactive-propose-results without re-running any
 // request, at the user's explicit request — reuses renderInteractive
@@ -8462,6 +8605,7 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
   const busyBtns = [
     interactiveDefinitionsBtn,
     interactiveProposeBtn,
+    interactiveCorrectBtn,
     interactiveImpossibleBtn,
     interactiveVerifyBtn,
     interactiveCleanBtn,
