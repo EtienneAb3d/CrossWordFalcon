@@ -29,7 +29,15 @@ public final class Cleanup {
     public static final int PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50;
     public static final int WIDEN_BLACK_CELL_WINDOW = 40;
     public static final int WIDEN_PRIORITY_WORDS_LIMIT = 30;
-    public static final int WIDEN_MAX_SUCCESSFUL = 6;
+    /** Words of each family a search node tries to reshape its slot for (mirrors RESHAPE_WORDS_PER_NODE). */
+    public static final int RESHAPE_WORDS_PER_NODE = 5;
+    /** Theme words get widening/shortening only while fewer than this many are placed. */
+    public static final int THEME_RESHAPE_MAX_PLACED_WORDS = 5;
+
+    /** Mirrors _theme_reshape_allowed. */
+    public static boolean themeReshapeAllowed(Set<String> placedThemeWords) {
+        return placedThemeWords.size() < THEME_RESHAPE_MAX_PLACED_WORDS;
+    }
     public static final int SHORTEN_SLOT_WINDOW = (int) Math.max(1, Math.rint(Filler.FALLBACK_PHASE_BUDGET_FRACTION * WIDEN_BLACK_CELL_WINDOW));
 
     static Map<Integer, Character> subKnown(int[] cells, Map<Integer, Character> known) {
@@ -1148,7 +1156,7 @@ public final class Cleanup {
         return by;
     }
 
-    /** Python's _has_free_matching_slot / _free_matching_slot (claims it). */
+    /** Python's _free_matching_slot (claims it). */
     static int[] freeMatchingSlot(Map<Integer, List<int[]>> byLength, String word, Map<Integer, Character> locked,
                                   Set<Cells.Key> claimed) {
         for (int[] cells : byLength.getOrDefault(word.length(), List.of())) {
@@ -1168,44 +1176,5 @@ public final class Cleanup {
             }
         }
         return null;
-    }
-
-    public static void widenFloatingBlackCellsForPriorityWords(char[][] grid, int rows, int cols, Rng rng,
-                                                               List<Set<String>> groups, DualIndex index,
-                                                               Map<Integer, Character> lockedIn,
-                                                               Set<Integer> permanentBlackIn) {
-        Map<Integer, Character> locked = lockedIn == null ? Map.of() : lockedIn;
-        Set<Integer> permanentBlack = permanentBlackIn == null ? Set.of() : permanentBlackIn;
-        Map<Integer, List<int[]>> byLength = slotsByLength(grid, rows, cols);
-        int successful = 0;
-        for (Set<String> words : groups) {
-            if (successful >= WIDEN_MAX_SUCCESSFUL) break;
-            Set<Cells.Key> claimed = new HashSet<>();
-            List<String> pending = new ArrayList<>();
-            for (String w : words) if (w.length() >= 2 && freeMatchingSlot(byLength, w, locked, claimed) == null) pending.add(w);
-            if (pending.isEmpty()) continue;
-            rng.shuffle(pending);
-            List<String> stillPending = new ArrayList<>();
-            for (String word : pending.subList(0, Math.min(WIDEN_PRIORITY_WORDS_LIMIT, pending.size()))) {
-                if (successful >= WIDEN_MAX_SUCCESSFUL) break;
-                if (freeMatchingSlot(byLength, word, locked, claimed) != null) continue;
-                int[] change = widenOneFloatingBlackCell(grid, rows, cols, rng, word, locked, permanentBlack, index);
-                if (change != null) {
-                    successful++;
-                    byLength = slotsByLength(grid, rows, cols);
-                } else {
-                    stillPending.add(word);
-                }
-            }
-            for (String word : stillPending) {
-                if (successful >= WIDEN_MAX_SUCCESSFUL) break;
-                if (freeMatchingSlot(byLength, word, locked, claimed) != null) continue;
-                int[] change = shortenOneSlotForWord(grid, rows, cols, rng, word, locked, index);
-                if (change != null) {
-                    successful++;
-                    byLength = slotsByLength(grid, rows, cols);
-                }
-            }
-        }
     }
 }

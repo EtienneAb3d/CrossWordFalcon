@@ -34,20 +34,26 @@ public final class Filler {
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 50;
     public static final int MAX_DESCENTS_PER_NODE = 3;
-    public static final int EARLY_DESCENTS_WORD_COUNT = 5;
-    public static final int EARLY_MAX_DESCENTS_PER_NODE = 10;
+    public static final int EARLY_DESCENTS_WORD_COUNT = 10;
+    public static final int EARLY_MAX_DESCENTS_PER_NODE = 7;
     // An attempt starting from locked cells (inherited from a previous
     // palier) applies no descent cap at all.
     public static final boolean BACKJUMPING_ENABLED = true;
     public static final int MAX_BACKGHOSTS_PER_DESCENT = 0;
     public static final int MAX_EXCLUDED_SLOTS = 3;
     public static final boolean ALTERNATE_DIRECTION_ENABLED = false;
+    // Level 4 of the slot-selection cascade (restrict to slots already
+    // carrying a real letter): optional, currently disabled.
+    public static final boolean KNOWN_LETTER_LEVEL_ENABLED = false;
+    // Origin (row, col) of level 6's geometric score: the grid's top-left corner.
+    public static final int SLOT_SELECTION_ORIGIN_ROW = 0;
+    public static final int SLOT_SELECTION_ORIGIN_COL = 0;
     public static final int SLOT_SELECTION_WINDOW_SIZE = 10;
     public static final int MOST_CONSTRAINED_START_LENGTH = 12;
     public static final int MOST_CONSTRAINED_MIN_LENGTH = 2;
     public static final double SLOT_SELECTION_REFINE_FRACTION = 0.5;
     public static final double FALLBACK_PHASE_BUDGET_FRACTION = 0.1;
-    public static final int LETTER_BIAS_SAMPLE_SIZE = 100;
+    public static final int LETTER_BIAS_SAMPLE_SIZE = 10;
 
     /** Insertion-ordered set keeping only the {@code capacity} most recent
      * members (Python's _RecentSlots). */
@@ -85,13 +91,17 @@ public final class Filler {
             return order.size();
         }
 
+        public List<Integer> toList() {
+            return new ArrayList<>(order);
+        }
+
         @Override
         public Iterator<Integer> iterator() {
             return new ArrayList<>(order).iterator();
         }
     }
 
-    public final List<int[]> slots;
+    public List<int[]> slots;
     public final DualIndex index;
     public final Rng rng;
     public final int rows, cols;
@@ -108,15 +118,23 @@ public final class Filler {
     public final Map<Integer, Character> lockedLetters;
     public final Map<Integer, int[][]> letterScoresByDir;
     public final Map<Integer, int[]> letterScores;
-    final boolean[] slotAcross;
+    boolean[] slotAcross;
     List<Object> bestStatLetters;
     /** Level 6's geometric window of the last selectTargetSlot call (mirrors last_selection_window). */
     public List<Integer> lastSelectionWindow = new ArrayList<>();
     /** For slot i and position p: the crossing slot (or -1) and its position there. */
-    final int[][] crossSlot, crossPos;
+    int[][] crossSlot, crossPos;
     /** cell -> [(slot, pos)...] in insertion order. */
-    final Map<Integer, int[][]> cellToSlots;
-    final int[][] crossingSlots;
+    Map<Integer, int[][]> cellToSlots;
+    int[][] crossingSlots;
+    /** The pattern `slots` was extracted from, and whether a node may
+     * reshape it (mirrors pattern/reshape_enabled/permanent_black_cells). */
+    public char[][] pattern;
+    public boolean reshapeEnabled;
+    public Set<Integer> permanentBlackCells = Set.of();
+    /** The slot list and pattern bestAssignment is indexed on. */
+    public List<int[]> bestSlots;
+    public char[][] bestPattern;
     public boolean abandoned, budgetExhausted, breakingPermitted, interruptedBySibling;
     public Set<Integer> toleratedDry = new HashSet<>();
     Set<Integer> lastConflict;
@@ -128,7 +146,7 @@ public final class Filler {
     public Set<Integer> excludedSlots;
     public Set<String> usedWords = new HashSet<>();
     public long checks;
-    public final RecentSlots impossibleThisAttempt = new RecentSlots(MAX_EXCLUDED_SLOTS);
+    public RecentSlots impossibleThisAttempt = new RecentSlots(MAX_EXCLUDED_SLOTS);
     public String[] bestAssignment;
     public int bestAssignedCount;
     int initialAssignedCount;
@@ -147,7 +165,6 @@ public final class Filler {
                   AtomicBoolean batchAbandonedEvent, AtomicBoolean attemptDoneEvent, Consumer<String[]> onNewBest,
                   Map<Integer, Character> lockedLetters, PW priorityWords, Set<String> challengeWords,
                   Integer rows, Integer cols) {
-        this.slots = slots;
         this.index = index;
         this.rng = rng;
         int maxR = -1, maxC = -1;
@@ -175,6 +192,18 @@ public final class Filler {
                 this.letterScores.put(cell, Tally.combined(copy));
             });
         }
+        indexSlots(slots);
+        this.bestSlots = slots;
+        this.assignment = new String[slots.size()];
+        this.excludedSlots = excludedSlots != null ? excludedSlots : new HashSet<>();
+        this.bestAssignment = assignment.clone();
+        this.onNewBest = onNewBest;
+        Arrays.fill(lastCheckpoint, Long.MIN_VALUE);
+    }
+
+    /** Sets `slots` and every per-slot lookup derived from it (mirrors _index_slots). */
+    void indexSlots(List<int[]> slots) {
+        this.slots = slots;
         int n = slots.size();
         this.slotAcross = new boolean[n];
         this.crossSlot = new int[n][];
@@ -207,11 +236,6 @@ public final class Filler {
             }
             crossingSlots[i] = crossing.stream().mapToInt(Integer::intValue).toArray();
         }
-        this.assignment = new String[n];
-        this.excludedSlots = excludedSlots != null ? excludedSlots : new HashSet<>();
-        this.bestAssignment = assignment.clone();
-        this.onNewBest = onNewBest;
-        Arrays.fill(lastCheckpoint, Long.MIN_VALUE);
     }
 
     // ================================================================== checkpoints
@@ -347,7 +371,8 @@ public final class Filler {
         return false;
     }
 
-    long slotLetterFrequencyScore(int i) {
+    /** Square root of the sum of the squares of the still-free cells' top frequencies. */
+    double slotLetterFrequencyScore(int i) {
         long total = 0;
         int[] cells = slots.get(i);
         for (int p = 0; p < cells.length; p++) {
@@ -358,7 +383,7 @@ public final class Filler {
                 total += m * m;
             }
         }
-        return total;
+        return Math.sqrt(total);
     }
 
     Integer slotMinLetterOptions(int i) {
@@ -386,7 +411,8 @@ public final class Filler {
         }
         List<Object[]> rowsOut = new ArrayList<>();
         letterScoresByDir.forEach((cell, byDir) -> {
-            if (fixed.contains(cell)) return;
+            // A cell a reshape turned black keeps its old tally but belongs to no slot any more.
+            if (fixed.contains(cell) || !cellToSlots.containsKey(cell)) return;
             Character letter = Tally.mostProbable(byDir);
             if (letter != null) rowsOut.add(new Object[]{cell, letter});
         });
@@ -452,7 +478,8 @@ public final class Filler {
         });
     }
 
-    public long candidateScore(int i, String word) {
+    /** Square root of the sum of the squares of the word's per-cell statistical scores. */
+    public double candidateScore(int i, String word) {
         int[] cells = slots.get(i);
         long total = 0;
         for (int p = 0; p < cells.length; p++) {
@@ -460,7 +487,7 @@ public final class Filler {
             long v = Tally.get(letterScores.get(cells[p]), word.charAt(p));
             total += v * v;
         }
-        return total;
+        return Math.sqrt(total);
     }
 
     /** Shuffle, rank by statistical score, then draw at random inside a
@@ -470,13 +497,13 @@ public final class Filler {
         rng.shuffle(cands);
         if (letterScores.isEmpty()) return cands;
         int n = cands.size();
-        long[] scores = new long[n];
+        double[] scores = new double[n];
         Integer[] order = new Integer[n];
         for (int k = 0; k < n; k++) {
             scores[k] = candidateScore(i, cands.get(k));
             order[k] = k;
         }
-        Arrays.sort(order, (a, b) -> Long.compare(scores[b], scores[a]));
+        Arrays.sort(order, (a, b) -> Double.compare(scores[b], scores[a]));
         List<String> reordered = new ArrayList<>(n);
         List<String> window = new ArrayList<>(CANDIDATE_SCORE_WINDOW);
         int next = 0;
@@ -572,6 +599,343 @@ public final class Filler {
         merged.remove(target);
         merged.addAll(retryConflict);
         return fail(merged);
+    }
+
+    // ================================================================== in-search reshapes
+
+    /** One way a node can turn its chosen slot into a slot of a family
+     * word's own length (mirrors _Reshape). */
+    static final class Reshape {
+        final String word, family;
+        final Map<Integer, Character> changes;
+        final char[][] pattern;
+        final List<int[]> slots;
+        final int target;
+        final Map<Integer, Integer> forward;
+
+        Reshape(String word, String family, Map<Integer, Character> changes, char[][] pattern, List<int[]> slots,
+                int target, Map<Integer, Integer> forward) {
+            this.word = word;
+            this.family = family;
+            this.changes = changes;
+            this.pattern = pattern;
+            this.slots = slots;
+            this.target = target;
+            this.forward = forward;
+        }
+    }
+
+    Map<Integer, Character> knownCells() {
+        Map<Integer, Character> known = new HashMap<>(lockedLetters);
+        for (int i = 0; i < assignment.length; i++) {
+            String w = assignment[i];
+            if (w == null) continue;
+            int[] cells = slots.get(i);
+            for (int p = 0; p < cells.length; p++) known.put(cells[p], w.charAt(p));
+        }
+        return known;
+    }
+
+    private boolean inside(int r, int c) {
+        return r >= 0 && r < rows && c >= 0 && c < cols;
+    }
+
+    /** Returns {span int[], changes Map} pairs (mirrors _reshape_geometries). */
+    List<Object[]> reshapeGeometries(int i, String word) {
+        int[] cells = slots.get(i);
+        int length = cells.length, k = word.length();
+        List<Object[]> out = new ArrayList<>();
+        if (k < length) {
+            Map<Integer, Character> c1 = new LinkedHashMap<>();
+            c1.put(cells[k], Grids.BLACK);
+            out.add(new Object[]{Arrays.copyOfRange(cells, 0, k), c1});
+            Map<Integer, Character> c2 = new LinkedHashMap<>();
+            c2.put(cells[length - k - 1], Grids.BLACK);
+            out.add(new Object[]{Arrays.copyOfRange(cells, length - k, length), c2});
+            return out;
+        }
+        int dr = Cells.r(cells[1]) - Cells.r(cells[0]), dc = Cells.c(cells[1]) - Cells.c(cells[0]);
+        for (int sign : new int[]{1, -1}) {
+            int edge = sign == 1 ? cells[length - 1] : cells[0];
+            int sr = sign * dr, sc = sign * dc;
+            int br = Cells.r(edge) + sr, bc = Cells.c(edge) + sc;
+            if (!inside(br, bc) || pattern[br][bc] != Grids.BLACK || permanentBlackCells.contains(Cells.of(br, bc))) continue;
+            List<Integer> ext = new ArrayList<>();
+            ext.add(Cells.of(br, bc));
+            int nr = br + sr, nc = bc + sc;
+            while (ext.size() < k - length) {
+                if (!inside(nr, nc) || pattern[nr][nc] == Grids.BLACK) break;
+                ext.add(Cells.of(nr, nc));
+                nr += sr;
+                nc += sc;
+            }
+            if (ext.size() < k - length) continue;
+            Map<Integer, Character> changes = new LinkedHashMap<>();
+            changes.put(Cells.of(br, bc), Grids.WHITE);
+            if (inside(nr, nc) && pattern[nr][nc] != Grids.BLACK) changes.put(Cells.of(nr, nc), Grids.BLACK);
+            int[] span = new int[k];
+            if (sign == 1) {
+                System.arraycopy(cells, 0, span, 0, length);
+                for (int e = 0; e < ext.size(); e++) span[length + e] = ext.get(e);
+            } else {
+                for (int e = 0; e < ext.size(); e++) span[ext.size() - 1 - e] = ext.get(e);
+                System.arraycopy(cells, 0, span, ext.size(), length);
+            }
+            out.add(new Object[]{span, changes});
+        }
+        return out;
+    }
+
+    /** Mirrors _reshape_options. */
+    @SuppressWarnings("unchecked")
+    List<Reshape> reshapeOptions(int i, String word, String family, Map<Integer, Character> known) {
+        List<Reshape> options = new ArrayList<>();
+        for (Object[] g : reshapeGeometries(i, word)) {
+            int[] span = (int[]) g[0];
+            Map<Integer, Character> changes = (Map<Integer, Character>) g[1];
+            boolean ok = true;
+            for (int p = 0; p < span.length && ok; p++) {
+                Character ch = known.get(span[p]);
+                if (ch != null && ch != word.charAt(p)) ok = false;
+            }
+            if (!ok) continue;
+            for (Map.Entry<Integer, Character> e : changes.entrySet()) {
+                if (e.getValue() == Grids.BLACK && known.containsKey(e.getKey())) ok = false;
+            }
+            if (!ok) continue;
+            char[][] newPattern = Grids.copy(pattern);
+            changes.forEach((cell, v) -> newPattern[Cells.r(cell)][Cells.c(cell)] = v);
+            if (!Grids.isStructurallyValid(newPattern, rows, cols, 1)) continue;
+            List<int[]> newSlots = Grids.extractSlots(newPattern, rows, cols);
+            Map<Cells.Key, Integer> newIndex = new HashMap<>();
+            for (int j = 0; j < newSlots.size(); j++) newIndex.put(Cells.key(newSlots.get(j)), j);
+            Integer target = newIndex.get(Cells.key(span));
+            if (target == null) continue;
+            Map<Integer, Integer> forward = new HashMap<>();
+            for (int old = 0; old < slots.size() && ok; old++) {
+                Integer j = newIndex.get(Cells.key(slots.get(old)));
+                if (j != null) forward.put(old, j);
+                else if (assignment[old] != null) ok = false;
+            }
+            if (ok) options.add(new Reshape(word, family, changes, newPattern, newSlots, target, forward));
+        }
+        return options;
+    }
+
+    /** Mirrors _reshape_candidates. */
+    List<Reshape> reshapeCandidates(int i, String family, Set<String> active) {
+        List<Reshape> out = new ArrayList<>();
+        Collection<String> source;
+        if (family.equals("challenge")) {
+            source = active;
+        } else {
+            if (!Cleanup.themeReshapeAllowed(Fill.placedThemeWords(slots, assignment, priorityWords))) return out;
+            source = activePriorityWordsFor(slots.get(i));
+        }
+        int length = slots.get(i).length;
+        List<String> pool = new ArrayList<>();
+        for (String w : source) if (w.length() != length && w.length() >= 2 && !usedWords.contains(w)) pool.add(w);
+        if (pool.isEmpty()) return out;
+        Map<Integer, Character> known = knownCells();
+        Map<Integer, List<int[]>> openByLength = new HashMap<>();
+        for (int j = 0; j < slots.size(); j++) {
+            if (assignment[j] == null && !excludedSlots.contains(j)) {
+                openByLength.computeIfAbsent(slots.get(j).length, x -> new ArrayList<>()).add(slots.get(j));
+            }
+        }
+        List<String> kept = new ArrayList<>();
+        for (String w : pool) {
+            boolean fits = false;
+            for (int[] cells : openByLength.getOrDefault(w.length(), List.of())) {
+                boolean ok = true;
+                for (int p = 0; p < cells.length && ok; p++) {
+                    Character ch = known.get(cells[p]);
+                    if (ch != null && ch != w.charAt(p)) ok = false;
+                }
+                if (ok) {
+                    fits = true;
+                    break;
+                }
+            }
+            if (!fits) kept.add(w);
+        }
+        java.util.Collections.sort(kept);
+        rng.shuffle(kept);
+        for (String w : kept.subList(0, Math.min(Cleanup.RESHAPE_WORDS_PER_NODE, kept.size()))) {
+            out.addAll(reshapeOptions(i, w, family, known));
+        }
+        return out;
+    }
+
+    /** `cands` with each family's reshapes right after its own words, built
+     * lazily (mirrors _with_reshape_candidates). */
+    Iterator<Object> withReshapeCandidates(int i, List<String> cands, Set<String> challengedSet, Set<String> priSet,
+                                           Set<String> active) {
+        int nChallenge = 0;
+        while (nChallenge < cands.size() && challengedSet.contains(cands.get(nChallenge))) nChallenge++;
+        int nTheme = nChallenge;
+        while (nTheme < cands.size() && priSet.contains(cands.get(nTheme))) nTheme++;
+        final int nc = nChallenge, nt = nTheme;
+        return new Iterator<Object>() {
+            int stage = 0;
+            Iterator<?> current = cands.subList(0, nc).iterator();
+
+            @Override
+            public boolean hasNext() {
+                while (!current.hasNext()) {
+                    stage++;
+                    if (stage == 1) current = active.isEmpty() ? List.of().iterator()
+                            : reshapeCandidates(i, "challenge", active).iterator();
+                    else if (stage == 2) current = cands.subList(nc, nt).iterator();
+                    else if (stage == 3) current = priorityWords.isEmpty() ? List.of().iterator()
+                            : reshapeCandidates(i, "theme", active).iterator();
+                    else if (stage == 4) current = cands.subList(nt, cands.size()).iterator();
+                    else return false;
+                }
+                return true;
+            }
+
+            @Override
+            public Object next() {
+                if (!hasNext()) throw new java.util.NoSuchElementException();
+                return current.next();
+            }
+        };
+    }
+
+    /** Mirrors _apply_reshape; returns the saved state. */
+    Object[] applyReshape(Reshape option) {
+        Object[] saved = {slots, pattern, assignment, toleratedDry, placementSeq, impossibleThisAttempt};
+        Map<Integer, Integer> forward = option.forward;
+        String[] newAssignment = new String[option.slots.size()];
+        forward.forEach((old, j) -> newAssignment[j] = assignment[old]);
+        RecentSlots recent = new RecentSlots(MAX_EXCLUDED_SLOTS);
+        for (int old : impossibleThisAttempt) if (forward.containsKey(old)) recent.add(forward.get(old));
+        Set<Integer> tolerated = new HashSet<>();
+        for (int j : toleratedDry) if (forward.containsKey(j)) tolerated.add(forward.get(j));
+        Map<Integer, Long> seq = new HashMap<>();
+        placementSeq.forEach((j, q) -> {
+            if (forward.containsKey(j)) seq.put(forward.get(j), q);
+        });
+        indexSlots(option.slots);
+        pattern = option.pattern;
+        assignment = newAssignment;
+        toleratedDry = tolerated;
+        placementSeq = seq;
+        impossibleThisAttempt = recent;
+        return saved;
+    }
+
+    /** Mirrors _undo_reshape; returns the new -> original index map. */
+    @SuppressWarnings("unchecked")
+    Map<Integer, Integer> undoReshape(Reshape option, Object[] saved, int i) {
+        Map<Integer, Integer> back = new HashMap<>();
+        option.forward.forEach((old, j) -> back.put(j, old));
+        back.put(option.target, i);
+        RecentSlots recent = new RecentSlots(MAX_EXCLUDED_SLOTS);
+        for (int old : (RecentSlots) saved[5]) if (!option.forward.containsKey(old)) recent.add(old);
+        for (int j : impossibleThisAttempt) if (back.containsKey(j)) recent.add(back.get(j));
+        indexSlots((List<int[]>) saved[0]);
+        pattern = (char[][]) saved[1];
+        assignment = (String[]) saved[2];
+        toleratedDry = (Set<Integer>) saved[3];
+        placementSeq = (Map<Integer, Long>) saved[4];
+        impossibleThisAttempt = recent;
+        return back;
+    }
+
+    /** Mirrors _try_reshape: returns {outcome, conflict-or-null, blame-or-null}. */
+    Object[] tryReshape(Reshape option, int i, Map<Integer, Dom> domains, Set<String> active, boolean allowBreaking,
+                        long deadlineChecks, boolean released) {
+        Object[] saved = applyReshape(option);
+        int t = option.target;
+        String w = option.word;
+        assignment[t] = w;
+        usedWords.add(w);
+        Map<Integer, Integer> inverse = new HashMap<>();
+        option.forward.forEach((old, j) -> inverse.put(j, old));
+        TreeSet<Integer> toCheck = new TreeSet<>();
+        for (int j : crossingSlots[t]) toCheck.add(j);
+        for (int j = 0; j < slots.size(); j++) if (!inverse.containsKey(j) && j != t) toCheck.add(j);
+        List<Integer> broken = new ArrayList<>(), unblocked = new ArrayList<>();
+        boolean stillImpossible = false;
+        for (int j : toCheck) {
+            if (assignment[j] != null || excludedSlots.contains(j)) continue;
+            if (slotIsBlocked(j, usedWords, active, null, null, null)) {
+                Integer oldJ = inverse.get(j);
+                if (oldJ == null || domains.containsKey(oldJ)) {
+                    broken.add(j);
+                    if (!allowBreaking) break;
+                } else {
+                    stillImpossible = true;
+                    break;
+                }
+            } else {
+                unblocked.add(j);
+            }
+        }
+        if (stillImpossible || (!broken.isEmpty() && !allowBreaking)) {
+            Set<Integer> blame = null;
+            if (!broken.isEmpty()) {
+                blame = new HashSet<>();
+                List<Integer> blamed = new ArrayList<>();
+                blamed.add(t);
+                blamed.addAll(broken);
+                for (int j : blamed) for (int k : assignedCrossers(j)) if (inverse.containsKey(k)) blame.add(inverse.get(k));
+                blame.remove(i);
+            }
+            assignment[t] = null;
+            usedWords.remove(w);
+            undoReshape(option, saved, i);
+            if (option.family.equals("challenge")) registerChallengeWordBreak(w);
+            else registerThemeWordBreak(w);
+            return new Object[]{"rejected", null, blame};
+        }
+        for (int j : unblocked) impossibleThisAttempt.discard(j);
+        Map<Integer, Object[]> savedScores = refreshLetterScoresAround(t);
+        List<Integer> newlyTolerated = new ArrayList<>();
+        for (int j : broken) if (!toleratedDry.contains(j)) newlyTolerated.add(j);
+        toleratedDry.addAll(newlyTolerated);
+        placementSeq.put(t, placementCounter++);
+        if (backtrack(deadlineChecks, released)) return new Object[]{"success", null, null};
+        Set<Integer> child = lastConflict;
+        toleratedDry.removeAll(newlyTolerated);
+        restoreLetterScores(savedScores);
+        placementSeq.remove(t);
+        assignment[t] = null;
+        usedWords.remove(w);
+        Map<Integer, Integer> back = undoReshape(option, saved, i);
+        if (child != null) {
+            Set<Integer> mapped = new HashSet<>();
+            for (int j : child) {
+                Integer b = back.get(j);
+                if (b == null) {
+                    mapped = null;
+                    break;
+                }
+                mapped.add(b);
+            }
+            child = mapped;
+        }
+        return new Object[]{"failed", child, null};
+    }
+
+    /** Mirrors adopt_best_structure. */
+    public void adoptBestStructure() {
+        if (bestSlots == slots) return;
+        Map<Cells.Key, Integer> byCells = new HashMap<>();
+        for (int j = 0; j < bestSlots.size(); j++) byCells.put(Cells.key(bestSlots.get(j)), j);
+        RecentSlots recent = new RecentSlots(MAX_EXCLUDED_SLOTS);
+        for (int j : impossibleThisAttempt) {
+            Integer k = byCells.get(Cells.key(slots.get(j)));
+            if (k != null) recent.add(k);
+        }
+        indexSlots(bestSlots);
+        pattern = bestPattern;
+        assignment = bestAssignment.clone();
+        impossibleThisAttempt = recent;
+        toleratedDry = new HashSet<>();
+        placementSeq = new HashMap<>();
     }
 
     public boolean solve(long deadlineChecks) {
@@ -887,6 +1251,12 @@ public final class Filler {
     // ================================================================== slot selection
 
     public int selectTargetSlot(List<Integer> unassigned, Map<Integer, Dom> domains) {
+        return selectTargetSlot(unassigned, domains, true, true);
+    }
+
+    /** challengeLevel/themeLevel switch cascade levels 2 and 5 (mirrors _select_target_slot's keywords). */
+    public int selectTargetSlot(List<Integer> unassigned, Map<Integer, Dom> domains,
+                                boolean challengeLevel, boolean themeLevel) {
         List<Integer> directionPool;
         if (ALTERNATE_DIRECTION_ENABLED) {
             List<Integer> a = new ArrayList<>(), d = new ArrayList<>();
@@ -896,7 +1266,7 @@ public final class Filler {
         } else {
             directionPool = new ArrayList<>(unassigned);
         }
-        Set<String> active = activeChallengeWords();
+        Set<String> active = challengeLevel ? activeChallengeWords() : Set.of();
         if (!active.isEmpty()) {
             List<Integer> placeable = new ArrayList<>();
             for (int i : directionPool) if (challengeCanFill(i, active)) placeable.add(i);
@@ -908,10 +1278,12 @@ public final class Filler {
             if (slots.get(i).length >= 4 && (d == null ? 0 : d.size()) < Grids.PREFILL_MIN_WORD_COUNT) few.add(i);
         }
         List<Integer> pool = few.isEmpty() ? directionPool : few;
-        List<Integer> nonBlank = new ArrayList<>();
-        for (int i : pool) if (hasKnownLetter(i)) nonBlank.add(i);
-        if (!nonBlank.isEmpty()) pool = nonBlank;
-        if (!priorityWords.isEmpty()) {
+        if (KNOWN_LETTER_LEVEL_ENABLED) {
+            List<Integer> nonBlank = new ArrayList<>();
+            for (int i : pool) if (hasKnownLetter(i)) nonBlank.add(i);
+            if (!nonBlank.isEmpty()) pool = nonBlank;
+        }
+        if (themeLevel && !priorityWords.isEmpty()) {
             Set<String> pw = activePriorityWordsFor(slots.get(pool.get(0)));
             List<Integer> themePlaceable = new ArrayList<>();
             for (int i : pool) {
@@ -925,7 +1297,7 @@ public final class Filler {
             }
             if (!themePlaceable.isEmpty()) pool = themePlaceable;
         }
-        double cr = (rows - 1) / 2.0, cc = (cols - 1) / 2.0;
+        double cr = SLOT_SELECTION_ORIGIN_ROW, cc = SLOT_SELECTION_ORIGIN_COL;
         Map<Integer, Double> scores = new HashMap<>();
         for (int i : pool) {
             double best = Double.MAX_VALUE;
@@ -967,9 +1339,9 @@ public final class Filler {
         shuffledWindow.sort((a, b) -> Integer.compare(placed.get(b), placed.get(a)));
         List<Integer> refined = new ArrayList<>(shuffledWindow.subList(0, Math.min(refinedSize, shuffledWindow.size())));
         rng.shuffle(refined);
-        Map<Integer, Long> freq = new HashMap<>();
+        Map<Integer, Double> freq = new HashMap<>();
         for (int i : refined) freq.put(i, slotLetterFrequencyScore(i));
-        refined.sort((a, b) -> Long.compare(freq.get(b), freq.get(a)));
+        refined.sort((a, b) -> Double.compare(freq.get(b), freq.get(a)));
         return refined.get(0);
     }
 
@@ -1018,6 +1390,8 @@ public final class Filler {
         if (assignedCount > bestAssignedCount) {
             bestAssignedCount = assignedCount;
             bestAssignment = assignment.clone();
+            bestSlots = slots;
+            bestPattern = pattern;
             bestStatLetters = statLetters(assignment);
             if (onNewBest != null) onNewBest.accept(bestAssignment);
         }
@@ -1105,7 +1479,12 @@ public final class Filler {
             boolean blameableRejection = false;
             Set<Integer> slotConflict = new HashSet<>();
             int[] crossers = crossingSlots[bestI];
-            for (String w : cands) {
+            // Each family's reshape candidates right after that family's own words.
+            Iterator<?> stream = reshapeEnabled
+                    ? withReshapeCandidates(bestI, cands, challengedSet, priSet, active)
+                    : cands.iterator();
+            while (stream.hasNext()) {
+                Object candidate = stream.next();
                 checks++;
                 if (abandoned) return fail(null);
                 if (deadlineReachedWithoutExtension(deadlineChecks)) {
@@ -1113,6 +1492,41 @@ public final class Filler {
                     return fail(null);
                 }
                 if (periodicCheckpoints()) return fail(null);
+                if (candidate instanceof Reshape rs) {
+                    // Its black-cell change is always undone before this
+                    // returns, unless it succeeded; counts as a descent.
+                    Object[] out = tryReshape(rs, bestI, domains, active, allowBreaking, deadlineChecks, released);
+                    String outcome = (String) out[0];
+                    if (outcome.equals("success")) return true;
+                    if (outcome.equals("rejected")) {
+                        @SuppressWarnings("unchecked")
+                        Set<Integer> blame = (Set<Integer>) out[2];
+                        if (blame != null) {
+                            blameableRejection = true;
+                            slotConflict.addAll(blame);
+                        }
+                        continue;
+                    }
+                    placedAny = true;
+                    descents++;
+                    @SuppressWarnings("unchecked")
+                    Set<Integer> childConflict = (Set<Integer>) out[1];
+                    if (childConflict == null) {
+                        conflictUnknown = true;
+                    } else if (!childConflict.contains(bestI)) {
+                        return fail(childConflict);
+                    } else {
+                        for (int k : childConflict) if (k != bestI) nodeConflict.add(k);
+                    }
+                    if (0 < maxDescents && maxDescents <= descents) {
+                        if (conflictUnknown) return failOrBackghost(null, deadlineChecks, entryReleased);
+                        Set<Integer> merged = new HashSet<>(nodeConflict);
+                        merged.addAll(slotConflict);
+                        return failOrBackghost(merged, deadlineChecks, entryReleased);
+                    }
+                    continue;
+                }
+                String w = (String) candidate;
                 assignment[bestI] = w;
                 usedWords.add(w);
                 boolean owned = true;

@@ -131,7 +131,8 @@ background:
 ./run_Populate.sh start                 # 1000 grids, random language/level/size
 ./run_Populate.sh start --count 200 --language fr --difficulty easy
 ./run_Populate.sh status                # is a batch running? show recent progress
-./run_Populate.sh stop                  # stop it (finishes the current grid first)
+./run_Populate.sh stop                  # stop it (finishes the current grid first,
+                                       # or cancels it if that takes too long)
 ./run_Populate.sh restart --mode turbo  # stop, then start again
 ```
 
@@ -169,8 +170,9 @@ On the page:
    Interactive mode's own "Challenge Words" box offers (see below), given
    priority over the theme and the ordinary dictionary when the grid is
    generated; the solver will even try to reshape the black-cell pattern
-   itself to make room for one of these words (or a theme word) when no
-   slot of the right size already exists. A word you list this way never
+   itself to make room for one of these words (or a theme word, until 5
+   theme words are placed) when no slot of the right size already exists,
+   and undoes that change whenever the word doesn't work out. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
    hidden answer to a spot you chose yourself.
 3. Click **"Generate grid"** (the button's own label follows your chosen

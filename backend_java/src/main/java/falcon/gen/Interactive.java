@@ -199,13 +199,19 @@ public final class Interactive {
         return new Object[]{f, slots};
     }
 
+    /** A reshaped candidate's extra acceptance test (mirrors fits_reshaped). */
+    interface ReshapeFit {
+        boolean test(Filler f, int j, String w);
+    }
+
     /** Returns {slot index, word, cells, pattern} or null. */
     static Object[] findPriorityWordPlacement(Collection<String> poolFlat, Map<Integer, Set<String>> viable, Filler f,
                                               List<int[]> slots, int target, char[][] basePattern, int rows, int cols,
                                               Rng rng, DualIndex index, Map<Integer, Character> known, PW pw,
                                               Set<String> challenge, BiPredicate<Integer, String> fitsOrdinary,
                                               Predicate<String> isEligible, Consumer<String> registerBreak,
-                                              IntConsumer setBudget, int level, boolean allowReshape) {
+                                              IntConsumer setBudget, int level, boolean allowReshape,
+                                              ReshapeFit fitsReshaped) {
         Map<Integer, List<String>> bySlot = new LinkedHashMap<>();
         for (int i : viable.keySet()) {
             List<String> words = new ArrayList<>();
@@ -213,16 +219,16 @@ public final class Interactive {
             if (!words.isEmpty()) bySlot.put(i, f.orderedCandidates(i, words));
         }
         List<Integer> order = new ArrayList<>(bySlot.keySet());
-        Map<Integer, Long> maxScore = new HashMap<>();
+        Map<Integer, Double> maxScore = new HashMap<>();
         for (int i : order) {
-            long m = Long.MIN_VALUE;
+            double m = Double.NEGATIVE_INFINITY;
             for (String w : bySlot.get(i)) m = Math.max(m, f.candidateScore(i, w));
             maxScore.put(i, m);
         }
         order.sort((a, b) -> {
             int ta = a == target ? 0 : 1, tb = b == target ? 0 : 1;
             if (ta != tb) return Integer.compare(ta, tb);
-            return Long.compare(maxScore.get(b), maxScore.get(a));
+            return Double.compare(maxScore.get(b), maxScore.get(a));
         });
         List<Object[]> combos = new ArrayList<>();
         for (int i : order) for (String w : bySlot.get(i)) combos.add(new Object[]{i, w});
@@ -276,6 +282,10 @@ public final class Interactive {
                 registerBreak.accept(w);
                 continue;
             }
+            if (fitsReshaped != null && !fitsReshaped.test(cf, j, w)) {
+                registerBreak.accept(w);
+                continue;
+            }
             Set<String> exemption = new LinkedHashSet<>(f.activeChallengeWords());
             exemption.removeAll(f.usedWords);
             String verdict = wordBreaksOpenSlot(cf, j, w, exemption, openSlotBaseline(cf, j));
@@ -300,7 +310,8 @@ public final class Interactive {
         return cells;
     }
 
-    static Iterable<Integer> cascadeSlotOrder(Filler f, List<Integer> candidates, Map<Integer, Dom> domains, Integer first) {
+    static Iterable<Integer> cascadeSlotOrder(Filler f, List<Integer> candidates, Map<Integer, Dom> domains, Integer first,
+                                              boolean challengeLevel, boolean themeLevel) {
         return () -> new Iterator<>() {
             final List<Integer> remaining = new ArrayList<>(candidates);
             boolean firstDone = !(first != null && candidates.contains(first));
@@ -318,7 +329,7 @@ public final class Interactive {
                     remaining.remove(first);
                     return first;
                 }
-                int i = f.selectTargetSlot(new ArrayList<>(remaining), domains);
+                int i = f.selectTargetSlot(new ArrayList<>(remaining), domains, challengeLevel, themeLevel);
                 remaining.remove(Integer.valueOf(i));
                 return i;
             }
@@ -349,9 +360,9 @@ public final class Interactive {
         return null;
     }
 
-    /** Each slot's cell(s) closest to the grid's center (mirrors _center_closest_cells). */
-    static List<Object> centerClosestCells(Filler f, Collection<Integer> slotIndices) {
-        double cr = (f.rows - 1) / 2.0, cc = (f.cols - 1) / 2.0;
+    /** Each slot's cell(s) closest to SLOT_SELECTION_ORIGIN (mirrors _origin_closest_cells). */
+    static List<Object> originClosestCells(Filler f, Collection<Integer> slotIndices) {
+        double cr = Filler.SLOT_SELECTION_ORIGIN_ROW, cc = Filler.SLOT_SELECTION_ORIGIN_COL;
         TreeSet<Long> out = new TreeSet<>();
         for (int i : slotIndices) {
             int[] slot = f.slots.get(i);
@@ -408,18 +419,33 @@ public final class Interactive {
             }
         }
         if (viable.isEmpty()) return impossibleResult(grid, rows, cols, index, challenge, new ArrayList<>(), new ArrayList<>());
+        // Whether the theme tier may still reshape the grid (mirrors theme_reshape).
+        final boolean themeReshape = Cleanup.themeReshapeAllowed(Fill.placedThemeWords(slots, f.assignment, f.priorityWords));
         Set<Integer> blockedTargets = new HashSet<>(Cleanup.impossibleIndices(slots, index, known, challenge));
         List<Integer> selectable = new ArrayList<>();
         for (int i : viable.keySet()) if (!blockedTargets.contains(i)) selectable.add(i);
         if (selectable.isEmpty()) selectable = new ArrayList<>(viable.keySet());
-        int target = f.selectTargetSlot(selectable, domains);
-        List<Object> windowCells = centerClosestCells(f, f.lastSelectionWindow);
+        // Each tier's own target, selected against that tier's own glossary
+        // (mirrors _tier_target): "challenge" -> level 2 alone, "theme" ->
+        // level 5 alone, "dictionary" -> neither; resolved lazily, once per call.
+        final List<Integer> selectableF = selectable;
+        Map<String, Object[]> tierTargets = new HashMap<>();
+        List<Object>[] windowCellsRef = new List[]{new ArrayList<>()};
+        java.util.function.Function<String, Integer> tierTarget = tier -> {
+            Object[] t = tierTargets.computeIfAbsent(tier, k -> {
+                int ti = f.selectTargetSlot(selectableF, domains, k.equals("challenge"), k.equals("theme"));
+                return new Object[]{ti, originClosestCells(f, f.lastSelectionWindow)};
+            });
+            @SuppressWarnings("unchecked") List<Object> w = (List<Object>) t[1];
+            windowCellsRef[0] = w;
+            return (Integer) t[0];
+        };
         String placedFrom = null;
         Integer placedTarget = null;
         String placedWord = null;
         int[] cells = null;
         char[][] patternToCommit = null;
-        Set<Integer> setAside = new HashSet<>();
+        Filler.RecentSlots setAside = new Filler.RecentSlots(Filler.MAX_EXCLUDED_SLOTS);
         Set<String> exclude = new HashSet<>(challenge);
         exclude.addAll(pw.flatten());
         Set<Integer> selectableSet = new HashSet<>(selectable);
@@ -430,9 +456,9 @@ public final class Interactive {
             Set<String> challengePool = new LinkedHashSet<>(f.activeChallengeWords());
             challengePool.removeAll(f.usedWords);
             if (!challengePool.isEmpty()) {
-                Object[] found = findPriorityWordPlacement(challengePool, viable, f, slots, target, pattern, rows, cols, rng,
+                Object[] found = findPriorityWordPlacement(challengePool, viable, f, slots, tierTarget.apply("challenge"), pattern, rows, cols, rng,
                         index, known, pw, challenge, f::challengeWordFits, w -> !f.challengeAbandoned.contains(w),
-                        f::registerChallengeWordBreak, v -> f.challengeWordBudget = v, level, true);
+                        f::registerChallengeWordBreak, v -> f.challengeWordBudget = v, level, true, null);
                 if (found != null) {
                     placedTarget = (Integer) found[0];
                     placedWord = (String) found[1];
@@ -447,9 +473,10 @@ public final class Interactive {
                 if (!themePool.isEmpty()) {
                     BiPredicate<Integer, String> themeFits = (i, w) -> viable.get(i).contains(w)
                             && f.priorityWords.forCells(slots.get(i)).contains(w);
-                    Object[] found = findPriorityWordPlacement(themePool, viable, f, slots, target, pattern, rows, cols, rng,
+                    Object[] found = findPriorityWordPlacement(themePool, viable, f, slots, tierTarget.apply("theme"), pattern, rows, cols, rng,
                             index, known, pw, challenge, themeFits, w -> !f.themeAbandoned.contains(w),
-                            f::registerThemeWordBreak, v -> f.themeWordBudget = v, level, false);
+                            f::registerThemeWordBreak, v -> f.themeWordBudget = v, level, themeReshape,
+                            (cf, j, w) -> cf.priorityWords.forCells(cf.slots.get(j)).contains(w));
                     if (found != null) {
                         placedTarget = (Integer) found[0];
                         placedWord = (String) found[1];
@@ -461,8 +488,9 @@ public final class Interactive {
             }
             if (placedFrom == null) {
                 String word = null;
+                int dictionaryTarget = tierTarget.apply("dictionary");
                 for (List<Integer> group : List.of(selectable, blockedViable)) {
-                    for (int i : cascadeSlotOrder(f, group, domains, group == selectable ? target : null)) {
+                    for (int i : cascadeSlotOrder(f, group, domains, group == selectable ? dictionaryTarget : null, false, false)) {
                         word = generalDictionaryPick(f, viable, i, exclude, baselines, level);
                         if (word == null) {
                             setAside.add(i);
@@ -482,8 +510,9 @@ public final class Interactive {
             }
             if (placedFrom != null) break;
         }
-        if (placedTarget != null) setAside.remove(placedTarget);
-        List<Object> excluded = slotCellsOf(slots, setAside);
+        if (placedTarget != null) setAside.discard(placedTarget);
+        List<Object> excluded = slotCellsOf(slots, setAside.toList());
+        List<Object> windowCells = windowCellsRef[0];
         if (placedFrom == null) return impossibleResult(grid, rows, cols, index, challenge, excluded, windowCells);
         char[][] newGrid = new char[rows][cols];
         for (int r = 0; r < rows; r++) {

@@ -4383,10 +4383,9 @@ end through the real running API (interactive start/step/save,
   2px solid var(--accent); outline-offset: -2px`) on the candidate slots
   of the last "Suivant" click in Interactive mode, at the user's explicit
   request: the slots of the slot-selection cascade's level-6 geometric
-  window, each marked only by its own cell(s) closest to the grid's center
-  (the cell that gives it its score), never by the whole slot — "entourer
-  les cases les plus proches du centre (et non la totalité des cases des
-  emplacements)". An `outline` rather than a background or a box-shadow:
+  window, each marked only by its own cell(s) closest to the level-6
+  origin (the grid's top-left cell — the cell that gives it its score),
+  never by the whole slot. An `outline` rather than a background or a box-shadow:
   every diagnostic here is a background fill and the hover/selection
   marks are inset box-shadows, so an outline is the one property that
   composes with all of them on the same cell. Reuses `--accent` (no new

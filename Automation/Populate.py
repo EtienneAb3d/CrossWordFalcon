@@ -38,7 +38,12 @@ Usage:
     .venv/bin/python Automation/Populate.py --count 50 --language fr --difficulty easy
     .venv/bin/python Automation/Populate.py --mode turbo --width 15 --height 10
 
-Ctrl-C: stops cleanly after the current grid (prints a summary).
+Ctrl-C: stops cleanly after the current grid (prints a summary). A second
+Ctrl-C (or SIGTERM) exits immediately — but never before cancelling the
+job this script still has on the server (`POST /api/generate/cancel/
+{job_id}`), so no orphaned job is left in the backend's queues to compute
+on its own once this script has gone. The same cancellation applies to a
+grid abandoned on `--per-grid-timeout`.
 """
 import argparse
 import json
@@ -74,6 +79,38 @@ DEFAULT_BASE_URL = os.environ.get(
 )
 
 _stop_requested = False
+
+# The job this script has submitted and not yet seen finish, with the
+# backend it lives on — cancelled before this script ever gives up on it
+# (`_cancel_current_job`).
+_current_job_id = None
+_current_base_url = None
+
+# Bounded, so an unreachable backend cannot hold up an exit.
+CANCEL_TIMEOUT_S = 10.0
+
+
+def _cancel_current_job():
+    """Cancels the job still owned by this script, if any (best-effort)."""
+    global _current_job_id
+    job_id, _current_job_id = _current_job_id, None
+    if not job_id or not _current_base_url:
+        return
+    try:
+        _http_json(
+            f"{_current_base_url}/api/generate/cancel/{job_id}",
+            payload={}, timeout=CANCEL_TIMEOUT_S,
+        )
+        print(f"    job {job_id[:8]} annulé sur le serveur.", flush=True)
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        print(f"    !! annulation du job {job_id[:8]} impossible : {e}", flush=True)
+
+
+def _handle_sigterm(signum, frame):
+    # SystemExit unwinds through main()'s own `finally`, which cancels the
+    # current job before the process exits.
+    print("\nArrêt immédiat (SIGTERM).", flush=True)
+    sys.exit(143)
 
 
 def _handle_sigint(signum, frame):
@@ -174,11 +211,17 @@ def _generate_one(base_url, req, poll_interval, per_grid_timeout):
             # without counting it as a failure or spending a retry.
             return None, "rejected", None, time.monotonic() - started
         raise
+    global _current_job_id, _current_base_url
     job_id = resp["job_id"]
+    _current_job_id, _current_base_url = job_id, base_url
+    # Machine-readable line: run_Populate.sh reads the last one back to
+    # cancel this job itself if the process ever has to be SIGKILLed.
+    print(f"    job_submitted {job_id} {base_url}", flush=True)
     last_phase = None
     while True:
         time.sleep(poll_interval)
         if per_grid_timeout and (time.monotonic() - started) > per_grid_timeout:
+            _cancel_current_job()
             return job_id, "timeout", None, time.monotonic() - started
         try:
             phase_info = _http_json(
@@ -189,6 +232,7 @@ def _generate_one(base_url, req, poll_interval, per_grid_timeout):
                 # Job evicted from JOBS (MAX_JOBS) before we saw it
                 # finish — rare here (only one job at a time), treated as
                 # unknown.
+                _current_job_id = None
                 return job_id, "gone", None, time.monotonic() - started
             raise
         phase = phase_info.get("phase")
@@ -207,6 +251,7 @@ def _generate_one(base_url, req, poll_interval, per_grid_timeout):
             print(f"    -> {phase}{extra}", flush=True)
             last_phase = phase
         if phase_info.get("finished"):
+            _current_job_id = None
             return (
                 job_id,
                 phase,
@@ -252,6 +297,14 @@ def main():
         return 1
 
     signal.signal(signal.SIGINT, _handle_sigint)
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+    try:
+        return _populate(args, base_url)
+    finally:
+        _cancel_current_job()
+
+
+def _populate(args, base_url):
 
     print(
         f"Peuplement : {args.count} grilles, une par une, via {base_url}\n"
@@ -292,6 +345,7 @@ def main():
                 )
             except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
                 print(f"    !! erreur réseau : {e}", flush=True)
+                _cancel_current_job()
                 phase, error_code, elapsed, job_id = "network_error", None, 0.0, None
 
             if phase == "done":

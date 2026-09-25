@@ -12,7 +12,9 @@
 # Usage:
 #   ./run_Populate.sh status              # is it running? (default action)
 #   ./run_Populate.sh start [args...]     # launch detached; args go to Populate.py
-#   ./run_Populate.sh stop                # graceful stop, then escalate if needed
+#   ./run_Populate.sh stop                # graceful stop, then escalate if needed;
+#                                         # an escalated stop cancels the current
+#                                         # job on the server too
 #   ./run_Populate.sh restart [args...]   # stop, then start with the given args
 #
 # Examples:
@@ -31,9 +33,11 @@ PY=".venv/bin/python"
 SCRIPT="Automation/Populate.py"
 
 # How long to wait for a graceful (finish-current-grid) stop before asking
-# Populate to exit immediately, then before a hard kill.
+# Populate to exit immediately, then before a hard kill. The second wait
+# stays above Populate.py's own CANCEL_TIMEOUT_S (10s): on an immediate
+# exit, Populate first cancels its job on the server.
 STOP_GRACE_SECONDS="${POPULATE_STOP_GRACE:-20}"
-FORCE_GRACE_SECONDS=5
+FORCE_GRACE_SECONDS=15
 
 mkdir -p "$LOG_DIR"
 
@@ -56,6 +60,23 @@ populate_pid() {
         rm -f "$PID_FILE"
     fi
     pgrep -f "python[0-9.]* .*${SCRIPT}" 2>/dev/null | head -n1 || true
+}
+
+# Cancels, on the server, the last job Populate submitted (its own
+# "job_submitted <id> <base_url>" log line) — the fallback for a SIGKILL,
+# which Populate cannot intercept to cancel the job itself. Harmless on a
+# job that has already finished.
+cancel_last_job() {
+    local line job_id base_url
+    line="$(grep -E '^ +job_submitted ' "$LOG_FILE" 2>/dev/null | tail -n1 || true)"
+    [ -n "$line" ] || return 0
+    read -r _ job_id base_url <<< "$line"
+    [ -n "$job_id" ] && [ -n "$base_url" ] || return 0
+    if curl -s -m 10 -o /dev/null -X POST "$base_url/api/generate/cancel/$job_id"; then
+        echo "Cancelled job ${job_id:0:8} on the server."
+    else
+        echo "WARNING: could not cancel job ${job_id:0:8} on $base_url." >&2
+    fi
 }
 
 # --- actions ------------------------------------------------------------
@@ -112,6 +133,7 @@ do_stop() {
         echo "WARNING: pid $pid is still alive." >&2
         return 1
     fi
+    cancel_last_job
     echo "Stopped."
     rm -f "$PID_FILE"
     return 0
@@ -170,7 +192,7 @@ case "$action" in
     stop)    do_stop ;;
     restart) do_stop && do_start "$@" ;;
     -h|--help|help)
-        sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
         ;;
     *)
         echo "Unknown action: $action" >&2

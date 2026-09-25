@@ -5,6 +5,7 @@ import falcon.gen.Words.LengthSets;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -19,7 +20,7 @@ public final class Grids {
 
     public static final char BLACK = '#';
     public static final char WHITE = '.';
-    public static final int STRUCTURAL_MIN_INTERIOR_FREE = 8;
+    public static final int STRUCTURAL_MIN_INTERIOR_FREE = 4;
     public static final int PREFILL_MIN_WORD_COUNT = 3;
     public static final int PREFILL_LOCKED_MIN_WORD_COUNT = 3;
     public static final int NOISE_FREQUENCY_THRESHOLD = 5;
@@ -287,6 +288,19 @@ public final class Grids {
         }
     }
 
+    /**
+     * Squared Euclidean distance from (r, c) to the closest of {@code blacks} ({@code Long.MAX_VALUE} when there
+     * is none) — {@link #placeBlackCells}' ranking criterion within its 32-candidate window.
+     */
+    static long nearestBlackDistanceSq(List<Integer> blacks, int r, int c) {
+        long best = Long.MAX_VALUE;
+        for (int b : blacks) {
+            long dr = r - Cells.r(b), dc = c - Cells.c(b);
+            best = Math.min(best, dr * dr + dc * dc);
+        }
+        return best;
+    }
+
     /** Returns the cells still unplaced (rejected ones, then untried ones). */
     static List<Integer> placeBlackCells(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
                                          List<Integer> candidates, int target, int placed, DualIndex index,
@@ -298,9 +312,16 @@ public final class Grids {
         while (!remaining.isEmpty() && placed < target) {
             List<Integer> pool = leastLoadedPool(remaining, rowBlack, colBlack);
             List<Integer> order = new ArrayList<>(pool.subList(0, Math.min(window, pool.size())));
-            final List<Integer> rem = remaining;
-            order.sort((a, b) -> Integer.compare(rowBlack[Cells.r(rem.get(a))] + colBlack[Cells.c(rem.get(a))],
-                    rowBlack[Cells.r(rem.get(b))] + colBlack[Cells.c(rem.get(b))]));
+            List<Integer> blacks = new ArrayList<>();
+            for (int br = 0; br < rows; br++) {
+                for (int bc = 0; bc < cols; bc++) if (grid[br][bc] == BLACK) blacks.add(Cells.of(br, bc));
+            }
+            Map<Integer, Long> dist = new HashMap<>();
+            for (int i : order) {
+                int cell = remaining.get(i);
+                dist.put(i, nearestBlackDistanceSq(blacks, Cells.r(cell), Cells.c(cell)));
+            }
+            order.sort((a, b) -> Long.compare(dist.get(b), dist.get(a)));
             List<Integer> nonAdjacent = new ArrayList<>();
             for (int i : order) {
                 int cell = remaining.get(i);
@@ -527,13 +548,18 @@ public final class Grids {
         }
         if (locked != null) {
             locked.forEach((cell, ch) -> {
-                if (!covered.contains(cell)) letters[Cells.r(cell)][Cells.c(cell)] = ch;
+                if (!covered.contains(cell) && letters[Cells.r(cell)][Cells.c(cell)] != BLACK) {
+                    letters[Cells.r(cell)][Cells.c(cell)] = ch;
+                }
             });
         }
         List<Integer> forcedSorted = new ArrayList<>();
         if (forced != null && !forced.isEmpty()) {
+            // A seed can sit on a cell a search reshape has since turned black.
             forced.forEach((cell, ch) -> {
-                if (!covered.contains(cell)) letters[Cells.r(cell)][Cells.c(cell)] = ch;
+                if (!covered.contains(cell) && letters[Cells.r(cell)][Cells.c(cell)] != BLACK) {
+                    letters[Cells.r(cell)][Cells.c(cell)] = ch;
+                }
             });
             forcedSorted.addAll(new java.util.TreeSet<>(forced.keySet()));
         }

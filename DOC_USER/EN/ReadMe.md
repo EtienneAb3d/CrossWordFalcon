@@ -183,7 +183,8 @@ generation (`frontend/static/script.js`, the form's own `submit` handler,
   panel's own **Suivant / Next** button already applies one word at a
   time, including accepting a word absent from the dictionary. If no slot
   of the right size already exists for one of these words (or a theme
-  word), the generator will even try reshaping the black-cell layout
+  word, until 5 theme words are placed), the generator will even try
+  reshaping the black-cell layout
   itself to make room for it before falling back to the ordinary
   dictionary — the same reshaping **Suivant / Next** tries too (see
   "Interactive authoring mode" below) — but it still isn't a hard
@@ -738,16 +739,22 @@ real letter. Both update after every edit.
 
 - **Suivant / Next** (`#interactive-next-btn`, `POST /api/interactive/
   step`) — places exactly one more word, choosing the spot where the
-  fewest words still fit and preferring a theme word where one does. A
+  fewest words still fit and preferring a theme word where one does. The
+  spot is picked separately for each kind of word it tries — "Mots Défi"
+  first, then theme words, then any dictionary word — each looking only
+  at the spots its own kind of word fits, so when no theme word can be
+  placed, the plain dictionary word goes wherever suits the dictionary
+  best, not into a spot picked for a theme word. A
   spot where every candidate word would leave some other word impossible
-  to complete is set aside — its still-empty cells turn yellow, and
+  to complete is set aside — its cells turn yellow, and
   **Suivant** simply looks at the next spot instead, coming back to a
-  set-aside one only once nothing can be placed anywhere else. A yellow
+  set-aside one only once nothing can be placed anywhere else. Only the
+  last three spots set aside stay yellow. A yellow
   spot is only deprioritised, never walled off: words crossing it are
   still placed normally, unlike a red (impossible) one. After each click,
   a blue frame marks the spots the generator was choosing among when it
-  picked where to go next — the ones closest to the grid's center — each
-  by its own square nearest that center (`frontend/static/script.js`,
+  picked where to put the word it placed — the ones closest to the grid's top-left
+  square — each by its own square nearest that corner (`frontend/static/script.js`,
   `interactiveWindowCells`). Once no spot in
   the whole grid has a completely safe word left, **Suivant** widens what
   it will accept rather than stopping: first a word that leaves some
@@ -875,7 +882,8 @@ real letter. Both update after every edit.
   best-ranked one that does once nothing safer is available anywhere in
   the grid — and only reaches for a challenge word here, as an absolute
   last resort, on the rare slot where literally nothing else, safe or
-  not, can go at all. Only once a challenge word has no existing slot
+  not, can go at all. Only once a challenge word — or a theme word, while
+  fewer than 5 theme words are on the grid — has no existing slot
   of its own length anywhere at all does **Suivant** try reshaping the
   black-cell layout for it specifically — first nudging a black cell over
   to carve out a right-sized empty slot, then, if that doesn't work,
@@ -1082,7 +1090,7 @@ respect a few hard rules: a white cell can never end up boxed in on all
 four sides (it would belong to no word at all and could never receive a
 letter); the white area of the grid must stay fully connected, never
 split into isolated pockets by a wall of black cells; and an ordinary
-interior word slot should normally be at least 8 cells long, unless one
+interior word slot should normally be at least 4 cells long, unless one
 of its ends touches the grid's own border, in which case any length is
 allowed. Before this placement even starts, a separate "pre-fill" pass
 runs first: as long as some slot's own length is covered by too few
@@ -1095,30 +1103,29 @@ within that slot's own cells (never from some unrelated part of the
 grid), or, if that isn't enough, by removing one of the crossing words
 that pinned those letters in place to begin with. Each new black cell is
 drawn only among the cells lying both in one of the columns and in one of
-the rows that currently hold the fewest black cells — spreading
-them out rather than letting them clump into ugly "walls" — and the
+the rows that currently hold the fewest black cells, and among a small
+batch of such cells the one farthest from every black cell already placed
+wins — spreading them out rather than letting them clump into ugly
+"walls" — and the
 generator never places a black cell right next to another one, on any
 cycle: a cycle whose black-cell density target can't be reached without
 doing so simply ends up with fewer black cells than aimed for, left as-is,
 rather than forcing an adjacent one.
 
-Once this fresh pattern is in place but before any word has actually been
-placed into it, the generator makes one more pass specifically for any
-"Mots Défi (personnalisation)" / "Challenge Words" word that has
-no slot of its own length anywhere yet (theme words never get this
-treatment: they only go into slots the pattern already offers): it looks for a black cell that
-can be nudged over to the far side of that word instead of its current
-spot — carving out a right-sized empty slot — as long as doing so keeps
-the grid's own hard rules intact and never disturbs a word that's already
-been placed. Once every Challenge Word has had its own turn at this, a
-second pass looks at whichever of them are still without a slot and tries a
-different adjustment for them: finding an existing empty slot that's
-already longer than the word, and casing the word flush against its
-start or its end by dropping a brand new black cell right past it,
-rather than moving an existing one. Both adjustments are best-effort, not
-a guarantee: a word too long for any nearby gap or existing slot, or one
-for which neither adjustment keeps the grid valid, simply falls back to
-the ordinary chances described below.
+The pattern itself is never adjusted ahead of the search. Instead, while
+filling the grid, the generator may reshape the slot it is working on for a
+"Mots Défi (personnalisation)" / "Challenge Words" word that has no slot of
+its own length anywhere — and for a theme word too, but only while fewer
+than 5 theme words are already on the grid (from 5 on, theme words only go
+into slots the pattern already offers). For a shorter word it drops a new
+black cell right past the word; for a longer one it frees the black cell at
+one end of the slot and closes the word further along. It remembers the
+black cells it changed, and the moment that word is turned down — because
+it would leave a crossing word impossible, or because the rest of the grid
+can't be completed around it — it puts those black cells back exactly as
+they were before trying anything else. A moved or added black cell
+therefore only ever stays on the grid next to the Challenge or theme word
+it was made for.
 
 **Choosing which word slot to fill next.** Once a black-cell pattern is
 accepted, every run of at least 2 white cells (across or down) becomes a
@@ -1134,13 +1141,9 @@ below — the same priority the Interactive mode panel's own "Suivant" /
 "Next" button gives it one word at a time; within that group, a slot with fewer than 3
 real dictionary candidates left is tackled first, on the theory that
 finishing it with a genuine word now is better than letting a later
-cleanup pass shorten it with a black cell instead; among what's left, a
-slot that's already partly determined by a real crossing letter is
-preferred over one that's still completely blank, so the generator tends
-to finish what it's already started rather than opening new fronts
-everywhere at once; the ten slots of that group closest to the grid's
-own center are then kept (so the fill closes in from the center
-outward); within those three, the choice narrows to whichever long slots
+cleanup pass shorten it with a black cell instead; the ten slots of that
+group closest to the grid's top-left square are then kept (so the fill
+spreads out from that corner); within those ten, the choice narrows to whichever long slots
 own the single most constrained cell (only slots of 12 letters or more
 are looked at first; if none has a free cell left to measure, the bar
 drops to 11 letters, then 10, and so on down to 2) — the cell with the
@@ -1165,7 +1168,7 @@ else remains to choose from.
 **Choosing which candidate word to try for that slot.** Before any real
 search even begins, the generator takes a quick statistical peek at what
 the rest of the grid might plausibly look like: for every still-open
-slot, it randomly samples 100 dictionary words of the right length
+slot, it randomly samples 10 dictionary words of the right length
 (filtered down to whichever ones are still compatible with any letters
 already known there) and looks, cell by cell, at which letter shows up
 most often. A handful of these cells, where one letter dominates clearly

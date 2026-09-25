@@ -9,6 +9,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -27,9 +28,9 @@ import static falcon.gen.Grids.WHITE;
 public final class Fill {
     private Fill() {}
 
-    public static final int LETTER_BIAS_SAMPLE_SIZE = 100;
+    public static final int LETTER_BIAS_SAMPLE_SIZE = 10;
     public static final double LETTER_BIAS_FORCE_FRACTION = 0.05;
-    public static final int LETTER_BIAS_MIN_COUNT = 10;
+    public static final int LETTER_BIAS_MIN_COUNT = 1;
     public static final int THEME_WORD_SCORE_BONUS = 2;
     public static final int CHALLENGE_WORD_SCORE_BONUS = 4;
     public static final int CONTENT_SCORE_LENGTH_CAP = 7;
@@ -182,6 +183,17 @@ public final class Fill {
             if (w != null && priorityWords.forCells(slots.get(i)).contains(w)) for (int c : slots.get(i)) out.add(c);
         }
         return new ArrayList<>(out);
+    }
+
+    /** Mirrors _placed_theme_words: distinct theme words already placed, each against its own direction's glossary. */
+    public static Set<String> placedThemeWords(List<int[]> slots, String[] assignment, PW priorityWords) {
+        Set<String> out = new LinkedHashSet<>();
+        if (priorityWords == null || priorityWords.isEmpty()) return out;
+        for (int i = 0; i < slots.size(); i++) {
+            String w = assignment[i];
+            if (w != null && priorityWords.forCells(slots.get(i)).contains(w)) out.add(w);
+        }
+        return out;
     }
 
     public static List<Integer> challengeWordCellsFromAssignment(List<int[]> slots, String[] assignment,
@@ -372,6 +384,9 @@ public final class Fill {
         public PW priorityWords;
         public Set<String> challengeWords;
         public Set<Integer> requiredCells;
+        /** Lets the search reshape the pattern for a "Mots Défi"/theme word (mirrors reshape_black_cells). */
+        public boolean reshapeBlackCells;
+        public Set<Integer> permanentBlackCells;
     }
 
     static List<Integer> quotaOverflowSlotIndices(String[] assignment, Set<String> offending) {
@@ -430,6 +445,11 @@ public final class Fill {
         Set<String> cw = a.challengeWords == null ? Set.of() : a.challengeWords;
         Filler filler = new Filler(slots, index, rng, a.forcedLetters, a.letterScores, a.excludedSlots, a.cancelEvent,
                 a.batchAbandonedEvent, a.attemptDoneEvent, null, a.lockedLetters, pw, cw, rows, cols);
+        filler.pattern = Grids.copy(grid);
+        filler.bestPattern = filler.pattern;
+        filler.reshapeEnabled = a.reshapeBlackCells && (a.excludedSlots == null || a.excludedSlots.isEmpty())
+                && Filler.MAX_BACKGHOSTS_PER_DESCENT <= 0;
+        filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
         if (a.checksProgress != null && a.checksSlot != null) {
             final int slot = a.checksSlot;
             filler.onChecksProgress = checks -> a.checksProgress.set(slot, checks);
@@ -441,9 +461,12 @@ public final class Fill {
         }
         if (a.bestStateQueue != null) {
             filler.onNewBest = best -> {
-                Object[] partial = Grids.buildPartialLettersGrid(grid, slots, best, a.forcedLetters, a.lockedLetters);
+                // Called right as the record is taken: the Filler's current
+                // pattern and slots are the ones `best` lives on.
+                Object[] partial = Grids.buildPartialLettersGrid(filler.pattern, filler.slots, best, a.forcedLetters,
+                        a.lockedLetters);
                 Diag m = new Diag();
-                m.grid = Grids.copy(grid);
+                m.grid = Grids.copy(filler.pattern);
                 m.assignment = best.clone();
                 m.exampleGrid = (char[][]) partial[0];
                 m.impossibleCells = filler.impossibleZoneCells();
@@ -455,15 +478,16 @@ public final class Fill {
                 List<Integer> fc = (List<Integer>) partial[1];
                 m.forcedCells = fc;
                 m.lockedCells = lockedCells;
-                m.themeCells = themeWordCells(slots, best, pw);
-                m.challengeCells = challengeWordCellsFromAssignment(slots, best, cw);
+                m.themeCells = themeWordCells(filler.slots, best, pw);
+                m.challengeCells = challengeWordCellsFromAssignment(filler.slots, best, cw);
                 m.checks = filler.checks;
                 m.reason = "best_state_snapshot";
                 m.attemptId = a.attemptId;
                 a.bestStateQueue.accept(m);
             };
             filler.onLiveState = current -> {
-                Object[] partial = Grids.buildPartialLettersGrid(grid, slots, current, a.forcedLetters, a.lockedLetters);
+                Object[] partial = Grids.buildPartialLettersGrid(filler.pattern, filler.slots, current, a.forcedLetters,
+                        a.lockedLetters);
                 Diag m = new Diag();
                 m.exampleGrid = (char[][]) partial[0];
                 m.impossibleCells = filler.emptyDomainZoneCells(current);
@@ -474,8 +498,8 @@ public final class Fill {
                 List<Integer> fc = (List<Integer>) partial[1];
                 m.forcedCells = fc;
                 m.lockedCells = lockedCells;
-                m.themeCells = themeWordCells(slots, current, pw);
-                m.challengeCells = challengeWordCellsFromAssignment(slots, current, cw);
+                m.themeCells = themeWordCells(filler.slots, current, pw);
+                m.challengeCells = challengeWordCellsFromAssignment(filler.slots, current, cw);
                 m.checks = filler.checks;
                 m.reason = "live_heartbeat";
                 m.attemptId = a.attemptId;
@@ -493,6 +517,12 @@ public final class Fill {
         }
         filler.markImmediatelyImpossibleSlots();
         boolean solvedInternally = filler.solve(deadline);
+        // A failed search has undone every reshape, but its record may have
+        // been taken on a reshaped grid: carry on from that grid, and hand its
+        // pattern back to the caller through `grid` (mirrors try_fill).
+        filler.adoptBestStructure();
+        slots = filler.slots;
+        for (int r = 0; r < rows; r++) System.arraycopy(filler.pattern[r], 0, grid[r], 0, cols);
         closeImpliedSlots(slots, index, filler.bestAssignment, filler.usedWords, filler.excludedSlots);
         filler.assignment = filler.bestAssignment.clone();
         boolean complete = true;

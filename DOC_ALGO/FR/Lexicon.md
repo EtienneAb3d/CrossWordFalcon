@@ -181,7 +181,8 @@ plusieurs signaux) :
   propriété de l'état examiné, pas un fait durable sur l'emplacement.
   En mode Interactif, le bouton **Suivant** constate la même chose à son
   échelle : un emplacement où aucun candidat n'est acceptable est écarté pour
-  ce clic, renvoyé au panneau dans `excluded_cells` et affiché en fond jaune
+  ce clic — seuls les 3 derniers écartés sont gardés, comme en génération
+  automatique —, renvoyé au panneau dans `excluded_cells` et affiché en fond jaune
   (`frontend/static/style.css`, `.cell.white.interactive-excluded`). La
   libération de l'étape 2 y prend la forme d'un niveau de tolérance
   supplémentaire : la recherche entière est rejouée sur toute la grille, les
@@ -239,13 +240,35 @@ plusieurs signaux) :
   `Filler._backtrack`, `_general_dictionary_pick`,
   `_find_priority_word_placement`.)
 
+- **Case noire flottante** : case noire que le moteur a le droit de
+  déplacer ou d'ajouter pour faire exister un emplacement de la longueur
+  d'un Mot Défi, ou d'un mot du glossaire thématique tant que moins de 5
+  mots thématiques sont posés — toute case noire qui n'est pas protégée
+  (`permanent_black_cells`, les cases noires figées par l'utilisateur pour
+  « Finir la grille »). (`backend/crossword_gen.py`,
+  `THEME_RESHAPE_MAX_PLACED_WORDS`.)
+
+- **Réaménagement** : modification de cases noires flottantes faite pour
+  un seul mot et liée à lui. En génération automatique, c'est une option
+  d'un nœud de la recherche sur l'emplacement qu'il a choisi : le nœud
+  mémorise l'état d'origine des seules cases noires qu'il modifie, pose le
+  mot, et remet ces cases dans leur état d'origine dès que le mot est
+  refusé (sur-le-champ ou après l'échec de la suite), avant de passer à
+  l'option suivante de l'emplacement. Un réaménagement ne survit donc
+  jamais sans le mot pour lequel il a été fait. En mode Interactif, il n'est
+  appliqué que s'il accompagne le mot réellement posé par « Suivant ».
+  (`backend/crossword_gen.py`, `Filler._try_reshape`, `_undo_reshape`,
+  `_find_priority_word_placement`.)
+
 ## Retour en arrière
 
 - **Descente** : candidat qui a passé le contrôle de croisement et dans
   lequel la recherche est descendue récursivement pour remplir la suite
   de la grille. Un candidat rejeté sur-le-champ par ce contrôle n'est pas
   une descente ; un Mot Défi ou un mot du glossaire thématique n'est
-  jamais compté comme une descente pour le plafond de descentes par nœud. (`backend/crossword_gen.py`, `Filler._backtrack`.)
+  jamais compté comme une descente pour le plafond de descentes par nœud,
+  sauf quand sa pose a demandé un réaménagement de case noire, qui compte
+  toujours. (`backend/crossword_gen.py`, `Filler._backtrack`.)
 
 - **Plafond de descentes par nœud** : nombre maximal de descentes
   qu'une étape de la recherche fait sans succès avant d'abandonner et de
@@ -253,8 +276,8 @@ plusieurs signaux) :
   candidat suivant — tous emplacements et tous temps du nœud confondus. C'est ce qui permet au retour en arrière de
   remonter jusqu'aux mots posés dans les premières phases au lieu de
   rester à explorer le bas de l'arbre. Une valeur `<= 0` supprime le
-  plafond. Tant que la recherche a posé moins de 5 mots en plus de ceux
-  de l'état initial de la tentative, le plafond d'un nœud est porté à 10
+  plafond. Tant que la recherche a posé moins de 10 mots en plus de ceux
+  de l'état initial de la tentative, le plafond d'un nœud est porté à 7
   descentes. Une grille héritée d'une étape précédente (tentative qui
   démarre avec des cases verrouillées) n'a aucun plafond : tous ses
   nœuds explorent toutes leurs possibilités. (`backend/crossword_gen.py`,
@@ -276,12 +299,14 @@ plusieurs signaux) :
 
 - **Emplacements candidats** : en mode Interactif, les emplacements de la
   fenêtre géométrique du niveau 6 de la cascade de choix d'emplacement —
-  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du centre de la grille
-  parmi ceux retenus par les niveaux précédents — dans laquelle
-  l'emplacement cible d'un clic sur « Suivant » a été tiré. Chacun est
-  signalé par sa ou ses cases les plus proches du centre, entourées en
+  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches de la case `(0, 0)`
+  parmi ceux retenus par les niveaux précédents — dans laquelle a été
+  tirée, lors d'un clic sur « Suivant », la cible de la famille (Mots Défi,
+  glossaire thématique ou dictionnaire général) qui a posé le mot ; chaque
+  famille évalue la cascade par rapport à son seul glossaire. Chacun est
+  signalé par sa ou ses cases les plus proches de cette origine, entourées en
   bleu. (`backend/crossword_gen.py`, `Filler.last_selection_window`,
-  `_center_closest_cells` ; `frontend/static/script.js`,
+  `_origin_closest_cells` ; `frontend/static/script.js`,
   `interactiveWindowCells`.)
 
 - **Retrait fantôme** (*backghost*) : alternative légère au saut arrière,

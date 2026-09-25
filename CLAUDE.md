@@ -280,9 +280,11 @@ via `ProcessPoolExecutor`:
    minimum over the rows/columns still owning a candidate, both bounds
    raised together one black cell at a time while that intersection is
    empty), then a 32-cell look-ahead window of that pool prefers the
-   row/column with the fewest black cells so far, restricted to
+   cell farthest from every black cell already placed (greatest
+   Euclidean distance to the closest one, `_nearest_black_distance_sq`,
+   ties keeping the shuffled order), restricted to
    non-adjacent candidates satisfying
-   `STRUCTURAL_MIN_INTERIOR_FREE=8` (an interior white zone must be at
+   `STRUCTURAL_MIN_INTERIOR_FREE=4` (an interior white zone must be at
    least this long), relaxed down to 1 — but adjacency itself is never
    accepted at all, on any palier (`forbid_adjacency=True`, always, not
    only on a call's very first, blank palier): a palier whose black-fill
@@ -319,15 +321,17 @@ via `ProcessPoolExecutor`:
    placed here, ahead of every level below, so it can never be starved by
    an unrelated fragile slot winning level 3 first; (3) among slots ≥4
    letters, prefer ones with fewer than
-   `PREFILL_MIN_WORD_COUNT` real candidates, if any; (4) among those,
-   prefer ones with at least one already-known letter, if any; (5) among
+   `PREFILL_MIN_WORD_COUNT` real candidates, if any; (4) optional,
+   currently disabled (`KNOWN_LETTER_LEVEL_ENABLED=False`, a no-op while
+   disabled) — when enabled, among those, prefer ones with at least one
+   already-known letter, if any; (5) among
    those, prefer ones where an unused theme word still fits, if any —
    since level 2 already ran first, this group may already be challenge-
    narrowed, which is what still gives "Mots Défi" priority over the
    theme glossary specifically; (6) score the remaining group
    geometrically (squared distance between the slot's own CLOSEST cell to
-   the grid's own center, and that center itself — not the slot's own
-   midpoint), shuffle, and keep the
+   `SLOT_SELECTION_ORIGIN=(0, 0)`, the grid's top-left cell, and that
+   origin itself — not the slot's own midpoint), shuffle, and keep the
    `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored as a window; (7) within
    that window, among slots of at least
    `MOST_CONSTRAINED_START_LENGTH=12` letters — a threshold lowered one
@@ -365,14 +369,17 @@ via `ProcessPoolExecutor`:
    every node; (8)
    re-sort that window by letters-already-placed (most first), keep the
    top `SLOT_SELECTION_REFINE_FRACTION=1/2`; (9) re-sort by statistical
-   fill-option richness (`_slot_letter_frequency_score`), highest wins.
+   fill-option richness (`_slot_letter_frequency_score`: square root of
+   the sum of the squared top-letter frequencies of the slot's still-free
+   cells), highest wins.
    Candidate word order
    within the chosen slot is `Filler.ordered_candidates` — this engine's
    single candidate-ordering rule, shared verbatim with Interactive
    mode's own "Suivant" (see "Priority-tier search in Interactive mode"
    below): shuffled, then ranked by `_candidate_score`
-   (sum of squared per-cell statistical letter scores from `sample_
-   letter_biases`) with a random draw inside a `CANDIDATE_SCORE_
+   (square root of the sum of squared per-cell statistical letter scores
+   from `sample_letter_biases`, which draws `LETTER_BIAS_SAMPLE_SIZE=10`
+   words per slot) with a random draw inside a `CANDIDATE_SCORE_
    WINDOW=50`-word sliding window — deliberately far narrower than a
    slot's own domain, so the statistical ranking stays in charge while two
    attempts on the same state still diverge; a themed grid's matching words are
@@ -380,7 +387,9 @@ via `ProcessPoolExecutor`:
    "Mots Défi" word geometrically fitting the chosen slot is injected
    ahead of that block (even when absent from the loaded lexicon
    entirely) — the same precedence `interactive_place_word`'s own
-   candidate draw already gives it. A slot whose real dictionary domain
+   candidate draw already gives it. Each family's black-cell reshape
+   options for the chosen slot follow that family's own words (see
+   "Floating black cells and reshapes" below). A slot whose real dictionary domain
    is empty is not treated as a dead end (`Filler.
    mark_immediately_impossible_slots`/`_backtrack`'s own per-node
    domain check) as long as an unused, not-yet-abandoned challenge word
@@ -590,8 +599,8 @@ is inherited by everything placed below a release and restores itself as
 the backtrack unwinds back above the node that released it.
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
 `MAX_DESCENTS_PER_NODE` (3; `<= 0` disables it) — raised to
-`EARLY_MAX_DESCENTS_PER_NODE` (10) for a node entered while fewer than
-`EARLY_DESCENTS_WORD_COUNT` (5) words are in place on top of the
+`EARLY_MAX_DESCENTS_PER_NODE` (7) for a node entered while fewer than
+`EARLY_DESCENTS_WORD_COUNT` (10) words are in place on top of the
 attempt's initial state (`Filler._initial_assigned_count`, the words
 already assigned when `solve()` starts), and removed entirely for an
 attempt inherited from a previous palier — one starting from locked
@@ -896,9 +905,9 @@ return value), the same exemption `Filler.impossible_zone_slots`/
 remains a best-effort mechanic, not a hard geometry guarantee: black-cell placement
 itself (`make_pattern`/`_prefill_unfillable_slots`) knows nothing about
 challenge words, so nothing reserves a slot of the right shape ahead of
-time — see "Floating-black-cell widening" below for the mechanism that
-*does* try to carve one out, in both automatic generation and Interactive
-mode's "Suivant" alike.
+time — see "Floating black cells and reshapes" below for the mechanism
+that *does* carve one out, inside the search in automatic generation and
+per "Suivant" click in Interactive mode.
 `backend/grid_store.py`'s `save_grid_json` persists the typed list
 (`challenge_words`, never included in `_iter_stored_grids`'s Library-
 listing whitelist, so it stays invisible when browsing the Library) so
@@ -1063,101 +1072,76 @@ no word at all but NOT a crossing deadlock the placement creates — the
 same domain-iteration cost that keeps `_crossing_deadlock_slots` out of
 `_backtrack`'s per-node loop.
 
-**Floating-black-cell widening**: `_widen_floating_black_cells_for_
-priority_words` tries to carve out a right-sized slot for every "Mots
-Défi" word (never a theme-glossary word — those only ever take a slot the
-pattern already offers: `_pattern_attempt` passes the challenge list
-alone, and `interactive_place_word`'s theme tier calls
-`_find_priority_word_placement` with `allow_reshape=False`) that has no free, letter-
-compatible empty slot of its own exact length available anywhere in the
-pattern yet (`_has_free_matching_slot`: a same-length empty slot only
-counts as "available" for a word if every cell it already carries a
-locked letter on agrees with that word, and it hasn't already been
-claimed by an earlier, same-length word of the same glossary group in
-this same pass — so two words sharing a length are never both waved
-through onto the one slot that actually exists, and a same-length slot
-whose locked letters spell something else entirely is never mistaken for
-a home either): for each still-needy word it scans up to
-`WIDEN_BLACK_CELL_WINDOW` shuffled black cells not in `permanent_black_
-cells`, and for each one computes the merged run that would result from
-relocating it (`_white_run`, walking outward in both directions from the
-cell) — if the word fits flush against either end of that merged run
-(respecting any letter already fixed there by `locked_letters`) while
-keeping `is_structurally_valid(min_interior_free=1)`, the black cell is
-moved to bound the word on its far side (`_try_widen_black_cell`), and
-the ordinary `_select_target_slot`/candidate-priority cascade picks up
-the new empty slot on its own from there — this step never writes a
-letter itself, only reshapes the black-cell pattern. `_try_widen_black_
-cell` also refuses to let the relocated black cell (`new_black`, the one
-cell beyond the word's own span that absorbs it) land on any cell already
-in `locked_letters`, so it can never blacken — and so destroy — an
-already-known letter, and refuses any relocation that would turn a
-PERPENDICULAR slot into one with no real dictionary candidate at all
-(`_perpendicular_slot_stays_valid`/`_slot_has_domain`, a lightweight,
-`Filler`-independent domain check): freeing `(r, c)` merges it into the
-perpendicular slot(s) adjacent to it (checked with `(r, c)`'s own
-about-to-be-written letter already applied), and blackening `new_black`
-splits its own perpendicular slot into up to two pieces (each checked
-with the letters already known there) — either check failing rejects
-that candidate outright, so a relocation can never silently attach a
-stray uncloseable cell to an existing word, truncate one, or leave a
-newly-formed short crossing slot with no possible word at all. Capped by
-`WIDEN_PRIORITY_WORDS_LIMIT` (words tried per group) and `WIDEN_MAX_
-SUCCESSFUL` (total relocations per pattern, shared with the shortening
-fallback below) to bound its cost on a large theme glossary. This remains
-a best-effort mechanic, not a hard geometry guarantee: a word whose
-length exceeds every available merged run, or for which no floating
-black cell yields a structurally and dictionary-wise valid relocation,
-falls through to the shortening fallback below before ultimately falling
-back to the ordinary geometric-fit placement (or no placement at all) —
-never a corrupting one.
+**Floating black cells and reshapes**: a "Mots Défi" word — and a
+theme-glossary word while fewer than `THEME_RESHAPE_MAX_PLACED_WORDS` (5)
+distinct theme words are placed (`_placed_theme_words`/`_theme_reshape_
+allowed`) — that no empty slot of its own length can take (known letters
+incompatible everywhere) may get one carved out by changing "floating"
+black cells, i.e. any black cell not in `permanent_black_cells`. A
+reshape is always tied to exactly one word and never outlives it; the
+pattern is never reshaped ahead of the search.
 
-**Shortening fallback**: once every "Mots Défi" word has had its own
-widening attempt above, `_widen_floating_black_cells_for_priority_words`
-runs a second pass (`_shorten_one_slot_for_word`) over whichever of them
-are still unplaced — the
-mirror operation of widening: instead of relocating an existing black
-cell to grow a run up to the word's own length, it scans up to
-`SHORTEN_SLOT_WINDOW` shuffled existing EMPTY slots already longer than
-the word (`extract_slots`, filtered to `len(cells) > len(word)`), and for
-each one tries casing the word flush against its start or its end
-(`_try_shorten_slot`) by casting a brand new black cell into the
-interior cell right past the word's own span — no existing black cell is
-touched or moved, since the whole slot was open space to begin with.
-`SHORTEN_SLOT_WINDOW` is `FALLBACK_PHASE_BUDGET_FRACTION` (10%) of
-`WIDEN_BLACK_CELL_WINDOW`, reusing the same 10%-of-budget idiom the
-crossing-safety retry mechanism already applies elsewhere (see "Crossing-
-safety retry" below), scaled onto the widening scan's own window since no
-`deadline_checks`-based budget exists yet at this pre-search stage. The
-new black cell is guarded the same way `_try_widen_black_cell`'s own
-`new_black` is: it can never land on a cell already in `locked_letters`
-(never blackening — and so destroying — an already-known letter), and
-`_perpendicular_slot_stays_valid` refuses any placement that would turn
-the PERPENDICULAR slot crossing it into one with no real dictionary
-candidate left. A word still unplaced after both the widening and the
-shortening pass for its own group simply falls back to the ordinary
-geometric-fit placement (or no placement at all this round), same as
-widening alone used to.
+*In automatic generation* the reshape is a node option of `Filler.
+_backtrack`, on the slot the node just chose (`try_fill(reshape_black_
+cells=True)`, passed only by `_pattern_attempt`/`_pattern_continue`, off
+whenever `excluded_slots` is given or `MAX_BACKGHOSTS_PER_DESCENT > 0`).
+`_with_reshape_candidates` streams the node's candidates lazily as
+challenge words, challenge reshapes, theme words, theme reshapes, then the
+rest; `_reshape_candidates` picks at most `RESHAPE_WORDS_PER_NODE` (5)
+eligible words per family (other length than the slot, unused, still
+active, fitting no empty slot), and `_reshape_geometries`/`_reshape_
+options` build each `_Reshape`: a shorter word gets a new black cell right
+past it, flush against either end of the slot; a longer word frees the
+black cell bounding one end, runs on into the white cells beyond it and
+gets a new black cell right past it unless the run already ends there. An
+option is kept only if the word agrees with every known letter of its
+span, no known letter is blackened, `is_structurally_valid(min_interior_
+free=1)` holds, and no slot holding a word is altered — every other slot
+maps to its new index (`forward`). `_try_reshape` then memorises the
+state the change replaces (`_apply_reshape`: slot list, pattern,
+assignment, `_tolerated_dry`, `_placement_seq`, the écarté list, all
+carried over to the new indices through `_index_slots`), places the word,
+checks the slots it crosses plus every slot the change created (a created
+slot counts as healthy before the placement — `crossing_broken`/`crossing_
+still_impossible` otherwise as usual), and recurses. Whenever the word is
+refused — on the spot or once its subtree failed — `_undo_reshape` puts
+the modified black cells back in their original state with the slot list
+and per-slot state that went with them (the écarté entries made since are
+translated back), the child's conflict set is translated to the original
+indices (unmappable -> `None`), and the node moves on to its next option.
+A reshape option always counts as a descent, whatever its family; a
+refusal for a crossing counts against the word's give-up budget. Records
+store the slot list/pattern they were taken on (`best_slots`/`best_
+pattern`); after `solve()`, `Filler.adopt_best_structure` moves back onto
+the record's grid, `try_fill` uses `filler.slots` from there on and
+writes `filler.pattern` into the caller's `grid` in place, and the live
+callbacks publish `filler.pattern`/`filler.slots`. `stat_letters` skips a
+cell no slot covers, and `build_partial_letters_grid` never overlays a
+seed or locked letter onto a black cell.
 
-`_pattern_attempt` (automatic generation) is the one caller of the whole
-batch orchestrator, `_widen_floating_black_cells_for_priority_words`,
-applying it to a freshly generated pattern before the CSP search even
-starts (never `_pattern_continue`, whose pattern already carries real
-placed words on some slots) — every cell is still blank at that point, so
-both the letter-preservation and perpendicular-domain checks above are
-no-ops there, trivially satisfied by construction. It reshapes for the
-WHOLE word list in one cumulative pass (up to `WIDEN_MAX_SUCCESSFUL`
-relocations stacked on one shared pattern) because every one of them gets
-kept regardless of outcome: the CSP search that follows fills the *whole*
-grid over many placements, not just one, so there is never a "pick one
-winner, discard the rest" step to get right.
-
-`interactive_place_word` (Interactive mode's "Suivant") calls the exact
-same LOW-LEVEL primitives (`_widen_one_floating_black_cell`/`_shorten_
-one_slot_for_word`, and through them `_try_widen_black_cell`/`_try_
-shorten_slot`/`_perpendicular_slot_stays_valid`) but never the batch
-orchestrator itself, and never on a shared, cumulative pattern — see
-"Priority-tier search in Interactive mode" below for why and how.
+*In Interactive mode* (`interactive_place_word`), `_find_priority_word_
+placement` gives each word with no free, letter-compatible slot of its
+length (`_free_matching_slot`) its own isolated widen-then-shorten attempt
+(`_try_reshape_for_word`) on a copy of the grid, kept only if that word is
+the one placed. Widening (`_widen_one_floating_black_cell`) scans up to
+`WIDEN_BLACK_CELL_WINDOW` shuffled floating black cells and, for each,
+the merged run relocating it would produce (`_white_run`); if the word
+fits flush against either end while keeping `is_structurally_valid(min_
+interior_free=1)`, the black cell moves to bound the word on its far side
+(`_try_widen_black_cell`). Shortening (`_shorten_one_slot_for_word`) scans
+up to `SHORTEN_SLOT_WINDOW` (`FALLBACK_PHASE_BUDGET_FRACTION` of
+`WIDEN_BLACK_CELL_WINDOW`) empty slots longer than the word and casts a
+new black cell right past it, flush against either end (`_try_shorten_
+slot`). Both refuse to blacken a known letter and refuse any change that
+would leave a PERPENDICULAR slot with no real dictionary candidate
+(`_perpendicular_slot_stays_valid`/`_slot_has_domain`: freeing a cell
+merges it into the perpendicular slot(s) next to it, checked with its
+about-to-be-written letter applied; blackening one splits its
+perpendicular slot, each piece checked with the letters known there). The
+theme tier passes `allow_reshape` from the theme words already on the
+grid and a `fits_reshaped` check keeping a reshaped theme word on a slot
+of its own glossary's direction. `WIDEN_PRIORITY_WORDS_LIMIT` caps the
+words tried per tier.
 
 **Priority-tier search in Interactive mode**: `interactive_place_word`
 tries, in order, "Mots Défi" (`Filler.challenge_words`), then the theme
@@ -1179,8 +1163,9 @@ each slot's own words drawn by `Filler.ordered_candidates` and the slots
 themselves following their own best-scored word,
 `_word_breaks_open_slot` rejecting any that breaks a crossing) — nothing
 here can ever be contaminated, since no reshape is involved at all. For
-the "Mots Défi" tier only (the theme tier passes `allow_reshape=False` and
-stops here), and only
+the "Mots Défi" tier, and for the theme tier while fewer than
+`THEME_RESHAPE_MAX_PLACED_WORDS` theme words are placed (otherwise it
+passes `allow_reshape=False` and stops here), and only
 once every ordinary combo has failed, does it give each remaining word
 with no natural or ordinary slot anywhere its own, fully ISOLATED
 widen-then-shorten attempt (`_try_reshape_for_word`, one independent copy
@@ -1207,10 +1192,17 @@ one isolated reshape copy, for a "Mots Défi"/theme pick that needed one)
 straight into the real letter grid and writes the word's own letters in
 — no revert-unused-reshapes pass is needed any more, since nothing but
 the eventual winner's own single reshape (if any) was ever applied to
-begin with. The general-dictionary tier sweeps every still-open slot in
-`_select_target_slot`'s own cascade order (`_cascade_slot_order`, with
-`target` yielded first so the slot the two tiers above were built around
-is still tried before any other), not `target` alone; each swept slot
+begin with. Each tier has its own `target`, selected by the cascade
+against that tier's own glossary only (`_tier_target`, through
+`_select_target_slot`'s `challenge_level`/`theme_level` switches): the
+"Mots Défi" tier with level 2 alone, the theme tier with level 5 alone,
+the general dictionary with neither — so once a glossary tier fails, the
+next one re-evaluates the candidate slots instead of inheriting slots
+chosen for a glossary it does not apply. Each is resolved once per call,
+on first use, and reused at every acceptance level. The general-dictionary
+tier sweeps every still-open slot in the cascade's own order, levels 2
+and 5 off (`_cascade_slot_order`, its own target yielded first), not its
+target alone; each swept slot
 orders its own candidates through `Filler.ordered_candidates` — the same
 shuffle/statistical-sort/sliding-window draw the automatic search uses,
 never a strict argmax, which would make "Suivant" return the same word on
@@ -1226,7 +1218,9 @@ pool outright (any such word still present in its domain was necessarily
 already tried, across every slot in the grid, by one of the two tiers
 above) — falling back to the raw, unfiltered domain only if excluding both
 pools would leave nothing at all, so "Suivant" never gets stuck. The slots
-set aside this way come back as `excluded_cells` (`_slot_cells_of`, every
+set aside this way — at most the `MAX_EXCLUDED_SLOTS` (3) most recently set
+aside, the same `_RecentSlots` cap the automatic search applies — come
+back as `excluded_cells` (`_slot_cells_of`, every
 cell of the slot, letters included — an "emplacement écarté" is a property
 of a whole emplacement, exactly what `Filler.excluded_zone_cells` reports
 for the automatic previews; reporting only the still-empty cells scatters
@@ -1237,13 +1231,14 @@ declared before `.interactive-impossible`/`.interactive-low` so a stronger
 signal wins the cell) — the same "emplacement écarté" notion, and the same
 colour, automatic generation's own previews already use.
 
-Each "Suivant" also reports the slots its `target` was drawn from:
+Each "Suivant" also reports the slots the target of the tier that placed
+the word (the last tier tried when nothing is placed) was drawn from:
 `Filler._select_target_slot` keeps its level-6 geometric window in
 `Filler.last_selection_window` (a plain attribute assignment, overwritten
-by every call), which `interactive_place_word` reads right after resolving
-`target` — before the tier-3 sweep re-runs the cascade — and turns into
-`window_cells` (`_center_closest_cells`: for each window slot, its cell(s)
-closest to the grid's center, i.e. the cell that gives it its level-6
+by every call), which `_tier_target` reads right after resolving that
+tier's target — before the tier-3 sweep re-runs the cascade — and turns into
+`window_cells` (`_origin_closest_cells`: for each window slot, its cell(s)
+closest to `SLOT_SELECTION_ORIGIN`, i.e. the cell that gives it its level-6
 score, ties included). Threaded through `POST /api/interactive/step` (and
 the start job's result; empty on a resume) into `script.js`'s
 `interactiveWindowCells`, rendered as a blue outline
@@ -1445,13 +1440,13 @@ instead of stopping within a handful of checks past its own deadline).
 for an ordinary candidate, reusing the same 9-level slot-selection
 cascade, except for the bounded "Mots Défi" crossing-safety retry
 described above, the one case where several (word, slot) combinations
-genuinely are tried in sequence before this call commits to one; before
-selecting a slot it first runs the same "Floating-black-cell widening"
-mechanism automatic generation's own `_pattern_attempt` uses (see that
-section above) to try to carve out a right-sized slot for any "Mots
-Défi" word (never a theme word) with no matching-length slot yet, passing this call's
-own already-placed letters as `locked_letters` so an existing crossing
-letter can never be destroyed; its own word draw prefers an unused,
+genuinely are tried in sequence before this call commits to one; it can
+carve out a right-sized slot for a "Mots Défi" word (or theme word, under
+the 5-placed-theme-words threshold) with no matching-length slot, on an
+isolated copy of the grid (see "Floating black cells and reshapes"
+above), passing this call's own already-placed letters as
+`locked_letters` so an existing crossing letter can never be destroyed;
+its own word draw prefers an unused,
 crossing-safe "Mots Défi" word over an unused theme word, which in turn
 comes before every ordinary candidate — and, once no challenge word can
 be safely placed this round, the theme-glossary/general-dictionary
@@ -1889,7 +1884,15 @@ state, unlike the backend).
   LLM-invented theme phrase for that grid's language and sends it as
   `GenerateRequest.theme`, so the populated grid gets a real thematic
   glossary instead of none; a failed theme call just falls back to no
-  theme for that one grid. `run_Populate.sh` is its start/stop/restart
+  theme for that one grid. It never gives up on a job while that job still
+  runs on the server: a forced stop (second Ctrl-C, SIGTERM), a
+  `--per-grid-timeout` abandon or a network error first sends `POST /api/
+  generate/cancel/{job_id}` (`_cancel_current_job`, best-effort), so no
+  orphaned job keeps occupying the queues after the script exits. Each
+  submission also logs a `job_submitted <job_id> <base_url>` line, which
+  `run_Populate.sh stop` reads back to cancel that job itself when it has
+  to SIGKILL the process.
+  `run_Populate.sh` is its start/stop/restart
   process manager (tracked via `logs/populate.pid`, since it's a
   background script, not a port listener).
 - **`scrapper/fetch_rss_feeds.py`** — downloads a small, hand-verified

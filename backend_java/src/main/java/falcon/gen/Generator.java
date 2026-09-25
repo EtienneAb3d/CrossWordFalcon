@@ -202,10 +202,6 @@ public final class Generator {
             for (int cell : permanentBlack) seedGrid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         }
         char[][] grid = Grids.makePattern(rows, cols, ratio, rng, available, seedGrid, locked, ctx.index, enrichment);
-        if (!ctx.challengeWords.isEmpty()) {
-            Cleanup.widenFloatingBlackCellsForPriorityWords(grid, rows, cols, rng, List.of(ctx.challengeWords), ctx.index,
-                    locked, permanentBlack);
-        }
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
         locked = Fill.forceSingleCandidateSlots(slots, ctx.index, locked == null ? Map.of() : locked, null);
         String[] preseed = null;
@@ -236,6 +232,8 @@ public final class Generator {
         a.letterScores = scores;
         a.preseedAssignment = preseed;
         a.lockedLetters = locked;
+        a.reshapeBlackCells = true;
+        a.permanentBlackCells = permanentBlack;
         boolean flag = racing && checksSlot != null && ctx.attemptActive != null;
         if (flag) ctx.attemptActive.set(checksSlot, 1);
         Fill.Result result;
@@ -250,7 +248,7 @@ public final class Generator {
     static Outcome patternContinue(Ctx ctx, int rows, int cols, long seed, char[][] seedGrid, String[] preseedIn,
                                    Set<Integer> excludedSlots, double forceFraction, Long deadlineChecks,
                                    Map<Integer, Character> permanentLocked, Set<Integer> requiredCells,
-                                   Integer checksSlot) {
+                                   Integer checksSlot, Set<Integer> permanentBlack) {
         Rng rng = new Rng(seed);
         List<int[]> slots = Grids.extractSlots(seedGrid, rows, cols);
         Map<Integer, Character> known = new LinkedHashMap<>();
@@ -287,6 +285,8 @@ public final class Generator {
         a.preseedAssignment = preseed;
         a.excludedSlots = excludedSlots;
         a.lockedLetters = known;
+        a.reshapeBlackCells = true;
+        a.permanentBlackCells = permanentBlack;
         boolean flag = checksSlot != null && ctx.attemptActive != null;
         if (flag) ctx.attemptActive.set(checksSlot, 1);
         Fill.Result result;
@@ -757,7 +757,8 @@ public final class Generator {
                         } else {
                             Object[] task = continuePool.get((i - resetCount) % continuePool.size());
                             f = ecs.submit(() -> patternContinue(ctx, rows, cols, s, (char[][]) task[0], (String[]) task[1],
-                                    null, p.forceLettersFraction, p.deadlineChecks, permanentLocked, p.requiredCells, slot));
+                                    null, p.forceLettersFraction, p.deadlineChecks, permanentLocked, p.requiredCells, slot,
+                                    permanentBlack));
                         }
                         futureSeed.put(f, s);
                         origFutures.add(f);
