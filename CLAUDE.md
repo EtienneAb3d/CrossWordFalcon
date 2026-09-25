@@ -1815,6 +1815,11 @@ state, unlike the backend).
   sidebars), a collapsible virtual keyboard, and a set of togglable
   panels (library, dictionary, paraphraser, Qdrant admin, chatbot,
   interactive-mode controls), plus the first-visit welcome overlay.
+  While a playable grid is on screen (`displayFinalGrid`), the creation
+  form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`
+  in `script.js`) behind a `#create-grid-btn` "Créer une grille" button
+  that unfolds it; the tool buttons stay visible. `runGeneration`/
+  `runInteractive`/`enterInteractiveMode` unfold it.
 - **`script.js`** — all client logic in one file. Major areas: grid
   rendering/keyboard input/solution-checking; the interactive-authoring
   mode (by far the largest block — zone selection, undo stack, per-cell

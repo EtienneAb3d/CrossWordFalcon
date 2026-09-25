@@ -158,6 +158,7 @@ const gridTitleTextEl = document.getElementById("grid-title-text");
 const gridDifficultyEl = document.getElementById("grid-difficulty");
 const gridTimerEl = document.getElementById("grid-timer");
 const libraryBtn = document.getElementById("library-btn");
+const createGridBtn = document.getElementById("create-grid-btn");
 const libraryPanel = document.getElementById("library");
 const libraryRefreshBtn = document.getElementById("library-refresh-btn");
 const libraryCloseBtn = document.getElementById("library-close-btn");
@@ -3838,6 +3839,17 @@ function displayFinalGrid(gridData) {
   // letters from here on, at the user's explicit request, so the
   // preview-only toggle has nothing left to control.
   attemptPreviewRevealBtn.hidden = true;
+  // Play mode: fold the creation form behind "Créer une grille".
+  setGenerateFormCollapsed(true);
+}
+
+// Folds (true) or unfolds (false) the creation form in play mode: while
+// folded, every option field, "Thématique", "Mots Défi" and "Générer la
+// grille" are hidden (#generate-form.play-collapsed in style.css) and
+// #create-grid-btn alone stands for them; the tool buttons stay visible.
+function setGenerateFormCollapsed(collapsed) {
+  form.classList.toggle("play-collapsed", collapsed);
+  createGridBtn.hidden = !collapsed;
 }
 
 function hideLibraryPanel() {
@@ -7203,6 +7215,7 @@ async function proposeInteractiveTitle(autoFill) {
 // ---- Mode lifecycle ----
 function enterInteractiveMode(state) {
   interactiveMode = true;
+  setGenerateFormCollapsed(false);
   interactiveJobId = currentJobId || interactiveJobId;
   interactiveGrid = state.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
   interactiveHasTheme = !!state.has_theme;
@@ -7791,6 +7804,7 @@ async function checkForSavedInteractiveWork() {
 // `{work_id}` — no `mode` field to merge in, unlike a fresh start's).
 async function runInteractive(body, endpoint = "/api/interactive/start") {
   const t = I18N[uiLanguage];
+  setGenerateFormCollapsed(false);
   generationInProgress = true;
   button.disabled = true;
   result.hidden = true;
@@ -8899,6 +8913,7 @@ interactiveSaveBtn.addEventListener("click", async () => {
 // else here is identical either way.
 async function runGeneration(startJob) {
   const t = I18N[uiLanguage];
+  setGenerateFormCollapsed(false);
 
   generationInProgress = true;
   button.disabled = true;
@@ -8983,6 +8998,10 @@ async function runGeneration(startJob) {
     syncRssPanelVisibility();
   }
 }
+
+createGridBtn.addEventListener("click", () => {
+  setGenerateFormCollapsed(false);
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();

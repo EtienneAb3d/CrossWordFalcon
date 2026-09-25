@@ -72,6 +72,14 @@ Every field below (`#generate-form`) is used to start a new grid
 generation (`frontend/static/script.js`, the form's own `submit` handler,
 `runGeneration`).
 
+While a finished grid is being played, the form is folded away behind a
+single **Créer une grille / Create a grid** button (`#create-grid-btn`,
+`frontend/static/script.js`, `setGenerateFormCollapsed`): every field
+below, Thématique, Mots Défi and the generate button are hidden, while
+the tool buttons (Bibliothèque, Dictionnaire, Paraphraseur, Créations…)
+stay visible. Clicking it unfolds the full form. The form is shown in
+full again whenever a new generation or an Interactive session starts.
+
 - **Langue / Language** (`#language`) — which of the six supported
   languages (French, English, German, Spanish, Italian, Portuguese) the grid's own
   words and clues are written in. Also switches every label/message on

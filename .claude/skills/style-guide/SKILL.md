@@ -4441,3 +4441,21 @@ end through the real running API (interactive start/step/save,
   split in two). Confirmed live: "Capitaledela Frence" → "Capitale de la
   France" shows the "e" red above, the two inserted spaces and the "a"
   green below.
+
+- **Play mode folds the creation form behind "Créer une grille"**
+  (`#create-grid-btn`, `#generate-form.play-collapsed`), at the user's
+  explicit request: while a playable grid is on screen every option
+  `<label>`, `#theme-field`, `#generate-challenge-panel` and
+  `#generate-btn` get `display: none`, and a plain accent-blue
+  "Créer une grille" button (no dedicated style) takes the generate
+  button's place at the left of `#form-actions`; the tool buttons
+  (Bibliothèque… Qdrant) stay right-aligned via `#library-btn`'s
+  `margin-left: auto`. The buttons' `margin-top: 1.55rem` (input-row
+  alignment) drops to 0 while folded, since no input row is left. Clicking
+  the button unfolds the form in place above the grid. Set by
+  `displayFinalGrid()`, cleared by `runGeneration()`/`runInteractive()`/
+  `enterInteractiveMode()`. **Visually confirmed** with Playwright/
+  Chromium: a grid loaded via `?grid=` shows only "Créer une grille" +
+  the five tool buttons on one row; one click restores every field with
+  the grid still displayed.
+

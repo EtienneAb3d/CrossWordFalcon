@@ -230,6 +230,12 @@
                 data-i18n="attemptPreviewRevealBtn">Voir</button>
         <button type="button" id="stop-btn" data-i18n="stopBtn" hidden>Stop</button>
         <button type="button" id="continue-btn" data-i18n="continueBtn" hidden>Continuer</button>
+        <!-- Play mode only: while a playable grid is on screen the creation
+             fields above are folded away (#generate-form.play-collapsed,
+             see setGenerateFormCollapsed() in script.js) and this button
+             alone stands for them; clicking it unfolds the full form. The
+             tool buttons (Bibliothèque, Dictionnaire, …) stay visible. -->
+        <button type="button" id="create-grid-btn" data-i18n="createGridBtn" hidden>Créer une grille</button>
         <button type="button" id="library-btn" data-i18n="libraryBtn">Bibliothèque</button>
         <button type="button" id="dictionary-btn" data-i18n="dictionaryBtn">Dictionnaire</button>
         <!-- "Paraphraseur": asks the LLM for 5 rewordings of the typed

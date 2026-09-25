@@ -392,6 +392,24 @@ form {
   margin-top: 1.55rem;
 }
 
+/* Play mode (a playable grid on screen): the creation form is folded
+   behind a single "Créer une grille" button (#create-grid-btn) — every
+   option field, "Thématique", "Mots Défi" and "Générer la grille" are
+   hidden, only the tool buttons (Bibliothèque, Dictionnaire, …) stay.
+   With no input row left to line up with, the buttons drop their
+   input-alignment top margin. Toggled by script.js's
+   setGenerateFormCollapsed(). */
+#generate-form.play-collapsed > label,
+#generate-form.play-collapsed #theme-field,
+#generate-form.play-collapsed #generate-challenge-panel,
+#generate-form.play-collapsed #generate-btn {
+  display: none;
+}
+
+#generate-form.play-collapsed #form-actions > button {
+  margin-top: 0;
+}
+
 /* Play-mode buttons (Vérification, Solution, Définitions, Recalculer) on
    their own row right below #generate-form, above the grid. Hidden as a
    whole while none of its buttons is shown, so no empty gap remains.

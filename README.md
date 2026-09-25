@@ -193,7 +193,10 @@ On the page:
    far; the best of them is the one you get.
 4. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
-   ready to be filled in. Above it, a short generated title for the puzzle
+   ready to be filled in. While you play, the generation settings are
+   tucked away behind a single **"Create a grid"** button (the Library,
+   Dictionary and other tool buttons stay visible) — click it to bring
+   the full form back and start another grid. Above the grid, a short generated title for the puzzle
    is shown, with the grid's difficulty next to it ("Difficulty: Medium"). Clues follow the usual crossword format:
    horizontal ("Horizontalement") clues appear to the left of the grid,
    grouped one line per row; vertical ("Verticalement") clues appear
