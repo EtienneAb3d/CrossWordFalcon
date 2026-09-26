@@ -223,6 +223,11 @@ keyboard:
 - The **arrow keys** move the selection around the grid, skipping over
   black cells.
 
+A clock next to the title starts with your first letter. Your letters and
+the clock are saved on the server under your nickname as you type: close
+the page, reopen the grid later from the Library or its link, and you pick
+up where you left off.
+
 Two buttons above the grid help you check your progress:
 
 - **Solution** reveals every letter of the finished grid; click it again to

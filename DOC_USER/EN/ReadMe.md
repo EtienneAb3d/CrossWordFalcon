@@ -751,6 +751,16 @@ Once generation completes, the search-progress panel disappears and
   Shift/Caps Lock, and grid hover); switching it with a cell selected
   immediately updates the panel (and the green word band) to the other
   word through that cell.
+- **Time counter and saved progress** (`#grid-timer`, `frontend/static/
+  script.js`, `startGridTimer`/`ensureGridTimerRunning`) — a clock next
+  to the title, started by the first letter typed. Every letter typed or
+  erased saves the letters and the clock on the server under the
+  player's pseudo (`scheduleGridGameSave`, `POST /api/game/save`, only
+  when a pseudo is set). Reopening the grid in play mode later — from the
+  Library or its shareable link, even after the page was closed —
+  restores the letters and the clock where they were at the last edit
+  (`displayFinalGrid`, `saved_game`); the clock resumes at the next
+  letter typed.
 - **Horizontalement/Verticalement (Across/Down)** clue lists
   (`#clues-across`/`#clues-down`, `renderClueLines`) — every word's own
   clue, grouped by its starting cell number; hidden until "Définitions"
