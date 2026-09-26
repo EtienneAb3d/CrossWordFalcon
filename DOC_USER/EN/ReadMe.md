@@ -29,16 +29,24 @@ contains:
   in sync with `#language` in the form).
 - A **pseudo / nickname** field (up to 15 characters). It is required —
   the panel will not close until it is filled in.
+- A **Mot secret / Secret word** field (`#welcome-secret`), also
+  required. The first time a nickname is used, the secret word typed with
+  it is attached to that nickname; afterwards, the same nickname is only
+  accepted with the same secret word (`POST /api/pseudo/claim`), so
+  nobody else can take your nickname — and you can reuse it from another
+  device. With a different secret word, the panel says the nickname is
+  already taken and stays open; enter the right word or pick another
+  nickname. This is only a nickname guard, not a real account password.
 - A short notice that the site needs a functional preferences cookie to
   work, and that it uses no tracking cookies and no advertising cookies.
 
-Clicking **Accept** saves the language and pseudo in that one cookie and
+Clicking **Accept** checks the nickname/secret word pair, then saves the language and pseudo in that one cookie and
 closes the panel. The choice is remembered on later visits (the panel
 does not reappear).
 
 ## Header
 
-- The logo and page title sit at the top left (`#logo`, `h1`).
+- The logo and page title sit at the top left (`#logo`, `h1`). The same logo is the browser tab's icon and the home-screen icon when the page is bookmarked on a phone (`frontend/static/index.html`, `favicon.ico`/`apple-touch-icon.png`).
 - The **pseudo** chosen in the welcome panel is shown centered between
   the title and the right-hand badges (`#user-pseudo`). While no pseudo
   is set it shows a "set a nickname" label instead. Clicking it reopens
@@ -65,6 +73,10 @@ does not reappear).
   generation can end up waiting in one of them. All of this updates
   live, roughly every 2 seconds, riding along with the same background
   heartbeat that keeps `#online-count` current (`POST /api/presence`).
+- Two GitHub icons at the far right open, in a new tab, the project's
+  **GitHub Discussions** forum (`#discussions-link` — questions,
+  suggestions, bug reports) and its **source code** on GitHub
+  (`#github-link`).
 
 ## Generation form
 
@@ -293,6 +305,33 @@ when relevant.
   so on.
 - **Bibliothèque / Library** (`#library-btn`) — always visible; opens or
   closes the library panel (see "Library" below).
+- **Dictionnaire / Dictionary** (`#dictionary-btn`), **Paraphraseur /
+  Paraphraser** (`#paraphrase-btn`) and **Créations** (`#interactive-work-btn`)
+  — always visible next to it; each opens or closes its own panel (see
+  "Dictionary", "Paraphraser" and "Créations" below). **Qdrant (admin)**
+  (`#qdrant-admin-btn`) only appears on the machine running the app (see
+  "Qdrant (admin)" below).
+
+## Cross Talk news panel
+
+Under the buttons, a **Actu Croisée / Cross Talk** panel (`#rss-panel`,
+`frontend/static/script.js`, `renderRssList`; `GET /api/rss`, `GET
+/api/scrapp`) lists crossword news, refreshed once a day by the server. It
+always stays on the page, whatever the central area shows. Two kinds of
+entries are mixed there, told apart by the small icon on their left:
+
+- 📰 an **article** from a crossword blog's RSS feed, with the blog's name
+  underneath — clicking it (or Enter/Space) opens the article in a reader
+  over the page (`#rss-detail`, `openRssDetail`), closed by its **Fermer /
+  Close** button or Escape;
+- 🔗 a link to **today's grid** of a crossword publisher, with its web
+  address underneath — clicking it opens that publisher's page in a new
+  tab.
+
+A language selector in the panel's header (`#rss-language-filter`)
+keeps only the entries in one language (**Toutes les langues / All
+languages** shows everything). When a language has no entry at all, the
+English list is shown instead, with a line saying so.
 
 ## Status line
 
@@ -332,12 +371,21 @@ those was showing.
   grid is on screen it follows whichever word you hover or click in the
   grid (so on a bilingual grid it switches between the two languages as
   you move around).
-- Type an expression in the field and use one of three buttons:
+- Type an expression in the field (`#dictionary-input`) and use one of four buttons:
   - **Chercher / Search** (`#dictionary-search-btn`) — lists every word
     sharing the same root as what you typed (accents and case ignored),
     each with its real definitions, in a table
     (`frontend/static/script.js`, `renderDictionaryResult`; `GET
     /api/dictionary`).
+  - **Synonymes / Synonyms** (`#dictionary-synonyms-btn`,
+    `frontend/static/script.js`, `buildSimilarWordsResultNode`; `GET
+    /api/synonyms`) — a direct vector search on exactly what you typed,
+    with no help from the language model: every word close enough in
+    *meaning*, most similar first, on one comma-separated line with its
+    score in parentheses. Faster than **Thématique** and more literal. The
+    **Précision thématique** field sets the cutoff here too. Needs the
+    vector database and the embedding server (a short "unavailable"
+    message otherwise).
   - **Thématique / Theme** (`#dictionary-similar-btn`,
     `frontend/static/script.js`, `renderSimilarWordsResult`; `GET
     /api/similar_words`) — works exactly like the grid's own theme
@@ -363,15 +411,85 @@ those was showing.
     take up to a minute or so, especially on a small local model. If the
     LLM is unreachable, it shows a short "unavailable" message instead.
 - **Effacer / Clear** (`#dictionary-clear-btn`) empties the field and all
-  results. Each search (of any of the three kinds) stacks its own result
+  results. Each search (of any of the four kinds) stacks its own result
   block at the top, newest first, until cleared.
+- **External AI assistants** (`#dictionary-ai-buttons`,
+  `frontend/static/script.js`, `dictionaryAiButtons`) — five violet
+  buttons, each showing one service's own logo: Perplexity, ChatGPT,
+  Claude, Mistral (Le Chat) and Euria (Infomaniak). A click opens
+  that service in a new tab with a ready-made request about the typed
+  word — "give 5 crossword definition suggestions, then define every
+  possible meaning of the <language> word: <word>" — written in the
+  selected language (both language names, joined by "/", for a combined
+  option). Hovering a button names its service. With an empty field, the
+  click just puts the cursor back in it. Some services ask you to sign in
+  first; the request is only sent from your own browser, never by the app.
+- **✕** (`#dictionary-close-btn`) closes the panel.
+
+On a bilingual grid (or with two different languages picked in the
+generation form), the language selector also offers a combined
+"**<language 1>/<language 2>**" option, selected by default in that case:
+every button then searches both languages at once and shows the two
+results side by side (`buildBilingualResultBlock`), and the external AI
+assistants get both language names in their request.
+
+## Paraphraser
+
+The **Paraphraseur / Paraphraser** button (`#paraphrase-btn`) opens a
+panel built like the Dictionary (`#paraphrase`), sharing the same central
+area:
+
+- A language selector (`#paraphrase-language`), with the same combined
+  "<language 1>/<language 2>" option as the Dictionary's.
+- A text field (`#paraphrase-input`) for a word, an expression or a whole
+  sentence.
+- **Paraphraser / Paraphrase** (`#paraphrase-generate-btn`,
+  `frontend/static/script.js`, `fetchParaphraseResultNode`; `GET
+  /api/paraphrase`) — asks the language model for 5 other ways to say the
+  same thing, one per line, in the chosen language (side by side for a
+  combined option). If the model is unreachable, a short "unavailable"
+  message is shown instead.
+- **Effacer / Clear** (`#paraphrase-clear-btn`, the sponge icon) empties
+  the field and every result; each request otherwise stacks its result
+  block at the top, newest first.
+- **External AI assistants** (`#paraphrase-ai-buttons`,
+  `frontend/static/script.js`, `paraphraseAiButtons`) — the same five
+  logo buttons as the Dictionary's (Perplexity, ChatGPT, Claude, Mistral,
+  Euria): a click opens that service in a new tab, already asked "give 5
+  paraphrases in <language>: <your text>", in the chosen language (both
+  names joined by "/" for a combined option). Hovering a button names its
+  service. With an empty field, the click just puts the cursor back in
+  it.
+- **✕** (`#paraphrase-close-btn`) closes the panel.
+
+## Créations
+
+The **Créations** button (`#interactive-work-btn`) opens the list of your
+own Interactive-mode grids in progress (`#interactive-work`,
+`frontend/static/script.js`, `renderInteractiveWorkList`; `GET
+/api/interactive/work`) — the drafts saved automatically after each step,
+or with **Sauvegarder / Save** (see "Interactive authoring mode" below).
+Only drafts made under your current nickname are listed. The panel opens
+by itself when the page loads if you have at least one draft
+(`checkForSavedInteractiveWork`).
+
+- Each row shows the language, creation date, title (or "untitled"),
+  theme, difficulty, size and last-modification date. Clicking a row (or
+  Enter/Space) reopens that draft in Interactive mode exactly where you
+  left it (`POST /api/interactive/resume`).
+- The bin icon at the end of a row deletes that draft
+  (`POST /api/interactive/work/delete`). A grid already published to the
+  Library from it is not affected.
+- **↻** (`#interactive-work-refresh-btn`) reloads the list; **✕**
+  (`#interactive-work-close-btn`) closes the panel.
 
 ## Qdrant (admin)
 
 A **"Qdrant (admin)"** button appears in the action row **only when the
 page is opened on the machine that runs the app itself** (localhost) —
 never from another computer on the network. It opens a small maintenance
-panel for the vector database behind "Similar words"
+panel for the vector database behind the Dictionary's "Synonymes" and
+"Thématique" buttons and the theme glossary
 (`frontend/static/script.js`, `renderQdrantAdmin`; `GET /api/qdrant/admin`,
 gated to loopback requests by `frontend/server.py`, `_require_localhost`):
 
@@ -388,6 +506,8 @@ gated to loopback requests by `frontend/server.py`, `_require_localhost`):
   language's stored words (with confirmation).
 - A reminder of the command that refills the database:
   `python -m data_builder.qdrant_populate --all`.
+- **Rafraîchir / Refresh** (`#qdrant-admin-refresh-btn`) re-reads the
+  state; **✕** (`#qdrant-admin-close-btn`) closes the panel.
 
 ## Library
 
@@ -588,7 +708,12 @@ Once generation completes, the search-progress panel disappears and
 - **Stats line** (`#stats`) — the finished grid's own black-cell
   percentage, fill percentage, and unplayable-cell percentage.
 - **Generation times** (`#generation-times`) — how long grid generation,
-  optimization, and clue writing each took. Its own **◀**/**▶** buttons
+  optimization, and clue writing each took. A grid published from
+  Interactive mode ("(Création)") adds "Grid created manually", or "Grid
+  edited manually" when it was reworked from another grid — which keeps
+  that grid's own durations; a grid built entirely by hand has no
+  durations to show, only the label (`frontend/static/script.js`,
+  `displayFinalGrid`). Its own **◀**/**▶** buttons
   (`#generation-times-prev-btn`/`#generation-times-next-btn`) let a
   player revisit the same step-by-step search history the in-progress
   preview panel showed, now that the grid is finished.
@@ -823,6 +948,10 @@ real letter. Both update after every edit.
   so keeps the grid valid. Results are sorted shortest first, then
   alphabetically. Useful when no word fills the whole slot but part of it
   still can.
+- The sponge button right after "Fin" (`#interactive-results-clear-btn`)
+  empties the display area below the buttons (status message, "Vérifier"
+  report, candidate lists) and removes the matching red/orange
+  highlighting from the grid, without changing any letter.
 - In every one of these four lists ("Mots", "Croisés", "Début", "Fin"),
   a letter shown underlined in red within a candidate word means placing
   that word would leave the crossing emplacement through that letter with
@@ -1067,6 +1196,29 @@ real letter. Both update after every edit.
   Deleting a "Créations" entry later only removes the draft, never the
   published Library grid.
 
+## Virtual keyboard
+
+A keyboard icon (`#virtual-keyboard-toggle-btn`, ⌨) sits fixed in the
+bottom-left corner of the page, level with the chat panel; it opens or
+closes an on-screen keyboard (`#virtual-keyboard`, `frontend/static/
+script.js`, `buildVirtualKeyboard`), closed by default — handy on a touch
+screen. It has:
+
+- the 26 letters in alphabetical order on two rows (A-M, N-Z): a click
+  types that letter into the selected grid cell and moves on, exactly
+  like the physical keyboard (`typeVirtualLetter`) — or into the
+  Dictionary's search field, or Interactive mode's definition or title
+  field, when one of them has the focus;
+- a **■** key that turns the selected cell black or white, in
+  Interactive mode only (like the Space bar there);
+- a **→**/**↓** pair on the right (`#virtual-keyboard-across-btn`/
+  `#virtual-keyboard-down-btn`) choosing whether typing advances across
+  or down — the same shared direction as Shift/Caps Lock, Ctrl and the
+  arrows beside the clue panel.
+
+The page leaves room at its bottom while the keyboard is open, so the
+grid can always be scrolled above it.
+
 ## David FALCON (chat assistant)
 
 A small chat panel (`#chatbot`, `frontend/static/script.js`), fixed to
@@ -1096,6 +1248,11 @@ word being filled at the clicked cell in the current Across/Down
 direction — David FALCON writes its *entire* reply in that word's own
 language, which can differ between an across word and a down word. With
 nothing selected, it uses the interface language.
+
+The arrow button (`#chatbot-send-btn`) sends the message, like Enter. The
+circular-arrow button next to it (`#chatbot-reset-btn`) starts a new
+conversation: it forgets everything said so far and shows the welcome
+message again.
 
 ## How a grid is actually built (a summary of the generation algorithm)
 

@@ -336,14 +336,23 @@ looking words up in the chosen language:
 - **"Chercher" / "Search"** lists every word with the same root as what
   you typed (accents and case don't matter), each with its real
   definitions.
-- **"Mots similaires" / "Similar words"** lists the 50 words closest in
-  *meaning* to what you typed, most similar first, on one comma-separated
-  line. This one needs two optional extra services running — a local
+- **"Synonymes" / "Synonyms"** lists every word close in *meaning* to
+  what you typed, most similar first, on one comma-separated line.
+- **"Thématique" / "Theme"** does the same, but first asks the language
+  model to widen what you typed into a list of related keywords, so it
+  brings back a broader, theme-like vocabulary (a few seconds slower).
+  Both of these need two optional extra services running — a local
   embedding server (`./run_embed.sh`) and the Qdrant vector database
   (`./Install_qdrant.sh` once, then `./run_qdrant.sh`), with the word
   index built by `python -m data_builder.qdrant_populate --all`. If any
   of that isn't set up, the button just shows a short "unavailable"
   message and everything else keeps working.
+- **"Définir" / "Define"** asks the language model for up to 10
+  definitions of what you typed.
+- Five buttons with the logos of **Perplexity, ChatGPT, Claude, Mistral
+  and Euria** open that assistant in a new tab, already asked to
+  suggest crossword definitions for the word you typed and to explain
+  all of its meanings.
 
 If you're playing a bilingual grid (or you've picked two different
 languages in the generation form), the Dictionary's own language selector
@@ -358,9 +367,10 @@ Right next to "Dictionnaire" / "Dictionary" is a **"Paraphraseur" /
 "Paraphraser" / "Paraphrase" to get 5 alternative ways to say the same
 thing. Just like the Dictionary, a bilingual grid (or two different
 languages picked in the generation form) adds a combined language option
-and shows the 5 paraphrases for each language side by side. A
-"Perplexity" button next to it opens a ready-made paraphrase request for
-your text on [Perplexity](https://www.perplexity.ai) in a new tab.
+and shows the 5 paraphrases for each language side by side. The
+same five assistant logos as in the Dictionary (Perplexity, ChatGPT,
+Claude, Mistral, Euria) open that assistant in a new tab, already asked
+for 5 paraphrases of your text.
 
 ### Chatting with David FALCON
 

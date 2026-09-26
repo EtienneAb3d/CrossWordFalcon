@@ -317,6 +317,13 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export SGLANG_NVCC_CC="/usr/bin/gcc-12"
 # export CHATBOT_THINK_FILTER="close_only"
 
+# SGLang hierarchical prefix cache (run_sglang.sh, SGLANG_HICACHE_RATIO):
+# KV entries evicted from the GPU pool are kept in host RAM (this ratio x
+# the GPU KV pool, per instance) and reloaded instead of recomputed, so the
+# chat's long fixed system-prompt prefix survives other requests. Empty =
+# disabled.
+# export SGLANG_HICACHE_RATIO="2"
+
 # ============================================================================
 # Dual-GPU LLM — TWO independent server instances, one per card, at the
 # user's explicit request ("Cette machine a maintenant 2 GPUs... Toutes

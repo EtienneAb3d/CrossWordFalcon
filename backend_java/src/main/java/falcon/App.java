@@ -1176,7 +1176,11 @@ public final class App {
         m.put("priority_words", new ArrayList<>());
         m.put("seed", 0);
         m.put("origin", Json.obj("id", record.get("id"), "title", Json.truthy(record.get("title")) ? record.get("title") : "",
-                "pseudo", record.get("pseudo"), "created_at", record.get("created_at")));
+                "pseudo", record.get("pseudo"), "created_at", record.get("created_at"),
+                // The origin grid's own automatic generation durations, see interactiveSave.
+                "generation_duration_seconds", record.get("generation_duration_seconds"),
+                "optimization_duration_seconds", record.get("optimization_duration_seconds"),
+                "clues_duration_seconds", record.get("clues_duration_seconds")));
         return m;
     }
 
@@ -2023,6 +2027,9 @@ public final class App {
             }
             int nBlack = Grids.countBlack(bw);
             String themeClean = theme == null || Py.strip(theme).isEmpty() ? null : Py.strip(theme);
+            Job job = job(jobId);
+            Map<String, Object> meta = job == null ? Map.of() : Json.mapOrEmpty(job.copyOf("interactive"));
+            Map<String, Object> origin = Json.mapOrEmpty(meta.get("origin"));
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("width", cols);
             result.put("height", rows);
@@ -2034,9 +2041,14 @@ public final class App {
             result.put("black_ratio", rows > 0 && cols > 0 ? (double) nBlack / (rows * cols) : 0);
             result.put("language", language);
             result.put("bilingual_language", isBilingual ? bilingual : null);
-            result.put("generation_duration_seconds", 0);
-            result.put("optimization_duration_seconds", 0);
-            result.put("clues_duration_seconds", 0);
+            // A grid edited from an automatically generated one keeps that
+            // grid's own durations (carried in `origin`); one built by hand
+            // from scratch has none (0).
+            for (String k : List.of("generation_duration_seconds", "optimization_duration_seconds",
+                    "clues_duration_seconds")) {
+                Object v = origin.get(k);
+                result.put(k, Json.truthy(v) ? v : 0);
+            }
             result.put("difficulty", difficulty);
             result.put("theme", themeClean);
             result.put("title", title);
@@ -2049,8 +2061,6 @@ public final class App {
                 Log.warning("interactive save: SVG/PNG export skipped");
             }
             String pseudo = pseudoOf(pseudoRaw);
-            Job job = job(jobId);
-            Map<String, Object> meta = job == null ? Map.of() : Json.mapOrEmpty(job.copyOf("interactive"));
             String gridId = GridStore.saveGridJson(result, language, difficulty, "interactive", title, isBilingual ? bilingual : null,
                     pseudo, themeClean, true, meta.get("origin"), meta.get("generation_params"),
                     challengeWords.isEmpty() ? null : challengeWords);

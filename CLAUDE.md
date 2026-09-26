@@ -1636,7 +1636,14 @@ endpoint family. Builds its system prompt from the full text of
 `DOC_USER/EN/ReadMe.md` plus the live UI context sent by the browser
 (loaded grid's words/clues, hovered/selected cell, active fill
 direction) so it can answer questions about how to use the interface or
-give hints without revealing answers outright. `reply_stream()` yields
+give hints without revealing answers outright. The prompt opens with
+everything that never varies between requests — the introduction, then
+the whole `DOC_USER` text — and only then the reply-language-dependent
+rules and the interface state, so the LLM server's prefix cache reuses
+that ~20k-token head across every chat request. The prompt states,
+both in that fixed head and in the language rule, that the documentation
+is in English but must be rephrased in the reply language, never quoted.
+`reply_stream()` yields
 the reply incrementally (server-sent-events style) and strips `<think>...
 </think>` reasoning blocks according to `CHATBOT_THINK_FILTER`.
 
@@ -1648,7 +1655,13 @@ Four independent filesystem stores, one JSON file shape shared with the
 - **`GRID_STORE/<language|bilingual>/`** — one file per published grid,
   named `<timestamp>_<title-slug>_<4-digit-code>.json`, never rewritten.
   `save_grid_json`/`get_grid`/`list_grids` (paginated, filterable by
-  language/difficulty/seen-state/pseudo).
+  language/difficulty/seen-state/pseudo). A grid published from Interactive mode
+  carries `interactive: true`; when it was reworked from a library grid,
+  `origin` (that grid's id/title/pseudo/created_at plus its three
+  `*_duration_seconds`, snapshotted by `_library_record_to_interactive`)
+  supplies the durations `interactive_save` publishes — 0 for a grid
+  built from scratch. The play view labels such a grid "created"/"edited
+  manually" next to its durations.
 - **`GRID_WORK/`** — one continuously-overwritten file per in-progress
   "Interactif" authoring session, named `<timestamp>_<pseudo-slug>_<job_
   id>.json`. `save_grid_work`/`get_grid_work`/`list_grid_work`/`delete_
@@ -1882,8 +1895,24 @@ state, unlike the backend).
   consumed by `script.js`'s `applyTranslations`/`describeStep`/`describe
   ErrorCode`. `SUPPORTED_UI_LANGS` in `script.js` lists the same six
   codes.
+- **`ai-icons/`** — local copies of the official logos of the external AI
+  assistants the Dictionnaire and Paraphraseur panels link to
+  (`#dictionary-ai-buttons`/`#paraphrase-ai-buttons`, class `.ai-buttons`:
+  Perplexity, ChatGPT, Claude, Mistral, Euria), so the page makes no
+  third-party request at load. Each `.ai-btn` carries its service's
+  prompt-in-URL entry point (`data-ai-url`: `?q=` for all but Euria,
+  `?message=`); `script.js` appends the encoded definition query
+  (`PERPLEXITY_DEFINE_QUERY_TEMPLATES`) or paraphrase query
+  (`PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES`); each group's tooltip comes
+  from its own `data-ai-title-key`, `{service}` filled in. Gemini and Copilot have no
+  such entry point.
 - **`logo.png`/`logo.svg`** — app logo, also embedded as a base64 image
   into every exported SVG/PNG/PDF as a watermark.
+- **`favicon.ico`/`favicon-32.png`/`favicon-192.png`/`apple-touch-icon.png`**
+  — the browser-tab/home-screen icons, raster renders of `logo.svg`
+  (`rsvg-convert`; `favicon.ico` bundles 16/32/48 px, the Apple icon is
+  180 px on white), declared in `index.html`'s `<head>`. Re-render them
+  whenever `logo.svg` changes.
 
 ## Automation & scraping
 
@@ -1958,6 +1987,10 @@ section for the full variable list and the dual-GPU LLM routing scheme.
 - **`run_sglang.sh`** — alternative LLM launcher (SGLang, its own
   `.venv-sglang`), supporting both Apple-Silicon MLX and CUDA GGUF
   backends. Only ever invoked via `run_llm.sh`'s dispatch.
+  `SGLANG_HICACHE_RATIO` (empty = off) enables SGLang's hierarchical
+  prefix cache (`--enable-hierarchical-cache --hicache-ratio`): KV entries
+  evicted from the GPU pool are kept in host RAM and reloaded instead of
+  recomputed.
 - **`run_embed.sh`** — launches the local embedding server (CPU by
   default).
 - **`run_qdrant.sh`** — starts/stops/reports the local Qdrant Docker

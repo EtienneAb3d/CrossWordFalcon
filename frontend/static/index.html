@@ -4,6 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>CrossWordFalcon</title>
+  <!-- Favicons: raster renders of logo.svg (too heavy, ~800 KB, to serve as
+       an SVG icon itself). favicon.ico holds 16/32/48 px. -->
+  <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -479,36 +485,93 @@
                   data-i18n-aria="dictionaryClearBtn" data-i18n-title="dictionaryClearBtn">
             <span class="clear-icon" aria-hidden="true">🧽</span>
           </button>
-          <!-- Opens Perplexity, in a new tab, with a query ("Faire 5
-               propositions de définitions pour les mots croisés, puis
-               définir tous les sens possibles du mot <langue> : <mot>",
-               adapted to the language of the #dictionary-language
-               selector, including when two languages are combined
-               there) about the word typed in #dictionary-input — at
-               the user's explicit request. "Perplexity" text left
-               untranslated (a proper noun, the service's own name,
-               like "Falcon Auto Bot" elsewhere in this file); an
-               "external link" icon as inline SVG (no external icon
-               font/library in this project) signaling that this leaves
-               the site. Same shape as the blue buttons (the base
-               button element: padding/radius/weight), but violet
-               (class .external-link-btn, see style.css) — at the
-               user's explicit request, to visually reinforce that this
-               button opens an external URL rather than an internal
-               action. -->
-          <button type="button" id="dictionary-perplexity-btn" class="external-link-btn"
-                  data-i18n-aria="dictionaryPerplexityTitle"
-                  data-i18n-title="dictionaryPerplexityTitle">Perplexity
-            <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
-                 aria-hidden="true" focusable="false">
-              <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
-                    fill="none" stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M14 4h6v6M20 4l-9 9"
-                    fill="none" stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
+          <!-- External AI assistants (Perplexity, ChatGPT, Claude,
+               Mistral Le Chat, Euria), each opened in a new tab with a
+               query ("Faire 5 propositions de définitions pour les mots
+               croisés, puis définir tous les sens possibles du mot
+               <langue> : <mot>", adapted to the language of the
+               #dictionary-language selector, including when two languages
+               are combined there) about the word typed in
+               #dictionary-input — at the user's explicit request. Each
+               service's own official logo (ai-icons/, a local copy — no
+               third-party request at page load) on a small white tile,
+               plus the "external link" icon signaling that this leaves the
+               site; the service name is carried by the tooltip/aria-label
+               (dictionaryAiSearchTitle, {service} filled in by
+               applyTranslations from data-ai-service). data-ai-url is the
+               service's prompt-in-URL entry point, the encoded query
+               appended as is. Gemini and Copilot are absent: neither
+               gemini.google.com nor copilot.microsoft.com takes a prompt
+               from its URL. Same shape as the blue buttons, but
+               violet (class .external-link-btn, see style.css), to
+               visually reinforce that these open an external URL. -->
+          <span id="dictionary-ai-buttons" class="ai-buttons" data-ai-title-key="dictionaryAiSearchTitle">
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Perplexity" data-ai-url="https://www.perplexity.ai/search?q=">
+              <span class="ai-logo"><img src="ai-icons/perplexity.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="ChatGPT" data-ai-url="https://chatgpt.com/?q=">
+              <span class="ai-logo"><img src="ai-icons/chatgpt.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Claude" data-ai-url="https://claude.ai/new?q=">
+              <span class="ai-logo"><img src="ai-icons/claude.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Mistral" data-ai-url="https://chat.mistral.ai/chat?q=">
+              <span class="ai-logo"><img src="ai-icons/mistral.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Euria" data-ai-url="https://euria.infomaniak.com/?message=">
+              <span class="ai-logo"><img src="ai-icons/euria.png" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </span>
         </form>
         <button type="button" id="dictionary-close-btn" class="nav-btn"
                 data-i18n-aria="dictionaryCloseBtn">✕</button>
@@ -545,23 +608,77 @@
                   data-i18n-aria="paraphraseClearBtn" data-i18n-title="paraphraseClearBtn">
             <span class="clear-icon" aria-hidden="true">🧽</span>
           </button>
-          <!-- Same "external link" icon and same shape/color (class
-               .external-link-btn, violet) as #dictionary-perplexity-btn,
-               "Perplexity" left untranslated (the service's own proper
-               noun) — see its own note earlier in this file. -->
-          <button type="button" id="paraphrase-perplexity-btn" class="external-link-btn"
-                  data-i18n-aria="paraphrasePerplexityTitle"
-                  data-i18n-title="paraphrasePerplexityTitle">Perplexity
-            <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
-                 aria-hidden="true" focusable="false">
-              <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
-                    fill="none" stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round"/>
-              <path d="M14 4h6v6M20 4l-9 9"
-                    fill="none" stroke="currentColor" stroke-width="1.8"
-                    stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
+          <!-- The same external AI assistant buttons as #dictionary-ai-buttons
+               (see its note above), sending the paraphrase request ("Donner
+               5 paraphrases en <langue> : <texte>") instead of the
+               definition one. -->
+          <span id="paraphrase-ai-buttons" class="ai-buttons" data-ai-title-key="paraphraseAiTitle">
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Perplexity" data-ai-url="https://www.perplexity.ai/search?q=">
+              <span class="ai-logo"><img src="ai-icons/perplexity.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="ChatGPT" data-ai-url="https://chatgpt.com/?q=">
+              <span class="ai-logo"><img src="ai-icons/chatgpt.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Claude" data-ai-url="https://claude.ai/new?q=">
+              <span class="ai-logo"><img src="ai-icons/claude.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Mistral" data-ai-url="https://chat.mistral.ai/chat?q=">
+              <span class="ai-logo"><img src="ai-icons/mistral.svg" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+            <button type="button" class="external-link-btn ai-btn"
+                    data-ai-service="Euria" data-ai-url="https://euria.infomaniak.com/?message=">
+              <span class="ai-logo"><img src="ai-icons/euria.png" alt="" width="16" height="16"></span>
+              <svg class="external-link-icon" viewBox="0 0 24 24" width="13" height="13"
+                   aria-hidden="true" focusable="false">
+                <path d="M9 6H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M14 4h6v6M20 4l-9 9"
+                      fill="none" stroke="currentColor" stroke-width="1.8"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </span>
         </form>
         <button type="button" id="paraphrase-close-btn" class="nav-btn"
                 data-i18n-aria="paraphraseCloseBtn">✕</button>

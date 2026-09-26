@@ -49,11 +49,15 @@
      the tooltip's own background (--fg, near-black) is fixed regardless
      of theme; the fill itself reuses --accent, no new token needed. */
   --meter-track: rgba(255, 255, 255, 0.25);
-  /* "Perplexity" buttons (Dictionnaire/Paraphraseur) — same shape as the
+  /* External-link buttons (the Dictionnaire/Paraphraseur AI
+     assistants) — same shape as the
      blue buttons, but in purple, at the user's explicit request, to
      reinforce the indication that they open an external URL rather than
      an action internal to the application. */
   --external-link: #7c3aed;
+  /* White tile behind each official AI-assistant logo on those buttons
+     (.ai-btn .ai-logo), so the brand colors stay legible. */
+  --logo-tile-bg: #fff;
   /* Live attempt-preview tile border (script.js's renderLivePreview(),
      .attempt-preview-grid.live-succeeded/.live-failed below), at the
      user's explicit request: "encadrer en jaune les étapes qui sont
@@ -563,11 +567,12 @@ button:disabled {
   border-color: var(--error);
 }
 
-/* "Perplexity" buttons (Dictionnaire/Paraphraseur) — same base <button>
+/* External-link buttons (the Dictionnaire/Paraphraseur AI assistants)
+   — same base <button>
    shape as every blue action button (padding/radius/font-weight all
    inherited, unlike .nav-btn's smaller neutral look this class replaces),
    but in violet (--external-link) — at the user's explicit request, to
-   reinforce that these two buttons open an external URL rather than an
+   reinforce that these buttons open an external URL rather than an
    in-app action, the same "distinct color, same shape" convention already
    used by #stop-btn above. */
 .external-link-btn {
@@ -1884,17 +1889,43 @@ button:disabled {
   padding: 0.15rem 0.3rem;
 }
 
-/* "Perplexity" button (script.js): label + "external link" icon side by
-   side — shape/color (blue -> purple) supplied by .external-link-btn
-   (see further above in this file), this block only handles the
-   internal layout (icon + text, a small gap between the two). */
-#dictionary-perplexity-btn {
+/* External AI buttons (index.html, #dictionary-ai-buttons and
+   #paraphrase-ai-buttons, class .ai-buttons): the service's official logo
+   on a small white tile (the logos keep their own brand colors, which a
+   violet background would swallow) + the "external link" icon —
+   shape/color (blue -> purple) supplied by .external-link-btn (see
+   further above in this file). */
+.ai-buttons {
   display: inline-flex;
-  align-items: center;
+  flex-wrap: wrap;
   gap: 0.3rem;
 }
 
-#dictionary-perplexity-btn .external-link-icon {
+.ai-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding-left: 0.4rem;
+  padding-right: 0.5rem;
+}
+
+.ai-btn .ai-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 4px;
+  background: var(--logo-tile-bg);
+}
+
+.ai-btn .ai-logo img {
+  display: block;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.ai-btn .external-link-icon {
   display: block;
 }
 
@@ -2044,17 +2075,6 @@ button:disabled {
    shown together. */
 #paraphrase-input {
   width: 22rem;
-}
-
-/* Same treatment as #dictionary-perplexity-btn above. */
-#paraphrase-perplexity-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-
-#paraphrase-perplexity-btn .external-link-icon {
-  display: block;
 }
 
 #paraphrase-results {

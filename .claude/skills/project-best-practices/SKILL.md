@@ -422,6 +422,10 @@ project's engineering language.
   gone. `previous["diagnostics"]` is then the state displayed before the
   last click. Any new save path must resend it (and `challenge_words`)
   rather than let the record's own field be blanked out.
+  A manual edit never erases what the automatic pipeline measured: the
+  `origin` snapshot also carries the source grid's three generation
+  durations, and publishing reuses them (a grid built from scratch has
+  none, 0). The play view says when a grid was created or edited by hand.
   **The same one-step `previous` convention applies to `STOP_DUMP`'s own
   `live_preview` tiles**: a process's live tile is only ever overwritten,
   so each entry carries the snapshot it replaced (`crossword_gen._one_
@@ -1872,6 +1876,13 @@ the current defaults/behavior to know before touching this code.
 
 ### LLM clue generation (`backend/clues.py`)
 
+- **LLM prompts put their fixed part first.** Any long prompt text that
+  never varies between requests (the ChatBot's introduction and full
+  `DOC_USER` text) precedes every language-, grid- or state-dependent
+  part, since the local LLM servers only reuse a cached, byte-identical
+  prefix: one variable word near the top recomputes the whole ~20k-token
+  documentation on SGLang's slow GGUF prefill (~300 tokens/s on this
+  machine). Keep new variable text after the fixed head.
 - `LLMClueGenerator` owns all LLM handling (endpoint config, prompt text,
   the HTTP call, response parsing); `backend/app.py` builds one instance at
   module scope. Talks to any OpenAI-compatible chat-completions endpoint —

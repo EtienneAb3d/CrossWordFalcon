@@ -5229,6 +5229,16 @@ async def interactive_save(req: InteractiveSaveRequest):
         w["language"] = req.bilingual_language if (is_bilingual and w["direction"] == "down") else req.language
     solution = build_letters_grid(rows, cols, slots, assignment)
     n_black = sum(c == "#" for row in bw for c in row)
+    # Read once, up front, so the result's durations and both saves below
+    # (the new library record and the GRID_WORK snapshot further down)
+    # agree on the same origin snapshot — see grid_store.save_grid_json/
+    # save_grid_work's own `origin` parameter and _run_interactive_resume_
+    # job's own comment on job["interactive"]["origin"]. A grid edited
+    # from an automatically generated one keeps that grid's own
+    # durations (carried in `origin`, see _library_record_to_interactive);
+    # a grid built by hand from scratch has none (0).
+    meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
+    origin = meta.get("origin") or {}
     result = {
         "width": cols,
         "height": rows,
@@ -5240,9 +5250,9 @@ async def interactive_save(req: InteractiveSaveRequest):
         "black_ratio": n_black / (rows * cols) if rows and cols else 0,
         "language": req.language,
         "bilingual_language": req.bilingual_language if is_bilingual else None,
-        "generation_duration_seconds": 0,
-        "optimization_duration_seconds": 0,
-        "clues_duration_seconds": 0,
+        "generation_duration_seconds": origin.get("generation_duration_seconds") or 0,
+        "optimization_duration_seconds": origin.get("optimization_duration_seconds") or 0,
+        "clues_duration_seconds": origin.get("clues_duration_seconds") or 0,
         "difficulty": req.difficulty,
         "theme": (req.theme or "").strip() or None,
         "title": req.title,
@@ -5258,12 +5268,6 @@ async def interactive_save(req: InteractiveSaveRequest):
     except OSError:
         logger.warning("interactive save: SVG/PNG export skipped")
     pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
-    # Read once, up front, so both saves below (the new library record and
-    # the GRID_WORK snapshot further down) agree on the same origin
-    # snapshot — see grid_store.save_grid_json/save_grid_work's own
-    # `origin` parameter and _run_interactive_resume_job's own comment on
-    # job["interactive"]["origin"].
-    meta = (JOBS.get(req.job_id) or {}).get("interactive") or {}
     grid_id = await asyncio.to_thread(
         save_grid_json, result, req.language, req.difficulty, "interactive",
         req.title, req.bilingual_language if is_bilingual else None, pseudo,
@@ -5657,6 +5661,12 @@ def _library_record_to_interactive(record):
             "title": record.get("title") or "",
             "pseudo": record.get("pseudo"),
             "created_at": record.get("created_at"),
+            # The origin grid's own automatic generation durations, carried
+            # so a manual edit republishes them instead of zeros — see
+            # interactive_save.
+            "generation_duration_seconds": record.get("generation_duration_seconds"),
+            "optimization_duration_seconds": record.get("optimization_duration_seconds"),
+            "clues_duration_seconds": record.get("clues_duration_seconds"),
         },
     }
 

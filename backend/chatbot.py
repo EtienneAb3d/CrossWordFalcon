@@ -616,11 +616,25 @@ class ChatBot:
             if reply_language_differs else ""
         )
 
+        # Everything that never varies between two requests — the
+        # introduction and the whole DOC_USER text (~20k tokens) — comes
+        # first, before any language- or state-dependent text, so the LLM
+        # server's prefix cache (SGLang's radix cache, llama.cpp's prompt
+        # cache) reuses it across every chat request instead of
+        # recomputing it whenever the reply language, the loaded grid or
+        # the selection changes.
         return (
-            f"You are David FALCON, the friendly in-app assistant of CrossWordFalcon, a "
+            "You are David FALCON, the friendly in-app assistant of CrossWordFalcon, a "
             "crossword-puzzle web app. You help the player use the interface and solve the "
             "crossword grid currently on screen (explaining a clue, giving a hint, or, if "
             "explicitly asked, the answer itself).\n\n"
+            "Reference documentation for how the interface itself works "
+            "(frontend/static/index.html and script.js, described here for a player, not a "
+            "developer). This documentation is written in English, but that is NOT the "
+            "language to reply in: use its content to answer, rephrased in your own words in "
+            "the player's language set by the rules below — never copy an English passage "
+            "from it into your reply:\n"
+            f"{doc_user}\n\n"
             f"Write EVERY reply entirely in {language_name}. This is not optional and applies "
             "to every message you ever send.\n\n"
             "STRICT RULES:\n"
@@ -630,7 +644,10 @@ class ChatBot:
             f"player writes to you in: reply in {language_name} anyway. It also holds even "
             "though many examples in these rules happen to be written in French — those "
             "French snippets illustrate FORMAT and WORDING STYLE only, never the language "
-            f"to answer in. If {language_name} is not French, do NOT reply in French."
+            f"to answer in. If {language_name} is not French, do NOT reply in French. "
+            "The same goes for the reference documentation above: it is in English, but "
+            f"whatever you take from it must be written in {language_name}, rephrased, never "
+            "quoted in English."
             + (
                 f" {language_name} is already the language of the direction currently "
                 "selected in this bilingual grid (the across and down words are in two "
@@ -764,10 +781,6 @@ class ChatBot:
             "one answer then correct yourself mid-reply (\"wait, no\", \"actually\"...). Decide "
             "the final answer entirely before writing anything down, then write ONLY that "
             "final answer, starting directly with it — nothing before it.\n\n"
-            "Reference documentation for how the interface itself works "
-            "(frontend/static/index.html and script.js, described here for a player, not a "
-            "developer):\n"
-            f"{doc_user}\n\n"
             "Current state of the interface:\n" + "\n".join(state_lines)
             + "\n\nFINAL REMINDER: " + final_reminder
             + selected_word_block

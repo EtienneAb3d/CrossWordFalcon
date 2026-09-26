@@ -26,6 +26,15 @@ function applyTranslations() {
     const key = el.getAttribute("data-i18n-title");
     if (t[key]) el.setAttribute("title", t[key]);
   });
+  // External AI buttons (Dictionnaire/Paraphraseur): one parameterized
+  // tooltip per group (its data-ai-title-key), the service's own
+  // (untranslated) name filled in.
+  document.querySelectorAll(".ai-buttons .ai-btn").forEach((btn) => {
+    const key = btn.closest(".ai-buttons").dataset.aiTitleKey;
+    const label = t[key].replace("{service}", btn.dataset.aiService);
+    btn.setAttribute("title", label);
+    btn.setAttribute("aria-label", label);
+  });
   renderSystemInfoTooltip();
   // Only redraws the idle-state placeholder (or the selected word's own
   // clue, if a cell is clicked — see renderHoverDefinitionForSelection),
@@ -187,7 +196,8 @@ const dictionarySynonymsBtn = document.getElementById("dictionary-synonyms-btn")
 const dictionaryDefineBtn = document.getElementById("dictionary-define-btn");
 const dictionaryResults = document.getElementById("dictionary-results");
 const dictionaryClearBtn = document.getElementById("dictionary-clear-btn");
-const dictionaryPerplexityBtn = document.getElementById("dictionary-perplexity-btn");
+const dictionaryAiButtons = document.querySelectorAll("#dictionary-ai-buttons .ai-btn");
+const paraphraseAiButtons = document.querySelectorAll("#paraphrase-ai-buttons .ai-btn");
 const dictionaryCloseBtn = document.getElementById("dictionary-close-btn");
 const dictionaryLanguage = document.getElementById("dictionary-language");
 const paraphraseBtn = document.getElementById("paraphrase-btn");
@@ -197,7 +207,6 @@ const paraphraseInput = document.getElementById("paraphrase-input");
 const paraphraseGenerateBtn = document.getElementById("paraphrase-generate-btn");
 const paraphraseResults = document.getElementById("paraphrase-results");
 const paraphraseClearBtn = document.getElementById("paraphrase-clear-btn");
-const paraphrasePerplexityBtn = document.getElementById("paraphrase-perplexity-btn");
 const paraphraseCloseBtn = document.getElementById("paraphrase-close-btn");
 const paraphraseLanguage = document.getElementById("paraphrase-language");
 const qdrantAdminBtn = document.getElementById("qdrant-admin-btn");
@@ -3815,11 +3824,31 @@ function displayFinalGrid(gridData) {
   renderClues(gridData.words);
   const t = I18N[uiLanguage];
   stats.textContent = t.stats(gridData.word_count, gridData.black_count, (gridData.black_ratio * 100).toFixed(1));
-  generationTimes.textContent = t.generationTimes(
-    formatDuration(gridData.generation_duration_seconds),
-    formatDuration(gridData.optimization_duration_seconds),
-    formatDuration(gridData.clues_duration_seconds),
-  );
+  // A grid built by hand from scratch was never generated, optimized or
+  // clued automatically (all three durations 0): its durations are left
+  // out rather than shown as "0s" three times. A grid published from
+  // Interactive mode ("(Création)", `interactive`) is also labeled as
+  // created manually, or edited manually when it was derived from another
+  // grid (`origin`, whose own durations it keeps).
+  const hasGenerationTimes = [
+    gridData.generation_duration_seconds,
+    gridData.optimization_duration_seconds,
+    gridData.clues_duration_seconds,
+  ].some((seconds) => seconds > 0);
+  const timeParts = [];
+  if (hasGenerationTimes) {
+    timeParts.push(t.generationTimes(
+      formatDuration(gridData.generation_duration_seconds),
+      formatDuration(gridData.optimization_duration_seconds),
+      formatDuration(gridData.clues_duration_seconds),
+    ));
+  }
+  if (gridData.interactive) {
+    timeParts.push(gridData.origin && gridData.origin.id
+      ? t.gridEditedManually
+      : t.gridCreatedManually);
+  }
+  generationTimes.textContent = timeParts.join(" — ");
   solutionBtn.hidden = false;
   checkBtn.hidden = false;
   definitionsBtn.hidden = false;
@@ -4461,7 +4490,10 @@ const PERPLEXITY_DEFINE_QUERY_TEMPLATES = {
   pt: (adj, word) => `Faça 5 propostas de definições para palavras cruzadas, depois defina todos os significados possíveis da palavra ${adj}: ${word}`,
 };
 
-dictionaryPerplexityBtn.addEventListener("click", () => {
+// Every Dictionnaire external AI assistant button (index.html,
+// #dictionary-ai-buttons) sends the same query, appended to its own
+// data-ai-url.
+dictionaryAiButtons.forEach((btn) => btn.addEventListener("click", () => {
   const word = dictionaryInput.value.trim();
   if (!word) {
     dictionaryInput.focus();
@@ -4475,9 +4507,9 @@ dictionaryPerplexityBtn.addEventListener("click", () => {
   const template =
     PERPLEXITY_DEFINE_QUERY_TEMPLATES[sentenceLang] ||
     PERPLEXITY_DEFINE_QUERY_TEMPLATES.fr;
-  const url = `https://www.perplexity.ai/search?q=${encodeURIComponent(template(adjective, word))}`;
+  const url = `${btn.dataset.aiUrl}${encodeURIComponent(template(adjective, word))}`;
   window.open(url, "_blank", "noopener,noreferrer");
-});
+}));
 
 // Queries /api/dictionary for a given language and returns the already-
 // built result node (never attached to the page) — factored out so it
@@ -4887,7 +4919,9 @@ const PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES = {
   pt: (name, text) => `Dê 5 paráfrases em ${name}: ${text}`,
 };
 
-paraphrasePerplexityBtn.addEventListener("click", () => {
+// Same buttons on the Paraphraseur (#paraphrase-ai-buttons), sending the
+// paraphrase request instead.
+paraphraseAiButtons.forEach((btn) => btn.addEventListener("click", () => {
   const text = paraphraseInput.value.trim();
   if (!text) {
     paraphraseInput.focus();
@@ -4901,9 +4935,9 @@ paraphrasePerplexityBtn.addEventListener("click", () => {
   const template =
     PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES[sentenceLang] ||
     PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES.fr;
-  const url = `https://www.perplexity.ai/search?q=${encodeURIComponent(template(name, text))}`;
+  const url = `${btn.dataset.aiUrl}${encodeURIComponent(template(name, text))}`;
   window.open(url, "_blank", "noopener,noreferrer");
-});
+}));
 
 // 5 rewordings, one per line — the same presentation as "Définir"
 // (.dictionary-define-list/.dictionary-define-line, reused as-is: a

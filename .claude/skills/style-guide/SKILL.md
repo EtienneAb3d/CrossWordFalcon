@@ -4459,3 +4459,17 @@ end through the real running API (interactive start/step/save,
   the five tool buttons on one row; one click restores every field with
   the grid still displayed.
 
+- **The Dictionnaire's and Paraphraseur's external AI buttons are logo-only**, at the user's
+  explicit request (replace the "Perplexity" text with the official icon,
+  then add ChatGPT, Claude, Mistral and Euria on the same model — Copilot
+  and Gemini take no prompt from their URL): `#dictionary-ai-buttons` and `#paraphrase-ai-buttons` (class
+  `.ai-buttons`) each hold five `.external-link-btn.ai-btn`
+  buttons (violet, same shape as the blue ones), each with the service's
+  official logo (`frontend/static/ai-icons/`, local copies) on a small
+  white rounded tile (`.ai-logo`, `--logo-tile-bg`, 1.3rem square, 4px
+  radius, logo 0.95rem) so the brand colors stay legible on violet,
+  followed by the usual "external link" icon; the service name lives only
+  in the tooltip/aria-label (`dictionaryAiSearchTitle`/
+  `paraphraseAiTitle`, `{service}` filled in). Order: Perplexity, ChatGPT, Claude, Mistral, Euria.
+  **Visually confirmed** with Playwright/Chromium: the five tiles wrap as a
+  group on the Dictionnaire row, every logo recognizable.

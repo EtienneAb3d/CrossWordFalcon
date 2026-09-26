@@ -170,6 +170,15 @@ SGLANG_MEM_FRACTION_STATIC="${SGLANG_MEM_FRACTION_STATIC:-}"
 # something else ever needs to share that second card too.
 SGLANG_MEM_FRACTION_STATIC_INTERACTIVE="${SGLANG_MEM_FRACTION_STATIC_INTERACTIVE:-}"
 
+# Empty by default (disabled). When set, enables SGLang's hierarchical
+# prefix cache on every instance: KV entries the GPU pool evicts are kept
+# in host RAM, sized as this ratio of the GPU KV pool (--hicache-ratio),
+# and loaded back instead of being recomputed. It keeps the chat's long,
+# fixed system-prompt prefix (the whole DOC_USER text) reusable after
+# other requests have pushed it out of a small GPU KV pool. Host RAM cost:
+# roughly ratio x the GPU KV pool size, per instance.
+SGLANG_HICACHE_RATIO="${SGLANG_HICACHE_RATIO:-}"
+
 if [ ! -d .venv-sglang ]; then
     echo "Error: .venv-sglang not found — SGLang isn't installed. See CLAUDE.md's"
     echo "run_sglang.sh entry for the install steps (Python 3.12 venv + editable"
@@ -270,6 +279,12 @@ if [ -n "$SGLANG_MEM_FRACTION_STATIC" ]; then
     MEM_FRACTION_ARGS="--mem-fraction-static $SGLANG_MEM_FRACTION_STATIC"
 fi
 
+# Same plain-string convention; see SGLANG_HICACHE_RATIO's declaration.
+HICACHE_ARGS=""
+if [ -n "$SGLANG_HICACHE_RATIO" ]; then
+    HICACHE_ARGS="--enable-hierarchical-cache --hicache-ratio $SGLANG_HICACHE_RATIO"
+fi
+
 # Same convention, for the SECOND (interactive) instance only — see
 # SGLANG_MEM_FRACTION_STATIC_INTERACTIVE's own declaration above.
 MEM_FRACTION_ARGS_INTERACTIVE=""
@@ -355,6 +370,7 @@ start_mlx_instance() {
         $OVERRIDE_ARGS \
         $TOKENIZER_ARGS \
         $REASONING_ARGS \
+        $HICACHE_ARGS \
         $MEM_FRACTION_ARGS \
         < /dev/null > "$LLM_LOG" 2>&1 &
     LLM_PID=$!
@@ -379,6 +395,7 @@ start_cuda_instance() {
         $OVERRIDE_ARGS \
         $TOKENIZER_ARGS \
         $REASONING_ARGS \
+        $HICACHE_ARGS \
         $mem_args \
         < /dev/null > "$log_file" 2>&1 &
     local pid=$!
