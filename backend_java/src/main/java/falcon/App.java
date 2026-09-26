@@ -77,7 +77,10 @@ public final class App {
     static final int LIBRARY_PAGE_SIZE = 20;
     static final int MAX_PSEUDO_LENGTH = 15;
     static final int MAX_SECRET_LENGTH = 60;
-    static final int PRESENCE_TTL_S = 60;
+    // Well above one minute: a browser throttles a hidden tab's timers down to
+    // one wake-up per minute, so a still-open background tab heartbeats only
+    // every ~60s (see backend/app.py, PRESENCE_TTL_S).
+    static final int PRESENCE_TTL_S = 150;
     static final int MAX_PRESENCE_ENTRIES = 5000;
     static final int PRESENCE_SWEEP_INTERVAL_S = 10;
     static final double RESOURCE_USAGE_SAMPLE_INTERVAL_S = 2.0;

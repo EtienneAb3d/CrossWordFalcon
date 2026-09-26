@@ -596,7 +596,11 @@ MAX_SECRET_LENGTH = 60
 # module dict — fine, since the back end always runs single-process (no
 # --workers, see above) — pruned of stale entries on every request and
 # hard-capped so an abusive client can't grow it without bound.
-PRESENCE_TTL_S = 60
+# PRESENCE_TTL_S stays well above one minute: a browser throttles the
+# timers of a tab hidden for a while down to one wake-up per minute, so
+# a still-open background tab heartbeats only every ~60s, and a TTL of
+# exactly 60s dropped it at every sweep just before its next heartbeat.
+PRESENCE_TTL_S = 150
 MAX_PRESENCE_ENTRIES = 5000
 _PRESENCE = {}  # session_id -> {"last_seen": monotonic float, "pseudo": str}
 
@@ -642,7 +646,7 @@ _last_logged_pseudos = None
 # heartbeats stop arriving (everyone has left): without it, the purge
 # only ever runs inside `POST /api/presence`, so the drop to 0 would
 # never be logged until a new visitor connects. 10s is
-# fine-grained enough compared to PRESENCE_TTL_S (60s) and costs almost nothing
+# fine-grained enough compared to PRESENCE_TTL_S (150s) and costs almost nothing
 # (iterating a dict of at most MAX_PRESENCE_ENTRIES entries).
 PRESENCE_SWEEP_INTERVAL_S = 10
 
@@ -1452,7 +1456,7 @@ def _presence_snapshot(record=None):
             sid, entry = record
             _PRESENCE[sid] = entry
         # Purges expired sessions — keeps the dict bounded to "whatever
-        # sent a heartbeat within the last PRESENCE_TTL_S (60s) seconds".
+        # sent a heartbeat within the last PRESENCE_TTL_S (150s) seconds".
         for sid in [s for s, e in _PRESENCE.items()
                     if now - e["last_seen"] > PRESENCE_TTL_S]:
             del _PRESENCE[sid]

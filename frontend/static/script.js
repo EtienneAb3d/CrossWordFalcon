@@ -2717,7 +2717,7 @@ let uiBootstrapped = false;
 // At the user's explicit request: show, left of the version badge, how
 // many distinct active users there are (de-duplicated by pseudo — two
 // tabs of the same person count once), refreshed every 2s; a user is
-// dropped after 60s without a heartbeat (enforced server-side, see
+// dropped after 150s without a heartbeat (enforced server-side, see
 // backend/app.py's POST /api/presence).
 const PRESENCE_INTERVAL_MS = 2000;
 const PRESENCE_TIMEOUT_MS = 4000; // short: a heartbeat must not outlive its own interval
