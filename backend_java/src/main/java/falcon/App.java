@@ -925,7 +925,7 @@ public final class App {
                     String workId = GridStore.saveGridWork(jobId, result.get("solution"), definitions, title, req.language,
                             req.difficulty, theme.isEmpty() ? null : theme, themePriority == null ? List.of() : themePriority,
                             req.seed != null && req.seed != 0 ? req.seed : 0, pseudo, null, a.origin,
-                            result.get("bilingual_language"), generationParams, null, null);
+                            result.get("bilingual_language"), generationParams, req.challengeWords, null);
                     Log.info("[%s] saved to Créations: %s (pseudo=%s)", shortId, workId, Log.repr(pseudo));
                     result.put("grid_work_id", workId);
                 } catch (Exception e) {
@@ -1050,6 +1050,7 @@ public final class App {
             meta.put("theme", theme.isEmpty() ? null : theme);
             meta.put("has_theme", !priority.isEmpty());
             meta.put("theme_description", themeDescription);
+            meta.put("theme_precision", req.themePrecision);
             meta.put("challenge_words", new ArrayList<>(req.challengeWords));
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             Map<String, Object> result = new LinkedHashMap<>();
@@ -1132,6 +1133,7 @@ public final class App {
             meta.put("has_theme", !priority.isEmpty());
             meta.put("theme_description", null);
             meta.put("generation_params", generationParams);
+            meta.put("theme_precision", generationParams instanceof Map<?, ?> gp ? gp.get("theme_precision") : null);
             meta.put("origin", record.get("origin"));
             meta.put("challenge_words", Json.listOrEmpty(record.get("challenge_words")));
             Map<String, Object> result = new LinkedHashMap<>();
@@ -2176,6 +2178,10 @@ public final class App {
             int bep = b.integer("black_enrichment_percent", 17, 0, 100);
             int flp = b.integer("force_letters_percent", 1, 0, 100);
             String pseudo = b.str("pseudo", null);
+            String reqDifficulty = b.str("difficulty", null);
+            String reqTheme = b.str("theme", null);
+            Double reqPrecision = b.has("theme_precision") ? b.dbl("theme_precision", Themes.THEME_MIN_SCORE, 0.0, 1.0) : null;
+            List<String> reqChallenge = b.has("challenge_words") ? b.strList("challenge_words") : null;
             List<int[]> zoneCells = b.has("zone_cells") ? b.cells("zone_cells", false) : null;
             Session s = INTERACTIVE_SESSIONS.get(jobId);
             Job job = job(jobId);
@@ -2258,22 +2264,46 @@ public final class App {
             if (cols < 5 || cols > 30 || rows < 5 || rows > 30) {
                 throw Web.validation("body", "width", "less_than_equal", "Input should be between 5 and 30", cols);
             }
-            genreq.difficulty = Json.str(meta, "difficulty", "easy");
+            // The generation form's current settings win over the session's
+            // own (see app.py's interactive_finish); language stays the
+            // session's: the letters already placed are words of it.
+            Object st = meta.get("theme");
+            String sessionTheme = String.join(" ", Py.split(Json.truthy(st) ? st.toString() : ""));
+            String theme = String.join(" ", Py.split(reqTheme != null ? reqTheme : sessionTheme));
+            Object sp = meta.get("theme_precision");
+            Double sessionPrecision = sp instanceof Number n ? n.doubleValue() : null;
+            double themePrecision = reqPrecision != null ? reqPrecision
+                    : sessionPrecision != null ? sessionPrecision : Themes.THEME_MIN_SCORE;
+            List<String> challengeWords = new ArrayList<>();
+            if (reqChallenge != null) challengeWords.addAll(reqChallenge);
+            else for (Object o : Json.listOrEmpty(meta.get("challenge_words"))) if (o != null) challengeWords.add(o.toString());
+            genreq.difficulty = reqDifficulty != null && !reqDifficulty.isEmpty() ? reqDifficulty : Json.str(meta, "difficulty", "easy");
             genreq.seed = ThreadLocalRandom.current().nextLong(1L << 31);
             genreq.forceLettersPercent = flp;
             genreq.blackEnrichmentPercent = bep;
             genreq.mode = mode;
-            Object mt = meta.get("theme");
-            genreq.theme = Json.truthy(mt) ? mt.toString() : null;
+            genreq.theme = theme.isEmpty() ? null : theme;
+            genreq.themePrecision = themePrecision;
+            genreq.challengeWords = challengeWords;
             genreq.pseudo = pseudo;
             validateGenerateRequest(genreq);
             String id = newJob();
             GenJobArgs a = new GenJobArgs();
             a.resumeState = resumeState;
-            a.hasOverride = true;
-            a.overridePriorityWords = new ArrayList<>(s.priorityWords);
-            Object tdesc = meta.get("theme_description");
-            a.overrideThemeDescription = Json.truthy(tdesc) ? tdesc.toString() : "";
+            // The session's glossary is reused only while it was built for
+            // this exact theme at this exact precision; otherwise
+            // runGenerateJob builds a fresh one (none for an empty theme).
+            if (theme.isEmpty()) {
+                a.hasOverride = true;
+                a.overridePriorityWords = new ArrayList<>();
+                a.overrideThemeDescription = "";
+            } else if (theme.equals(sessionTheme) && !s.priorityWords.isEmpty() && sessionPrecision != null
+                    && sessionPrecision == themePrecision) {
+                a.hasOverride = true;
+                a.overridePriorityWords = new ArrayList<>(s.priorityWords);
+                Object tdesc = meta.get("theme_description");
+                a.overrideThemeDescription = Json.truthy(tdesc) ? tdesc.toString() : "";
+            }
             a.preservedClues = preserved;
             a.permanentLocked = locked;
             a.permanentBlack = permanentBlack;

@@ -234,6 +234,9 @@ public final class Generator {
         a.lockedLetters = locked;
         a.reshapeBlackCells = true;
         a.permanentBlackCells = permanentBlack;
+        // A replacement gets no sibling visibility, so its own budget is a
+        // hard stop (no elastic extension): it only uses a free process.
+        if (!racing) a.attemptActive = null;
         boolean flag = racing && checksSlot != null && ctx.attemptActive != null;
         if (flag) ctx.attemptActive.set(checksSlot, 1);
         Fill.Result result;
@@ -745,7 +748,8 @@ public final class Generator {
                 final char[][] fSeedGridNull = null;
                 if (carryPreseed != null) {
                     int resetCount = FULL_RESET_ATTEMPT_COUNT;
-                    dispatchLineage = Cleanup.buildDispatchLineage(PA, resetCount, continuePoolLineage);
+                    dispatchLineage = Cleanup.buildDispatchLineage(PA, resetCount,
+                            carrySeedPoolContinueLineage != null && !carrySeedPoolContinueLineage.isEmpty() ? continuePoolLineage : null);
                     for (int i = 0; i < PA; i++) {
                         final int slot = i;
                         final long s = seeds[i];
@@ -781,7 +785,8 @@ public final class Generator {
                                     List.of(), dispatchLineage.get(i), false));
                         }
                     } else {
-                        dispatchLineage = Cleanup.buildDispatchLineage(PA, resetCount, poolLineage);
+                        dispatchLineage = Cleanup.buildDispatchLineage(PA, resetCount,
+                                carrySeedPoolLineage != null && !carrySeedPoolLineage.isEmpty() ? poolLineage : null);
                         Set<String> seen = new HashSet<>();
                         for (int k = 0; k < pool.size(); k++) {
                             char[][] pg = (char[][]) pool.get(k)[0];

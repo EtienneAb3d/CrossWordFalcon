@@ -1190,21 +1190,28 @@ class InteractiveFinishRequest(BaseModel):
     lettres déjà positionnées..., y compris la génération des définitions
     manquantes (mais pas celles déjà définies)." `grid`/`definitions` are
     the current editable state (same shape as InteractiveSaveRequest);
-    `language`/`difficulty`/`bilingual_language`/`theme`/the interactive
-    session's own already-resolved theme glossary are all read back from
-    `JOBS[job_id]["interactive"]`/`INTERACTIVE_SESSIONS[job_id]` (set once
-    at session start), never trusted from the request body — the same
-    convention `InteractiveSaveWorkRequest` already establishes.
-    `mode`/`black_enrichment_percent`/`force_letters_percent` mirror the
-    generation form's own current values, since this reuses the ordinary
-    automatic-generation engine (see `interactive_finish`/
-    `_run_generate_job`)."""
+    `language`/`bilingual_language` are read back from
+    `JOBS[job_id]["interactive"]` (set once at session start), never
+    trusted from the request body: the letters already on the grid are
+    words of that language, so the search must keep its dictionary.
+    Every other generation parameter mirrors the generation form's own
+    CURRENT values, which the player may have changed since the session
+    started: `mode`/`black_enrichment_percent`/`force_letters_percent`/
+    `difficulty`/`theme`/`theme_precision`/`challenge_words`. The last four
+    fall back to the session's own value when omitted (`None`). The
+    session's already-resolved theme glossary is reused only while it
+    still matches the form's theme and precision (see
+    `interactive_finish`)."""
     job_id: str
     grid: list[list[str]]
     definitions: list[dict] = []
     mode: str = "medium"
     black_enrichment_percent: int = Field(default=17, ge=0, le=100)
     force_letters_percent: int = Field(default=1, ge=0, le=100)
+    difficulty: Optional[str] = None
+    theme: Optional[str] = None
+    theme_precision: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    challenge_words: Optional[list[str]] = None
     # Same convention as InteractiveSaveRequest/InteractiveSaveWorkRequest
     # (trusted directly from the frontend's own current userPseudo, never
     # derived from the session) — this is who's using the browser right
@@ -4279,6 +4286,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                     theme_priority_words or (), req.seed or 0, pseudo,
                     None, origin, result.get("bilingual_language"),
                     generation_params=generation_params,
+                    challenge_words=req.challenge_words,
                 )
                 logger.info("[%s] saved to Créations: %s (pseudo=%r)", short_id, work_id, pseudo)
                 # Read by frontend/static/script.js's runGeneration(), which
@@ -4485,6 +4493,10 @@ async def _run_interactive_job(job_id, req):
             "theme": theme or None,
             "has_theme": bool(priority_words),
             "theme_description": theme_description,
+            # The precision the session's glossary was built with — read
+            # by POST /api/interactive/finish to decide whether that
+            # glossary still matches the form's current settings.
+            "theme_precision": req.theme_precision,
             # "Mots Défi (personnalisation)" this session started from —
             # the client's own author-typed spelling verbatim (see
             # InteractiveSaveWorkRequest/InteractiveSaveRequest's own
@@ -5534,6 +5546,7 @@ async def _run_interactive_resume_job(job_id, record):
             "has_theme": bool(priority_words),
             "theme_description": None,
             "generation_params": generation_params,
+            "theme_precision": (generation_params or {}).get("theme_precision"),
             # Snapshot of the grid this session was derived from — set
             # only when `record` itself carries one (a library grid
             # opened via "Ouvrir en mode Interactif", or a GRID_WORK
@@ -5784,10 +5797,13 @@ async def interactive_finish(req: InteractiveFinishRequest):
     adding new black cells / words wherever still needed, exactly like a
     fresh generation would.
 
-    Reuses the interactive session's own already-resolved theme glossary
-    verbatim (`override_priority_words`/`override_theme_description` —
-    see _run_generate_job's own docstring) rather than re-running the
-    LLM/Qdrant theme pre-search a second time. Every word whose exact
+    Every generation parameter except the language comes from the
+    generation form's current values (see `InteractiveFinishRequest`).
+    The interactive session's own already-resolved theme glossary is
+    reused verbatim (`override_priority_words`/`override_theme_description`
+    — see _run_generate_job's own docstring) while the form still asks
+    for the same theme at the same precision; a changed theme or precision
+    gets a freshly built glossary, an emptied theme none. Every word whose exact
     TEXT (never its position — see `preserved_clues`'s own construction
     below, and `_run_generate_job`'s docstring, for why matching by
     (row, col, direction) alone silently breaks the moment the search
@@ -5998,26 +6014,60 @@ async def interactive_finish(req: InteractiveFinishRequest):
                 protected_black_cells.add((br, bc))
     if protected_black_cells:
         permanent_black_cells = (permanent_black_cells or set()) | protected_black_cells
+    # The generation form's current settings win over the session's own
+    # (the player may have changed difficulty, theme, precision or "Mots
+    # Défi" since the session started); `None` means "not sent" and keeps
+    # the session's value. Language stays the session's: the letters
+    # already placed are words of that language.
+    session_theme = " ".join((meta.get("theme") or "").split())
+    theme = " ".join((req.theme if req.theme is not None else session_theme).split())
+    theme_precision = (
+        req.theme_precision if req.theme_precision is not None
+        else meta.get("theme_precision") if meta.get("theme_precision") is not None
+        else THEME_MIN_SCORE
+    )
+    challenge_words = (
+        req.challenge_words if req.challenge_words is not None
+        else list(meta.get("challenge_words") or [])
+    )
+    # The session's glossary is reused only while it was built for this
+    # exact theme at this exact precision; otherwise `_run_generate_job`
+    # builds a fresh one from the form's theme (none at all for an empty
+    # theme).
+    if not theme:
+        override_priority_words, override_theme_description = set(), ""
+    elif (
+        theme == session_theme
+        and sess["priority_words"]
+        and meta.get("theme_precision") is not None
+        and meta.get("theme_precision") == theme_precision
+    ):
+        override_priority_words = sess["priority_words"]
+        override_theme_description = meta.get("theme_description") or ""
+    else:
+        override_priority_words, override_theme_description = None, ""
     genreq = GenerateRequest(
         language=meta["language"],
         bilingual_language=meta.get("bilingual_language"),
         width=cols,
         height=rows,
-        difficulty=meta.get("difficulty", "easy"),
+        difficulty=req.difficulty or meta.get("difficulty", "easy"),
         seed=random.randrange(2**31),
         force_letters_percent=req.force_letters_percent,
         black_enrichment_percent=req.black_enrichment_percent,
         mode=req.mode,
-        theme=meta.get("theme") or None,
+        theme=theme or None,
+        theme_precision=theme_precision,
         pseudo=req.pseudo,
+        challenge_words=challenge_words,
     )
     _validate_generate_request(genreq)
     new_job_id = _new_job()
     task = asyncio.create_task(
         _run_generate_job(
             new_job_id, genreq, resume_state=resume_state,
-            override_priority_words=sess["priority_words"],
-            override_theme_description=meta.get("theme_description") or "",
+            override_priority_words=override_priority_words,
+            override_theme_description=override_theme_description,
             preserved_clues=preserved_clues,
             permanent_locked_letters=locked_letters,
             permanent_black_cells=permanent_black_cells,

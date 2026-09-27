@@ -456,10 +456,16 @@ project's engineering language.
   from a previously failed automatic run), and the search fills in
   whatever's left, adding new black cells/words wherever still needed.
   `POST /api/interactive/finish` (matching `frontend/server.py` proxy
-  route per rule 15) reuses the interactive session's own already-
+  route per rule 15) keeps the session's grid size and language(s) and
+  takes every other setting (mode, Taux noir, Graines, difficulty,
+  Thématique, Précision thématique, "Mots Défi") from the generation
+  form's current values — the player may have changed them since the
+  session started. It reuses the interactive session's own already-
   resolved theme glossary verbatim (`_run_generate_job`'s
-  `override_priority_words`/`override_theme_description` parameters —
-  no re-derivation of the theme via a second LLM/Qdrant round trip) and
+  `override_priority_words`/`override_theme_description` parameters)
+  only while the form's theme and precision match the ones it was built
+  with, and rebuilds it otherwise. The main form's "Mots Défi" list and
+  the Interactive panel's are one list kept in sync client-side. It
   only asks the LLM for a clue on a word that doesn't already have one
   (`_run_generate_job`'s `preserved_clues` parameter, a `{(row, col,
   direction): clue}` map built from the definitions already typed) — a
@@ -993,7 +999,10 @@ the current defaults/behavior to know before touching this code.
 - **Every finished attempt frees its worker for a fresh replacement
   attempt** (success or failure), as long as an original attempt of the
   palier is still racing; replacements never extend the palier
-  (`racing=False`, no `attempt_active` flag) and are all interrupted
+  (`racing=False`, no `attempt_active` flag), never get an elastic budget
+  of their own (each stops at its own `deadline_checks`, its worker then
+  taking the next replacement: they use free processes, never lengthen
+  any budget), and are all interrupted
   (`attempt_done_event`) once every original has finished or used up its
   budget. They are an extra chance within the palier, not extra lineages:
   the next palier resumes only the best `PARALLEL_ATTEMPTS - reset_count`
@@ -1210,7 +1219,7 @@ the current defaults/behavior to know before touching this code.
   squares`, a solitary CLI run) is unaffected — same plain, unconditional
   stop as always.
 - **Each `Filler._backtrack` node makes at most `MAX_DESCENTS_PER_NODE`
-  (3) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (7) while the
+  (10) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (7) while the
   search has placed fewer than `EARLY_DESCENTS_WORD_COUNT` (10) words on
   top of the attempt's initial state — before returning `False` to its parent — one
   cap shared by all four stages of the node, `allow_breaking` included;
@@ -1222,7 +1231,11 @@ the current defaults/behavior to know before touching this code.
   rule is that such a grid must be finished as well as possible, every
   possibility explored. It exists so backtracking climbs back to words placed
   early in an attempt: an uncapped node only fails after exhausting its
-  whole subtree, which never happens within the budget.
+  whole subtree, which never happens within the budget. A node that
+  receives a backjump (a failure passed up through at least one node that
+  skipped its other candidates, `Filler._last_jumped`) may make only one
+  more descent — the user's rule: the cap is only reached when every
+  failure came back through ordinary backtracking.
 - **`Filler._backtrack` backjumps on conflict sets** (`BACKJUMPING_ENABLED`):
   chronological backtracking with a per-node cap still costs `cap^k` nodes
   to climb k levels, so the first words of an attempt are never revisited
@@ -1289,9 +1302,11 @@ the current defaults/behavior to know before touching this code.
   already determined by a real letter is skipped, otherwise every
   partially-filled slot would report 1. Level 7 runs inside level 6's
   geometric window (the `SLOT_SELECTION_WINDOW_SIZE` (10) slots closest to
-  the grid's top-left cell, `SLOT_SELECTION_ORIGIN` = `(0, 0)`), not over the whole group, and measures slots through a
-  decreasing length threshold: 12 letters and more first
-  (`MOST_CONSTRAINED_START_LENGTH`), then 11, 10… down to 2
+  the center of the last word the current descent placed,
+  `Filler._selection_origin` — the grid's center while it has placed
+  none), not over the whole group, and measures slots through a
+  decreasing length threshold: 4 letters and more first
+  (`MOST_CONSTRAINED_START_LENGTH`), then 3, then 2
   (`MOST_CONSTRAINED_MIN_LENGTH`), stopping at the first threshold where
   some slot of the window has a measurable free cell.
   The older 2-tier rule this cascade grew out of is kept below for the

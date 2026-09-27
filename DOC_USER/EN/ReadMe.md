@@ -632,7 +632,9 @@ colored instead: blue while it's still computing, yellow once it stopped
 because it succeeded, orange once it stopped because it reached a failed
 state, light blue once it was stopped from outside — a replacement attempt
 launched on a freed process, cut short because every original attempt of
-the round had finished or used up its budget. Once every attempt has
+the round had finished or used up its budget. A replacement attempt
+never runs past its own budget: it only puts an otherwise idle process to
+work, and never makes the round last longer. Once every attempt has
 stopped, the status line says so explicitly and gives the number of
 successful grids now being optimized and compared to keep the best one
 (`frontend/static/script.js`, `describeStep`). A still-computing (blue-bordered) grid keeps visibly changing —
@@ -797,7 +799,10 @@ to the left of **Mots / Words** to open it as an overlay panel.
   into the grid: they are shown first (in green) by the **Mots / Words**,
   **Croisés / Crossings**, **Début / Start** and **Fin / End** buttons, and
   **Suivant / Next** also places them first — even when the word isn't in
-  the dictionary.
+  the dictionary. This list and the "Mots Défi (personnalisation)"
+  mini-form at the top of the page are one list shown in two places:
+  adding or removing a word in either updates the other
+  (`frontend/static/script.js`, `syncChallengeWordLists`).
 - Use the tools to help you: **Dictionnaire / Dictionary**, **Paraphraseur
   / Paraphraser**, the **Mots / Words** button lists the words compatible
   with the selected slot, and **Croisés / Crossings** lists, for the
@@ -900,8 +905,8 @@ real letter. Both update after every edit.
   spot is only deprioritised, never walled off: words crossing it are
   still placed normally, unlike a red (impossible) one. After each click,
   a blue frame marks the spots the generator was choosing among when it
-  picked where to put the word it placed — the ones closest to the grid's top-left
-  square — each by its own square nearest that corner (`frontend/static/script.js`,
+  picked where to put the word it placed — the ones closest to the grid's center
+  — each by its own square nearest that center (`frontend/static/script.js`,
   `interactiveWindowCells`). Once no spot in
   the whole grid has a completely safe word left, **Suivant** widens what
   it will accept rather than stopping: first a word that leaves some
@@ -1168,7 +1173,16 @@ real letter. Both update after every edit.
   elsewhere for a cell the search itself has confirmed so far, since a
   light-green letter can never be changed or removed for the rest of
   this generation. Your interactive session itself is left untouched, so
-  it stays available in your "Créations" list.
+  it stays available in your "Créations" list. The grid size and the
+  language(s) stay those of the session; every other setting is read from
+  the generation form at the top of the page as it stands at the moment
+  you click — Difficulté, Taux noir, Graines, Mode (an "Interactif" Mode
+  counts as "Moyen"), Thématique, Précision thématique and the "Mots Défi"
+  list — so you can change any of them before finishing. The session's
+  theme glossary is reused only while the form still asks for the same
+  theme at the same precision; otherwise it is rebuilt from the form's
+  theme (and dropped if you emptied it). The same applies to **Finir la
+  zone / Finish the zone** above.
 
 **Finishing**
 
@@ -1361,8 +1375,9 @@ below — the same priority the Interactive mode panel's own "Suivant" /
 real dictionary candidates left is tackled first, on the theory that
 finishing it with a genuine word now is better than letting a later
 cleanup pass shorten it with a black cell instead; the ten slots of that
-group closest to the grid's top-left square are then kept (so the fill
-spreads out from that corner); within those ten, the choice narrows to whichever long slots
+group closest to the middle of the last word the search placed are then
+kept (so the fill grows outward from each new word, starting from the
+grid's center while no word is placed yet); within those ten, the choice narrows to whichever long slots
 own the single most constrained cell (only slots of 12 letters or more
 are looked at first; if none has a free cell left to measure, the bar
 drops to 11 letters, then 10, and so on down to 2) — the cell with the

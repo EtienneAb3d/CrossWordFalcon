@@ -291,7 +291,9 @@ vient de se terminer — plutôt que de rester inactif, tant qu'au moins une
 tentative **d'origine** du palier est encore en course. Ces tentatives de
 remplacement ne prolongent jamais le palier : elles ne comptent pas comme
 « en course » pour l'allongement du budget des autres tentatives
-(`_pattern_attempt`, `racing=False`), et elles sont toutes interrompues
+(`_pattern_attempt`, `racing=False`), elles n'ont pas elles-mêmes de
+budget élastique — chacune s'arrête à son propre budget, et son processus
+passe alors à une nouvelle tentative de remplacement — et elles sont toutes interrompues
 dès que chaque tentative d'origine s'est terminée ou a consommé tout son
 budget (`attempt_done_event`). Une tentative de remplacement interrompue
 rend sa meilleure grille comme n'importe quelle tentative échouée.
@@ -901,7 +903,7 @@ chose.
    suivant. Le retour en arrière peut ainsi remonter plusieurs emplacements
    d'un coup, jusqu'à en trouver un qui a encore un candidat non essayé.
 6. **Un nœud ne fait qu'un nombre limité de descentes** : au bout de
-   `MAX_DESCENTS_PER_NODE` (3) descentes récursives sans succès, il échoue
+   `MAX_DESCENTS_PER_NODE` (10) descentes récursives sans succès, il échoue
    aussitôt et rend la main à l'appel supérieur, quel que soit le stade
    atteint (voir les quatre temps d'un nœud plus bas), dernier recours
    compris. Une descente est un candidat qui a passé le contrôle de
@@ -919,8 +921,16 @@ chose.
    premiers mots et peut les remplacer. Une valeur `<= 0` supprime la
    limite : toutes les possibilités du nœud sont alors essayées
    (`backend/crossword_gen.py`, `Filler._backtrack`,
-   `MAX_DESCENTS_PER_NODE`). Au début d'une tentative, le plafond est
-   plus large : un nœud atteint alors que la recherche a posé moins de
+   `MAX_DESCENTS_PER_NODE`). Un nœud qui reçoit un saut arrière (voir le
+   point suivant) — un échec qui lui remonte après avoir traversé au moins
+   un nœud intermédiaire sans que celui-ci essaie ses autres candidats —
+   n'a plus droit qu'à une seule descente supplémentaire : son plafond
+   tombe au nombre de descentes déjà faites plus une. Il ne peut atteindre
+   `MAX_DESCENTS_PER_NODE` que si tous les échecs qui lui sont revenus
+   sont des retours en arrière ordinaires, nés dans son propre nœud enfant
+   (`backend/crossword_gen.py`, `Filler._backtrack`, `Filler._fail`,
+   `_last_jumped`). Au début d'une tentative, le plafond est
+   plus serré : un nœud atteint alors que la recherche a posé moins de
    `EARLY_DESCENTS_WORD_COUNT` (10) mots en plus de ceux de l'état initial
    de la tentative (les mots déjà en place au lancement de
    `Filler.solve`) peut faire jusqu'à `EARLY_MAX_DESCENTS_PER_NODE` (7)
@@ -1169,19 +1179,31 @@ propre liste d'emplacements sélectionnables.
    grille bilingue, chaque direction est jaugée contre le glossaire de
    **sa propre** langue. Sans thématique, ce niveau ne change rien ;
 6. parmi les emplacements retenus, on calcule pour chacun le carré de la
-   distance entre sa **case la plus proche de l'origine `(0, 0)`** — la
-   case en haut à gauche de la grille (`SLOT_SELECTION_ORIGIN`) — et cette
-   origine. Chaque case de l'emplacement est considérée individuellement, et
-   c'est la plus petite distance au carré qui sert de score — et non la
-   distance depuis son point médian : il suffit donc à un emplacement long
-   d'approcher l'origine par une seule de ses cases pour obtenir un bon
-   score. Un emplacement contenant la case `(0, 0)` obtient 0, le score
-   augmentant à mesure que sa case la plus proche s'en éloigne — la
-   distance étant euclidienne (au carré) et non de Manhattan, le front de
-   remplissage progresse en quart de cercle autour de l'origine plutôt que
-   le long d'une diagonale. Ce
-   score ne dépend pas de l'état de remplissage, seulement de la position
-   fixe dans la grille. On retient, parmi les emplacements au plus petit
+   distance entre sa **case la plus proche de l'origine** et cette
+   origine. L'origine est le **centre du dernier mot posé par la descente
+   en cours** du retour en arrière — le mot au plus grand numéro de pose
+   encore sur la grille (`_placement_seq`) : un mot retiré par retour en
+   arrière ou par retrait fantôme ne compte plus —, c'est-à-dire le milieu
+   de sa première et de sa dernière case, à mi-chemin entre deux cases
+   quand sa longueur est paire. Tant que la descente n'a posé aucun mot
+   (à la racine de la recherche, les mots déjà présents au départ de
+   `solve()` n'étant pas numérotés), l'origine est le **centre de la
+   grille**, le point `((lignes - 1) / 2, (colonnes - 1) / 2)`
+   (`_slot_selection_origin`) ; c'est toujours le cas en mode Interactif,
+   dont le `Filler` n'effectue aucune descente (`backend/crossword_gen.py`,
+   `Filler._selection_origin`). Chaque case de l'emplacement est
+   considérée individuellement, et c'est la plus petite distance au carré
+   qui sert de score — et non la distance depuis son point médian : il
+   suffit donc à un emplacement long d'approcher l'origine par une seule
+   de ses cases pour obtenir un bon score. Un emplacement passant par la
+   case de l'origine (un emplacement croisant le dernier mot en son milieu,
+   par exemple) obtient le plus petit score, celui-ci augmentant à mesure
+   que sa case la plus proche s'en éloigne — la distance étant euclidienne
+   (au carré) et non de Manhattan, la fenêtre forme un cercle autour de
+   l'origine plutôt qu'un losange, et le remplissage s'étend de proche en
+   proche à partir de chaque nouveau mot. Ce score ne dépend pas de l'état
+   de remplissage de l'emplacement, seulement de sa position par rapport
+   au dernier mot posé. On retient, parmi les emplacements au plus petit
    score, une fenêtre de `SLOT_SELECTION_WINDOW_SIZE` (10) emplacements —
    tous si le groupe en compte lui-même moins de 10 —, mélangés au
    préalable pour qu'aucun ordre positionnel ne départage les ex æquo à la
@@ -1208,9 +1230,9 @@ propre liste d'emplacements sélectionnables.
    d'une case croisée bloquée ; une case qui n'appartient qu'à un seul emplacement garde le
    relevé de ce seul sens. La mesure est limitée par un **seuil de
    longueur décroissant** : on ne mesure d'abord que les emplacements de
-   **12 lettres et plus** (`MOST_CONSTRAINED_START_LENGTH`) ; si aucun
+   **4 lettres et plus** (`MOST_CONSTRAINED_START_LENGTH`) ; si aucun
    n'a de case libre mesurable (sélection vide ou épuisée), le seuil
-   descend à 11 lettres et plus, puis 10, et ainsi de suite jusqu'à **2**
+   descend à 3 lettres et plus, puis à **2**
    (`MOST_CONSTRAINED_MIN_LENGTH`) ; le premier seuil qui retient au
    moins un emplacement mesurable est celui appliqué. Les longs
    emplacements sont ainsi résolus sur leur case la plus serrée avant les
@@ -1647,8 +1669,9 @@ actions restent donc régulières quelle que soit la proportion de
 candidats rejetés.
 
 Aucun pourcentage n'est plafonné à 100 % : le budget d'une tentative étant
-élastique (voir ci-dessus), une tentative qui a dépassé son propre budget
-continue de chercher tant qu'une sœur n'a pas atteint le sien, et sa
+élastique (voir ci-dessus), une tentative d'origine qui a dépassé son
+propre budget continue de chercher tant qu'une sœur n'a pas atteint le
+sien (une tentative de remplacement, elle, s'arrête à 100 %), et sa
 valeur — comme la moyenne du palier — peut dépasser 100 %.
 
 C'est la **moyenne** de ces cases qui est affichée, jamais la plus élevée :
@@ -1945,7 +1968,7 @@ famille qui a posé le mot (de la dernière famille essayée si rien n'est
 posé) : la fenêtre géométrique du niveau 6 de la cascade (au plus
 `SLOT_SELECTION_WINDOW_SIZE` emplacements, mémorisée par
 `Filler._select_target_slot` dans `Filler.last_selection_window`), chacun
-représenté par sa ou ses cases les plus proches de l'origine `(0, 0)` —
+représenté par sa ou ses cases les plus proches du centre de la grille —
 celles qui lui donnent son score (`window_cells`,
 `backend/crossword_gen.py`, `_origin_closest_cells`) —, entourées en bleu
 dans le panneau. Sur chaque emplacement
@@ -2605,7 +2628,11 @@ dans le vivier de départ de chaque palier, héritée d'un palier au suivant
 tant que cette lignée existe.
 
 Chaque grille du premier palier reçoit directement son propre numéro
-(1..N). À chaque palier suivant, chaque tentative non réinitialisée hérite
+(1..N), que ce palier parte d'une grille vierge ou d'une grille reprise
+(« Finir la grille », « Finir la zone », « Continuer ») : dans ce second
+cas toutes les tentatives repartent de la même grille, mais chacune est
+une lignée distincte, affichée sous son propre numéro
+(`backend/crossword_gen.py`, `_build_dispatch_lineage`). À chaque palier suivant, chaque tentative non réinitialisée hérite
 du numéro de l'entrée du vivier dont elle repart ; une tentative
 réinitialisée n'a par définition aucun numéro à hériter — si elle survit au
 tri par score qui construit le vivier du palier suivant, elle reprend alors

@@ -360,9 +360,11 @@ public final class Interactive {
         return null;
     }
 
-    /** Each slot's cell(s) closest to SLOT_SELECTION_ORIGIN (mirrors _origin_closest_cells). */
+    /** Each slot's cell(s) closest to the level-6 origin — the grid's center
+     *  for Interactive mode's Filler (mirrors _origin_closest_cells). */
     static List<Object> originClosestCells(Filler f, Collection<Integer> slotIndices) {
-        double cr = Filler.SLOT_SELECTION_ORIGIN_ROW, cc = Filler.SLOT_SELECTION_ORIGIN_COL;
+        double[] origin = f.selectionOrigin();
+        double cr = origin[0], cc = origin[1];
         TreeSet<Long> out = new TreeSet<>();
         for (int i : slotIndices) {
             int[] slot = f.slots.get(i);

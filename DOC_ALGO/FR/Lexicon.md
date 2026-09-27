@@ -276,13 +276,16 @@ plusieurs signaux) :
   candidat suivant — tous emplacements et tous temps du nœud confondus. C'est ce qui permet au retour en arrière de
   remonter jusqu'aux mots posés dans les premières phases au lieu de
   rester à explorer le bas de l'arbre. Une valeur `<= 0` supprime le
-  plafond. Tant que la recherche a posé moins de 10 mots en plus de ceux
+  plafond. Un nœud qui reçoit un saut arrière n'a plus droit qu'à une
+  seule descente supplémentaire ; il ne peut atteindre le plafond que si
+  tous les échecs qui lui sont revenus sont des retours en arrière
+  ordinaires. Tant que la recherche a posé moins de 10 mots en plus de ceux
   de l'état initial de la tentative, le plafond d'un nœud est porté à 7
   descentes. Une grille héritée d'une étape précédente (tentative qui
   démarre avec des cases verrouillées) n'a aucun plafond : tous ses
   nœuds explorent toutes leurs possibilités. (`backend/crossword_gen.py`,
   `MAX_DESCENTS_PER_NODE`, `EARLY_DESCENTS_WORD_COUNT`,
-  `EARLY_MAX_DESCENTS_PER_NODE`, `Filler._inherited`.)
+  `EARLY_MAX_DESCENTS_PER_NODE`, `Filler._inherited`, `_last_jumped`.)
 
 - **Ensemble de conflit** : ensemble des mots déjà posés dont dépend
   l'échec d'une étape de la recherche — ceux qui croisent l'emplacement
@@ -299,12 +302,12 @@ plusieurs signaux) :
 
 - **Emplacements candidats** : en mode Interactif, les emplacements de la
   fenêtre géométrique du niveau 6 de la cascade de choix d'emplacement —
-  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches de la case `(0, 0)`
+  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du centre de la grille
   parmi ceux retenus par les niveaux précédents — dans laquelle a été
   tirée, lors d'un clic sur « Suivant », la cible de la famille (Mots Défi,
   glossaire thématique ou dictionnaire général) qui a posé le mot ; chaque
   famille évalue la cascade par rapport à son seul glossaire. Chacun est
-  signalé par sa ou ses cases les plus proches de cette origine, entourées en
+  signalé par sa ou ses cases les plus proches de ce centre, entourées en
   bleu. (`backend/crossword_gen.py`, `Filler.last_selection_window`,
   `_origin_closest_cells` ; `frontend/static/script.js`,
   `interactiveWindowCells`.)

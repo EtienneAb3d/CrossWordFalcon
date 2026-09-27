@@ -6444,7 +6444,7 @@ function renderInteractiveChallengeList() {
     removeBtn.setAttribute("aria-label", `${t.interactiveChallengeRemoveBtn} ${word}`);
     removeBtn.addEventListener("click", () => {
       interactiveChallengeWords = interactiveChallengeWords.filter((w) => w !== word);
-      renderInteractiveChallengeList();
+      syncChallengeWordLists(interactiveChallengeWords);
     });
     li.appendChild(removeBtn);
     interactiveChallengeList.appendChild(li);
@@ -6472,7 +6472,7 @@ function addInteractiveChallengeWord() {
   if (!gridForm) return;
   if (interactiveChallengeWords.some((w) => challengeWordGridForm(w) === gridForm)) return;
   interactiveChallengeWords.push(word);
-  renderInteractiveChallengeList();
+  syncChallengeWordLists(interactiveChallengeWords);
 }
 
 interactiveChallengeAddBtn.addEventListener("click", addInteractiveChallengeWord);
@@ -6519,7 +6519,7 @@ function renderGenerateChallengeList() {
     removeBtn.setAttribute("aria-label", `${t.interactiveChallengeRemoveBtn} ${word}`);
     removeBtn.addEventListener("click", () => {
       generateChallengeWords = generateChallengeWords.filter((w) => w !== word);
-      renderGenerateChallengeList();
+      syncChallengeWordLists(generateChallengeWords);
     });
     li.appendChild(removeBtn);
     generateChallengeList.appendChild(li);
@@ -6536,7 +6536,18 @@ function addGenerateChallengeWord() {
   if (!gridForm) return;
   if (generateChallengeWords.some((w) => challengeWordGridForm(w) === gridForm)) return;
   generateChallengeWords.push(word);
+  syncChallengeWordLists(generateChallengeWords);
+}
+
+// The main form's "Mots Défi (personnalisation)" list and the Interactive
+// panel's "Mots Défi" list are one list shown in two places: an edit in
+// either is copied into the other, so "Suivant", the autosave and "Finir
+// la grille"/"Finir la zone" all see the same words.
+function syncChallengeWordLists(source) {
+  generateChallengeWords = source.slice();
+  interactiveChallengeWords = source.slice();
   renderGenerateChallengeList();
+  renderInteractiveChallengeList();
 }
 
 generateChallengeAddBtn.addEventListener("click", addGenerateChallengeWord);
@@ -8777,6 +8788,13 @@ async function runInteractiveFinish(zoneCells) {
     // for this exact field.
     const rawMode = document.getElementById("mode").value;
     const finishMode = rawMode === "interactive" ? "medium" : rawMode;
+    // Every other setting of the generation form is sent as it stands NOW
+    // (the player may have changed it since the session started):
+    // difficulty, "Thématique", "Précision thématique" and "Mots Défi"
+    // (one list, kept in sync with the Interactive panel's — see
+    // syncChallengeWordLists()). The grid size and the languages stay the
+    // session's (backend-side): the letters already placed are words of
+    // those languages.
     let response;
     try {
       response = await fetchWithTimeout("/api/interactive/finish", {
@@ -8789,6 +8807,10 @@ async function runInteractiveFinish(zoneCells) {
           mode: finishMode,
           black_enrichment_percent: Number(blackEnrichmentInput.value),
           force_letters_percent: Number(document.getElementById("force-letters").value),
+          difficulty: document.getElementById("difficulty").value,
+          theme: themeKeywords.join(" "),
+          theme_precision: readThemePrecision(),
+          challenge_words: generateChallengeWords,
           pseudo: userPseudo || undefined,
           zone_cells: zoneCells || undefined,
         }),

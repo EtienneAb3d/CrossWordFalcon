@@ -2229,7 +2229,14 @@ CANDIDATE_SCORE_WINDOW = 50
 # climbs more than a few levels and a hard word placed early stays in
 # place for the rest of the attempt. `<= 0` disables the cap (every
 # option of the node is tried).
-MAX_DESCENTS_PER_NODE = 3
+#
+# A node that receives a backjump — a failure passed up to it through at
+# least one intermediate node that skipped its own other candidates (see
+# BACKJUMPING_ENABLED) — may make only ONE more descent after it: its cap
+# drops to `descents + 1`. It can only reach MAX_DESCENTS_PER_NODE while
+# every failure it received came back through ordinary backtracking (a
+# failure arising in its own child). Applies only where a cap applies.
+MAX_DESCENTS_PER_NODE = 10
 
 # Early-attempt relaxation of MAX_DESCENTS_PER_NODE: a node reached while
 # the search has placed fewer than `EARLY_DESCENTS_WORD_COUNT` words on top
@@ -2347,11 +2354,13 @@ ALTERNATE_DIRECTION_ENABLED = False
 # real letter. Optional, currently disabled: when False, level 4 is a no-op.
 KNOWN_LETTER_LEVEL_ENABLED = False
 
-# Origin `(row, col)` of level 6's geometric score (see `Filler._select_
-# target_slot`): each slot is scored by the squared distance between its
-# own cell closest to this point and the point itself — the grid's top-left
-# corner.
-SLOT_SELECTION_ORIGIN = (0, 0)
+def _slot_selection_origin(rows, cols):
+    """Origin `(row, col)` of level 6's geometric score (see `Filler._
+    select_target_slot`): the grid's center, `((rows - 1) / 2, (cols - 1) /
+    2)` — a half-integer coordinate when the dimension is even, so the
+    central cells tie. Each slot is scored by the squared distance between
+    its own cell closest to this point and the point itself."""
+    return ((rows - 1) / 2, (cols - 1) / 2)
 
 # Size (fixed, not a proportion of the group) of the final draw window
 # among the retained group of slots (`selection_pool`, see `Filler.
@@ -2371,7 +2380,7 @@ SLOT_SELECTION_WINDOW_SIZE = 10
 # 6's geometric window, not the whole group. Long slots are thus
 # resolved on their tightest cell first, short ones only once no longer
 # slot is left to measure.
-MOST_CONSTRAINED_START_LENGTH = 12
+MOST_CONSTRAINED_START_LENGTH = 4
 MOST_CONSTRAINED_MIN_LENGTH = 2
 
 # Once the window above is obtained (`window`, sorted by ascending
@@ -2649,7 +2658,7 @@ class Filler:
         # it. `None` until the first record (see `best_stat_letters_for`).
         self.best_stat_letters = None
         # Level 6's geometric window of the last `_select_target_slot` call
-        # (the slots it kept closest to `SLOT_SELECTION_ORIGIN`), read back
+        # (the slots it kept closest to `_selection_origin()`), read back
         # by `interactive_place_word` to show the player which slots the
         # cascade was choosing among (`_origin_closest_cells`).
         self.last_selection_window = []
@@ -2692,6 +2701,7 @@ class Filler:
         # the grid (budget, abandon, backjumping disabled) and the caller
         # must backtrack chronologically.
         self._last_conflict = None
+        self._last_jumped = False
         # Words placed by `_backtrack` that are still on the grid, slot ->
         # placement sequence number (increasing with depth), so a backghost
         # can find the most recent word of a conflict set and the node that
@@ -3520,12 +3530,15 @@ class Filler:
             conflict.update(holder[w] for w in domain if w in holder)
         return conflict
 
-    def _fail(self, conflict):
+    def _fail(self, conflict, jumped=False):
         """Return False from `_backtrack`, reporting `conflict` (a set of
-        slots, or None for "unknown") to the caller."""
+        slots, or None for "unknown") to the caller. `jumped` is True when
+        this node only passes a child's failure up without trying its own
+        other candidates (a backjump), False when the failure arises here."""
         self._last_conflict = (
             frozenset(conflict) if BACKJUMPING_ENABLED and conflict is not None else None
         )
+        self._last_jumped = jumped and self._last_conflict is not None
         return False
 
     def _backghost_target(self, conflict):
@@ -4427,6 +4440,24 @@ class Filler:
                 cells.update(self.slots[i])
         return sorted(cells)
 
+    def _selection_origin(self):
+        """Origin `(row, col)` of level 6's geometric score (see `_select_
+        target_slot`): the center of the most recent word the current
+        descent placed and still holds — the highest `_placement_seq`, so
+        a word reverted by backtracking or taken off by a backghost no
+        longer counts — i.e. the midpoint of its first and last cells, a
+        half-integer coordinate when its length is even. Falls back to the
+        grid's center (`_slot_selection_origin`) while the descent holds no
+        word of its own (search root, words already there when `solve()`
+        started, Interactive mode's fresh `Filler`)."""
+        if not self._placement_seq:
+            return _slot_selection_origin(self.rows, self.cols)
+        last = max(self._placement_seq, key=self._placement_seq.__getitem__)
+        cells = self.slots[last]
+        rows = [r for r, _ in cells]
+        cols = [c for _, c in cells]
+        return ((min(rows) + max(rows)) / 2, (min(cols) + max(cols)) / 2)
+
     def _select_target_slot(self, unassigned, domains, challenge_level=True, theme_level=True):
         """Chooses which slot to fill next among `unassigned` (already
         guaranteed non-empty, each with at least one genuinely available
@@ -4439,7 +4470,7 @@ class Filler:
         live there (a plain MRV: the smallest domain, then an already
         partially-known slot, then random), with neither level 3's length
         threshold (which excludes 2-3-letter slots) nor level 6's
-        geometric score (which favors `SLOT_SELECTION_ORIGIN`) — which made
+        geometric score (which favors `_selection_origin()`) — which made
         interactive fill start with 2-letter slots scattered across the
         grid instead of following the same rules as automatic generation.
         Takes `unassigned`/`domains` as parameters (rather than
@@ -4555,17 +4586,18 @@ class Filler:
         # 6. among the slots of the group obtained at the previous level, a
         #    purely **geometric** score is computed for each: the squared
         #    distance between the slot's own CLOSEST cell to
-        #    `SLOT_SELECTION_ORIGIN` (`(0, 0)`, the grid's top-left corner;
-        #    every cell of `self.slots[i]` is considered individually, the
-        #    smallest of their own squared distances being the slot's
-        #    score — NOT the midpoint of its own span, so a long slot only
-        #    needs to REACH toward that corner to score well) and that
-        #    point itself — see the computation itself
-        #    further below for the detail. This score
-        #    doesn't depend at all on the slot's own fill state (neither
-        #    its known letters nor its domain) — only on its fixed position
-        #    in the grid — which tends to make the fill progress along a
-        #    geometric front rather than by each slot's own difficulty.
+        #    `_selection_origin()` (the center of the last word the
+        #    current descent placed, or the grid's center while it has
+        #    placed none; every cell of `self.slots[i]` is considered
+        #    individually, the smallest of their own squared distances
+        #    being the slot's score — NOT the midpoint of its own span, so
+        #    a long slot only needs to REACH toward that point to score
+        #    well) and that point itself — see the computation itself
+        #    further below for the detail. This score doesn't depend on
+        #    the slot's own fill state (neither its known letters nor its
+        #    domain) — only on its position relative to the last word
+        #    placed — which makes the fill grow outward from each new word
+        #    rather than by each slot's own difficulty.
         #    Only **the `SLOT_SELECTION_WINDOW_SIZE` (10) slots with the
         #    smallest score** (the closest to that corner) are
         #    kept — a fixed window size, not a
@@ -4593,7 +4625,7 @@ class Filler:
         #    soonest, so it gets resolved while the search still has room
         #    to manoeuvre, instead of being left for some crossing word to
         #    settle by accident. Only slots of at least
-        #    `MOST_CONSTRAINED_START_LENGTH` (12) letters are measured
+        #    `MOST_CONSTRAINED_START_LENGTH` (4) letters are measured
         #    first; when none has a measurable free cell, the length
         #    threshold drops by one, down to `MOST_CONSTRAINED_MIN_LENGTH`
         #    (2). If no slot of the window has a measurable free cell even
@@ -4726,19 +4758,20 @@ class Filler:
             if theme_placeable:
                 selection_pool = theme_placeable
         # Geometric score: squared distance between the slot's own CLOSEST
-        # cell to `SLOT_SELECTION_ORIGIN` (the grid's top-left corner,
-        # `(0, 0)`), and that point itself — not the slot's own midpoint.
+        # cell to `_selection_origin()` (the center of the last word this
+        # descent placed, or the grid's center while it has placed none),
+        # and that point itself — not the slot's own midpoint.
         # Every cell of the slot (`self.slots[i]`, a straight run of cells
         # along one axis — see `extract_slots`) is considered individually,
         # and the smallest squared distance among them is the slot's own
         # score, so a long slot only needs to REACH toward the origin to
         # score well, even when most of its span sits far from it. A slot
-        # owning the origin cell gets the lowest possible score (0); the
+        # owning the origin's cell gets the lowest possible score; the
         # score grows as its closest cell sits further away. Squaring each
         # coordinate's own distance before summing them (a squared
-        # Euclidean distance, not a Manhattan one) makes the fill front a
-        # quarter circle around the origin rather than a diagonal.
-        origin_row, origin_col = SLOT_SELECTION_ORIGIN
+        # Euclidean distance, not a Manhattan one) makes the window a
+        # circle around the origin rather than a diamond.
+        origin_row, origin_col = self._selection_origin()
         scores = {
             i: min(
                 (col - origin_col) ** 2 + (row - origin_row) ** 2
@@ -4763,7 +4796,7 @@ class Filler:
         # restrict), and it can never empty the pool: whichever slot owns
         # the minimum is in the result by construction. The measure is
         # scoped by a decreasing slot-length threshold: only slots of at
-        # least `MOST_CONSTRAINED_START_LENGTH` (12) letters are measured
+        # least `MOST_CONSTRAINED_START_LENGTH` (4) letters are measured
         # first; when none of the window has a measurable free cell at that
         # threshold, it drops by one (6, 5, ...) down to `MOST_CONSTRAINED_
         # MIN_LENGTH` (2), and the first threshold yielding a measurable
@@ -4910,6 +4943,7 @@ class Filler:
         # with this value as-is.
         # Every early exit below reports no conflict (see `_fail`).
         self._last_conflict = None
+        self._last_jumped = False
         entry_released = released
         if self.abandoned:
             return False
@@ -5251,14 +5285,18 @@ class Filler:
                             blameable_rejection = True
                             slot_conflict |= blame
                         continue
+                    jumped_in = self._last_jumped
                     placed_any = True
                     descents += 1
                     if child_conflict is None:
                         conflict_unknown = True
                     elif best_i not in child_conflict:
-                        return self._fail(child_conflict)
+                        return self._fail(child_conflict, jumped=True)
                     else:
                         node_conflict |= child_conflict - {best_i}
+                        if jumped_in and 0 < max_descents:
+                            # A backjump landed here: one more descent only.
+                            max_descents = min(max_descents, descents + 1)
                     if 0 < max_descents <= descents:
                         return self._fail_or_backghost(
                             None if conflict_unknown else node_conflict | slot_conflict,
@@ -5430,6 +5468,7 @@ class Filler:
                     if self._backtrack(deadline_checks, released):
                         return True
                     child_conflict = self._last_conflict
+                    jumped_in = self._last_jumped
                     self._tolerated_dry.difference_update(newly_tolerated)
                     self._restore_letter_scores(saved_scores)
                     # A backghost below has taken `w` off already (see
@@ -5451,9 +5490,13 @@ class Filler:
                         if owned:
                             self.assignment[best_i] = None
                             self.used_words.discard(w)
-                        return self._fail(child_conflict)
+                        return self._fail(child_conflict, jumped=True)
                     else:
                         node_conflict |= child_conflict - {best_i}
+                        if jumped_in and 0 < max_descents:
+                            # A backjump landed here: one more descent only
+                            # (see MAX_DESCENTS_PER_NODE).
+                            max_descents = min(max_descents, descents + 1)
                 if owned:
                     self.assignment[best_i] = None
                     self.used_words.discard(w)
@@ -7307,12 +7350,14 @@ def _slot_cells_of(slots, slot_indices):
 
 def _origin_closest_cells(filler, slot_indices):
     """For each slot of `slot_indices`, its cell(s) closest to
-    `SLOT_SELECTION_ORIGIN` — the cell that gives the slot its level-6
+    `Filler._selection_origin()` (the grid's center here, Interactive
+    mode's `Filler` holding no word of its own descent) — the cell that
+    gives the slot its level-6
     geometric score in
     `Filler._select_target_slot` (every cell tied at that smallest squared
     distance), as sorted `[row, col]` pairs. Shown by Interactive mode
     around the candidate slots of each "Suivant" click."""
-    origin_row, origin_col = SLOT_SELECTION_ORIGIN
+    origin_row, origin_col = filler._selection_origin()
     out = set()
     for i in slot_indices:
         dist = {
@@ -11224,7 +11269,18 @@ def _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[1]),
 # computation already used to distribute pool grids to non-reset tasks
 # (see `pool`/`continue_pool` in generate_grid), so each task inherits
 # exactly the number of the pool entry it's resuming from.
+#
+# `pool_lineage=None` means no palier of this call has built a pool yet:
+# every non-reset task starts from the one grid the call was handed
+# (`resume_state` — "Finir la grille"/"Finir la zone", "Continuer"), with
+# no lineage of its own to inherit. Each then gets its own number,
+# 1, 2, … in submission order, exactly like the very first palier on a
+# blank grid; sharing one number would make every task's live tile
+# overwrite the same process's, showing a single process while all of
+# them compute.
 def _build_dispatch_lineage(seeds_count, reset_count, pool_lineage):
+    if pool_lineage is None:
+        return [None if i < reset_count else i - reset_count + 1 for i in range(seeds_count)]
     return [
         None if i < reset_count else pool_lineage[(i - reset_count) % len(pool_lineage)]
         for i in range(seeds_count)
@@ -12112,7 +12168,9 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     """`racing=False` marks a mid-palier replacement attempt (see
     `generate_grid`): it never flags its slot in `attempt_active`, so it
     never counts as a sibling still racing and never extends the budget of
-    the palier's original attempts.
+    the palier's original attempts; nor does it get the elastic budget
+    itself — it stops at its own `deadline_checks`, freeing its process
+    for the next replacement.
 
     One independent attempt (pattern + full CSP fill), run in a separate
     worker process — see PARALLEL_ATTEMPTS/generate_grid().
@@ -12374,7 +12432,11 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            best_state_queue=_worker_best_state_queue,
                            checks_progress=_worker_checks_progress,
                            checks_slot=checks_slot,
-                           attempt_active=_worker_attempt_active,
+                           # A replacement gets no sibling visibility, so
+                           # its own budget is a hard stop (no elastic
+                           # extension): it only uses a free process, it
+                           # never runs longer on the palier's account.
+                           attempt_active=_worker_attempt_active if racing else None,
                            attempt_id=seed,
                            proper_noun_words=_worker_proper_noun_words,
                            max_proper_nouns=_worker_max_proper_nouns,
@@ -13961,7 +14023,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # preview, stays parallel to `continue_pool` (same order,
                 # same length).
                 dispatch_lineage = _build_dispatch_lineage(
-                    PARALLEL_ATTEMPTS, reset_count, continue_pool_lineage
+                    PARALLEL_ATTEMPTS, reset_count,
+                    continue_pool_lineage if carry_seed_pool_continue_lineage else None,
                 )
                 futures = []
                 for i, s in enumerate(seeds):
@@ -14175,7 +14238,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # pool, rather than `seeds` on a shared blank grid)
                     # differs.
                     dispatch_lineage = _build_dispatch_lineage(
-                        PARALLEL_ATTEMPTS, reset_count, pool_lineage
+                        PARALLEL_ATTEMPTS, reset_count,
+                        pool_lineage if carry_seed_pool_lineage else None,
                     )
                     seen_pool_patterns = set()
                     early_examples = []

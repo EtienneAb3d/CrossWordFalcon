@@ -33,7 +33,9 @@ public final class Filler {
     public static final int UNFILLABLE_ABANDON_CHECK_INTERVAL = 500;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 50;
-    public static final int MAX_DESCENTS_PER_NODE = 3;
+    // A node receiving a backjump (a failure passed up through a node that
+    // skipped its other candidates) may make only one more descent.
+    public static final int MAX_DESCENTS_PER_NODE = 10;
     public static final int EARLY_DESCENTS_WORD_COUNT = 10;
     public static final int EARLY_MAX_DESCENTS_PER_NODE = 7;
     // An attempt starting from locked cells (inherited from a previous
@@ -45,11 +47,33 @@ public final class Filler {
     // Level 4 of the slot-selection cascade (restrict to slots already
     // carrying a real letter): optional, currently disabled.
     public static final boolean KNOWN_LETTER_LEVEL_ENABLED = false;
-    // Origin (row, col) of level 6's geometric score: the grid's top-left corner.
-    public static final int SLOT_SELECTION_ORIGIN_ROW = 0;
-    public static final int SLOT_SELECTION_ORIGIN_COL = 0;
+    /** Origin {row, col} of level 6's geometric score: the grid's center,
+     *  ((rows - 1) / 2, (cols - 1) / 2), half-integer when a dimension is
+     *  even (mirrors _slot_selection_origin). */
+    public static double[] slotSelectionOrigin(int rows, int cols) {
+        return new double[]{(rows - 1) / 2.0, (cols - 1) / 2.0};
+    }
+    /** Origin {row, col} of level 6's geometric score: the center of the
+     *  most recent word the current descent placed and still holds (highest
+     *  placementSeq), i.e. the midpoint of its first and last cells; the
+     *  grid's center while the descent holds no word of its own (mirrors
+     *  Filler._selection_origin). */
+    public double[] selectionOrigin() {
+        if (placementSeq.isEmpty()) return slotSelectionOrigin(rows, cols);
+        int last = -1;
+        long latest = Long.MIN_VALUE;
+        for (Map.Entry<Integer, Long> e : placementSeq.entrySet()) {
+            if (e.getValue() > latest) { latest = e.getValue(); last = e.getKey(); }
+        }
+        int minR = Integer.MAX_VALUE, maxR = Integer.MIN_VALUE, minC = Integer.MAX_VALUE, maxC = Integer.MIN_VALUE;
+        for (int cell : slots.get(last)) {
+            minR = Math.min(minR, Cells.r(cell)); maxR = Math.max(maxR, Cells.r(cell));
+            minC = Math.min(minC, Cells.c(cell)); maxC = Math.max(maxC, Cells.c(cell));
+        }
+        return new double[]{(minR + maxR) / 2.0, (minC + maxC) / 2.0};
+    }
     public static final int SLOT_SELECTION_WINDOW_SIZE = 10;
-    public static final int MOST_CONSTRAINED_START_LENGTH = 12;
+    public static final int MOST_CONSTRAINED_START_LENGTH = 4;
     public static final int MOST_CONSTRAINED_MIN_LENGTH = 2;
     public static final double SLOT_SELECTION_REFINE_FRACTION = 0.5;
     public static final double FALLBACK_PHASE_BUDGET_FRACTION = 0.1;
@@ -138,6 +162,8 @@ public final class Filler {
     public boolean abandoned, budgetExhausted, breakingPermitted, interruptedBySibling;
     public Set<Integer> toleratedDry = new HashSet<>();
     Set<Integer> lastConflict;
+    /** Whether the last failure was passed up by a backjump (mirrors _last_jumped). */
+    boolean lastJumped;
     /** Words placed by backtrack still on the grid: slot -> placement sequence number. */
     Map<Integer, Long> placementSeq = new HashMap<>();
     long placementCounter;
@@ -558,7 +584,12 @@ public final class Filler {
     }
 
     boolean fail(Set<Integer> conflict) {
+        return fail(conflict, false);
+    }
+
+    boolean fail(Set<Integer> conflict, boolean jumped) {
         lastConflict = BACKJUMPING_ENABLED && conflict != null ? new HashSet<>(conflict) : null;
+        lastJumped = jumped && lastConflict != null;
         return false;
     }
 
@@ -1297,7 +1328,8 @@ public final class Filler {
             }
             if (!themePlaceable.isEmpty()) pool = themePlaceable;
         }
-        double cr = SLOT_SELECTION_ORIGIN_ROW, cc = SLOT_SELECTION_ORIGIN_COL;
+        double[] origin = selectionOrigin();
+        double cr = origin[0], cc = origin[1];
         Map<Integer, Double> scores = new HashMap<>();
         for (int i : pool) {
             double best = Double.MAX_VALUE;
@@ -1374,6 +1406,7 @@ public final class Filler {
 
     boolean backtrack(long deadlineChecks, boolean released) {
         lastConflict = null;
+        lastJumped = false;
         final boolean entryReleased = released;
         if (abandoned) return false;
         if (deadlineReachedWithoutExtension(deadlineChecks)) {
@@ -1507,6 +1540,7 @@ public final class Filler {
                         }
                         continue;
                     }
+                    boolean jumpedIn = lastJumped;
                     placedAny = true;
                     descents++;
                     @SuppressWarnings("unchecked")
@@ -1514,9 +1548,11 @@ public final class Filler {
                     if (childConflict == null) {
                         conflictUnknown = true;
                     } else if (!childConflict.contains(bestI)) {
-                        return fail(childConflict);
+                        return fail(childConflict, true);
                     } else {
                         for (int k : childConflict) if (k != bestI) nodeConflict.add(k);
+                        // A backjump landed here: one more descent only.
+                        if (jumpedIn && 0 < maxDescents) maxDescents = Math.min(maxDescents, descents + 1);
                     }
                     if (0 < maxDescents && maxDescents <= descents) {
                         if (conflictUnknown) return failOrBackghost(null, deadlineChecks, entryReleased);
@@ -1575,6 +1611,7 @@ public final class Filler {
                     placementSeq.put(bestI, seq);
                     if (backtrack(deadlineChecks, released)) return true;
                     Set<Integer> childConflict = lastConflict;
+                    boolean jumpedIn = lastJumped;
                     toleratedDry.removeAll(newlyTolerated);
                     restoreLetterScores(savedScores);
                     Long current = placementSeq.get(bestI);
@@ -1588,9 +1625,11 @@ public final class Filler {
                             assignment[bestI] = null;
                             usedWords.remove(w);
                         }
-                        return fail(childConflict);
+                        return fail(childConflict, true);
                     } else {
                         for (int k : childConflict) if (k != bestI) nodeConflict.add(k);
+                        // A backjump landed here: one more descent only.
+                        if (jumpedIn && 0 < maxDescents) maxDescents = Math.min(maxDescents, descents + 1);
                     }
                 }
                 if (owned) {

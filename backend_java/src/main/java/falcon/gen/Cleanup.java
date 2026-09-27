@@ -995,9 +995,15 @@ public final class Cleanup {
         return new Object[]{out, next};
     }
 
+    /** {@code poolLineage == null}: no pool built yet (a call resumed from one grid) — each non-reset task gets its
+     *  own number, 1, 2, … in submission order (see crossword_gen._build_dispatch_lineage). */
     public static List<Integer> buildDispatchLineage(int seedsCount, int resetCount, List<Integer> poolLineage) {
         List<Integer> out = new ArrayList<>();
         for (int i = 0; i < seedsCount; i++) {
+            if (poolLineage == null) {
+                out.add(i < resetCount ? null : i - resetCount + 1);
+                continue;
+            }
             out.add(i < resetCount ? null : poolLineage.get((i - resetCount) % poolLineage.size()));
         }
         return out;

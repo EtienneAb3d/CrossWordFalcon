@@ -331,11 +331,17 @@ via `ProcessPoolExecutor`:
    narrowed, which is what still gives "Mots Défi" priority over the
    theme glossary specifically; (6) score the remaining group
    geometrically (squared distance between the slot's own CLOSEST cell to
-   `SLOT_SELECTION_ORIGIN=(0, 0)`, the grid's top-left cell, and that
-   origin itself — not the slot's own midpoint), shuffle, and keep the
+   an origin, `Filler._selection_origin`, and that origin itself — not the
+   slot's own midpoint: the origin is the center of the most recent word
+   the current descent placed and still holds — the highest
+   `_placement_seq`, the midpoint of its first and last cells — so the
+   fill grows outward from each new word, falling back to the grid's
+   center, `_slot_selection_origin` = `((rows - 1) / 2, (cols - 1) / 2)`,
+   while the descent holds no word of its own: at the root, and always in
+   Interactive mode, whose `Filler` runs no descent), shuffle, and keep the
    `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored as a window; (7) within
    that window, among slots of at least
-   `MOST_CONSTRAINED_START_LENGTH=12` letters — a threshold lowered one
+   `MOST_CONSTRAINED_START_LENGTH=4` letters — a threshold lowered one
    letter at a time, down to `MOST_CONSTRAINED_MIN_LENGTH=2`, until some
    slot of the window has a measurable free cell (no-op when none has one
    even at 2) — find
@@ -472,7 +478,10 @@ brand-new, from-scratch attempt (the same shape as an ordinary "reset"
 attempt — never a continuation of the grid that just finished) instead of
 sitting idle. A replacement runs with `racing=False` (`_pattern_attempt`):
 it never flags `attempt_active`, so it never counts as a sibling still
-racing and never extends an original's elastic budget. The harvest loop
+racing and never extends an original's elastic budget; nor does it get
+an elastic budget itself (`try_fill` is given no `attempt_active`, so it
+stops at its own `deadline_checks` like a solitary run, and its freed
+worker takes the next replacement). The harvest loop
 polls every 0.5s and sets `attempt_done_event` — interrupting every
 replacement still running — as soon as every original has finished
 (`interrupt_threshold`) or every original still pending has used up its
@@ -493,7 +502,11 @@ accepted at the end of the budget goes through the separate final
 `minimize_black_squares` call. A mid-palier replacement attempt takes the
 next free lineage number (`next_lineage_number`, used then advanced), so
 tiles are numbered 1…`PARALLEL_ATTEMPTS`, then `PARALLEL_ATTEMPTS`+1 for
-the replacement. Replacements make a palier return more candidates than it
+the replacement. The first palier of a call resumed from one grid
+(`resume_state`: "Finir la grille"/"Finir la zone", "Continuer") numbers
+its non-reset tasks 1, 2, … too (`_build_dispatch_lineage` with
+`pool_lineage=None`, used while no pool has been built), since the live
+preview keeps one tile per process number. Replacements make a palier return more candidates than it
 has workers; only the best `PARALLEL_ATTEMPTS - reset_count` cleaned grids
 (N-1 of N, fewer by one per discarded grid after a full cleanup) are
 carried into the next palier, alongside its blank-grid worker(s) —
@@ -599,7 +612,7 @@ backtracking resume. `released` is a plain `_backtrack` parameter, so it
 is inherited by everything placed below a release and restores itself as
 the backtrack unwinds back above the node that released it.
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
-`MAX_DESCENTS_PER_NODE` (3; `<= 0` disables it) — raised to
+`MAX_DESCENTS_PER_NODE` (10; `<= 0` disables it) — set to
 `EARLY_MAX_DESCENTS_PER_NODE` (7) for a node entered while fewer than
 `EARLY_DESCENTS_WORD_COUNT` (10) words are in place on top of the
 attempt's initial state (`Filler._initial_assigned_count`, the words
@@ -613,7 +626,12 @@ candidate that passed the crossing check and was recursed into, never one
 rejected on the spot, and never a "Mots Défi" or theme-glossary candidate
 (`challenged_set`/`pri_set`), whose hypotheses are all explored whatever
 the count — it returns `False` at once, whatever stage it has
-reached. Without it a node only fails once its whole subtree is
+reached. A node that receives a backjump (see below: a failure passed up
+through at least one node that skipped its own other candidates,
+`Filler._fail(jumped=True)` → `_last_jumped`) gets its cap lowered to its
+descents so far plus one, so it may try only one more word; it reaches
+the full cap only while every failure it received came back through
+ordinary backtracking (a failure arising in its own child). Without it a node only fails once its whole subtree is
 exhausted, which never happens within the budget on a real dictionary, so
 backtracking climbs only a few levels and a hard word placed early stays
 for the whole attempt; with it, backtracking climbs back to those early
@@ -1239,7 +1257,8 @@ the word (the last tier tried when nothing is placed) was drawn from:
 by every call), which `_tier_target` reads right after resolving that
 tier's target — before the tier-3 sweep re-runs the cascade — and turns into
 `window_cells` (`_origin_closest_cells`: for each window slot, its cell(s)
-closest to `SLOT_SELECTION_ORIGIN`, i.e. the cell that gives it its level-6
+closest to the grid's center — Interactive mode's `Filler` holds no
+descent, so `_selection_origin` is the grid's center there — i.e. the cell that gives it its level-6
 score, ties included). Threaded through `POST /api/interactive/step` (and
 the start job's result; empty on a resume) into `script.js`'s
 `interactiveWindowCells`, rendered as a blue outline
@@ -1393,7 +1412,8 @@ the one that actually bounds a slot whose candidates mostly get rejected
 without ever recursing back into the top-of-function check). For a
 caller with no sibling visibility (`_checks_slot`/`_sibling_checks_
 progress`/`_sibling_attempt_active` all `None` — interactive mode,
-`minimize_black_squares`, a solitary CLI run), this is the plain,
+`minimize_black_squares`, a solitary CLI run, a palier's mid-palier
+replacement attempt), this is the plain,
 unconditional "budget's up" rule, unchanged. For a palier's own parallel
 attempts, the budget is elastic instead: an attempt whose own `checks`
 has exceeded its `deadline_checks` keeps searching past it as long as
@@ -1572,7 +1592,19 @@ never on cycle-start, post-cleanup or `minimizing` previews.
 a still-empty (".") cell, only while "Voir" (`showPreviewLetters`) is on,
 like the real letters.
 
-"Finir la grille"/"Finir la zone" reuses the ordinary automatic pipeline
+"Finir la grille"/"Finir la zone" (`POST /api/interactive/finish`) keeps
+the session's grid size and language(s) and takes every other generation
+parameter from the generation form's current values (`Interactive
+FinishRequest`: `mode`, `black_enrichment_percent`, `force_letters_percent`,
+`difficulty`, `theme`, `theme_precision`, `challenge_words` — each of the
+last four falling back to the session's own when omitted); the session's
+theme glossary is reused only while the form's theme and precision equal
+the ones it was built with (`job["interactive"]["theme_precision"]`),
+otherwise `_run_generate_job` rebuilds it (none for an emptied theme), and
+the resulting "Créations" draft keeps the `challenge_words` it was run
+with. The main form's "Mots Défi (personnalisation)" list and the
+Interactive panel's "Mots Défi" list are kept identical client-side
+(`syncChallengeWordLists`). It reuses the ordinary automatic pipeline
 via `permanent_locked_letters`/`permanent_black_cells` (every already-
 placed cell becomes a hard, permanent constraint) and `required_cells`
 (when a zone is selected rather than the whole grid, only that zone's
