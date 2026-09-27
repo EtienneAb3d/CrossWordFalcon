@@ -73,6 +73,17 @@ LLM_INTERACTIVE_GPU_INDEX="${LLM_INTERACTIVE_GPU_INDEX:-}"
 LLM_PORT_INTERACTIVE="${LLM_PORT_INTERACTIVE:-3004}"
 LLM_INTERACTIVE_LOG="$LOG_DIR/sglang_interactive.log"
 
+# Empty or 1 by default (one card per instance, as above). A value > 1
+# (CUDA only) instead starts ONE instance on LLM_PORT, tensor-parallel
+# across that many cards (--tp-size): the ones listed in
+# SGLANG_TP_GPU_INDICES (comma-separated, default "LLM_GPU_INDEX,
+# LLM_INTERACTIVE_GPU_INDEX"). For a model too large for one card (e.g.
+# Qwen3.8-27B on two 12 GB cards). No interactive instance is started
+# then — point LLM_BASE_URL_INTERACTIVE at LLM_PORT (or leave it unset)
+# so the back end sends every request to this single instance.
+SGLANG_TP_SIZE="${SGLANG_TP_SIZE:-}"
+SGLANG_TP_GPU_INDICES="${SGLANG_TP_GPU_INDICES:-$LLM_GPU_INDEX${LLM_INTERACTIVE_GPU_INDEX:+,$LLM_INTERACTIVE_GPU_INDEX}}"
+
 SGLANG_MODEL_PATH="${SGLANG_MODEL_PATH:?SGLANG_MODEL_PATH not set — check env.sh (or env_default.sh)}"
 # Empty by default (an MLX-community pre-quantized repo needs no explicit
 # --quantization flag at all — see the header comment above); set to
@@ -178,6 +189,10 @@ SGLANG_MEM_FRACTION_STATIC_INTERACTIVE="${SGLANG_MEM_FRACTION_STATIC_INTERACTIVE
 # other requests have pushed it out of a small GPU KV pool. Host RAM cost:
 # roughly ratio x the GPU KV pool size, per instance.
 SGLANG_HICACHE_RATIO="${SGLANG_HICACHE_RATIO:-}"
+
+# Empty by default. Any further `sglang.launch_server` flags, space-
+# separated, passed to every instance (e.g. "--dtype bfloat16").
+SGLANG_EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
 
 if [ ! -d .venv-sglang ]; then
     echo "Error: .venv-sglang not found — SGLang isn't installed. See CLAUDE.md's"
@@ -371,6 +386,7 @@ start_mlx_instance() {
         $TOKENIZER_ARGS \
         $REASONING_ARGS \
         $HICACHE_ARGS \
+        $SGLANG_EXTRA_ARGS \
         $MEM_FRACTION_ARGS \
         < /dev/null > "$LLM_LOG" 2>&1 &
     LLM_PID=$!
@@ -396,6 +412,7 @@ start_cuda_instance() {
         $TOKENIZER_ARGS \
         $REASONING_ARGS \
         $HICACHE_ARGS \
+        $SGLANG_EXTRA_ARGS \
         $mem_args \
         < /dev/null > "$log_file" 2>&1 &
     local pid=$!
@@ -407,8 +424,13 @@ start_cuda_instance() {
 if [ "$IS_APPLE_SILICON" = true ]; then
     start_mlx_instance
 else
-    start_cuda_instance "$LLM_GPU_INDEX" "$LLM_PORT" "$LLM_LOG" "$MEM_FRACTION_ARGS" "automatic generation"
-    if [ -n "$LLM_INTERACTIVE_GPU_INDEX" ]; then
+    if [ -n "$SGLANG_TP_SIZE" ] && [ "$SGLANG_TP_SIZE" -gt 1 ]; then
+        start_cuda_instance "$SGLANG_TP_GPU_INDICES" "$LLM_PORT" "$LLM_LOG" \
+            "$MEM_FRACTION_ARGS --tp-size $SGLANG_TP_SIZE" "all requests, tensor-parallel"
+    else
+        start_cuda_instance "$LLM_GPU_INDEX" "$LLM_PORT" "$LLM_LOG" "$MEM_FRACTION_ARGS" "automatic generation"
+    fi
+    if [ -n "$LLM_INTERACTIVE_GPU_INDEX" ] && ! { [ -n "$SGLANG_TP_SIZE" ] && [ "$SGLANG_TP_SIZE" -gt 1 ]; }; then
         start_cuda_instance "$LLM_INTERACTIVE_GPU_INDEX" "$LLM_PORT_INTERACTIVE" \
             "$LLM_INTERACTIVE_LOG" "$MEM_FRACTION_ARGS_INTERACTIVE" "interactive requests"
     fi

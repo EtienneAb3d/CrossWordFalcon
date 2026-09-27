@@ -88,6 +88,18 @@ public final class DictionaryLookup {
         return Optional.of(idx);
     }
 
+    /** Every wordlist row whose MOT or accented spelling normalizes to {@code word}, as {accented, canonicals}, in file order. */
+    public static List<Map.Entry<String, List<String>>> wordForms(String word, String language) {
+        Optional<LangIndex> oi = CACHE.computeIfAbsent(language, DictionaryLookup::build);
+        List<Map.Entry<String, List<String>>> out = new ArrayList<>();
+        if (oi.isEmpty()) return out;
+        LangIndex idx = oi.get();
+        for (int i : idx.byKey.getOrDefault(norm(word), List.of())) {
+            out.add(Map.entry(idx.forms.get(i), idx.canonicals.get(i)));
+        }
+        return out;
+    }
+
     private static List<Object> definitionsFor(List<String> canonicals, Map<String, Map<String, Object>> glossIndex,
                                                boolean showLemma) {
         List<Object> out = new ArrayList<>();

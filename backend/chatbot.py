@@ -26,14 +26,23 @@ two (not asked for, and a real one would need the same kind of care as
 GRID_QUEUE/CLUES_QUEUE's own preemption logic for comparatively little
 benefit — a chat reply is one call, not a long-running batch that could
 starve someone else for 15 minutes)."""
+import asyncio
 import json
 import logging
 import os
+import re
+import unicodedata
 from pathlib import Path
 
 import httpx
 
 from .clues import DEFAULT_LLM_API_KEY, DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL, LANGUAGE_NAMES
+from .dictionary_lookup import word_forms
+from .embedder import Embedder, EmbedderError
+from .example_sentences import find_examples_for_words
+from .gloss_lookup import find_glosses_for_canonicals
+from .inflection_lookup import describe_form
+from .qdrant_store import QdrantStore, QdrantStoreError
 
 logger = logging.getLogger("crosswordfalcon.chatbot")
 
@@ -88,6 +97,55 @@ _THINK_CLOSE = "</think>"
 CHATBOT_THINK_FILTER_CHOICES = ("open_close", "close_only", "none")
 DEFAULT_CHATBOT_THINK_FILTER = "open_close"
 
+# Routing of a question asked while a playable grid is on screen (see
+# ChatBot.classify_question): a first, non-streamed LLM call answers with
+# one of these keywords, and the reply is then written from a prompt
+# holding only what that kind of question needs — the whole DOC_USER text
+# for USAGE, the one selected word for CLUE. Anything else the classifier
+# answers (or a failed call) falls back to the combined prompt.
+ROUTE_USAGE = "USAGE"
+ROUTE_CLUE = "CLUE"
+# An explicit request for the answer of a word: written from the CLUE
+# prompt like a hint, but never checked for leaks (it IS the answer).
+ROUTE_ANSWER = "ANSWER"
+CLASSIFY_TEMPERATURE = 0.0
+# Room for a model that reasons a few lines before answering anyway.
+CLASSIFY_MAX_TOKENS = 200
+CLASSIFY_TIMEOUT = 30.0
+# Earlier messages shown to the classifier, each cut to
+# CLASSIFY_CONTEXT_CHARS — enough to read a follow-up ("et l'autre ?")
+# without paying for the whole conversation.
+CLASSIFY_HISTORY_MESSAGES = 2
+CLASSIFY_CONTEXT_CHARS = 300
+# Earlier messages kept in a CLUE reply's prompt: the last exchanges only
+# (a previous hint on the same word), never the whole conversation.
+CLUE_HISTORY_MESSAGES = 4
+# Shortest root of the answer a CLUE prompt forbids in a hint.
+CLUE_STEM_MIN_LETTERS = 4
+# Attempts at a hint that gives no part of the answer before its leaked
+# words are masked (see ChatBot._checked_hint).
+CLUE_HINT_ATTEMPTS = 3
+# Dictionary grounding of a CLUE prompt: at most this many base forms of
+# the answer, and this many definitions for each.
+CLUE_GLOSS_LEMMAS = 2
+CLUE_GLOSSES_PER_LEMMA = 3
+# Example synonyms of a CLUE prompt, found by a Qdrant similarity search
+# (see _qdrant_synonyms): how many are shown, the lowest similarity score
+# kept, how many nearest neighbours a search reads, and the timeout of
+# those calls — the hint goes without examples when Qdrant or the
+# embedding server does not answer in time.
+CLUE_SYNONYM_COUNT = 3
+CLUE_SYNONYM_MIN_SCORE = 0.80
+CLUE_SYNONYM_POOL = 100
+# The lowest similarity kept between an example and the definitions of the
+# answer's base form, and how many of those definitions are embedded.
+CLUE_SYNONYM_MIN_MEANING = 0.40
+CLUE_SYNONYM_GLOSSES = 2
+CLUE_SYNONYM_TIMEOUT = 5.0
+# Real sentences of the reference corpus shown in a CLUE prompt's
+# SENTENCES section (see _corpus_sentences).
+CLUE_SENTENCE_COUNT = 3
+
 
 def _longest_tag_prefix_suffix(buffer, tag):
     """Longest suffix of `buffer` that's also a (strict, not full-tag)
@@ -101,6 +159,54 @@ def _longest_tag_prefix_suffix(buffer, tag):
         if buffer.endswith(tag[:length]):
             return length
     return 0
+
+
+# A markup tag in a chat reply: `<name>`, `</name>`, `<name attr="…">` or
+# `<name/>`. The model sometimes wraps its reply in structuring tags of its
+# own (<preamble>, <answer>, <output>…); the tags are dropped, their text
+# is kept.
+_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9_:-]*(?:\s[^<>]*)?/?>")
+# Longest text after a "<" still awaited as a possible tag before it is
+# released as plain text.
+MAX_TAG_CHARS = 64
+
+
+class _TagStripper:
+    """Removes every markup tag (`_TAG_RE`) from a streamed reply. A tag
+    can arrive split across chunks, so the text from a "<" onwards is held
+    back until it either closes as a tag (dropped) or can no longer be one
+    (a newline, a "<" or MAX_TAG_CHARS reached — released as is)."""
+
+    def __init__(self):
+        self.pending = ""
+
+    def feed(self, text):
+        out = []
+        for ch in text:
+            if not self.pending:
+                if ch == "<":
+                    self.pending = ch
+                else:
+                    out.append(ch)
+                continue
+            if ch == "<":
+                out.append(self.pending)
+                self.pending = ch
+            elif ch == ">":
+                candidate = self.pending + ch
+                self.pending = ""
+                if not _TAG_RE.fullmatch(candidate):
+                    out.append(candidate)
+            elif ch == "\n" or len(self.pending) >= MAX_TAG_CHARS:
+                out.append(self.pending + ch)
+                self.pending = ""
+            else:
+                self.pending += ch
+        return "".join(out)
+
+    def flush(self):
+        rest, self.pending = self.pending, ""
+        return rest
 
 
 DOC_USER_PATH = Path(__file__).resolve().parent.parent / "DOC_USER" / "EN" / "ReadMe.md"
@@ -125,6 +231,326 @@ def _load_doc_user():
             logger.warning("could not read %s: %s", DOC_USER_PATH, e)
             _doc_user_cache = ""
     return _doc_user_cache
+
+
+def _fixed_prompt_head(doc_user):
+    """The part of every DOC_USER-carrying system prompt that never varies
+    between two requests — the introduction and the whole DOC_USER text —
+    shared verbatim by the combined prompt and the USAGE prompt, so the
+    LLM server's prefix cache reuses it across both."""
+    return (
+        "You are David FALCON, the friendly in-app assistant of CrossWordFalcon, a "
+        "crossword-puzzle web app. You help the player use the interface and solve the "
+        "crossword grid currently on screen (explaining a clue, giving a hint, or, if "
+        "explicitly asked, the answer itself).\n\n"
+        "Reference documentation for how the interface itself works "
+        "(frontend/static/index.html and script.js, described here for a player, not a "
+        "developer). This documentation is written in English, but that is NOT the "
+        "language to reply in: use its content to answer, rephrased in your own words in "
+        "the player's language set by the rules below — never copy an English passage "
+        "from it into your reply:\n"
+        f"{doc_user}\n\n"
+    )
+
+
+_CLASSIFY_SYSTEM_PROMPT = (
+    "You sort the messages a player sends to the assistant of a crossword web "
+    "app while a crossword grid is on screen. Answer with exactly one word:\n"
+    "USAGE — the message is about using the software: its interface, buttons, "
+    "panels, settings, features, how something works, or anything else that is "
+    "not help with filling in the grid.\n"
+    "CLUE — the message asks for help filling in the grid: a hint, an "
+    "explanation of a clue, whether a letter or a word is right.\n"
+    "ANSWER — the message EXPLICITLY asks for the answer, the solution or the "
+    "exact word to write.\n"
+    "A question about grids as objects of the software (the library, generating, "
+    "saving, printing or opening a grid) is USAGE. Examples: 'Un indice ?' -> "
+    "CLUE; 'Ça commence par un B ?' -> CLUE; 'C'est MAISON ?' -> CLUE (a proposal "
+    "to check, not a request for the answer); 'Donne-moi la réponse' -> ANSWER; "
+    "'What is the answer?' -> ANSWER; "
+    "'Comment vérifier mes réponses ?' -> USAGE; 'Où sont les grilles déjà "
+    "créées ?' -> USAGE; 'How do I change the language?' -> USAGE.\n"
+    "Reply with USAGE, CLUE or ANSWER only, nothing else."
+)
+
+
+def _build_classify_messages(history, message):
+    """The two messages of the classifier call: the fixed instructions,
+    then the player's message after a short excerpt of the conversation
+    (the last CLASSIFY_HISTORY_MESSAGES messages, each cut to
+    CLASSIFY_CONTEXT_CHARS) so a follow-up can be read in context."""
+    context_lines = []
+    for m in _trim_history(history, CLASSIFY_HISTORY_MESSAGES):
+        who = "Player" if m.get("role") == "user" else "Assistant"
+        context_lines.append(f"{who}: {(m.get('content') or '')[:CLASSIFY_CONTEXT_CHARS]}")
+    context = (
+        "Previous messages (context only):\n" + "\n".join(context_lines) + "\n\n"
+        if context_lines else ""
+    )
+    return [
+        {"role": "system", "content": _CLASSIFY_SYSTEM_PROMPT},
+        {"role": "user", "content": (
+            f"{context}Message to sort: {message}\n\nAnswer with one word, USAGE, CLUE or ANSWER:"
+        )},
+    ]
+
+
+def _word_forms(word, language):
+    """`(inflected forms, base forms)` of `word`'s answer: the natural
+    spellings and canonical forms of every wordlist row of its grid form
+    (`dictionary_lookup.word_forms` — the same lookup the Dictionnaire
+    panel makes), then the grid word's own `accented`/`canonical` fields,
+    each list without repeats (case-insensitive). The wordlist comes first
+    because a grid word can carry placeholders instead (a grid published
+    from Interactive mode stores its answer as both), and the Dictionnaire
+    finds "boire" for BUSSENT whatever the grid holds."""
+    answer = word.get("answer") or ""
+    forms, bases = [], []
+    for accented, canonicals in (word_forms(answer, language) if answer else []):
+        forms.append(accented)
+        bases.extend(canonicals)
+    if word.get("accented"):
+        forms.append(word["accented"])
+    canonical = word.get("canonical") or []
+    if isinstance(canonical, str):
+        canonical = [c for c in canonical.split(";") if c]
+    bases.extend(canonical)
+
+    def unique(items):
+        seen, out = set(), []
+        for item in items:
+            if item and item.lower() not in seen:
+                seen.add(item.lower())
+                out.append(item)
+        return out
+
+    return unique(forms), unique(bases)
+
+
+def _clue_grounding(word, language):
+    """What the CLUE prompt tells the model about the answer itself, so a
+    hint describes the word in its exact form rather than the words of its
+    clue: `(grammar, meanings, base_forms)`. `grammar` is the parts of
+    speech of the exact form (backend/inflection_lookup.py), `meanings`
+    `(lemma, pos, gloss)` triples from the gloss dictionary for its base
+    forms (the senses of the analysed part of speech when there are any),
+    `base_forms` the base forms other than the word itself — forbidden in a
+    hint like the word. The forms come from `_word_forms`."""
+    answer = word.get("answer") or ""
+    forms, canonical = _word_forms(word, language)
+    analyses = []
+    for form in forms or [answer]:
+        for analysis in describe_form(form, language) if form else []:
+            if analysis not in analyses:
+                analyses.append(analysis)
+    # Only the part of speech of each analysis ("verb" of "verb, third-
+    # person plural imperfect subjunctive (of "boire")"): the English tense
+    # and person labels made the model write them out, even in Chinese.
+    grammar = []
+    for _, text in analyses:
+        label = text.split(",", 1)[0].split(" (", 1)[0]
+        if label and label not in grammar:
+            grammar.append(label)
+    poses = {pos for pos, _ in analyses if pos}
+    own = {f.lower() for f in forms + [answer]}
+    base_forms = [c for c in canonical if c.lower() not in own]
+    meanings = []
+    lemmas = list(canonical)[:CLUE_GLOSS_LEMMAS]
+    for lemma, entries in find_glosses_for_canonicals(lemmas, language).items():
+        matching = [e for e in entries if e.get("pos") in poses]
+        kept = []
+        for entry in matching or entries:
+            for gloss in entry.get("glosses") or []:
+                if len(kept) < CLUE_GLOSSES_PER_LEMMA:
+                    kept.append((lemma, entry.get("pos") or "?", gloss))
+        meanings.extend(kept)
+    return grammar, meanings, base_forms
+
+
+def _grid_form(text):
+    """`text` as the grid writes it: a ligature letter split into two,
+    accents dropped, uppercase — to compare a reply's words with the
+    answer whatever their spelling."""
+    for lig, split in (("œ", "oe"), ("Œ", "OE"), ("æ", "ae"), ("Æ", "AE")):
+        text = text.replace(lig, split)
+    text = "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+    return text.upper()
+
+
+def _letter_runs(text):
+    """`(start, end)` of every run of letters in `text`."""
+    runs, start = [], None
+    for i, ch in enumerate(text):
+        if ch.isalpha():
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append((start, i))
+            start = None
+    if start is not None:
+        runs.append((start, len(text)))
+    return runs
+
+
+def _root(word):
+    """The part of `word` a hint must not start a word with: the word
+    minus its last two letters, never shorter than CLUE_STEM_MIN_LETTERS."""
+    return word[:max(CLUE_STEM_MIN_LETTERS, len(word) - 2)]
+
+
+def _hint_leak_spans(text, word, message, language):
+    """`(start, end)` of every word of hint `text` that gives away part of
+    `word`'s answer: the answer itself, one of its base forms, a word
+    starting with the root of either (a root of CLUE_STEM_MIN_LETTERS
+    letters at least), or a word of CLUE_STEM_MIN_LETTERS letters or more
+    that the wordlist gives as a form of one of those base forms. A word the player wrote in `message` is never
+    counted — a proposal they typed can be echoed back. The base forms come
+    from `_word_forms`."""
+    answer = _grid_form(word.get("answer") or "")
+    _, canonical = _word_forms(word, language)
+    forbidden = [f for f in [answer] + [_grid_form(c) for c in canonical] if f]
+    roots = [_root(f) for f in forbidden if len(_root(f)) >= CLUE_STEM_MIN_LETTERS]
+    allowed = {_grid_form(message[a:b]) for a, b in _letter_runs(message)}
+    bases = {c.lower() for c in canonical}
+    spans = []
+    for start, end in _letter_runs(text):
+        token = _grid_form(text[start:end])
+        if token in allowed:
+            continue
+        if token in forbidden or any(token.startswith(r) for r in roots):
+            spans.append((start, end))
+        elif len(token) >= CLUE_STEM_MIN_LETTERS and any(
+                c.lower() in bases for _, cs in word_forms(text[start:end], language) for c in cs):
+            # Another form of one of the answer's base forms ("boivent" for
+            # BUSSENT), found through the wordlist.
+            spans.append((start, end))
+    return spans
+
+
+_synonym_clients = None
+
+
+def _corpus_sentences(word, language):
+    """Up to CLUE_SENTENCE_COUNT real sentences of the reference corpus
+    (data/reference_corpus/, `example_sentences.find_examples_for_words`,
+    drawn at random) using the answer's exact inflected form — the first of
+    its forms (`_word_forms`) that has any. Empty when none has."""
+    forms, _ = _word_forms(word, language)
+    for form in forms or [(word.get("answer") or "").lower()]:
+        if not form:
+            continue
+        sentences = find_examples_for_words([form], language, limit=CLUE_SENTENCE_COUNT).get(form)
+        if sentences:
+            return sentences
+    return []
+
+
+def _qdrant_synonyms(word, language):
+    """Example synonyms of `word`'s answer for the CLUE prompt, as
+    `(base form, definition)` pairs, from the Qdrant `words` collection.
+    One search per query — the answer's grid form, its inflected forms and
+    its possible base forms (`_word_forms`) — reading CLUE_SYNONYM_POOL
+    nearest neighbours each; a neighbour's score is its best one over
+    those searches, and must reach CLUE_SYNONYM_MIN_SCORE. The collection
+    embeds only spellings, so those neighbours are often look-alikes: a
+    neighbour must also reach CLUE_SYNONYM_MIN_MEANING of similarity (its
+    stored vector against the embedded first CLUE_SYNONYM_GLOSSES
+    definitions of the answer's base form, from `_clue_grounding`) — no
+    example at all without such a definition. A neighbour is skipped as
+    well when it or one of its base forms is the answer or one of its base
+    forms, or starts with the root (`_root`) of either, when its first base
+    form was already taken or is capitalized (a proper noun), or when that
+    base form has no definition in the gloss dictionary (the model checks
+    each example against it). Best score first, up to CLUE_SYNONYM_COUNT.
+    Empty when Qdrant or the embedding server is unavailable."""
+    global _synonym_clients
+    answer = word.get("answer") or ""
+    forms, canonical = _word_forms(word, language)
+    _, meanings, _ = _clue_grounding(word, language)
+    lemma = meanings[0][0] if meanings else ""
+    meaning = " ".join([g for l, _, g in meanings if l == lemma][:CLUE_SYNONYM_GLOSSES])
+    if not meaning:
+        return []
+    forbidden = {f for f in [_grid_form(answer)] + [_grid_form(c) for c in canonical] if f}
+    roots = [r for r in (_root(f) for f in sorted(forbidden)) if len(r) >= CLUE_STEM_MIN_LETTERS]
+    queries = []
+    for q in [answer] + forms + canonical:
+        if q and q not in queries:
+            queries.append(q)
+    best = {}
+    try:
+        if _synonym_clients is None:
+            _synonym_clients = (QdrantStore(timeout=CLUE_SYNONYM_TIMEOUT),
+                                Embedder(timeout=CLUE_SYNONYM_TIMEOUT))
+        store, embedder = _synonym_clients
+        for query in queries:
+            for hit in store.search(embedder.embed(query), lang=language, limit=CLUE_SYNONYM_POOL):
+                payload = hit.get("payload") or {}
+                w = payload.get("word")
+                score = hit.get("score", 0.0)
+                if w and (w not in best or score > best[w][0]):
+                    best[w] = (score, payload)
+        candidates, seen = [], set()
+        for w, (score, payload) in sorted(best.items(), key=lambda kv: -kv[1][0]):
+            if score < CLUE_SYNONYM_MIN_SCORE:
+                break
+            bases = [b for b in (payload.get("canonical") or payload.get("accented") or w).split(";") if b]
+            forms_of_hit = [_grid_form(w)] + [_grid_form(b) for b in bases]
+            if any(f in forbidden or any(f.startswith(r) for r in roots) for f in forms_of_hit):
+                continue
+            base = bases[0] if bases else w
+            if base in seen or base[:1].isupper():
+                continue
+            seen.add(base)
+            entries = find_glosses_for_canonicals([base], language).get(base) or []
+            gloss = next((g for e in entries for g in (e.get("glosses") or [])), "")
+            if gloss:
+                candidates.append((w, base, gloss))
+        meaning_vector = embedder.embed(meaning) if candidates else []
+        vectors = store.retrieve_word_vectors(language, [w for w, _, _ in candidates])
+    except (QdrantStoreError, EmbedderError) as e:
+        logger.warning("chat: Qdrant synonyms unavailable for %r: %s", answer, e)
+        return []
+    found = []
+    for w, base, gloss in candidates:
+        vector = vectors.get(w)
+        if vector is None or sum(a * b for a, b in zip(vector, meaning_vector)) < CLUE_SYNONYM_MIN_MEANING:
+            continue
+        found.append((base, gloss))
+        if len(found) >= CLUE_SYNONYM_COUNT:
+            break
+    logger.info("chat: Qdrant synonyms for %r (queries %r): %r", answer, queries, found)
+    return found
+
+
+def _parse_route(content):
+    """The routing keyword in a classifier answer (ROUTE_USAGE/ROUTE_CLUE/
+    ROUTE_ANSWER):
+    its last one, since a model that reasons before answering ends on its
+    verdict; `None` when it names neither."""
+    found = re.findall(r"\b(USAGE|CLUE|ANSWER)\b", content.upper())
+    return found[-1] if found else None
+
+
+def _strip_think_block(content):
+    """`content` without a `<think>...</think>` block — the non-streamed
+    classifier call's counterpart of reply_stream's streaming filter: the
+    text after the last `</think>` when there is one, "" for a block that
+    never closed, `content` unchanged otherwise."""
+    if _THINK_CLOSE in content:
+        return content.rsplit(_THINK_CLOSE, 1)[1]
+    if _THINK_OPEN in content:
+        return ""
+    return content
+
+
+def _trim_history(history, count):
+    """The last `count` messages of `history`, never starting on an
+    assistant turn (a chat template expects the user to speak first)."""
+    kept = list(history[-count:]) if count > 0 else []
+    while kept and kept[0].get("role") != "user":
+        kept.pop(0)
+    return kept
 
 
 def _format_words_block(words):
@@ -311,11 +737,10 @@ class ChatBot:
         hovered word if any, else the word(s) at the clicked cell, else a
         word the player's own message names, else a refusal that asks the
         player to hover/click first. The reply must name which word it
-        chose (short preamble only), then give an ALTERNATIVE definition —
-        a fresh rewording that adds information the on-screen clue does
-        not, never just echoing the position + existing clue + letter
-        count — and must never contain the answer unless the player
-        explicitly asked for it. The clicked-cell word's own clue is
+        chose (short preamble only), then give one or two synonyms of
+        another root, or a new definition different from its on-screen
+        clue — never the answer, a word of its family, any of its letters
+        or its letter count, unless the player explicitly asked for it. The clicked-cell word's own clue is
         passed to the model (the `filling_words` block, with `clue=` and
         `answer=`), so it always has what it needs to build that hint.
 
@@ -556,7 +981,9 @@ class ChatBot:
             + (
                 " And if the player asked for a HINT (not an explicit answer request), the "
                 "solution word must NOT appear anywhere in your reply — never end a hint "
-                "with \"the answer is ...\", never spell it out, never confirm it."
+                "with \"the answer is ...\", never spell it out, never confirm it, never give "
+                "any of its letters. A hint gives a synonym of another root or a new "
+                "definition, never just a paraphrase of its clue."
                 if puzzle_loaded else ""
             )
         )
@@ -624,18 +1051,8 @@ class ChatBot:
         # recomputing it whenever the reply language, the loaded grid or
         # the selection changes.
         return (
-            "You are David FALCON, the friendly in-app assistant of CrossWordFalcon, a "
-            "crossword-puzzle web app. You help the player use the interface and solve the "
-            "crossword grid currently on screen (explaining a clue, giving a hint, or, if "
-            "explicitly asked, the answer itself).\n\n"
-            "Reference documentation for how the interface itself works "
-            "(frontend/static/index.html and script.js, described here for a player, not a "
-            "developer). This documentation is written in English, but that is NOT the "
-            "language to reply in: use its content to answer, rephrased in your own words in "
-            "the player's language set by the rules below — never copy an English passage "
-            "from it into your reply:\n"
-            f"{doc_user}\n\n"
-            f"Write EVERY reply entirely in {language_name}. This is not optional and applies "
+            _fixed_prompt_head(doc_user)
+            + f"Write EVERY reply entirely in {language_name}. This is not optional and applies "
             "to every message you ever send.\n\n"
             "STRICT RULES:\n"
             "1. Always reply extremely politely.\n"
@@ -708,17 +1125,17 @@ class ChatBot:
             "'clue=' and 'answer=' fields that must not appear in your reply). This "
             "preamble is NOT the hint. (If the word's clue shows '(none yet)', just say its "
             "clue has not been generated yet.)\n"
-            "   c. THE HINT ITSELF MUST BE AN ALTERNATIVE DEFINITION — a genuinely fresh "
-            "wording, DIFFERENT from the clue the player already sees on screen. It is "
-            "forbidden to: copy the existing 'clue=' text, lightly reword or reorder it, or "
-            "reply with just the position + that clue + a letter count (the player already "
-            "has every bit of that — such a reply gives them nothing). You MUST add new "
-            "information the clue does not state: a synonym or near-synonym phrase, a "
-            "broader category the word belongs to, a concrete example of it, the role or "
-            "function it has, or a paraphrase from a clearly different angle. Give 1 to 2 "
-            "sentences of this fresh description. You MAY additionally give the letter "
-            "count or confirm/deny one specific letter the player proposes — but only IN "
-            "ADDITION to the fresh description, never instead of it.\n"
+            "   c. THE HINT MUST HELP FIND THE WORD WITHOUT GIVING ANY PART OF IT. Unless "
+            "the player explicitly asks for it, never give a letter of the solution (not "
+            "its first letter, not its last letter, no letter at all), its letter count, "
+            "or a word of its family. Instead give ONE of these: one or two synonyms of "
+            "the word that do NOT share its root (not the same canonical form, not the "
+            "same word family), or a NEW definition of your own, clearly DIFFERENT from "
+            "the clue the player already sees on screen (another angle: what it is used "
+            "for, the category it belongs to, a typical example of it). It is forbidden to "
+            "copy the existing 'clue=' text, to lightly reword or reorder it, or to reply "
+            "with just the position + that clue (the player already has every bit of "
+            "that). You MAY confirm or deny one specific letter the player proposes.\n"
             "   c-bis. Describe the word EXACTLY as it appears in the grid — its part of "
             "speech, and for an inflected form its number, tense and person. Do NOT slide "
             "into a meaning that belongs only to a similar-looking word, or to a DIFFERENT "
@@ -743,22 +1160,17 @@ class ChatBot:
             "(same short preamble as 4b) and then the exact answer plainly, e.g. « Le mot "
             "vertical en (l, c) est : … ». Rules b–d do not restrict this case.\n"
             "   - Example 1: word MAISON, clue on screen 'Habitation'. BAD: 'Le mot est "
-            "MAISON' / 'M-A-I-S-O-N'. ALSO BAD (just echoes what is on screen): 'Le mot "
-            "horizontal en (l, c) a pour définition « Habitation », 6 lettres.' GOOD: a "
-            "short preamble then a FRESH alternative definition, e.g. '… : pensez à un "
-            "bâtiment privé où réside une famille, avec des murs, un toit et plusieurs "
-            "pièces — 6 lettres.'\n"
-            "   - Example 2: word SOLEIL, clue on screen 'Astre du jour'. BAD: 'C'est "
-            "SOLEIL'. ALSO BAD (echoes the clue): 'Le mot vertical en (l, c), sa définition "
-            "est « Astre du jour ».' GOOD: '… : l'étoile la plus proche de la Terre, source "
-            "de sa lumière et de sa chaleur, au centre du système solaire — 6 lettres.'\n"
-            "   - Example 3 (answer leak — the most common mistake): word CHEVAL. BAD: "
-            "'… : pensez à un grand animal de trait à quatre pattes. La réponse est : "
-            "CHEVAL.' — the fresh description is fine, but the final sentence hands over the "
-            "solution and RUINS the hint. GOOD: the exact same reply WITHOUT that last "
-            "sentence: '… : pensez à un grand animal de trait à quatre pattes — 6 lettres.' "
-            "A hint stops at the description (plus, optionally, the letter count); it NEVER "
-            "names the word.\n"
+            "MAISON' / 'M-A-I-S-O-N'. ALSO BAD (gives letters of the solution): '… : 6 "
+            "lettres, commence par un M et finit par un N.' ALSO BAD (echoes the clue, or "
+            "stays vague): '… : c'est une habitation.' / '… : un terme lié au logement.' "
+            "GOOD: '… : un synonyme est « demeure ».' or '… : on y rentre le soir, et on y "
+            "reçoit ses amis.'\n   - Example 2 (answer leak — the most common mistake): "
+            "word CHEVAL. BAD: '… : un synonyme est « destrier ». La réponse est : "
+            "CHEVAL.' — the final sentence RUINS the hint. ALSO BAD: a synonym of the same "
+            "family (« chevaux », « chevalin »). GOOD: the same reply WITHOUT that last "
+            "sentence.\n   A hint NEVER names the word and never gives any of its letters. "
+            "The synonyms and definitions above belong to their own example word — find "
+            "new ones for the player's OWN word, never reuse one from these rules.\n"
             "   These examples illustrate the SAME general rule — apply it to ANY word the "
             "player asks a hint about. The positions in the examples are illustrative only: "
             "NEVER copy a position from an example; always take the real one from the "
@@ -786,7 +1198,204 @@ class ChatBot:
             + selected_word_block
         )
 
-    def _current_selection_line(self, ui_context):
+    async def classify_question(self, history, message, timeout=CLASSIFY_TIMEOUT):
+        """The first of the two LLM calls a question asked in play mode
+        costs: one non-streamed call answering ROUTE_USAGE (using the
+        software), ROUTE_CLUE (help filling the grid) or ROUTE_ANSWER (an
+        explicit request for a word's answer). Returns `(route,
+        raw_answer, messages)` — `messages` the exact request sent, for
+        LOG_CHAT/; `route` is `None` when the answer names neither
+        keyword or the call fails, and the reply then falls back to the
+        combined prompt rather than failing the message."""
+        messages = _build_classify_messages(history, message)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    self.base_url,
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": messages,
+                        "temperature": CLASSIFY_TEMPERATURE,
+                        "max_tokens": CLASSIFY_MAX_TOKENS,
+                        "reasoning_effort": "none",
+                    },
+                )
+                response.raise_for_status()
+                content = response.json()["choices"][0]["message"]["content"] or ""
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as e:
+            logger.warning("chat: question classification failed (%s, model=%r): %s",
+                           self.base_url, self.model, e)
+            return None, "", messages
+        route = _parse_route(_strip_think_block(content))
+        logger.info("chat: question classified as %s (raw answer %r)", route, content)
+        return route, content, messages
+
+    def _build_usage_prompt(self, language, ui_context):
+        """System prompt of a USAGE reply: the fixed head (introduction +
+        DOC_USER, shared with the combined prompt for the prefix cache)
+        and the rules a question about the interface needs. No grid
+        content at all — the words and their answers have no use here —
+        and always the interface language."""
+        language_name = LANGUAGE_NAMES.get(language, language)
+        return (
+            _fixed_prompt_head(_load_doc_user())
+            + f"Write EVERY reply entirely in {language_name}. This is not optional and "
+            "applies to every message you ever send.\n\n"
+            "The player is playing the crossword grid on screen and asks you how the "
+            "interface works.\n\n"
+            "STRICT RULES:\n"
+            "1. Always reply extremely politely.\n"
+            f"2. LANGUAGE. Your entire reply MUST be written in {language_name} — every word "
+            "of it, whatever language the player writes to you in. The reference "
+            f"documentation above is in English: whatever you take from it must be written in "
+            f"{language_name}, rephrased, never quoted in English.\n"
+            "3. Answer ONLY questions about using this interface, from the documentation "
+            "above. For a question unrelated to this app (general knowledge, other software, "
+            "personal questions...), politely decline, suggest an appropriate website or "
+            "resource for it, and say NOTHING else — never answer it anyway. If the message "
+            "is in fact a request for help with a word of the grid, tell the player to move "
+            "the mouse over that word (or click one of its cells) and ask you for a hint.\n"
+            "4. Keep replies reasonably short and conversational — this is a chat, not an "
+            "essay.\n"
+            "5. NEVER start with a greeting or a self-introduction: the chat already greeted "
+            "the player once. Start directly with the answer.\n"
+            "6. NEVER think out loud or show your reasoning: write only the final answer.\n\n"
+            f"FINAL REMINDER: write your entire reply in {language_name}, starting directly "
+            "with the answer and no greeting."
+        )
+
+    def _build_clue_prompt(self, language, ui_context, answer_requested=False, message="",
+                           synonyms=(), sentences=()):
+        """System prompt of a CLUE reply, deliberately small so a small
+        model can follow it closely: no DOC_USER, no word list — only the
+        word selected right now (position, direction, clue, answer) and
+        what to do with it: a hint is a synonym of another root or a new
+        definition, never a letter of the answer. Written in that word's own language (the interface
+        language when nothing is selected), like the combined prompt."""
+        sel = _resolve_selection(ui_context)
+        help_word = sel["help_word"]
+        reply_language = (help_word.get("language") if help_word else None) or language
+        language_name = LANGUAGE_NAMES.get(reply_language, reply_language)
+        head = (
+            "You are David FALCON, the assistant of a crossword web app. The player is "
+            "solving the crossword grid on screen and asks you for help with one word of it.\n"
+            f"Write your entire reply in {language_name}, whatever language the player "
+            "writes to you in.\n\n"
+        )
+        if help_word is None:
+            return head + (
+                "No word is selected in the grid right now (nothing under the mouse, no "
+                "single word at a clicked cell), so you do not know which word the player "
+                f"means. Reply with ONE polite sentence in {language_name} asking the player "
+                "to move the mouse over the word (or click one of its cells) and ask again. "
+                "Say nothing else: no hint, no word, no greeting."
+            )
+        row, col = help_word.get("row", 0) + 1, help_word.get("col", 0) + 1
+        direction = (
+            "DOWN (vertical)" if help_word.get("direction") == "down" else "ACROSS (horizontal)"
+        )
+        kind = (
+            "the word under the player's mouse" if sel["hovered_resolved"]
+            else "the word at the cell the player clicked"
+        )
+        clue = help_word.get("clue") or ""
+        clue_line = repr(clue) if clue else "none yet (no clue has been generated for it)"
+        answer = help_word.get("answer", "")
+        if answer_requested:
+            # ROUTE_ANSWER: the player explicitly asked for the answer.
+            return head + (
+                f"THE WORD ({kind}, selected right now):\n"
+                f"- position: row {row}, column {col}, {direction}\n"
+                f"- clue shown to the player: {clue_line}\n"
+                f"- solution: {answer!r}\n"
+                "\nThe player EXPLICITLY asked for the answer of this word. Reply with ONE "
+                f"sentence in {language_name} giving the word's position, its direction (in "
+                f"{language_name} words) and its solution, {answer}. Nothing else: no hint, no "
+                "greeting."
+            )
+        grammar, meanings, base_forms = _clue_grounding(help_word, reply_language)
+        # The root forbidden in a hint (see _root).
+        stem = _root(answer)
+        context = (
+            f"- The word: {kind}.\n"
+            f"- Clue already shown to the player: {clue_line}\n"
+            f"- Solution: {answer!r}.\n"
+        )
+        if grammar:
+            context += (
+                f"- Part of speech: {' / '.join(grammar)}"
+                + (f", an inflected form of {', '.join(repr(b) for b in base_forms)}"
+                   if base_forms else "")
+                + ".\n"
+            )
+        if meanings:
+            context += (
+                "- Dictionary entries of its base form:\n"
+                + "".join(f"  - {lemma!r} ({pos}): {gloss}\n" for lemma, pos, gloss in meanings)
+            )
+        if synonyms:
+            context += (
+                "- Possible synonyms, found by a similarity search and possibly imperfect "
+                "(check each one's definition):\n"
+                + "".join(f"  - {base!r}: {gloss}\n" for base, gloss in synonyms)
+            )
+        # A proposal the model could not check reliably by itself.
+        proposed = any(
+            _grid_form(message[a:b]) == _grid_form(answer) for a, b in _letter_runs(message)
+        )
+        base_list = "".join(f", its base form {b!r}" for b in base_forms)
+        return head + (
+            "# GOAL\n"
+            f"Create a new clue for the solution {answer!r} (see CONTEXT), in {language_name}. "
+            "The player already has the clue shown in the grid and cannot find the word with "
+            "it: your new clue must describe the same word in a DIFFERENT way, so that they can "
+            "guess it and write it in the grid themselves. Like a crossword clue, it is one or "
+            "two short sentences that point to the word without writing it: another meaning of "
+            "it, a synonym, what it is used for, where or when one meets it. It never contains "
+            "the solution nor any part of it — unless the player clearly asks for the "
+            "solution.\n\n"
+            "# HOW TO HELP THE PLAYER (your answer)\n"
+            f"Your answer, in {language_name}, is your new clue alone, starting directly "
+            "(no greeting, no reasoning, no position, row, column or direction: the player "
+            "already has the word selected). Build it from one or two of these:\n"
+            "- pertinent synonyms of the solution, in the same form — from the list below "
+            "when their definition fits, or your own;\n"
+            "- for a conjugated or plural form: say it is one, and give a synonym of its base "
+            "form;\n"
+            "- a new clue or definition of your own, from another angle than the one shown "
+            "(what it is for, what it is made of, who uses it...);\n"
+            + ("- a paraphrase, in your own words, of one of the dictionary entries given in "
+               "CONTEXT;\n" if meanings else "")
+            + "- a context where the word is used: a typical situation, an example, a "
+            "well-known expression with « … » in its place"
+            + (", or one of the SENTENCES below with the word replaced by « … »" if sentences else "")
+            + ".\n"
+            "Depending on the message:\n"
+            "- another hint: a different kind of help from your previous one;\n"
+            "- a letter or a word to check (« C'est MAISON ? », « Ça commence par un B ? »): "
+            + ("this message proposes the solution itself: tell them it is right;\n" if proposed
+               else "say whether it is right, and if not, add a hint;\n")
+            + "- the solution itself: say you will give it if they clearly ask for it;\n"
+            "- another word of the grid: ask them to move the mouse over it or click one of "
+            "its cells;\n"
+            "- something unrelated to the grid: politely decline and suggest an appropriate "
+            "resource.\n\n"
+            "# CONTEXT\n"
+        ) + context + (
+            (
+                "\n# SENTENCES\nReal sentences using the word, from a reference corpus:\n"
+                + "".join(f"- {sentence}\n" for sentence in sentences)
+            ) if sentences else ""
+        ) + (
+            "\n# FORBIDDEN (unless the player clearly asks for the solution) — never:\n"
+            f"- write the solution {answer!r}{base_list}, or any word starting with {stem!r};\n"
+            "- say how many letters the word has, or which letters it contains;\n"
+            "- repeat or rephrase the clue already shown: the player already has it;\n"
+            "- give the word's position (row, column) or direction."
+        )
+
+    def _current_selection_line(self, ui_context, with_position=True):
         """A one-line restatement of which grid word is selected RIGHT
         NOW, prepended to the player's own message in `reply_stream()` so
         the model answers about the currently-selected word rather than
@@ -796,7 +1405,10 @@ class ChatBot:
         player had selected a different one — the interface-state block
         in the system prompt is far from the current question and lost
         the tug-of-war against recent conversation history. Returns "" for
-        no puzzle (the system prompt already covers that)."""
+        no puzzle (the system prompt already covers that). `with_position`
+        False names the word without its row/column/direction — the CLUE
+        route, whose reply must not state the position (the model copies
+        whatever position text it is shown into the hint)."""
         sel = _resolve_selection(ui_context or {})
         if not sel["puzzle_loaded"]:
             return ""
@@ -809,6 +1421,14 @@ class ChatBot:
                 "first; do NOT continue a word from an earlier reply."
             )
         kind = "under the mouse (hovered)" if sel["hovered_resolved"] else "at the clicked cell being filled"
+        if not with_position:
+            return (
+                f"NOTE — right now the player has a word selected in the grid ({kind}): the "
+                f"one of the system prompt. If this message is a request for help / a hint and "
+                f"does not explicitly name a different word, it is about THAT word, even if an "
+                f"earlier reply in this conversation was about a different word. Do not carry "
+                f"over the previous reply's word."
+            )
         d = "DOWN (vertical)" if w.get("direction") == "down" else "ACROSS (horizontal)"
         r, c = w.get("row", 0) + 1, w.get("col", 0) + 1
         return (
@@ -821,7 +1441,7 @@ class ChatBot:
         )
 
     async def reply_stream(self, history, message, language="fr", ui_context=None,
-                           timeout=DEFAULT_TIMEOUT, on_prompt=None):
+                           timeout=DEFAULT_TIMEOUT, on_prompt=None, on_route=None):
         """Same purpose as a plain `reply()` would have, but yields the
         assistant's reply incrementally, chunk by chunk, as the LLM
         produces it — at the user's explicit request: "Le Bot doit
@@ -910,15 +1530,50 @@ class ChatBot:
         to deliver them together (e.g. `"<think>x</think>Answer"` all at
         once) — without it, the close-tag check would only ever run on
         the *next* chunk's arrival, one iteration too late."""
-        system_prompt = self._build_system_prompt(language, ui_context or {})
+        ui = ui_context or {}
+        # In play mode (a playable grid on screen) a first call sorts the
+        # question (classify_question), and the reply is written from the
+        # prompt of that kind only; `on_route`, if given, receives the
+        # route, the classifier's raw answer and its request (logged in
+        # LOG_CHAT/).
+        route = None
+        if ui.get("puzzle_loaded"):
+            route, raw_route, classify_messages = await self.classify_question(history, message)
+            if on_route is not None:
+                on_route(route, raw_route, classify_messages)
+        if route == ROUTE_USAGE:
+            system_prompt = self._build_usage_prompt(language, ui)
+            selection_line = ""
+        elif route in (ROUTE_CLUE, ROUTE_ANSWER):
+            synonyms, sentences = [], []
+            help_word = _resolve_selection(ui)["help_word"]
+            if route == ROUTE_CLUE and help_word is not None:
+                word_language = help_word.get("language") or language
+                synonyms, sentences = await asyncio.to_thread(
+                    lambda: (_qdrant_synonyms(help_word, word_language),
+                             _corpus_sentences(help_word, word_language))
+                )
+            system_prompt = self._build_clue_prompt(
+                language, ui, answer_requested=route == ROUTE_ANSWER, message=message,
+                synonyms=synonyms, sentences=sentences,
+            )
+            history = _trim_history(history, CLUE_HISTORY_MESSAGES)
+            # The CLUE prompt names the selected word already; the NOTE
+            # still sits right before the question, against an earlier
+            # hint's word kept in the trimmed history — without the
+            # position for a hint, which must not state it.
+            selection_line = self._current_selection_line(ui, with_position=route != ROUTE_CLUE)
+        else:
+            system_prompt = self._build_system_prompt(language, ui)
+            # Prepend the live "which word is selected right now" NOTE to
+            # the player's own message, so it sits immediately before the
+            # question (highest recency) rather than only in the far-away
+            # system prompt — a small model was anchoring on an earlier
+            # reply's word instead (see _current_selection_line's own
+            # docstring).
+            selection_line = self._current_selection_line(ui)
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(history)
-        # Prepend the live "which word is selected right now" NOTE to the
-        # player's own message, so it sits immediately before the question
-        # (highest recency) rather than only in the far-away system prompt
-        # — a small model was anchoring on an earlier reply's word instead
-        # (see _current_selection_line's own docstring).
-        selection_line = self._current_selection_line(ui_context or {})
         user_content = f"{selection_line}\n\n{message}" if selection_line else message
         messages.append({"role": "user", "content": user_content})
         # Hand the exact wire payload to the caller before sending it —
@@ -928,8 +1583,48 @@ class ChatBot:
         # still leaves the prompt captured for analysis.
         if on_prompt is not None:
             on_prompt(messages)
+        help_word = _resolve_selection(ui)["help_word"]
+        if route == ROUTE_CLUE and help_word is not None:
+            # A hint is checked before it is sent (see _checked_hint), so it
+            # reaches the player in one piece rather than streamed.
+            yield await self._checked_hint(
+                messages, timeout, help_word, message, help_word.get("language") or language
+            )
+            return
+        async for chunk in self._stream_completion(messages, timeout):
+            yield chunk
+
+    async def _checked_hint(self, messages, timeout, word, message, language):
+        """A hint that gives no part of the answer: written up to
+        CLUE_HINT_ATTEMPTS times until `_hint_leak_spans` finds nothing in
+        it and it is not a mere echo of the player's message, the last
+        attempt's leaked words replaced by "…" otherwise."""
+        text = ""
+        for attempt in range(CLUE_HINT_ATTEMPTS):
+            text = "".join([c async for c in self._stream_completion(messages, timeout)])
+            spans = _hint_leak_spans(text, word, message, language)
+            echo = _grid_form(text.strip()) == _grid_form(message.strip())
+            if not spans and not echo:
+                return text
+            if echo:
+                logger.info("chat: hint attempt %d/%d only echoes the message: %r",
+                            attempt + 1, CLUE_HINT_ATTEMPTS, text)
+                continue
+            logger.info("chat: hint attempt %d/%d leaks part of the answer: %r",
+                        attempt + 1, CLUE_HINT_ATTEMPTS, text)
+        for start, end in reversed(spans):
+            text = text[:start] + "…" + text[end:]
+        return text
+
+    async def _stream_completion(self, messages, timeout):
+        """The streamed chat-completions call behind every reply: yields
+        the visible text chunk by chunk, `<think>` blocks and markup tags
+        removed (see reply_stream's docstring for the filtering)."""
         buffer = ""
         yielded_anything = False
+        # Every visible piece goes through the tag filter before it is
+        # yielded (see _TagStripper).
+        tags = _TagStripper()
         reasoning_state = {
             "none": "disabled",
             "close_only": "in_reasoning",
@@ -981,10 +1676,12 @@ class ChatBot:
                             continue
                         logger.info("chat: raw LLM chunk: %r", delta)
                         if reasoning_state == "disabled":
-                            # CHATBOT_THINK_FILTER=none — no tag search at
-                            # all, stream every chunk immediately.
-                            yielded_anything = True
-                            yield delta
+                            # CHATBOT_THINK_FILTER=none — no <think>
+                            # search at all, stream every chunk immediately.
+                            visible = tags.feed(delta)
+                            if visible:
+                                yielded_anything = True
+                                yield visible
                             continue
                         buffer += delta
                         progressed = True
@@ -1015,12 +1712,17 @@ class ChatBot:
                                     if hold < len(buffer):
                                         to_flush = buffer[:len(buffer) - hold] if hold else buffer
                                         buffer = buffer[len(buffer) - hold:] if hold else ""
-                                        if to_flush:
+                                        visible = tags.feed(to_flush) if to_flush else ""
+                                        if visible:
                                             yielded_anything = True
-                                            yield to_flush
+                                            yield visible
         except httpx.HTTPError as e:
             logger.warning("chat stream failed (%s, model=%r): %s", self.base_url, self.model, e)
             raise ChatError(f"Le serveur de langage est indisponible ({e}).") from e
+        tail = tags.flush()
+        if tail:
+            yielded_anything = True
+            yield tail
         if not yielded_anything:
             # A real, reproduced incident: llama_cpp.server can send a 200
             # OK, start an SSE stream, then raise "Requested tokens (N)

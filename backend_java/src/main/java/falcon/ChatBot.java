@@ -32,6 +32,62 @@ public final class ChatBot {
     public static final List<String> CHATBOT_THINK_FILTER_CHOICES = List.of("open_close", "close_only", "none");
     public static final String DEFAULT_CHATBOT_THINK_FILTER = "open_close";
     static final Path DOC_USER_PATH = Env.path("DOC_USER", "EN", "ReadMe.md");
+    // Routing of a question asked while a playable grid is on screen (see
+    // classifyQuestion): a first, non-streamed LLM call answers with one of
+    // these two keywords, and the reply is then written from a prompt holding
+    // only what that kind of question needs. Anything else the classifier
+    // answers (or a failed call) falls back to the combined prompt.
+    public static final String ROUTE_USAGE = "USAGE";
+    public static final String ROUTE_CLUE = "CLUE";
+    // An explicit request for the answer of a word: written from the CLUE
+    // prompt, never checked for leaks (it IS the answer).
+    public static final String ROUTE_ANSWER = "ANSWER";
+    static final double CLASSIFY_TEMPERATURE = 0.0;
+    // Room for a model that reasons a few lines before answering anyway.
+    static final int CLASSIFY_MAX_TOKENS = 200;
+    static final double CLASSIFY_TIMEOUT = 30.0;
+    // Earlier messages shown to the classifier, each cut to
+    // CLASSIFY_CONTEXT_CHARS.
+    static final int CLASSIFY_HISTORY_MESSAGES = 2;
+    static final int CLASSIFY_CONTEXT_CHARS = 300;
+    // Earlier messages kept in a CLUE reply's prompt.
+    static final int CLUE_HISTORY_MESSAGES = 4;
+    // Shortest root of the answer a CLUE prompt forbids in a hint.
+    static final int CLUE_STEM_MIN_LETTERS = 4;
+    // Attempts at a hint that gives no part of the answer before its leaked
+    // words are masked (see checkedHint).
+    static final int CLUE_HINT_ATTEMPTS = 3;
+    // Dictionary grounding of a CLUE prompt: at most this many base forms of
+    // the answer, and this many definitions for each.
+    static final int CLUE_GLOSS_LEMMAS = 2;
+    static final int CLUE_GLOSSES_PER_LEMMA = 3;
+    // Example synonyms of a CLUE prompt, found by a Qdrant similarity search
+    // (see qdrantSynonyms).
+    static final int CLUE_SYNONYM_COUNT = 3;
+    static final double CLUE_SYNONYM_MIN_SCORE = 0.80;
+    static final int CLUE_SYNONYM_POOL = 100;
+    // The lowest similarity kept between an example and the definitions of
+    // the answer's base form, and how many of those definitions are embedded.
+    static final double CLUE_SYNONYM_MIN_MEANING = 0.40;
+    static final int CLUE_SYNONYM_GLOSSES = 2;
+    static final double CLUE_SYNONYM_TIMEOUT = 5.0;
+    // Real sentences of the reference corpus shown in a CLUE prompt's
+    // SENTENCES section (see corpusSentences).
+    static final int CLUE_SENTENCE_COUNT = 3;
+    private static volatile QdrantStore synonymStore;
+    private static volatile Embedder synonymEmbedder;
+    private static final java.util.regex.Pattern COMBINING_RE = java.util.regex.Pattern.compile("\\p{Mn}+");
+    private static final java.util.regex.Pattern ROUTE_RE = java.util.regex.Pattern.compile(
+            "\\b(USAGE|CLUE|ANSWER)\\b", java.util.regex.Pattern.UNICODE_CHARACTER_CLASS);
+
+    // A markup tag in a chat reply; dropped by TagStripper, its text kept.
+    static final java.util.regex.Pattern TAG_RE = java.util.regex.Pattern.compile(
+            "</?[A-Za-z][A-Za-z0-9_:-]*(?:\\s[^<>]*)?/?>", java.util.regex.Pattern.UNICODE_CHARACTER_CLASS);
+    // Longest text after a "<" still awaited as a possible tag.
+    static final int MAX_TAG_CHARS = 64;
+
+    /** A classifier verdict: the keyword (null when undetermined), the raw answer and the request sent. */
+    public record Route(String route, String raw, List<Object> messages) {}
     private static volatile String docUserCache;
 
     public static final class ChatError extends RuntimeException {
@@ -76,6 +132,345 @@ public final class ChatBot {
             }
         }
         return docUserCache;
+    }
+
+    /** Intro + DOC_USER: the fixed head shared by the combined and USAGE prompts. */
+    static String fixedPromptHead(String docUser) {
+        return "You are David FALCON, the friendly in-app assistant of CrossWordFalcon, a "
+                + "crossword-puzzle web app. You help the player use the interface and solve the "
+                + "crossword grid currently on screen (explaining a clue, giving a hint, or, if "
+                + "explicitly asked, the answer itself).\n\n"
+                + "Reference documentation for how the interface itself works "
+                + "(frontend/static/index.html and script.js, described here for a player, not a "
+                + "developer). This documentation is written in English, but that is NOT the "
+                + "language to reply in: use its content to answer, rephrased in your own words in "
+                + "the player's language set by the rules below — never copy an English passage "
+                + "from it into your reply:\n"
+                + docUser + "\n\n";
+    }
+
+    /** The last routing keyword in a classifier answer, or null. */
+    static String parseRoute(String content) {
+        java.util.regex.Matcher m = ROUTE_RE.matcher(content.toUpperCase(java.util.Locale.ROOT));
+        String last = null;
+        while (m.find()) last = m.group(1);
+        return last;
+    }
+
+    /** {@code content} without a {@code <think>...</think>} block. */
+    static String stripThinkBlock(String content) {
+        int idx = content.lastIndexOf(THINK_CLOSE);
+        if (idx >= 0) return content.substring(idx + THINK_CLOSE.length());
+        if (content.contains(THINK_OPEN)) return "";
+        return content;
+    }
+
+    /** The last {@code count} messages of {@code history}, never starting on an assistant turn. */
+    static List<Object> trimHistory(List<Object> history, int count) {
+        List<Object> kept = new ArrayList<>(count > 0
+                ? history.subList(Math.max(0, history.size() - count), history.size()) : List.of());
+        while (!kept.isEmpty() && !"user".equals(Json.get(kept.get(0), "role"))) kept.remove(0);
+        return kept;
+    }
+
+    /** Python's {@code s[:n]} (code points). */
+    static String cpHead(String s, int n) {
+        int len = s.codePointCount(0, s.length());
+        return n >= len ? s : s.substring(0, s.offsetByCodePoints(0, Math.max(0, n)));
+    }
+
+    /** The answer's canonical forms, from a list or a ";"-separated string. */
+    static List<String> canonicalForms(Object word) {
+        Object c = Json.get(word, "canonical");
+        List<String> out = new ArrayList<>();
+        if (c instanceof String str) {
+            for (String part : str.split(";", -1)) if (!part.isEmpty()) out.add(part);
+        } else if (Json.truthy(c)) {
+            for (Object o : Json.asList(c)) out.add(o.toString());
+        }
+        return out;
+    }
+
+    /** Inflected forms and base forms of the answer: wordlist rows first, then the word's own fields (see chatbot.py _word_forms). */
+    static List<List<String>> wordForms(Object word, String language) {
+        String answer = Json.str(word, "answer", "");
+        List<String> forms = new ArrayList<>(), bases = new ArrayList<>();
+        if (!answer.isEmpty()) {
+            for (Map.Entry<String, List<String>> row : DictionaryLookup.wordForms(answer, language)) {
+                forms.add(row.getKey());
+                bases.addAll(row.getValue());
+            }
+        }
+        Object acc = Json.get(word, "accented");
+        if (Json.truthy(acc)) forms.add(acc.toString());
+        bases.addAll(canonicalForms(word));
+        return List.of(uniqueCi(forms), uniqueCi(bases));
+    }
+
+    static List<String> uniqueCi(List<String> items) {
+        Set<String> seen = new HashSet<>();
+        List<String> out = new ArrayList<>();
+        for (String item : items) {
+            if (item != null && !item.isEmpty() && seen.add(item.toLowerCase(java.util.Locale.ROOT))) out.add(item);
+        }
+        return out;
+    }
+
+    record Grounding(List<String> grammar, List<String[]> meanings, List<String> baseForms) {}
+
+    /** Parts of speech, base-form definitions and base forms of the answer (see chatbot.py _clue_grounding). */
+    static Grounding clueGrounding(Object word, String language) {
+        String answer = Json.str(word, "answer", "");
+        List<List<String>> wf = wordForms(word, language);
+        List<String> forms = wf.get(0), canonical = wf.get(1);
+        List<InflectionLookup.Analysis> analyses = new ArrayList<>();
+        for (String form : forms.isEmpty() ? List.of(answer) : forms) {
+            if (form.isEmpty()) continue;
+            for (InflectionLookup.Analysis a : InflectionLookup.describeForm(form, language)) {
+                if (!analyses.contains(a)) analyses.add(a);
+            }
+        }
+        List<String> grammar = new ArrayList<>();
+        Set<String> poses = new HashSet<>();
+        for (InflectionLookup.Analysis a : analyses) {
+            String text = a.description();
+            int comma = text.indexOf(',');
+            String label = comma >= 0 ? text.substring(0, comma) : text;
+            int paren = label.indexOf(" (");
+            if (paren >= 0) label = label.substring(0, paren);
+            if (!label.isEmpty() && !grammar.contains(label)) grammar.add(label);
+            if (a.pos() != null && !a.pos().isEmpty()) poses.add(a.pos());
+        }
+        Set<String> own = new HashSet<>();
+        for (String f : forms) own.add(f.toLowerCase(java.util.Locale.ROOT));
+        own.add(answer.toLowerCase(java.util.Locale.ROOT));
+        List<String> baseForms = new ArrayList<>();
+        for (String c : canonical) {
+            if (!own.contains(c.toLowerCase(java.util.Locale.ROOT))) baseForms.add(c);
+        }
+        List<String[]> meanings = new ArrayList<>();
+        List<String> lemmas = canonical.subList(0, Math.min(CLUE_GLOSS_LEMMAS, canonical.size()));
+        for (Map.Entry<String, List<Object>> e : GlossLookup.findGlossesForCanonicals(lemmas, language).entrySet()) {
+            List<Object> matching = new ArrayList<>();
+            for (Object entry : e.getValue()) {
+                if (poses.contains(Json.str(entry, "pos", null))) matching.add(entry);
+            }
+            int kept = 0;
+            for (Object entry : matching.isEmpty() ? e.getValue() : matching) {
+                Object pos = Json.get(entry, "pos");
+                for (Object gloss : Json.listOrEmpty(Json.get(entry, "glosses"))) {
+                    if (kept < CLUE_GLOSSES_PER_LEMMA) {
+                        meanings.add(new String[] {e.getKey(), Json.truthy(pos) ? pos.toString() : "?", gloss.toString()});
+                        kept++;
+                    }
+                }
+            }
+        }
+        return new Grounding(grammar, meanings, baseForms);
+    }
+
+    /**
+     * Up to CLUE_SENTENCE_COUNT reference-corpus sentences using the answer's
+     * exact inflected form — the first of its forms that has any (the same
+     * lookup as the clue generator's examples, see chatbot.py _corpus_sentences).
+     */
+    static List<String> corpusSentences(Object word, String language) {
+        List<String> forms = wordForms(word, language).get(0);
+        List<String> tried = forms.isEmpty()
+                ? List.of(Json.str(word, "answer", "").toLowerCase(java.util.Locale.ROOT)) : forms;
+        for (String form : tried) {
+            if (form.isEmpty()) continue;
+            List<String> sentences = ExampleSentences.findExamplesForWords(List.of(form), language, CLUE_SENTENCE_COUNT).get(form);
+            if (sentences != null && !sentences.isEmpty()) return sentences;
+        }
+        return List.of();
+    }
+
+    /**
+     * Example synonyms of the answer for the CLUE prompt, as {base form,
+     * definition}: neighbours over one search per grid form, inflected form
+     * and base form, scored by their best search score and by their
+     * similarity to the base form's definitions (see chatbot.py
+     * _qdrant_synonyms). Empty when Qdrant or the embedding server is
+     * unavailable.
+     */
+    static List<String[]> qdrantSynonyms(Object word, String language) {
+        String answer = Json.str(word, "answer", "");
+        List<List<String>> wf = wordForms(word, language);
+        List<String> forms = wf.get(0), canonical = wf.get(1);
+        List<String[]> meanings = clueGrounding(word, language).meanings();
+        String lemma = meanings.isEmpty() ? "" : meanings.get(0)[0];
+        List<String> glosses = new ArrayList<>();
+        for (String[] m : meanings) if (m[0].equals(lemma) && glosses.size() < CLUE_SYNONYM_GLOSSES) glosses.add(m[2]);
+        String meaning = String.join(" ", glosses);
+        if (meaning.isEmpty()) return List.of();
+        java.util.TreeSet<String> forbidden = new java.util.TreeSet<>();
+        String af = gridForm(answer);
+        if (!af.isEmpty()) forbidden.add(af);
+        for (String c : canonical) {
+            String f = gridForm(c);
+            if (!f.isEmpty()) forbidden.add(f);
+        }
+        List<String> roots = new ArrayList<>();
+        for (String f : forbidden) {
+            String r = root(f);
+            if (r.codePointCount(0, r.length()) >= CLUE_STEM_MIN_LETTERS) roots.add(r);
+        }
+        List<String> queries = new ArrayList<>();
+        List<String> all = new ArrayList<>();
+        all.add(answer);
+        all.addAll(forms);
+        all.addAll(canonical);
+        for (String q : all) if (!q.isEmpty() && !queries.contains(q)) queries.add(q);
+        Map<String, Double> bestScore = new java.util.LinkedHashMap<>();
+        Map<String, Object> bestPayload = new java.util.LinkedHashMap<>();
+        List<String[]> candidates = new ArrayList<>();
+        double[] meaningVector;
+        Map<String, double[]> vectors;
+        try {
+            if (synonymStore == null) {
+                synonymStore = new QdrantStore(CLUE_SYNONYM_TIMEOUT);
+                synonymEmbedder = new Embedder(null, null, null, CLUE_SYNONYM_TIMEOUT);
+            }
+            for (String query : queries) {
+                for (Object hit : synonymStore.search(synonymEmbedder.embed(query), language, CLUE_SYNONYM_POOL, 0)) {
+                    Object payload = Json.get(hit, "payload");
+                    Object wo = Json.get(payload, "word");
+                    Object sc = Json.get(hit, "score");
+                    double score = sc instanceof Number n ? n.doubleValue() : 0.0;
+                    if (!Json.truthy(wo)) continue;
+                    String w = wo.toString();
+                    Double prev = bestScore.get(w);
+                    if (prev == null || score > prev) {
+                        bestScore.put(w, score);
+                        bestPayload.put(w, payload);
+                    }
+                }
+            }
+            List<String> ranked = new ArrayList<>(bestScore.keySet());
+            ranked.sort((x, y) -> Double.compare(bestScore.get(y), bestScore.get(x)));
+            Set<String> seen = new HashSet<>();
+            for (String w : ranked) {
+                if (bestScore.get(w) < CLUE_SYNONYM_MIN_SCORE) break;
+                Object payload = bestPayload.get(w);
+                Object can = Json.get(payload, "canonical");
+                Object pacc = Json.get(payload, "accented");
+                String baseRaw = Json.truthy(can) ? can.toString() : Json.truthy(pacc) ? pacc.toString() : w;
+                List<String> bases = new ArrayList<>();
+                for (String b : baseRaw.split(";", -1)) if (!b.isEmpty()) bases.add(b);
+                List<String> hitForms = new ArrayList<>();
+                hitForms.add(gridForm(w));
+                for (String b : bases) hitForms.add(gridForm(b));
+                boolean skip = false;
+                for (String f : hitForms) {
+                    if (forbidden.contains(f)) skip = true;
+                    for (String r : roots) skip |= f.startsWith(r);
+                }
+                if (skip) continue;
+                String base = bases.isEmpty() ? w : bases.get(0);
+                int first = base.isEmpty() ? -1 : base.codePointAt(0);
+                if (seen.contains(base) || (first >= 0 && Character.isUpperCase(first))) continue;
+                seen.add(base);
+                List<Object> entries = GlossLookup.findGlossesForCanonicals(List.of(base), language).getOrDefault(base, List.of());
+                String gloss = null;
+                for (Object e : entries) {
+                    List<Object> gl = Json.listOrEmpty(Json.get(e, "glosses"));
+                    if (!gl.isEmpty()) {
+                        gloss = String.valueOf(gl.get(0));
+                        break;
+                    }
+                }
+                if (gloss != null && !gloss.isEmpty()) candidates.add(new String[] {w, base, gloss});
+            }
+            meaningVector = candidates.isEmpty() ? new double[0] : synonymEmbedder.embed(meaning);
+            List<String> ws = new ArrayList<>();
+            for (String[] c : candidates) ws.add(c[0]);
+            vectors = synonymStore.retrieveWordVectors(language, ws, 2000);
+        } catch (QdrantStore.QdrantStoreError | Embedder.EmbedderError e) {
+            Log.warning("chat: Qdrant synonyms unavailable for %s: %s", Log.repr(answer), e.getMessage());
+            return List.of();
+        }
+        List<String[]> found = new ArrayList<>();
+        for (String[] c : candidates) {
+            double[] v = vectors.get(c[0]);
+            if (v == null) continue;
+            double sim = 0.0;
+            for (int k = 0; k < Math.min(v.length, meaningVector.length); k++) sim += v[k] * meaningVector[k];
+            if (sim < CLUE_SYNONYM_MIN_MEANING) continue;
+            found.add(new String[] {c[1], c[2]});
+            if (found.size() >= CLUE_SYNONYM_COUNT) break;
+        }
+        List<String> shown = new ArrayList<>();
+        for (String[] f : found) shown.add(f[0]);
+        Log.info("chat: Qdrant synonyms for %s (queries %s): %s", Log.repr(answer), queries, shown);
+        return found;
+    }
+
+    /** {@code text} as the grid writes it: ligatures split, accents dropped, uppercase. */
+    static String gridForm(String text) {
+        text = text.replace("œ", "oe").replace("Œ", "OE").replace("æ", "ae").replace("Æ", "AE");
+        text = COMBINING_RE.matcher(java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFKD)).replaceAll("");
+        return text.toUpperCase(java.util.Locale.ROOT);
+    }
+
+    /** {start, end} (char indices) of every run of letters in {@code text}. */
+    static List<int[]> letterRuns(String text) {
+        List<int[]> runs = new ArrayList<>();
+        int start = -1;
+        for (int i = 0; i < text.length(); ) {
+            int cp = text.codePointAt(i);
+            if (Character.isLetter(cp)) {
+                if (start < 0) start = i;
+            } else if (start >= 0) {
+                runs.add(new int[] {start, i});
+                start = -1;
+            }
+            i += Character.charCount(cp);
+        }
+        if (start >= 0) runs.add(new int[] {start, text.length()});
+        return runs;
+    }
+
+    /** The word minus its last two letters, never shorter than CLUE_STEM_MIN_LETTERS. */
+    static String root(String word) {
+        int n = word.codePointCount(0, word.length());
+        return cpHead(word, Math.max(CLUE_STEM_MIN_LETTERS, n - 2));
+    }
+
+    /** Spans of the words of hint {@code text} giving away part of the answer (see chatbot.py _hint_leak_spans). */
+    static List<int[]> hintLeakSpans(String text, Object word, String message, String language) {
+        List<String> forbidden = new ArrayList<>();
+        String answer = gridForm(Json.str(word, "answer", ""));
+        if (!answer.isEmpty()) forbidden.add(answer);
+        for (String c : wordForms(word, language).get(1)) {
+            String f = gridForm(c);
+            if (!f.isEmpty()) forbidden.add(f);
+        }
+        List<String> roots = new ArrayList<>();
+        for (String f : forbidden) {
+            String r = root(f);
+            if (r.codePointCount(0, r.length()) >= CLUE_STEM_MIN_LETTERS) roots.add(r);
+        }
+        Set<String> allowed = new HashSet<>();
+        for (int[] run : letterRuns(message)) allowed.add(gridForm(message.substring(run[0], run[1])));
+        Set<String> bases = new HashSet<>();
+        for (String c : wordForms(word, language).get(1)) bases.add(c.toLowerCase(java.util.Locale.ROOT));
+        List<int[]> spans = new ArrayList<>();
+        for (int[] run : letterRuns(text)) {
+            String raw = text.substring(run[0], run[1]);
+            String token = gridForm(raw);
+            if (allowed.contains(token)) continue;
+            boolean leak = forbidden.contains(token);
+            for (String r : roots) leak |= token.startsWith(r);
+            if (!leak && token.codePointCount(0, token.length()) >= CLUE_STEM_MIN_LETTERS) {
+                // Another form of one of the answer's base forms, through the wordlist.
+                for (Map.Entry<String, List<String>> row : DictionaryLookup.wordForms(raw, language)) {
+                    for (String c : row.getValue()) leak |= bases.contains(c.toLowerCase(java.util.Locale.ROOT));
+                }
+            }
+            if (leak) spans.add(run);
+        }
+        return spans;
     }
 
     static int ival(Object w, String key) {
@@ -265,7 +660,9 @@ public final class ChatBot {
                 + "starting directly with the answer and no greeting."
                 + (puzzleLoaded ? " And if the player asked for a HINT (not an explicit answer request), the "
                 + "solution word must NOT appear anywhere in your reply — never end a hint "
-                + "with \"the answer is ...\", never spell it out, never confirm it." : "");
+                + "with \"the answer is ...\", never spell it out, never confirm it, never give "
+                + "any of its letters. A hint gives a synonym of another root or a new "
+                + "definition, never just a paraphrase of its clue." : "");
         String selectedWordBlock;
         if (!puzzleLoaded) {
             selectedWordBlock = "";
@@ -300,17 +697,7 @@ public final class ChatBot {
         // Everything that never varies between two requests (the
         // introduction and the whole DOC_USER text) comes first, so the LLM
         // server's prefix cache reuses it across every chat request.
-        return "You are David FALCON, the friendly in-app assistant of CrossWordFalcon, a "
-                + "crossword-puzzle web app. You help the player use the interface and solve the "
-                + "crossword grid currently on screen (explaining a clue, giving a hint, or, if "
-                + "explicitly asked, the answer itself).\n\n"
-                + "Reference documentation for how the interface itself works "
-                + "(frontend/static/index.html and script.js, described here for a player, not a "
-                + "developer). This documentation is written in English, but that is NOT the "
-                + "language to reply in: use its content to answer, rephrased in your own words in "
-                + "the player's language set by the rules below — never copy an English passage "
-                + "from it into your reply:\n"
-                + docUser + "\n\n"
+        return fixedPromptHead(docUser)
                 + "Write EVERY reply entirely in " + languageName + ". This is not optional and applies "
                 + "to every message you ever send.\n\n"
                 + "STRICT RULES:\n"
@@ -383,17 +770,17 @@ public final class ChatBot {
                 + "'clue=' and 'answer=' fields that must not appear in your reply). This "
                 + "preamble is NOT the hint. (If the word's clue shows '(none yet)', just say its "
                 + "clue has not been generated yet.)\n"
-                + "   c. THE HINT ITSELF MUST BE AN ALTERNATIVE DEFINITION — a genuinely fresh "
-                + "wording, DIFFERENT from the clue the player already sees on screen. It is "
-                + "forbidden to: copy the existing 'clue=' text, lightly reword or reorder it, or "
-                + "reply with just the position + that clue + a letter count (the player already "
-                + "has every bit of that — such a reply gives them nothing). You MUST add new "
-                + "information the clue does not state: a synonym or near-synonym phrase, a "
-                + "broader category the word belongs to, a concrete example of it, the role or "
-                + "function it has, or a paraphrase from a clearly different angle. Give 1 to 2 "
-                + "sentences of this fresh description. You MAY additionally give the letter "
-                + "count or confirm/deny one specific letter the player proposes — but only IN "
-                + "ADDITION to the fresh description, never instead of it.\n"
+                + "   c. THE HINT MUST HELP FIND THE WORD WITHOUT GIVING ANY PART OF IT. Unless "
+                + "the player explicitly asks for it, never give a letter of the solution (not "
+                + "its first letter, not its last letter, no letter at all), its letter count, "
+                + "or a word of its family. Instead give ONE of these: one or two synonyms of "
+                + "the word that do NOT share its root (not the same canonical form, not the "
+                + "same word family), or a NEW definition of your own, clearly DIFFERENT from "
+                + "the clue the player already sees on screen (another angle: what it is used "
+                + "for, the category it belongs to, a typical example of it). It is forbidden to "
+                + "copy the existing 'clue=' text, to lightly reword or reorder it, or to reply "
+                + "with just the position + that clue (the player already has every bit of "
+                + "that). You MAY confirm or deny one specific letter the player proposes.\n"
                 + "   c-bis. Describe the word EXACTLY as it appears in the grid — its part of "
                 + "speech, and for an inflected form its number, tense and person. Do NOT slide "
                 + "into a meaning that belongs only to a similar-looking word, or to a DIFFERENT "
@@ -418,22 +805,17 @@ public final class ChatBot {
                 + "(same short preamble as 4b) and then the exact answer plainly, e.g. « Le mot "
                 + "vertical en (l, c) est : … ». Rules b–d do not restrict this case.\n"
                 + "   - Example 1: word MAISON, clue on screen 'Habitation'. BAD: 'Le mot est "
-                + "MAISON' / 'M-A-I-S-O-N'. ALSO BAD (just echoes what is on screen): 'Le mot "
-                + "horizontal en (l, c) a pour définition « Habitation », 6 lettres.' GOOD: a "
-                + "short preamble then a FRESH alternative definition, e.g. '… : pensez à un "
-                + "bâtiment privé où réside une famille, avec des murs, un toit et plusieurs "
-                + "pièces — 6 lettres.'\n"
-                + "   - Example 2: word SOLEIL, clue on screen 'Astre du jour'. BAD: 'C'est "
-                + "SOLEIL'. ALSO BAD (echoes the clue): 'Le mot vertical en (l, c), sa définition "
-                + "est « Astre du jour ».' GOOD: '… : l'étoile la plus proche de la Terre, source "
-                + "de sa lumière et de sa chaleur, au centre du système solaire — 6 lettres.'\n"
-                + "   - Example 3 (answer leak — the most common mistake): word CHEVAL. BAD: "
-                + "'… : pensez à un grand animal de trait à quatre pattes. La réponse est : "
-                + "CHEVAL.' — the fresh description is fine, but the final sentence hands over the "
-                + "solution and RUINS the hint. GOOD: the exact same reply WITHOUT that last "
-                + "sentence: '… : pensez à un grand animal de trait à quatre pattes — 6 lettres.' "
-                + "A hint stops at the description (plus, optionally, the letter count); it NEVER "
-                + "names the word.\n"
+                + "MAISON' / 'M-A-I-S-O-N'. ALSO BAD (gives letters of the solution): '… : 6 "
+                + "lettres, commence par un M et finit par un N.' ALSO BAD (echoes the clue, or "
+                + "stays vague): '… : c'est une habitation.' / '… : un terme lié au logement.' "
+                + "GOOD: '… : un synonyme est « demeure ».' or '… : on y rentre le soir, et on y "
+                + "reçoit ses amis.'\n   - Example 2 (answer leak — the most common mistake): "
+                + "word CHEVAL. BAD: '… : un synonyme est « destrier ». La réponse est : "
+                + "CHEVAL.' — the final sentence RUINS the hint. ALSO BAD: a synonym of the same "
+                + "family (« chevaux », « chevalin »). GOOD: the same reply WITHOUT that last "
+                + "sentence.\n   A hint NEVER names the word and never gives any of its letters. "
+                + "The synonyms and definitions above belong to their own example word — find "
+                + "new ones for the player's OWN word, never reuse one from these rules.\n"
                 + "   These examples illustrate the SAME general rule — apply it to ANY word the "
                 + "player asks a hint about. The positions in the examples are illustrative only: "
                 + "NEVER copy a position from an example; always take the real one from the "
@@ -461,7 +843,265 @@ public final class ChatBot {
                 + selectedWordBlock;
     }
 
+    static final String CLASSIFY_SYSTEM_PROMPT = "You sort the messages a player sends to the assistant of a crossword web app "
+            + "while a crossword grid is on screen. Answer with exactly one word:\nUSAGE — "
+            + "the message is about using the software: its interface, buttons, panels, "
+            + "settings, features, how something works, or anything else that is not help "
+            + "with filling in the grid.\nCLUE — the message asks for help filling in the "
+            + "grid: a hint, an explanation of a clue, whether a letter or a word is right.\n"
+            + "ANSWER — the message EXPLICITLY asks for the answer, the solution or the "
+            + "exact word to write.\nA question about grids as objects of the software (the "
+            + "library, generating, saving, printing or opening a grid) is USAGE. Examples: "
+            + "'Un indice ?' -> CLUE; 'Ça commence par un B ?' -> CLUE; 'C'est MAISON ?' -> "
+            + "CLUE (a proposal to check, not a request for the answer); 'Donne-moi la "
+            + "réponse' -> ANSWER; 'What is the answer?' -> ANSWER; 'Comment vérifier mes "
+            + "réponses ?' -> USAGE; 'Où sont les grilles déjà créées ?' -> USAGE; 'How do I "
+            + "change the language?' -> USAGE.\nReply with USAGE, CLUE or ANSWER only, "
+            + "nothing else.";
+
+    /** The two messages of the classifier call (fixed instructions, then an excerpt of the conversation + the message). */
+    static List<Object> buildClassifyMessages(List<Object> history, String message) {
+        List<String> contextLines = new ArrayList<>();
+        for (Object m : trimHistory(history, CLASSIFY_HISTORY_MESSAGES)) {
+            String who = "user".equals(Json.get(m, "role")) ? "Player" : "Assistant";
+            Object content = Json.get(m, "content");
+            contextLines.add(who + ": " + cpHead(Json.truthy(content) ? content.toString() : "", CLASSIFY_CONTEXT_CHARS));
+        }
+        String context = contextLines.isEmpty() ? ""
+                : "Previous messages (context only):\n" + String.join("\n", contextLines) + "\n\n";
+        return Json.list(
+                Json.obj("role", "system", "content", CLASSIFY_SYSTEM_PROMPT),
+                Json.obj("role", "user", "content",
+                        context + "Message to sort: " + message + "\n\nAnswer with one word, USAGE, CLUE or ANSWER:"));
+    }
+
+    /**
+     * The first of the two LLM calls a question asked in play mode costs:
+     * one non-streamed call answering USAGE or CLUE. The route is null when
+     * the answer names neither keyword or the call fails, and the reply then
+     * falls back to the combined prompt.
+     */
+    public Route classifyQuestion(List<Object> history, String message) {
+        List<Object> classifyMessages = buildClassifyMessages(history, message);
+        Map<String, Object> body = Json.obj("model", model, "messages", classifyMessages,
+                "temperature", CLASSIFY_TEMPERATURE, "max_tokens", CLASSIFY_MAX_TOKENS, "reasoning_effort", "none");
+        String content;
+        try {
+            Http.Response r = Http.postJson(baseUrl, body, Map.of("Authorization", "Bearer " + apiKey), CLASSIFY_TIMEOUT);
+            if (r.status() >= 400) throw new IOException("Client error '" + r.status() + "' for url '" + baseUrl + "'");
+            Object msg = Json.get(Json.asList(Json.get(r.json(), "choices")).get(0), "message");
+            Object c = Json.get(msg, "content");
+            content = c == null ? "" : c.toString();
+        } catch (IOException | RuntimeException e) {
+            Log.warning("chat: question classification failed (%s, model=%s): %s", baseUrl, Log.repr(model), e.getMessage());
+            return new Route(null, "", classifyMessages);
+        }
+        String route = parseRoute(stripThinkBlock(content));
+        Log.info("chat: question classified as %s (raw answer %s)", route == null ? "None" : route, Log.repr(content));
+        return new Route(route, content, classifyMessages);
+    }
+
+    /** System prompt of a USAGE reply: fixed head + interface rules, no grid content, interface language. */
+    public String buildUsagePrompt(String language, Map<String, Object> ui) {
+        String languageName = Clues.LANGUAGE_NAMES.getOrDefault(language, language);
+        return fixedPromptHead(loadDocUser())
+                + "Write EVERY reply entirely in " + languageName + ". This is not optional and "
+                + "applies to every message you ever send.\n\n"
+                + "The player is playing the crossword grid on screen and asks you how the "
+                + "interface works.\n\n"
+                + "STRICT RULES:\n"
+                + "1. Always reply extremely politely.\n"
+                + "2. LANGUAGE. Your entire reply MUST be written in " + languageName + " — every word "
+                + "of it, whatever language the player writes to you in. The reference "
+                + "documentation above is in English: whatever you take from it must be written in "
+                + languageName + ", rephrased, never quoted in English.\n"
+                + "3. Answer ONLY questions about using this interface, from the documentation "
+                + "above. For a question unrelated to this app (general knowledge, other software, "
+                + "personal questions...), politely decline, suggest an appropriate website or "
+                + "resource for it, and say NOTHING else — never answer it anyway. If the message "
+                + "is in fact a request for help with a word of the grid, tell the player to move "
+                + "the mouse over that word (or click one of its cells) and ask you for a hint.\n"
+                + "4. Keep replies reasonably short and conversational — this is a chat, not an "
+                + "essay.\n"
+                + "5. NEVER start with a greeting or a self-introduction: the chat already greeted "
+                + "the player once. Start directly with the answer.\n"
+                + "6. NEVER think out loud or show your reasoning: write only the final answer.\n\n"
+                + "FINAL REMINDER: write your entire reply in " + languageName + ", starting directly "
+                + "with the answer and no greeting.";
+    }
+
+    /** System prompt of a CLUE (or ANSWER) reply: only the selected word and what to do with it. */
+    public String buildCluePrompt(String language, Map<String, Object> ui, boolean answerRequested, String message,
+                                  List<String[]> synonyms, List<String> sentences) {
+        Selection sel = resolveSelection(ui);
+        Object helpWord = sel.helpWord();
+        Object wordLang = helpWord != null ? Json.get(helpWord, "language") : null;
+        String replyLanguage = Json.truthy(wordLang) ? wordLang.toString() : language;
+        String languageName = Clues.LANGUAGE_NAMES.getOrDefault(replyLanguage, replyLanguage);
+        String head = "You are David FALCON, the assistant of a crossword web app. The player is "
+                + "solving the crossword grid on screen and asks you for help with one word of it.\n"
+                + "Write your entire reply in " + languageName + ", whatever language the player "
+                + "writes to you in.\n\n";
+        if (helpWord == null) {
+            return head + "No word is selected in the grid right now (nothing under the mouse, no "
+                    + "single word at a clicked cell), so you do not know which word the player "
+                    + "means. Reply with ONE polite sentence in " + languageName + " asking the player "
+                    + "to move the mouse over the word (or click one of its cells) and ask again. "
+                    + "Say nothing else: no hint, no word, no greeting.";
+        }
+        int row = ival(helpWord, "row") + 1, col = ival(helpWord, "col") + 1;
+        String direction = "down".equals(Json.get(helpWord, "direction")) ? "DOWN (vertical)" : "ACROSS (horizontal)";
+        String kind = sel.hoveredResolved() != null ? "the word under the player's mouse"
+                : "the word at the cell the player clicked";
+        Object clueObj = Json.get(helpWord, "clue");
+        String clue = Json.truthy(clueObj) ? clueObj.toString() : "";
+        String clueLine = !clue.isEmpty() ? Log.repr(clue) : "none yet (no clue has been generated for it)";
+        String answer = Json.str(helpWord, "answer", "");
+        if (answerRequested) {
+            // ROUTE_ANSWER: the player explicitly asked for the answer.
+            return head + "THE WORD (" + kind + ", selected right now):\n"
+                    + "- position: row " + row + ", column " + col + ", " + direction + "\n"
+                    + "- clue shown to the player: " + clueLine + "\n"
+                    + "- solution: " + Log.repr(answer) + "\n"
+                    + "\nThe player EXPLICITLY asked for the answer of this word. Reply with ONE "
+                    + "sentence in " + languageName + " giving the word's position, its direction (in "
+                    + languageName + " words) and its solution, " + answer + ". Nothing else: no hint, no "
+                    + "greeting.";
+        }
+        Grounding g = clueGrounding(helpWord, replyLanguage);
+        // The root forbidden in a hint (see root).
+        String stem = root(answer);
+        StringBuilder context = new StringBuilder();
+        context.append("- The word: ").append(kind).append(".\n");
+        context.append("- Clue already shown to the player: ").append(clueLine).append("\n");
+        context.append("- Solution: ").append(Log.repr(answer)).append(".\n");
+        List<String> baseReprs = new ArrayList<>();
+        for (String b : g.baseForms()) baseReprs.add(Log.repr(b));
+        if (!g.grammar().isEmpty()) {
+            context.append("- Part of speech: ").append(String.join(" / ", g.grammar()))
+                    .append(g.baseForms().isEmpty() ? "" : ", an inflected form of " + String.join(", ", baseReprs))
+                    .append(".\n");
+        }
+        if (!g.meanings().isEmpty()) {
+            context.append("- Dictionary entries of its base form:\n");
+            for (String[] mm : g.meanings()) {
+                context.append("  - ").append(Log.repr(mm[0])).append(" (").append(mm[1]).append("): ").append(mm[2]).append("\n");
+            }
+        }
+        if (synonyms != null && !synonyms.isEmpty()) {
+            context.append("- Possible synonyms, found by a similarity search and possibly imperfect "
+                    + "(check each one's definition):\n");
+            for (String[] x : synonyms) context.append("  - ").append(Log.repr(x[0])).append(": ").append(x[1]).append("\n");
+        }
+        // A proposal the model could not check reliably by itself.
+        String answerForm = gridForm(answer);
+        boolean proposed = false;
+        for (int[] run : letterRuns(message)) proposed |= gridForm(message.substring(run[0], run[1])).equals(answerForm);
+        StringBuilder baseList = new StringBuilder();
+        for (String r : baseReprs) baseList.append(", its base form ").append(r);
+        boolean hasSentences = sentences != null && !sentences.isEmpty();
+        StringBuilder sentenceLines = new StringBuilder();
+        if (hasSentences) for (String sentence : sentences) sentenceLines.append("- ").append(sentence).append("\n");
+        return head
+                + "# GOAL\n"
+                + "Create a new clue for the solution " + Log.repr(answer) + " (see CONTEXT), in " + languageName + ". "
+                + "The player already has the clue shown in the grid and cannot find the word with "
+                + "it: your new clue must describe the same word in a DIFFERENT way, so that they can "
+                + "guess it and write it in the grid themselves. Like a crossword clue, it is one or "
+                + "two short sentences that point to the word without writing it: another meaning of "
+                + "it, a synonym, what it is used for, where or when one meets it. It never contains "
+                + "the solution nor any part of it — unless the player clearly asks for the "
+                + "solution.\n\n"
+                + "# HOW TO HELP THE PLAYER (your answer)\n"
+                + "Your answer, in " + languageName + ", is your new clue alone, starting directly "
+                + "(no greeting, no reasoning, no position, row, column or direction: the player "
+                + "already has the word selected). Build it from one or two of these:\n"
+                + "- pertinent synonyms of the solution, in the same form — from the list below "
+                + "when their definition fits, or your own;\n"
+                + "- for a conjugated or plural form: say it is one, and give a synonym of its base "
+                + "form;\n"
+                + "- a new clue or definition of your own, from another angle than the one shown "
+                + "(what it is for, what it is made of, who uses it...);\n"
+                + (!g.meanings().isEmpty() ? "- a paraphrase, in your own words, of one of the dictionary entries given in "
+                + "CONTEXT;\n" : "")
+                + "- a context where the word is used: a typical situation, an example, a "
+                + "well-known expression with « … » in its place"
+                + (hasSentences ? ", or one of the SENTENCES below with the word replaced by « … »" : "")
+                + ".\n"
+                + "Depending on the message:\n"
+                + "- another hint: a different kind of help from your previous one;\n"
+                + "- a letter or a word to check (« C'est MAISON ? », « Ça commence par un B ? »): "
+                + (proposed ? "this message proposes the solution itself: tell them it is right;\n"
+                : "say whether it is right, and if not, add a hint;\n")
+                + "- the solution itself: say you will give it if they clearly ask for it;\n"
+                + "- another word of the grid: ask them to move the mouse over it or click one of "
+                + "its cells;\n"
+                + "- something unrelated to the grid: politely decline and suggest an appropriate "
+                + "resource.\n\n"
+                + "# CONTEXT\n"
+                + context
+                + (hasSentences ? "\n# SENTENCES\nReal sentences using the word, from a reference corpus:\n"
+                + sentenceLines : "")
+                + "\n# FORBIDDEN (unless the player clearly asks for the solution) — never:\n"
+                + "- write the solution " + Log.repr(answer) + baseList + ", or any word starting with " + Log.repr(stem) + ";\n"
+                + "- say how many letters the word has, or which letters it contains;\n"
+                + "- repeat or rephrase the clue already shown: the player already has it;\n"
+                + "- give the word's position (row, column) or direction.";
+    }
+
+    /**
+     * Removes every markup tag ({@code <name>}, {@code </name>}, {@code <name attr>},
+     * {@code <name/>}) from a streamed reply, keeping the text between them. A
+     * tag can arrive split across chunks, so the text from a "<" onwards is
+     * held back until it closes as a tag (dropped) or can no longer be one (a
+     * newline, a "<" or MAX_TAG_CHARS reached — released as is).
+     */
+    static final class TagStripper {
+        private final StringBuilder pending = new StringBuilder();
+
+        String feed(String text) {
+            StringBuilder out = new StringBuilder();
+            text.codePoints().forEach(cp -> {
+                if (pending.length() == 0) {
+                    if (cp == '<') pending.appendCodePoint(cp);
+                    else out.appendCodePoint(cp);
+                    return;
+                }
+                if (cp == '<') {
+                    out.append(pending);
+                    pending.setLength(0);
+                    pending.appendCodePoint(cp);
+                } else if (cp == '>') {
+                    String candidate = pending + ">";
+                    pending.setLength(0);
+                    if (!TAG_RE.matcher(candidate).matches()) out.append(candidate);
+                } else if (cp == '\n' || pending.codePointCount(0, pending.length()) >= MAX_TAG_CHARS) {
+                    out.append(pending).appendCodePoint(cp);
+                    pending.setLength(0);
+                } else {
+                    pending.appendCodePoint(cp);
+                }
+            });
+            return out.toString();
+        }
+
+        String flush() {
+            String rest = pending.toString();
+            pending.setLength(0);
+            return rest;
+        }
+    }
+
     public String currentSelectionLine(Map<String, Object> ui) {
+        return currentSelectionLine(ui, true);
+    }
+
+    /**
+     * {@code withPosition} false names the word without its row/column/
+     * direction — the CLUE route, whose reply must not state the position
+     * (the model copies whatever position text it is shown into the hint).
+     */
+    public String currentSelectionLine(Map<String, Object> ui, boolean withPosition) {
         Selection sel = resolveSelection(ui);
         if (!sel.puzzleLoaded()) return "";
         Object w = sel.hoveredResolved() != null ? sel.hoveredResolved() : sel.fillingWord();
@@ -472,6 +1112,13 @@ public final class ChatBot {
                     + "first; do NOT continue a word from an earlier reply.";
         }
         String kind = sel.hoveredResolved() != null ? "under the mouse (hovered)" : "at the clicked cell being filled";
+        if (!withPosition) {
+            return "NOTE — right now the player has a word selected in the grid (" + kind + "): the "
+                    + "one of the system prompt. If this message is a request for help / a hint and "
+                    + "does not explicitly name a different word, it is about THAT word, even if an "
+                    + "earlier reply in this conversation was about a different word. Do not carry "
+                    + "over the previous reply's word.";
+        }
         String d = "down".equals(Json.get(w, "direction")) ? "DOWN (vertical)" : "ACROSS (horizontal)";
         int r = ival(w, "row") + 1, c = ival(w, "col") + 1;
         return "NOTE — right now the player has the " + d + " word starting at (row " + r + ", column " + c + ") "
@@ -489,17 +1136,86 @@ public final class ChatBot {
      * when the call fails or yields no content at all.
      */
     public void replyStream(List<Object> history, String message, String language, Map<String, Object> uiContext,
-                            double timeout, Consumer<List<Object>> onPrompt, Consumer<String> onChunk) {
+                            double timeout, Consumer<List<Object>> onPrompt, Consumer<Route> onRoute,
+                            Consumer<String> onChunk) {
         Map<String, Object> ui = uiContext == null ? Map.of() : uiContext;
+        // In play mode (a playable grid on screen) a first call sorts the
+        // question, and the reply is written from the prompt of that kind only.
+        String route = null;
+        if (Json.truthy(ui.get("puzzle_loaded"))) {
+            Route r = classifyQuestion(history, message);
+            route = r.route();
+            if (onRoute != null) onRoute.accept(r);
+        }
+        String systemPrompt;
+        String selection;
+        if (ROUTE_USAGE.equals(route)) {
+            systemPrompt = buildUsagePrompt(language, ui);
+            selection = "";
+        } else if (ROUTE_CLUE.equals(route) || ROUTE_ANSWER.equals(route)) {
+            List<String[]> synonyms = List.of();
+            List<String> sentences = List.of();
+            Object hw = resolveSelection(ui).helpWord();
+            if (ROUTE_CLUE.equals(route) && hw != null) {
+                Object wl = Json.get(hw, "language");
+                String wordLanguage = Json.truthy(wl) ? wl.toString() : language;
+                synonyms = qdrantSynonyms(hw, wordLanguage);
+                sentences = corpusSentences(hw, wordLanguage);
+            }
+            systemPrompt = buildCluePrompt(language, ui, ROUTE_ANSWER.equals(route), message, synonyms, sentences);
+            history = trimHistory(history, CLUE_HISTORY_MESSAGES);
+            selection = currentSelectionLine(ui, !ROUTE_CLUE.equals(route));
+        } else {
+            systemPrompt = buildSystemPrompt(language, ui);
+            selection = currentSelectionLine(ui);
+        }
         List<Object> messages = new ArrayList<>();
-        messages.add(Json.obj("role", "system", "content", buildSystemPrompt(language, ui)));
+        messages.add(Json.obj("role", "system", "content", systemPrompt));
         messages.addAll(history);
-        String selection = currentSelectionLine(ui);
         String userContent = selection.isEmpty() ? message : selection + "\n\n" + message;
         messages.add(Json.obj("role", "user", "content", userContent));
         if (onPrompt != null) onPrompt.accept(messages);
+        Object helpWord = resolveSelection(ui).helpWord();
+        if (ROUTE_CLUE.equals(route) && helpWord != null) {
+            // A hint is checked before it is sent (see checkedHint), so it
+            // reaches the player in one piece rather than streamed.
+            Object hl = Json.get(helpWord, "language");
+            onChunk.accept(checkedHint(messages, timeout, helpWord, message, Json.truthy(hl) ? hl.toString() : language));
+            return;
+        }
+        streamCompletion(messages, timeout, onChunk);
+    }
+
+    /** A hint giving no part of the answer and not echoing the message: retried, then its leaked words masked (see chatbot.py _checked_hint). */
+    String checkedHint(List<Object> messages, double timeout, Object word, String message, String language) {
+        String text = "";
+        List<int[]> spans = List.of();
+        for (int attempt = 0; attempt < CLUE_HINT_ATTEMPTS; attempt++) {
+            StringBuilder sb = new StringBuilder();
+            streamCompletion(messages, timeout, sb::append);
+            text = sb.toString();
+            spans = hintLeakSpans(text, word, message, language);
+            boolean echo = gridForm(Py.strip(text)).equals(gridForm(Py.strip(message)));
+            if (spans.isEmpty() && !echo) return text;
+            if (echo) {
+                Log.info("chat: hint attempt %d/%d only echoes the message: %s", attempt + 1, CLUE_HINT_ATTEMPTS, Log.repr(text));
+                continue;
+            }
+            Log.info("chat: hint attempt %d/%d leaks part of the answer: %s", attempt + 1, CLUE_HINT_ATTEMPTS, Log.repr(text));
+        }
+        for (int k = spans.size() - 1; k >= 0; k--) {
+            int[] sp = spans.get(k);
+            text = text.substring(0, sp[0]) + "…" + text.substring(sp[1]);
+        }
+        return text;
+    }
+
+    /** The streamed chat-completions call behind every reply: visible text, think blocks and tags removed. */
+    void streamCompletion(List<Object> messages, double timeout, Consumer<String> onChunk) {
         StringBuilder buffer = new StringBuilder();
         boolean yielded = false;
+        // Every visible piece goes through the tag filter before it is sent.
+        TagStripper tags = new TagStripper();
         String state = switch (thinkFilter) {
             case "none" -> "disabled";
             case "close_only" -> "in_reasoning";
@@ -537,8 +1253,11 @@ public final class ChatBot {
                     if (delta.isEmpty()) continue;
                     Log.info("chat: raw LLM chunk: %s", Log.repr(delta));
                     if (state.equals("disabled")) {
-                        yielded = true;
-                        onChunk.accept(delta);
+                        String visible = tags.feed(delta);
+                        if (!visible.isEmpty()) {
+                            yielded = true;
+                            onChunk.accept(visible);
+                        }
                         continue;
                     }
                     buffer.append(delta);
@@ -563,9 +1282,10 @@ public final class ChatBot {
                                 if (hold < buffer.length()) {
                                     String toFlush = buffer.substring(0, buffer.length() - hold);
                                     buffer.delete(0, buffer.length() - hold);
-                                    if (!toFlush.isEmpty()) {
+                                    String visible = toFlush.isEmpty() ? "" : tags.feed(toFlush);
+                                    if (!visible.isEmpty()) {
                                         yielded = true;
-                                        onChunk.accept(toFlush);
+                                        onChunk.accept(visible);
                                     }
                                 }
                             }
@@ -579,6 +1299,11 @@ public final class ChatBot {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new ChatError("Le serveur de langage est indisponible (interrupted).", e);
+        }
+        String tail = tags.flush();
+        if (!tail.isEmpty()) {
+            yielded = true;
+            onChunk.accept(tail);
         }
         if (!yielded) {
             throw new ChatError("Le serveur de langage n'a renvoyé aucun contenu "

@@ -5384,6 +5384,10 @@ function buildChatUiContext() {
     words: puzzle
       ? puzzle.words.map((w) => ({
           row: w.row, col: w.col, direction: w.direction, clue: w.clue, answer: w.answer,
+          // The natural spelling and base form(s): backend/chatbot.py looks
+          // up the exact form's grammar and its base form's definitions
+          // with them, so a hint describes the word itself.
+          accented: w.accented, canonical: w.canonical,
           // The language actually used for THIS word (see backend/
           // crossword_gen.py's generate_grid — every word carries its own
           // `language` according to its direction on a bilingual grid) —
@@ -5504,6 +5508,8 @@ chatbotForm.addEventListener("submit", async (event) => {
         language: uiLanguage,
         ui_context: buildChatUiContext(),
         session_id: chatSessionId,
+        // Written in the session's LOG_CHAT/ entries.
+        pseudo: userPseudo || undefined,
       }),
     }, CHAT_FETCH_TIMEOUT_MS);
     if (!response.ok || !response.body) throw new Error(t.chatbotErrorFailed);

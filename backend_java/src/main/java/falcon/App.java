@@ -463,26 +463,41 @@ public final class App {
         });
     }
 
+    /** One collapsible LOG_CHAT block holding the exact messages sent to the LLM. */
+    static void appendPromptDetails(StringBuilder sb, String title, List<Object> messages) {
+        int total = 0;
+        List<String> parts = new ArrayList<>();
+        for (int i = 0; i < messages.size(); i++) {
+            Object m = messages.get(i);
+            String content = Json.str(m, "content", "");
+            total += content.codePointCount(0, content.length());
+            parts.add("========== [" + (i + 1) + "/" + messages.size() + "] role=" + Json.str(m, "role", "?")
+                    + " ==========\n" + content);
+        }
+        sb.append("<details>\n<summary>").append(title).append(" — ").append(messages.size())
+                .append(" messages, ").append(total).append(" caractères</summary>\n\n~~~~~~\n")
+                .append(String.join("\n\n", parts)).append("\n~~~~~~\n\n</details>\n\n");
+    }
+
     static void appendChatLog(String sessionId, String language, String message, String reply, Double firstTokenS,
-                              Double totalS, List<Object> promptMessages) {
+                              Double totalS, List<Object> promptMessages, ChatBot.Route route, String pseudo) {
         Path path = chatLogPath(sessionId);
         StringBuilder sb = new StringBuilder();
         sb.append("## ").append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")))
-                .append(" (").append(language).append(")\n\n");
+                .append(" (").append(language).append(")")
+                .append(pseudo != null && !pseudo.isEmpty() ? " — " + pseudo : "").append("\n\n");
         sb.append("**Utilisateur** : ").append(message).append("\n\n");
+        String keyword = route != null ? route.route() : null;
+        if (route != null) {
+            sb.append("*Type de question : ").append(keyword != null ? keyword : "indéterminé (prompt complet)")
+                    .append(" — réponse du classifieur : ").append(Log.repr(Py.strip(route.raw()))).append("*\n\n");
+        }
+        if (promptMessages != null && !promptMessages.isEmpty() && route != null && route.messages() != null
+                && !route.messages().isEmpty()) {
+            appendPromptDetails(sb, "Requête de classification envoyée au LLM", route.messages());
+        }
         if (promptMessages != null && !promptMessages.isEmpty()) {
-            int total = 0;
-            List<String> parts = new ArrayList<>();
-            for (int i = 0; i < promptMessages.size(); i++) {
-                Object m = promptMessages.get(i);
-                String content = Json.str(m, "content", "");
-                total += content.length();
-                parts.add("========== [" + (i + 1) + "/" + promptMessages.size() + "] role=" + Json.str(m, "role", "?")
-                        + " ==========\n" + content);
-            }
-            sb.append("<details>\n<summary>Prompt complet envoyé au LLM — ").append(promptMessages.size())
-                    .append(" messages, ").append(total).append(" caractères</summary>\n\n~~~~~~\n")
-                    .append(String.join("\n\n", parts)).append("\n~~~~~~\n\n</details>\n\n");
+            appendPromptDetails(sb, "Prompt " + (keyword != null ? keyword : "complet") + " envoyé au LLM", promptMessages);
         }
         sb.append("**David FALCON** : ").append(reply).append("\n\n");
         if (firstTokenS != null || totalS != null) {
@@ -1690,21 +1705,26 @@ public final class App {
             String language = b.str("language", "fr");
             Map<String, Object> ui = b.dict("ui_context");
             String sessionId = b.str("session_id", null);
+            // The player's nickname, written in LOG_CHAT/ (none when unset).
+            String pseudo = b.str("pseudo", null);
             return new Web.Stream("text/event-stream; charset=utf-8", out -> {
                 StringBuilder full = new StringBuilder();
                 long start = System.nanoTime();
                 Double[] firstToken = {null};
                 List<Object> captured = new ArrayList<>();
+                // The route of a question asked in play mode, always logged.
+                ChatBot.Route[] route = {null};
                 try {
                     INTERACTIVE_CHATBOT.replyStream(history, message, language, ui == null ? new LinkedHashMap<>() : ui,
-                            ChatBot.DEFAULT_TIMEOUT, CHATBOT_DEBUG ? captured::addAll : null, chunk -> {
+                            ChatBot.DEFAULT_TIMEOUT, CHATBOT_DEBUG ? captured::addAll : null, r2 -> route[0] = r2, chunk -> {
                                 if (firstToken[0] == null) firstToken[0] = (System.nanoTime() - start) / 1e9;
                                 full.append(chunk);
                                 writeSse(out, "data: " + Json.dumpsAscii(Json.obj("delta", chunk)) + "\n\n");
                             });
                     double total = (System.nanoTime() - start) / 1e9;
                     writeSse(out, "data: [DONE]\n\n");
-                    appendChatLog(sessionId, language, message, full.toString(), firstToken[0], total, captured.isEmpty() ? null : captured);
+                    appendChatLog(sessionId, language, message, full.toString(), firstToken[0], total,
+                            captured.isEmpty() ? null : captured, route[0], pseudo);
                 } catch (ChatBot.ChatError e) {
                     double total = (System.nanoTime() - start) / 1e9;
                     writeSse(out, "data: " + Json.dumpsAscii(Json.obj("error", e.getMessage())) + "\n\n");
@@ -1712,7 +1732,7 @@ public final class App {
                     appendChatLog(sessionId, language, message, !sofar.isEmpty()
                                     ? sofar + "\n\n*(échec en cours de réponse : " + e.getMessage() + ")*"
                                     : "*(échec : " + e.getMessage() + ")*", firstToken[0], total,
-                            captured.isEmpty() ? null : captured);
+                            captured.isEmpty() ? null : captured, route[0], pseudo);
                 }
             });
         });

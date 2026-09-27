@@ -261,7 +261,7 @@ def _format_prompt_messages(messages):
 
 
 def _append_chat_log(session_id, language, message, reply, first_token_s=None, total_s=None,
-                     prompt_messages=None):
+                     prompt_messages=None, route=None, pseudo=None):
     """Appends one conversation turn (question + full reply) to
     this session's log file — best-effort, like every other log write in
     this project (SVG/PNG, LOG_LLM/): a write failure is logged but must
@@ -282,16 +282,38 @@ def _append_chat_log(session_id, language, message, reply, first_token_s=None, t
     DEBUG`, see its own comment) — written inside a collapsible
     `<details>` block right under the question, so the whole prompt
     (system prompt + history + question) is available for analysis
-    without burying the readable Q/A."""
+    without burying the readable Q/A.
+
+    `route` is `(keyword, raw classifier answer, classifier request)` for a
+    question asked in play mode (see `ChatBot.classify_question`): the
+    keyword and answer are written as one italic line under the question,
+    and, with `prompt_messages` (the "chat debug" option), the request in
+    its own collapsible block before the reply prompt, whose summary names
+    the prompt used; `None` for a question that was not sorted. `pseudo`,
+    the player's nickname, follows the language in the entry's heading."""
     path = _chat_log_path_for_session(session_id)
     try:
         with path.open("a", encoding="utf-8") as f:
-            f.write(f"## {time.strftime('%Y-%m-%d %H:%M:%S')} ({language})\n\n")
+            who = f" — {pseudo}" if pseudo else ""
+            f.write(f"## {time.strftime('%Y-%m-%d %H:%M:%S')} ({language}){who}\n\n")
             f.write(f"**Utilisateur** : {message}\n\n")
+            keyword = route[0] if route is not None else None
+            if route is not None:
+                f.write(
+                    f"*Type de question : {keyword or 'indéterminé (prompt complet)'} — "
+                    f"réponse du classifieur : {route[1].strip()!r}*\n\n"
+                )
+            if prompt_messages and route is not None and route[2]:
+                classify_chars = sum(len(m.get("content", "")) for m in route[2])
+                f.write(
+                    f"<details>\n<summary>Requête de classification envoyée au LLM — "
+                    f"{len(route[2])} messages, {classify_chars} caractères</summary>\n\n"
+                    f"~~~~~~\n{_format_prompt_messages(route[2])}\n~~~~~~\n\n</details>\n\n"
+                )
             if prompt_messages:
                 total_chars = sum(len(m.get("content", "")) for m in prompt_messages)
                 f.write(
-                    f"<details>\n<summary>Prompt complet envoyé au LLM — "
+                    f"<details>\n<summary>Prompt {keyword or 'complet'} envoyé au LLM — "
                     f"{len(prompt_messages)} messages, {total_chars} caractères</summary>\n\n"
                     f"~~~~~~\n{_format_prompt_messages(prompt_messages)}\n~~~~~~\n\n</details>\n\n"
                 )
@@ -2823,6 +2845,8 @@ class ChatRequest(BaseModel):
     language: str = Field(default="fr", description="fr, en, de, es ou it")
     ui_context: dict = Field(default_factory=dict)
     session_id: Optional[str] = None
+    # The player's nickname, written in LOG_CHAT/ (none when unset).
+    pseudo: Optional[str] = None
 
 
 @app.post("/api/chat")
@@ -2881,10 +2905,17 @@ async def chat(req: ChatRequest):
         def _capture_prompt(messages):
             captured_prompt[:] = messages
 
+        # The route of a question asked in play mode, always logged.
+        captured_route = []
+
+        def _capture_route(keyword, raw_route, classify_messages):
+            captured_route[:] = [(keyword, raw_route, classify_messages)]
+
         try:
             async for chunk in interactive_chatbot.reply_stream(
                 [m.model_dump() for m in req.history], req.message, req.language, req.ui_context,
                 on_prompt=_capture_prompt if CHATBOT_DEBUG else None,
+                on_route=_capture_route,
             ):
                 if first_token_s is None:
                     first_token_s = time.monotonic() - start
@@ -2895,6 +2926,7 @@ async def chat(req: ChatRequest):
             _append_chat_log(
                 req.session_id, req.language, req.message, "".join(full_reply),
                 first_token_s, total_s, captured_prompt or None,
+                captured_route[0] if captured_route else None, req.pseudo,
             )
         except ChatError as e:
             total_s = time.monotonic() - start
@@ -2905,6 +2937,7 @@ async def chat(req: ChatRequest):
                 f"{reply_so_far}\n\n*(échec en cours de réponse : {e})*" if reply_so_far
                 else f"*(échec : {e})*",
                 first_token_s, total_s, captured_prompt or None,
+                captured_route[0] if captured_route else None, req.pseudo,
             )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

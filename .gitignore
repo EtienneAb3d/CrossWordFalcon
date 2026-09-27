@@ -1,5 +1,4 @@
-.venv/*
-.venv-sglang/*
+.venv*
 /sglang-src/
 env.sh
 *__pycache__*

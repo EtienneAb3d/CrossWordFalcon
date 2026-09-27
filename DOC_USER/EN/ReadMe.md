@@ -1259,6 +1259,24 @@ direction — David FALCON writes its *entire* reply in that word's own
 language, which can differ between an across word and a down word. With
 nothing selected, it uses the interface language.
 
+While a playable grid is on screen, David FALCON first decides what kind
+of question it received: a question about using the interface, answered
+from this documentation, or a request for help with the grid, answered
+from the selected word alone (`backend/chatbot.py`, `ChatBot.classify_
+question`). A hint is the new clue alone — it does not restate where
+the word is, since the player has it selected — and it describes the word itself — not the words of its definition: one or two
+synonyms that do not share its root, or, for a conjugated or plural
+form, a synonym of its base form, or failing both a new definition
+different from the on-screen one. To find synonyms, David FALCON is
+given up to three example words, each with its dictionary definition,
+found in the optional Qdrant word index (none when it is not running). It never gives the word, its base
+form, a word of its family, any of its letters or its letter count: a
+hint that does is rewritten, or its offending words are replaced by
+"…". Asking explicitly for the answer (« donne-moi la
+réponse ») gets the answer; proposing a letter or a word gets a yes or a
+no. With no word selected, David FALCON asks the player to hover a word
+or click one of its cells first.
+
 The arrow button (`#chatbot-send-btn`) sends the message, like Enter. The
 circular-arrow button next to it (`#chatbot-reset-btn`) starts a new
 conversation: it forgets everything said so far and shows the welcome

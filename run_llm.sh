@@ -84,6 +84,9 @@ LLM_ENGINE="${LLM_ENGINE:-llama_cpp}"
 if [ "$LLM_ENGINE" = "sglang" ]; then
     exec ./run_sglang.sh
 fi
+if [ "$LLM_ENGINE" = "vllm" ]; then
+    exec ./run_vllm.sh
+fi
 
 GGUF_REPO="${LLAMA_GGUF_REPO:?LLAMA_GGUF_REPO not set — check env.sh (or env_default.sh)}"
 GGUF_FILE="${LLAMA_GGUF_FILE:?LLAMA_GGUF_FILE not set — check env.sh (or env_default.sh)}"

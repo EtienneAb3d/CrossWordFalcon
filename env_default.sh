@@ -370,6 +370,16 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # can usually be left at SGLang's own auto-computed default — only set
 # SGLANG_MEM_FRACTION_STATIC_INTERACTIVE if something else ever needs to
 # share that second card too (see run_sglang.sh's own declaration of it).
+#
+# Alternative on SGLang/CUDA, for a model too large for one card (e.g.
+# Qwen3.8-27B UD-Q2_K_XL, 9.8 GB, on two 12 GB cards): ONE instance,
+# tensor-parallel across the cards, instead of one instance per card.
+# run_sglang.sh then starts no interactive instance, so every request goes
+# to LLM_PORT (point LLM_BASE_URL_INTERACTIVE there, or leave it unset).
+# SGLANG_TP_GPU_INDICES defaults to "LLM_GPU_INDEX,LLM_INTERACTIVE_GPU_INDEX".
+# export SGLANG_TP_SIZE="2"
+# export SGLANG_TP_GPU_INDICES="0,1"
+# export LLM_BASE_URL_INTERACTIVE="$LLM_BASE_URL"
 
 # Mistral cloud API — the best possible result, no local hardware needed,
 # but requires a paid API key (console.mistral.ai). To use it, comment out

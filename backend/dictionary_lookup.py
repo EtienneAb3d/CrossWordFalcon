@@ -98,6 +98,18 @@ def _get_index(language):
     return _index_cache[language]
 
 
+def word_forms(word, language):
+    """`[(accented, (canonical, ...)), ...]`: every wordlist row whose bare
+    MOT or accented spelling normalizes to `word` (so "BUSSENT" gives
+    `("bussent", ("boire",))`), in file order — how a grid word's natural
+    spelling and base forms are found again from its grid form alone.
+    Empty for an unknown word or a language without a wordlist."""
+    idx = _get_index(language)
+    if idx is None:
+        return []
+    return [idx.rows[i] for i in idx.by_key.get(_norm(word), [])]
+
+
 def _definitions_for(canonicals, gloss_index, show_lemma):
     """[{"pos": ..., "gloss": ..., "lemma": ...}] for every gloss of every
     canonical form, de-duplicated. `lemma` is only filled when the row has

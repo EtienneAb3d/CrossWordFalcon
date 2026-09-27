@@ -1636,7 +1636,98 @@ endpoint family. Builds its system prompt from the full text of
 `DOC_USER/EN/ReadMe.md` plus the live UI context sent by the browser
 (loaded grid's words/clues, hovered/selected cell, active fill
 direction) so it can answer questions about how to use the interface or
-give hints without revealing answers outright. The prompt opens with
+give hints without revealing answers outright.
+
+While a playable grid is on screen (`ui_context.puzzle_loaded`),
+`reply_stream()` makes two LLM calls. The first, `classify_question`
+(non-streamed, temperature 0, `_CLASSIFY_SYSTEM_PROMPT` + the last
+`CLASSIFY_HISTORY_MESSAGES` messages cut to `CLASSIFY_CONTEXT_CHARS`),
+answers one keyword: `USAGE` (using the software), `CLUE` (help filling
+the grid) or `ANSWER` (an explicit request for a word's answer);
+`_parse_route` keeps the last keyword of the answer, after
+`_strip_think_block`. The second writes the reply from a prompt holding
+only what that kind needs: `_build_usage_prompt` (the fixed head —
+introduction + DOC_USER, `_fixed_prompt_head`, shared with the combined
+prompt for the prefix cache — plus the interface rules, no grid content,
+interface language) or `_build_clue_prompt` (a few thousand characters,
+no DOC_USER and no word list; the selected word's language; history cut
+to `CLUE_HISTORY_MESSAGES`). For `ANSWER` it only states the word and
+asks for one sentence giving its answer. For `CLUE` it adds what
+`_clue_grounding` finds about the answer itself, from its forms
+(`_word_forms`: the natural spellings and canonical forms of every
+wordlist row of its grid form — `dictionary_lookup.word_forms`, the
+Dictionnaire panel's own lookup — then the grid word's own
+`accented`/`canonical` fields, which a grid published from Interactive
+mode fills with the answer itself): the part of speech of the exact form
+(`inflection_lookup.describe_form`, tense and person labels dropped) and
+whether it is an inflected form of its base form(s), plus up to
+`CLUE_GLOSSES_PER_LEMMA` definitions of up to `CLUE_GLOSS_LEMMAS` base
+forms (`gloss_lookup`) — then up to `CLUE_SYNONYM_COUNT` example synonyms
+from Qdrant with their definitions (`_qdrant_synonyms`, run in a worker
+thread before the prompt is built: one search per query — the answer's
+grid form, its inflected forms, its base forms — each candidate scored
+by its best search score, kept at `CLUE_SYNONYM_MIN_SCORE` (0.80) and
+above; the collection embeds only spellings, so a candidate must also
+reach `CLUE_SYNONYM_MIN_MEANING` (0.40) of similarity to the embedded
+first `CLUE_SYNONYM_GLOSSES` definitions of the base form — no examples
+without one; a candidate of the answer's family (the answer, one of its
+base forms, or a word starting with the root of either), a capitalized
+base form (proper noun) or a base form without a definition is skipped,
+one per base form, shown as that base form with its first definition;
+none when Qdrant or the embedding server does not answer within
+`CLUE_SYNONYM_TIMEOUT`), presented as possibly imperfect examples — and,
+when the player's message contains the answer, that a proposal of it is
+right. The same worker thread draws up to `CLUE_SENTENCE_COUNT` real
+sentences of the reference corpus using the answer's exact inflected
+form (`_corpus_sentences`, the first of its forms with any, through
+`example_sentences.find_examples_for_words` — the lookup and in-process
+index the clue generator's example block already uses, built once per
+language on first use). The prompt's sections, each headed by a `# `
+title, come in this order: GOAL (create a new clue for the solution, in
+the reply language: the player cannot find the word with the clue shown,
+so the new one describes the same word differently — like a crossword
+clue, one or two short sentences pointing to the word without writing
+it — and never contains the solution or any part of it unless the
+player clearly asks for it); HOW TO HELP THE PLAYER (the new clue alone,
+with no position, row, column or direction, built from one or two of — pertinent synonyms from the list
+or the model's own, for an inflected form that it is one and a synonym
+of its base form, a new clue or definition from another angle, a
+paraphrase of one of the dictionary entries of CONTEXT (when there are
+some), a context of use, one of the SENTENCES with the word replaced by
+« … » — and the
+answer to each other kind of message: another hint, a letter or word to
+check, whose verdict is given directly when the message contains the
+solution, the solution, another word, anything else); CONTEXT (whether
+the word is hovered or clicked, the clue already shown, the
+solution, its part of speech, the dictionary entries of its base form,
+the possible synonyms); SENTENCES (those corpus sentences, only when some
+exist); FORBIDDEN (the solution, its base forms and any word starting
+with its root, how many letters it has or which, repeating or
+rephrasing the clue, its position or direction). The prompt shows the
+model no position at all — the NOTE put before the player's message
+(`_current_selection_line(with_position=False)`) names the selected word
+without its row, column or direction too — since a position it is shown
+ends up copied into the hint. A `CLUE` reply is not streamed:
+`_checked_hint` writes it up to
+`CLUE_HINT_ATTEMPTS` times until `_hint_leak_spans` finds no word equal
+to the answer or a base form (`_word_forms`), given by the wordlist as a
+form of a base form (`dictionary_lookup.word_forms`, CLUE_STEM_MIN_LETTERS
+letters or more — "boivent" for BUSSENT), or starting with the root of
+either (`_root`, `CLUE_STEM_MIN_LETTERS` letters at least, compared in grid form,
+`_grid_form`), and it is not a mere echo of the message; words the player
+typed are exempt, and the last attempt's leaked words are replaced by
+"…". An undetermined route, a failed classification, and every question
+asked with no grid on screen use the combined `_build_system_prompt`,
+whose rule 4c asks for the same kind of hint.
+`POST /api/chat` logs each turn in `LOG_CHAT/` under a heading carrying
+the time, the interface language and the player's nickname
+(`ChatRequest.pseudo`, sent by the frontend), then the route and the
+classifier's raw answer; with `CHATBOT_DEBUG`, the classifier's request
+and the reply prompt (its summary naming the prompt used — `USAGE`,
+`CLUE`, `ANSWER` or `complet`) each follow in a collapsible block. Every reply chunk goes through `_TagStripper`,
+which drops any markup tag the model adds (`<preamble>`, `</answer>`,
+`<br/>`…, `_TAG_RE`) and keeps the text between tags, holding back a tag
+split across chunks until it closes. The combined prompt opens with
 everything that never varies between requests — the introduction, then
 the whole `DOC_USER` text — and only then the reply-language-dependent
 rules and the interface state, so the LLM server's prefix cache reuses
