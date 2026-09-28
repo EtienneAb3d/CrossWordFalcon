@@ -2265,17 +2265,28 @@ EARLY_MAX_DESCENTS_PER_NODE = 7
 # chronological backtracking.
 BACKJUMPING_ENABLED = True
 
-# Backghosting in `Filler._backtrack`, tried before a backjump. Where a
-# failure arises with a conflict set whose most recent word is NOT the one
-# placed right above (so a backjump would unwind several placed words to
-# reach it), that word alone is taken off the grid in place — a "ghost" —
-# without unwinding anything, and the search carries on from a fresh node
-# on the grid thus freed. Every word placed in between stays; the node that
-# placed the ghosted word finds it already gone once the search really
-# unwinds back to it, and has nothing left to remove. At most this many
-# backghosts can be pending on the current descent (nested one inside the
-# other); past that, a failure backjumps as usual. `<= 0` disables it.
-MAX_BACKGHOSTS_PER_DESCENT = 0
+# Longest backjump `Filler._backtrack` makes: the number of words placed by
+# this search after the most recent word of a conflict set, i.e. the words
+# a backjump to it would take off without replacing them. A failure within
+# that distance backjumps (0 is plain chronological backtracking); a
+# failure beyond it is backghosted instead (see below).
+MAX_BACKJUMP_LEVELS = 5
+
+# Backghosting in `Filler._backtrack`, replacing a backjump longer than
+# MAX_BACKJUMP_LEVELS. Where a failure arises with a conflict set whose most
+# recent word lies further back than that, that word alone is taken off the
+# grid in place — a "ghost" — without unwinding anything, and the search
+# carries on from a fresh node on the grid thus freed. Every word placed in
+# between stays; the node that placed the ghosted word finds it already
+# gone once the search really unwinds back to it, and has nothing left to
+# remove. If that fresh node fails in turn, the same choice is made again
+# on the union of both conflict sets, so the words causing the conflict are
+# taken off one by one until the most recent one left is within reach of a
+# backjump. At most this many backghosts can be pending on the current
+# descent (nested one inside the other); past that, a failure backjumps
+# however far. `<= 0` disables backghosting (every backjump is then made in
+# full).
+MAX_BACKGHOSTS_PER_DESCENT = 10
 
 # Maximum number of "emplacements écartés" `Filler._impossible_this_attempt`
 # holds at once: only the most recently added ones are kept, the oldest
@@ -2662,6 +2673,11 @@ class Filler:
         # by `interactive_place_word` to show the player which slots the
         # cascade was choosing among (`_origin_closest_cells`).
         self.last_selection_window = []
+        # Cells of the last word Interactive mode's "Suivant" placed, set
+        # by `interactive_place_word` (whose `Filler` runs no descent of its
+        # own): `_selection_origin`'s fallback before the grid's center.
+        # `None` everywhere else.
+        self.last_placed_cells = None
         # Every per-slot lookup derived from `slots` (see `_index_slots`).
         self._index_slots(slots)
         # The black/white pattern `slots` was extracted from, and whether a
@@ -2710,6 +2726,15 @@ class Filler:
         # search started are never in it, and never ghosted.
         self._placement_seq = {}
         self._placement_counter = 0
+        # Every word this attempt's search has placed on each slot, with the
+        # number of times it was placed there: slot cells (tuple) -> {word:
+        # count}, plus the per-slot total. Keyed by cells rather than slot
+        # index so an in-search reshape, which renumbers the slots, keeps
+        # the history of every slot it leaves unchanged. Never decremented
+        # when a word is taken back: it counts tries, not the current
+        # state. Read by level 9 of `_select_target_slot` (`_slot_try_count`).
+        self._tried_words = {}
+        self._tried_totals = {}
         # Backghosts currently pending on the descent being explored.
         self._ghosts_in_descent = 0
         # Distinct from `self.abandoned` above (which it still reuses as a
@@ -3182,6 +3207,19 @@ class Filler:
                     return True
         return False
 
+    def _record_tried_word(self, i, word):
+        """Count one more placement of `word` on slot `i` by the search
+        (see `_tried_words`)."""
+        key = tuple(self.slots[i])
+        words = self._tried_words.setdefault(key, {})
+        words[word] = words.get(word, 0) + 1
+        self._tried_totals[key] = self._tried_totals.get(key, 0) + 1
+
+    def _slot_try_count(self, i):
+        """Total number of word placements the search has made on slot
+        `i` during this attempt, every word counted (see `_tried_words`)."""
+        return self._tried_totals.get(tuple(self.slots[i]), 0)
+
     def _slot_letter_frequency_score(self, i):
         """Square root of the sum of the squares of the measured frequencies (self.letter_
         scores — the same statistic sample_letter_biases computes to
@@ -3432,8 +3470,12 @@ class Filler:
            ties in the sort right below, `sort` being stable;
         2. they are sorted by `_candidate_score` (root of the sum of squares of the
            statistical letter scores over the cells no crossing word has
-           fixed yet), so a word matching the statistical consensus on
-           several free cells is tried before one that matches it nowhere;
+           fixed yet) divided by (1 + the number of times the search has
+           already placed that word on this slot during this attempt,
+           `_tried_words`), so a word matching the statistical consensus on
+           several free cells is tried before one that matches it nowhere,
+           and a word already tried here again and again yields to a fresh
+           one;
         3. the order is NOT strictly descending even so: each successive
            pick is drawn at random among the `CANDIDATE_SCORE_WINDOW` best
            words *still remaining* (not the first `CANDIDATE_SCORE_WINDOW`
@@ -3446,7 +3488,11 @@ class Filler:
         self.rng.shuffle(cands)
         if not self.letter_scores:
             return cands
-        cands.sort(key=lambda w: self._candidate_score(i, w), reverse=True)
+        tried = self._tried_words.get(tuple(self.slots[i]), {})
+        cands.sort(
+            key=lambda w: self._candidate_score(i, w) / (1 + tried.get(w, 0)),
+            reverse=True,
+        )
         window = CANDIDATE_SCORE_WINDOW
         reordered = []
         remaining = cands
@@ -3546,9 +3592,8 @@ class Filler:
         conflict set is `conflict` — or None when the failure must simply
         be reported (see MAX_BACKGHOSTS_PER_DESCENT): no conflict known,
         the backghost budget of this descent used up, no word of the set
-        placed by this search, or its most recent one being the word placed
-        right above, which ordinary backtracking reaches without unwinding
-        anything else."""
+        placed by this search, or its most recent one lying within
+        MAX_BACKJUMP_LEVELS words of the top, which a backjump reaches."""
         if (conflict is None or not self._placement_seq
                 or self._ghosts_in_descent >= MAX_BACKGHOSTS_PER_DESCENT):
             return None
@@ -3556,7 +3601,8 @@ class Filler:
         if not ghostable:
             return None
         target = max(ghostable, key=self._placement_seq.__getitem__)
-        if self._placement_seq[target] == max(self._placement_seq.values()):
+        seq = self._placement_seq[target]
+        if sum(1 for s in self._placement_seq.values() if s > seq) <= MAX_BACKJUMP_LEVELS:
             return None
         return target
 
@@ -3566,30 +3612,33 @@ class Filler:
         word of the set is taken off the grid in place, and a fresh node
         carries on from there. Returns what `_backtrack` must return.
 
-        The retry fails for reasons of its own, so what goes up is the union
-        of both conflict sets, minus the ghosted slot: a word below the
-        retry is not involved just because the first attempt needed it,
-        and the ghosted slot is empty. The letter statistics re-tallied
-        for the ghost are restored before returning, keeping every restore
-        in placement order."""
-        target = self._backghost_target(conflict)
-        if target is None:
-            return self._fail(conflict)
-        w = self.assignment[target]
-        del self._placement_seq[target]
-        self.assignment[target] = None
-        self.used_words.discard(w)
-        saved_scores = self._refresh_letter_scores_around(target)
-        self._ghosts_in_descent += 1
-        solved = self._backtrack(deadline_checks, released)
-        self._ghosts_in_descent -= 1
-        if solved:
-            return True
-        retry_conflict = self._last_conflict
-        self._restore_letter_scores(saved_scores)
-        if retry_conflict is None:
-            return self._fail(None)
-        return self._fail((set(conflict) - {target}) | retry_conflict)
+        When the retry fails, the same choice is made again on the union of
+        both conflict sets, minus the ghosted slot (a word below the retry
+        is not involved just because the first attempt needed it, and the
+        ghosted slot is empty): another backghost while the most recent
+        word left is still beyond MAX_BACKJUMP_LEVELS, the failure reported
+        otherwise. The letter statistics re-tallied for each ghost are
+        restored before going on, keeping every restore in placement
+        order."""
+        while True:
+            target = self._backghost_target(conflict)
+            if target is None:
+                return self._fail(conflict)
+            w = self.assignment[target]
+            del self._placement_seq[target]
+            self.assignment[target] = None
+            self.used_words.discard(w)
+            saved_scores = self._refresh_letter_scores_around(target)
+            self._ghosts_in_descent += 1
+            solved = self._backtrack(deadline_checks, released)
+            self._ghosts_in_descent -= 1
+            if solved:
+                return True
+            retry_conflict = self._last_conflict
+            self._restore_letter_scores(saved_scores)
+            if retry_conflict is None:
+                return self._fail(None)
+            conflict = (set(conflict) - {target}) | retry_conflict
 
     def _known_cells(self):
         """cell -> letter of every cell a placed word or a locked letter
@@ -3761,12 +3810,17 @@ class Filler:
     def _undo_reshape(self, option, saved, i):
         """Put the black cells `option` changed back to their original
         state, with the slot list and per-slot state that went with them —
-        the écarté list keeps its entries made since, translated back.
-        Returns the new -> original slot index map (`option.target` maps
-        to `i`)."""
+        the écarté list keeps its entries made since, translated back, and
+        a word placed before the change that a backghost has taken off
+        since stays off (see MAX_BACKGHOSTS_PER_DESCENT). Returns the new
+        -> original slot index map (`option.target` maps to `i`)."""
         back = {j: old_i for old_i, j in option.forward.items()}
         back[option.target] = i
         slots, pattern, assignment, tolerated, placement_seq, old_recent = saved
+        for old_i in list(placement_seq):
+            if option.forward.get(old_i) not in self._placement_seq:
+                del placement_seq[old_i]
+                assignment[old_i] = None
         recent = _RecentSlots(MAX_EXCLUDED_SLOTS)
         for old_i in old_recent:
             if old_i not in option.forward:
@@ -3841,6 +3895,7 @@ class Filler:
         self._tolerated_dry.update(newly_tolerated)
         self._placement_seq[t] = self._placement_counter
         self._placement_counter += 1
+        self._record_tried_word(t, w)
         if self._backtrack(deadline_checks, released):
             return "success", None, None
         child = self._last_conflict
@@ -4442,21 +4497,33 @@ class Filler:
 
     def _selection_origin(self):
         """Origin `(row, col)` of level 6's geometric score (see `_select_
-        target_slot`): the center of the most recent word the current
-        descent placed and still holds — the highest `_placement_seq`, so
-        a word reverted by backtracking or taken off by a backghost no
-        longer counts — i.e. the midpoint of its first and last cells, a
-        half-integer coordinate when its length is even. Falls back to the
-        grid's center (`_slot_selection_origin`) while the descent holds no
-        word of its own (search root, words already there when `solve()`
-        started, Interactive mode's fresh `Filler`)."""
+        target_slot`): the midpoint of the segment joining the grid's
+        center (`_slot_selection_origin`) and the center of the most
+        recent word the current descent placed and still holds — the
+        highest `_placement_seq`, so a word reverted by backtracking or
+        taken off by a backghost no longer counts — that word's center
+        being the midpoint of its first and last cells. Pulling halfway
+        back toward the grid's center keeps the fill exploring one region
+        around the last word without either staying in the central disk
+        or wandering across the whole grid. While the descent holds no
+        word of its own, Interactive mode's `Filler` uses the last word
+        "Suivant" placed (`last_placed_cells`) the same way, and every
+        other caller (search root, words already there when `solve()`
+        started) the grid's center itself, which is also Interactive
+        mode's own before any placed word."""
         if not self._placement_seq:
-            return _slot_selection_origin(self.rows, self.cols)
-        last = max(self._placement_seq, key=self._placement_seq.__getitem__)
-        cells = self.slots[last]
+            if not self.last_placed_cells:
+                return _slot_selection_origin(self.rows, self.cols)
+            cells = self.last_placed_cells
+        else:
+            last = max(self._placement_seq, key=self._placement_seq.__getitem__)
+            cells = self.slots[last]
         rows = [r for r, _ in cells]
         cols = [c for _, c in cells]
-        return ((min(rows) + max(rows)) / 2, (min(cols) + max(cols)) / 2)
+        word_row = (min(rows) + max(rows)) / 2
+        word_col = (min(cols) + max(cols)) / 2
+        center_row, center_col = _slot_selection_origin(self.rows, self.cols)
+        return ((word_row + center_row) / 2, (word_col + center_col) / 2)
 
     def _select_target_slot(self, unassigned, domains, challenge_level=True, theme_level=True):
         """Chooses which slot to fill next among `unassigned` (already
@@ -4586,18 +4653,19 @@ class Filler:
         # 6. among the slots of the group obtained at the previous level, a
         #    purely **geometric** score is computed for each: the squared
         #    distance between the slot's own CLOSEST cell to
-        #    `_selection_origin()` (the center of the last word the
-        #    current descent placed, or the grid's center while it has
-        #    placed none; every cell of `self.slots[i]` is considered
+        #    `_selection_origin()` (the midpoint between the grid's center
+        #    and the center of the last word the current descent placed,
+        #    or the grid's center while it has placed none; every cell of `self.slots[i]` is considered
         #    individually, the smallest of their own squared distances
         #    being the slot's score — NOT the midpoint of its own span, so
         #    a long slot only needs to REACH toward that point to score
         #    well) and that point itself — see the computation itself
         #    further below for the detail. This score doesn't depend on
         #    the slot's own fill state (neither its known letters nor its
-        #    domain) — only on its position relative to the last word
-        #    placed — which makes the fill grow outward from each new word
-        #    rather than by each slot's own difficulty.
+        #    domain) — only on its position relative to that origin —
+        #    which keeps the fill exploring one region around each new
+        #    word, pulled halfway back toward the grid's center, rather
+        #    than following each slot's own difficulty.
         #    Only **the `SLOT_SELECTION_WINDOW_SIZE` (10) slots with the
         #    smallest score** (the closest to that corner) are
         #    kept — a fixed window size, not a
@@ -4635,7 +4703,8 @@ class Filler:
         #    (`_placed_letter_count`, the most letters first), reduced to
         #    its own first `SLOT_SELECTION_REFINE_FRACTION` slots (see this
         #    constant's own docstring);
-        # 9. by `_slot_letter_frequency_score` (see its own docstring), the
+        # 9. by `_slot_letter_frequency_score` (see its own docstring)
+        #    divided by (1 + `_slot_try_count`), the
         #    highest score first — the slot whose own zone statistically
         #    offers the most fill options — whose very first entry directly
         #    becomes the chosen slot. Each of these two reductions
@@ -4758,8 +4827,9 @@ class Filler:
             if theme_placeable:
                 selection_pool = theme_placeable
         # Geometric score: squared distance between the slot's own CLOSEST
-        # cell to `_selection_origin()` (the center of the last word this
-        # descent placed, or the grid's center while it has placed none),
+        # cell to `_selection_origin()` (the midpoint between the grid's
+        # center and the center of the last word this descent placed, or
+        # the grid's center while it has placed none),
         # and that point itself — not the slot's own midpoint.
         # Every cell of the slot (`self.slots[i]`, a straight run of cells
         # along one axis — see `extract_slots`) is considered individually,
@@ -4841,10 +4911,16 @@ class Filler:
         # first (with this attempt's own seeded RNG), for the same reason
         # as the two previous shuffles: `sorted` is stable, so without this
         # third shuffle the order from the two previous sorts would decide,
-        # at equal score, which slot wins.
+        # at equal score, which slot wins. The score is divided by (1 + the
+        # number of word placements the search has already made on the slot
+        # during this attempt, `_slot_try_count`), so a slot retried again
+        # and again yields to one explored less.
         shuffled_refined = list(refined_window)
         self.rng.shuffle(shuffled_refined)
-        freq_scores = {i: self._slot_letter_frequency_score(i) for i in refined_window}
+        freq_scores = {
+            i: self._slot_letter_frequency_score(i) / (1 + self._slot_try_count(i))
+            for i in refined_window
+        }
         return sorted(shuffled_refined, key=lambda i: -freq_scores[i])[0]
 
     def _siblings_still_racing(self, deadline_checks):
@@ -5465,6 +5541,7 @@ class Filler:
                     seq = self._placement_counter
                     self._placement_counter += 1
                     self._placement_seq[best_i] = seq
+                    self._record_tried_word(best_i, w)
                     if self._backtrack(deadline_checks, released):
                         return True
                     child_conflict = self._last_conflict
@@ -6005,9 +6082,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     (`Filler._try_reshape`), never freeing a cell of `permanent_black_cells`.
     `grid` is then updated in place to the pattern the returned or reported
     state lives on. Only `_pattern_attempt`/`_pattern_continue` turn it on;
-    it stays off whenever `excluded_slots` is given or backghosting is
-    enabled (`MAX_BACKGHOSTS_PER_DESCENT`), whose per-slot bookkeeping a
-    reshape does not carry over.
+    it stays off whenever `excluded_slots` is given, whose per-slot
+    bookkeeping a reshape does not carry over.
 
     `non_gloss_words`/`max_non_gloss` (both `None` by default — every
     pre-existing caller unaffected) work exactly like `proper_noun_words`/
@@ -6275,9 +6351,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                      rows=rows, cols=cols)
     filler.pattern = [row[:] for row in grid]
     filler.best_pattern = filler.pattern
-    filler.reshape_enabled = (
-        reshape_black_cells and not excluded_slots and MAX_BACKGHOSTS_PER_DESCENT <= 0
-    )
+    filler.reshape_enabled = reshape_black_cells and not excluded_slots
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
     if checks_progress is not None and checks_slot is not None:
         # See `_worker_checks_progress`'s own docstring — `checks_progress`
@@ -7348,10 +7422,30 @@ def _slot_cells_of(slots, slot_indices):
     return cells
 
 
+def _placed_word_origin_cells(cells, known):
+    """`cells` (`[[row, col], ...]`, the last word "Suivant" placed) as a
+    list of `(row, col)` tuples, or `None` unless they are at least two
+    cells forming one straight, contiguous run whose every cell still
+    carries a letter in `known` — a word since erased, undone or broken
+    by a black cell no longer gives `interactive_place_word` its origin."""
+    try:
+        cells = sorted({(int(r), int(c)) for r, c in (cells or [])})
+    except (TypeError, ValueError):
+        return None
+    if len(cells) < 2 or any(cell not in known for cell in cells):
+        return None
+    r0, c0 = cells[0]
+    if cells in ([(r0, c0 + k) for k in range(len(cells))],
+                 [(r0 + k, c0) for k in range(len(cells))]):
+        return cells
+    return None
+
+
 def _origin_closest_cells(filler, slot_indices):
     """For each slot of `slot_indices`, its cell(s) closest to
-    `Filler._selection_origin()` (the grid's center here, Interactive
-    mode's `Filler` holding no word of its own descent) — the cell that
+    `Filler._selection_origin()` (here the midpoint between the grid's
+    center and the center of the last word "Suivant" placed, or the grid's
+    center before any) — the cell that
     gives the slot its level-6
     geometric score in
     `Filler._select_target_slot` (every cell tied at that smallest squared
@@ -7369,10 +7463,13 @@ def _origin_closest_cells(filler, slot_indices):
     return [[r, c] for r, c in sorted(out)]
 
 
-def _cascade_slot_order(filler, candidates, domains, first=None,
+def _cascade_slot_order(filler, candidates, domains, first=None, first_window=(),
                         challenge_level=True, theme_level=True):
-    """Yield every index of `candidates` in `Filler._select_target_slot`'s
-    own 9-level cascade order, best first — repeatedly re-selecting from
+    """Yield `(index, window)` for every index of `candidates` in `Filler.
+    _select_target_slot`'s own 9-level cascade order, best first — `window`
+    being the level-6 geometric window that selection drew the index from
+    (`Filler.last_selection_window`, `first_window` for `first`) —
+    repeatedly re-selecting from
     the shrinking pool rather than sorting once, so each successive pick
     is made by the exact same cascade automatic generation uses (its
     level-3/4/5 groupings are relative to the pool it is handed, so they
@@ -7390,13 +7487,13 @@ def _cascade_slot_order(filler, candidates, domains, first=None,
     remaining = list(candidates)
     if first is not None and first in remaining:
         remaining.remove(first)
-        yield first
+        yield first, list(first_window)
     while remaining:
         i = filler._select_target_slot(
             remaining, domains,
             challenge_level=challenge_level, theme_level=theme_level,
         )
-        yield i
+        yield i, list(filler.last_selection_window)
         remaining.remove(i)
 
 
@@ -7459,7 +7556,7 @@ def _general_dictionary_pick(filler, viable, i, exclude, baselines, level):
 
 
 def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
-                            challenge_words=None):
+                            challenge_words=None, last_placed_cells=None):
     """Place EXACTLY ONE additional word into `grid`, honouring every letter
     already present, with NO backtracking — the single-step primitive behind
     the web UI's "Interactif" authoring mode (see backend/app.py's
@@ -7478,6 +7575,12 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     in the lexicon can therefore still be placed automatically, though it
     then shows up flagged as invalid by this same function's own
     diagnostics below, same as a hand-typed one.
+
+    `last_placed_cells` (`[[row, col], ...]`) are the cells of the last
+    word a previous "Suivant" placed: the origin of the cascade's level-6
+    geometric score (`Filler.last_placed_cells`), used only when they
+    still form one straight run of letters on `grid`
+    (`_placed_word_origin_cells`) — the grid's center otherwise.
 
     A "Mots Défi"/theme word with no matching-length slot anywhere yet can
     still be reached, via `_try_reshape_for_word` relocating or inserting a
@@ -7522,6 +7625,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     )
     if not slots:
         return {"impossible": True}
+    filler.last_placed_cells = _placed_word_origin_cells(last_placed_cells, known)
     # Whether the theme tier may still reshape the grid for a word, fixed
     # for this click from the theme words already on the grid.
     theme_reshape = _theme_reshape_allowed(
@@ -7583,8 +7687,8 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     # candidate slots rather than inheriting slots chosen for a glossary
     # it does not use. Resolved lazily (once per call, reused at every
     # acceptance level), together with the level-6 window it was drawn
-    # from: each window slot's own cell closest to `SLOT_SELECTION_
-    # ORIGIN`, outlined blue by the panel for the tier that placed the
+    # from: each window slot's own cell closest to `Filler._selection_
+    # origin()`, outlined blue by the panel for the tier that placed the
     # word (the last tier tried when nothing is placed).
     tier_targets = {}
     window_cells = []
@@ -7596,8 +7700,9 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
                 selectable_targets, domains,
                 challenge_level=(tier == "challenge"), theme_level=(tier == "theme"),
             )
-            tier_targets[tier] = (t, _origin_closest_cells(filler, filler.last_selection_window))
-        target, window_cells = tier_targets[tier]
+            tier_targets[tier] = (t, list(filler.last_selection_window))
+        target, window = tier_targets[tier]
+        window_cells = _origin_closest_cells(filler, window)
         return target
 
     # Three tiers ("Mots Défi", then the theme glossary, then the general
@@ -7726,9 +7831,10 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
             word = None
             dictionary_target = _tier_target("dictionary")
             for group in (selectable_targets, blocked_viable):
-                for i in _cascade_slot_order(
+                for i, window in _cascade_slot_order(
                     filler, group, domains,
                     first=dictionary_target if group is selectable_targets else None,
+                    first_window=tier_targets["dictionary"][1],
                     challenge_level=False, theme_level=False,
                 ):
                     word = _general_dictionary_pick(
@@ -7751,6 +7857,11 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
                         set_aside_slots.add(i)
                         continue
                     placed_target = i
+                    # The candidate slots shown blue are those of the
+                    # selection that yielded the slot actually placed on,
+                    # not of the tier's first target when the sweep had
+                    # to move past it.
+                    window_cells = _origin_closest_cells(filler, window)
                     break
                 if word is not None:
                     break

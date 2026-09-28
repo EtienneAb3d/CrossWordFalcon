@@ -1834,11 +1834,12 @@ public final class App {
             String jobId = b.required("job_id");
             List<Object> gridJson = b.grid("grid");
             Set<String> cw = challengeSet(b.strList("challenge_words"));
+            List<int[]> lastPlaced = b.cells("last_placed_cells", false);
             Session s = session(jobId);
             int[] d = dims(gridJson);
             Map<String, Object> placed;
             synchronized (s) {
-                placed = Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw);
+                placed = Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw, lastPlaced);
             }
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             Map<String, Object> out = new LinkedHashMap<>();
@@ -2176,7 +2177,7 @@ public final class App {
             List<Object> definitions = b.list("definitions", false);
             String mode = b.str("mode", "medium");
             int bep = b.integer("black_enrichment_percent", 17, 0, 100);
-            int flp = b.integer("force_letters_percent", 1, 0, 100);
+            int flp = b.integer("force_letters_percent", 0, 0, 100);
             String pseudo = b.str("pseudo", null);
             String reqDifficulty = b.str("difficulty", null);
             String reqTheme = b.str("theme", null);

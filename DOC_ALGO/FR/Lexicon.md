@@ -297,29 +297,39 @@ plusieurs signaux) :
 - **Saut arrière** (*backjumping*) : retour en arrière qui, au lieu de
   remettre en cause le dernier mot posé, remonte directement au mot le
   plus récent de l'ensemble de conflit, en retirant au passage sans les
-  remplacer tous les mots posés entre-temps qui n'y figurent pas.
-  (`backend/crossword_gen.py`, `Filler._backtrack`, `BACKJUMPING_ENABLED`.)
+  remplacer tous les mots posés entre-temps qui n'y figurent pas. Un saut
+  arrière retire au plus `MAX_BACKJUMP_LEVELS` (5) mots posés par la
+  recherche ; au-delà, il est remplacé par un retrait fantôme (voir
+  ci-dessous).
+  (`backend/crossword_gen.py`, `Filler._backtrack`, `BACKJUMPING_ENABLED`,
+  `MAX_BACKJUMP_LEVELS`.)
 
 - **Emplacements candidats** : en mode Interactif, les emplacements de la
   fenêtre géométrique du niveau 6 de la cascade de choix d'emplacement —
-  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du centre de la grille
+  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du milieu du segment reliant le centre de la grille au centre du dernier mot posé par « Suivant » (du centre de la grille tant qu'il n'y en a pas)
   parmi ceux retenus par les niveaux précédents — dans laquelle a été
-  tirée, lors d'un clic sur « Suivant », la cible de la famille (Mots Défi,
-  glossaire thématique ou dictionnaire général) qui a posé le mot ; chaque
-  famille évalue la cascade par rapport à son seul glossaire. Chacun est
+  tiré, lors d'un clic sur « Suivant », l'emplacement où le mot a été posé
+  — pour le dictionnaire général, la sélection du balayage qui a fourni cet
+  emplacement ; pour les Mots Défi et le glossaire thématique, la cible de
+  la famille ; chaque famille évalue la cascade par rapport à son seul
+  glossaire. Chacun est
   signalé par sa ou ses cases les plus proches de ce centre, entourées en
   bleu. (`backend/crossword_gen.py`, `Filler.last_selection_window`,
   `_origin_closest_cells` ; `frontend/static/script.js`,
   `interactiveWindowCells`.)
 
-- **Retrait fantôme** (*backghost*) : alternative légère au saut arrière,
-  tentée avant lui : seul le mot le plus récent de l'ensemble de conflit
-  est retiré de la grille, sur place, sans dépiler aucun nœud ni retirer
-  les mots posés depuis ; la recherche continue sur la grille ainsi
-  libérée, et le nœud qui avait posé ce mot n'a plus rien à retirer quand
-  le retour en arrière finit par l'atteindre. Au plus `MAX_BACKGHOSTS_PER_DESCENT`
-  retraits fantômes en cours sur une même descente ; au-delà, c'est le
-  saut arrière. Actuellement désactivé (valeur 0).
+- **Retrait fantôme** (*backghost*) : simple nettoyage du conflit, qui
+  remplace un saut arrière de plus de `MAX_BACKJUMP_LEVELS` (5) mots : seul
+  le mot le plus récent de l'ensemble de conflit est retiré de la grille,
+  sur place, sans dépiler aucun nœud ni retirer les mots posés depuis ; la
+  recherche continue sur la grille ainsi libérée, et le nœud qui avait posé
+  ce mot n'a plus rien à retirer quand le retour en arrière finit par
+  l'atteindre. Si la reprise échoue à son tour, le même choix est refait
+  sur la réunion des deux ensembles de conflit : les mots à l'origine du
+  conflit sont ainsi retirés un à un, jusqu'à ce que le plus récent restant
+  soit à portée d'un saut arrière. Au plus `MAX_BACKGHOSTS_PER_DESCENT` (10)
+  retraits fantômes en cours sur une même descente ; au-delà, le saut
+  arrière est fait en entier.
   (`backend/crossword_gen.py`, `Filler._fail_or_backghost`,
   `MAX_BACKGHOSTS_PER_DESCENT`.)
 

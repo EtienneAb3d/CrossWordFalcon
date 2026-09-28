@@ -761,6 +761,12 @@ let interactiveGrid = [];
 // Deep-copied snapshots of interactiveGrid; the first is pushed on entry
 // so length <= 1 means "nothing left to undo".
 let interactiveUndoStack = [];
+// Cells of every word "Suivant" placed this session, oldest first. The
+// latest one the grid still fully holds (interactiveOriginCells) is sent
+// with each "Suivant" as the origin of the backend's slot-selection
+// geometric score, so the fill grows outward from the last placed word;
+// a word since undone ("Précédent") or erased is simply skipped.
+let interactivePlacedHistory = [];
 // "Mots Défi" — free-form list of words the author wants to force into
 // the grid (see #interactive-challenge-panel in index.html). Kept exactly
 // as typed — accents/case and all, "comme dans les dictionnaires," at the
@@ -873,8 +879,9 @@ let interactiveDeadlockCells = new Set();
 let interactiveExcludedCells = new Set();
 // The candidate slots of the last "Suivant" click — the level-6 window of
 // the slot-selection cascade (backend `Filler._select_target_slot`), the
-// slots closest to the grid's center the cascade chose among — each shown
-// by its own cell closest to the center, outlined blue. Same staleness
+// slots closest to the selection origin (the center of the last placed
+// word, the grid's center before any) the cascade chose among — each
+// shown by its own cell closest to that origin, outlined blue. Same staleness
 // rule as the sets above.
 let interactiveWindowCells = new Set();
 // The word the last "Suivant" click placed, exactly as the backend
@@ -7396,6 +7403,7 @@ function enterInteractiveMode(state) {
   generateChallengeWords = interactiveChallengeWords.slice();
   renderGenerateChallengeList();
   interactiveUndoStack = [];
+  interactivePlacedHistory = state.placed && state.placed.cells ? [state.placed.cells] : [];
   interactivePushUndo();
   setInteractiveDiagnostics(state); // after pushUndo (which clears them)
   interactiveTitleProposed = false;
@@ -7937,6 +7945,18 @@ interactivePrevBtn.addEventListener("click", async () => {
   await autosaveInteractiveWork();
 });
 
+// The latest entry of interactivePlacedHistory whose every cell still
+// carries a letter on interactiveGrid, or [] when none does.
+function interactiveOriginCells() {
+  for (let k = interactivePlacedHistory.length - 1; k >= 0; k--) {
+    const cells = interactivePlacedHistory[k];
+    if (cells.every(([r, c]) => /^[A-Z]$/.test((interactiveGrid[r] || [])[c] || ""))) {
+      return cells;
+    }
+  }
+  return [];
+}
+
 interactiveNextBtn.addEventListener("click", async () => {
   const t = I18N[uiLanguage];
   interactiveNextBtn.disabled = true;
@@ -7954,6 +7974,7 @@ interactiveNextBtn.addEventListener("click", async () => {
       body: JSON.stringify({
         job_id: interactiveJobId, grid: wireGrid,
         challenge_words: interactiveChallengeWords,
+        last_placed_cells: interactiveOriginCells(),
       }),
     }, FETCH_TIMEOUT_MS);
     if (resp.status === 404) {
@@ -8024,6 +8045,8 @@ interactiveNextBtn.addEventListener("click", async () => {
     }
     setInteractiveDiagnostics(data);
     interactiveLastPlaced = data.placed;
+    interactivePlacedHistory.push(data.placed.cells);
+    if (interactivePlacedHistory.length > 500) interactivePlacedHistory.shift();
     selected = { row: data.placed.cells[0][0], col: data.placed.cells[0][1] };
     activeDirection = data.placed.direction || activeDirection;
     setActiveDirection(activeDirection);

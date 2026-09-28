@@ -792,7 +792,7 @@ class GenerateRequest(BaseModel):
     # request, see frontend/static/index.html), converted to a
     # fraction (`percent / 100`) right before calling generate_grid.
     force_letters_percent: int = Field(
-        default=1, ge=0, le=100,
+        default=0, ge=0, le=100,
         description="Percentage of seeds at the start of filling (integer, 0 to 100)",
     )
     # 14% by default on the API side (the UI uses this same fixed
@@ -924,10 +924,17 @@ class InteractiveStepRequest(BaseModel):
     bare-uppercase grid form on the fly (`challenge_word_grid_form`) —
     the request body itself is never stored, so it doesn't need to be in
     that form already. Defaults to empty for a session with no challenge
-    words."""
+    words.
+
+    `last_placed_cells` are the cells (`[[row, col], ...]`) of the last
+    word a previous "Suivant" placed that the grid still holds: the origin
+    of the slot-selection cascade's geometric score (see `interactive_
+    place_word`'s own `last_placed_cells`). Empty — the grid's center —
+    when there is none."""
     job_id: str
     grid: list[list[str]]
     challenge_words: list[str] = []
+    last_placed_cells: list[list[int]] = []
 
 
 class InteractiveCleanRequest(BaseModel):
@@ -1207,7 +1214,7 @@ class InteractiveFinishRequest(BaseModel):
     definitions: list[dict] = []
     mode: str = "medium"
     black_enrichment_percent: int = Field(default=17, ge=0, le=100)
-    force_letters_percent: int = Field(default=1, ge=0, le=100)
+    force_letters_percent: int = Field(default=0, ge=0, le=100)
     difficulty: Optional[str] = None
     theme: Optional[str] = None
     theme_precision: Optional[float] = Field(default=None, ge=0.0, le=1.0)
@@ -4918,7 +4925,7 @@ async def interactive_step(req: InteractiveStepRequest):
         interactive_place_word,
         [list(row) for row in req.grid], rows, cols,
         sess["index"], sess["rng"], sess["priority_words"],
-        challenge_words,
+        challenge_words, req.last_placed_cells,
     )
     if placed["impossible"]:
         return {"width": cols, "height": rows, "grid": req.grid,
@@ -4938,8 +4945,8 @@ async def interactive_step(req: InteractiveStepRequest):
             # shown yellow by the panel (see crossword_gen.py's own
             # `interactive_place_word`).
             "excluded_cells": placed.get("excluded_cells", []),
-            # Each candidate slot's cell closest to the grid's center —
-            # the level-6 window the placement's target was drawn from.
+            # Each candidate slot's cell closest to the selection origin
+            # (the last placed word's center) — the level-6 window the placement's target was drawn from.
             "window_cells": placed.get("window_cells", [])}
 
 

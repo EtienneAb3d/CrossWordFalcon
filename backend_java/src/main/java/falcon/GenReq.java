@@ -11,7 +11,7 @@ public final class GenReq {
     public int width = 15, height = 10;
     public String difficulty = "easy";
     public Long seed;
-    public int forceLettersPercent = 1;
+    public int forceLettersPercent = 0;
     public int blackEnrichmentPercent = 17;
     public String mode = "medium";
     public String pseudo;
@@ -29,7 +29,7 @@ public final class GenReq {
         r.height = b.integer("height", falcon.gen.Generator.DEFAULT_HEIGHT, 5, 30);
         r.difficulty = b.str("difficulty", "easy");
         r.seed = b.optLong("seed");
-        r.forceLettersPercent = b.integer("force_letters_percent", 1, 0, 100);
+        r.forceLettersPercent = b.integer("force_letters_percent", 0, 0, 100);
         r.blackEnrichmentPercent = b.integer("black_enrichment_percent", 17, 0, 100);
         r.mode = b.str("mode", "medium");
         r.pseudo = b.str("pseudo", null);

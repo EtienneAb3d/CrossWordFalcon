@@ -1036,10 +1036,9 @@ English (see `project-best-practices`).
   (`forceLettersLabel` in `i18n.js`: en "Seeds", de "Saatbuchstaben", es
   "Semillas", it "Semi") — the field's `id`/`name`
   (`force-letters`/`force_letters_percent`) stay unchanged, only the
-  displayed label text moved. The field's default also moved from 0 to 1
-  (`index.html`'s `value="1"`, matching `GenerateRequest.force_letters_
-  percent`'s own new `default=1`), at the user's explicit follow-up
-  request. Motivation (from the user's own definition of what a "graine"
+  displayed label text moved. The field's default is 0
+  (`index.html`'s `value="0"`, matching `GenerateRequest.force_letters_
+  percent`'s own `default=0`). Motivation (from the user's own definition of what a "graine"
   is): "emplacements qui initient les premiers placements, ou les
   influences quand il y a déjà d'autres lettres" — this reflects a real
   backend fix landing in the same request (`Filler._placed_letter_count`
@@ -4388,7 +4387,8 @@ end through the real running API (interactive start/step/save,
   of the last "Suivant" click in Interactive mode, at the user's explicit
   request: the slots of the slot-selection cascade's level-6 geometric
   window, each marked only by its own cell(s) closest to the level-6
-  origin (the grid's center — the cell that gives it its score),
+  origin (the center of the last word "Suivant" placed, the grid's
+  center before any — the cell that gives it its score),
   never by the whole slot. An `outline` rather than a background or a box-shadow:
   every diagnostic here is a background fill and the hover/selection
   marks are inset box-shadows, so an outline is the one property that

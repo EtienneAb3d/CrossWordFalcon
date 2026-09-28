@@ -310,7 +310,11 @@ public final class Interactive {
         return cells;
     }
 
-    static Iterable<Integer> cascadeSlotOrder(Filler f, List<Integer> candidates, Map<Integer, Dom> domains, Integer first,
+    /** Every candidate in cascade order, each paired with the level-6 window
+     *  its selection drew it from (firstWindow for first) (mirrors
+     *  _cascade_slot_order). */
+    static Iterable<Map.Entry<Integer, List<Integer>>> cascadeSlotOrder(Filler f, List<Integer> candidates,
+                                              Map<Integer, Dom> domains, Integer first, List<Integer> firstWindow,
                                               boolean challengeLevel, boolean themeLevel) {
         return () -> new Iterator<>() {
             final List<Integer> remaining = new ArrayList<>(candidates);
@@ -322,16 +326,16 @@ public final class Interactive {
             }
 
             @Override
-            public Integer next() {
+            public Map.Entry<Integer, List<Integer>> next() {
                 if (remaining.isEmpty()) throw new NoSuchElementException();
                 if (!firstDone) {
                     firstDone = true;
                     remaining.remove(first);
-                    return first;
+                    return Map.entry(first, new ArrayList<>(firstWindow == null ? List.of() : firstWindow));
                 }
                 int i = f.selectTargetSlot(new ArrayList<>(remaining), domains, challengeLevel, themeLevel);
                 remaining.remove(Integer.valueOf(i));
-                return i;
+                return Map.entry(i, new ArrayList<>(f.lastSelectionWindow));
             }
         };
     }
@@ -360,8 +364,36 @@ public final class Interactive {
         return null;
     }
 
-    /** Each slot's cell(s) closest to the level-6 origin — the grid's center
-     *  for Interactive mode's Filler (mirrors _origin_closest_cells). */
+    /** The last word "Suivant" placed ({row, col} pairs) as Cells, or null
+     *  unless they are at least two cells forming one straight, contiguous
+     *  run whose every cell still carries a letter in known (mirrors
+     *  _placed_word_origin_cells). */
+    static int[] placedWordOriginCells(List<int[]> cells, Map<Integer, Character> known) {
+        if (cells == null) return null;
+        TreeSet<Long> keys = new TreeSet<>();
+        for (int[] rc : cells) {
+            if (rc.length != 2) return null;
+            keys.add(((long) rc[0] << 32) | (rc[1] & 0xffffffffL));
+        }
+        if (keys.size() < 2) return null;
+        int[] out = new int[keys.size()];
+        int k = 0, r0 = 0, c0 = 0;
+        boolean row = true, col = true;
+        for (long key : keys) {
+            int r = (int) (key >> 32), c = (int) key;
+            if (k == 0) { r0 = r; c0 = c; }
+            row &= r == r0 && c == c0 + k;
+            col &= c == c0 && r == r0 + k;
+            if (r < 0 || c < 0 || r > 0xffff || c > 0xffff) return null;
+            out[k++] = Cells.of(r, c);
+            if (!known.containsKey(out[k - 1])) return null;
+        }
+        return row || col ? out : null;
+    }
+
+    /** Each slot's cell(s) closest to the level-6 origin — the center of the
+     *  last word "Suivant" placed, or the grid's center before any (mirrors
+     *  _origin_closest_cells). */
     static List<Object> originClosestCells(Filler f, Collection<Integer> slotIndices) {
         double[] origin = f.selectionOrigin();
         double cr = origin[0], cc = origin[1];
@@ -400,6 +432,11 @@ public final class Interactive {
 
     public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
                                                 Set<String> challengeIn) {
+        return placeWord(grid, rows, cols, index, rng, pwIn, challengeIn, null);
+    }
+
+    public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
+                                                Set<String> challengeIn, List<int[]> lastPlacedCells) {
         PW pw = pwIn == null ? PW.EMPTY : pwIn;
         Set<String> challenge = challengeIn == null ? Set.of() : challengeIn;
         char[][] pattern = Grids.patternOf(grid);
@@ -409,6 +446,7 @@ public final class Interactive {
         @SuppressWarnings("unchecked")
         List<int[]> slots = (List<int[]>) built[1];
         if (slots.isEmpty()) return new LinkedHashMap<>(Map.of("impossible", true));
+        f.lastPlacedCells = placedWordOriginCells(lastPlacedCells, known);
         Map<Integer, Dom> domains = new LinkedHashMap<>();
         Map<Integer, Set<String>> viable = new LinkedHashMap<>();
         for (int i = 0; i < slots.size(); i++) {
@@ -436,7 +474,8 @@ public final class Interactive {
         java.util.function.Function<String, Integer> tierTarget = tier -> {
             Object[] t = tierTargets.computeIfAbsent(tier, k -> {
                 int ti = f.selectTargetSlot(selectableF, domains, k.equals("challenge"), k.equals("theme"));
-                return new Object[]{ti, originClosestCells(f, f.lastSelectionWindow)};
+                List<Integer> window = new ArrayList<>(f.lastSelectionWindow);
+                return new Object[]{ti, originClosestCells(f, window), window};
             });
             @SuppressWarnings("unchecked") List<Object> w = (List<Object>) t[1];
             windowCellsRef[0] = w;
@@ -492,13 +531,20 @@ public final class Interactive {
                 String word = null;
                 int dictionaryTarget = tierTarget.apply("dictionary");
                 for (List<Integer> group : List.of(selectable, blockedViable)) {
-                    for (int i : cascadeSlotOrder(f, group, domains, group == selectable ? dictionaryTarget : null, false, false)) {
+                    @SuppressWarnings("unchecked")
+                    List<Integer> firstWindow = (List<Integer>) tierTargets.get("dictionary")[2];
+                    for (Map.Entry<Integer, List<Integer>> e : cascadeSlotOrder(f, group, domains,
+                            group == selectable ? dictionaryTarget : null, firstWindow, false, false)) {
+                        int i = e.getKey();
                         word = generalDictionaryPick(f, viable, i, exclude, baselines, level);
                         if (word == null) {
                             setAside.add(i);
                             continue;
                         }
                         placedTarget = i;
+                        // Blue cells: the window of the selection that yielded
+                        // the slot actually placed on (mirrors Python).
+                        windowCellsRef[0] = originClosestCells(f, e.getValue());
                         break;
                     }
                     if (word != null) break;

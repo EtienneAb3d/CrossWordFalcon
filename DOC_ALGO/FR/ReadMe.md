@@ -780,7 +780,7 @@ mots compatibles une fois la lettre figée.
 Parmi les cases candidates, le programme en pioche **au hasard** un certain
 nombre pour en faire des **graines** — des indices qui initient les
 premiers placements ou les influencent quand d'autres lettres existent
-déjà. Leur nombre va jusqu'à un pourcentage réglable dans l'interface (1 %
+déjà. Leur nombre va jusqu'à un pourcentage réglable dans l'interface (0 %
 par défaut) du nombre de cases blanches **encore sans lettre connue** — pas
 du total des cases blanches : une case déjà connue avec certitude, héritée
 d'un palier précédent, ne compte pas dans cette base, donc le nombre de
@@ -971,31 +971,39 @@ chose.
    remonte jusqu'à la racine (`backend/crossword_gen.py`,
    `Filler._backtrack`, `Filler._fail`, `_last_conflict`,
    `BACKJUMPING_ENABLED`).
-8. **Retrait fantôme (backghost), actuellement désactivé
-   (`MAX_BACKGHOSTS_PER_DESCENT` = 0).** Quand il est actif, avant de
-   sauter, la recherche tente un retrait fantôme. Là où un échec naît avec un ensemble de conflit connu —
+8. **Un saut arrière trop long est remplacé par un retrait fantôme
+   (backghost).** Un saut arrière retire au plus `MAX_BACKJUMP_LEVELS` (5)
+   mots posés par la recherche. Là où un échec naît avec un ensemble de conflit connu —
    un emplacement vide, un emplacement dont tous les candidats rendraient
    bloqué un emplacement croisé sain, un nœud qui a épuisé ses
    possibilités ou atteint son plafond de descentes, mais jamais un échec
    simplement transmis par un nœud inférieur —, la recherche regarde le
    mot le plus récent de cet ensemble parmi ceux qu'elle a posés elle-même
    (`Filler._placement_seq` : les mots déjà présents au lancement de
-   `Filler.solve` ne sont jamais retirés ainsi). Si ce n'est pas le mot
-   posé juste au-dessus — c'est-à-dire si un saut arrière devrait retirer
-   d'autres mots pour l'atteindre —, ce seul mot est retiré de la grille
+   `Filler.solve` ne sont jamais retirés ainsi). Si la recherche a posé
+   plus de `MAX_BACKJUMP_LEVELS` mots après lui — c'est-à-dire si un saut
+   arrière devrait en retirer davantage pour l'atteindre —, ce seul mot est retiré de la grille
    sur place : aucun nœud n'est dépilé, tous les mots posés depuis restent
    en place, les relevés de lettres des emplacements qu'il croisait sont
    ré-échantillonnés, et un nouveau nœud reprend la recherche sur la
    grille ainsi libérée. Quand le retour en arrière dépile réellement
    jusqu'au nœud qui avait posé ce mot, ce nœud constate qu'il n'est plus
-   là et n'a rien à retirer. Au plus `MAX_BACKGHOSTS_PER_DESCENT`
-   retraits fantômes peuvent être en cours sur la même descente (imbriqués
-   l'un dans l'autre) ; au-delà, l'échec déclenche le saut arrière
-   ordinaire, qui dépile pour de bon. Si la reprise échoue à son tour,
-   l'échec remonte avec la réunion des deux ensembles de conflit, sans
-   l'emplacement retiré. Une valeur `<= 0` supprime le mécanisme
+   là et n'a rien à retirer. À distance de `MAX_BACKJUMP_LEVELS` mots ou
+   moins, l'échec déclenche le saut arrière ordinaire, qui dépile pour de
+   bon. Si la reprise échoue à son tour, le même choix est refait sur la
+   réunion des deux ensembles de conflit, sans l'emplacement retiré :
+   nouveau retrait fantôme si son mot le plus récent est encore au-delà de
+   `MAX_BACKJUMP_LEVELS`, saut arrière sinon — les mots à l'origine du
+   conflit sont ainsi retirés un à un. Au plus
+   `MAX_BACKGHOSTS_PER_DESCENT` (10) retraits fantômes peuvent être en
+   cours sur la même descente (imbriqués l'un dans l'autre) ; au-delà, le
+   saut arrière est fait en entier, quelle que soit sa longueur. Une valeur
+   `<= 0` supprime le mécanisme. Un retrait fantôme fait sous un
+   réaménagement de cases noires est conservé quand ce réaménagement est
+   défait : un mot posé avant lui et retiré depuis reste retiré
    (`backend/crossword_gen.py`, `Filler._fail_or_backghost`,
-   `Filler._backghost_target`, `MAX_BACKGHOSTS_PER_DESCENT`).
+   `Filler._backghost_target`, `Filler._undo_reshape`,
+   `MAX_BACKJUMP_LEVELS`, `MAX_BACKGHOSTS_PER_DESCENT`).
 
 Vérifier les voisins directs avant de redescendre suffit : poser un mot ne
 peut jamais affecter le domaine d'un emplacement qui ne partage aucune case
@@ -1180,18 +1188,28 @@ propre liste d'emplacements sélectionnables.
    **sa propre** langue. Sans thématique, ce niveau ne change rien ;
 6. parmi les emplacements retenus, on calcule pour chacun le carré de la
    distance entre sa **case la plus proche de l'origine** et cette
-   origine. L'origine est le **centre du dernier mot posé par la descente
-   en cours** du retour en arrière — le mot au plus grand numéro de pose
-   encore sur la grille (`_placement_seq`) : un mot retiré par retour en
-   arrière ou par retrait fantôme ne compte plus —, c'est-à-dire le milieu
-   de sa première et de sa dernière case, à mi-chemin entre deux cases
-   quand sa longueur est paire. Tant que la descente n'a posé aucun mot
-   (à la racine de la recherche, les mots déjà présents au départ de
-   `solve()` n'étant pas numérotés), l'origine est le **centre de la
-   grille**, le point `((lignes - 1) / 2, (colonnes - 1) / 2)`
-   (`_slot_selection_origin`) ; c'est toujours le cas en mode Interactif,
-   dont le `Filler` n'effectue aucune descente (`backend/crossword_gen.py`,
-   `Filler._selection_origin`). Chaque case de l'emplacement est
+   origine. L'origine est le **milieu du segment reliant le centre de la
+   grille au centre du dernier mot posé par la descente en cours** du
+   retour en arrière — le mot au plus grand numéro de pose encore sur la
+   grille (`_placement_seq`) : un mot retiré par retour en arrière ou par
+   retrait fantôme ne compte plus. Le centre d'un mot est le milieu de sa
+   première et de sa dernière case, à mi-chemin entre deux cases quand sa
+   longueur est paire ; le centre de la grille est le point
+   `((lignes - 1) / 2, (colonnes - 1) / 2)` (`_slot_selection_origin`).
+   Ramener ainsi l'origine à mi-chemin vers le centre de la grille fait
+   explorer une même zone autour du dernier mot, sans rester cantonné au
+   disque central ni tourner au hasard dans toute la grille. Tant que la
+   descente n'a posé aucun mot (à la racine de la recherche, les mots déjà
+   présents au départ de `solve()` n'étant pas numérotés), l'origine est
+   le **centre de la grille** lui-même. En mode Interactif, dont le
+   `Filler` n'effectue aucune descente, l'origine est le milieu du segment
+   reliant le centre de la grille au **centre du dernier mot posé par
+   « Suivant »** encore entièrement présent sur la grille — un mot annulé
+   par « Précédent » ou effacé à la main ne compte plus, on remonte au
+   précédent —, et le centre de la grille tant qu'il n'y en a aucun
+   (`backend/crossword_gen.py`, `Filler._selection_origin`,
+   `Filler.last_placed_cells`, `_placed_word_origin_cells` ;
+   `frontend/static/script.js`, `interactiveOriginCells`). Chaque case de l'emplacement est
    considérée individuellement, et c'est la plus petite distance au carré
    qui sert de score — et non la distance depuis son point médian : il
    suffit donc à un emplacement long d'approcher l'origine par une seule
@@ -1200,10 +1218,10 @@ propre liste d'emplacements sélectionnables.
    par exemple) obtient le plus petit score, celui-ci augmentant à mesure
    que sa case la plus proche s'en éloigne — la distance étant euclidienne
    (au carré) et non de Manhattan, la fenêtre forme un cercle autour de
-   l'origine plutôt qu'un losange, et le remplissage s'étend de proche en
-   proche à partir de chaque nouveau mot. Ce score ne dépend pas de l'état
-   de remplissage de l'emplacement, seulement de sa position par rapport
-   au dernier mot posé. On retient, parmi les emplacements au plus petit
+   l'origine plutôt qu'un losange, et le remplissage progresse de proche
+   en proche autour de chaque nouveau mot, du côté du centre de la grille.
+   Ce score ne dépend pas de l'état de remplissage de l'emplacement,
+   seulement de sa position par rapport à l'origine. On retient, parmi les emplacements au plus petit
    score, une fenêtre de `SLOT_SELECTION_WINDOW_SIZE` (10) emplacements —
    tous si le groupe en compte lui-même moins de 10 —, mélangés au
    préalable pour qu'aucun ordre positionnel ne départage les ex æquo à la
@@ -1261,7 +1279,19 @@ propre liste d'emplacements sélectionnables.
    d'option, donc n'est pas comptée) — le plus haut score en premier :
    l'emplacement dont la zone propose statistiquement le plus d'options de
    remplissage, et donc, pour ses voisins croisants, le plus de lettres
-   crédibles avec lesquelles composer. La fenêtre est remélangée au
+   crédibles avec lesquelles composer. Ce score est **divisé par (1 + le
+   nombre d'essais de l'emplacement)** : chaque emplacement mémorise, pour
+   la durée de la tentative, chaque mot que la recherche y a posé et le
+   nombre de fois où elle l'y a posé (un mot accepté par la vérification
+   des croisements puis exploré, réaménagement compris) ; le nombre
+   d'essais est la somme de ces comptes. Un mot retiré par retour en
+   arrière reste compté. Un emplacement déjà souvent retenté cède ainsi la
+   place à un emplacement moins exploré. La mémoire est attachée aux cases
+   de l'emplacement : un réaménagement de cases noires qui renumérote les
+   emplacements conserve l'historique de ceux qu'il ne modifie pas. En mode
+   Interactif, chaque clic construit un `Filler` neuf : le compte y est
+   toujours nul (`backend/crossword_gen.py`, `Filler._record_tried_word`,
+   `Filler._slot_try_count`). La fenêtre est remélangée au
    préalable ; le premier emplacement devient l'emplacement choisi.
 
 ### Choisir quel mot essayer
@@ -1270,9 +1300,14 @@ Les mots candidats de l'emplacement choisi sont d'abord **mélangés**, puis
 classés selon à quel point leurs lettres correspondent au consensus
 statistique observé sur les cases pas encore déterminées par un croisement
 (`_candidate_score`, racine carrée de la somme des carrés des scores par
-case) : un mot qui
+case), score **divisé par (1 + le nombre de fois où ce mot a déjà été posé
+sur cet emplacement)** pendant la tentative — la mémoire des mots essayés
+par emplacement décrite au niveau 9 du choix de l'emplacement
+(`Filler.ordered_candidates`, `Filler._tried_words`) : un mot qui
 colle bien au consensus sur plusieurs cases est essayé avant un mot qui n'y
-colle pas du tout, plutôt qu'un tirage entièrement aléatoire.
+colle pas du tout, plutôt qu'un tirage entièrement aléatoire, et un mot
+déjà souvent retenté à cet emplacement cède la place à un mot neuf. En mode
+Interactif, le compte est toujours nul (un `Filler` neuf par clic).
 
 Le premier mot essayé n'est toutefois pas strictement le mieux classé : le
 programme pioche au hasard parmi les `CANDIDATE_SCORE_WINDOW` meilleurs
@@ -1364,9 +1399,8 @@ Une option de réaménagement compte toujours comme une **descente** pour
 le plafond de descentes du nœud, quelle que soit sa famille, et un
 réaménagement refusé pour un croisement compte dans le budget d'abandon du
 mot comme tout autre refus. Le mécanisme est désactivé quand
-`Filler.excluded_slots` est utilisé ou que le retrait fantôme est actif
-(`MAX_BACKGHOSTS_PER_DESCENT`), dont la tenue par index d'emplacement ne
-suit pas un changement de motif ; seules les tentatives de palier
+`Filler.excluded_slots` est utilisé, dont la tenue par index
+d'emplacement ne suit pas un changement de motif ; seules les tentatives de palier
 (`_pattern_attempt`/`_pattern_continue`) l'activent (`try_fill`,
 `reshape_black_cells`).
 
@@ -1963,12 +1997,16 @@ Les emplacements écartés pendant ce balayage — au plus les
 (`_RecentSlots`) — sont renvoyés au panneau
 (`excluded_cells`) et affichés en fond jaune, comme dans les
 prévisualisations de la génération automatique. Chaque clic renvoie aussi
-les **emplacements candidats** parmi lesquels a été tirée la cible de la
-famille qui a posé le mot (de la dernière famille essayée si rien n'est
+les **emplacements candidats** de la sélection qui a fourni l'emplacement
+posé — pour le dictionnaire général, celle du balayage qui a fourni cet
+emplacement (`_cascade_slot_order` renvoie chaque emplacement avec sa
+fenêtre), et non la cible initiale quand le balayage a dû la dépasser ;
+pour les Mots Défi et le glossaire thématique, la cible de la famille qui a
+posé le mot (de la dernière famille essayée si rien n'est
 posé) : la fenêtre géométrique du niveau 6 de la cascade (au plus
 `SLOT_SELECTION_WINDOW_SIZE` emplacements, mémorisée par
 `Filler._select_target_slot` dans `Filler.last_selection_window`), chacun
-représenté par sa ou ses cases les plus proches du centre de la grille —
+représenté par sa ou ses cases les plus proches de l'origine du niveau 6 —
 celles qui lui donnent son score (`window_cells`,
 `backend/crossword_gen.py`, `_origin_closest_cells`) —, entourées en bleu
 dans le panneau. Sur chaque emplacement

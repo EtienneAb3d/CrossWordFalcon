@@ -447,8 +447,7 @@ public final class Fill {
                 a.batchAbandonedEvent, a.attemptDoneEvent, null, a.lockedLetters, pw, cw, rows, cols);
         filler.pattern = Grids.copy(grid);
         filler.bestPattern = filler.pattern;
-        filler.reshapeEnabled = a.reshapeBlackCells && (a.excludedSlots == null || a.excludedSlots.isEmpty())
-                && Filler.MAX_BACKGHOSTS_PER_DESCENT <= 0;
+        filler.reshapeEnabled = a.reshapeBlackCells && (a.excludedSlots == null || a.excludedSlots.isEmpty());
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
         if (a.checksProgress != null && a.checksSlot != null) {
             final int slot = a.checksSlot;

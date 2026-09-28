@@ -41,7 +41,12 @@ public final class Filler {
     // An attempt starting from locked cells (inherited from a previous
     // palier) applies no descent cap at all.
     public static final boolean BACKJUMPING_ENABLED = true;
-    public static final int MAX_BACKGHOSTS_PER_DESCENT = 0;
+    // Longest backjump: words placed after the most recent word of a
+    // conflict set; a failure beyond that distance is backghosted instead.
+    public static final int MAX_BACKJUMP_LEVELS = 5;
+    // Backghosts pending on one descent at most; past that a failure
+    // backjumps however far. <= 0 disables backghosting.
+    public static final int MAX_BACKGHOSTS_PER_DESCENT = 10;
     public static final int MAX_EXCLUDED_SLOTS = 3;
     public static final boolean ALTERNATE_DIRECTION_ENABLED = false;
     // Level 4 of the slot-selection cascade (restrict to slots already
@@ -53,24 +58,33 @@ public final class Filler {
     public static double[] slotSelectionOrigin(int rows, int cols) {
         return new double[]{(rows - 1) / 2.0, (cols - 1) / 2.0};
     }
-    /** Origin {row, col} of level 6's geometric score: the center of the
-     *  most recent word the current descent placed and still holds (highest
-     *  placementSeq), i.e. the midpoint of its first and last cells; the
-     *  grid's center while the descent holds no word of its own (mirrors
-     *  Filler._selection_origin). */
+    /** Origin {row, col} of level 6's geometric score: the midpoint of the
+     *  segment joining the grid's center and the center of the most recent
+     *  word the current descent placed and still holds (highest
+     *  placementSeq; a word's center is the midpoint of its first and last
+     *  cells); while the descent holds no word of its own, the same with
+     *  the last word Interactive mode's "Suivant" placed (lastPlacedCells),
+     *  else the grid's center itself (mirrors Filler._selection_origin). */
     public double[] selectionOrigin() {
-        if (placementSeq.isEmpty()) return slotSelectionOrigin(rows, cols);
-        int last = -1;
-        long latest = Long.MIN_VALUE;
-        for (Map.Entry<Integer, Long> e : placementSeq.entrySet()) {
-            if (e.getValue() > latest) { latest = e.getValue(); last = e.getKey(); }
+        int[] cells;
+        if (placementSeq.isEmpty()) {
+            if (lastPlacedCells == null || lastPlacedCells.length == 0) return slotSelectionOrigin(rows, cols);
+            cells = lastPlacedCells;
+        } else {
+            int last = -1;
+            long latest = Long.MIN_VALUE;
+            for (Map.Entry<Integer, Long> e : placementSeq.entrySet()) {
+                if (e.getValue() > latest) { latest = e.getValue(); last = e.getKey(); }
+            }
+            cells = slots.get(last);
         }
         int minR = Integer.MAX_VALUE, maxR = Integer.MIN_VALUE, minC = Integer.MAX_VALUE, maxC = Integer.MIN_VALUE;
-        for (int cell : slots.get(last)) {
+        for (int cell : cells) {
             minR = Math.min(minR, Cells.r(cell)); maxR = Math.max(maxR, Cells.r(cell));
             minC = Math.min(minC, Cells.c(cell)); maxC = Math.max(maxC, Cells.c(cell));
         }
-        return new double[]{(minR + maxR) / 2.0, (minC + maxC) / 2.0};
+        double[] center = slotSelectionOrigin(rows, cols);
+        return new double[]{((minR + maxR) / 2.0 + center[0]) / 2.0, ((minC + maxC) / 2.0 + center[1]) / 2.0};
     }
     public static final int SLOT_SELECTION_WINDOW_SIZE = 10;
     public static final int MOST_CONSTRAINED_START_LENGTH = 4;
@@ -146,6 +160,10 @@ public final class Filler {
     List<Object> bestStatLetters;
     /** Level 6's geometric window of the last selectTargetSlot call (mirrors last_selection_window). */
     public List<Integer> lastSelectionWindow = new ArrayList<>();
+    /** Cells of the last word Interactive mode's "Suivant" placed, set by
+     *  Interactive.placeWord: selectionOrigin's fallback before the grid's
+     *  center; null everywhere else (mirrors last_placed_cells). */
+    public int[] lastPlacedCells;
     /** For slot i and position p: the crossing slot (or -1) and its position there. */
     int[][] crossSlot, crossPos;
     /** cell -> [(slot, pos)...] in insertion order. */
@@ -167,6 +185,10 @@ public final class Filler {
     /** Words placed by backtrack still on the grid: slot -> placement sequence number. */
     Map<Integer, Long> placementSeq = new HashMap<>();
     long placementCounter;
+    /** Words placed by the search on each slot and how often (slot cells -> word -> count), plus the
+     *  per-slot total; keyed by cells so a reshape's renumbering keeps unchanged slots' history. */
+    final Map<String, Map<String, Integer>> triedWords = new HashMap<>();
+    final Map<String, Integer> triedTotals = new HashMap<>();
     int ghostsInDescent;
     public String[] assignment;
     public Set<Integer> excludedSlots;
@@ -397,6 +419,16 @@ public final class Filler {
         return false;
     }
 
+    void recordTriedWord(int i, String word) {
+        String key = Arrays.toString(slots.get(i));
+        triedWords.computeIfAbsent(key, k -> new HashMap<>()).merge(word, 1, Integer::sum);
+        triedTotals.merge(key, 1, Integer::sum);
+    }
+
+    int slotTryCount(int i) {
+        return triedTotals.getOrDefault(Arrays.toString(slots.get(i)), 0);
+    }
+
     /** Square root of the sum of the squares of the still-free cells' top frequencies. */
     double slotLetterFrequencyScore(int i) {
         long total = 0;
@@ -516,8 +548,8 @@ public final class Filler {
         return Math.sqrt(total);
     }
 
-    /** Shuffle, rank by statistical score, then draw at random inside a
-     * sliding window of the CANDIDATE_SCORE_WINDOW best remaining words. */
+    /** Shuffle, rank by statistical score divided by (1 + times the word was already placed on this
+     * slot), then draw at random inside a sliding window of the CANDIDATE_SCORE_WINDOW best remaining words. */
     public List<String> orderedCandidates(int i, Collection<String> candsIn) {
         List<String> cands = new ArrayList<>(candsIn);
         rng.shuffle(cands);
@@ -525,8 +557,10 @@ public final class Filler {
         int n = cands.size();
         double[] scores = new double[n];
         Integer[] order = new Integer[n];
+        Map<String, Integer> tried = triedWords.getOrDefault(Arrays.toString(slots.get(i)), Map.of());
         for (int k = 0; k < n; k++) {
-            scores[k] = candidateScore(i, cands.get(k));
+            String w = cands.get(k);
+            scores[k] = candidateScore(i, w) / (1 + tried.getOrDefault(w, 0));
             order[k] = k;
         }
         Arrays.sort(order, (a, b) -> Double.compare(scores[b], scores[a]));
@@ -597,8 +631,7 @@ public final class Filler {
     int backghostTarget(Set<Integer> conflict) {
         if (conflict == null || placementSeq.isEmpty() || ghostsInDescent >= MAX_BACKGHOSTS_PER_DESCENT) return -1;
         int target = -1;
-        long targetSeq = -1, latest = -1;
-        for (Map.Entry<Integer, Long> e : placementSeq.entrySet()) latest = Math.max(latest, e.getValue());
+        long targetSeq = -1;
         for (int k : conflict) {
             Long q = placementSeq.get(k);
             if (q != null && q > targetSeq) {
@@ -606,30 +639,35 @@ public final class Filler {
                 target = k;
             }
         }
-        if (target < 0 || targetSeq == latest) return -1;
+        if (target < 0) return -1;
+        int after = 0;
+        for (long q : placementSeq.values()) if (q > targetSeq) after++;
+        if (after <= MAX_BACKJUMP_LEVELS) return -1;
         return target;
     }
 
     /** Report a failure, backghosting first when allowed (mirrors _fail_or_backghost). */
     boolean failOrBackghost(Set<Integer> conflict, long deadlineChecks, boolean released) {
-        int target = backghostTarget(conflict);
-        if (target < 0) return fail(conflict);
-        String w = assignment[target];
-        placementSeq.remove(target);
-        assignment[target] = null;
-        usedWords.remove(w);
-        Map<Integer, Object[]> savedScores = refreshLetterScoresAround(target);
-        ghostsInDescent++;
-        boolean solved = backtrack(deadlineChecks, released);
-        ghostsInDescent--;
-        if (solved) return true;
-        Set<Integer> retryConflict = lastConflict;
-        restoreLetterScores(savedScores);
-        if (retryConflict == null) return fail(null);
-        Set<Integer> merged = new HashSet<>(conflict);
-        merged.remove(target);
-        merged.addAll(retryConflict);
-        return fail(merged);
+        while (true) {
+            int target = backghostTarget(conflict);
+            if (target < 0) return fail(conflict);
+            String w = assignment[target];
+            placementSeq.remove(target);
+            assignment[target] = null;
+            usedWords.remove(w);
+            Map<Integer, Object[]> savedScores = refreshLetterScoresAround(target);
+            ghostsInDescent++;
+            boolean solved = backtrack(deadlineChecks, released);
+            ghostsInDescent--;
+            if (solved) return true;
+            Set<Integer> retryConflict = lastConflict;
+            restoreLetterScores(savedScores);
+            if (retryConflict == null) return fail(null);
+            Set<Integer> merged = new HashSet<>(conflict);
+            merged.remove(target);
+            merged.addAll(retryConflict);
+            conflict = merged;
+        }
     }
 
     // ================================================================== in-search reshapes
@@ -866,11 +904,23 @@ public final class Filler {
         RecentSlots recent = new RecentSlots(MAX_EXCLUDED_SLOTS);
         for (int old : (RecentSlots) saved[5]) if (!option.forward.containsKey(old)) recent.add(old);
         for (int j : impossibleThisAttempt) if (back.containsKey(j)) recent.add(back.get(j));
+        String[] oldAssignment = (String[]) saved[2];
+        Map<Integer, Long> oldSeq = (Map<Integer, Long>) saved[4];
+        // A word placed before the change that a backghost has taken off
+        // since stays off.
+        for (Iterator<Integer> it = oldSeq.keySet().iterator(); it.hasNext(); ) {
+            int old = it.next();
+            Integer j = option.forward.get(old);
+            if (j == null || !placementSeq.containsKey(j)) {
+                it.remove();
+                oldAssignment[old] = null;
+            }
+        }
         indexSlots((List<int[]>) saved[0]);
         pattern = (char[][]) saved[1];
-        assignment = (String[]) saved[2];
+        assignment = oldAssignment;
         toleratedDry = (Set<Integer>) saved[3];
-        placementSeq = (Map<Integer, Long>) saved[4];
+        placementSeq = oldSeq;
         impossibleThisAttempt = recent;
         return back;
     }
@@ -928,6 +978,7 @@ public final class Filler {
         for (int j : broken) if (!toleratedDry.contains(j)) newlyTolerated.add(j);
         toleratedDry.addAll(newlyTolerated);
         placementSeq.put(t, placementCounter++);
+        recordTriedWord(t, w);
         if (backtrack(deadlineChecks, released)) return new Object[]{"success", null, null};
         Set<Integer> child = lastConflict;
         toleratedDry.removeAll(newlyTolerated);
@@ -1372,7 +1423,7 @@ public final class Filler {
         List<Integer> refined = new ArrayList<>(shuffledWindow.subList(0, Math.min(refinedSize, shuffledWindow.size())));
         rng.shuffle(refined);
         Map<Integer, Double> freq = new HashMap<>();
-        for (int i : refined) freq.put(i, slotLetterFrequencyScore(i));
+        for (int i : refined) freq.put(i, slotLetterFrequencyScore(i) / (1 + slotTryCount(i)));
         refined.sort((a, b) -> Double.compare(freq.get(b), freq.get(a)));
         return refined.get(0);
     }
@@ -1609,6 +1660,7 @@ public final class Filler {
                     toleratedDry.addAll(newlyTolerated);
                     long seq = placementCounter++;
                     placementSeq.put(bestI, seq);
+                    recordTriedWord(bestI, w);
                     if (backtrack(deadlineChecks, released)) return true;
                     Set<Integer> childConflict = lastConflict;
                     boolean jumpedIn = lastJumped;

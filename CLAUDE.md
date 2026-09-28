@@ -223,7 +223,7 @@ json`. Holds all server-side state in plain module dicts/lists:
 
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
 (`language`, `bilingual_language`, `width`/`height` [5-30], `difficulty`
-[easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 1],
+[easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
 `black_enrichment_percent` [0-100, default 17], `mode` [flash/turbo/fast/
 medium/ultra, default medium], `pseudo`, `theme`, `theme_precision`
 [0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
@@ -332,13 +332,20 @@ via `ProcessPoolExecutor`:
    theme glossary specifically; (6) score the remaining group
    geometrically (squared distance between the slot's own CLOSEST cell to
    an origin, `Filler._selection_origin`, and that origin itself — not the
-   slot's own midpoint: the origin is the center of the most recent word
-   the current descent placed and still holds — the highest
-   `_placement_seq`, the midpoint of its first and last cells — so the
-   fill grows outward from each new word, falling back to the grid's
-   center, `_slot_selection_origin` = `((rows - 1) / 2, (cols - 1) / 2)`,
-   while the descent holds no word of its own: at the root, and always in
-   Interactive mode, whose `Filler` runs no descent), shuffle, and keep the
+   slot's own midpoint: the origin is the midpoint of the segment joining
+   the grid's center, `_slot_selection_origin` = `((rows - 1) / 2,
+   (cols - 1) / 2)`, and the center of the most recent word the current
+   descent placed and still holds — the highest `_placement_seq`, the
+   midpoint of its first and last cells — so the fill keeps exploring one
+   region around each new word, pulled halfway back toward the center
+   rather than confined to the central disk or wandering the whole grid;
+   the origin is the grid's center itself while the descent holds no word
+   of its own, at the root; Interactive mode's `Filler` runs no descent
+   and takes instead the same midpoint with the last word "Suivant" placed that the grid still fully holds (`Filler.
+   last_placed_cells`, from `InteractiveStepRequest.last_placed_cells` —
+   the client's `interactivePlacedHistory`, so an undone or erased word is
+   skipped — validated by `_placed_word_origin_cells` as one straight run
+   of letters), the grid's center before any), shuffle, and keep the
    `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored as a window; (7) within
    that window, among slots of at least
    `MOST_CONSTRAINED_START_LENGTH=4` letters — a threshold lowered one
@@ -378,7 +385,14 @@ via `ProcessPoolExecutor`:
    top `SLOT_SELECTION_REFINE_FRACTION=1/2`; (9) re-sort by statistical
    fill-option richness (`_slot_letter_frequency_score`: square root of
    the sum of the squared top-letter frequencies of the slot's still-free
-   cells), highest wins.
+   cells) divided by (1 + the slot's try count, `_slot_try_count`),
+   highest wins. The try count comes from `Filler._tried_words` (slot
+   cells -> word -> times the search placed it there, i.e. accepted by the
+   crossing check and recursed into, reshape options included;
+   `_record_tried_word`), summed per slot, kept for the whole attempt and
+   never decremented on backtrack; keyed by cells so an in-search reshape's
+   renumbering keeps every unchanged slot's history. Interactive mode builds
+   a fresh `Filler` per click, so its count is always 0.
    Candidate word order
    within the chosen slot is `Filler.ordered_candidates` — this engine's
    single candidate-ordering rule, shared verbatim with Interactive
@@ -386,7 +400,8 @@ via `ProcessPoolExecutor`:
    below): shuffled, then ranked by `_candidate_score`
    (square root of the sum of squared per-cell statistical letter scores
    from `sample_letter_biases`, which draws `LETTER_BIAS_SAMPLE_SIZE=10`
-   words per slot) with a random draw inside a `CANDIDATE_SCORE_
+   words per slot) divided by (1 + the number of times the search already
+   placed that word on this slot during the attempt, `_tried_words`) with a random draw inside a `CANDIDATE_SCORE_
    WINDOW=50`-word sliding window — deliberately far narrower than a
    slot's own domain, so the statistical ranking stays in charge while two
    attempts on the same state still diverge; a themed grid's matching words are
@@ -649,23 +664,31 @@ backtracking jumps straight to the most recent word actually involved
 instead of replaying the same failure under every unrelated intermediate
 level. `None` (budget, abandon, periodic stop, disabled) falls back to
 chronological backtracking; an empty set (only root-dry slots left) jumps
-to the root. Before backjumping, a failure is first backghosted
-(`Filler._fail_or_backghost`, `MAX_BACKGHOSTS_PER_DESCENT`, currently 0 — disabled): at each
+to the root. A backjump is at most `MAX_BACKJUMP_LEVELS` (5) long; a
+longer one is replaced by a backghost
+(`Filler._fail_or_backghost`, `MAX_BACKGHOSTS_PER_DESCENT` = 10): at each
 place a failure arises with a conflict set (a dry slot, a slot whose
 candidates were all rejected blameably, a node exhausted or at its descent
 cap — never a child's failure merely passed up), if the most recent word of
 that set placed by this search (`Filler._placement_seq`, slot → placement
 sequence number; words already there when `solve()` starts are never
-ghosted) is not the word placed right above — so a backjump would unwind
-other placed words to reach it — that word alone is taken off the grid in
+ghosted) has more than `MAX_BACKJUMP_LEVELS` search-placed words after it
+— the words a backjump would take off without replacing them — that word
+alone is taken off the grid in
 place (its crossers' letter tallies re-sampled, restored afterwards), and a
 fresh `_backtrack` node carries on from there, with every word in between
 still placed. The node that placed a ghosted word finds its entry gone once
 the search really unwinds to it and has nothing left to remove (`owned`).
 At most `MAX_BACKGHOSTS_PER_DESCENT` backghosts can be pending on the
 current descent (`_ghosts_in_descent`, nested retries); past that the
-failure backjumps as above. A failed retry reports the union of both
-conflict sets minus the ghosted slot. A flagged
+failure backjumps however far. A failed retry makes the same choice
+again on the union of both conflict sets minus the ghosted slot — another
+backghost while its most recent word is still beyond `MAX_BACKJUMP_LEVELS`,
+the failure reported otherwise — so the words causing the conflict are
+taken off one by one (a loop in `_fail_or_backghost`, not a recursion). A
+backghost across an in-search reshape is kept by `_undo_reshape`: a word
+placed before the change and ghosted since stays off once the change is
+undone. A flagged
 slot therefore stays fully reusable for the rest of the attempt and is
 picked back up automatically, with no special bookkeeping, the moment
 some other slot's own assignment changes and its domain becomes non-empty
@@ -1103,7 +1126,7 @@ pattern is never reshaped ahead of the search.
 *In automatic generation* the reshape is a node option of `Filler.
 _backtrack`, on the slot the node just chose (`try_fill(reshape_black_
 cells=True)`, passed only by `_pattern_attempt`/`_pattern_continue`, off
-whenever `excluded_slots` is given or `MAX_BACKGHOSTS_PER_DESCENT > 0`).
+whenever `excluded_slots` is given).
 `_with_reshape_candidates` streams the node's candidates lazily as
 challenge words, challenge reshapes, theme words, theme reshapes, then the
 rest; `_reshape_candidates` picks at most `RESHAPE_WORDS_PER_NODE` (5)
@@ -1250,16 +1273,20 @@ declared before `.interactive-impossible`/`.interactive-low` so a stronger
 signal wins the cell) — the same "emplacement écarté" notion, and the same
 colour, automatic generation's own previews already use.
 
-Each "Suivant" also reports the slots the target of the tier that placed
-the word (the last tier tried when nothing is placed) was drawn from:
+Each "Suivant" also reports the slots the placed slot was drawn from —
+for the general-dictionary tier, the window of the sweep selection that
+yielded the slot actually placed on (`_cascade_slot_order` yields each
+slot with its window), not the tier's first target when the sweep moved
+past it; for the "Mots Défi"/theme tiers, their target's (the last tier
+tried when nothing is placed):
 `Filler._select_target_slot` keeps its level-6 geometric window in
 `Filler.last_selection_window` (a plain attribute assignment, overwritten
 by every call), which `_tier_target` reads right after resolving that
 tier's target — before the tier-3 sweep re-runs the cascade — and turns into
 `window_cells` (`_origin_closest_cells`: for each window slot, its cell(s)
-closest to the grid's center — Interactive mode's `Filler` holds no
-descent, so `_selection_origin` is the grid's center there — i.e. the cell that gives it its level-6
-score, ties included). Threaded through `POST /api/interactive/step` (and
+closest to `_selection_origin` — in Interactive mode, the center of the
+last word "Suivant" placed, see below — i.e. the cell that gives it its
+level-6 score, ties included). Threaded through `POST /api/interactive/step` (and
 the start job's result; empty on a resume) into `script.js`'s
 `interactiveWindowCells`, rendered as a blue outline
 (`.cell.white.interactive-window`, `outline` so it composes with every

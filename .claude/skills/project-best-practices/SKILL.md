@@ -1242,17 +1242,23 @@ the current defaults/behavior to know before touching this code.
   and a local failure is replayed under every unrelated intermediate word.
   Every failure path goes through `Filler._fail` so `_last_conflict` is
   never stale; `None` means "backtrack chronologically".
-- **A failure is backghosted before it backjumps**
-  (`Filler._fail_or_backghost`, `MAX_BACKGHOSTS_PER_DESCENT`, currently 0 — disabled, kept for testing): only
-  the most recent word of the conflict set is taken off the grid, in
-  place, with no node unwound and every later word kept; the node that
-  placed it later finds nothing to remove. The rule, as the user framed
-  it: a backjump strips too much of the grid during the early filling
-  phases, so the lighter move comes first, up to `MAX_BACKGHOSTS_PER_DESCENT` pending per descent,
-  then the backjump that unwinds for good. Applied only where a failure
-  arises (never to a child's failure passed up), only to words this
-  search placed, and only when that word is not the one placed right
-  above (ordinary backtracking reaches it without loss).
+- **A backjump is at most `MAX_BACKJUMP_LEVELS` (5) words long; a longer
+  one is replaced by a backghost** (`Filler._fail_or_backghost`,
+  `MAX_BACKGHOSTS_PER_DESCENT` = 10) — the user's rule: "Limiter le
+  backjump complet à 5 sauts en arrière. Pour plus de 5 sauts, effectuer
+  un simple nettoyage du conflit, en retirant les mots créant le conflit."
+  The distance is the number of search-placed words after the most recent
+  word of the conflict set. Beyond it, only that word is taken off the
+  grid, in place, with no node unwound and every later word kept; the
+  node that placed it later finds nothing to remove. A failed retry
+  re-decides on the merged conflict set, so conflict words are taken off
+  one by one until the most recent one left is within backjump reach.
+  Applied only where a failure arises (never to a child's failure passed
+  up) and only to words this search placed. Choice made with the change,
+  to revisit with the user: past `MAX_BACKGHOSTS_PER_DESCENT` nested
+  backghosts on one descent, the backjump is made in full (bounds the
+  recursion). Backghosting and in-search reshapes coexist:
+  `_undo_reshape` keeps a word ghosted since the reshape off the grid.
 - **The last-resort `allow_breaking` stage is gated globally, not per
   node.** `Filler.solve` runs a strict pass from the root first; only if
   the root itself fails (not the budget, not an abandon) is the search
@@ -1302,9 +1308,12 @@ the current defaults/behavior to know before touching this code.
   already determined by a real letter is skipped, otherwise every
   partially-filled slot would report 1. Level 7 runs inside level 6's
   geometric window (the `SLOT_SELECTION_WINDOW_SIZE` (10) slots closest to
-  the center of the last word the current descent placed,
-  `Filler._selection_origin` — the grid's center while it has placed
-  none), not over the whole group, and measures slots through a
+  the midpoint between the grid's center and the center of the last word
+  the current descent placed, `Filler._selection_origin` — the grid's
+  center while it has placed none; in Interactive mode, the same midpoint
+  with the last word "Suivant" placed that the grid still holds, sent by
+  the client as `last_placed_cells`),
+  not over the whole group, and measures slots through a
   decreasing length threshold: 4 letters and more first
   (`MOST_CONSTRAINED_START_LENGTH`), then 3, then 2
   (`MOST_CONSTRAINED_MIN_LENGTH`), stopping at the first threshold where
@@ -1526,7 +1535,7 @@ the current defaults/behavior to know before touching this code.
   `force_letters_percent` in code — renamed in the UI only, at the user's
   explicit request, from "Lettres forcées"/"Forced letters") are a
   separate, UI-configurable option (`force_letters_percent`, a free-text
-  integer field 0-100, `GenerateRequest.Field(ge=0, le=100)`, static "1"
+  integer field 0-100, `GenerateRequest.Field(ge=0, le=100)`, static "0"
   default) — at most one seed per slot, drawn at random among eligible
   candidates (not the statistically strongest one, to avoid always forcing
   the same dominant letter), each needing `LETTER_BIAS_MIN_COUNT` (1)

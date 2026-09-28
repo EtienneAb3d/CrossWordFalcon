@@ -129,7 +129,7 @@ full again whenever a new generation or an Interactive session starts.
   cells (0-100%, 17% by default). A higher value gives shorter, easier
   words at the cost of a denser-looking grid.
 - **Graines / Seeds** (`#force-letters`) — a small percentage (0-100%,
-  1% by default) of cells the generator seeds with a statistically
+  0% by default) of cells the generator seeds with a statistically
   likely letter before it starts searching for real words, nudging the
   search rather than fixing an actual answer in place.
 - **Mode** (`#mode`) — how much computing effort one attempt is allowed
@@ -905,8 +905,9 @@ real letter. Both update after every edit.
   spot is only deprioritised, never walled off: words crossing it are
   still placed normally, unlike a red (impossible) one. After each click,
   a blue frame marks the spots the generator was choosing among when it
-  picked where to put the word it placed — the ones closest to the grid's center
-  — each by its own square nearest that center (`frontend/static/script.js`,
+  picked where to put the word it placed — the ones closest to the point
+  halfway between the grid's center and the middle of the previous word
+  **Suivant** placed (the grid's center before the first one) — each by its own square nearest that point (`frontend/static/script.js`,
   `interactiveWindowCells`). Once no spot in
   the whole grid has a completely safe word left, **Suivant** widens what
   it will accept rather than stopping: first a word that leaves some
@@ -1375,9 +1376,11 @@ below — the same priority the Interactive mode panel's own "Suivant" /
 real dictionary candidates left is tackled first, on the theory that
 finishing it with a genuine word now is better than letting a later
 cleanup pass shorten it with a black cell instead; the ten slots of that
-group closest to the middle of the last word the search placed are then
-kept (so the fill grows outward from each new word, starting from the
-grid's center while no word is placed yet); within those ten, the choice narrows to whichever long slots
+group closest to the point halfway between the grid's center and the
+middle of the last word the search placed are then kept (so the fill keeps
+exploring one region around each new word, without being confined to the
+center or wandering across the whole grid, starting from the grid's
+center while no word is placed yet); within those ten, the choice narrows to whichever long slots
 own the single most constrained cell (only slots of 12 letters or more
 are looked at first; if none has a free cell left to measure, the bar
 drops to 11 letters, then 10, and so on down to 2) — the cell with the
@@ -1389,7 +1392,9 @@ is still room to manoeuvre; ties are then broken by how many letters are
 already placed and, as a final
 tie-break among a handful of similarly-placed slots, by which one's
 still-open cells look statistically the most promising to fill (see the
-next paragraph). A slot that crosses another slot already known to be
+next paragraph), that promise being divided by one plus the number of
+words the attempt has already tried on the slot, so a slot retried again
+and again gives way to a less explored one. A slot that crosses another slot already known to be
 unfillable is skipped entirely — a word placed there would likely just
 be removed again the moment the grid gets cleaned up. Separately, the
 generator also keeps its own running memory, within the current attempt
@@ -1413,7 +1418,9 @@ Separately, and regardless of whether any seed was actually planted, this
 same sampling is used to rank the real dictionary candidates for a slot
 before trying them: a candidate whose letters line up well with the
 statistical consensus on the slot's own still-undetermined cells is tried
-before one that doesn't, though the very first word actually attempted is
+before one that doesn't (a word's rank being divided by one plus the number
+of times the attempt has already tried it on that slot, so a fresh word
+overtakes one retried again and again), though the very first word actually attempted is
 still drawn at random from among a narrow window of the best-ranked
 candidates, not strictly the single best one — this keeps different
 attempts from converging on the exact same choice every time, without
@@ -1473,14 +1480,17 @@ be tried there instead — this "undo and try something else" behavior can
 ripple back through several slots at once if needed. Undoing goes
 straight to the cause: when a step fails, the generator notes which
 already-placed words its failure depends on (the words crossing the slot
-it could not fill). The generator also has a lighter fix, currently switched off: if the
-most recent of them is not the word placed just before, it takes that one word off the
-grid, leaves every word placed since then where it is, and simply carries
-on filling from there (backend/crossword_gen.py, `Filler._fail_or_
-backghost`). When it is on, a set number of these lighter fixes can be stacked
-on one line of search; past that, or while it is off, every word placed since the cause that has nothing
-to do with it is removed in one go, without being retried, until the most
-recent word actually involved gets a different candidate. Undoing also starts
+it could not fill). When at most 5 words have been placed since the most
+recent of them, every word placed since the cause that has nothing to do
+with it is removed in one go, without being retried, until the most
+recent word actually involved gets a different candidate. When more have
+been placed since, the generator uses a lighter fix instead: it takes
+just that one word off the grid, leaves every word placed since then
+where it is, and simply carries on filling from there — and if that
+fails too, it takes the next word causing the conflict off the same way
+(backend/crossword_gen.py, `Filler._fail_or_backghost`,
+`MAX_BACKJUMP_LEVELS`). Up to 10 of these lighter fixes can be stacked on
+one line of search; past that, the full undo is made. Undoing also starts
 the moment the generator notices that some still-empty slot can no longer
 be filled at all as the grid stands, since a word placed earlier is to
 blame — unless that slot was already unfillable before the search placed
