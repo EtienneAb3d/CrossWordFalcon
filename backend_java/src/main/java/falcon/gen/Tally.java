@@ -40,16 +40,6 @@ public final class Tally {
         return t;
     }
 
-    public static int[] combined(int[][] byDir) {
-        int[] total = new int[Alpha.size()];
-        if (byDir == null) return total;
-        for (int[] t : byDir) {
-            if (t == null) continue;
-            for (int i = 0; i < t.length && i < total.length; i++) total[i] += t[i];
-        }
-        return total;
-    }
-
     /** Letters both directions observed, each at the lower of its two counts. */
     public static int[] crossed(int[][] byDir) {
         int[] a = byDir == null ? null : byDir[0], b = byDir == null ? null : byDir[1];

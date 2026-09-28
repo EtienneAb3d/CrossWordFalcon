@@ -280,7 +280,7 @@ plusieurs signaux) :
   seule descente supplémentaire ; il ne peut atteindre le plafond que si
   tous les échecs qui lui sont revenus sont des retours en arrière
   ordinaires. Tant que la recherche a posé moins de 10 mots en plus de ceux
-  de l'état initial de la tentative, le plafond d'un nœud est porté à 7
+  de l'état initial de la tentative, le plafond d'un nœud est porté à 50
   descentes. Une grille héritée d'une étape précédente (tentative qui
   démarre avec des cases verrouillées) n'a aucun plafond : tous ses
   nœuds explorent toutes leurs possibilités. (`backend/crossword_gen.py`,
@@ -350,7 +350,9 @@ plusieurs signaux) :
   n'appartenant qu'à un seul emplacement garde le relevé de ce seul sens.
   Le nombre de lettres du relevé croisé est le « nombre de lettres encore
   possibles » d'une case (niveau 7 du choix d'emplacement) ; sa lettre la
-  plus fréquente est la **lettre statistique** de la case. Un relevé
+  plus fréquente est la **lettre statistique** de la case. C'est aussi la
+  combinaison des deux sens conservée pour chaque case et relue par le
+  classement des mots candidats ; rafraîchir un sens la recalcule. Un relevé
   croisé vide (aucune lettre commune) ne fait PAS de la case une case
   croisée bloquée : ce n'est qu'un échantillon, et seule la recherche, sur
   les domaines réels, en décide.
@@ -377,6 +379,27 @@ plusieurs signaux) :
   emplacement entièrement verrouillé dont la combinaison ne forme aucun mot
   réel. (`backend/crossword_gen.py`, `_build_retry_seed`/
   `_clean_blocked_slots` avec `deep=True`, `GRID_REPEAT_DEEP_CLEANUP_STREAK`.)
+
+- **Nettoyage dur** (*hardclean*) : option du nettoyage des emplacements
+  bloqués, activée par défaut, qui efface toutes les lettres des mots
+  retirés parce qu'ils croisent un emplacement bloqué — y compris celles
+  qu'ils partagent avec un mot qui ne le croise pas ; ce mot, amputé d'une
+  lettre, est retiré à son tour, ses autres lettres restant en place.
+  Commune à la génération automatique et au bouton **Nettoyer** du mode
+  Interactif. (`backend/crossword_gen.py`, `_clean_blocked_slots`,
+  `HARD_CLEAN_ENABLED`.)
+
+- **Seconde chance** : reprise d'une tentative qui échoue alors que le
+  palier est encore en course (au moins une tentative d'origine n'a pas
+  atteint son budget). Au lieu d'être déclarée échouée et remplacée par une
+  grille vierge, sa grille subit un nettoyage dur, sans génération de cases
+  noires (motif gardé tel quel), et reprend sur le même processus. Une case
+  verrouillée dont le nettoyage efface la lettre est déverrouillée. La
+  tentative n'est réellement déclarée échouée que lorsqu'elle reproduit un
+  état bloqué (motif et lettres placées) déjà produit au cours de ses
+  secondes chances ; son processus passe alors à une grille vierge.
+  (`backend/crossword_gen.py`, `generate_grid`, `_second_chance_seed`,
+  `_blocked_state_key`.)
 
 - **Grille écartée** : grille nettoyée qui reproduit une troisième fois le
   même état malgré le nettoyage profond. Elle n'est plus reprise au palier

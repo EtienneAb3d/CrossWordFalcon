@@ -3506,6 +3506,15 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     # search/fill) and "grid_ready" right after (end of optimization) —
     # see crossword_gen.py.
     phase_times = {}
+    # The last non-empty live-preview snapshot the search published (one
+    # tile per process, each frozen gold/orange/grey once its attempt
+    # finished) — `job["live_preview"]` itself is cleared the moment the
+    # search ends, which can precede "minimizing" (a lone success accepted
+    # at the end of the budget). Recorded into `examples_history` as a
+    # "search_final" entry right before the "minimizing" one, so the
+    # navigable history shows the final state of the search, successful
+    # grids framed in gold, before the successful grids themselves.
+    last_live_preview = {"examples": None}
 
     def _apply_zone_revert(examples):
         # "Finir la zone" (`zone_revert`) — shared by every channel that can
@@ -3553,6 +3562,8 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # ce que l'utilisateur revienne au dernier état de l'historique."
         _apply_zone_revert(examples)
         job["live_preview"] = examples
+        if examples:
+            last_live_preview["examples"] = examples
 
     def progress(step, **data):
         if step == "budget_progress":
@@ -3583,6 +3594,18 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # `example_grid` this job's own `examples_history` ever stores gets
         # the same cell-by-cell revert as the live-preview channel does.
         _apply_zone_revert(data.get("examples"))
+        if step == "minimizing" and last_live_preview["examples"]:
+            # See `last_live_preview` above. Each tile's `previous` field is
+            # a STOP_DUMP-only diagnostic, never shown, so it is dropped.
+            job["examples_history"].append({
+                "step": {"code": "search_final", "count": job["success_count"]},
+                "examples": [
+                    {k: v for k, v in ex.items() if k != "previous"}
+                    for ex in last_live_preview["examples"]
+                ],
+                "success_count": job["success_count"],
+            })
+            last_live_preview["examples"] = None
         job["step"] = {"code": step, **data}
         if step in ("minimizing", "grid_ready"):
             phase_times[step] = time.monotonic()
@@ -3631,29 +3654,29 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # step's own field, once as this entry's dedicated `examples` key)
         # for no benefit — nothing ever reads `entry["step"]["examples"]`.
         #
-        # The "pattern" step itself is excluded here — at the user's
-        # explicit request: "seuls les états actuellement stockés dans
-        # l'historique navigable doivent être dans cet historique : les
-        # états intermédiaires ne sont pas mémorisés." It fires at the very
-        # START of a palier (crossword_gen.py's own `progress("pattern",
-        # ...)` call, right before that palier's own search even begins),
-        # previewing the exact same carried-forward/cleaned-up state the
-        # PREVIOUS palier's own "pattern_attempt_failed"/"pattern_found"
-        # entry already recorded — never new information, only a
-        # letterless echo of it. Because this event fires with no
-        # scheduling gap right after that previous entry (see
-        # `recordPreviewHistory`'s own comment in script.js), it is
-        # deterministically the newest `examples_history` entry every time
-        # a client happens to poll — recording it used to make the web
-        # UI's "jump straight to the latest known state" auto-follow (see
-        # script.js) show only these blank, just-starting grids, never the
-        # richer state a palier's own search actually reaches.
+        # The "pattern" step (the grid a palier STARTS from:
+        # crossword_gen.py's own `progress("pattern", ...)`, right before
+        # that palier's search begins) is recorded like every other key
+        # step. It is the only entry showing the state AFTER the previous
+        # palier's cleanup — its "pattern_attempt_failed"/"pre_cleanup_
+        # optimized" entries both precede that cleanup — so without it a
+        # "reprise telle quelle" palier, which emits no "pattern_generated",
+        # leaves nothing between one palier's optimization and the next
+        # one's failure. The web UI steps through recorded entries one per
+        # poll before going back to the live view (script.js's
+        # `advanceLiveDisplay`), so this entry never pins the display.
         examples = data.get("examples")
-        if examples and step != "pattern":
+        if examples:
             step_without_examples = {
                 k: v for k, v in job["step"].items() if k not in ("examples", "word_table")
             }
-            entry = {"step": step_without_examples, "examples": examples}
+            # `success_count`: the number of successful grids at this
+            # step, so the web UI's gold-medal badge follows the navigated
+            # entry rather than the live count.
+            entry = {
+                "step": step_without_examples, "examples": examples,
+                "success_count": job["success_count"],
+            }
             # word_table (see _build_word_verification_table below) rides
             # along on this same entry rather than a separate job-level
             # field, at the user's explicit request that this diagnostic

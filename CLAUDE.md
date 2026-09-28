@@ -139,8 +139,16 @@ json`. Holds all server-side state in plain module dicts/lists:
 - **`JOBS`** (`dict[job_id, dict]`, bounded to `MAX_JOBS=50`, oldest
   evicted first) — every generation/interactive-authoring job. An entry
   carries `status` (`running`/`done`/`cancelled`/`error`), a live `step`
-  progress dict, `result` once finished, `examples_history` (an append-
-  only log of attempt-preview snapshots the web UI replays), `live_preview`
+  progress dict, `result` once finished, `examples_history` (every
+  progress event carrying `examples` — the palier-start `pattern` step
+  included, the only entry showing a grid after the previous palier's
+  cleanup; an append-
+  only log of attempt-preview snapshots the web UI replays, each entry
+  also carrying the job's `success_count` at that moment, which the web
+  UI's gold-medal badge shows for the navigated entry — plus one
+  `search_final` entry appended right before "minimizing": the last
+  non-empty `live_preview` snapshot, `previous` stripped, successful
+  tiles framed gold), `live_preview`
   (a single, continuously OVERWRITTEN attempt-preview snapshot — every new
   best state the CSP search reaches on any still-running attempt, never
   appended, `None` for a job type that never produces one; each entry
@@ -370,12 +378,13 @@ via `ProcessPoolExecutor`:
    rather than frozen on the pre-search sampling: every time a word is
    written, `_refresh_letter_scores_around` re-samples each still-open
    slot it CROSSES (skipping one whose domain is empty — nothing left to
-   measure) against that slot's own current `_domain`, replacing its
-   cells' summed tally (`letter_scores`, what `_candidate_score`/`_slot_
-   letter_frequency_score` read) rather than adding to it, since the other
-   contributor to those cells is the word just placed, whose letters are
-   now fixed, and replacing only that slot's own direction entry in
-   `letter_scores_by_dir`, the other direction's left as it stands;
+   measure) against that slot's own current `_domain`, replacing only
+   that slot's own direction entry in `letter_scores_by_dir`, the other
+   direction's left as it stands, then recomputing each of its cells'
+   combined tally (`letter_scores`, what `_candidate_score`/`_slot_
+   letter_frequency_score` read) as the crossing of the two directions
+   (`_crossed_letter_counts`: common letters, each at its lower count —
+   the same view level 7 and the "Stats" letters read);
    `_restore_letter_scores` undoes it as the placement is reverted, so a
    tally never outlives its own assignment. Bounded by construction: at
    most one crossing slot per cell of the placed word, each costing one
@@ -485,10 +494,26 @@ via `ProcessPoolExecutor`:
 successful grid is never enough to conclude the search: `generate_grid`
 only stops once at least `MIN_SUCCESSFUL_ATTEMPTS=2` attempts have
 genuinely succeeded, counted cumulatively across the *whole* search (every
-palier, not just the one that just ran). While harvesting a palier's
+palier, not just the one that just ran). A failure while some ORIGINAL attempt of the palier is still racing is
+not declared failed at once: it gets a **second chance**
+(`_second_chance_seed`) — a hard clean of its blocked slots
+(`_clean_blocked_slots` given no `grid`, so no black cell is added, moved
+or reopened; `cleared_cells_out` returns the cells it erased), then
+`_pattern_continue(racing=False)` resumes the same pattern on the freed
+worker, under the same lineage number, with the attempt's own locked
+letters (`diag["locked_letters"]`, `[row, col, letter]` triples set by
+`try_fill` on failure) minus the erased cells — a locked cell whose letter
+the clean removes is unlocked — plus the clean's `confirmed`. The chain's
+blocked states (`_blocked_state_key`: pattern + placed letters) are kept
+per attempt seed (`second_chance_keys`); a failure reproducing one of them
+is final, and so is one `_plug_isolated_cells` completes. A superseded
+failure stays out of `outcomes` (its checks still count in
+`total_attempts_tried`); the continuation's result takes its place.
+While harvesting a palier's
 `PARALLEL_ATTEMPTS` parallel futures, the moment any of them finishes
 (success or failure) while some ORIGINAL attempt of the palier is still
-racing, the worker process it just freed is immediately reassigned to a
+racing, the worker process it just freed (by a success, or by a failure
+declared final) is immediately reassigned to a
 brand-new, from-scratch attempt (the same shape as an ordinary "reset"
 attempt — never a continuation of the grid that just finished) instead of
 sitting idle. A replacement runs with `racing=False` (`_pattern_attempt`):
@@ -501,7 +526,11 @@ polls every 0.5s and sets `attempt_done_event` — interrupting every
 replacement still running — as soon as every original has finished
 (`interrupt_threshold`) or every original still pending has used up its
 budget (`checks_progress` of its slot ≥ `resolved_deadline_checks`); no
-replacement is dispatched after that. A palier that ends with fewer than `MIN_SUCCESSFUL_ATTEMPTS`
+replacement is dispatched after that. Once the harvest ends, every failed attempt whose only unfilled cells
+are isolated ones (no unfilled neighbour) is completed by blackening them
+(`_plug_isolated_cells`, kept only if the grid stays structurally valid
+and every slot of the new pattern spells a real word) and then counts as
+an ordinary success, subject to the same threshold. A palier that ends with fewer than `MIN_SUCCESSFUL_ATTEMPTS`
 successes in hand (0 or 1) does not stop the search: it falls through to
 the ordinary cross-palier retry machinery below for its own failed
 attempts, and whatever single success it did find stays remembered for
@@ -549,6 +578,25 @@ Both functions hand back a `black_cell_links` map pairing each word they
 place with its own black-cell change; `_clean_blocked_slots` reverts that
 change in the same step it removes the word, so a word and the black
 cell added or moved for it are always kept or discarded together.
+**Hardclean** (`HARD_CLEAN_ENABLED`, on by default; Java `Cleanup.
+HARD_CLEAN_ENABLED`): once `_clean_blocked_slots` has done every removal,
+every cell of a removed word is cleared, including one it shared with a
+still-assigned word that does not cross the impossible slot — that word
+is unassigned too (its `black_cell_links` change reverted), its other
+letters kept in the returned `confirmed` as plain letters (never on a
+cell `new_black_cells` blackened; a `permanent_locked_letters` cell is
+never cleared). Every caller inherits it: the "reprise telle quelle" and
+full/deep cleanups, and Interactive "Nettoyer" (`interactive_clean_
+impossible_zones`, which carries those plain letters into the returned
+grid). Both resume paths differ only in their cleanup, never in how the
+next palier starts: each hands it every letter its own cleanup confirmed.
+"Reprise telle quelle" passes them as locked letters (`_pattern_continue`'s
+own `locked_letters`, the cleanup's `confirmed` carried by `_continue_seed_
+pool` as each pool entry's 4th element), exactly as the full cleanup
+already does through `_pattern_attempt`; `preseed_assignment` holds whole
+words only and cannot carry them. `_serialize_resume_state`'s own
+`continue_locked_letters` field keeps them across "Continuer" (absent from
+an older payload, read as `None`).
 This can repeat for up to `MAX_CONSECUTIVE_CONTINUE_PALIERS=4`
 consecutive paliers before a full cleanup is forced regardless (and
 immediately, if every one of a palier's parallel attempts independently
@@ -628,7 +676,7 @@ is inherited by everything placed below a release and restores itself as
 the backtrack unwinds back above the node that released it.
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
 `MAX_DESCENTS_PER_NODE` (10; `<= 0` disables it) — set to
-`EARLY_MAX_DESCENTS_PER_NODE` (7) for a node entered while fewer than
+`EARLY_MAX_DESCENTS_PER_NODE` (50) for a node entered while fewer than
 `EARLY_DESCENTS_WORD_COUNT` (10) words are in place on top of the
 attempt's initial state (`Filler._initial_assigned_count`, the words
 already assigned when `solve()` starts), and removed entirely for an

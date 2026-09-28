@@ -583,6 +583,7 @@ public final class Fill {
                     diag.impossibleCells = new ArrayList<>(ic);
                 }
                 diag.lockedCells = lockedCells;
+                diag.lockedLetters = a.lockedLetters == null ? Map.of() : new java.util.TreeMap<>(a.lockedLetters);
                 diag.themeCells = themeWordCells(slots, filler.bestAssignment, pw);
                 diag.challengeCells = challengeWordCellsFromAssignment(slots, filler.bestAssignment, cw);
                 diag.attemptId = a.attemptId;

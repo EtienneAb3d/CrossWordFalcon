@@ -2245,7 +2245,7 @@ MAX_DESCENTS_PER_NODE = 10
 # `EARLY_MAX_DESCENTS_PER_NODE` descents instead. Measured per node, from
 # the words in place when the node is entered.
 EARLY_DESCENTS_WORD_COUNT = 10
-EARLY_MAX_DESCENTS_PER_NODE = 7
+EARLY_MAX_DESCENTS_PER_NODE = 50
 
 # An attempt inherited from a previous palier — one that starts with
 # locked cells (`locked_letters`, or words already assigned when
@@ -2652,14 +2652,15 @@ class Filler:
         # words are placed (`_refresh_letter_scores_around`) and crossed
         # (`_crossed_letter_counts`) wherever the letters actually still
         # possible at a cell are wanted (`_slot_min_letter_options`,
-        # `stat_letters`). `self.letter_scores` is the summed view the
-        # candidate ordering reads (`_candidate_score`/`_slot_letter_
-        # frequency_score`).
+        # `stat_letters`). `self.letter_scores` is that same crossed view,
+        # kept per cell and recomputed whenever one of its directions is
+        # refreshed — what the candidate ordering reads (`_candidate_score`/
+        # `_slot_letter_frequency_score`).
         self.letter_scores_by_dir = {
             cell: dict(by_dir) for cell, by_dir in (letter_scores or {}).items()
         }
         self.letter_scores = {
-            cell: _combined_letter_counts(by_dir)
+            cell: _crossed_letter_counts(by_dir)
             for cell, by_dir in self.letter_scores_by_dir.items()
         }
         # The previews' statistical letters (`stat_letters`) as they stood
@@ -3375,18 +3376,13 @@ class Filler:
         every cell is already determined: there is nothing left to
         measure, and the stale tally is simply left alone.
 
-        Each refreshed slot REPLACES the tally of its own cells rather
-        than adding to it. `sample_letter_biases` sums the contributions
-        of both slots crossing a cell, but the other contributor here is
-        `i`, whose letters are now fixed — its tally says nothing useful
-        about a cell whose letter is settled — so the crossing slot's own
-        fresh sample is the whole of what is still to be measured there.
-
-        The per-direction tally (`letter_scores_by_dir`) is updated in step:
-        the refreshed slot's own direction entry is replaced at each of its
-        cells, the other direction's entry left as it stands, so crossing
-        the two (`_crossed_letter_counts`) always confronts the freshest
-        sample of each side. Both views are restored together.
+        Each refreshed slot replaces only its OWN direction's entry of the
+        per-direction tally (`letter_scores_by_dir`) at each of its cells,
+        the other direction's entry left as it stands; the cell's combined
+        tally (`letter_scores`) is then recomputed as the crossing of the
+        two (`_crossed_letter_counts`: letters both directions observed,
+        each at the lower of its two counts), so it always confronts the
+        freshest sample of each side. Both views are restored together.
         """
         saved = {}
         seen = set()
@@ -3407,9 +3403,9 @@ class Filler:
                             self.letter_scores.get(jcell),
                             dict(by_dir) if by_dir is not None else None,
                         )
-                    fresh = Counter(word[pos] for word in sample)
-                    self.letter_scores[jcell] = fresh
-                    self.letter_scores_by_dir.setdefault(jcell, {})[direction] = fresh
+                    by_dir = self.letter_scores_by_dir.setdefault(jcell, {})
+                    by_dir[direction] = Counter(word[pos] for word in sample)
+                    self.letter_scores[jcell] = _crossed_letter_counts(by_dir)
         return saved
 
     def _restore_letter_scores(self, saved):
@@ -5815,16 +5811,6 @@ def _close_implied_slots(slots, index, assignment, used_words, excluded_slots=No
             changed = True
 
 
-def _combined_letter_counts(by_dir):
-    """Sum of a cell's per-direction letter tallies (see `sample_letter_
-    biases`'s `letter_scores`): every letter either crossing slot observed
-    there, with both slots' occurrences added up."""
-    total = Counter()
-    for counts in by_dir.values():
-        total.update(counts)
-    return total
-
-
 def _crossed_letter_counts(by_dir):
     """A cell's per-direction letter tallies (see `sample_letter_biases`'s
     `letter_scores`) crossed with each other: only the letters observed by
@@ -5966,14 +5952,14 @@ def sample_letter_biases(grid, rows, cols, index, rng,
       every white cell of the grid (not just the winning letter kept for
       `forced`), kept SEPARATELY for each of the two slots crossing a
       cell (`"across"`/`"down"`, `slot_direction`), each contributing its
-      own sample. `_combined_letter_counts` sums both directions — what
-      `Filler._candidate_score` sorts a slot's candidate words by (root of the
-      sum of squares over its still-free cells) and what `Filler._slot_letter_
-      frequency_score` reads; `_crossed_letter_counts` keeps only the
-      letters BOTH directions observed, each at the lower of its two
-      counts — what `Filler._slot_min_letter_options`, the "Stats" button
-      (`_interactive_letter_stats`) and the previews' statistical letters
-      (`Filler.stat_letters`) read."""
+      own sample. `_crossed_letter_counts` combines the two, keeping only
+      the letters BOTH directions observed, each at the lower of its two
+      counts — what `Filler._candidate_score` sorts a slot's candidate
+      words by (root of the sum of squares over its still-free cells),
+      what `Filler._slot_letter_frequency_score` and `Filler._slot_min_
+      letter_options` read, and what the "Stats" button (`_interactive_
+      letter_stats`) and the previews' statistical letters (`Filler.stat_
+      letters`) show."""
     slots = extract_slots(grid, rows, cols)
     cell_to_slots = defaultdict(list)
     for slot_idx, cells in enumerate(slots):
@@ -6618,6 +6604,12 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                     set(diagnostics["impossible_cells"]) | {cell for i in quota_slots for cell in slots[i]}
                 )
             diagnostics["locked_cells"] = locked_cells
+            # The letters themselves, as `[row, col, letter]` triples: a
+            # second chance (`_second_chance_seed`) resumes this grid with
+            # them, minus the cells its hard clean erases.
+            diagnostics["locked_letters"] = [
+                [r, c, ch] for (r, c), ch in sorted((locked_letters or {}).items())
+            ]
             diagnostics["theme_cells"] = _theme_word_cells(
                 slots, filler.best_assignment, priority_words
             )
@@ -8412,7 +8404,10 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng, challenge_w
     # impossibles. Ils doivent aussi retirer les emplacements impossibles
     # eux-mêmes." Cleared explicitly here, and `confirmed` rebuilt from the
     # corrected list rather than reused from `_clean_blocked_slots`'s own
-    # (now-stale) return value.
+    # (now-stale) return value. The plain letters a hard clean leaves
+    # behind (`HARD_CLEAN_ENABLED`: the other letters of a word that lost
+    # one to a removed crossing word) are carried over from it — never a
+    # cell of an impossible slot, which only its own cleared word covered.
     cleaned_assignment = list(cleaned_assignment)
     for i in impossible:
         cleaned_assignment[i] = None
@@ -8422,6 +8417,10 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng, challenge_w
             continue
         for cell, ch in zip(slots[i], word):
             confirmed[cell] = ch
+    impossible_cells = {cell for i in impossible for cell in slots[i]}
+    for cell, ch in _confirmed.items():
+        if cell not in impossible_cells:
+            confirmed.setdefault(cell, ch)
     # How many words were genuinely removed (a slot that had a word
     # before and no longer has one after) — the only other possible
     # action of `_clean_blocked_slots` (`new_black_cells`) is already
@@ -10458,10 +10457,23 @@ def _lengthen_impossible_zones(grid, rows, cols, slots, assignment, impossible_s
     return new_grid, final_slots, final_assignment, final_impossible, black_cell_links
 
 
+# "Hardclean" option of `_clean_blocked_slots` (every caller: the end-of-
+# palier cleanups of automatic generation and Interactive mode's
+# "Nettoyer", `interactive_clean_impossible_zones`). On top of removing the words crossing
+# an impossible slot, every letter of those removed words is cleared too,
+# including a letter shared with another word that does not cross the
+# impossible slot — that other word loses its letter there, so it is no
+# longer a whole word and is unassigned, its other letters staying as
+# plain letters (`confirmed`). Off, a removed word's shared letters stay in
+# place through the non-crossing word holding them.
+HARD_CLEAN_ENABLED = True
+
+
 def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=None,
                           exclude_impossible_locked=False, index=None, rng=None,
                           grid=None, rows=None, cols=None, permanent_locked_letters=None,
-                          black_cell_links=None, deadlocked_slots=None, deep=False):
+                          black_cell_links=None, deadlocked_slots=None, deep=False,
+                          cleared_cells_out=None):
     """Steps 1 and 2 of `_build_retry_seed` (see its own docstring for the
     complete history), extracted into their own function at the user's
     explicit request: "à la fin d'un tour, nettoyer automatiquement les
@@ -10638,7 +10650,21 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     ordinary removal above, every still-assigned word crossing a word that
     removal took out is removed in turn — one extra level, so the letters
     that forced the removed word straight back in (held by those crossing
-    words) are freed too."""
+    words) are freed too.
+
+    `HARD_CLEAN_ENABLED` (hardclean): once every removal above is done,
+    every cell of a word this call removed is cleared, even when a
+    still-assigned word that does not cross the impossible slot shares
+    it. Such a word is unassigned (paired black-cell change reverted like
+    any other removal); its letters outside the cleared cells stay in
+    `confirmed` as plain letters. A `permanent_locked_letters` cell is
+    never cleared.
+
+    `cleared_cells_out` (`None` by default): a set this call fills with
+    every cell whose letter it removed — a cell of a removed word left out
+    of `confirmed` (never a `permanent_locked_letters` cell). A caller that
+    carries locked letters of its own past this cleanup unlocks exactly
+    these cells (see `_second_chance_seed`)."""
     if locked_letters:
         assignment = list(assignment)
         impossible_set = set(impossible_slots) if exclude_impossible_locked else set()
@@ -10868,19 +10894,87 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                         assignment[k] = None
                         _revert_black_cell_link(k)
 
+    leftover_letters = {}
+    if HARD_CLEAN_ENABLED:
+        cleared_cells = {
+            cell
+            for j, word in enumerate(assignment)
+            if word is None and assignment_before_removal[j] is not None
+            for cell in slots[j]
+            if not (permanent_locked_letters and cell in permanent_locked_letters)
+        }
+        for k, word in enumerate(assignment):
+            if word is None or not any(cell in cleared_cells for cell in slots[k]):
+                continue
+            assignment[k] = None
+            _revert_black_cell_link(k)
+            for cell, ch in zip(slots[k], word):
+                if cell not in cleared_cells:
+                    leftover_letters[cell] = ch
+
     confirmed = {}
     for i, word in enumerate(assignment):
         if word is None:
             continue
         for cell, ch in zip(slots[i], word):
             confirmed[cell] = ch
+    for cell, ch in leftover_letters.items():
+        if cell not in new_black_cells:
+            confirmed.setdefault(cell, ch)
+
+    if cleared_cells_out is not None:
+        cleared_cells_out.update(
+            cell
+            for j, word in enumerate(assignment)
+            if word is None and assignment_before_removal[j] is not None
+            for cell in slots[j]
+            if cell not in confirmed
+            and not (permanent_locked_letters and cell in permanent_locked_letters)
+        )
 
     return assignment, confirmed, new_black_cells, reopened_cells
 
 
+def _second_chance_seed(grid, diag, rows, cols, index, rng, permanent_locked_letters=None):
+    """Second chance of an attempt that fails while the palier still runs
+    (see `generate_grid`'s harvest loop): hard clean of its blocked
+    emplacements (`_clean_blocked_slots`, no `grid` given, so no black cell
+    is added, moved or reopened), its pattern kept as is.
+
+    Returns `(seed_grid, preseed_assignment, locked_letters)`, the shape
+    `_pattern_continue` expects. `locked_letters` is the attempt's own
+    locked letters (`diag["locked_letters"]`) minus every cell the clean
+    erased — a locked cell whose letter is removed is unlocked — plus the
+    letters the clean confirmed."""
+    slots = extract_slots(grid, rows, cols)
+    attempt_locked = {(r, c): ch for r, c, ch in diag.get("locked_letters", ())}
+    cleared = set()
+    cleaned_assignment, confirmed, _, _ = _clean_blocked_slots(
+        slots, diag["assignment"], diag["impossible_slots"],
+        locked_letters=attempt_locked or None, index=index, rng=rng,
+        permanent_locked_letters=permanent_locked_letters,
+        cleared_cells_out=cleared,
+    )
+    locked = {cell: ch for cell, ch in attempt_locked.items() if cell not in cleared}
+    locked.update(confirmed)
+    return [row[:] for row in grid], cleaned_assignment, locked
+
+
+def _blocked_state_key(grid, assignment, rows, cols):
+    """Pattern + every letter `assignment` places, as one hashable value:
+    two failures of the same second-chance chain with equal keys are the
+    same blocked state."""
+    letters = [list(row) for row in grid]
+    for cells, word in zip(extract_slots(grid, rows, cols), assignment):
+        if word is not None:
+            for (r, c), ch in zip(cells, word):
+                letters[r][c] = ch
+    return tuple("".join(row) for row in letters)
+
+
 def _plug_isolated_cells(grid, rows, cols, slots, assignment, index, permanent_locked_letters=None):
-    """Last resort tried at the end of a failed palier, at the user's
-    explicit request: "Lorsque toutes les recherches échouent en laissant
+    """Last resort tried on every failed attempt of a palier, at the
+    user's explicit request: "Lorsque toutes les recherches échouent en laissant
     une grille avec [ne reste] plus que des cases blanches isolées, boucher
     les cases isolées avec une case noire. Si le résultat donne une grille
     où tous les emplacements possibles sont remplis et valides, déclarer la
@@ -11616,15 +11710,24 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
 
 # Extracts, from an already-sorted list of `_clean_continue_candidate`
 # candidates (6 elements), the pool passed to the next "reprise telle
-# quelle" palier — `(seed_grid, preseed_assignment, excluded_slots)` per
-# entry, the shape `_pattern_continue` expects (the 6th element, the
-# inherited lineage number, is never passed to `_pattern_continue` itself
-# — see `carry_seed_pool_continue_lineage`, built separately with the
-# same `_seed_pool` but a different extractor, for what it's actually
-# used for). A plain call to `_seed_pool` above with the extractor
-# adapted to this 6-element shape.
+# quelle" palier — `(seed_grid, preseed_assignment, excluded_slots,
+# confirmed)` per entry, the shape `_pattern_continue` expects (the 6th
+# element, the inherited lineage number, is never passed to `_pattern_
+# continue` itself — see `carry_seed_pool_continue_lineage`, built
+# separately with the same `_seed_pool` but a different extractor, for
+# what it's actually used for). A plain call to `_seed_pool` above with
+# the extractor adapted to this 6-element shape.
+#
+# `confirmed` (`sc[1]`) is the cleanup's own cell -> letter map, carried
+# for exactly the same reason the full-cleanup pool carries it as
+# `carry_locked_letters` (see `_build_retry_seed`/`_pattern_attempt`): a
+# hard clean (`HARD_CLEAN_ENABLED`) removes a word that shared a letter
+# with a removed crossing word, so its own remaining letters survive as
+# plain letters with no whole word left to carry them into `preseed_
+# assignment`. Both resume paths differ only in their cleanup, never in
+# how the next palier starts.
 def _continue_seed_pool(sorted_candidates):
-    return _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[3], sc[4]))
+    return _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[3], sc[4], sc[1]))
 
 
 # ---------- Parallel attempts (pattern + fill) ----------
@@ -12567,9 +12670,23 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
 def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_slots,
                        force_letters_fraction=0.0, deadline_checks=None,
                        permanent_locked_letters=None, required_cells=None,
-                       checks_slot=None, permanent_black_cells=None):
+                       checks_slot=None, permanent_black_cells=None,
+                       locked_letters=None, racing=True):
     """`permanent_black_cells` is only passed on to `try_fill`, whose
     in-search reshapes never free one of them.
+
+    `racing=False` marks a second-chance attempt dispatched mid-palier
+    (see `_second_chance_seed`), exactly like `_pattern_attempt`'s own
+    replacements: never a sibling still racing, no elastic budget.
+
+    `locked_letters` (`None` by default) is the cleanup's own cell ->
+    letter map, exactly what `_pattern_attempt` already receives after a
+    full cleanup: every letter genuinely confirmed at this point, whether
+    or not a whole word still carries it. A hard clean (`HARD_CLEAN_
+    ENABLED`) leaves such letters behind on their own, and
+    `preseed_assignment` alone — whole words only — would drop them. Both
+    resume paths differ in their cleanup, never in how the next palier
+    starts.
 
     Attempt at the "reprise telle quelle" (carry-forward-as-is) mechanism
     between paliers, at the user's explicit request ("New version") —
@@ -12670,6 +12787,12 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
         if word is not None
         for cell, letter in zip(cells, word)
     }
+    # The cleanup's own confirmed letters, merged on top: a superset of
+    # the whole-word letters just collected (same letters, same cells) plus
+    # whatever a hard clean left standing alone — see this function's own
+    # docstring.
+    if locked_letters:
+        known_letters = {**known_letters, **locked_letters}
     # `permanent_locked_letters` (`None` by default — no effect for any
     # pre-existing caller before "Finir la grille", see generate_grid's
     # own docstring) always merged here, UNCONDITIONALLY — even if the
@@ -12755,7 +12878,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     # real live failure ever confirmed it.
     # See `_pattern_attempt`'s own matching comment for why this is set/
     # cleared around the `try_fill` call.
-    if checks_slot is not None and _worker_attempt_active is not None:
+    if racing and checks_slot is not None and _worker_attempt_active is not None:
         _worker_attempt_active[checks_slot] = 1
     try:
         result = try_fill(seed_grid, rows, cols, _worker_index, rng, deadline_checks=deadline_checks,
@@ -12769,7 +12892,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                            best_state_queue=_worker_best_state_queue,
                            checks_progress=_worker_checks_progress,
                            checks_slot=checks_slot,
-                           attempt_active=_worker_attempt_active,
+                           attempt_active=_worker_attempt_active if racing else None,
                            attempt_id=seed,
                            proper_noun_words=_worker_proper_noun_words,
                            max_proper_nouns=_worker_max_proper_nouns,
@@ -12781,7 +12904,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                            reshape_black_cells=True,
                            permanent_black_cells=permanent_black_cells)
     finally:
-        if checks_slot is not None and _worker_attempt_active is not None:
+        if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
     return seed_grid, result, diag
 
@@ -12814,7 +12937,15 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
 # apart (see the loop's own `if carry_preseed_assignment is not None:`
 # dispatch) — collapsing that distinction here would silently corrupt which
 # mechanism a resumed run starts from.
-def _serialize_resume_state(seed_grid, locked_letters, preseed_assignment, excluded_slots):
+def _serialize_resume_state(seed_grid, locked_letters, preseed_assignment, excluded_slots,
+                             continue_locked_letters=None):
+    """`continue_locked_letters` is the "reprise telle quelle" path's own
+    confirmed letters (`carry_continue_locked`), encoded exactly like
+    `locked_letters` and kept in its own field since the two paths are
+    mutually exclusive but reuse distinct variables — without it a
+    "Continuer" resuming on that path would drop every letter a hard clean
+    (`HARD_CLEAN_ENABLED`) left standing on its own, no whole word being
+    there to carry it in `preseed_assignment`."""
     return {
         "seed_grid": seed_grid,
         "locked_letters": (
@@ -12823,6 +12954,10 @@ def _serialize_resume_state(seed_grid, locked_letters, preseed_assignment, exclu
         ),
         "preseed_assignment": preseed_assignment,
         "excluded_slots": None if excluded_slots is None else sorted(excluded_slots),
+        "continue_locked_letters": (
+            None if continue_locked_letters is None
+            else [[r, c, letter] for (r, c), letter in continue_locked_letters.items()]
+        ),
     }
 
 
@@ -12836,7 +12971,15 @@ def _deserialize_resume_state(state):
     preseed_assignment = state.get("preseed_assignment")
     raw_excluded_slots = state.get("excluded_slots")
     excluded_slots = None if raw_excluded_slots is None else set(raw_excluded_slots)
-    return seed_grid, locked_letters, preseed_assignment, excluded_slots
+    # Absent from a payload serialized before this field existed — `None`
+    # then, exactly as if that run's own cleanup had confirmed no letter
+    # outside a whole word.
+    raw_continue_locked = state.get("continue_locked_letters")
+    continue_locked_letters = (
+        None if raw_continue_locked is None
+        else {(r, c): letter for r, c, letter in raw_continue_locked}
+    )
+    return seed_grid, locked_letters, preseed_assignment, excluded_slots, continue_locked_letters
 
 
 def _one_step_previous(entry):
@@ -13358,10 +13501,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # branch below) — kept only for its own `process_number` (see
     # `seed_to_lineage`), so the "minimizing" preview/the final result's
     # `winning_process_number` field can always show the number of the
-    # lineage that actually produced the chosen grid. `None` for any
-    # success path that never has a real diag (`_plug_isolated_cells`, a
-    # last resort that builds its own grid directly in the parent process
-    # — never a real worker).
+    # lineage that actually produced the chosen grid (a grid completed by
+    # `_plug_isolated_cells` keeps its failed attempt's own diag).
     best_diag = None
     last_diag = None
     last_examples = []
@@ -13451,10 +13592,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # below, where each branch resets the other to None).
     carry_preseed_assignment = None
     carry_excluded_slots = None
+    # The best "reprise telle quelle" entry's own confirmed letters — the
+    # exact counterpart of `carry_locked_letters` for the full-cleanup
+    # path, so both paths hand the next palier every letter the cleanup
+    # confirmed, not just the ones a whole word still carries (see
+    # `_continue_seed_pool`/`HARD_CLEAN_ENABLED`).
+    carry_continue_locked = None
     # Pool of cleaned candidate grids for the next "reprise telle quelle"
     # palier — the counterpart of `carry_seed_pool` above, but for
     # `_pattern_continue` instead of `_pattern_attempt`: one `(seed_grid,
-    # preseed_assignment, excluded_slots)` entry per distinct attempt of
+    # preseed_assignment, excluded_slots, confirmed)` entry per distinct attempt of
     # the palier that just finished, not a single grid reused by every
     # non-reset worker — at the user's explicit request: "Quand il n'y a
     # pas de déclenchement d'un nettoyage complet, chaque process doit
@@ -13493,7 +13640,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # top-level `generate_grid()` call, rather than carrying over wherever
     # the previous run's own counter happened to be.
     if resume_state is not None:
-        carry_seed_grid, carry_locked_letters, carry_preseed_assignment, carry_excluded_slots = (
+        (carry_seed_grid, carry_locked_letters, carry_preseed_assignment, carry_excluded_slots,
+         carry_continue_locked) = (
             _deserialize_resume_state(resume_state)
         )
     # Number of consecutive "continue" paliers already chained without
@@ -13875,6 +14023,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     _serialize_resume_state(
                         carry_seed_grid, carry_locked_letters,
                         carry_preseed_assignment, carry_excluded_slots,
+                        carry_continue_locked,
                     )
                     if carry_seed_grid is not None else None
                 )
@@ -13919,7 +14068,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # "fresh pattern" branch below, whose own pool doesn't
                 # preview them either.
                 continue_pool = carry_seed_pool_continue if carry_seed_pool_continue else [
-                    (carry_seed_grid, carry_preseed_assignment, carry_excluded_slots)
+                    (carry_seed_grid, carry_preseed_assignment, carry_excluded_slots,
+                     carry_continue_locked)
                 ]
                 # Parallel to `continue_pool` — the same role as `pool_
                 # lineage` above, for the "reprise telle quelle" pool.
@@ -13928,13 +14078,22 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 )
                 seen_continue_patterns = set()
                 cycle_start_examples = []
-                for pool_idx, (pool_grid, pool_preseed, _pool_excluded) in enumerate(continue_pool):
+                for pool_idx, (pool_grid, pool_preseed, _pool_excluded, pool_locked_letters) in (
+                    enumerate(continue_pool)
+                ):
                     pattern_key = tuple(tuple(row) for row in pool_grid)
                     if pattern_key in seen_continue_patterns:
                         continue
                     seen_continue_patterns.add(pattern_key)
+                    # `_cycle_start_preview` takes ONE of its two resume
+                    # shapes, never both — it returns on `preseed_
+                    # assignment` without ever reading `locked_letters`.
+                    # The cleanup's own `confirmed` is a superset of every
+                    # letter its words carry, so passing it alone shows
+                    # exactly what this palier receives, the plain letters
+                    # a hard clean left standing included.
                     start_grid, start_locked_cells = _cycle_start_preview(
-                        rows, cols, pool_grid, None, pool_preseed,
+                        rows, cols, pool_grid, pool_locked_letters, None,
                     )
                     cycle_start_examples.append({
                         "example_grid": start_grid,
@@ -14160,7 +14319,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         # impossible_slots()`/live per-node domain check,
                         # from whatever the state genuinely is right now
                         # (see `_pattern_continue`'s own docstring).
-                        task_seed_grid, task_preseed_assignment, _task_excluded_slots = (
+                        (task_seed_grid, task_preseed_assignment, _task_excluded_slots,
+                         task_locked_letters) = (
                             continue_pool[(i - reset_count) % len(continue_pool)]
                         )
                         futures.append(executor.submit(
@@ -14170,6 +14330,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             permanent_locked_letters,
                             required_cells=required_cells, checks_slot=i,
                             permanent_black_cells=permanent_black_cells,
+                            locked_letters=task_locked_letters,
                         ))
             else:
                 # A fraction of this palier's own workers start from a
@@ -14556,6 +14717,15 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             pending = set(futures)
             outcomes = []
             orig_done_count = 0
+            # Second chance of a failed attempt (see `_second_chance_seed`):
+            # attempt seed -> the blocked states its chain has already
+            # produced. A failure reached while the palier still runs is
+            # declared final only once it reproduces one of them;
+            # otherwise its grid is hard-cleaned and resumed on the freed
+            # process. `superseded_checks` keeps the checks of the
+            # failures a second chance replaced in the palier's total.
+            second_chance_keys = {}
+            superseded_checks = 0
             def _originals_all_spent():
                 # Every original attempt still running is already past its
                 # own budget: none of them is racing any more, so the
@@ -14572,7 +14742,6 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     attempt_done_event.set()
                 for f in done:
                     result = f.result()
-                    outcomes.append(result)
                     if f in orig_futures:
                         orig_done_count += 1
                         if orig_done_count == interrupt_threshold:
@@ -14586,6 +14755,36 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # up — computed once here rather than duplicated in
                     # both places.
                     seed = future_seed.get(f)
+                    # A failure while the palier still runs gets a second
+                    # chance unless its chain already produced this same
+                    # blocked state: it is then not declared failed, and
+                    # stays out of `outcomes` (its continuation's own result
+                    # takes its place).
+                    chain_keys = second_chance_keys.pop(seed, frozenset())
+                    second_chance = None
+                    # A failure the isolated-cell plug below completes is
+                    # never declared failed either, and needs no second
+                    # chance.
+                    if r is None and not attempt_done_event.is_set() and _plug_isolated_cells(
+                        g, rows, cols, extract_slots(g, rows, cols), d["assignment"], index,
+                        permanent_locked_letters=permanent_locked_letters,
+                    ) is None:
+                        state_key = _blocked_state_key(g, d["assignment"], rows, cols)
+                        if state_key not in chain_keys:
+                            second_chance = chain_keys | {state_key}
+                    if second_chance is None:
+                        outcomes.append(result)
+                    else:
+                        superseded_checks += d.get("checks", 0)
+                    # Lineage number inherited from the task that produced
+                    # this outcome (`seed_to_lineage`, see its own
+                    # construction above), attached to every diag of the
+                    # palier — successes included, whose diag carries no
+                    # `attempt_id` — so anything reading `d["process_number"]`
+                    # further down (previews, winner selection) finds it.
+                    # `None` for a reset task whose lineage hasn't been
+                    # resolved yet (see `_reassign_lineage_numbers`).
+                    d["process_number"] = seed_to_lineage.get(seed)
                     if on_live_preview is not None:
                         # "Encadrer en jaune les étapes qui sont arrêtées
                         # parce qu'elle ont réussies, en orange ... elles
@@ -14676,16 +14875,43 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         )
                         _store_live_state(process_number, live_entry)
                         _publish_live_preview()
-                    # Any finished attempt, succeeded or failed, frees its
-                    # process: it is handed a brand-new, from-scratch
-                    # replacement attempt for as long as some ORIGINAL
-                    # attempt of the palier is still racing
+                    # A failure given a second chance resumes its own
+                    # hard-cleaned grid on the process it frees. Any other
+                    # finished attempt (a success, or a failure declared
+                    # final) frees its process for a brand-new,
+                    # from-scratch replacement attempt for as long as some
+                    # ORIGINAL attempt of the palier is still racing
                     # (`attempt_done_event` is set once every original has
                     # finished or used up its budget, which also interrupts
                     # every replacement still running). A replacement never
                     # counts as racing itself (`racing=False`), so it never
                     # extends the palier.
-                    if not attempt_done_event.is_set():
+                    if second_chance is not None:
+                        # Hard clean without any new black cell, then the
+                        # same grid resumes on the freed process, under the
+                        # same lineage number, as a non-racing attempt.
+                        new_seed = rng.randrange(2**31)
+                        freed_slot = seed_to_checks_slot.get(seed)
+                        if freed_slot is not None:
+                            checks_progress[freed_slot] = 0
+                        sc_grid, sc_preseed, sc_locked = _second_chance_seed(
+                            g, d, rows, cols, index, rng,
+                            permanent_locked_letters=permanent_locked_letters,
+                        )
+                        new_future = executor.submit(
+                            _pattern_continue, rows, cols, new_seed, sc_grid,
+                            sc_preseed, None, force_letters_fraction, deadline_checks,
+                            permanent_locked_letters,
+                            required_cells=required_cells, checks_slot=freed_slot,
+                            permanent_black_cells=permanent_black_cells,
+                            locked_letters=sc_locked, racing=False,
+                        )
+                        pending.add(new_future)
+                        future_seed[new_future] = new_seed
+                        seed_to_checks_slot[new_seed] = freed_slot
+                        seed_to_lineage[new_seed] = seed_to_lineage.get(seed)
+                        second_chance_keys[new_seed] = second_chance
+                    elif not attempt_done_event.is_set():
                         new_seed = rng.randrange(2**31)
                         # The freed slot (the one the just-finished attempt
                         # owned) is handed to its replacement, reset to 0
@@ -14712,17 +14938,25 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         # advance it.
                         seed_to_lineage[new_seed] = next_lineage_number
                         next_lineage_number += 1
-            # Attaches, to every diag of this palier (successes and
-            # failures alike), the lineage number inherited from the task
-            # that produced it (`seed_to_lineage`, see its own
-            # construction above) — done once here, so anything reading
-            # `d["process_number"]` further down (previews, winner
-            # selection) already finds it ready. `None` for a reset task
-            # whose lineage hasn't been resolved yet (see `_reassign_
-            # lineage_numbers`, further below, which only applies to the
-            # next palier's own SURVIVING pool candidates).
-            for _, _, d in outcomes:
-                d["process_number"] = seed_to_lineage.get(d.get("attempt_id"))
+            # Last resort on every failed attempt, before any success is
+            # counted: one whose only unfilled cells are isolated ones
+            # becomes a complete grid once they are plugged (see `_plug_
+            # isolated_cells`), and is then an ordinary success — counted
+            # towards MIN_SUCCESSFUL_ATTEMPTS, optimized and compared with
+            # the others, never accepted on its own.
+            plugged_outcomes = []
+            for g, r, d in outcomes:
+                if r is None:
+                    plugged = _plug_isolated_cells(
+                        g, rows, cols, extract_slots(g, rows, cols), d["assignment"], index,
+                        permanent_locked_letters=permanent_locked_letters,
+                    )
+                    if plugged is not None:
+                        g, r = plugged[0], (plugged[1], plugged[2])
+                        live_success_count += 1
+                        progress("success_count", count=live_success_count)
+                plugged_outcomes.append((g, r, d))
+            outcomes = plugged_outcomes
             successes = [(g, r, d) for g, r, d in outcomes if r is not None]
             # Cumulative across the whole search — see MIN_SUCCESSFUL_
             # ATTEMPTS/accumulated_successes's own docstring above.
@@ -14839,7 +15073,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # each worker, its own genuine search work (a backtracking
             # path that can differ even if the final result converges), so
             # neither quantity of work is to be ignored.
-            total_attempts_tried += sum(d["checks"] for _, d in failed_all)
+            total_attempts_tried += sum(d["checks"] for _, d in failed_all) + superseded_checks
             if len(accumulated_successes) >= MIN_SUCCESSFUL_ATTEMPTS:
                 # A single success is no longer enough to conclude the
                 # search — see MIN_SUCCESSFUL_ATTEMPTS's own docstring.
@@ -15271,27 +15505,6 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # a fresh pattern at the next palier, exactly as before this
             # feature.
             selected_grid, selected_diag = failed_pairs[0]
-            # A last resort before any "reprise telle quelle" / nettoyage
-            # decision, at the user's explicit request: see `_plug_
-            # isolated_cells`'s own docstring for the precise definition
-            # of an "isolated" cell and the conditions that trigger it. A
-            # `None` (the normal, by far most common case) leaves the rest
-            # of this palier completely unchanged — only a grid where
-            # NOTHING remains but isolated cells to plug, forming, once
-            # done, an entirely filled and valid grid, short-circuits the
-            # rest by declaring it directly successful, exactly like a
-            # normal CSP success (`best`/`best_result`, used as-is by all
-            # the code following the palier loop).
-            plugged = _plug_isolated_cells(
-                selected_grid, rows, cols,
-                extract_slots(selected_grid, rows, cols),
-                selected_diag["assignment"], index,
-                permanent_locked_letters=permanent_locked_letters,
-            )
-            if plugged is not None:
-                new_grid, new_slots, new_assignment = plugged
-                best, best_result = new_grid, (new_slots, new_assignment)
-                break
             selected_impossible = set(selected_diag["impossible_slots"])
             # `_slots_touching`: a slot crossing an impossible one is
             # counted as hopeless too. Its own words are stripped by
@@ -15480,7 +15693,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     priority_words=priority_words, challenge_words=challenge_words,
                 )
                 carry_seed_pool_continue = _continue_seed_pool(cleaned_continue_candidates)
-                carry_seed_grid, carry_preseed_assignment, carry_excluded_slots = (
+                (carry_seed_grid, carry_preseed_assignment, carry_excluded_slots,
+                 carry_continue_locked) = (
                     carry_seed_pool_continue[0]
                 )
                 carry_locked_letters = None
@@ -15510,6 +15724,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 consecutive_continue_paliers = 0
                 carry_preseed_assignment = None
                 carry_excluded_slots = None
+                carry_continue_locked = None
                 # A new cross-palier retry algorithm, at the user's
                 # explicit request (see _build_retry_seed): cleans every
                 # distinct attempt of THIS palier (see `_clean_all_
@@ -15666,6 +15881,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     carry_locked_letters = None
                     carry_preseed_assignment = None
                     carry_excluded_slots = None
+                    carry_continue_locked = None
                     carry_seed_pool = None
                     carry_seed_pool_continue = None
                     carry_seed_pool_lineage = None
@@ -15729,6 +15945,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             _serialize_resume_state(
                 carry_seed_grid, carry_locked_letters,
                 carry_preseed_assignment, carry_excluded_slots,
+                carry_continue_locked,
             )
             if carry_seed_grid is not None else None
         )
@@ -15766,8 +15983,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # mechanism to handle, whether it's 1 grid or 6.
     best_slots, best_assignment = best_result
     # Lineage number of the task that genuinely produced `best` (see
-    # `best_diag`, `seed_to_lineage`) — `None` for the one success path
-    # with no real worker behind it (`_plug_isolated_cells`). Passed both
+    # `best_diag`, `seed_to_lineage`). Passed both
     # into the "minimizing" preview below and into the final result, so
     # backend/app.py can also attach it to the "clues" preview.
     winning_process_number = best_diag.get("process_number") if best_diag else None

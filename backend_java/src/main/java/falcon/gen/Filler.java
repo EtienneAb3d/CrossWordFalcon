@@ -37,7 +37,7 @@ public final class Filler {
     // skipped its other candidates) may make only one more descent.
     public static final int MAX_DESCENTS_PER_NODE = 10;
     public static final int EARLY_DESCENTS_WORD_COUNT = 10;
-    public static final int EARLY_MAX_DESCENTS_PER_NODE = 7;
+    public static final int EARLY_MAX_DESCENTS_PER_NODE = 50;
     // An attempt starting from locked cells (inherited from a previous
     // palier) applies no descent cap at all.
     public static final boolean BACKJUMPING_ENABLED = true;
@@ -237,7 +237,7 @@ public final class Filler {
             letterScores.forEach((cell, byDir) -> {
                 int[][] copy = new int[][]{byDir[0], byDir[1]};
                 letterScoresByDir.put(cell, copy);
-                this.letterScores.put(cell, Tally.combined(copy));
+                this.letterScores.put(cell, Tally.crossed(copy));
             });
         }
         indexSlots(slots);
@@ -518,9 +518,12 @@ public final class Filler {
                         saved.put(jcell, new Object[]{letterScores.get(jcell),
                                 byDir == null ? null : new int[][]{byDir[0], byDir[1]}});
                     }
-                    int[] fresh = Tally.ofLetters(sample, pos);
-                    letterScores.put(jcell, fresh);
-                    letterScoresByDir.computeIfAbsent(jcell, k -> new int[2][])[dir] = fresh;
+                    // Replace this direction's tally only, then re-cross the two.
+                    int[][] byDir = letterScoresByDir.get(jcell);
+                    byDir = byDir == null ? new int[2][] : new int[][]{byDir[0], byDir[1]};
+                    byDir[dir] = Tally.ofLetters(sample, pos);
+                    letterScoresByDir.put(jcell, byDir);
+                    letterScores.put(jcell, Tally.crossed(byDir));
                 }
             }
         }

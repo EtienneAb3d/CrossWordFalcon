@@ -1410,10 +1410,11 @@ function renderAttemptPreview(examples) {
     // Live-preview-only tile border (`live_status`, see backend/
     // crossword_gen.py's `on_live_preview` and style.css's own
     // `.live-computing`/`.live-succeeded`/`.live-failed` rules), at the
-    // user's explicit request — `undefined` on every previewHistory
-    // entry (that field only ever rides on the ephemeral live channel),
-    // so this is a no-op there, same `|| []`-style convention as every
-    // other optional field this function already reads.
+    // user's explicit request — carried by the live channel and by the
+    // one "search_final" previewHistory entry (the search's last live
+    // state, backend/app.py), `undefined` on every other entry, so this
+    // is a no-op there, same `|| []`-style convention as every other
+    // optional field this function already reads.
     if (liveStatus === "computing") miniGrid.classList.add("live-computing");
     else if (liveStatus === "succeeded") miniGrid.classList.add("live-succeeded");
     else if (liveStatus === "failed") miniGrid.classList.add("live-failed");
@@ -1597,10 +1598,10 @@ function renderAttemptPreview(examples) {
     // Per-process budget-consumption percentage, at the user's explicit
     // request: "Afficher le taux de budget consommé par le process sur la
     // ligne d'info de chaque grille Live (à gauche du bouton icône
-    // crayon)." Only ever present on the live channel (`live_status` is
-    // `undefined` on every navigable `previewHistory` entry — see
-    // CLAUDE.md's own "Scoped to one attempt's own lifecycle" section),
-    // so `typeof budgetPercent === "number"` is a no-op there, the same
+    // crayon)." Only present on the live channel and on the
+    // "search_final" `previewHistory` entry (a copy of the search's last
+    // live state) — `undefined` on every other navigable entry, so
+    // `typeof budgetPercent === "number"` is a no-op there, the same
     // optional-field convention as every other example field this
     // function reads. Appended to the same dimmed `statsText` span (not a
     // separate sibling) so it reads as part of the same secondary-stat
@@ -1955,6 +1956,20 @@ function showPreviewEntry(entry) {
   lastPreviewStep = entry.step || null;
   renderPreviewStatus();
   renderWordTable(entry.word_table);
+  showEntrySuccessMedal(entry);
+}
+
+// The gold-medal badge follows the history entry on screen: each entry
+// carries the number of successful grids at that step (`success_count`,
+// backend/app.py), so navigating the history — during the generation or
+// after it, from #generation-times — shows the count that went with the
+// displayed grids. The live count (pollJob()) takes over again at the
+// live edge. An entry without the field (a "Recalculer" job) leaves the
+// badge untouched.
+function showEntrySuccessMedal(entry) {
+  if (typeof entry.success_count !== "number" || interactiveMode) return;
+  successMedalCount.textContent = String(entry.success_count);
+  successMedal.hidden = false;
 }
 
 // Renders `data.live_preview` (backend/app.py's `_on_live_preview`, see
@@ -2117,6 +2132,7 @@ function hideAttemptPreview() {
   liveClues = [];
   renderLiveClues();
   updatePreviewNavButtons();
+  successMedal.hidden = true;
   syncRssPanelVisibility();
 }
 
@@ -2132,6 +2148,8 @@ function hideAttemptPreview() {
 // runGeneration().
 function hideAttemptPreviewPanel() {
   attemptPreview.hidden = true;
+  // The badge comes back with the history (showEntrySuccessMedal()).
+  successMedal.hidden = true;
   syncRssPanelVisibility();
 }
 
@@ -3455,6 +3473,11 @@ function describeStep(t, step) {
     case "pattern_found":
       message = t.statusPatternFound(step.attempt, formatAttemptCount(step.total_attempts));
       break;
+    case "search_final":
+      // The last live state of the search, recorded right before the
+      // "minimizing" entry (backend/app.py), `count` successful grids.
+      message = t.statusSearchFinal(step.count || 0);
+      break;
     case "minimizing":
       // `count` is set when every attempt has stopped and several
       // successful grids are being optimized to pick the best one.
@@ -3622,7 +3645,12 @@ async function pollJob(jobId, t) {
       throw new Error(describeErrorCode(t, data.detail && data.detail.code, data.detail, true));
     }
     consecutivePollFailures = 0;
-    if (isCurrentJob()) successMedalCount.textContent = String(data.success_count || 0);
+    // The live count is shown only while following the live edge: a
+    // history entry navigated back to keeps its own count on the badge
+    // (showEntrySuccessMedal()).
+    if (isCurrentJob() && autoFollowPreview && previewHistoryIndex >= previewHistory.length - 1) {
+      successMedalCount.textContent = String(data.success_count || 0);
+    }
     const cluesFeed = data.clues_progress || [];
     if (cluesFeed.length > nextClueIndex) {
       if (isCurrentJob()) {
@@ -9014,8 +9042,6 @@ async function runGeneration(startJob) {
   attemptPreviewRevealBtn.hidden = false;
   stopBtn.hidden = false;
   stopBtn.disabled = false;
-  successMedalCount.textContent = "0";
-  successMedal.hidden = false;
   // Hidden on every fresh attempt (a new form submission or a "Continuer"
   // click alike) — only shown again if *this* run itself ends in the
   // specific "no_fillable_grid" failure the button exists for (see the
@@ -9025,6 +9051,9 @@ async function runGeneration(startJob) {
   setStatus(t.statusGenerating, false);
   hideAttemptPreview();
   hideInteractivePanel();
+  // After hideAttemptPreview(), which hides the badge with the history.
+  successMedalCount.textContent = "0";
+  successMedal.hidden = false;
 
   try {
     const jobId = await startJob(t);

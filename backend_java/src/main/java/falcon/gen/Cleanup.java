@@ -26,6 +26,9 @@ public final class Cleanup {
     private Cleanup() {}
 
     public static final double BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY = 1.0 / 10;
+    /** Hardclean option of cleanBlockedSlots (mirrors HARD_CLEAN_ENABLED): every letter of a removed
+     * crossing word is cleared, even one shared with a word that does not cross the impossible slot. */
+    public static final boolean HARD_CLEAN_ENABLED = true;
     public static final int PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50;
     public static final int WIDEN_BLACK_CELL_WINDOW = 40;
     public static final int WIDEN_PRIORITY_WORDS_LIMIT = 30;
@@ -515,6 +518,18 @@ public final class Cleanup {
                                              DualIndex index, Rng rng, char[][] grid, Integer rows, Integer cols,
                                              Map<Integer, Character> permanentLocked, Map<Cells.Key, Link> links,
                                              Set<Integer> deadlockedSlots, boolean deep) {
+        return cleanBlockedSlots(slots, assignmentIn, impossibleSlots, lockedLetters, excludeImpossibleLocked, index,
+                rng, grid, rows, cols, permanentLocked, links, deadlockedSlots, deep, null);
+    }
+
+    /** clearedOut (nullable) receives every cell whose letter this call removed — a cell of a removed word left
+     * out of confirmed, never a permanentLocked cell; a caller carrying locked letters of its own past this
+     * cleanup unlocks exactly these cells (Generator.secondChanceSeed). */
+    public static Object[] cleanBlockedSlots(List<int[]> slots, String[] assignmentIn, Collection<Integer> impossibleSlots,
+                                             Map<Integer, Character> lockedLetters, boolean excludeImpossibleLocked,
+                                             DualIndex index, Rng rng, char[][] grid, Integer rows, Integer cols,
+                                             Map<Integer, Character> permanentLocked, Map<Cells.Key, Link> links,
+                                             Set<Integer> deadlockedSlots, boolean deep, Set<Integer> clearedOut) {
         String[] assignment = assignmentIn.clone();
         if (lockedLetters != null && !lockedLetters.isEmpty()) {
             Set<Integer> impossibleSet = excludeImpossibleLocked ? new HashSet<>(impossibleSlots) : Set.of();
@@ -666,12 +681,50 @@ public final class Cleanup {
                 }
             }
         }
+        Map<Integer, Character> leftover = new LinkedHashMap<>();
+        if (HARD_CLEAN_ENABLED) {
+            Set<Integer> cleared = new HashSet<>();
+            for (int j = 0; j < assignment.length; j++) {
+                if (assignment[j] != null || before[j] == null) continue;
+                for (int cell : slots.get(j)) {
+                    if (permanentLocked != null && permanentLocked.containsKey(cell)) continue;
+                    cleared.add(cell);
+                }
+            }
+            for (int k = 0; k < assignment.length; k++) {
+                String w = assignment[k];
+                if (w == null) continue;
+                int[] cells = slots.get(k);
+                boolean hit = false;
+                for (int cell : cells) if (cleared.contains(cell)) {
+                    hit = true;
+                    break;
+                }
+                if (!hit) continue;
+                assignment[k] = null;
+                revert.accept(k);
+                for (int p = 0; p < cells.length; p++) if (!cleared.contains(cells[p])) leftover.put(cells[p], w.charAt(p));
+            }
+        }
         Map<Integer, Character> confirmed = new LinkedHashMap<>();
         for (int i = 0; i < assignment.length; i++) {
             String w = assignment[i];
             if (w == null) continue;
             int[] cells = slots.get(i);
             for (int p = 0; p < cells.length; p++) confirmed.put(cells[p], w.charAt(p));
+        }
+        for (Map.Entry<Integer, Character> e : leftover.entrySet()) {
+            if (!newBlack.contains(e.getKey())) confirmed.putIfAbsent(e.getKey(), e.getValue());
+        }
+        if (clearedOut != null) {
+            for (int j = 0; j < assignment.length; j++) {
+                if (assignment[j] != null || before[j] == null) continue;
+                for (int cell : slots.get(j)) {
+                    if (confirmed.containsKey(cell)) continue;
+                    if (permanentLocked != null && permanentLocked.containsKey(cell)) continue;
+                    clearedOut.add(cell);
+                }
+            }
         }
         return new Object[]{assignment, confirmed, newBlack, reopened};
     }

@@ -284,11 +284,31 @@ en faut au moins **2**, cumulées sur l'ensemble de la recherche — un palier
 suivant peut donc fournir la deuxième réussite d'un palier précédent qui
 n'en avait trouvé qu'une (`generate_grid`, `MIN_SUCCESSFUL_ATTEMPTS`).
 
-Chaque processus libéré par une tentative terminée, réussie ou échouée,
-est immédiatement réaffecté à une toute nouvelle tentative — un motif
-entièrement neuf tiré depuis zéro, jamais une poursuite de la grille qui
-vient de se terminer — plutôt que de rester inactif, tant qu'au moins une
-tentative **d'origine** du palier est encore en course. Ces tentatives de
+Une tentative qui échoue alors qu'au moins une tentative **d'origine** du
+palier est encore en course n'est pas aussitôt déclarée échouée : elle
+reçoit une **seconde chance** (`_second_chance_seed`). Sa grille subit un
+nettoyage dur des emplacements bloqués (`_clean_blocked_slots`, sans
+aucune case noire ajoutée, déplacée ni rouverte : le motif est gardé tel
+quel), puis reprend sur le processus qu'elle vient de libérer, sous le
+même numéro de grille (`_pattern_continue`). Une case verrouillée dont le
+nettoyage efface la lettre est déverrouillée ; les autres lettres
+verrouillées de la tentative le restent. Elle n'est réellement déclarée
+échouée que lorsqu'elle aboutit à un état bloqué (motif et lettres placées)
+qu'elle a déjà produit au cours de cette même chaîne de secondes chances
+(`_blocked_state_key`) ; une tentative que le bouchage des cases isolées
+(chapitre 5) complète n'est pas non plus déclarée échouée et n'en reçoit
+pas. Une tentative remplacée par sa seconde chance ne figure pas parmi les
+résultats du palier : c'est le résultat de sa reprise qui compte. Une
+seconde chance se comporte en tout point comme une tentative de
+remplacement (ci-dessous) : elle n'allonge jamais le palier, s'arrête à
+son propre budget et est interrompue avec elles.
+
+Chaque processus libéré par une tentative réussie, ou par une tentative
+réellement déclarée échouée, est immédiatement réaffecté à une toute
+nouvelle tentative — un motif entièrement neuf tiré depuis zéro, jamais une
+poursuite de la grille qui vient de se terminer — plutôt que de rester
+inactif, tant qu'au moins une tentative **d'origine** du palier est encore
+en course. Ces tentatives de
 remplacement ne prolongent jamais le palier : elles ne comptent pas comme
 « en course » pour l'allongement du budget des autres tentatives
 (`_pattern_attempt`, `racing=False`), elles n'ont pas elles-mêmes de
@@ -801,12 +821,13 @@ lettres connues, un tel emplacement n'a simplement aucun mot à tirer.
 Ce relevé est tenu **séparément pour chaque sens** : à chaque case, le
 relevé de l'emplacement horizontal et celui de l'emplacement vertical qui
 s'y croisent sont conservés chacun de leur côté (`sample_letter_biases`,
-`Filler.letter_scores_by_dir`). Leur somme sert au classement des mots
-candidats (voir « Choisir quel mot essayer ») ; leur croisement — seules
-les lettres présentes dans les deux sens, chacune au plus bas de ses deux
-décomptes (`_crossed_letter_counts`) — sert au choix de l'emplacement
-(niveau 7 de la cascade), au bouton **Stats** du mode Interactif et aux
-lettres grises des aperçus.
+`Filler.letter_scores_by_dir`). Leur combinaison est leur croisement —
+seules les lettres présentes dans les deux sens, chacune au plus bas de
+ses deux décomptes (`_crossed_letter_counts`) — conservée pour chaque case
+(`Filler.letter_scores`) : elle sert au classement des mots candidats
+(voir « Choisir quel mot essayer »), au choix de l'emplacement (niveaux 7
+et 9 de la cascade), au bouton **Stats** du mode Interactif et aux lettres
+grises des aperçus.
 
 Ce relevé de lettres ne reste pas figé sur l'état d'avant la recherche. À
 chaque mot effectivement posé, les emplacements que ce mot **croise** sont
@@ -814,12 +835,10 @@ rééchantillonnés sur leur domaine courant, qui tient déjà compte de la
 lettre qui vient d'être écrite (`Filler._refresh_letter_scores_around`) :
 ce sont exactement les emplacements dont les possibilités ont changé. Un
 emplacement sans plus aucune lettre valide (domaine vide) n'est pas
-rééchantillonné — il n'y a plus rien à y mesurer. Le relevé rafraîchi
-remplace celui des cases de l'emplacement concerné plutôt que de s'y
-ajouter : l'autre contributeur de ces cases est le mot qu'on vient de
-poser, dont les lettres sont désormais fixées et ne disent plus rien
-d'utile. Dans le relevé par sens, seul le sens de l'emplacement
-rééchantillonné est remplacé, l'autre sens restant tel quel : le croisement
+rééchantillonné — il n'y a plus rien à y mesurer. Sur chaque case de
+l'emplacement rééchantillonné, seul le relevé de son sens est remplacé,
+l'autre sens restant tel quel, puis la combinaison des deux sens est
+recalculée (lettres communes, au plus bas des deux décomptes) : elle
 confronte ainsi toujours le dernier relevé de chacun des deux côtés. Le
 rafraîchissement est défait en même temps que la pose qu'il
 suivait, lors d'un retour en arrière, pour qu'un relevé ne survive jamais à
@@ -930,10 +949,10 @@ chose.
    sont des retours en arrière ordinaires, nés dans son propre nœud enfant
    (`backend/crossword_gen.py`, `Filler._backtrack`, `Filler._fail`,
    `_last_jumped`). Au début d'une tentative, le plafond est
-   plus serré : un nœud atteint alors que la recherche a posé moins de
+   plus large : un nœud atteint alors que la recherche a posé moins de
    `EARLY_DESCENTS_WORD_COUNT` (10) mots en plus de ceux de l'état initial
    de la tentative (les mots déjà en place au lancement de
-   `Filler.solve`) peut faire jusqu'à `EARLY_MAX_DESCENTS_PER_NODE` (7)
+   `Filler.solve`) peut faire jusqu'à `EARLY_MAX_DESCENTS_PER_NODE` (50)
    descentes. Le compte est pris à l'entrée du nœud, sur les mots alors
    en place (`backend/crossword_gen.py`, `Filler._backtrack`,
    `EARLY_MAX_DESCENTS_PER_NODE`). Une grille héritée d'une étape
@@ -2069,7 +2088,8 @@ machineries de tentatives parallèles :
 - `interactive_clean_impossible_zones`/`interactive_minimize_black_cells`
   (**Nettoyer** / **Nettoyer (+noires)**) — les équivalents manuels du
   nettoyage automatique, le second essayant en plus de retirer chaque case
-  noire.
+  noire ; le nettoyage dur (chapitre 5) s'applique à **Nettoyer** de la
+  même façon qu'au nettoyage automatique.
 - **Vérifier** — contrôle que chaque mot posé est bien dans le
   dictionnaire ; comme les précédents, il n'a jamais un Mot Défi
   validement posé pour invalide.
@@ -2183,8 +2203,8 @@ l'optimisation a fourni un mot valide n'est plus signalé impossible.
 
 ### Dernier recours : boucher les cases isolées
 
-Avant même de choisir entre reprise et nettoyage, un dernier recours est
-tenté sur la meilleure tentative échouée de ce palier : si tout ce qui
+Dès la récolte du palier, avant de compter ses réussites, un dernier
+recours est tenté sur chacune de ses tentatives échouées : si tout ce qui
 reste sans lettre n'est rien de plus que des **cases isolées** — des cases
 blanches sans lettre dont aucun des 4 voisins directs n'est lui non plus
 sans lettre —, chacune est bouchée d'une case noire
@@ -2197,8 +2217,11 @@ touche alors pas du tout.
 Si le résultat reste une grille valide (pas de case blanche orpheline créée
 ailleurs, grille blanche toujours connexe) **et** que chaque emplacement du
 nouveau motif est entièrement rempli d'un vrai mot du dictionnaire, la
-grille est directement déclarée **réussie**, exactement comme un
-remplissage abouti. Sinon, rien n'est modifié et le palier suit son cours.
+tentative devient une **réussite** ordinaire, exactement comme un
+remplissage abouti : elle compte pour le minimum de réussites
+(`MIN_SUCCESSFUL_ATTEMPTS`), puis est optimisée et comparée aux autres
+réussites — jamais acceptée seule. Sinon, rien n'est modifié et la
+tentative reste un échec.
 
 ### Reprise « telle quelle »
 
@@ -2322,6 +2345,42 @@ palier suivant — mais, sauf exception (ci-dessous), **aucune case noire
 n'est touchée**. Les emplacements déjà connus impossibles sont eux-mêmes mis
 de côté (ignorés plutôt que redemandés), pour laisser la recherche continuer
 là où elle s'était arrêtée.
+
+**Nettoyage dur (*hardclean*).** Option activée par défaut
+(`HARD_CLEAN_ENABLED`) : une fois les retraits faits, **toutes** les lettres
+des mots retirés sont effacées, y compris une lettre qu'un mot retiré
+partageait avec un autre mot qui, lui, ne croise pas l'emplacement
+impossible. Ce second mot perd sa lettre à cette case : il n'est plus un mot
+entier et est retiré à son tour (avec la case noire qui lui était associée,
+comme tout retrait), mais ses autres lettres restent en place comme simples
+lettres confirmées. Sans l'option, les lettres partagées restent en place,
+portées par le mot non croisant. Une lettre posée par l'utilisateur
+(`permanent_locked_letters`) n'est jamais effacée. L'option vaut pour tous
+les nettoyages : reprise « telle quelle », nettoyage complet et nettoyage
+profond, et bouton **Nettoyer** du mode Interactif, qui passent tous par le
+même code (`_clean_blocked_slots`).
+
+Les deux chemins de reprise ne diffèrent que par leur nettoyage, jamais par
+la façon dont le palier suivant démarre : chacun transmet au palier suivant
+**toutes** les lettres que son nettoyage a confirmées, qu'un mot entier les
+porte encore ou non. La reprise « telle quelle » les passe comme lettres
+verrouillées (`_pattern_continue`, paramètre `locked_letters`, tiré du
+`confirmed` de son propre nettoyage, transporté par `_continue_seed_pool`),
+exactement comme le nettoyage complet le fait déjà (`_pattern_attempt`) ;
+son `preseed_assignment`, qui ne porte que des mots entiers, ne suffirait
+pas à les transmettre. Le bouton **Continuer** les conserve aussi
+(`_serialize_resume_state`, champ `continue_locked_letters`). L'aperçu de
+début de cycle les montre : il reçoit ce même `confirmed`, qui contient
+toutes les lettres portées par le palier, et non le seul découpage en mots
+entiers (`_cycle_start_preview` ne lit qu'une de ses deux formes de
+reprise, jamais les deux).
+
+Le nettoyage dur laisse davantage d'emplacements libres, donc la reprise
+« telle quelle » reste possible plus longtemps : les paliers à motif neuf —
+les seuls qui posent des cases noires, et donc les seuls à produire
+l'aperçu « Motif de cases noires posé » — se raréfient d'autant, jusqu'au
+plancher imposé par `MAX_CONSECUTIVE_CONTINUE_PALIERS` (un motif neuf au
+moins tous les 5 paliers).
 
 **Validation des mots recomposés par croisement.** Avant ce retrait, tout
 emplacement encore sans mot mais dont toutes les cases sont déjà
@@ -2584,7 +2643,18 @@ recherche de mots ne démarre, le **motif noir/blanc** obtenu ; puis, si le
 palier échoue, **toutes les meilleures tentatives échouées distinctes**, sans
 plafond, avec leurs lettres réelles et leurs diagnostics complets ; puis,
 juste avant le nettoyage, l'état de chacune de ces mêmes tentatives une fois
-passée par l'optimisation dédiée (chapitre 5).
+passée par l'optimisation dédiée (chapitre 5). Quand la recherche aboutit,
+l'historique navigable reçoit encore, juste avant les grilles réussies en
+cours d'optimisation, le **dernier état des recherches** : la dernière
+vignette en direct de chaque processus, telle qu'elle s'est figée (or,
+orange ou bleu clair), avec son numéro de Process et son budget consommé
+(`backend/app.py`, `_run_generate_job`, étape `search_final`). Chaque
+entrée de l'historique mémorise aussi le nombre de grilles réussies à ce
+moment (`success_count`), que le badge médaille affiche quand on la
+consulte (`frontend/static/script.js`, `showEntrySuccessMedal`). Les
+grilles réussies portent, elles aussi, le numéro de Process de la
+tentative qui les a trouvées (`backend/crossword_gen.py`, `generate_grid`,
+attribué à la récolte de chaque résultat).
 
 Chaque tentative dispose de sa propre vignette, bleue tant qu'elle
 calcule, puis figée en or (réussie) ou en orange (échouée) quand elle se

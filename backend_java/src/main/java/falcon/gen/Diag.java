@@ -23,6 +23,9 @@ public final class Diag {
     public Long attemptId;
     public Integer processNumber;
     public String kind;
+    /** The attempt's locked letters (failure diagnostics only, never serialized): a second chance
+     * (Generator.secondChanceSeed) resumes the grid with them, minus the cells its hard clean erases. */
+    public Map<Integer, Character> lockedLetters;
 
     public Diag copy() {
         Diag d = new Diag();
@@ -46,6 +49,7 @@ public final class Diag {
         d.attemptId = attemptId;
         d.processNumber = processNumber;
         d.kind = kind;
+        d.lockedLetters = lockedLetters;
         return d;
     }
 

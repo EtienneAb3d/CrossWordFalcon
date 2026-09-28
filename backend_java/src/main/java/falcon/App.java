@@ -652,6 +652,9 @@ public final class App {
         job.put("request", req.dump());
         Task task = new Task(jobId, req);
         Map<String, Long> phaseTimes = new ConcurrentHashMap<>();
+        // Last non-empty live-preview snapshot, recorded as a "search_final" history entry right before
+        // "minimizing" (live_preview itself is cleared when the search ends; see backend/app.py).
+        java.util.concurrent.atomic.AtomicReference<List<Object>> lastLivePreview = new java.util.concurrent.atomic.AtomicReference<>();
         Generator.Progress progress = (step, data) -> {
             if (step.equals("budget_progress")) {
                 job.update(d -> {
@@ -671,16 +674,38 @@ public final class App {
             newStep.put("code", step);
             newStep.putAll(data);
             if (step.equals("minimizing") || step.equals("grid_ready")) phaseTimes.put(step, System.nanoTime());
+            List<Object> finalLive = step.equals("minimizing") ? lastLivePreview.getAndSet(null) : null;
             job.update(d -> {
+                if (finalLive != null && !finalLive.isEmpty()) {
+                    // Each tile's "previous" field is a STOP_DUMP-only diagnostic, never shown.
+                    List<Object> tiles = new ArrayList<>();
+                    for (Object t : finalLive) {
+                        Map<String, Object> tm = new LinkedHashMap<>(Json.asMap(t));
+                        tm.remove("previous");
+                        tiles.add(tm);
+                    }
+                    Map<String, Object> fs = new LinkedHashMap<>();
+                    fs.put("code", "search_final");
+                    fs.put("count", d.get("success_count"));
+                    Map<String, Object> fe = new LinkedHashMap<>();
+                    fe.put("step", fs);
+                    fe.put("examples", tiles);
+                    fe.put("success_count", d.get("success_count"));
+                    Json.asList(d.get("examples_history")).add(fe);
+                }
                 d.put("step", newStep);
                 Object ex = data.get("examples");
-                if (Json.truthy(ex) && !step.equals("pattern")) {
+                // "pattern" (the grid a palier starts from) is recorded like every other key step: it is the
+                // only entry showing the state after the previous palier's cleanup (see backend/app.py).
+                if (Json.truthy(ex)) {
                     Map<String, Object> sw = new LinkedHashMap<>(newStep);
                     sw.remove("examples");
                     sw.remove("word_table");
                     Map<String, Object> entry = new LinkedHashMap<>();
                     entry.put("step", sw);
                     entry.put("examples", ex);
+                    // Successful grids at this step, for the web UI's gold-medal badge.
+                    entry.put("success_count", d.get("success_count"));
                     if (data.containsKey("word_table")) entry.put("word_table", data.get("word_table"));
                     Json.asList(d.get("examples_history")).add(entry);
                 }
@@ -748,6 +773,7 @@ public final class App {
                         p.onLivePreview = examples -> {
                             applyZoneRevert(a.zoneRevert, examples);
                             job.put("live_preview", examples);
+                            if (examples != null && !examples.isEmpty()) lastLivePreview.set(examples);
                         };
                         p.forceLettersFraction = req.forceLettersPercent / 100.0;
                         p.blackEnrichmentFraction = req.blackEnrichmentPercent / 100.0;
@@ -2226,7 +2252,7 @@ public final class App {
                     if (".".equals(row.get(c)) && (zone == null || zone.contains(Cells.of(rr, c)))) required.add(Cells.of(rr, c));
                 }
             }
-            Map<String, Object> resumeState = Generator.serializeResumeState(seedGrid, locked, null, null);
+            Map<String, Object> resumeState = Generator.serializeResumeState(seedGrid, locked, null, null, null);
             List<int[]> slots = Grids.extractSlots(seedGrid, rows, cols);
             Map<String, int[]> slotByKey = new HashMap<>();
             for (int[] cells : slots) slotByKey.put(Cells.r(cells[0]) + "|" + Cells.c(cells[0]) + "|" + Words.slotDirection(cells), cells);

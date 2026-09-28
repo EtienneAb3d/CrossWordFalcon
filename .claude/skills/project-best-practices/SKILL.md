@@ -996,9 +996,26 @@ the current defaults/behavior to know before touching this code.
   `ProcessPoolExecutor`; `attempts` (paliers)
   defaults to 200 (raised from an original 40 — some grids need many quick,
   unproductive cycles before a workable state emerges).
+- **A failure while the palier still races gets a second chance before
+  being declared failed** (`_second_chance_seed`) — the user's rule: "au
+  moment de déclarer une grille échouée, tenter un cleanhard (sans
+  génération de nouvelles cases noires), pour lui donner une seconde
+  chance. Ne la déclarer réellement échouée que si elle produit 2 fois le
+  même état bloqué", and "si le cleanhard enlève des lettres sur cases
+  verrouillées, ces cases doivent être déverrouillées." The hard clean runs
+  with no `grid` (no black cell added, moved or reopened), the same grid
+  resumes on the freed worker (`_pattern_continue(racing=False)`, same
+  lineage number) with the attempt's own locked letters minus the cells
+  the clean erased (`cleared_cells_out`). "Same blocked state" is compared
+  on pattern + placed letters (`_blocked_state_key`) against every failure
+  of the same chain. Choices made with the change, to revisit with the
+  user: a failure the isolated-cell plug completes gets no second chance
+  (it is a success); a superseded failure is dropped from the palier's
+  outcomes, its continuation's result taking its place; the second chance
+  is a non-racing attempt like a replacement.
 - **Every finished attempt frees its worker for a fresh replacement
-  attempt** (success or failure), as long as an original attempt of the
-  palier is still racing; replacements never extend the palier
+  attempt** (a success, or a failure declared final), as long as an
+  original attempt of the palier is still racing; replacements never extend the palier
   (`racing=False`, no `attempt_active` flag), never get an elastic budget
   of their own (each stops at its own `deadline_checks`, its worker then
   taking the next replacement: they use free processes, never lengthen
@@ -1010,7 +1027,10 @@ the current defaults/behavior to know before touching this code.
 - A single successful grid never concludes `generate_grid`'s search on its
   own: at least `MIN_SUCCESSFUL_ATTEMPTS` (2) genuine successes, counted
   cumulatively across the whole search rather than one palier alone, are
-  required before the best one is picked. While harvesting a palier's
+  required before the best one is picked. A failed attempt completed by
+  plugging its isolated cells (`_plug_isolated_cells`) is one ordinary
+  success among the others, never a shortcut past this threshold.
+  While harvesting a palier's
   parallel attempts, a worker freed by a success is immediately reassigned
   to a brand-new, from-scratch attempt (never a continuation of the grid
   that just succeeded) as long as the threshold isn't reached yet, instead
@@ -1219,7 +1239,7 @@ the current defaults/behavior to know before touching this code.
   squares`, a solitary CLI run) is unaffected — same plain, unconditional
   stop as always.
 - **Each `Filler._backtrack` node makes at most `MAX_DESCENTS_PER_NODE`
-  (10) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (7) while the
+  (10) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (50) while the
   search has placed fewer than `EARLY_DESCENTS_WORD_COUNT` (10) words on
   top of the attempt's initial state — before returning `False` to its parent — one
   cap shared by all four stages of the node, `allow_breaking` included;
@@ -1384,9 +1404,12 @@ the current defaults/behavior to know before touching this code.
   re-samples every still-open slot it CROSSES against that slot's own
   current `_domain`, and `_restore_letter_scores` undoes it as the
   placement is reverted. A slot with an empty domain is skipped (nothing
-  left to measure), and a refreshed slot REPLACES its cells' tally rather
-  than adding to it — the other contributor to those cells is the word
-  just placed, whose letters are now fixed. Measured on `try_fill`
+  left to measure). Each cell keeps its tally per direction
+  (`letter_scores_by_dir`); a refreshed slot replaces only its own
+  direction's entry, and the cell's combined tally (`letter_scores`, what
+  the candidate ranking reads) is recomputed as the crossing of the two
+  directions — only the letters both observed, each at the lower of its
+  two counts (`_crossed_letter_counts`), never their sum. Measured on `try_fill`
   directly, same patterns and seeds, 20 000-check budget: 7×5 went from
   9/25 to **13/25** filled (9.5s -> 6.3s), 9×7 from 0/15 to **2/15**
   (8.5s -> 7.5s) — fresher statistics pay for their own cost and then
@@ -1771,6 +1794,45 @@ the current defaults/behavior to know before touching this code.
   grid — no revert-unused-reshapes pass is needed any more, since nothing
   but the eventual winner's own single reshape (if any) was ever applied
   to begin with.
+- **The palier-start grid is a recorded history step.** `examples_history`
+  keeps every progress event carrying `examples`, the `pattern` step (the
+  grid a palier starts from) included — `backend/app.py`'s progress
+  callback and `App.java`'s alike. The user's rule: "au minimum, le code
+  antérieur montrait l'état de la grille au démarrage d'une nouvelle
+  étape." It is the only entry showing a grid after the previous palier's
+  cleanup (`pattern_attempt_failed`/`pre_cleanup_optimized` both precede
+  it), and a "reprise telle quelle" palier emits no `pattern_generated`,
+  so excluding it hid every cleanup's result. Do not re-exclude it on the
+  ground that it "echoes" the previous entry: it does not.
+- **The search's last live state is a recorded history step too**
+  (`search_final`, appended by `backend/app.py`'s/`App.java`'s progress
+  callback right before "minimizing", from the last non-empty
+  `live_preview` snapshot, since `live_preview` is cleared as the search
+  ends): the successful attempts show there framed in gold, next to the
+  failed/interrupted ones. Every history entry also stores the job's
+  `success_count`, so the gold-medal badge follows the navigated entry.
+- **Hardclean** (`HARD_CLEAN_ENABLED` in `backend/crossword_gen.py`,
+  `Cleanup.HARD_CLEAN_ENABLED` in Java; on by default "pour le moment", in
+  the user's words): the cleanup of blocked emplacements clears every
+  letter of each word it removes, even a letter shared with a word that
+  does NOT cross the impossible emplacement — that word, left with a hole,
+  is unassigned in turn (its paired black-cell change reverted like any
+  other removal), its other letters kept as plain confirmed letters. A
+  `permanent_locked_letters` cell is never cleared. It lives in
+  `_clean_blocked_slots` itself, so automatic generation and Interactive
+  "Nettoyer" share it, as the user required ("ça doit être le même code").
+- **Both cross-palier resume paths start the next palier the same way**,
+  differing only in their cleanup — the user's rule: "La différence est au
+  niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça
+  devrait être le même code." Each hands the next palier every letter its
+  own cleanup confirmed, whether or not a whole word still carries it:
+  "reprise telle quelle" passes the cleanup's `confirmed` as
+  `_pattern_continue`'s `locked_letters` (carried as each
+  `_continue_seed_pool` entry's 4th element), exactly as the full cleanup
+  already does via `_pattern_attempt`. `preseed_assignment` holds whole
+  words only, so it cannot carry them — which is what made hardclean's
+  leftover letters vanish on that path before. `_serialize_resume_state`'s
+  own `continue_locked_letters` field keeps them across "Continuer".
 - **Crossing an already-impossible emplacement is allowed in exactly one
   place**: the last-chance enrichment at the very end of
   `_optimize_before_cleanup`, once a palier has failed and its grid is

@@ -263,6 +263,12 @@ when relevant.
   start). The search keeps going until at least two grids have succeeded,
   then keeps the best one, so this number tells how many finished
   candidates it is choosing from. Hidden again once the generation ends.
+  Each recorded step of the search history keeps the count it had at
+  that moment: stepping through the history (during the generation, or
+  afterwards with the **◀**/**▶** buttons of the generation times) brings
+  the medal back with the count of the step on screen
+  (`showEntrySuccessMedal`); the live count takes over again once back at
+  the latest step.
 - **Continuer / Continue** (`#continue-btn`, `frontend/static/script.js`,
   `continueBtn` click handler, `POST /api/generate/continue/{job_id}`) —
   appears only after a generation fails specifically because no fillable
@@ -664,7 +670,19 @@ it cancels the current job first. **⏮ ◀ ▶ ⏭** buttons
 `catchUpPreviewToEnd`) and a "Étape X/Y" position indicator
 (`#attempt-preview-position`, `renderPreviewPosition`) let a player step
 back through earlier moments of the search rather than only ever seeing
-the latest one.
+the latest one. Every step of the search records the same key moments in
+this history: the grid it starts from (whatever the previous step's
+cleanup kept, its surviving letters locked), the black-cell pattern it
+builds when it lays out a new one, its best failed attempts, and those
+same attempts after optimization — so the effect of each cleanup is
+always visible as the next step's starting grid. Once the search has
+found enough successful grids, its last live state is recorded too,
+right before the successful grids being optimized: every attempt of the
+last step as it ended, the successful ones framed in gold, the others in
+orange or light blue, each with its "Process N" number and its budget
+consumed. The successful grids shown next, while they are optimized and
+compared, each carry the "Process N" number of the attempt that found
+them.
 
 As long as a player hasn't manually stepped back, each status refresh
 updates the panel following one rule (`advanceLiveDisplay`): if a
@@ -1081,7 +1099,12 @@ real letter. Both update after every edit.
   or it crosses another still-open word with no letter the two could ever
   agree on where they meet — the exact conflicting cell shows in a more
   vivid red than the rest of either word, see "Impossibles" above),
-  removes every word crossing it and clears its own letters too. Turning a
+  removes every word crossing it and clears its own letters too. Every
+  letter of a removed word goes, including one it shared with a word that
+  does not itself cross the impossible emplacement: that word, now missing
+  a letter, is no longer a whole word, so it is removed as well, and its
+  remaining letters simply stay on the grid as loose letters you can build
+  on or erase. Turning a
   cell black is a separate mechanism this button never reaches for: for
   the last kind of conflict above specifically, the other word is itself
   still open, so there is nothing already placed to remove there either —
@@ -1416,7 +1439,9 @@ the search without being real, confirmed answers; a real crossing word
 placed later always overrides a seed the moment it reaches that cell.
 Separately, and regardless of whether any seed was actually planted, this
 same sampling is used to rank the real dictionary candidates for a slot
-before trying them: a candidate whose letters line up well with the
+before trying them (at a cell crossed by two slots, a letter only counts
+if both the across and the down sample saw it, at the lower of its two
+counts): a candidate whose letters line up well with the
 statistical consensus on the slot's own still-undetermined cells is tried
 before one that doesn't (a word's rank being divided by one plus the number
 of times the attempt has already tried it on that slot, so a fresh word
@@ -1498,8 +1523,8 @@ anything, which no undoing could fix. A slot set aside this way is not
 forgotten afterwards: it merely loses its priority, and is tried again
 once nothing else can be placed, in case the grid has changed enough
 around it to make it fillable again. Each step of the
-search gives itself only a handful of real tries (three at the moment,
-ten while the attempt has placed fewer than five words:
+search gives itself only a handful of real tries (ten at the moment,
+fifty while the attempt has placed fewer than ten words of its own:
 candidates that passed the neighbor check and were explored further,
 across every slot and every stage of that step) before it gives up and hands control back to the step above.
 Without that limit, a step would only give up once every combination
@@ -1532,10 +1557,15 @@ attempts in parallel as the machine has processor cores, each running in
 its own process. A single successful grid is never enough on its own —
 the generator always waits for at least two genuinely successful grids,
 counted across the whole search rather than just one cycle, before it
-will settle on a winner; the moment one attempt finishes (succeeded or
-failed) while others of the same cycle are still running, whichever
-processor core it was using is immediately put to work on a brand-new,
-from-scratch attempt instead of sitting idle for the rest of that cycle.
+will settle on a winner. An attempt that fails while others of the same
+cycle are still running gets a second chance first: the words crossing
+its blocked slots are erased (no black cell is added or moved, and any
+locked cell whose letter is erased is unlocked) and the same grid resumes
+on the same core; it is only really declared failed once it runs into a
+blocked state it already produced. Whenever an attempt succeeds, or is
+really declared failed, while others are still running, the processor
+core it was using is immediately put to work on a brand-new, from-scratch
+attempt instead of sitting idle for the rest of that cycle.
 These extra attempts are a bonus chance within the cycle, not extra
 grids to carry along: with N cores, only the N-1 best grids of the cycle
 move on to the next one, plus 1 brand-new grid. Once enough successes are in hand — which
@@ -1569,6 +1599,12 @@ word that crosses a now-hopeless slot, decides afterward which black
 cells are still needed to bound whatever survived, and hands that leaner,
 smaller pattern to the next cycle instead of a blank one — real words and
 black cells that were never part of the problem are preserved throughout.
+Removing a word takes away all of its letters, including any it shared
+with a word that doesn't touch the hopeless slot at all: that word is now
+missing a letter, so it stops counting as a whole word, and its remaining
+letters carry on to the next cycle as individually confirmed letters. Both
+of the roads above hand the next cycle every letter their cleanup
+confirmed this way, whether or not a whole word still holds it.
 Each cleaned grid is watched on its own: when one reproduces the exact
 same stuck state twice in a row, the generator cleans it deeper, also
 removing the words that cross the ones just removed, since those are

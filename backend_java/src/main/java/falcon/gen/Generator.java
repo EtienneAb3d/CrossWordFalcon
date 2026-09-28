@@ -248,10 +248,25 @@ public final class Generator {
         return new Outcome(grid, result, diag);
     }
 
+    /** lockedLetters: the cleanup's own confirmed letters, exactly what patternAttempt already gets after a
+     * full cleanup — a hard clean (HARD_CLEAN_ENABLED) leaves letters standing with no whole word left to
+     * carry them in preseedAssignment. Both resume paths differ in their cleanup, never in how a palier starts. */
     static Outcome patternContinue(Ctx ctx, int rows, int cols, long seed, char[][] seedGrid, String[] preseedIn,
                                    Set<Integer> excludedSlots, double forceFraction, Long deadlineChecks,
                                    Map<Integer, Character> permanentLocked, Set<Integer> requiredCells,
-                                   Integer checksSlot, Set<Integer> permanentBlack) {
+                                   Integer checksSlot, Set<Integer> permanentBlack,
+                                   Map<Integer, Character> lockedLetters) {
+        return patternContinue(ctx, rows, cols, seed, seedGrid, preseedIn, excludedSlots, forceFraction, deadlineChecks,
+                permanentLocked, requiredCells, checksSlot, permanentBlack, lockedLetters, true);
+    }
+
+    /** racing=false marks a second-chance attempt dispatched mid-palier (secondChanceSeed), exactly like
+     * patternAttempt's own replacements: never a sibling still racing, no elastic budget. */
+    static Outcome patternContinue(Ctx ctx, int rows, int cols, long seed, char[][] seedGrid, String[] preseedIn,
+                                   Set<Integer> excludedSlots, double forceFraction, Long deadlineChecks,
+                                   Map<Integer, Character> permanentLocked, Set<Integer> requiredCells,
+                                   Integer checksSlot, Set<Integer> permanentBlack,
+                                   Map<Integer, Character> lockedLetters, boolean racing) {
         Rng rng = new Rng(seed);
         List<int[]> slots = Grids.extractSlots(seedGrid, rows, cols);
         Map<Integer, Character> known = new LinkedHashMap<>();
@@ -261,6 +276,7 @@ public final class Generator {
             int[] cells = slots.get(i);
             for (int p = 0; p < cells.length; p++) known.put(cells[p], w.charAt(p));
         }
+        if (lockedLetters != null) known.putAll(lockedLetters);
         if (permanentLocked != null) known.putAll(permanentLocked);
         known = Fill.forceSingleCandidateSlots(slots, ctx.index, known, excludedSlots);
         String[] preseed = preseedIn.clone();
@@ -290,7 +306,8 @@ public final class Generator {
         a.lockedLetters = known;
         a.reshapeBlackCells = true;
         a.permanentBlackCells = permanentBlack;
-        boolean flag = checksSlot != null && ctx.attemptActive != null;
+        if (!racing) a.attemptActive = null;
+        boolean flag = racing && checksSlot != null && ctx.attemptActive != null;
         if (flag) ctx.attemptActive.set(checksSlot, 1);
         Fill.Result result;
         try {
@@ -303,8 +320,12 @@ public final class Generator {
 
     // ================================================================== resume state
 
+    /** continueLocked: the "reprise telle quelle" path's own confirmed letters, in its own field since the two
+     * paths are mutually exclusive but keep distinct variables — without it a "Continuer" resuming on that path
+     * drops every letter a hard clean (HARD_CLEAN_ENABLED) left with no whole word to carry it in preseed. */
     public static Map<String, Object> serializeResumeState(char[][] seedGrid, Map<Integer, Character> locked,
-                                                           String[] preseed, Set<Integer> excluded) {
+                                                           String[] preseed, Set<Integer> excluded,
+                                                           Map<Integer, Character> continueLocked) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("seed_grid", Grids.toJson(seedGrid));
         if (locked == null) {
@@ -316,10 +337,17 @@ public final class Generator {
         }
         m.put("preseed_assignment", preseed == null ? null : Diag.assignmentJson(preseed));
         m.put("excluded_slots", excluded == null ? null : new ArrayList<>(new TreeSet<>(excluded)));
+        if (continueLocked == null) {
+            m.put("continue_locked_letters", null);
+        } else {
+            List<Object> l = new ArrayList<>();
+            continueLocked.forEach((cell, ch) -> l.add(Json.list(Cells.r(cell), Cells.c(cell), String.valueOf(ch))));
+            m.put("continue_locked_letters", l);
+        }
         return m;
     }
 
-    /** Returns {seedGrid, locked, preseed, excluded}. */
+    /** Returns {seedGrid, locked, preseed, excluded, continueLocked}. */
     public static Object[] deserializeResumeState(Map<String, Object> state) {
         char[][] seed = Grids.fromJson(state.get("seed_grid"), WHITE);
         Object rawLocked = state.get("locked_letters");
@@ -344,7 +372,19 @@ public final class Generator {
             excluded = new HashSet<>();
             for (Object o : Json.asList(rawEx)) excluded.add(((Number) o).intValue());
         }
-        return new Object[]{seed, locked, preseed, excluded};
+        // Absent from a payload serialized before this field existed — null then, exactly as if that run's own
+        // cleanup had confirmed no letter outside a whole word.
+        Object rawContinueLocked = state.get("continue_locked_letters");
+        Map<Integer, Character> continueLocked = null;
+        if (rawContinueLocked != null) {
+            continueLocked = new LinkedHashMap<>();
+            for (Object e : Json.asList(rawContinueLocked)) {
+                List<Object> t = Json.asList(e);
+                continueLocked.put(Cells.of(((Number) t.get(0)).intValue(), ((Number) t.get(1)).intValue()),
+                        t.get(2).toString().charAt(0));
+            }
+        }
+        return new Object[]{seed, locked, preseed, excluded, continueLocked};
     }
 
     // ================================================================== helpers
@@ -384,6 +424,43 @@ public final class Generator {
             return Integer.compare(va, vb);
         });
         return new ArrayList<>(copy);
+    }
+
+    /** Second chance of an attempt that fails while the palier still runs: hard clean of its blocked
+     * emplacements (cleanBlockedSlots with no grid, so no black cell is added, moved or reopened), its pattern
+     * kept as is. Returns {seedGrid, preseedAssignment, lockedLetters}: the attempt's own locked letters minus
+     * every cell the clean erased (a locked cell whose letter is removed is unlocked), plus the letters the
+     * clean confirmed. */
+    static Object[] secondChanceSeed(char[][] grid, Diag diag, int rows, int cols, DualIndex index, Rng rng,
+                                     Map<Integer, Character> permanentLocked) {
+        List<int[]> slots = Grids.extractSlots(grid, rows, cols);
+        Map<Integer, Character> attemptLocked = diag.lockedLetters == null ? Map.of() : diag.lockedLetters;
+        Set<Integer> cleared = new HashSet<>();
+        Object[] cleaned = Cleanup.cleanBlockedSlots(slots, diag.assignment, diag.impossibleSlots,
+                attemptLocked.isEmpty() ? null : attemptLocked, false, index, rng, null, null, null,
+                permanentLocked, null, null, false, cleared);
+        @SuppressWarnings("unchecked")
+        Map<Integer, Character> confirmed = (Map<Integer, Character>) cleaned[1];
+        Map<Integer, Character> locked = new LinkedHashMap<>();
+        for (Map.Entry<Integer, Character> e : attemptLocked.entrySet()) {
+            if (!cleared.contains(e.getKey())) locked.put(e.getKey(), e.getValue());
+        }
+        locked.putAll(confirmed);
+        return new Object[]{Grids.copy(grid), cleaned[0], locked};
+    }
+
+    /** Pattern + every letter the assignment places: two failures of the same second-chance chain with equal
+     * keys are the same blocked state. */
+    static String blockedStateKey(char[][] grid, String[] assignment, int rows, int cols) {
+        char[][] letters = Grids.copy(grid);
+        List<int[]> slots = Grids.extractSlots(grid, rows, cols);
+        for (int i = 0; i < slots.size(); i++) {
+            String w = assignment[i];
+            if (w == null) continue;
+            int[] cells = slots.get(i);
+            for (int p = 0; p < cells.length; p++) letters[Cells.r(cells[p])][Cells.c(cells[p])] = w.charAt(p);
+        }
+        return Grids.key(letters);
     }
 
     static String outcomeKey(char[][] g, String[] assignment) {
@@ -518,6 +595,10 @@ public final class Generator {
         Set<Integer> carryExcluded = null;
         List<Object[]> carrySeedPoolContinue = null;
         List<Integer> carrySeedPoolContinueLineage = null;
+        // The best "reprise telle quelle" entry's own confirmed letters — the exact counterpart of carryLocked
+        // for the full-cleanup path, so both hand the next palier every letter the cleanup confirmed, not just
+        // the ones a whole word still carries (see Cleanup.HARD_CLEAN_ENABLED).
+        Map<Integer, Character> carryContinueLocked = null;
         if (p.resumeState != null) {
             Object[] st = deserializeResumeState(p.resumeState);
             carrySeedGrid = (char[][]) st[0];
@@ -528,6 +609,9 @@ public final class Generator {
             @SuppressWarnings("unchecked")
             Set<Integer> e = (Set<Integer>) st[3];
             carryExcluded = e;
+            @SuppressWarnings("unchecked")
+            Map<Integer, Character> cl = (Map<Integer, Character>) st[4];
+            carryContinueLocked = cl;
         }
         int consecutiveContinue = 0;
         Map<String, Integer> carryCleanupStreaks = new HashMap<>();
@@ -665,7 +749,8 @@ public final class Generator {
                 if (p.cancelEvent != null && p.cancelEvent.get()) throw new GenerationCancelled();
                 if (p.shouldPause != null && p.shouldPause.getAsBoolean()) {
                     throw new GenerationPaused(carrySeedGrid != null
-                            ? serializeResumeState(carrySeedGrid, carryLocked, carryPreseed, carryExcluded) : null);
+                            ? serializeResumeState(carrySeedGrid, carryLocked, carryPreseed, carryExcluded,
+                                    carryContinueLocked) : null);
                 }
                 attemptDoneEvent.set(false);
                 for (int i = 0; i < PA; i++) {
@@ -681,15 +766,21 @@ public final class Generator {
                 List<Map<String, Object>> cycleStart = new ArrayList<>();
                 if (carryPreseed != null) {
                     continuePool = carrySeedPoolContinue != null && !carrySeedPoolContinue.isEmpty() ? carrySeedPoolContinue
-                            : List.<Object[]>of(new Object[]{carrySeedGrid, carryPreseed, carryExcluded});
+                            : List.<Object[]>of(new Object[]{carrySeedGrid, carryPreseed, carryExcluded,
+                                    carryContinueLocked});
                     continuePoolLineage = carrySeedPoolContinueLineage != null && !carrySeedPoolContinueLineage.isEmpty()
                             ? carrySeedPoolContinueLineage : List.of(1);
                     Set<String> seen = new HashSet<>();
                     for (int k = 0; k < continuePool.size(); k++) {
                         char[][] pg = (char[][]) continuePool.get(k)[0];
                         String[] pp = (String[]) continuePool.get(k)[1];
+                        @SuppressWarnings("unchecked")
+                        Map<Integer, Character> pl = (Map<Integer, Character>) continuePool.get(k)[3];
                         if (!seen.add(Grids.key(pg))) continue;
-                        Object[] st = Fill.cycleStartPreview(rows, cols, pg, null, pp);
+                        // cycleStartPreview takes ONE of its two resume shapes, never both — it returns on
+                        // preseed without ever reading locked. The cleanup's confirmed map is a superset of
+                        // every letter its words carry, so it alone shows what this palier really receives.
+                        Object[] st = Fill.cycleStartPreview(rows, cols, pg, pl, null);
                         @SuppressWarnings("unchecked")
                         List<Integer> lc = (List<Integer>) st[1];
                         Map<String, Object> ex = example((char[][]) st[0], List.of(), List.of(), List.of(), List.of(), lc,
@@ -760,9 +851,11 @@ public final class Generator {
                                     p.requiredCells, slot, true));
                         } else {
                             Object[] task = continuePool.get((i - resetCount) % continuePool.size());
+                            @SuppressWarnings("unchecked")
+                            Map<Integer, Character> taskLocked = (Map<Integer, Character>) task[3];
                             f = ecs.submit(() -> patternContinue(ctx, rows, cols, s, (char[][]) task[0], (String[]) task[1],
                                     null, p.forceLettersFraction, p.deadlineChecks, permanentLocked, p.requiredCells, slot,
-                                    permanentBlack));
+                                    permanentBlack, taskLocked));
                         }
                         futureSeed.put(f, s);
                         origFutures.add(f);
@@ -846,6 +939,11 @@ public final class Generator {
                 Set<Future<Outcome>> pending = new HashSet<>(futureSeed.keySet());
                 List<Outcome> outcomes = new ArrayList<>();
                 int origDone = 0;
+                // Second chance of a failed attempt (secondChanceSeed): attempt seed -> the blocked states its
+                // chain already produced. A failure while the palier still runs is final only once it
+                // reproduces one of them; supersededChecks keeps the replaced failures' checks in the total.
+                Map<Long, Set<String>> secondChanceKeys = new HashMap<>();
+                long supersededChecks = 0;
                 while (!pending.isEmpty()) {
                     List<Future<Outcome>> done = new ArrayList<>();
                     Future<Outcome> first;
@@ -885,7 +983,6 @@ public final class Generator {
                             Thread.currentThread().interrupt();
                             throw new GenerationCancelled();
                         }
-                        outcomes.add(res);
                         if (res.result() != null) {
                             liveSuccessCount[0]++;
                             progress.on("success_count", data("count", liveSuccessCount[0]));
@@ -895,6 +992,26 @@ public final class Generator {
                             if (origDone == interruptThreshold) attemptDoneEvent.set(true);
                         }
                         long seed = futureSeed.get(f);
+                        // A failure while the palier still runs gets a second chance unless its chain already
+                        // produced this blocked state (or the isolated-cell plug completes it): it is then not
+                        // declared failed and stays out of outcomes, its continuation's result taking its place.
+                        Set<String> chainKeys = secondChanceKeys.remove(seed);
+                        Set<String> secondChance = null;
+                        if (res.result() == null && !attemptDoneEvent.get()
+                                && Cleanup.plugIsolatedCells(res.grid(), rows, cols,
+                                        Grids.extractSlots(res.grid(), rows, cols), res.diag().assignment, index,
+                                        permanentLocked) == null) {
+                            String stateKey = blockedStateKey(res.grid(), res.diag().assignment, rows, cols);
+                            if (chainKeys == null || !chainKeys.contains(stateKey)) {
+                                secondChance = chainKeys == null ? new HashSet<>() : new HashSet<>(chainKeys);
+                                secondChance.add(stateKey);
+                            }
+                        }
+                        if (secondChance == null) outcomes.add(res);
+                        else supersededChecks += res.diag().checks == null ? 0 : res.diag().checks;
+                        // Lineage of the task that produced this outcome, successes included
+                        // (their diag carries no attemptId).
+                        res.diag().processNumber = seedToLineage.get(seed);
                         if (p.onLivePreview != null) {
                             Integer pn = seedToLineage.get(seed);
                             Map<String, Object> entry;
@@ -923,7 +1040,26 @@ public final class Generator {
                             storeLive.accept(pn, entry);
                             publishLive.run();
                         }
-                        if (!attemptDoneEvent.get()) {
+                        if (secondChance != null) {
+                            // Hard clean without any new black cell, then the same grid resumes on the freed
+                            // thread, under the same lineage number, as a non-racing attempt.
+                            long newSeed = rng.seed31();
+                            Integer freed = seedToSlot.get(seed);
+                            if (freed != null) checksProgress.set(freed, 0);
+                            final Integer fslot = freed;
+                            Object[] sc = secondChanceSeed(res.grid(), res.diag(), rows, cols, index, rng, permanentLocked);
+                            @SuppressWarnings("unchecked")
+                            Map<Integer, Character> scLocked = (Map<Integer, Character>) sc[2];
+                            Future<Outcome> nf = ecs.submit(() -> patternContinue(ctx, rows, cols, newSeed,
+                                    (char[][]) sc[0], (String[]) sc[1], null, p.forceLettersFraction, p.deadlineChecks,
+                                    permanentLocked, p.requiredCells, fslot, permanentBlack, scLocked, false));
+                            pending.add(nf);
+                            futureSeed.put(nf, newSeed);
+                            if (freed != null) seedToSlot.put(newSeed, freed);
+                            Integer lineage = seedToLineage.get(seed);
+                            if (lineage != null) seedToLineage.put(newSeed, lineage);
+                            secondChanceKeys.put(newSeed, secondChance);
+                        } else if (!attemptDoneEvent.get()) {
                             long newSeed = rng.seed31();
                             Integer freed = seedToSlot.get(seed);
                             if (freed != null) checksProgress.set(freed, 0);
@@ -938,7 +1074,21 @@ public final class Generator {
                         }
                     }
                 }
-                for (Outcome o : outcomes) o.diag().processNumber = o.diag().attemptId == null ? null : seedToLineage.get(o.diag().attemptId);
+                // Last resort on every failed attempt, before any success is counted: one whose only
+                // unfilled cells are isolated ones becomes a complete grid once they are plugged, and is
+                // then an ordinary success (counted towards MIN_SUCCESSFUL_ATTEMPTS, never accepted alone).
+                for (int k = 0; k < outcomes.size(); k++) {
+                    Outcome o = outcomes.get(k);
+                    if (o.result() != null) continue;
+                    Object[] plugged = Cleanup.plugIsolatedCells(o.grid(), rows, cols,
+                            Grids.extractSlots(o.grid(), rows, cols), o.diag().assignment, index, permanentLocked);
+                    if (plugged == null) continue;
+                    @SuppressWarnings("unchecked")
+                    List<int[]> ps = (List<int[]>) plugged[1];
+                    outcomes.set(k, new Outcome((char[][]) plugged[0], new Fill.Result(ps, (String[]) plugged[2]), o.diag()));
+                    liveSuccessCount[0]++;
+                    progress.on("success_count", data("count", liveSuccessCount[0]));
+                }
                 List<Outcome> successes = new ArrayList<>();
                 List<Outcome> failedAll = new ArrayList<>();
                 for (Outcome o : outcomes) (o.result() != null ? successes : failedAll).add(o);
@@ -949,6 +1099,7 @@ public final class Generator {
                     if (seenKeys.add(outcomeKey(o.grid(), o.diag().assignment))) failedUnique.add(o);
                 }
                 for (Outcome o : failedAll) totalAttemptsTried += o.diag().checks == null ? 0 : o.diag().checks;
+                totalAttemptsTried += supersededChecks;
                 if (accumulatedSuccesses.size() >= MIN_SUCCESSFUL_ATTEMPTS) {
                     List<Map<String, Object>> exs = new ArrayList<>();
                     for (Outcome o : accumulatedSuccesses) {
@@ -1071,15 +1222,6 @@ public final class Generator {
                 progress.on("pattern_attempt_failed", failData);
                 char[][] selGrid = winner.grid();
                 Diag selDiag = winner.diag();
-                Object[] plugged = Cleanup.plugIsolatedCells(selGrid, rows, cols, Grids.extractSlots(selGrid, rows, cols),
-                        selDiag.assignment, index, permanentLocked);
-                if (plugged != null) {
-                    best = (char[][]) plugged[0];
-                    @SuppressWarnings("unchecked")
-                    List<int[]> ps = (List<int[]>) plugged[1];
-                    bestResult = new Fill.Result(ps, (String[]) plugged[2]);
-                    break;
-                }
                 Set<Integer> selImpossible = new HashSet<>(selDiag.impossibleSlots);
                 List<int[]> selSlots = Grids.extractSlots(selGrid, rows, cols);
                 Set<Integer> selDead = new HashSet<>(selImpossible);
@@ -1139,7 +1281,7 @@ public final class Generator {
                     List<Integer> rawLineage = new ArrayList<>();
                     for (int k = 0; k < keep && k < cc.size(); k++) {
                         Cleanup.ContinueCandidate c = cc.get(k);
-                        carrySeedPoolContinue.add(new Object[]{c.seedGrid(), c.preseed(), c.excluded()});
+                        carrySeedPoolContinue.add(new Object[]{c.seedGrid(), c.preseed(), c.excluded(), c.confirmed()});
                         rawLineage.add(c.processNumber());
                     }
                     carrySeedGrid = (char[][]) carrySeedPoolContinue.get(0)[0];
@@ -1147,6 +1289,9 @@ public final class Generator {
                     @SuppressWarnings("unchecked")
                     Set<Integer> ex0 = (Set<Integer>) carrySeedPoolContinue.get(0)[2];
                     carryExcluded = ex0;
+                    @SuppressWarnings("unchecked")
+                    Map<Integer, Character> cl0 = (Map<Integer, Character>) carrySeedPoolContinue.get(0)[3];
+                    carryContinueLocked = cl0;
                     carryLocked = null;
                     Object[] rl = Cleanup.reassignLineageNumbers(rawLineage, dispatchLineage, nextLineage);
                     @SuppressWarnings("unchecked")
@@ -1157,6 +1302,7 @@ public final class Generator {
                     consecutiveContinue = 0;
                     carryPreseed = null;
                     carryExcluded = null;
+                    carryContinueLocked = null;
                     Map<String, Integer> cleanupStreaks = new HashMap<>();
                     List<Object[]> kept = new ArrayList<>();
                     int discarded = 0;
@@ -1207,6 +1353,7 @@ public final class Generator {
                         carryLocked = null;
                         carryPreseed = null;
                         carryExcluded = null;
+                        carryContinueLocked = null;
                         carrySeedPool = null;
                         carrySeedPoolContinue = null;
                         carrySeedPoolLineage = null;
@@ -1235,7 +1382,8 @@ public final class Generator {
         }
         if (best == null) {
             Map<String, Object> resume = carrySeedGrid != null
-                    ? serializeResumeState(carrySeedGrid, carryLocked, carryPreseed, carryExcluded) : null;
+                    ? serializeResumeState(carrySeedGrid, carryLocked, carryPreseed, carryExcluded,
+                            carryContinueLocked) : null;
             progress.on("pattern_failed", data("attempts", p.attempts, "last_attempt",
                     lastDiag != null ? lastDiag.toJson(true) : null, "examples", lastExamples, "total_attempts",
                     totalAttemptsTried, "resume_state", resume));
