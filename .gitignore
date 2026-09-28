@@ -22,6 +22,7 @@ env.sh*
 /LOG_THEME/
 /RSS/
 /SCRAPP/
+/CrossWordFalcon_PROD/
 *.log
 /logs/*
 install_cuda13.sh
@@ -35,4 +36,3 @@ renew-https.sh
 
 nohup.out
 TODO.txt
-/CrossWordFalcon_PROD/*
