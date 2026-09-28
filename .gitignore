@@ -1,6 +1,6 @@
 .venv*
 /sglang-src/
-env.sh
+env.sh*
 *__pycache__*
 /backend_java/target/
 /models/
@@ -35,4 +35,4 @@ renew-https.sh
 
 nohup.out
 TODO.txt
-/CrossWordFalcon_PROD/
+/CrossWordFalcon_PROD/*
