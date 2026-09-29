@@ -160,7 +160,9 @@ json`. Holds all server-side state in plain module dicts/lists:
   progress event — one per attempt finishing with a grid, emitted from the
   palier's harvest loop — without replacing `step`, like
   `"budget_progress"`; shown by the web UI's gold-medal badge
-  `#success-medal`), `resume_state` (set only on total failure, feeds the
+  `#success-medal`), `grid_choice_count`/`grid_choice` (the grid choice:
+  number of grids offered while the player's pick is pending, `None`
+  otherwise, and the index picked), `resume_state` (set only on total failure, feeds the
   "Continuer" button), the original `request`, and `interactive` (JSON-
   safe session metadata, `None` for an ordinary generation). A companion
   `CANCEL_EVENTS[job_id]` (a real `multiprocessing.Event`, since worker
@@ -177,6 +179,15 @@ json`. Holds all server-side state in plain module dicts/lists:
   waiting, resuming later from its own saved state; a Populate-sourced
   job (`req.source == "populate"`) yields immediately, with no grace
   period, to any real user's job in the same queue.
+- **Grid choice** (`_await_grid_choice`): when `generate_grid`'s result
+  carries `choices` and the job is not Populate's, `_run_generate_job`
+  holds no queue slot and, before any clue is written, publishes the
+  `"choose_grid"` step (one example per choice, in the engine's order,
+  each with `choice_index`, `score` and `is_best` = `recommended`), then
+  polls `job["grid_choice"]` (set by `POST /api/generate/choose/{job_id}`)
+  every `GRID_CHOICE_POLL_INTERVAL_S` (0.5s), honoring "Stop". The chosen
+  grid becomes the result; after `GRID_CHOICE_TIMEOUT_S` (10 min) with no
+  pick, the recommended one does. Populate keeps the engine's pick.
 - **Background tasks**, registered on `@app.on_event("startup")`: a daily
   RSS/SCRAPP refresh (`_rss_daily_scheduler`, `RSS_FETCH_HOUR=8` local
   time) plus a startup catch-up if today's refresh is missing; a presence
@@ -207,7 +218,9 @@ json`. Holds all server-side state in plain module dicts/lists:
 - *Generation lifecycle*: `POST /api/generate` (202, starts a background
   job), `GET /api/generate/status/{job_id}` (full polled state), `GET
   /api/generate/phase/{job_id}` (condensed phase code, used by Populate),
-  `POST /api/generate/cancel/{job_id}`, `POST /api/generate/continue/
+  `POST /api/generate/cancel/{job_id}`, `POST /api/generate/choose/
+  {job_id}` (`{"index"}`: the player's pick among the finished grids,
+  409 when no choice is pending), `POST /api/generate/continue/
   {job_id}` (resume from `resume_state`), `POST /api/recompute`
   (regenerate only a stored grid's clues, saved as a new "(Vn)" copy).
 - *Interactive mode* (word-by-word manual authoring): `POST /api/
@@ -544,7 +557,14 @@ palier's own pool (`_minimize_trial`, one task per success, the
 examples) and keeps the winner's minimized grid as the final grid
 (`best_minimized`) instead of minimizing it again; only a lone success
 accepted at the end of the budget goes through the separate final
-`minimize_black_squares` call. A mid-palier replacement attempt takes the
+`minimize_black_squares` call. When that parallel pass compared two
+successes or more, the result also carries `choices` (`generate_grid`'s
+`minimized_successes`, each turned into a full result dict by
+`_final_result`): every minimized success, by decreasing `_content_score`
+(fewest black cells, then the winner, first at equal score), one entry per
+distinct solution, each with its `score` and `recommended` (the winner
+picked above). `backend/app.py` offers them to the player (see "Grid
+choice" below). A mid-palier replacement attempt takes the
 next free lineage number (`next_lineage_number`, used then advanced), so
 tiles are numbered 1…`PARALLEL_ATTEMPTS`, then `PARALLEL_ATTEMPTS`+1 for
 the replacement. The first palier of a call resumed from one grid
@@ -2051,7 +2071,11 @@ state, unlike the backend).
   that unfolds it; the tool buttons stay visible. `runGeneration`/
   `runInteractive`/`enterInteractiveMode` unfold it.
 - **`script.js`** — all client logic in one file. Major areas: grid
-  rendering/keyboard input/solution-checking; the interactive-authoring
+  rendering/keyboard input/solution-checking; the end-of-generation grid
+  choice (`pollJob` arms `pendingGridChoiceJobId` while the job's
+  `grid_choice_count` is set and jumps to the `choose_grid` entry,
+  `renderAttemptPreview` makes each tile carrying a `choice_index`
+  clickable, `chooseGeneratedGrid` posts the pick); the interactive-authoring
   mode (by far the largest block — zone selection, undo stack, per-cell
   editing, calls to every `/api/interactive/*` endpoint, candidate/
   crossing-word panels, a "Mots Défi" challenge-word list — stored and

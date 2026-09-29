@@ -3152,6 +3152,14 @@ def _new_job():
         # the web UI's gold-medal badge. Stays 0 for every job type that
         # never runs the palier search.
         "success_count": 0,
+        # Number of finished grids a user-launched automatic generation is
+        # offering the player right now (the "choose_grid" step, see
+        # `_await_grid_choice`), `None` whenever no choice is pending —
+        # what POST /api/generate/choose/{job_id} validates against.
+        "grid_choice_count": None,
+        # The `choices` index the player clicked (POST /api/generate/
+        # choose/{job_id}), `None` until then.
+        "grid_choice": None,
         # "Continuer" button (see POST /api/generate/continue/{job_id}
         # below), at the user's explicit request: set once generate_grid()
         # exhausts every one of its `attempts` without finding a fillable
@@ -3373,6 +3381,70 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
         whole_theme_reject_threshold=whole_theme_reject_threshold,
     )
     return theme_priority_words, theme_description
+
+
+# How long a finished automatic generation waits for the player to pick
+# one of its grids (`_await_grid_choice`) before keeping the engine's own
+# pick, so a closed tab never holds the job forever.
+GRID_CHOICE_TIMEOUT_S = 10 * 60
+GRID_CHOICE_POLL_INTERVAL_S = 0.5
+
+
+def _word_cells(words, answers):
+    """Every cell of the `words` entries whose answer is in `answers`, as
+    sorted (row, col) pairs."""
+    return sorted({
+        (w["row"] + (dk if w["direction"] != "across" else 0),
+         w["col"] + (dk if w["direction"] == "across" else 0))
+        for w in words if w["answer"] in answers
+        for dk in range(len(w["answer"]))
+    })
+
+
+async def _await_grid_choice(job, choices, progress, cancel_event, short_id,
+                             theme_priority_words, challenge_words):
+    """Publishes the finished grids of an automatic generation (`generate_
+    grid`'s `choices`, by decreasing content score) as the "choose_grid"
+    step, then waits for the player's click (POST /api/generate/choose/
+    {job_id}) and returns the chosen grid's result dict. Honors "Stop"
+    while waiting; after `GRID_CHOICE_TIMEOUT_S` with no click, keeps the
+    grid `generate_grid` picked itself (`recommended`)."""
+    theme_set = set(theme_priority_words or ())
+    job["grid_choice"] = None
+    job["grid_choice_count"] = len(choices)
+    progress(
+        "choose_grid", count=len(choices),
+        examples=[
+            {
+                "example_grid": [row[:] for row in choice["solution"]],
+                "impossible_cells": [],
+                "forced_cells": [],
+                "locked_cells": [],
+                "theme_cells": _word_cells(choice["words"], theme_set),
+                "challenge_cells": _word_cells(choice["words"], challenge_words),
+                "process_number": choice.get("winning_process_number"),
+                "is_best": choice["recommended"],
+                "choice_index": i,
+                "score": choice["score"],
+            }
+            for i, choice in enumerate(choices)
+        ],
+    )
+    deadline = time.monotonic() + GRID_CHOICE_TIMEOUT_S
+    try:
+        while job["grid_choice"] is None and time.monotonic() < deadline:
+            if cancel_event.is_set():
+                raise GenerationCancelled()
+            await asyncio.sleep(GRID_CHOICE_POLL_INTERVAL_S)
+    finally:
+        job["grid_choice_count"] = None
+    index = job["grid_choice"]
+    if index is None:
+        index = next((i for i, c in enumerate(choices) if c["recommended"]), 0)
+        logger.info("[%s] no grid chosen in time, keeping grid %d", short_id, index)
+    else:
+        logger.info("[%s] player chose grid %d of %d", short_id, index, len(choices))
+    return {k: v for k, v in choices[index].items() if k not in ("score", "recommended")}
 
 
 async def _run_generate_job(job_id, req, resume_state=None, override_priority_words=None,
@@ -3935,6 +4007,15 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             )
             logger.warning("[%s] no fillable grid found", short_id)
             return
+        # Several finished grids: a user-launched generation lets the
+        # player pick one before any clue is written; Populate keeps the
+        # engine's own pick.
+        choices = result.pop("choices", None)
+        if choices and req.source != "populate":
+            result = await _await_grid_choice(
+                job, choices, progress, cancel_event, short_id,
+                theme_priority_words, challenge_words,
+            )
         # "Finir la zone" (`zone_revert`, see this function's own docstring
         # above) — undo, cell by cell, whatever the search decided outside
         # the selected zone, before anything else ever reads `result`: no
@@ -6216,6 +6297,27 @@ def generate_cancel(job_id: str):
         raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
     CANCEL_EVENTS[job_id].set()
     return {"status": "cancelling"}
+
+
+class GridChoiceRequest(BaseModel):
+    index: int = Field(ge=0)
+
+
+@app.post("/api/generate/choose/{job_id}")
+def generate_choose(job_id: str, req: GridChoiceRequest):
+    """The player's pick among the finished grids a generation job offers
+    (the "choose_grid" step, see `_await_grid_choice`): `index` into the
+    step's examples (`choice_index`). 409 when no choice is pending."""
+    job = JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job inconnu (expiré ou jamais existé)")
+    count = job.get("grid_choice_count")
+    if count is None or job.get("grid_choice") is not None:
+        raise HTTPException(status_code=409, detail="aucun choix de grille en attente")
+    if req.index >= count:
+        raise HTTPException(status_code=422, detail="index de grille hors limites")
+    job["grid_choice"] = req.index
+    return {"status": "chosen", "index": req.index}
 
 
 @app.post("/api/generate/continue/{job_id}", status_code=202)

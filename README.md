@@ -190,7 +190,11 @@ On the page:
    hand instead of waiting for the search to finish — this cancels the
    ongoing generation if it's still running. A gold medal in the left
    margin counts how many grids the search has successfully completed so
-   far; the best of them is the one you get.
+   far. When several are finished, the search stops before writing any
+   definition and shows them all, best score first (the one the generator
+   recommends framed in green; click **"Voir"** to see their letters):
+   click the one you prefer, and its definitions are written. Without a
+   choice within 10 minutes, the recommended grid is kept.
 4. An empty grid appears on the right, with row and column numbers along
    its edges and a small number in the cells where each word starts,
    ready to be filled in. While you play, the generation settings are

@@ -13489,6 +13489,11 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # picked among several successes (each one is minimized to compare
     # them), so the final optimization does not redo it.
     best_minimized = None
+    # Every success minimized for that choice, as
+    # `(black_count, content_score, process_number, (grid, slots,
+    # assignment))` — each becomes one of the result's `choices` (see the
+    # end of this function), the grids offered to the player.
+    minimized_successes = []
     # Genuine successes found so far, cumulative across the WHOLE search
     # (every palier included), never reset by the failure-side retry
     # machinery below — see MIN_SUCCESSFUL_ATTEMPTS.
@@ -15177,6 +15182,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 _, _, best, best_result, best_diag, best_minimized = min(
                     scored, key=lambda t: (t[0], t[1])
                 )
+                minimized_successes = [
+                    (ob, -neg, d.get("process_number"), opt)
+                    for ob, neg, _g, _r, d, opt in scored
+                ]
                 break
             # Every genuinely distinct attempt of this palier, sorted by
             # ascending black-cell count — at the user's explicit
@@ -16014,76 +16023,110 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             permanent_black_cells=permanent_black_cells, challenge_words=challenge_words,
         )
 
+    def _final_result(grid, slots, assignment, process_number):
+        """The returned result dict of one finished, minimized grid — the
+        winner, or any other success offered as a `choices` entry."""
+        n_black = sum(row.count(BLACK) for row in grid)
+        words = build_word_entries(grid, rows, cols, slots, assignment)
+        # `required_cells` (see this function's own docstring/try_fill's own)
+        # — "Finir la zone" — can leave a slot genuinely unresolved
+        # (`answer` is `None`) as long as it never touched a required cell.
+        # Such a slot is never a real word: no clue could ever be generated
+        # for it, and the word-verification table/theme-cells computation
+        # downstream (backend/app.py) must never see it either — dropped here,
+        # once and for all, rather than relying on every caller to filter it
+        # out itself. A complete no-op whenever `required_cells` was never
+        # given (every `answer` is already non-`None` in that case).
+        words = [w for w in words if w["answer"] is not None]
+        # On a bilingual grid, every vertical ("down") word receives its own
+        # accented spelling/canonical root(s) IN THE SECOND LANGUAGE rather
+        # than the first, and now carries its own `language` — the code of
+        # the language genuinely used for THIS exact word (see `bilingual_
+        # wordlist_path`'s own docstring) — consumed by backend/clues.py (one
+        # definition per word in its own language) and backend/chatbot.py (a
+        # hint in the right language depending on the word). On a monolingual
+        # grid (`bilingual_active` false), every word still receives
+        # `language` — always the same value — with no other change to
+        # behavior.
+        for w in words:
+            if bilingual_active and w["direction"] == "down":
+                w["accented"] = accents_down.get(w["answer"], w["answer"])
+                w["canonical"] = canonicals_down.get(w["answer"], [w["accented"]])
+                w["language"] = bilingual_language
+            else:
+                w["accented"] = accents.get(w["answer"], w["answer"])
+                w["canonical"] = canonicals.get(w["answer"], [w["accented"]])
+                w["language"] = language
+        solution = build_letters_grid(rows, cols, slots, assignment)
+        # Safety net for `required_cells`/"Finir la zone": a locked cell whose
+        # BOTH crossing slots end up unresolved (an edge case — one of the two
+        # is virtually always assigned in practice, but never guaranteed once
+        # a slot can legitimately stay `None` forever) would otherwise show up
+        # as a stray black cell in `solution`, silently losing a letter the
+        # player typed themselves. `permanent_locked_letters` is always
+        # correct regardless of how the search went, so it's reapplied here
+        # unconditionally — a genuine no-op whenever every one of these cells
+        # was already covered by a real assignment (the overwhelmingly common
+        # case, and the ONLY case for every pre-existing caller).
+        if permanent_locked_letters:
+            for (r, c), ch in permanent_locked_letters.items():
+                solution[r][c] = ch
+        return {
+            "width": cols,
+            "height": rows,
+            "pattern": grid,
+            "solution": solution,
+            "words": words,
+            "word_count": len(slots),
+            "black_count": n_black,
+            "black_ratio": n_black / (rows * cols),
+            "winning_process_number": process_number,
+            # Primary language (horizontal words) and the bilingual grid's own
+            # language (vertical words, `None` for an ordinary monolingual
+            # grid) — at the user's explicit request, so backend/app.py/
+            # backend/grid_store.py can record both without having to
+            # re-derive them from `wordlist_path` themselves.
+            "language": language,
+            "bilingual_language": bilingual_language,
+        }
+
     if best_minimized is not None:
         # Already optimized, in parallel with the other successes, while
         # picking the winner (the "minimizing" step was published then).
         grid, slots, assignment = best_minimized
     else:
         grid, slots, assignment = _final_minimize()
-    n_black = sum(row.count(BLACK) for row in grid)
-    words = build_word_entries(grid, rows, cols, slots, assignment)
-    # `required_cells` (see this function's own docstring/try_fill's own)
-    # — "Finir la zone" — can leave a slot genuinely unresolved
-    # (`answer` is `None`) as long as it never touched a required cell.
-    # Such a slot is never a real word: no clue could ever be generated
-    # for it, and the word-verification table/theme-cells computation
-    # downstream (backend/app.py) must never see it either — dropped here,
-    # once and for all, rather than relying on every caller to filter it
-    # out itself. A complete no-op whenever `required_cells` was never
-    # given (every `answer` is already non-`None` in that case).
-    words = [w for w in words if w["answer"] is not None]
-    # On a bilingual grid, every vertical ("down") word receives its own
-    # accented spelling/canonical root(s) IN THE SECOND LANGUAGE rather
-    # than the first, and now carries its own `language` — the code of
-    # the language genuinely used for THIS exact word (see `bilingual_
-    # wordlist_path`'s own docstring) — consumed by backend/clues.py (one
-    # definition per word in its own language) and backend/chatbot.py (a
-    # hint in the right language depending on the word). On a monolingual
-    # grid (`bilingual_active` false), every word still receives
-    # `language` — always the same value — with no other change to
-    # behavior.
-    for w in words:
-        if bilingual_active and w["direction"] == "down":
-            w["accented"] = accents_down.get(w["answer"], w["answer"])
-            w["canonical"] = canonicals_down.get(w["answer"], [w["accented"]])
-            w["language"] = bilingual_language
-        else:
-            w["accented"] = accents.get(w["answer"], w["answer"])
-            w["canonical"] = canonicals.get(w["answer"], [w["accented"]])
-            w["language"] = language
-    progress("grid_ready", word_count=len(slots), black_count=n_black)
-    solution = build_letters_grid(rows, cols, slots, assignment)
-    # Safety net for `required_cells`/"Finir la zone": a locked cell whose
-    # BOTH crossing slots end up unresolved (an edge case — one of the two
-    # is virtually always assigned in practice, but never guaranteed once
-    # a slot can legitimately stay `None` forever) would otherwise show up
-    # as a stray black cell in `solution`, silently losing a letter the
-    # player typed themselves. `permanent_locked_letters` is always
-    # correct regardless of how the search went, so it's reapplied here
-    # unconditionally — a genuine no-op whenever every one of these cells
-    # was already covered by a real assignment (the overwhelmingly common
-    # case, and the ONLY case for every pre-existing caller).
-    if permanent_locked_letters:
-        for (r, c), ch in permanent_locked_letters.items():
-            solution[r][c] = ch
-    return {
-        "width": cols,
-        "height": rows,
-        "pattern": grid,
-        "solution": solution,
-        "words": words,
-        "word_count": len(slots),
-        "black_count": n_black,
-        "black_ratio": n_black / (rows * cols),
-        "winning_process_number": winning_process_number,
-        # Primary language (horizontal words) and the bilingual grid's own
-        # language (vertical words, `None` for an ordinary monolingual
-        # grid) — at the user's explicit request, so backend/app.py/
-        # backend/grid_store.py can record both without having to
-        # re-derive them from `wordlist_path` themselves.
-        "language": language,
-        "bilingual_language": bilingual_language,
-    }
+    result = _final_result(grid, slots, assignment, winning_process_number)
+    progress("grid_ready", word_count=len(slots), black_count=result["black_count"])
+    if len(minimized_successes) >= 2:
+        # Every success minimized while picking the winner, offered to the
+        # player (backend/app.py's grid choice, before clue writing) by
+        # decreasing content score (`_content_score`, the tie-break of the
+        # winner's own choice), fewest black cells first at equal score.
+        # Two successes ending on the same solution are offered once (the
+        # recommended one sorted first among equals, so it is the one kept).
+        # `recommended` marks the grid this function picked itself.
+        choices = []
+        seen_solutions = set()
+        for n_black, score, process_number, minimized in sorted(
+            minimized_successes,
+            key=lambda t: (-t[1], t[0], t[3] is not best_minimized),
+        ):
+            recommended = minimized is best_minimized
+            choice = (
+                dict(result) if recommended
+                else _final_result(*minimized, process_number)
+            )
+            key = tuple("".join(row) for row in choice["solution"])
+            if key in seen_solutions:
+                continue
+            seen_solutions.add(key)
+            choice["score"] = score
+            choice["recommended"] = recommended
+            choices.append(choice)
+        if len(choices) >= 2:
+            result["choices"] = choices
+    return result
 
 
 def main():

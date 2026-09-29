@@ -11,6 +11,7 @@ import falcon.gen.Words.PW;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -578,6 +579,11 @@ public final class Generator {
         char[][] best = null;
         Fill.Result bestResult = null;
         Object[] bestMinimized = null;
+        // Every success minimized for that choice, as {black count, content
+        // score, process number, minimized {grid, slots, assignment}} — each
+        // becomes one of the result's "choices" (the grids offered to the
+        // player, see the end of this method).
+        List<Object[]> minimizedSuccesses = new ArrayList<>();
         List<Outcome> accumulatedSuccesses = new ArrayList<>();
         // Genuine successes counted the moment each attempt finishes,
         // published live as the "success_count" progress event.
@@ -1137,6 +1143,7 @@ public final class Generator {
                         String[] oa = (String[]) opt[2];
                         int ob = Grids.countBlack(og);
                         long osc = Fill.contentScore(oa, os, priority, challenge);
+                        minimizedSuccesses.add(new Object[]{ob, osc, accumulatedSuccesses.get(k).diag().processNumber, opt});
                         if (bestScored == null || ob < (int) bestScored[0] || (ob == (int) bestScored[0] && -osc < (long) bestScored[1])) {
                             bestScored = new Object[]{ob, -osc, accumulatedSuccesses.get(k), opt};
                         }
@@ -1415,6 +1422,55 @@ public final class Generator {
             slots = s;
             assignment = (String[]) m[2];
         }
+        Words.Lexicon acrossLex = across.lexicon();
+        Words.Lexicon downLex = bilingual ? down.lexicon() : null;
+        Map<String, Object> out = finalResult(grid, slots, assignment, winningProcess, rows, cols, acrossLex, downLex,
+                language, bilingualLanguage, permanentLocked);
+        progress.on("grid_ready", data("word_count", slots.size(), "black_count", out.get("black_count")));
+        if (minimizedSuccesses.size() >= 2) {
+            // Every success minimized while picking the winner, offered to
+            // the player (App's grid choice, before clue writing) by
+            // decreasing content score, fewest black cells first at equal
+            // score; two successes ending on the same solution are offered
+            // once (the recommended one sorted first among equals, so it is
+            // the one kept). "recommended" marks the grid picked here.
+            final Object[] bm = bestMinimized;
+            List<Object[]> sorted = new ArrayList<>(minimizedSuccesses);
+            sorted.sort(Comparator.<Object[]>comparingLong(t -> -(long) t[1])
+                    .thenComparingInt(t -> (int) t[0])
+                    .thenComparingInt(t -> t[3] == bm ? 0 : 1));
+            List<Object> choices = new ArrayList<>();
+            Set<String> seenSolutions = new HashSet<>();
+            for (Object[] t : sorted) {
+                Object[] opt = (Object[]) t[3];
+                boolean recommended = opt == bm;
+                Map<String, Object> choice;
+                if (recommended) {
+                    choice = new LinkedHashMap<>(out);
+                } else {
+                    @SuppressWarnings("unchecked")
+                    List<int[]> os = (List<int[]>) opt[1];
+                    choice = finalResult((char[][]) opt[0], os, (String[]) opt[2], (Integer) t[2], rows, cols,
+                            acrossLex, downLex, language, bilingualLanguage, permanentLocked);
+                }
+                if (!seenSolutions.add(Json.dumps(choice.get("solution")))) continue;
+                choice.put("score", t[1]);
+                choice.put("recommended", recommended);
+                choices.add(choice);
+            }
+            if (choices.size() >= 2) out.put("choices", choices);
+        }
+        return out;
+    }
+
+    /** The returned result map of one finished, minimized grid — the winner,
+     * or any other success offered as a "choices" entry. {@code downLex} is
+     * null on a monolingual grid. */
+    static Map<String, Object> finalResult(char[][] grid, List<int[]> slots, String[] assignment, Integer process,
+                                           int rows, int cols, Words.Lexicon acrossLex, Words.Lexicon downLex,
+                                           String language, String bilingualLanguage,
+                                           Map<Integer, Character> permanentLocked) {
+        boolean bilingual = downLex != null;
         int nBlack = Grids.countBlack(grid);
         List<Map<String, Object>> words = new ArrayList<>();
         for (Map<String, Object> w : Fill.buildWordEntries(grid, rows, cols, slots, assignment)) {
@@ -1422,13 +1478,12 @@ public final class Generator {
         }
         for (Map<String, Object> w : words) {
             String ans = (String) w.get("answer");
-            Words.Lexicon lex = bilingual && "down".equals(w.get("direction")) ? down.lexicon() : across.lexicon();
+            Words.Lexicon lex = bilingual && "down".equals(w.get("direction")) ? downLex : acrossLex;
             String acc = lex.accents().getOrDefault(ans, ans);
             w.put("accented", acc);
             w.put("canonical", new ArrayList<>(lex.canonicals().getOrDefault(ans, List.of(acc))));
             w.put("language", bilingual && "down".equals(w.get("direction")) ? bilingualLanguage : language);
         }
-        progress.on("grid_ready", data("word_count", slots.size(), "black_count", nBlack));
         char[][] solution = Grids.buildLettersGrid(rows, cols, slots, assignment);
         permanentLocked.forEach((cell, ch) -> solution[Cells.r(cell)][Cells.c(cell)] = ch);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -1440,7 +1495,7 @@ public final class Generator {
         out.put("word_count", slots.size());
         out.put("black_count", nBlack);
         out.put("black_ratio", (double) nBlack / (rows * cols));
-        out.put("winning_process_number", winningProcess);
+        out.put("winning_process_number", process);
         out.put("language", language);
         out.put("bilingual_language", bilingualLanguage);
         return out;

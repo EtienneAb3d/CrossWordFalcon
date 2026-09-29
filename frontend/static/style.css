@@ -1131,6 +1131,27 @@ button:disabled {
   border: 3px solid var(--best);
 }
 
+/* A finished grid offered for the player's choice at the end of an
+   automatic generation (the "choose_grid" step, script.js's
+   renderAttemptPreview()/chooseGeneratedGrid()): the whole tile
+   (stats line + grid) is clickable, tinted on hover/focus like a library
+   row; the tile clicked keeps an accent outline. An outline, so it never
+   shifts the tile's layout or hides the grid's own border. */
+.attempt-preview-item.attempt-preview-choice {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0.2rem;
+  margin: -0.2rem;
+}
+.attempt-preview-item.attempt-preview-choice:hover {
+  background: var(--selected);
+}
+.attempt-preview-item.attempt-preview-chosen {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 /* Live-preview tile borders (script.js's renderLivePreview(), the
    `live_status` field on each backend/crossword_gen.py `on_live_preview`
    entry — see CLAUDE.md), at the user's explicit request: "encadrer en

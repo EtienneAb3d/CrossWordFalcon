@@ -4507,3 +4507,22 @@ end through the real running API (interactive start/step/save,
   Playwright/Chromium at 1400×900: centered over the dimmed page, both
   buttons on one row.
 
+- **Grid choice at the end of a generation** (`.attempt-preview-item.
+  attempt-preview-choice`/`.attempt-preview-chosen`, `frontend/static/
+  script.js`'s `renderAttemptPreview`/`chooseGeneratedGrid`), at the
+  user's explicit request: the finished grids of a user-launched
+  generation are shown as ordinary attempt-preview tiles, by decreasing
+  score, before any clue is written. While the choice is pending, each
+  whole tile (stats line + grid) is clickable: `cursor: pointer`, a
+  `--selected` tint on hover (the library rows' convention), 4px radius,
+  a 0.2rem padding cancelled by an equal negative margin so the tint has
+  room without shifting the layout. The clicked tile keeps a 3px
+  `--accent` outline (offset 2px) — an outline, so it never moves the
+  tile or hides the grid's own border, and blue rather than green so it
+  never reads as the recommended grid's `.attempt-preview-best` green
+  frame. Each tile's stats line gains a " — score N" clause
+  (`attemptPreviewScore`, all 6 languages); the tile's `title` is
+  `attemptPreviewChooseTitle`. No new token. **Visually confirmed** with
+  Playwright/Chromium: a 7×5 Flash run showed 32 tiles, hover tint
+  `rgb(191, 219, 254)`, and one `.attempt-preview-chosen` tile left with
+  no clickable tile after the click.

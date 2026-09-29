@@ -479,6 +479,18 @@ project's engineering language.
   from `.locked` (a cell merely confirmed by the search itself, which a
   later cleanup can still revert) — see the `style-guide` SKILL.
 
+- **A user-launched automatic generation lets the player choose the
+  grid before any clue is written.** When the parallel minimization
+  compared several successes, `generate_grid` returns them all as
+  `choices` (by decreasing content score, one per distinct solution, the
+  engine's own pick marked `recommended`); `backend/app.py`'s
+  `_await_grid_choice` (Java `App.awaitGridChoice`) shows them as the
+  `choose_grid` step and waits for `POST /api/generate/choose/{job_id}`
+  (matching proxy route per rule 15). A Populate job never waits: it keeps
+  the engine's pick. Choices made with the change, to revisit with the
+  user: after `GRID_CHOICE_TIMEOUT_S` (10 min) without a click the
+  recommended grid is kept, and the waiting job holds no queue slot.
+
 ### Ports and environment variables
 
 - **Ports live in the 300x range**: frontend/middleware 3000, backend 3001,

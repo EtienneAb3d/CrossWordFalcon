@@ -269,6 +269,19 @@ when relevant.
   the medal back with the count of the step on screen
   (`showEntrySuccessMedal`); the live count takes over again once back at
   the latest step.
+- **Choosing your grid** (`frontend/static/script.js`, `pollJob`/
+  `renderAttemptPreview`/`chooseGeneratedGrid`, `POST /api/generate/
+  choose/{job_id}`) — when a generation you launched ends with several
+  finished grids, it pauses before writing any definition: the preview
+  shows every finished grid, sorted by decreasing score (the score of each
+  tile is shown on its stats line), the one the generator recommends
+  framed in green, and the status line asks you to pick one. Hovering a
+  tile tints it; clicking it selects that grid (a blue frame marks it) and
+  the definitions are then written for that grid only. Letters stay hidden
+  unless **Voir** is on, like every other preview. Without a click within
+  10 minutes, the recommended grid is kept; **Stop** still cancels while
+  the choice is pending. A single finished grid is used directly, with no
+  choice to make.
 - **Continuer / Continue** (`#continue-btn`, `frontend/static/script.js`,
   `continueBtn` click handler, `POST /api/generate/continue/{job_id}`) —
   appears only after a generation fails specifically because no fillable
@@ -1597,7 +1610,10 @@ happens more often than one might expect within a single cycle alone —
 the generator doesn't just keep the first one that finished: every
 successful attempt is genuinely optimized on its own (see the next
 paragraph) and whichever one ends up with the fewest black cells
-afterward is the one that's actually kept. If, after using up the
+afterward is the one recommended. When you launched the generation
+yourself, every optimized success is then shown to you, best score
+first, and you pick the one whose definitions get written (the
+recommended one is kept if you don't choose). If, after using up the
 generator's whole cycle budget, only one success was ever found, that
 one is still kept rather than the whole generation failing outright. If
 every attempt in a cycle fails instead, the generator

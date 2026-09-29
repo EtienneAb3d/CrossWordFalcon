@@ -1374,6 +1374,14 @@ function setStatus(message, isError) {
 // currently reveals on screen.
 let lastPreviewExamples = null;
 
+// The finished grids of the "choose_grid" step (backend/app.py's
+// `_await_grid_choice`) carry a `choice_index`: while that job is still
+// waiting for the player's pick (`pendingGridChoiceJobId`, set by
+// pollJob()), each of those tiles is clickable and hands its index to
+// chooseGeneratedGrid(). `chosenGridChoiceIndex` frames the tile picked.
+let pendingGridChoiceJobId = null;
+let chosenGridChoiceIndex = null;
+
 function renderAttemptPreview(examples) {
   if (!examples || !examples.length) return;
   lastPreviewExamples = examples;
@@ -1394,6 +1402,8 @@ function renderAttemptPreview(examples) {
     live_status: liveStatus,
     budget_percent: budgetPercent,
     stat_letters: statLetters,
+    choice_index: choiceIndex,
+    score,
   } of examples) {
     if (!exampleGrid || !exampleGrid.length) continue;
     const height = exampleGrid.length;
@@ -1416,6 +1426,15 @@ function renderAttemptPreview(examples) {
     // own position in the list no longer says anything about rank on its
     // own.
     if (isBest) miniGrid.classList.add("attempt-preview-best");
+    const isChoice = typeof choiceIndex === "number";
+    if (isChoice && pendingGridChoiceJobId) {
+      item.classList.add("attempt-preview-choice");
+      item.title = I18N[uiLanguage].attemptPreviewChooseTitle;
+      item.addEventListener("click", () => chooseGeneratedGrid(choiceIndex));
+    }
+    if (isChoice && choiceIndex === chosenGridChoiceIndex) {
+      item.classList.add("attempt-preview-chosen");
+    }
     // Live-preview-only tile border (`live_status`, see backend/
     // crossword_gen.py's `on_live_preview` and style.css's own
     // `.live-computing`/`.live-succeeded`/`.live-failed` rules), at the
@@ -1620,6 +1639,13 @@ function renderAttemptPreview(examples) {
         document.createTextNode(I18N[uiLanguage].attemptPreviewBudgetPercent(budgetPercent))
       );
     }
+    // Content score of a finished grid offered for the player's choice
+    // (the "choose_grid" step, tiles sorted by decreasing score).
+    if (typeof score === "number") {
+      statsText.appendChild(
+        document.createTextNode(I18N[uiLanguage].attemptPreviewScore(score))
+      );
+    }
     stats.appendChild(statsText);
     // Pencil icon button, at the user's explicit request: "à droite des
     // mentions de remplissage des prévisualisations... ajouter un bouton
@@ -1655,6 +1681,36 @@ function renderAttemptPreview(examples) {
   }
   attemptPreview.hidden = false;
   syncRssPanelVisibility();
+}
+
+// The player's click on one of the finished grids of the "choose_grid"
+// step: POST /api/generate/choose/{job_id}, after which the job goes on to
+// write the clues of that grid (pollJob() keeps polling it as usual).
+async function chooseGeneratedGrid(index) {
+  const jobId = pendingGridChoiceJobId;
+  if (!jobId) return;
+  const t = I18N[uiLanguage];
+  pendingGridChoiceJobId = null;
+  chosenGridChoiceIndex = index;
+  if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
+  try {
+    const resp = await fetchWithTimeout(
+      `/api/generate/choose/${jobId}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ index }),
+      },
+      FETCH_TIMEOUT_MS,
+    );
+    if (!resp.ok) throw new Error(String(resp.status));
+    if (jobId === currentJobId) setStatus(t.statusGridChosen, false);
+  } catch (err) {
+    // The choice did not reach the back end: offer the tiles again (the
+    // next poll re-arms `pendingGridChoiceJobId` while the job still waits).
+    chosenGridChoiceIndex = null;
+    if (jobId === currentJobId) setStatus(t.errorGridChoice, true);
+  }
 }
 
 // Backs the attempt-preview pencil icon button above — at the user's
@@ -2134,6 +2190,8 @@ function hideAttemptPreview() {
   attemptPreviewStatus.textContent = "";
   lastPreviewExamples = null;
   lastPreviewStep = null;
+  pendingGridChoiceJobId = null;
+  chosenGridChoiceIndex = null;
   previewHistory = [];
   previewHistoryIndex = -1;
   autoFollowPreview = true;
@@ -3662,6 +3720,12 @@ function describeStep(t, step) {
       // "minimizing" entry (backend/app.py), `count` successful grids.
       message = t.statusSearchFinal(step.count || 0);
       break;
+    case "choose_grid":
+      // Every finished grid is shown, by decreasing score, for the
+      // player to click the one they prefer (backend/app.py's
+      // `_await_grid_choice`).
+      message = t.statusChooseGrid(step.count || 0);
+      break;
     case "minimizing":
       // `count` is set when every attempt has stopped and several
       // successful grids are being optimized to pick the best one.
@@ -3847,6 +3911,20 @@ async function pollJob(jobId, t) {
     if (history.length > nextExampleIndex) {
       if (isCurrentJob()) recordPreviewHistory(history.slice(nextExampleIndex));
       nextExampleIndex = history.length;
+    }
+    // A pending grid choice (backend/app.py's `_await_grid_choice`): the
+    // choice tiles are jumped to right away — they are the last recorded
+    // entry — and made clickable; they stop being clickable as soon as the
+    // back end no longer waits (chosen, timed out, or stopped).
+    const choicePending = data.grid_choice_count != null && data.grid_choice == null;
+    if (isCurrentJob() && choicePending && pendingGridChoiceJobId !== jobId
+        && chosenGridChoiceIndex == null) {
+      pendingGridChoiceJobId = jobId;
+      catchUpPreviewToEnd();
+      if (lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
+    } else if (!choicePending && pendingGridChoiceJobId === jobId) {
+      pendingGridChoiceJobId = null;
+      if (isCurrentJob() && lastPreviewExamples) renderAttemptPreview(lastPreviewExamples);
     }
     // Decides what this poll actually shows — a not-yet-seen key step if
     // one is waiting, otherwise the live search state — see its own

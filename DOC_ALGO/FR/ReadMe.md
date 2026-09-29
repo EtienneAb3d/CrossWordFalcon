@@ -355,6 +355,17 @@ une seconde fois. Seul le cas d'une réussite unique acceptée faute de
 mieux, en fin de budget, passe par une optimisation séparée
 (`backend/crossword_gen.py`, `generate_grid`).
 
+Toutes les réussites ainsi optimisées sont aussi rendues avec la grille
+retenue, sous forme de **grilles au choix** (`choices`) : chacune avec son
+score de contenu, triées par score décroissant (à égalité, le moins de
+cases noires, puis la grille retenue), une seule par solution distincte,
+la grille retenue marquée « recommandée » (`backend/crossword_gen.py`,
+`generate_grid`, `_final_result`). Pour une génération lancée depuis
+l'interface (pas par Populate), le serveur s'arrête alors avant d'écrire la
+moindre définition et laisse le joueur cliquer la grille qu'il préfère ;
+sans choix au bout de 10 minutes, la grille recommandée est gardée
+(`backend/app.py`, `_await_grid_choice`).
+
 ### Le score de contenu
 
 Toutes les sélections de l'algorithme qui doivent désigner la « meilleure »

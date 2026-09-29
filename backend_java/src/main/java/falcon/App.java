@@ -645,6 +645,69 @@ public final class App {
         }
     }
 
+    /** How long a finished automatic generation waits for the player to pick one of its grids before keeping
+     * the engine's own pick, so a closed tab never holds the job forever. */
+    static final double GRID_CHOICE_TIMEOUT_S = 10 * 60;
+    static final double GRID_CHOICE_POLL_INTERVAL_S = 0.5;
+
+    /** Publishes the finished grids of an automatic generation (the engine's "choices", by decreasing content
+     * score) as the "choose_grid" step, then waits for the player's click (POST /api/generate/choose/{job_id})
+     * and returns the chosen grid's result map. Honors "Stop" while waiting; after GRID_CHOICE_TIMEOUT_S with
+     * no click, keeps the grid the engine picked itself ("recommended"). */
+    static Map<String, Object> awaitGridChoice(Job job, List<Object> choices, Generator.Progress progress,
+                                               String shortId, Set<String> themeSet, Set<String> challengeWords) {
+        job.update(d -> {
+            d.put("grid_choice", null);
+            d.put("grid_choice_count", choices.size());
+        });
+        List<Object> examples = new ArrayList<>();
+        for (int i = 0; i < choices.size(); i++) {
+            Map<String, Object> choice = Json.asMap(choices.get(i));
+            List<Object> words = Json.asList(choice.get("words"));
+            Map<String, Object> ex = new LinkedHashMap<>();
+            ex.put("example_grid", Json.parse(Json.dumps(choice.get("solution"))));
+            ex.put("impossible_cells", List.of());
+            ex.put("forced_cells", List.of());
+            ex.put("locked_cells", List.of());
+            ex.put("theme_cells", wordCellsJson(words, themeSet));
+            ex.put("challenge_cells", wordCellsJson(words, challengeWords));
+            ex.put("process_number", choice.get("winning_process_number"));
+            ex.put("is_best", choice.get("recommended"));
+            ex.put("choice_index", i);
+            ex.put("score", choice.get("score"));
+            examples.add(ex);
+        }
+        progress.on("choose_grid", Json.obj("count", choices.size(), "examples", examples));
+        long deadline = System.nanoTime() + (long) (GRID_CHOICE_TIMEOUT_S * 1e9);
+        try {
+            while (job.get("grid_choice") == null && System.nanoTime() < deadline) {
+                if (job.cancel.get()) throw new GenerationCancelled();
+                sleepS(GRID_CHOICE_POLL_INTERVAL_S);
+            }
+        } finally {
+            job.put("grid_choice_count", null);
+        }
+        Object picked = job.get("grid_choice");
+        int index;
+        if (picked == null) {
+            index = 0;
+            for (int i = 0; i < choices.size(); i++) {
+                if (Boolean.TRUE.equals(Json.asMap(choices.get(i)).get("recommended"))) {
+                    index = i;
+                    break;
+                }
+            }
+            Log.info("[%s] no grid chosen in time, keeping grid %d", shortId, index);
+        } else {
+            index = ((Number) picked).intValue();
+            Log.info("[%s] player chose grid %d of %d", shortId, index, choices.size());
+        }
+        Map<String, Object> chosen = new LinkedHashMap<>(Json.asMap(choices.get(index)));
+        chosen.remove("score");
+        chosen.remove("recommended");
+        return chosen;
+    }
+
     static void runGenerateJob(String jobId, GenReq req, GenJobArgs a) {
         Job job = job(jobId);
         if (job == null) return;
@@ -809,6 +872,13 @@ public final class App {
                 });
                 Log.warning("[%s] no fillable grid found", shortId);
                 return;
+            }
+            // Several finished grids: a user-launched generation lets the player pick one before any clue is
+            // written; Populate keeps the engine's own pick (see backend/app.py, _await_grid_choice).
+            Object choices = result.remove("choices");
+            if (choices != null && !"populate".equals(req.source)) {
+                Set<String> choiceTheme = themePriority == null ? Set.of() : new HashSet<>(themePriority);
+                result = awaitGridChoice(job, Json.asList(choices), progress, shortId, choiceTheme, challengeWords);
             }
             if (a.zoneRevert != null && !a.zoneRevert.isEmpty()) {
                 List<Object> pattern = Json.asList(result.get("pattern"));
@@ -1820,6 +1890,25 @@ public final class App {
             if (job == null) throw http(404, "job inconnu (expiré ou jamais existé)");
             job.cancel.set(true);
             return Json.obj("status", "cancelling");
+        });
+        w.post("/api/generate/choose/{job_id}", r -> {
+            // The player's pick among the finished grids a generation job offers ("choose_grid", see
+            // awaitGridChoice). 409 when no choice is pending.
+            Job job = job(r.pathParams.get("job_id"));
+            if (job == null) throw http(404, "job inconnu (expiré ou jamais existé)");
+            Body b = new Body(r.json());
+            if (!b.has("index")) throw Web.validation("body", "index", "missing", "Field required", r.json());
+            int index = b.integer("index", 0, 0, null);
+            Object[] verdict = new Object[1];
+            job.update(d -> {
+                Object count = d.get("grid_choice_count");
+                if (count == null || d.get("grid_choice") != null) verdict[0] = 409;
+                else if (index >= ((Number) count).intValue()) verdict[0] = 422;
+                else d.put("grid_choice", index);
+            });
+            if (verdict[0] != null && (int) verdict[0] == 409) throw http(409, "aucun choix de grille en attente");
+            if (verdict[0] != null) throw http(422, "index de grille hors limites");
+            return Json.obj("status", "chosen", "index", index);
         });
         w.post("/api/generate/continue/{job_id}", 202, r -> {
             Job job = job(r.pathParams.get("job_id"));

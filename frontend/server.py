@@ -201,6 +201,23 @@ async def proxy_generate_cancel(job_id: str):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.post("/api/generate/choose/{job_id}")
+async def proxy_generate_choose(job_id: str, request: Request):
+    """Relays the player's click on one of the finished grids a generation
+    offers (see script.js's `chooseGeneratedGrid`) to the back end."""
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{BACKEND_URL}/api/generate/choose/{job_id}",
+                content=body,
+                headers={"Content-Type": "application/json"},
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 # A real chat reply (POST /api/chat below) is a single, synchronous LLM
 # call (backend/chatbot.py's own DEFAULT_TIMEOUT, 120s) rather than a
 # quick status check — PROXY_TIMEOUT_S (30s) alone would abort the proxy
