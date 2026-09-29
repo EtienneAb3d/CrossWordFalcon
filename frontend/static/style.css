@@ -5,7 +5,7 @@
   --accent: #2563eb;
   --accent-fg: #ffffff;
   --border: #c9c9c5;
-  --black-cell: #1f2320;
+  --black-cell: #2563eb;
   --white-cell: #ffffff;
   --error: #b3261e;
   --selected: #bfdbfe;
@@ -2520,8 +2520,17 @@ button:disabled {
   cursor: pointer;
 }
 
+/* A black cell is drawn as a centered square covering 50% of the cell's
+   width and height, on the white-cell background — every grid shares this
+   rule (the playable grid, Interactive mode, the attempt previews). The
+   square is a background-image so an overlay changing only
+   background-color (zone selection below) keeps it visible. */
 .cell.black {
-  background: var(--black-cell);
+  background-color: var(--white-cell);
+  background-image: linear-gradient(var(--black-cell), var(--black-cell));
+  background-size: 50% 50%;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 /* "Interactif" mode: click-drag zone selection (script.js's
@@ -2535,7 +2544,7 @@ button:disabled {
    ordering convention already established for those overlays. */
 .cell.white.zone-unselected,
 .cell.black.zone-unselected {
-  background: var(--zone-unselected-bg);
+  background-color: var(--zone-unselected-bg);
 }
 
 /* Live preview of the rectangle currently being dragged, before the
@@ -2548,7 +2557,7 @@ button:disabled {
    drag is in progress over a cell that isn't part of any prior zone. */
 .cell.white.zone-drag-preview,
 .cell.black.zone-drag-preview {
-  background: var(--selected);
+  background-color: var(--selected);
 }
 
 /* "Interactif" mode fill diagnostics — same meaning and colours as the
@@ -3248,7 +3257,7 @@ button:disabled {
   color: var(--correct-fg);
 }
 .virtual-keyboard-key.virtual-keyboard-black {
-  background: #222;
+  background: var(--black-cell);
   color: #fff;
 }
 /* Interactive mode: a selected black cell (editable, unlike play mode)

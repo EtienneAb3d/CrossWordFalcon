@@ -751,8 +751,11 @@ Once generation completes, the search-progress panel disappears and
   player revisit the same step-by-step search history the in-progress
   preview panel showed, now that the grid is finished.
 - **The grid itself** (`#grid`, `frontend/static/script.js`,
-  `renderGrid`) — a black-and-white crossword grid with 1-based
-  row/column headers. Click a white cell to select it (`selectCell`, a
+  `renderGrid`) — a crossword grid with 1-based
+  row/column headers. A black cell is drawn as a black square half the
+  cell's size, centered in a white cell — the same in every grid of the
+  page: play, Interactive mode and the generation previews
+  (`frontend/static/style.css`, `.cell.black`). Click a white cell to select it (`selectCell`, a
   black cell can't be selected) — the clicked cell turns light blue, and
   the rest of the word running through it in the current Across/Down
   direction is tinted light green (`applySelectedWordHighlight`), so it

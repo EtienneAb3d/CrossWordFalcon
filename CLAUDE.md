@@ -1963,7 +1963,9 @@ Four independent filesystem stores, one JSON file shape shared with the
 Renders a `generate_grid()`-shaped result to a self-contained SVG:
 `render_grid_svg` (empty grid + clue lists + solved grid, for the
 per-generation archive under `GRID_SVG/`) or `render_puzzle_svg` (a
-printable, answer-free sheet for the library's PDF download). `save_grid_
+printable, answer-free sheet for the library's PDF download). Both draw
+a black cell like the web UI: a bordered white cell holding a centered
+half-size square of `BLACK_CELL_FILL` (`#2563eb`). `save_grid_
 png` and `svg_to_pdf_bytes` shell out to the external `rsvg-convert`
 binary (a real runtime dependency, installed by `Install.sh`).
 

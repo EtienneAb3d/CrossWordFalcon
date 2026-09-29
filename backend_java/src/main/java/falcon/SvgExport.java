@@ -31,6 +31,8 @@ public final class SvgExport {
     private static final Path VERSION_PATH = Env.path("VERSION.txt");
 
     static final int CELL_SIZE = 26;
+    // Colour of a black cell's centered square (the web UI's --black-cell).
+    static final String BLACK_CELL_FILL = "#2563eb";
     static final int LINE_HEIGHT = 16;
     static final int MARGIN = 16;
     static final int MIN_CANVAS_WIDTH = 720;
@@ -249,8 +251,16 @@ public final class SvgExport {
                 int y = gridY0 + r * CELL_SIZE;
                 String xs = fmt.apply(x);
                 if ("#".equals(cell(pattern, r, c))) {
+                    // A black cell is a white cell carrying a centered square
+                    // half its size, filled with BLACK_CELL_FILL — the web UI's
+                    // own `.cell.black` look.
                     parts.append("<rect x=\"").append(xs).append("\" y=\"").append(y).append("\" width=\"")
-                            .append(CELL_SIZE).append("\" height=\"").append(CELL_SIZE).append("\" fill=\"#1f2937\"/>");
+                            .append(CELL_SIZE).append("\" height=\"").append(CELL_SIZE)
+                            .append("\" fill=\"#ffffff\" stroke=\"#1f2937\" stroke-width=\"1\"/>");
+                    parts.append("<rect x=\"").append(num(x + CELL_SIZE / 4.0)).append("\" y=\"")
+                            .append(num(y + CELL_SIZE / 4.0)).append("\" width=\"").append(num(CELL_SIZE / 2.0))
+                            .append("\" height=\"").append(num(CELL_SIZE / 2.0)).append("\" fill=\"")
+                            .append(BLACK_CELL_FILL).append("\"/>");
                     continue;
                 }
                 parts.append("<rect x=\"").append(xs).append("\" y=\"").append(y).append("\" width=\"")

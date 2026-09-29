@@ -27,9 +27,10 @@ English (see `project-best-practices`).
    hardcode a color value directly in a rule if a token already exists for
    it. Add a new token here (and in this log) rather than a one-off literal.
 
-3. **The grid itself (`#grid` cells) stays black & white** — only black
-   cells (`--black-cell`) and white cells (`--white-cell`); no color is
-   applied to the grid's base look. Colored states (selection, correctness
+3. **The grid's base look has only two cell kinds** — "black" cells
+   (`--black-cell`, drawn in blue as a centered half-size square) and
+   white cells (`--white-cell`); no other color is applied to the grid's
+   base look. Colored states (selection, correctness
    feedback) are overlaid on top of the white cells only, so they read as
    temporary/interactive rather than part of the puzzle's base appearance.
 
@@ -4526,3 +4527,24 @@ end through the real running API (interactive start/step/save,
   Playwright/Chromium: a 7×5 Flash run showed 32 tiles, hover tint
   `rgb(191, 219, 254)`, and one `.attempt-preview-chosen` tile left with
   no clickable tile after the click.
+
+- **Black cells are drawn as a centered half-size blue square**
+  (`.cell.black`, `frontend/static/style.css`), at the user's explicit
+  request: a white (`--white-cell`) background carrying a `--black-cell`
+  square (`#2563eb`, the same blue as `--accent`) covering 50% of the
+  cell's width and height, centered — one rule shared by the playable
+  grid, Interactive mode and the attempt-preview grids; the virtual
+  keyboard's "case noire" key uses the same token. The square is a
+  `background-image` (a flat `linear-gradient`) rather than a fill, so an
+  overlay that sets only `background-color` on a black cell
+  (`.zone-unselected`, `.zone-drag-preview`) tints around it without
+  erasing it; the border-style overlays on black cells (`.locked`,
+  `.finish-locked`, `#grid .cell.black.selected`) sit on the cell's white
+  edge and stay visible. Any new overlay on a black cell must likewise use
+  `background-color`, never the `background` shorthand. The SVG/PNG/PDF
+  exports draw black cells the same way (`backend/svg_export.py`'s
+  `_grid_svg`, `BLACK_CELL_FILL`; Java `SvgExport.gridSvg`): a white cell
+  with the usual border plus a centered half-size `#2563eb` square.
+  **Visually confirmed** with Playwright/Chromium and an `rsvg-convert`
+  render of the PDF sheet: blue centered squares on white, grid lines
+  intact.

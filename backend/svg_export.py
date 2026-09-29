@@ -32,6 +32,8 @@ _LOGO_PATH = PROJECT_ROOT / "frontend" / "static" / "logo.png"
 _VERSION_PATH = PROJECT_ROOT / "VERSION.txt"
 
 CELL_SIZE = 26
+# Colour of a black cell's centered square (the web UI's --black-cell).
+BLACK_CELL_FILL = "#2563eb"
 LINE_HEIGHT = 16
 MARGIN = 16
 MIN_CANVAS_WIDTH = 720
@@ -354,8 +356,16 @@ def _grid_svg(pattern, letters, words, y_offset, x_offset=MARGIN):
         for c in range(cols):
             x, y = grid_x0 + c * CELL_SIZE, grid_y0 + r * CELL_SIZE
             if pattern[r][c] == BLACK:
+                # A black cell is a white cell carrying a centered square
+                # half its size, filled with BLACK_CELL_FILL — the web UI's
+                # own `.cell.black` look.
                 parts.append(
-                    f'<rect x="{x}" y="{y}" width="{CELL_SIZE}" height="{CELL_SIZE}" fill="#1f2937"/>'
+                    f'<rect x="{x}" y="{y}" width="{CELL_SIZE}" height="{CELL_SIZE}" '
+                    f'fill="#ffffff" stroke="#1f2937" stroke-width="1"/>'
+                )
+                parts.append(
+                    f'<rect x="{x + CELL_SIZE / 4}" y="{y + CELL_SIZE / 4}" '
+                    f'width="{CELL_SIZE / 2}" height="{CELL_SIZE / 2}" fill="{BLACK_CELL_FILL}"/>'
                 )
                 continue
             parts.append(
