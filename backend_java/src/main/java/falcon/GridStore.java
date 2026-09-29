@@ -300,22 +300,33 @@ public final class GridStore {
     // ------------------------------------------------------------------ GRID_GAME
 
     public static boolean saveGridGame(String gridId, String pseudo, Object userLetters, double elapsedSeconds,
-                                       Double correctPercent) throws IOException {
+                                       Double correctPercent, boolean solutionSeen) throws IOException {
         String p = pseudo == null ? "" : Py.strip(pseudo);
         if (gridId == null || !GRID_ID_RE.matcher(gridId).matches() || p.isEmpty()) return false;
         Path path = GRID_GAME_DIR.resolve(gridId).resolve(slugifyPseudo(p) + ".json");
         Object createdAt = null;
+        Object elapsed = Math.max(0, (long) elapsedSeconds);
+        Object percent = correctPercent;
         if (Files.isRegularFile(path)) {
             Map<String, Object> old = readRecord(path);
-            if (old != null) createdAt = old.get("created_at");
+            if (old != null) {
+                createdAt = old.get("created_at");
+                // Solution already displayed: score frozen (grid_store.save_grid_game).
+                if (Boolean.TRUE.equals(old.get("solution_seen"))) {
+                    solutionSeen = true;
+                    percent = old.get("correct_percent");
+                    elapsed = old.getOrDefault("elapsed_seconds", 0);
+                }
+            }
         }
         String now = isoNow();
         Map<String, Object> record = new LinkedHashMap<>();
         record.put("grid_id", gridId);
         record.put("pseudo", p);
         record.put("user_letters", userLetters);
-        record.put("elapsed_seconds", Math.max(0, (long) elapsedSeconds));
-        record.put("correct_percent", correctPercent);
+        record.put("elapsed_seconds", elapsed);
+        record.put("correct_percent", percent);
+        record.put("solution_seen", solutionSeen);
         record.put("created_at", createdAt != null ? createdAt : now);
         record.put("updated_at", now);
         write(path, record);

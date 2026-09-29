@@ -1903,7 +1903,14 @@ Four independent filesystem stores, one JSON file shape shared with the
   10 best as `{rank, pseudo, correct_percent, elapsed_seconds, is_me}`,
   and `pseudo`'s own entry only when ranked below them). The play view
   shows it as `#leaderboard`, and stops the timer for good once the grid
-  is 100 % correct (`updateGridTimerAfterLetter`).
+  is 100 % correct (`updateGridTimerAfterLetter`). A record also carries
+  `solution_seen`: set by the first save sent with it (the play view's
+  "Solution" button, after its `#solution-confirm-overlay` confirmation),
+  it then stays true and freezes `correct_percent`/`elapsed_seconds` at
+  the values of that save — later saves only update the letters (same in
+  `GridStore.saveGridGame`). `GET /api/library/{grid_id}`'s `saved_game`
+  returns it, so a reopened grid keeps the timer stopped and asks no
+  confirmation again.
 - **`STOP_DUMP/`** — one file per automatic-generation job interrupted via
   the "Stop" button, named `<timestamp>_<pseudo-slug>_<job_id>.json`,
   written once by `save_stop_dump`. `backend/app.py`'s `_run_generate_job`

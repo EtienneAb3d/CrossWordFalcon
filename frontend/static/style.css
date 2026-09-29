@@ -3719,6 +3719,51 @@ button:disabled {
   display: none;
 }
 
+/* Confirmation before showing the solution (#solution-confirm-overlay):
+   the same scrim and white card as the welcome overlay; its two buttons
+   side by side, right-aligned, "Continuer à jouer" last (the default,
+   focused choice). */
+#solution-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(31, 35, 32, 0.55);
+}
+#solution-confirm-overlay[hidden] {
+  display: none;
+}
+#solution-confirm-box {
+  width: 100%;
+  max-width: 26rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--white-cell);
+  color: var(--fg);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+}
+#solution-confirm-box h2 {
+  margin: 0;
+  font-size: 1.2rem;
+  text-align: center;
+}
+#solution-confirm-text {
+  margin: 0;
+  line-height: 1.5;
+}
+#solution-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
 #welcome-form {
   width: 100%;
   max-width: 26rem;

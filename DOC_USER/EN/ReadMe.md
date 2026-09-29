@@ -784,6 +784,17 @@ Once generation completes, the search-progress panel disappears and
   cells holding the right letter (`correctFillPercent`); once it reaches
   100 % the clock stops for good (`updateGridTimerAfterLetter`), so the
   saved time is the time it took to solve the grid.
+- **Solution confirmation** (`#solution-confirm-overlay`, `frontend/
+  static/script.js`, `toggleSolution`/`openSolutionConfirm`) — the first
+  time "Solution" is turned on for a grid stored in the Library, with a
+  pseudo set and not yet fully correct, a dialog warns that the score can
+  no longer be improved and states it (percentage of correct cells and
+  time). **"Solution"** shows the solution: the clock stops for good and
+  the save records that the solution was seen, so the percentage and
+  time saved (and ranked) no longer change, even after reopening the
+  grid; the solution can then be toggled freely without a new warning.
+  **"Continuer à jouer / Keep playing"** (focused by default, also
+  Escape or a click outside the dialog) closes it and changes nothing.
 - **Ranking** (`#leaderboard`, `frontend/static/script.js`,
   `showLeaderboard`/`refreshLeaderboard`) — a small card against the
   window's right edge, over the page margin, level with the top of the

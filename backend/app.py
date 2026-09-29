@@ -1873,6 +1873,9 @@ class GridGameSaveRequest(BaseModel):
     # Share of the grid's white cells holding the right letter (0-100,
     # script.js's correctFillPercent); omitted by an older client.
     correct_percent: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    # True once the player displayed the solution: the saved percentage
+    # and time stop changing (see grid_store.save_grid_game).
+    solution_seen: bool = False
 
 
 class LibraryListRequest(BaseModel):
@@ -2067,6 +2070,7 @@ def library_get(grid_id: str, pseudo: str = ""):
                 "saved_game": {
                     "user_letters": saved_game.get("user_letters"),
                     "elapsed_seconds": saved_game.get("elapsed_seconds", 0),
+                    "solution_seen": saved_game.get("solution_seen") is True,
                 },
             }
     return record
@@ -2110,7 +2114,7 @@ def game_save(req: GridGameSaveRequest):
     longer be referenced anywhere else (there is no mechanism today to
     delete a grid from the library)."""
     if not save_grid_game(req.grid_id, req.pseudo, req.user_letters, req.elapsed_seconds,
-                          req.correct_percent):
+                          req.correct_percent, req.solution_seen):
         raise HTTPException(status_code=400, detail="identifiant de grille ou pseudo invalide")
     return {"ok": True}
 

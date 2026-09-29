@@ -700,7 +700,8 @@ def delete_grid_work(work_id):
 GRID_GAME_DIR = Path(__file__).resolve().parent.parent / "GRID_GAME"
 
 
-def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds, correct_percent=None):
+def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds, correct_percent=None,
+                   solution_seen=False):
     """Saves (or updates) one player's own play state for `grid_id` — the
     letters they've typed so far (`user_letters`, a plain 2D list of
     strings, "" for a still-empty cell — the exact shape script.js's own
@@ -721,26 +722,41 @@ def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds, correct_perce
     `correct_percent` is the share of the grid's white cells holding the
     right letter, computed by the frontend (script.js's
     `correctFillPercent`) on every save; None (an older client) is stored
-    as-is and recomputed from the solution by grid_game_leaderboard."""
+    as-is and recomputed from the solution by grid_game_leaderboard.
+
+    `solution_seen` marks that the player displayed the solution: from the
+    first save carrying it, the record keeps `solution_seen: true` and the
+    `correct_percent`/`elapsed_seconds` it held at that moment (those of
+    that very save, when it is the one setting it) — later saves only
+    update the letters, so the score shown in the ranking stays frozen."""
     pseudo = (pseudo or "").strip()
     if not _GRID_ID_RE.match(grid_id) or not pseudo:
         return False
     directory = GRID_GAME_DIR / grid_id
     path = directory / f"{_slugify_pseudo(pseudo)}.json"
-    created_at = None
+    previous = {}
     if path.is_file():
         try:
             with open(path, encoding="utf-8") as f:
-                created_at = json.load(f).get("created_at")
+                previous = json.load(f)
         except (OSError, json.JSONDecodeError):
-            created_at = None
+            previous = {}
+        if not isinstance(previous, dict):
+            previous = {}
+    created_at = previous.get("created_at")
+    elapsed_seconds = max(0, int(elapsed_seconds or 0))
+    if previous.get("solution_seen") is True:
+        solution_seen = True
+        correct_percent = previous.get("correct_percent")
+        elapsed_seconds = previous.get("elapsed_seconds", 0)
     now = datetime.now().isoformat()
     record = {
         "grid_id": grid_id,
         "pseudo": pseudo,
         "user_letters": user_letters,
-        "elapsed_seconds": max(0, int(elapsed_seconds or 0)),
+        "elapsed_seconds": elapsed_seconds,
         "correct_percent": correct_percent,
+        "solution_seen": bool(solution_seen),
         "created_at": created_at or now,
         "updated_at": now,
     }

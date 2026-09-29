@@ -166,6 +166,10 @@ const gridTitleEl = document.getElementById("grid-title");
 const gridTitleTextEl = document.getElementById("grid-title-text");
 const gridDifficultyEl = document.getElementById("grid-difficulty");
 const gridTimerEl = document.getElementById("grid-timer");
+const solutionConfirmOverlay = document.getElementById("solution-confirm-overlay");
+const solutionConfirmText = document.getElementById("solution-confirm-text");
+const solutionConfirmShowBtn = document.getElementById("solution-confirm-show-btn");
+const solutionConfirmContinueBtn = document.getElementById("solution-confirm-continue-btn");
 const leaderboardPanel = document.getElementById("leaderboard");
 const leaderboardList = document.getElementById("leaderboard-list");
 const leaderboardMe = document.getElementById("leaderboard-me");
@@ -1196,7 +1200,8 @@ function hasActiveTextSelection() {
 }
 
 function shouldGridIgnoreKeydown() {
-  return isTextInputFocused() || hasActiveTextSelection();
+  // A modal confirmation (#solution-confirm-overlay) owns the keyboard.
+  return isTextInputFocused() || hasActiveTextSelection() || !solutionConfirmOverlay.hidden;
 }
 
 // Vertical word on Shift or CapsLock (either one), horizontal otherwise —
@@ -2541,7 +2546,54 @@ function renderClues(words) {
   renderClueLines(cluesDown, words, "down", "col");
 }
 
+// Once the player has displayed the solution of a grid, their score on it
+// (correct-fill percentage and time) is frozen, at the user's explicit
+// request: saved as `solution_seen` in GRID_GAME (backend/grid_store.py's
+// save_grid_game keeps the percentage and time of that save from then
+// on), restored from `saved_game` when the grid is reopened, and the
+// timer never runs again. Showing the solution of a scored grid (stored
+// in the library, a pseudo set, not yet fully correct) for the first time
+// first asks for confirmation (#solution-confirm-overlay).
+let solutionSeen = false;
+
+function solutionNeedsConfirm() {
+  return !solutionSeen && !!puzzle && !!puzzle.id && !!userPseudo
+    && correctFillPercent() < 100;
+}
+
+function openSolutionConfirm() {
+  const t = I18N[uiLanguage];
+  solutionConfirmText.textContent = t.solutionConfirmText(
+    Math.floor(correctFillPercent()), formatDuration(gridTimerSeconds));
+  solutionConfirmOverlay.hidden = false;
+  solutionConfirmContinueBtn.focus();
+}
+
+function closeSolutionConfirm() {
+  solutionConfirmOverlay.hidden = true;
+  solutionBtn.focus();
+}
+
+solutionConfirmShowBtn.addEventListener("click", () => {
+  closeSolutionConfirm();
+  solutionSeen = true;
+  stopGridTimer();
+  scheduleGridGameSave();
+  toggleSolution();
+});
+solutionConfirmContinueBtn.addEventListener("click", closeSolutionConfirm);
+solutionConfirmOverlay.addEventListener("click", (event) => {
+  if (event.target === solutionConfirmOverlay) closeSolutionConfirm();
+});
+solutionConfirmOverlay.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeSolutionConfirm();
+});
+
 function toggleSolution() {
+  if (!showSolution && solutionNeedsConfirm()) {
+    openSolutionConfirm();
+    return;
+  }
   showSolution = !showSolution;
   if (showSolution) checking = false;
   selected = null;
@@ -3408,7 +3460,7 @@ function correctFillPercent() {
 // explicit request — the time saved (and ranked) is then the time it
 // took to solve the grid.
 function updateGridTimerAfterLetter() {
-  if (correctFillPercent() >= 100) {
+  if (solutionSeen || correctFillPercent() >= 100) {
     stopGridTimer();
   } else {
     ensureGridTimerRunning();
@@ -3438,6 +3490,7 @@ async function scheduleGridGameSave() {
         user_letters: userLetters,
         elapsed_seconds: gridTimerSeconds,
         correct_percent: correctFillPercent(),
+        solution_seen: solutionSeen,
       }),
     }, FETCH_TIMEOUT_MS);
   } catch (err) {
@@ -3947,6 +4000,8 @@ function displayFinalGrid(gridData) {
       && savedLetters.every((row) => row.length === gridData.width)) {
     userLetters = savedLetters.map((row) => row.slice());
   }
+  solutionSeen = !!(savedGame && savedGame.solution_seen);
+  solutionConfirmOverlay.hidden = true;
   selected = null;
   showSolution = false;
   checking = false;

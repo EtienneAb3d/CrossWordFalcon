@@ -229,6 +229,12 @@ the page, reopen the grid later from the Library or its link, and you pick
 up where you left off. The clock stops for good once every letter of the
 grid is right.
 
+Clicking **"Solution"** on a grid you are playing under your nickname
+first asks for confirmation: once you have seen the solution, your score
+on that grid (percentage of correct letters and time) can no longer
+improve and stays as it was. Choose **"Solution"** to show it anyway, or
+**"Keep playing"** to go back to the grid.
+
 To the right of the grid, a **ranking** lists the 10 best players of that
 grid: first by how much of the grid they filled in correctly, then by the
 fastest time. Each line shows the rank, the nickname, the percentage of

@@ -4494,3 +4494,16 @@ end through the real running API (interactive start/step/save,
   (379px), its right edge is the window's (1400px), and a player ranked
   13th shows under the separator.
 
+- **Solution confirmation dialog** (`#solution-confirm-overlay`,
+  `#solution-confirm-box`), at the user's explicit request: before the
+  solution of a scored grid is shown, an `alertdialog` warns the score
+  will stay frozen and states it. Same scrim, white card, radius, shadow
+  and 26rem width as `#welcome-overlay`/`#welcome-form` (no new token);
+  title centered, text left-aligned, the two shared accent-blue buttons
+  side by side at the bottom right — "Solution" then "Continuer à jouer",
+  the latter focused by default as the safe choice. `[hidden]` override
+  for the bare-id `display: flex` trap. While it is open the grid ignores
+  the keyboard (`shouldGridIgnoreKeydown`). **Visually confirmed** with
+  Playwright/Chromium at 1400×900: centered over the dimmed page, both
+  buttons on one row.
+

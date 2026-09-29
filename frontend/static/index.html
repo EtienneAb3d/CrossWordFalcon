@@ -1277,6 +1277,21 @@
        and #language, stay in sync). The pseudo is optional (under 15
        letters). Reopened later via the header's own #user-pseudo
        button. -->
+  <!-- Confirmation before showing the solution of a scored grid
+       (script.js's toggleSolution/openSolutionConfirm): the score is
+       frozen once the solution has been seen. -->
+  <div id="solution-confirm-overlay" role="alertdialog" aria-modal="true"
+       aria-labelledby="solution-confirm-title" aria-describedby="solution-confirm-text" hidden>
+    <div id="solution-confirm-box">
+      <h2 id="solution-confirm-title" data-i18n="solutionConfirmTitle">Afficher la solution ?</h2>
+      <p id="solution-confirm-text"></p>
+      <div id="solution-confirm-actions">
+        <button type="button" id="solution-confirm-show-btn" data-i18n="solutionBtn">Solution</button>
+        <button type="button" id="solution-confirm-continue-btn" data-i18n="solutionConfirmContinue">Continuer à jouer</button>
+      </div>
+    </div>
+  </div>
+
   <div id="welcome-overlay" role="dialog" aria-modal="true"
        aria-labelledby="welcome-title" hidden>
     <form id="welcome-form">

@@ -1572,7 +1572,8 @@ public final class App {
                 if (saved != null) {
                     record = new LinkedHashMap<>(record);
                     record.put("saved_game", Json.obj("user_letters", saved.get("user_letters"), "elapsed_seconds",
-                            saved.getOrDefault("elapsed_seconds", 0)));
+                            saved.getOrDefault("elapsed_seconds", 0), "solution_seen",
+                            Boolean.TRUE.equals(saved.get("solution_seen"))));
                 }
             }
             return record;
@@ -1600,7 +1601,8 @@ public final class App {
             int elapsed = b.integer("elapsed_seconds", 0, 0, null);
             Double correctPercent = b.has("correct_percent") && b.raw("correct_percent") != null
                     ? b.dbl("correct_percent", 0.0, 0.0, 100.0) : null;
-            if (!GridStore.saveGridGame(gridId, pseudo, letters, elapsed, correctPercent))
+            boolean solutionSeen = b.bool("solution_seen", false);
+            if (!GridStore.saveGridGame(gridId, pseudo, letters, elapsed, correctPercent, solutionSeen))
                 throw http(400, "identifiant de grille ou pseudo invalide");
             return Json.obj("ok", true);
         });
