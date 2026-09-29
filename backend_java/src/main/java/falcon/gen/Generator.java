@@ -186,6 +186,21 @@ public final class Generator {
         return a;
     }
 
+    /** Fills a palier's seed -> lineage and seed -> checksProgress slot maps and publishes them for the drain
+     * thread (mirrors _publish_dispatch_maps). Called before the palier's first attempt is submitted: an attempt
+     * publishes a heartbeat on its very first checkpoint (checks 0), and a message whose seed the drain thread
+     * cannot resolve yet would be shown as a tile with no process number that no later message ever updates. */
+    static void publishDispatchMaps(long[] seeds, List<Integer> dispatchLineage, Map<Long, Integer> seedToLineage,
+                                    Map<Long, Integer> seedToSlot, Map<Long, Integer>[] seedToLineageRef,
+                                    Map<Long, Integer>[] seedToSlotRef) {
+        for (int i = 0; i < seeds.length; i++) {
+            if (dispatchLineage.get(i) != null) seedToLineage.put(seeds[i], dispatchLineage.get(i));
+            seedToSlot.put(seeds[i], i);
+        }
+        seedToLineageRef[0] = seedToLineage;
+        seedToSlotRef[0] = seedToSlot;
+    }
+
     static Outcome patternAttempt(Ctx ctx, int rows, int cols, double ratio, long seed, double forceFraction,
                                   char[][] seedGrid, Map<Integer, Character> locked, double enrichment,
                                   Long deadlineChecks, Map<Integer, Character> permanentLocked,
@@ -843,10 +858,15 @@ public final class Generator {
                 Set<Future<Outcome>> origFutures = new HashSet<>();
                 List<Integer> dispatchLineage;
                 final char[][] fSeedGridNull = null;
+                // Seed -> lineage number and seed -> checksProgress slot, filled and published for the drain
+                // thread before the palier's first attempt is submitted (publishDispatchMaps).
+                Map<Long, Integer> seedToLineage = new ConcurrentHashMap<>();
+                Map<Long, Integer> seedToSlot = new ConcurrentHashMap<>();
                 if (carryPreseed != null) {
                     int resetCount = FULL_RESET_ATTEMPT_COUNT;
                     dispatchLineage = Cleanup.buildDispatchLineage(PA, resetCount,
                             carrySeedPoolContinueLineage != null && !carrySeedPoolContinueLineage.isEmpty() ? continuePoolLineage : null);
+                    publishDispatchMaps(seeds, dispatchLineage, seedToLineage, seedToSlot, seedToLineageRef, seedToSlotRef);
                     for (int i = 0; i < PA; i++) {
                         final int slot = i;
                         final long s = seeds[i];
@@ -911,6 +931,7 @@ public final class Generator {
                     }
                     progress.on("pattern_generated", data("attempt", attempt + 1, "attempts", p.attempts,
                             "total_attempts", totalAttemptsTried, "examples", sortExamplesByProcess(early)));
+                    publishDispatchMaps(seeds, dispatchLineage, seedToLineage, seedToSlot, seedToLineageRef, seedToSlotRef);
                     for (int i = 0; i < PA; i++) {
                         final int slot = i;
                         final long s = seeds[i];
@@ -933,14 +954,6 @@ public final class Generator {
                         origFutures.add(f);
                     }
                 }
-                Map<Long, Integer> seedToLineage = new ConcurrentHashMap<>();
-                Map<Long, Integer> seedToSlot = new ConcurrentHashMap<>();
-                for (int i = 0; i < PA; i++) {
-                    if (dispatchLineage.get(i) != null) seedToLineage.put(seeds[i], dispatchLineage.get(i));
-                    seedToSlot.put(seeds[i], i);
-                }
-                seedToLineageRef[0] = seedToLineage;
-                seedToSlotRef[0] = seedToSlot;
                 int interruptThreshold = Math.max(1, (int) Math.ceil(PALIER_ATTEMPT_INTERRUPT_FRACTION * origFutures.size()));
                 Set<Future<Outcome>> pending = new HashSet<>(futureSeed.keySet());
                 List<Outcome> outcomes = new ArrayList<>();

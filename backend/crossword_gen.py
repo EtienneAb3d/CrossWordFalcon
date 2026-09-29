@@ -13832,6 +13832,28 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             return None
         return round(100 * checks_progress[slot] / resolved_deadline_checks)
 
+    def _publish_dispatch_maps(seeds, dispatch_lineage):
+        """Builds a palier's seed -> lineage number and seed -> `checks_
+        progress` slot maps and publishes them for the drain thread
+        (`current_seed_to_lineage_ref`/`current_seed_to_checks_slot_ref`).
+        Called before the palier's first attempt is submitted: an attempt
+        publishes a heartbeat on its very first checkpoint (`checks` 0), and
+        a message whose seed the drain thread cannot resolve yet would be
+        shown as a tile with no process number that no later message ever
+        updates. `dispatch_lineage` associates to each submission INDEX the
+        lineage number that task inherits (`None` for a reset task whose
+        lineage is not resolved yet, see `_reassign_lineage_numbers`);
+        `seeds[i]` is the `attempt_id` every diagnostic and published state
+        of that task carries. Slot `i` and `seeds[i]` are the same
+        submission, so the slot map is the identity at dispatch; both dicts
+        are mutated in place by the mid-palier reassignment, which the
+        published references see with nothing more to do."""
+        seed_to_lineage = {seeds[i]: dispatch_lineage[i] for i in range(PARALLEL_ATTEMPTS)}
+        seed_to_checks_slot = {seeds[i]: i for i in range(PARALLEL_ATTEMPTS)}
+        current_seed_to_lineage_ref[0] = seed_to_lineage
+        current_seed_to_checks_slot_ref[0] = seed_to_checks_slot
+        return seed_to_lineage, seed_to_checks_slot
+
     def _refresh_computing_budget_percents():
         """Re-reads `checks_progress` into every still-"computing" live
         tile's own `budget_percent`, returning whether any value changed.
@@ -14301,6 +14323,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     PARALLEL_ATTEMPTS, reset_count,
                     continue_pool_lineage if carry_seed_pool_continue_lineage else None,
                 )
+                seed_to_lineage, seed_to_checks_slot = _publish_dispatch_maps(seeds, dispatch_lineage)
                 futures = []
                 for i, s in enumerate(seeds):
                     if i < reset_count:
@@ -14602,6 +14625,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # comment) — only in that specific case can the same
                 # cleaned grid legitimately end up reused by more than
                 # one worker, each with its own seed.
+                seed_to_lineage, seed_to_checks_slot = _publish_dispatch_maps(seeds, dispatch_lineage)
                 futures = []
                 for i, s in enumerate(seeds):
                     if i < reset_count:
@@ -14672,35 +14696,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # different and higher-priority signal — see Filler._backtrack)
             # still propagates immediately here, exactly as before this
             # feature.
-            # `dispatch_lineage` (see its own construction above, in each
-            # of the two branches above) associates, to each submission
-            # INDEX (0..PARALLEL_ATTEMPTS-1), the lineage number this task
-            # inherits — never the completion order, which has nothing to
-            # do with lineage. `seeds[i]` is already the `attempt_id`
-            # every real diagnostic (see `diag["attempt_id"]` in
-            # `_pattern_attempt`/`_pattern_continue`) and every state
-            # published along the way (see `_publish_new_best`) already
-            # carries, so this seed -> lineage mapping is enough to find
-            # the right number for either one, with no need to know which
-            # worker (PID) produced it.
-            seed_to_lineage = {seeds[i]: dispatch_lineage[i] for i in range(PARALLEL_ATTEMPTS)}
-            # Mirrors `seed_to_lineage` above, but for `checks_progress`'s
-            # own array slot rather than the display lineage number: at
-            # dispatch time slot `i` and `seeds[i]` are the same submission,
-            # so this is just the identity mapping — kept as an explicit
-            # dict (like `seed_to_lineage`) so the mid-palier reassignment
-            # below can look a freed slot back up by seed alone, the same
-            # way it already does for lineage.
-            seed_to_checks_slot = {seeds[i]: i for i in range(PARALLEL_ATTEMPTS)}
-            # Published for `_drain_best_state_queue_continuously`'s own
-            # use (see `current_seed_to_lineage_ref`'s own comment above) —
-            # a single reference write; every later in-place mutation of
-            # this same dict (the mid-palier reassignment further below)
-            # is already visible through it with nothing more to do here.
-            current_seed_to_lineage_ref[0] = seed_to_lineage
-            # Same reference-publishing convention as `current_seed_to_
-            # lineage_ref` right above, for `seed_to_checks_slot` instead.
-            current_seed_to_checks_slot_ref[0] = seed_to_checks_slot
+            # `seed_to_lineage`/`seed_to_checks_slot` were built and
+            # published by `_publish_dispatch_maps`, in each branch above,
+            # before the first attempt was submitted.
             interrupt_threshold = max(1, math.ceil(PALIER_ATTEMPT_INTERRUPT_FRACTION * len(futures)))
             # Harvests this palier's futures with `concurrent.futures.wait`
             # (not the simpler `as_completed`) specifically so `pending` can

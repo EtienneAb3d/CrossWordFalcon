@@ -1493,6 +1493,13 @@ specific attempt actually consumed. Every cycle-start ("pattern")
 preview starts at 0%, since `checks_progress` is reset to all zeros
 for the new palier before that preview is even built.
 
+Both seed maps (`seed_to_lineage`, `seed_to_checks_slot`) are built and
+published for the drain thread by `_publish_dispatch_maps` before a
+palier's first attempt is submitted: an attempt publishes a heartbeat on
+its very first checkpoint (`checks` 0), and a message whose seed cannot be
+resolved yet would land on a tile with no process number that no later
+message updates.
+
 A finished attempt's frozen tile ("succeeded"/"failed") carries its
 `attempt_id`, and the drain thread drops any record or heartbeat of that
 same attempt that reaches it afterwards: a worker queues its last messages
