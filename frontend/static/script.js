@@ -166,6 +166,10 @@ const gridTitleEl = document.getElementById("grid-title");
 const gridTitleTextEl = document.getElementById("grid-title-text");
 const gridDifficultyEl = document.getElementById("grid-difficulty");
 const gridTimerEl = document.getElementById("grid-timer");
+const leaderboardPanel = document.getElementById("leaderboard");
+const leaderboardList = document.getElementById("leaderboard-list");
+const leaderboardMe = document.getElementById("leaderboard-me");
+const leaderboardEmpty = document.getElementById("leaderboard-empty");
 const libraryBtn = document.getElementById("library-btn");
 const createGridBtn = document.getElementById("create-grid-btn");
 const libraryPanel = document.getElementById("library");
@@ -2277,7 +2281,7 @@ function handleKeydown(event) {
     event.preventDefault();
     const isUpper = key !== key.toLowerCase();
     userLetters[selected.row][selected.col] = key.toUpperCase();
-    ensureGridTimerRunning();
+    updateGridTimerAfterLetter();
     // Auto-advance follows the current selection direction (activeDirection
     // — set by Ctrl, the Across/Down buttons, or Shift/Caps Lock), not just
     // the letter's own case. Typing an uppercase letter still advances down
@@ -2634,7 +2638,7 @@ function typeVirtualLetter(letter) {
   // writing into the void or overwriting the solution.
   if (!puzzle || !selected || showSolution) return;
   userLetters[selected.row][selected.col] = letter;
-  ensureGridTimerRunning();
+  updateGridTimerAfterLetter();
   // moveSelection() expects "right" for horizontal, anything else for
   // vertical (see its own definition) — not the same labels as
   // activeDirection ("across"/"down").
@@ -3117,6 +3121,8 @@ welcomeForm.addEventListener("submit", async (event) => {
   savePrefs({ accepted: true, lang: uiLanguage, pseudo: userPseudo, secret: userSecret });
   renderUserPseudo();
   welcomeOverlay.hidden = true;
+  // The ranking's own "your rank" line depends on the pseudo.
+  refreshLeaderboard();
   // Fires a presence heartbeat right away (see pingPresence's own
   // docstring) instead of waiting for the setInterval's next tick, so
   // LOG_USERS reflects with no perceptible delay a user who just named
@@ -3377,6 +3383,38 @@ function hideGridTimer() {
   gridTimerEl.hidden = true;
 }
 
+// Share of the grid's white cells holding the right letter, in percent,
+// floored to one decimal with integer arithmetic — the exact same value
+// as backend/grid_store.py's correct_fill_percent, so 100 means every
+// white cell is right. Saved with every GRID_GAME autosave and used to
+// rank the players of the grid (#leaderboard).
+function correctFillPercent() {
+  if (!puzzle) return 0;
+  let white = 0;
+  let correct = 0;
+  puzzle.solution.forEach((row, r) => {
+    row.forEach((expected, c) => {
+      if (expected === "#") return;
+      white += 1;
+      if (userLetters[r] && userLetters[r][c] === expected) correct += 1;
+    });
+  });
+  return white ? Math.floor((correct * 1000) / white) / 10 : 0;
+}
+
+// Called right after the player writes a letter (handleKeydown,
+// typeVirtualLetter): starts the counter on the first letter, and stops
+// it for good once the whole grid is filled correctly, at the user's
+// explicit request — the time saved (and ranked) is then the time it
+// took to solve the grid.
+function updateGridTimerAfterLetter() {
+  if (correctFillPercent() >= 100) {
+    stopGridTimer();
+  } else {
+    ensureGridTimerRunning();
+  }
+}
+
 // GRID_GAME autosave — "Every time the grid is edited, save the grid's
 // state into GRID_GAME under the user's name so it can be reloaded
 // later. Include the time counter's state." — at the user's explicit
@@ -3399,12 +3437,105 @@ async function scheduleGridGameSave() {
         pseudo: userPseudo,
         user_letters: userLetters,
         elapsed_seconds: gridTimerSeconds,
+        correct_percent: correctFillPercent(),
       }),
     }, FETCH_TIMEOUT_MS);
   } catch (err) {
     // Best-effort, silently ignored — same convention as
     // autosaveInteractiveWork().
   }
+  refreshLeaderboard();
+}
+
+// Ranking of the players of the grid on screen (#leaderboard), at the
+// user's explicit request: fixed against the page's right edge, over the
+// margin, level with the top of the grid. The 10 best by correct-fill
+// percentage (descending) then time (ascending), one line each (rank,
+// pseudo, percentage, time); the current player's own line is shown
+// below them when they rank lower. Shown only in play mode for a grid
+// stored in the library (`puzzle.id`); refreshed on display, after each
+// GRID_GAME autosave and every LEADERBOARD_REFRESH_MS while shown.
+const LEADERBOARD_REFRESH_MS = 30000;
+let leaderboardRefreshTimer = null;
+
+function hideLeaderboard() {
+  leaderboardPanel.hidden = true;
+  clearInterval(leaderboardRefreshTimer);
+  leaderboardRefreshTimer = null;
+}
+
+function showLeaderboard() {
+  if (interactiveMode || !puzzle || !puzzle.id) {
+    hideLeaderboard();
+    return;
+  }
+  leaderboardList.replaceChildren();
+  leaderboardMe.replaceChildren();
+  leaderboardMe.hidden = true;
+  leaderboardEmpty.hidden = true;
+  leaderboardPanel.hidden = false;
+  positionLeaderboard();
+  clearInterval(leaderboardRefreshTimer);
+  leaderboardRefreshTimer = setInterval(refreshLeaderboard, LEADERBOARD_REFRESH_MS);
+  refreshLeaderboard();
+}
+
+// Aligns the panel's top on the grid's top (document coordinates — the
+// panel is absolutely positioned against the page, not fixed, so it
+// scrolls with the grid). Re-run whenever the page layout moves (a panel
+// opening above the grid, a resize — see the ResizeObserver below).
+function positionLeaderboard() {
+  if (leaderboardPanel.hidden) return;
+  const top = gridEl.getBoundingClientRect().top + window.scrollY;
+  leaderboardPanel.style.top = `${Math.max(0, Math.round(top))}px`;
+}
+
+function leaderboardRow(entry) {
+  const li = document.createElement("li");
+  li.className = "leaderboard-row";
+  if (entry.is_me) li.classList.add("leaderboard-row-me");
+  const cells = [
+    ["leaderboard-rank", String(entry.rank)],
+    ["leaderboard-pseudo", entry.pseudo],
+    ["leaderboard-percent", `${Math.floor(entry.correct_percent)} %`],
+    ["leaderboard-time", formatDuration(entry.elapsed_seconds)],
+  ];
+  cells.forEach(([cls, text]) => {
+    const span = document.createElement("span");
+    span.className = cls;
+    span.textContent = text;
+    if (cls === "leaderboard-pseudo") span.title = text;
+    li.appendChild(span);
+  });
+  return li;
+}
+
+async function refreshLeaderboard() {
+  if (leaderboardPanel.hidden || !puzzle || !puzzle.id) return;
+  const gridId = puzzle.id;
+  let data;
+  try {
+    const params = new URLSearchParams({ pseudo: userPseudo || "" });
+    const resp = await fetchWithTimeout(
+      `/api/game/leaderboard/${encodeURIComponent(gridId)}?${params}`, {}, FETCH_TIMEOUT_MS);
+    if (!resp.ok) return;
+    data = await resp.json();
+  } catch (err) {
+    return;
+  }
+  // A response for a grid no longer on screen is dropped.
+  if (!puzzle || puzzle.id !== gridId || leaderboardPanel.hidden) return;
+  const top = data.top || [];
+  leaderboardList.replaceChildren(...top.map(leaderboardRow));
+  leaderboardEmpty.hidden = top.length > 0;
+  leaderboardMe.replaceChildren(...(data.me ? [leaderboardRow(data.me)] : []));
+  leaderboardMe.hidden = !data.me;
+  positionLeaderboard();
+}
+
+window.addEventListener("resize", positionLeaderboard);
+if (typeof ResizeObserver !== "undefined") {
+  new ResizeObserver(positionLeaderboard).observe(document.querySelector("main"));
 }
 
 // Count of words tried (backend/crossword_gen.py, `total_attempts` — the
@@ -3857,6 +3988,7 @@ function displayFinalGrid(gridData) {
   markGridSeen(gridData.id);
   renderGrid();
   renderClues(gridData.words);
+  showLeaderboard();
   const t = I18N[uiLanguage];
   stats.textContent = t.stats(gridData.word_count, gridData.black_count, (gridData.black_ratio * 100).toFixed(1));
   // A grid built by hand from scratch was never generated, optimized or
@@ -7300,6 +7432,7 @@ async function proposeInteractiveTitle(autoFill) {
 
 // ---- Mode lifecycle ----
 function enterInteractiveMode(state) {
+  hideLeaderboard();
   interactiveMode = true;
   setGenerateFormCollapsed(false);
   interactiveJobId = currentJobId || interactiveJobId;
@@ -7895,6 +8028,7 @@ async function runInteractive(body, endpoint = "/api/interactive/start") {
   generationInProgress = true;
   button.disabled = true;
   result.hidden = true;
+  hideLeaderboard();
   solutionBtn.hidden = true;
   checkBtn.hidden = true;
   definitionsBtn.hidden = true;
@@ -9031,6 +9165,7 @@ async function runGeneration(startJob) {
   generationInProgress = true;
   button.disabled = true;
   result.hidden = true;
+  hideLeaderboard();
   syncRssPanelVisibility();
   solutionBtn.hidden = true;
   checkBtn.hidden = true;

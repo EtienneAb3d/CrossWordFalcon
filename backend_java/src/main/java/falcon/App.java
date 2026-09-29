@@ -1598,8 +1598,17 @@ public final class App {
             String pseudo = b.required("pseudo");
             List<Object> letters = b.grid("user_letters");
             int elapsed = b.integer("elapsed_seconds", 0, 0, null);
-            if (!GridStore.saveGridGame(gridId, pseudo, letters, elapsed)) throw http(400, "identifiant de grille ou pseudo invalide");
+            Double correctPercent = b.has("correct_percent") && b.raw("correct_percent") != null
+                    ? b.dbl("correct_percent", 0.0, 0.0, 100.0) : null;
+            if (!GridStore.saveGridGame(gridId, pseudo, letters, elapsed, correctPercent))
+                throw http(400, "identifiant de grille ou pseudo invalide");
             return Json.obj("ok", true);
+        });
+        w.get("/api/game/leaderboard/{grid_id}", r -> {
+            String gridId = r.pathParams.get("grid_id");
+            Map<String, Object> record = GridStore.getGrid(gridId);
+            if (record == null) throw http(404, "grille introuvable dans la bibliothèque");
+            return GridStore.gridGameLeaderboard(gridId, r.q("pseudo", ""), record.get("solution"), 10);
         });
         w.get("/api/dictionary", r -> {
             String q = r.qRequired("q");

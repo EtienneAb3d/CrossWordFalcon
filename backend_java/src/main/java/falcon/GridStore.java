@@ -299,8 +299,8 @@ public final class GridStore {
 
     // ------------------------------------------------------------------ GRID_GAME
 
-    public static boolean saveGridGame(String gridId, String pseudo, Object userLetters, double elapsedSeconds)
-            throws IOException {
+    public static boolean saveGridGame(String gridId, String pseudo, Object userLetters, double elapsedSeconds,
+                                       Double correctPercent) throws IOException {
         String p = pseudo == null ? "" : Py.strip(pseudo);
         if (gridId == null || !GRID_ID_RE.matcher(gridId).matches() || p.isEmpty()) return false;
         Path path = GRID_GAME_DIR.resolve(gridId).resolve(slugifyPseudo(p) + ".json");
@@ -315,6 +315,7 @@ public final class GridStore {
         record.put("pseudo", p);
         record.put("user_letters", userLetters);
         record.put("elapsed_seconds", Math.max(0, (long) elapsedSeconds));
+        record.put("correct_percent", correctPercent);
         record.put("created_at", createdAt != null ? createdAt : now);
         record.put("updated_at", now);
         write(path, record);
@@ -327,6 +328,76 @@ public final class GridStore {
         Path path = GRID_GAME_DIR.resolve(gridId).resolve(slugifyPseudo(p) + ".json");
         if (!Files.isRegularFile(path)) return null;
         return readRecord(path);
+    }
+
+    /** Share of {@code solution}'s white cells holding the right letter in {@code userLetters}, in percent,
+     *  floored to one decimal with integer arithmetic (grid_store.correct_fill_percent). */
+    public static double correctFillPercent(Object userLetters, Object solution) {
+        long white = 0, correct = 0;
+        if (solution instanceof List<?> rows) {
+            for (int r = 0; r < rows.size(); r++) {
+                if (!(rows.get(r) instanceof List<?> row)) continue;
+                for (int c = 0; c < row.size(); c++) {
+                    Object expected = row.get(c);
+                    if ("#".equals(expected)) continue;
+                    white++;
+                    Object typed = "";
+                    if (userLetters instanceof List<?> uRows && r < uRows.size() && uRows.get(r) instanceof List<?> uRow
+                            && c < uRow.size()) typed = uRow.get(c);
+                    if (typed != null && typed.equals(expected)) correct++;
+                }
+            }
+        }
+        return white > 0 ? (correct * 1000 / white) / 10.0 : 0.0;
+    }
+
+    /** Ranking of every GRID_GAME record of {@code gridId} (grid_store.grid_game_leaderboard). */
+    public static Map<String, Object> gridGameLeaderboard(String gridId, String pseudo, Object solution, int limit) {
+        if (gridId == null || !GRID_ID_RE.matcher(gridId).matches()) return null;
+        String p = pseudo == null ? "" : Py.strip(pseudo);
+        String mySlug = p.isEmpty() ? null : slugifyPseudo(p);
+        List<Path> paths = glob(GRID_GAME_DIR.resolve(gridId), "*.json");
+        paths.sort(Comparator.comparing(Path::toString));
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (Path path : paths) {
+            Map<String, Object> record = readRecord(path);
+            if (record == null) continue;
+            String name = path.getFileName().toString();
+            String stem = name.substring(0, name.length() - ".json".length());
+            Object pct = record.get("correct_percent");
+            double percent = pct instanceof Number n && !(pct instanceof Boolean)
+                    ? Math.max(0.0, Math.min(100.0, n.doubleValue()))
+                    : correctFillPercent(record.get("user_letters"), solution);
+            Object pseudoValue = record.get("pseudo");
+            String entryPseudo = pseudoValue == null || "".equals(pseudoValue) ? stem : String.valueOf(pseudoValue);
+            Object elapsed = record.get("elapsed_seconds");
+            long seconds = elapsed instanceof Number n ? Math.max(0, n.longValue()) : 0;
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("pseudo", entryPseudo);
+            e.put("correct_percent", percent);
+            e.put("elapsed_seconds", seconds);
+            e.put("is_me", stem.equals(mySlug));
+            entries.add(e);
+        }
+        entries.sort(Comparator.<Map<String, Object>>comparingDouble(e -> -(double) e.get("correct_percent"))
+                .thenComparingLong(e -> (long) e.get("elapsed_seconds"))
+                .thenComparing(e -> (String) e.get("pseudo")));
+        List<Map<String, Object>> ranked = new ArrayList<>();
+        for (int i = 0; i < entries.size(); i++) {
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("rank", i + 1);
+            e.putAll(entries.get(i));
+            ranked.add(e);
+        }
+        Map<String, Object> me = null;
+        for (int i = limit; i < ranked.size(); i++) {
+            if (Boolean.TRUE.equals(ranked.get(i).get("is_me"))) { me = ranked.get(i); break; }
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("top", new ArrayList<>(ranked.subList(0, Math.min(limit, ranked.size()))));
+        out.put("me", me);
+        out.put("total", ranked.size());
+        return out;
     }
 
     // ------------------------------------------------------------------ STOP_DUMP

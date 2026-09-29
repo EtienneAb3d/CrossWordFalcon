@@ -226,7 +226,14 @@ keyboard:
 A clock next to the title starts with your first letter. Your letters and
 the clock are saved on the server under your nickname as you type: close
 the page, reopen the grid later from the Library or its link, and you pick
-up where you left off.
+up where you left off. The clock stops for good once every letter of the
+grid is right.
+
+To the right of the grid, a **ranking** lists the 10 best players of that
+grid: first by how much of the grid they filled in correctly, then by the
+fastest time. Each line shows the rank, the nickname, the percentage of
+correct letters and the time. If you are not among the 10, your own rank
+is shown below them.
 
 Two buttons above the grid help you check your progress:
 

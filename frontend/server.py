@@ -409,6 +409,21 @@ async def proxy_game_save(request: Request):
     return JSONResponse(status_code=resp.status_code, content=resp.json())
 
 
+@app.get("/api/game/leaderboard/{grid_id}")
+async def proxy_game_leaderboard(grid_id: str, request: Request):
+    """Relays a library grid's player ranking (see backend/app.py's
+    game_leaderboard) — the query string (`pseudo`) passed through
+    verbatim, same pattern as proxy_library_get."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(
+                f"{BACKEND_URL}/api/game/leaderboard/{grid_id}", params=request.query_params
+            )
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    return JSONResponse(status_code=resp.status_code, content=resp.json())
+
+
 @app.get("/api/dictionary")
 async def proxy_dictionary(request: Request):
     """Relays the UI's "Dictionnaire" button (see script.js) to the back

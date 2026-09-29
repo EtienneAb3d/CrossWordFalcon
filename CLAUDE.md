@@ -194,7 +194,8 @@ json`. Holds all server-side state in plain module dicts/lists:
 - *Library*: `GET|POST /api/library` (paginated, filterable listing),
   `GET /api/library/{grid_id}` (optionally merges a player's saved play
   state), `GET /api/library/{grid_id}/pdf` (answer-free printable sheet),
-  `POST /api/game/save` (autosave play state to `GRID_GAME`).
+  `POST /api/game/save` (autosave play state to `GRID_GAME`), `GET
+  /api/game/leaderboard/{grid_id}` (players' ranking on that grid).
 - *Dictionary/paraphrase*: `GET /api/dictionary` (root-family search),
   `GET /api/dictionary/define` (LLM candidate definitions), `GET /api/
   paraphrase` (LLM paraphrases), `GET /api/correct` (LLM proofreading of
@@ -1890,8 +1891,19 @@ Four independent filesystem stores, one JSON file shape shared with the
   click. Diagnostic-only, and absent from `_iter_stored_grid_work`'s own
   "Créations" listing whitelist.
 - **`GRID_GAME/<grid_id>/<pseudo-slug>.json`** — one file per (grid,
-  player) pair holding that player's own typed letters + elapsed timer.
-  `save_grid_game`/`get_grid_game`.
+  player) pair holding that player's own typed letters, elapsed timer and
+  `correct_percent` (share of the white cells holding the right letter,
+  floored to one decimal with integer arithmetic — computed by
+  `script.js`'s `correctFillPercent` on every save, `null` from an older
+  client). `save_grid_game`/`get_grid_game`. `grid_game_leaderboard`
+  ranks every record of a grid by `correct_percent` descending, then
+  `elapsed_seconds` ascending, then pseudo, recomputing a missing
+  percentage from the grid's solution (`correct_fill_percent`); it backs
+  `GET /api/game/leaderboard/{grid_id}?pseudo=` (`{top, me, total}`: the
+  10 best as `{rank, pseudo, correct_percent, elapsed_seconds, is_me}`,
+  and `pseudo`'s own entry only when ranked below them). The play view
+  shows it as `#leaderboard`, and stops the timer for good once the grid
+  is 100 % correct (`updateGridTimerAfterLetter`).
 - **`STOP_DUMP/`** — one file per automatic-generation job interrupted via
   the "Stop" button, named `<timestamp>_<pseudo-slug>_<job_id>.json`,
   written once by `save_stop_dump`. `backend/app.py`'s `_run_generate_job`

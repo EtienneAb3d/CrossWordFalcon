@@ -60,7 +60,7 @@ from .crossword_gen import (
 from .grid_store import (
     _slugify_title, get_grid, list_grids, save_grid_json,
     save_grid_work, list_grid_work, get_grid_work, delete_grid_work,
-    save_grid_game, get_grid_game, save_stop_dump,
+    save_grid_game, get_grid_game, grid_game_leaderboard, save_stop_dump,
 )
 from .svg_export import (
     render_puzzle_svg,
@@ -1870,6 +1870,9 @@ class GridGameSaveRequest(BaseModel):
     pseudo: str
     user_letters: list[list[str]]
     elapsed_seconds: int = Field(default=0, ge=0)
+    # Share of the grid's white cells holding the right letter (0-100,
+    # script.js's correctFillPercent); omitted by an older client.
+    correct_percent: Optional[float] = Field(default=None, ge=0.0, le=100.0)
 
 
 class LibraryListRequest(BaseModel):
@@ -2106,9 +2109,22 @@ def game_save(req: GridGameSaveRequest):
     state stays valid even for a grid that would, hypothetically, no
     longer be referenced anywhere else (there is no mechanism today to
     delete a grid from the library)."""
-    if not save_grid_game(req.grid_id, req.pseudo, req.user_letters, req.elapsed_seconds):
+    if not save_grid_game(req.grid_id, req.pseudo, req.user_letters, req.elapsed_seconds,
+                          req.correct_percent):
         raise HTTPException(status_code=400, detail="identifiant de grille ou pseudo invalide")
     return {"ok": True}
+
+
+@app.get("/api/game/leaderboard/{grid_id}")
+def game_leaderboard(grid_id: str, pseudo: str = ""):
+    """The ranking of every player of library grid `grid_id` (see
+    grid_store.grid_game_leaderboard): the 10 best, by correct-fill
+    percentage then time, plus `pseudo`'s own entry when it is ranked
+    below them — shown to the right of the grid in play mode."""
+    record = get_grid(grid_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    return grid_game_leaderboard(grid_id, pseudo, record.get("solution"))
 
 
 @app.get("/api/dictionary")

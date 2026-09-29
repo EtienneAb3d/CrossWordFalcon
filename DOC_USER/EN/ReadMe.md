@@ -780,7 +780,20 @@ Once generation completes, the search-progress panel disappears and
   Library or its shareable link, even after the page was closed —
   restores the letters and the clock where they were at the last edit
   (`displayFinalGrid`, `saved_game`); the clock resumes at the next
-  letter typed.
+  letter typed. Each save also records the share of the grid's white
+  cells holding the right letter (`correctFillPercent`); once it reaches
+  100 % the clock stops for good (`updateGridTimerAfterLetter`), so the
+  saved time is the time it took to solve the grid.
+- **Ranking** (`#leaderboard`, `frontend/static/script.js`,
+  `showLeaderboard`/`refreshLeaderboard`) — a small card against the
+  window's right edge, over the page margin, level with the top of the
+  grid, for a grid stored in the Library. It lists the 10 best players of
+  that grid, sorted by percentage of correct letters (highest first) then
+  by time (fastest first); each line shows the rank, the pseudo, the
+  percentage and the time. The player's own line is highlighted; when
+  they rank below the 10 shown, their own line follows under a dashed
+  separator. It refreshes when the grid opens, after each save of the
+  player's letters, when the pseudo changes and every 30 seconds.
 - **Horizontalement/Verticalement (Across/Down)** clue lists
   (`#clues-across`/`#clues-down`, `renderClueLines`) — every word's own
   clue, grouped by its starting cell number; hidden until "Définitions"

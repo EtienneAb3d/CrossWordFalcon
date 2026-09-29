@@ -1179,6 +1179,16 @@
     </section>
   </main>
 
+  <!-- Ranking of the players of the grid in play mode, against the page's
+       right edge over the margin, level with the top of the grid
+       (script.js's showLeaderboard/positionLeaderboard). -->
+  <aside id="leaderboard" hidden>
+    <h3 id="leaderboard-title" data-i18n="leaderboardTitle">Classement</h3>
+    <ol id="leaderboard-list"></ol>
+    <p id="leaderboard-empty" data-i18n="leaderboardEmpty" hidden>Aucun joueur pour l'instant.</p>
+    <ol id="leaderboard-me" hidden></ol>
+  </aside>
+
   <div id="success-medal" role="status" data-i18n-title="successMedalTitle"
        data-i18n-aria="successMedalTitle" title="Grilles réussies" hidden>
     <span id="success-medal-count">0</span>

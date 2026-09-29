@@ -3795,6 +3795,82 @@ button:disabled {
   color: var(--correct-fg);
 }
 
+/* Player ranking (#leaderboard, script.js's showLeaderboard): absolutely
+   positioned against the page (it scrolls with the grid), flush with the
+   right edge of the window over main's right margin, its top level with
+   the grid's (positionLeaderboard sets `top`). A small white card; each
+   line is a 4-column grid (rank, pseudo, percentage, time). The current
+   player's own line is bold and tinted; when they rank below the 10
+   shown, it follows under a dashed separator (#leaderboard-me). */
+#leaderboard {
+  position: absolute;
+  right: 0;
+  z-index: 4;
+  width: 15rem;
+  max-width: 40vw;
+  box-sizing: border-box;
+  padding: 0.5rem 0.6rem;
+  background: var(--white-cell);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  font-size: 0.75rem;
+}
+#leaderboard[hidden] {
+  display: none;
+}
+#leaderboard-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--accent);
+}
+#leaderboard-list,
+#leaderboard-me {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#leaderboard-me {
+  margin-top: 0.3rem;
+  padding-top: 0.3rem;
+  border-top: 1px dashed var(--border);
+}
+#leaderboard-me[hidden] {
+  display: none;
+}
+#leaderboard-empty {
+  margin: 0;
+  color: #777;
+  font-style: italic;
+}
+.leaderboard-row {
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr) auto auto;
+  column-gap: 0.4rem;
+  padding: 0.1rem 0.2rem;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.leaderboard-row-me {
+  background: var(--selected);
+  font-weight: 700;
+}
+.leaderboard-rank {
+  color: #777;
+  text-align: right;
+}
+.leaderboard-pseudo {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leaderboard-percent,
+.leaderboard-time {
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* Gold-medal success counter (#success-medal): fixed in the page's left
    margin, vertically centered, visible only while an automatic generation
    runs (script.js's runGeneration()). A gold disc (radial gradient, darker

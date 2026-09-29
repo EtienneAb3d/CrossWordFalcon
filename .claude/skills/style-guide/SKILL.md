@@ -4473,3 +4473,24 @@ end through the real running API (interactive start/step/save,
   `paraphraseAiTitle`, `{service}` filled in). Order: Perplexity, ChatGPT, Claude, Mistral, Euria.
   **Visually confirmed** with Playwright/Chromium: the five tiles wrap as a
   group on the Dictionnaire row, every logo recognizable.
+
+- **Player ranking** (`#leaderboard`, `.leaderboard-row`), at the user's
+  explicit request: "à droite de la grille, collé au bord de l'écran par
+  dessus la marge, aligné sur le haut de la grille". An `<aside>` after
+  `<main>`, `position: absolute; right: 0` (it scrolls with the grid,
+  unlike the fixed medal/chatbot/keyboard), `top` set by
+  `positionLeaderboard()` from `#grid`'s own top, re-run on resize and by
+  a `ResizeObserver` on `main` (a panel opening above the grid moves it).
+  A 15rem (max 40vw) white card, flush against the window edge (no right
+  border, left corners rounded, soft shadow), `z-index: 4` (under the
+  chatbot/keyboard at 5), 0.75rem text, accent-coloured `<h3>` title. Each
+  line is a 4-column CSS grid (rank grey right-aligned, pseudo with
+  ellipsis, percentage, time — tabular digits); the player's own line is
+  bold on `--selected`; when ranked below the 10, it follows under a
+  dashed `--border` separator (`#leaderboard-me`). No new token.
+  `#leaderboard[hidden]`/`#leaderboard-me[hidden]` overrides guard the
+  usual bare-id `display` trap. **Visually confirmed** with
+  Playwright/Chromium at 1400×900: the card's top matches the grid's
+  (379px), its right edge is the window's (1400px), and a player ranked
+  13th shows under the separator.
+

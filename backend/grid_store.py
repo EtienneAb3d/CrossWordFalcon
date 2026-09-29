@@ -700,7 +700,7 @@ def delete_grid_work(work_id):
 GRID_GAME_DIR = Path(__file__).resolve().parent.parent / "GRID_GAME"
 
 
-def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds):
+def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds, correct_percent=None):
     """Saves (or updates) one player's own play state for `grid_id` — the
     letters they've typed so far (`user_letters`, a plain 2D list of
     strings, "" for a still-empty cell — the exact shape script.js's own
@@ -716,7 +716,12 @@ def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds):
     if any, before it gets overwritten) the same way save_grid_work already
     does for its own record — so the very first time this grid was played
     stays known even after many later saves; only `updated_at` and the
-    content itself change on every call after the first."""
+    content itself change on every call after the first.
+
+    `correct_percent` is the share of the grid's white cells holding the
+    right letter, computed by the frontend (script.js's
+    `correctFillPercent`) on every save; None (an older client) is stored
+    as-is and recomputed from the solution by grid_game_leaderboard."""
     pseudo = (pseudo or "").strip()
     if not _GRID_ID_RE.match(grid_id) or not pseudo:
         return False
@@ -735,6 +740,7 @@ def save_grid_game(grid_id, pseudo, user_letters, elapsed_seconds):
         "pseudo": pseudo,
         "user_letters": user_letters,
         "elapsed_seconds": max(0, int(elapsed_seconds or 0)),
+        "correct_percent": correct_percent,
         "created_at": created_at or now,
         "updated_at": now,
     }
@@ -760,6 +766,68 @@ def get_grid_game(grid_id, pseudo):
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def correct_fill_percent(user_letters, solution):
+    """Share of `solution`'s white cells ("#" marks a black one) whose
+    letter in `user_letters` is the right one, in percent, floored to one
+    decimal with integer arithmetic (so 100.0 means every cell is right,
+    and the Java back end and script.js's `correctFillPercent` give the
+    exact same value). 0.0 for a grid with no white cell."""
+    white = correct = 0
+    for r, row in enumerate(solution or []):
+        for c, expected in enumerate(row):
+            if expected == "#":
+                continue
+            white += 1
+            try:
+                typed = user_letters[r][c]
+            except (IndexError, KeyError, TypeError):
+                typed = ""
+            if typed == expected:
+                correct += 1
+    return (correct * 1000 // white) / 10 if white else 0.0
+
+
+def grid_game_leaderboard(grid_id, pseudo, solution, limit=10):
+    """Ranking of every player with a GRID_GAME record for `grid_id`: by
+    `correct_percent` descending, then `elapsed_seconds` ascending (then
+    pseudo, for a stable order). Returns `{"top", "me", "total"}` — `top`
+    the first `limit` entries (`{rank, pseudo, correct_percent,
+    elapsed_seconds, is_me}`), `me` the entry of `pseudo` only when it is
+    ranked below `limit` (None otherwise), `total` the number of players.
+    A record saved without `correct_percent` gets it recomputed from
+    `solution` (correct_fill_percent). None if `grid_id` doesn't match the
+    expected shape."""
+    if not _GRID_ID_RE.match(grid_id):
+        return None
+    pseudo = (pseudo or "").strip()
+    my_slug = _slugify_pseudo(pseudo) if pseudo else None
+    directory = GRID_GAME_DIR / grid_id
+    entries = []
+    for path in sorted(directory.glob("*.json")) if directory.is_dir() else []:
+        try:
+            with open(path, encoding="utf-8") as f:
+                record = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        percent = record.get("correct_percent")
+        if isinstance(percent, (int, float)) and not isinstance(percent, bool):
+            percent = max(0.0, min(100.0, float(percent)))
+        else:
+            percent = correct_fill_percent(record.get("user_letters"), solution)
+        entries.append({
+            "pseudo": str(record.get("pseudo") or path.stem),
+            "correct_percent": percent,
+            "elapsed_seconds": max(0, int(record.get("elapsed_seconds") or 0)),
+            "is_me": path.stem == my_slug,
+        })
+    entries.sort(key=lambda e: (-e["correct_percent"], e["elapsed_seconds"], e["pseudo"]))
+    ranked = [{"rank": i + 1, **e} for i, e in enumerate(entries)]
+    me = next((e for e in ranked[limit:] if e["is_me"]), None)
+    return {"top": ranked[:limit], "me": me, "total": len(ranked)}
 
 
 # ---------------------------------------------------------------------------
