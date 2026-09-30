@@ -32,7 +32,7 @@ public final class Words {
     public static final Map<String, Integer> MAX_NON_GLOSS_WORDS = Map.of("easy", 0, "medium", 2, "hard", 5);
     public static final Set<String> PROPER_NOUN_EXCLUDED_LANGS = Set.of("de");
 
-    private static final Pattern LANG_RE = Pattern.compile("wordlist_([a-z]{2})_full\\.tsv$");
+    private static final Pattern LANG_RE = Pattern.compile("wordlist_([a-z]{2})_freq\\.tsv$");
 
     public static String langFromPath(String path) {
         if (path == null) return null;
@@ -280,6 +280,183 @@ public final class Words {
             if (ch >= 'A' && ch <= 'Z') out.append(ch);
         }
         return out.toString();
+    }
+
+    // ---------------------------------------------------------------- Scrabble dictionaries
+
+    /** data/wordlist_&lt;lang&gt;_scrabble.tsv (mirrors crossword_gen.py's scrabble_wordlist_path). */
+    public static Path scrabbleWordlistPath(String language) {
+        return falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_scrabble.tsv");
+    }
+
+    /** One row of a Scrabble wordlist. */
+    public record ScrabbleEntry(String accented, List<String> canonical) {}
+
+    private static final Map<String, Map<String, ScrabbleEntry>> SCRABBLE_LEXICON = new java.util.HashMap<>();
+    private static final Map<String, Set<String>> SCRABBLE_WORDS = new java.util.HashMap<>();
+
+    /** {MOT: (ACCENTUE, [CANONIQUE...])} of the language's Scrabble wordlist in file order, read once per process
+     * (empty when the language has none). Mirrors load_scrabble_lexicon. */
+    public static synchronized Map<String, ScrabbleEntry> loadScrabbleLexicon(String language) {
+        if (language == null || language.isEmpty()) return Map.of();
+        Map<String, ScrabbleEntry> cached = SCRABBLE_LEXICON.get(language);
+        if (cached != null) return cached;
+        Map<String, ScrabbleEntry> lexicon = new LinkedHashMap<>();
+        Path path = scrabbleWordlistPath(language);
+        if (Files.exists(path)) {
+            try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    String[] parts = line.split("\t", -1);
+                    if (parts.length < 3 || !isAlpha(parts[0])) continue;
+                    List<String> canonical = new ArrayList<>();
+                    for (String c : parts[2].split(";", -1)) if (!c.isEmpty()) canonical.add(c);
+                    lexicon.put(parts[0], new ScrabbleEntry(parts[1], canonical.isEmpty() ? List.of(parts[1]) : canonical));
+                }
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
+        lexicon = java.util.Collections.unmodifiableMap(lexicon);
+        SCRABBLE_LEXICON.put(language, lexicon);
+        return lexicon;
+    }
+
+    private static final Map<String, Set<String>> INFLECTION_KEYS = new java.util.HashMap<>();
+    private static final Map<String, Map<String, ScrabbleEntry>> SCRABBLE_EASY = new java.util.HashMap<>();
+
+    /** Every form and every lemma of the language's inflection table (data/inflection/&lt;lang&gt;.jsonl),
+     * lowercased with ligatures folded — the words with a known inflection (mirrors load_inflection_keys). */
+    public static synchronized Set<String> loadInflectionKeys(String language) {
+        if (language == null || language.isEmpty()) return Set.of();
+        Set<String> cached = INFLECTION_KEYS.get(language);
+        if (cached != null) return cached;
+        Set<String> keys = new HashSet<>();
+        Path path = falcon.Env.ROOT.resolve("data").resolve("inflection").resolve(language + ".jsonl");
+        if (Files.exists(path)) {
+            try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    Object rec;
+                    try {
+                        rec = falcon.Json.parse(line);
+                    } catch (RuntimeException e) {
+                        continue;
+                    }
+                    if (!(rec instanceof Map<?, ?> m)) continue;
+                    if (m.get("form") instanceof String f && !f.isEmpty()) keys.add(Py.lookupKey(f));
+                    if (m.get("analyses") instanceof List<?> analyses) {
+                        for (Object a : analyses) {
+                            if (a instanceof Map<?, ?> am && am.get("lemma") instanceof String l && !l.isEmpty()) {
+                                keys.add(Py.lookupKey(l));
+                            }
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        }
+        cached = java.util.Collections.unmodifiableSet(keys);
+        INFLECTION_KEYS.put(language, cached);
+        return cached;
+    }
+
+    /** The language's Scrabble lexicon, restricted at "easy" difficulty to the words whose accented form is a form
+     * or a lemma of the inflection table (mirrors _scrabble_lexicon_for). */
+    public static synchronized Map<String, ScrabbleEntry> scrabbleLexiconFor(String language, boolean easy) {
+        Map<String, ScrabbleEntry> lexicon = loadScrabbleLexicon(language);
+        if (!easy || language == null || language.isEmpty()) return lexicon;
+        Map<String, ScrabbleEntry> cached = SCRABBLE_EASY.get(language);
+        if (cached != null) return cached;
+        Set<String> known = loadInflectionKeys(language);
+        Map<String, ScrabbleEntry> filtered = new LinkedHashMap<>();
+        lexicon.forEach((w, e) -> {
+            if (known.contains(Py.lookupKey(e.accented()))) filtered.put(w, e);
+        });
+        cached = java.util.Collections.unmodifiableMap(filtered);
+        SCRABBLE_EASY.put(language, cached);
+        return cached;
+    }
+
+    /** Every Scrabble word (grid form) of the language — at "easy" difficulty, only those with a known inflection
+     * (mirrors load_scrabble_words). */
+    public static synchronized Set<String> loadScrabbleWords(String language, boolean easy) {
+        if (language == null || language.isEmpty()) return Set.of();
+        String key = language + "|" + easy;
+        Set<String> cached = SCRABBLE_WORDS.get(key);
+        if (cached == null) {
+            cached = java.util.Collections.unmodifiableSet(new HashSet<>(scrabbleLexiconFor(language, easy).keySet()));
+            SCRABBLE_WORDS.put(key, cached);
+        }
+        return cached;
+    }
+
+    /** Adds the language's Scrabble wordlist to a loaded lexicon, in place, whatever its difficulty cut — whole, or
+     * only its words with a known inflection when {@code easy}: a missing word joins byLength with its own
+     * accented/canonical forms, and every added Scrabble word gets a frequency of at least NOISE_FREQUENCY_THRESHOLD.
+     * Returns the Scrabble word set used (mirrors merge_scrabble_lexicon). */
+    public static Set<String> mergeScrabbleLexicon(String language, Lexicon lex, double noiseThreshold, boolean easy) {
+        Map<String, ScrabbleEntry> lexicon = scrabbleLexiconFor(language, easy);
+        lexicon.forEach((word, e) -> {
+            if (!lex.accents().containsKey(word)) {
+                lex.accents().put(word, e.accented());
+                lex.canonicals().put(word, new ArrayList<>(e.canonical()));
+                lex.byLength().computeIfAbsent(word.length(), k -> new ArrayList<>()).add(word);
+            }
+            lex.frequencies().put(word, Math.max(lex.frequencies().getOrDefault(word, 0.0), noiseThreshold));
+        });
+        return loadScrabbleWords(language, easy);
+    }
+
+    /** The Scrabble word set of a grid: one set, or one per direction on a bilingual grid (mirrors
+     * scrabble_words_for_languages). */
+    public static PW scrabbleWordsForLanguages(String language, String bilingualLanguage, boolean easy) {
+        Set<String> across = loadScrabbleWords(language, easy);
+        if (bilingualLanguage != null && !bilingualLanguage.isEmpty() && !bilingualLanguage.equals(language)) {
+            return new PW(across, loadScrabbleWords(bilingualLanguage, easy), true);
+        }
+        return PW.single(across);
+    }
+
+    /** [row, col] of every cell of a fully lettered run (2 letters or more, across or down) of a JSON grid
+     * (rows of "#", "." or a letter) spelling a word of that run's direction's Scrabble set. Sorted,
+     * deduplicated (mirrors scrabble_word_cells). */
+    public static List<Object> scrabbleWordCells(Object grid, PW scrabble) {
+        java.util.TreeSet<Integer> found = new java.util.TreeSet<>();
+        if (scrabble == null || scrabble.isEmpty() || !(grid instanceof List<?> rowsList) || rowsList.isEmpty()) {
+            return Cells.toJson(found);
+        }
+        int rows = rowsList.size();
+        Object first = rowsList.get(0);
+        int cols = first instanceof String str ? str.length() : ((List<?>) first).size();
+        for (int dir = 0; dir < 2; dir++) {
+            Set<String> words = dir == 0 ? scrabble.across : (scrabble.dual ? scrabble.down : scrabble.across);
+            if (words.isEmpty()) continue;
+            int outer = dir == 0 ? rows : cols, inner = dir == 0 ? cols : rows;
+            for (int a = 0; a < outer; a++) {
+                List<Integer> run = new ArrayList<>();
+                StringBuilder word = new StringBuilder();
+                boolean complete = true;
+                for (int b = 0; b <= inner; b++) {
+                    int r = dir == 0 ? a : b, c = dir == 0 ? b : a;
+                    Object row = b < inner ? rowsList.get(r) : null;
+                    String ch = row == null ? "#" : row instanceof String str
+                            ? String.valueOf(str.charAt(c)) : String.valueOf(((List<?>) row).get(c));
+                    if (!ch.equals("#")) {
+                        run.add(Cells.of(r, c));
+                        word.append(ch);
+                        if (ch.equals(".")) complete = false;
+                        continue;
+                    }
+                    if (run.size() >= 2 && complete && words.contains(word.toString())) found.addAll(run);
+                    run.clear();
+                    word.setLength(0);
+                    complete = true;
+                }
+            }
+        }
+        return Cells.toJson(found);
     }
 
     public static Set<String> challengeSet(Collection<String> raw) {

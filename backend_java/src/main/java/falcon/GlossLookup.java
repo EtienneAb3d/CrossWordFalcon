@@ -47,7 +47,7 @@ public final class GlossLookup {
                 }
                 Object word = entry.get("word");
                 if (word == null) continue;
-                index.put(word.toString().toLowerCase(Locale.ROOT), entry);
+                index.put(Py.lookupKey(word.toString()), entry);
             }
         } catch (IOException e) {
             Env.log("gloss_lookup: cannot read " + path + ": " + e.getMessage());
@@ -61,7 +61,7 @@ public final class GlossLookup {
         Map<String, Map<String, Object>> index = load(language);
         Map<String, List<Object>> result = new LinkedHashMap<>();
         for (String lemma : canonicalForms) {
-            Map<String, Object> entry = index.get(lemma.toLowerCase(Locale.ROOT));
+            Map<String, Object> entry = index.get(Py.lookupKey(lemma));
             if (entry != null) result.put(lemma, Json.listOrEmpty(entry.get("entries")));
         }
         return result;
@@ -77,7 +77,7 @@ public final class GlossLookup {
     public static boolean hasAnyGloss(Iterable<String> candidates, String language) {
         Map<String, Map<String, Object>> index = load(language);
         for (String c : candidates) {
-            if (index.containsKey(c.toLowerCase(Locale.ROOT))) return true;
+            if (index.containsKey(Py.lookupKey(c))) return true;
         }
         return false;
     }

@@ -13,7 +13,7 @@ clone that only needs example sentences never needs the full 80-100M-line
 corpus, and the full corpus compresses to roughly a gigabyte per language
 (see GITHUB_HARD_LIMIT_BYTES below) — utterly incompatible with GitHub
 regardless. A fresh clone that DOES need the full corpus (to rebuild
-data/wordlist_<lang>_full.tsv via build_wordlist_freq.py) still has to run
+data/wordlist_<lang>_freq.tsv via build_wordlist_freq.py) still has to run
 build_sentence_corpus.py <lang> from scratch — this script's own archive
 was never meant to substitute for that.
 

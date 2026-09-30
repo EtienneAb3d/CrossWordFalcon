@@ -8,7 +8,7 @@ the clue-writing prompt with an actual definition of a word's canonical
 form(s), rather than relying solely on the LLM's own (sometimes wrong)
 sense of what a word means — see the French "ARE" case in the
 project-best-practices SKILL for why this exists, and why it targets the
-word's CANONICAL form(s) (data/wordlist_<lang>_full.tsv's 4th column, from
+word's CANONICAL form(s) (data/wordlist_<lang>_freq.tsv's 4th column, from
 build_wordlist_freq.py) rather than every inflected form: Wiktionary is
 itself indexed by lemma, and a genuinely ambiguous word (French "suis" ->
 "être" or "suivre") can have more than one candidate lemma, each gathered
@@ -29,7 +29,7 @@ download would only ever cover words starting with the first few letters
 of the alphabet. Each is downloaded in full (multi-gigabyte), filtered
 down to just the lemmas this project's dictionaries actually use (a few
 hundred thousand words at most, vs. every word/sense Wiktionary has), and
-kept under DICS/ (project root, gitignored — same caching principle as
+kept under data/wiktionary/ (gitignored — same caching principle as
 build_sentence_corpus.py's CORPUS/) rather than deleted: a lemma already
 cached there is read from disk instead of re-downloaded, so a later
 rebuild (the wordlist's own CANONICAL column changed, MAX_GLOSSES_PER_
@@ -46,15 +46,18 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_wordlist_freq import fold_ligatures  # noqa: E402
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 GLOSS_DIR = DATA_DIR / "gloss_dictionary"
 # Raw, full Kaikki/Wiktionary dump cache — see the module docstring's
-# "kept under DICS/" paragraph. A project-root sibling of CORPUS/ (build_
-# sentence_corpus.py's own raw cache), not nested under data/: both are
-# purely local, gitignored working caches of upstream downloads, distinct
+# "kept under data/wiktionary/" paragraph. Shared with build_inflections.py
+# and build_wordlist_scrabble.py (the English-edition dumps): a local,
+# gitignored cache of upstream downloads kept for later reuse, distinct
 # from GLOSS_DIR above, which stays the final, filtered, checked-into-git
 # output the rest of the pipeline actually reads.
-DICS_DIR = Path(__file__).resolve().parent.parent / "DICS"
+DICS_DIR = Path(__file__).resolve().parent.parent / "data" / "wiktionary"
 
 # Kaikki source per language: (edition, word-language-name-in-that-edition).
 # English uses the primary (English-Wiktionary-sourced) extraction, already
@@ -80,17 +83,21 @@ def _kaikki_url(lang):
 
 
 def _target_lemmas(lang):
-    """Every canonical form (lemma) this project's own dictionary for
-    `lang` actually needs a gloss for — data/wordlist_<lang>_full.tsv's
-    4th column, build_wordlist_freq.py's CANONICAL (one or more per word,
-    semicolon-separated)."""
-    path = DATA_DIR / f"wordlist_{lang}_full.tsv"
+    """Every canonical form (lemma) this project's own dictionaries for
+    `lang` actually need a gloss for — the CANONICAL column (one or more
+    per word, semicolon-separated) of data/wordlist_<lang>_freq.tsv (4th
+    column, build_wordlist_freq.py) and of data/wordlist_<lang>_scrabble.
+    tsv (3rd column, build_wordlist_scrabble.py) when it exists."""
     lemmas = set()
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) >= 4:
-                lemmas.update(c for c in parts[3].split(";") if c)
+    for name, column in ((f"wordlist_{lang}_freq.tsv", 3), (f"wordlist_{lang}_scrabble.tsv", 2)):
+        path = DATA_DIR / name
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) > column:
+                    lemmas.update(c for c in parts[column].split(";") if c)
     return lemmas
 
 
@@ -103,7 +110,7 @@ def build_gloss_dictionary(lang):
     if lang not in KAIKKI_SOURCE:
         raise ValueError(f"no Kaikki source configured for {lang!r}")
     lemmas = _target_lemmas(lang)
-    lemmas_lower = {w.lower() for w in lemmas}
+    lemmas_lower = {fold_ligatures(w.lower()) for w in lemmas}
     print(f"Looking for glosses for {len(lemmas)} lemmas", file=sys.stderr)
 
     GLOSS_DIR.mkdir(parents=True, exist_ok=True)
@@ -125,7 +132,13 @@ def build_gloss_dictionary(lang):
             except json.JSONDecodeError:
                 continue  # truncated/malformed line — skip, not fatal
             word = entry.get("word")
-            if not word or word.lower() not in lemmas_lower:
+            if not word:
+                continue
+            # Ligatures folded ("œuvre" -> "oeuvre"), like every text column
+            # of the project's dictionaries (build_wordlist_freq.py's
+            # `fold_ligatures`).
+            word = fold_ligatures(word)
+            if word.lower() not in lemmas_lower:
                 continue
             glosses = []
             for sense in entry.get("senses", []):
@@ -137,7 +150,7 @@ def build_gloss_dictionary(lang):
             bucket = found.setdefault(word.lower(), {"word": word, "entries": []})
             bucket["entries"].append({
                 "pos": entry.get("pos", ""),
-                "glosses": glosses[:MAX_GLOSSES_PER_WORD],
+                "glosses": [fold_ligatures(g) for g in glosses[:MAX_GLOSSES_PER_WORD]],
             })
 
     dst = GLOSS_DIR / f"{lang}_glosses.jsonl"

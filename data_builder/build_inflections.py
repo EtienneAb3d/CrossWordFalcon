@@ -10,7 +10,7 @@ consistent, language-neutral vocabulary (`["form-of", "future",
 "singular", "third-person"]`) where the own-language editions
 `build_gloss_dictionary.py` uses for definitions mostly leave the detail
 in prose. These dumps are small (~55-95 MB gzipped) compared to the
-own-language ones, and are cached under DICS/ like every other raw
+own-language ones, and are cached under data/wiktionary/ like every other raw
 download in this pipeline.
 
 Output: `data/inflection/<lang>.jsonl` — a plain-text (uncompressed, so
@@ -21,7 +21,7 @@ limits) JSON-lines file, one object per line, sorted by form:
         {"pos": "verb", "tags": "third-person singular future", "lemma": "humer"}]}
 
 filtered to just the surface forms present in
-`data/wordlist_<lang>_full.tsv` (the app only ever looks these up: every
+`data/wordlist_<lang>_freq.tsv` (the app only ever looks these up: every
 grid word comes from that file), which keeps each language's file to a
 few MB up to ~20 MB. Read at runtime by `backend/inflection_lookup.py`.
 
@@ -36,8 +36,11 @@ import sys
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from build_wordlist_freq import fold_ligatures  # noqa: E402
+
 ROOT = Path(__file__).resolve().parent.parent
-DICS_DIR = ROOT / "DICS"
+DICS_DIR = ROOT / "data" / "wiktionary"
 WORDLIST_DIR = ROOT / "data"
 OUT_DIR = ROOT / "data" / "inflection"
 
@@ -67,7 +70,7 @@ _TAG_ORDER = [t for group in _TAG_GROUPS for t in group]
 
 
 def _download_dump(lang):
-    """Downloads (once, cached under DICS/) the English-edition dump for
+    """Downloads (once, cached under data/wiktionary/) the English-edition dump for
     `lang` and returns its local path."""
     name = DUMP_NAME[lang]
     dst = DICS_DIR / f"{name}-en.jsonl.gz"
@@ -80,15 +83,20 @@ def _download_dump(lang):
 
 
 def _wordlist_forms(lang):
-    """Every ACCENTED spelling (2nd column) in the language's wordlist,
-    lowercased — the inflection table is filtered to just these."""
-    path = WORDLIST_DIR / f"wordlist_{lang}_full.tsv"
+    """Every ACCENTED spelling (2nd column) of the language's wordlists —
+    data/wordlist_<lang>_freq.tsv and, when it exists, data/wordlist_
+    <lang>_scrabble.tsv — lowercased: the inflection table is filtered to
+    just these."""
     forms = set()
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) >= 2 and parts[1]:
-                forms.add(parts[1].lower())
+    for name in (f"wordlist_{lang}_freq.tsv", f"wordlist_{lang}_scrabble.tsv"):
+        path = WORDLIST_DIR / name
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 2 and parts[1]:
+                    forms.add(parts[1].lower())
     return forms
 
 
@@ -108,7 +116,10 @@ def build(lang):
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            form = (entry.get("word") or "").lower()
+            # Ligatures folded ("œuvre" -> "oeuvre"), like every text
+            # column of the project's dictionaries (build_wordlist_freq.py's
+            # `fold_ligatures`).
+            form = fold_ligatures((entry.get("word") or "").lower())
             if not form or form not in keep:
                 continue
             pos = entry.get("pos") or None
@@ -122,6 +133,8 @@ def build(lang):
                     fo[0].get("word")
                     if fo and isinstance(fo[0], dict) else None
                 )
+                if lemma:
+                    lemma = fold_ligatures(lemma)
                 if not pos and not gram:
                     continue
                 key = (form, pos, gram, lemma)
@@ -155,7 +168,7 @@ def main():
     ap.add_argument("language", choices=sorted(DUMP_NAME))
     ap.add_argument(
         "--force", action="store_true",
-        help="re-download the dump even if it is already cached under DICS/",
+        help="re-download the dump even if it is already cached under data/wiktionary/",
     )
     args = ap.parse_args()
     if args.force:

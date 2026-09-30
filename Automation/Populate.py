@@ -58,7 +58,7 @@ import urllib.request
 
 LANGUAGES = ["fr", "en", "de", "es", "it", "pt"]
 DIFFICULTIES = ["easy", "medium", "hard"]
-MODES = ["flash", "turbo", "fast", "medium", "ultra"]
+MODES = ["flash", "turbo", "fast", "medium", "ultra", "megatron"]
 
 # GET /api/theme/random makes an LLM round-trip (see backend/app.py's
 # `random_theme` / backend/clues.py's `generate_random_theme`) — generous
@@ -181,6 +181,11 @@ def _build_request(args):
         # a single grid search alone, which makes populating 1000 grids
         # unmanageable. `--mode` can always force a different value.
         "mode": args.mode or "medium",
+        # "Taux noir" at 15% and no statistical seeds ("Graines"), the web
+        # UI's own settings — sent explicitly rather than left to the
+        # API's defaults.
+        "black_enrichment_percent": 15,
+        "force_letters_percent": 0,
         "width": width,
         "height": height,
         # seed deliberately omitted -> the backend draws one; we want

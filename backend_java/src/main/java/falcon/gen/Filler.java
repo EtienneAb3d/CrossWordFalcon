@@ -144,6 +144,9 @@ public final class Filler {
     public final Rng rng;
     public final int rows, cols;
     public final PW priorityWords;
+    /** Scrabble dictionary (mirrors Filler.scrabble_words): a slot's candidates belonging to it are tried
+     * right after its theme words and before the rest of the dictionary (scrabbleFirst). */
+    public PW scrabbleWords = PW.EMPTY;
     public final Set<String> challengeWords;
     final Map<String, Integer> challengeAttemptCounts = new HashMap<>();
     public final Set<String> challengeAbandoned = new HashSet<>();
@@ -549,6 +552,20 @@ public final class Filler {
             total += v * v;
         }
         return Math.sqrt(total);
+    }
+
+    /** {@code cands} (already ordered) stably split into the words of slot i's own Scrabble dictionary first,
+     * then the rest; {@code cands} itself when all, or none, belong to it (mirrors Filler.scrabble_first). */
+    public List<String> scrabbleFirst(int i, List<String> cands) {
+        if (scrabbleWords.isEmpty()) return cands;
+        Set<String> words = scrabbleWords.forCells(slots.get(i));
+        if (words.isEmpty()) return cands;
+        List<String> head = new ArrayList<>();
+        List<String> tail = new ArrayList<>();
+        for (String w : cands) (words.contains(w) ? head : tail).add(w);
+        if (head.isEmpty() || tail.isEmpty()) return cands;
+        head.addAll(tail);
+        return head;
     }
 
     /** Shuffle, rank by statistical score divided by (1 + times the word was already placed on this
@@ -1537,6 +1554,9 @@ public final class Filler {
             int bestI = selectTargetSlot(avail, domains);
             triedSlots.add(bestI);
             List<String> cands = orderedCandidates(bestI, domains.get(bestI).minus(usedWords));
+            // Scrabble family: ahead of the rest of the general dictionary; the theme block and the "Mots Défi"
+            // below are then pulled ahead of both.
+            cands = scrabbleFirst(bestI, cands);
             Set<String> priSet = Set.of();
             if (!priorityWords.isEmpty()) {
                 Set<String> pw = activePriorityWordsFor(slots.get(bestI));

@@ -53,14 +53,14 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `data_builder/` | One-off/periodic scripts that build each language's dictionary artifacts (corpus → wordlist → gloss dictionary → inflection table → Qdrant embeddings), plus one orchestration shell script per language. |
 | `scrapper/` | Daily-refreshed content scrapers feeding the web UI's "Actu Croisée" panel (RSS feeds, aggregated crossword-publisher links). |
 | `Automation/` | `Populate.py`, a CLI daemon that drives the real `/api/generate` endpoint to bulk-fill the grid library. |
-| `data/` | Per-language dictionaries (`wordlist_<lang>_full.tsv`, `gloss_dictionary/`, `inflection/`), the reference sentence corpus, and Qdrant's on-disk storage. |
+| `data/` | Per-language dictionaries (`wordlist_<lang>_freq.tsv`, `wordlist_<lang>_scrabble.tsv`, `gloss_dictionary/`, `inflection/`, the raw `scrabble/` lists, the gitignored `wiktionary/` dump cache), the reference sentence corpus, and Qdrant's on-disk storage. |
 | `DOC_ALGO/FR/`, `DOC_DIC/FR/`, `DOC_USER/EN/` | Hand-maintained, present-tense-only reference docs (see intro). |
 | `GRID_STORE/`, `GRID_WORK/`, `GRID_GAME/` | Persisted grids: published library grids, in-progress "Interactif" authoring drafts, per-player play state. All gitignored. |
 | `STOP_DUMP/` | One diagnostic snapshot per automatic-generation job interrupted via the "Stop" button: last known cell/slot state of every attempt still running at that moment. Gitignored. |
 | `GRID_SVG/`, `GRID_PNG/` | Generated SVG/PNG exports of every finished grid. Gitignored. `GRID_SAMPLES/` (committed) is a small, hand-curated set of examples — never written automatically. |
 | `LOG_LLM/`, `LOG_CHAT/`, `LOG_THEME/`, `LOG_USERS/` | Diagnostic/audit logs (LLM call traces, chat transcripts, theme pre-search traces, daily presence headcount). Gitignored. |
 | `RSS/`, `SCRAPP/` | Daily-refreshed scraper output caches. Gitignored. |
-| `CORPUS/`, `DICS/` | Raw downloaded source caches for the dictionary pipeline (OPUS corpora, Wiktionary/Kaikki dumps). Gitignored. |
+| `CORPUS/`, `data/wiktionary/` | Raw downloaded source caches for the dictionary pipeline (OPUS corpora; Wiktionary/Kaikki dumps, kept for reuse). Gitignored. |
 | `env.sh` / `env_default.sh` | Runtime configuration (ports, LLM/embed/Qdrant endpoints, model choice). `env.sh` is gitignored (real machine config); `env_default.sh` is the checked-in template. |
 | `run_*.sh`, `Install*.sh` | Launch/setup scripts — see "Environment, ports, launch scripts" below. |
 | `requirements.txt`, `requirements-llama.txt` | Base web-server dependencies (`fastapi`, `uvicorn[standard]`, `httpx`) and the optional local-LLM dependency (`llama-cpp-python[server]`), respectively. |
@@ -80,13 +80,13 @@ Each of the six languages has its own dictionary, built independently by
    sample capped for distribution — used at runtime by `backend/
    example_sentences.py`). Both gitignored.
 2. **`build_wordlist_freq.py`** — counts word occurrences over the full
-   corpus and writes `data/wordlist_<lang>_full.tsv`, four tab-separated
+   corpus and writes `data/wordlist_<lang>_freq.tsv`, four tab-separated
    columns: `MOT` (bare, accent-stripped, ligature-folded, uppercase — the
    grid form: a French ligature letter with no accent-style decomposition
    of its own, `œ`/`Œ`/`æ`/`Æ`, is folded into its two separate ASCII
    letters — "sœur" -> `SOEUR`, not `SŒUR` — so MOT always stays a plain
    run of A-Z letters, individually typable on a simple keyboard/grid
-   cell; `ACCENTUE` keeps the ligature),
+   cell; `ACCENTUE`/`CANONIQUE` fold it too, see "Ligatures" below),
    `ACCENTUE` (natural accented/inflected spelling), `FREQUENCE` (a
    blended frequency score favoring the word's own canonical/lemma form),
    `CANONIQUE` (one or more `;`-separated candidate lemmas). Every
@@ -106,22 +106,73 @@ Each of the six languages has its own dictionary, built independently by
 5. **`build_inflections.py`** — downloads the English-Wiktionary Kaikki
    dump (its tags are structured and consistent across languages, unlike
    the own-language editions), extracts every `form-of` sense's
-   grammatical tags, filters to `data/wordlist_<lang>_full.tsv`'s own
-   surface forms, and writes `data/inflection/<lang>.jsonl` (`{"form",
+   grammatical tags, filters to the surface forms (ACCENTUE) of
+   `data/wordlist_<lang>_freq.tsv` and `data/wordlist_<lang>_scrabble.tsv`, and writes `data/inflection/<lang>.jsonl` (`{"form",
    "analyses": [{"pos", "tags", "lemma"}]}`) — used by `backend/
    inflection_lookup.py` for clue-writing's grammar grounding. Committed,
    plain uncompressed.
 6. **`qdrant_populate.py`** (`WordEmbeddingIndexer`) — embeds and upserts
-   every wordlist word into a local Qdrant vector collection (optional;
-   only needed for the "Thématique"/"Synonymes" features). Non-fatal if
-   Qdrant/the embed server isn't running.
+   every word of the language's lexicon — the freq wordlist, then every
+   Scrabble-dictionary word it lacks (`--source all`, the default; `freq`
+   or `scrabble` restrict the stream, `--offset` counts words of it) —
+   into a local Qdrant vector collection (optional; only needed for the
+   "Thématique"/"Synonymes" features). Non-fatal if Qdrant/the embed
+   server isn't running.
+
+`data_builder/build_<lang>.sh` chains, for one language: corpus, freq
+wordlist, Scrabble download (`download_scrabble_dictionaries.py <lang>`)
++ Scrabble dictionary, gloss dictionary, corpus archive, inflection
+table, Qdrant tenant (steps 1/7-7/7, the last one non-fatal);
+`data_builder/build_all.sh` runs the six in turn (logs/build_<lang>.log).
+Only Python's standard library, `httpx`, `curl`, `xz` and the `hunspell`
+CLI are needed (`Install.sh` installs `hunspell`/`xz`).
 
 Each stage is idempotent and reuses its own on-disk cache
-(`CORPUS/`/`DICS/`/`data/hunspell_cache/`) — a full re-run only re-fetches
+(`CORPUS/`/`data/wiktionary/`/`data/hunspell_cache/`) — a full re-run only re-fetches
 what's missing. Re-running any *earlier* stage should always be followed
 by every later one, since each depends on the previous stage's exact
 output (a wordlist rebuild can add/drop lemmas the gloss dictionary or
 Qdrant index haven't caught up with).
+
+**Scrabble dictionary** (`data/wordlist_<lang>_scrabble.tsv`, committed,
+`MOT<TAB>ACCENTUE<TAB>CANONIQUE` sorted by MOT — the freq wordlist's
+columns minus FREQUENCE), built by `data_builder/build_wordlist_scrabble.
+py` right after stage 2 (`build_<lang>.sh` step 3/7) from `data/scrabble/
+<lang>/*.txt` (the raw official/reference Scrabble lists — fr ODS8, en
+SOWPODS + TWL, es FILE 2017 + FISE 2, it Zingarelli, pt LibreOffice-
+derived, de reference list — copied verbatim from GitHub `FlandersBurger/
+scrabble-dictionary` by `download_scrabble_dictionaries.py`;
+`data/scrabble/ReadMe.md` records provenance and licenses). Files of a
+language are merged; MOT is the entry's grid form (`grid_form`, the MOT
+convention, "ß" -> "SS", non-A-Z entries dropped). ACCENTUE/CANONIQUE come
+from, in order: the freq wordlist's row; the stage-5 English-Wiktionary
+Kaikki dump (headwords and their listed/form-of inflected forms with
+their lemma, `_kaikki_forms`/`_pick_spelling`); Hunspell as-is/title-cased
+(`-G`) with `-m` stems; Hunspell's suggestions (`-a`, one process per CPU,
+first suggestion with the same MOT, `_hunspell_suggestions`); else the
+raw entry as its own lemma. Stages 3 and 5 also cover it: `build_gloss_
+dictionary._target_lemmas` adds its CANONIQUE column, `build_inflections.
+_wordlist_forms` its ACCENTUE column. Every raw Wiktionary/Kaikki dump is
+kept in `data/wiktionary/` (gitignored) for reuse.
+
+**Ligatures**: every text column of every dictionary — ACCENTUE/
+CANONIQUE of both wordlists, the gloss dictionary (words and glosses), the
+inflection table (forms and lemmas), Qdrant's embedded text and payload —
+spells a ligature as its two plain letters ("œuvre" -> "oeuvre", "Œdipe" ->
+"Oedipe", "ŒUVRE" -> "OEUVRE"; `build_wordlist_freq.fold_ligatures`, used
+by every builder on output, `qdrant_store._fold_ligatures` in `_flush`).
+Every lookup folds its key the same way: `gloss_lookup`/`inflection_
+lookup`/`example_sentences._key` (lowercase + fold; the example-sentence
+index also covers the Scrabble wordlist's ACCENTUE column), `clues.
+_normalize`; Java `Py.lookupKey`, `Clues.normalize`.
+
+**Easy difficulty and the Scrabble dictionary**: at "easy", only the
+Scrabble words whose ACCENTUE is a form or a lemma of the inflection table
+join the lexicon (`load_inflection_keys` -> `_scrabble_lexicon_for`,
+`load_scrabble_words(language, easy)`, `merge_scrabble_lexicon(...,
+easy)`, `scrabble_words_for_languages(..., easy)`; `backend/app.py`'s
+`_scrabble_words(..., difficulty)`/`_load_interactive_index`; Java
+`Words.loadInflectionKeys`/`scrabbleLexiconFor`).
 
 `backend/gloss_lookup.py`/`backend/example_sentences.py`/`backend/
 inflection_lookup.py` each lazily build and cache their own index once
@@ -188,6 +239,19 @@ json`. Holds all server-side state in plain module dicts/lists:
   every `GRID_CHOICE_POLL_INTERVAL_S` (0.5s), honoring "Stop". The chosen
   grid becomes the result; after `GRID_CHOICE_TIMEOUT_S` (10 min) with no
   pick, the recommended one does. Populate keeps the engine's pick.
+- **Scrabble dictionary**: `_run_generate_job` loads the grid's word set
+  once (`_scrabble_words`, cached per language by `crossword_gen`;
+  `generate_grid` merges the Scrabble lexicon itself);
+  `_load_interactive_index` merges it into an Interactive session's
+  lexicon (`merge_scrabble_lexicon`); `_load_wordlist_raw_lines` falls
+  back on the Scrabble TSV's line for the word-verification table;
+  `_annotate_scrabble_cells` adds `scrabble_cells`
+  (`scrabble_word_cells` of the example's own `example_grid`) to every
+  example published through `progress` and `_on_live_preview` (after the
+  zone revert), so every preview — live tiles, history, grid choice, the
+  final "clues" grid — carries it; `_run_recompute_job`'s example too.
+  Interactive sessions keep the set in `INTERACTIVE_SESSIONS[job_id]
+  ["scrabble_words"]`, passed to every `interactive_place_word` call.
 - **Background tasks**, registered on `@app.on_event("startup")`: a daily
   RSS/SCRAPP refresh (`_rss_daily_scheduler`, `RSS_FETCH_HOUR=8` local
   time) plus a startup catch-up if today's refresh is missing; a presence
@@ -246,8 +310,8 @@ json`. Holds all server-side state in plain module dicts/lists:
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
 (`language`, `bilingual_language`, `width`/`height` [5-30], `difficulty`
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
-`black_enrichment_percent` [0-100, default 17], `mode` [flash/turbo/fast/
-medium/ultra, default medium], `pseudo`, `theme`, `theme_precision`
+`black_enrichment_percent` [0-100, default 15], `mode` [flash/turbo/fast/
+medium/ultra/megatron, default medium], `pseudo`, `theme`, `theme_precision`
 [0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
 [list of free-form "Mots Défi" strings, default empty]); `RecomputeRequest`;
 the `Interactive*Request` family (`Step`, `Clean`, `Candidates`,
@@ -259,15 +323,20 @@ automatic completion to a selected region instead of the whole grid,
 `ChatRequest`/`ChatMessage`.
 
 `BUDGET_MODES = {flash: 1000, turbo: 10000, fast: 100000, medium: 500000,
-ultra: 5000000}` sets the CSP search-check budget per attempt for the
-"Mode" selector. `WORDLISTS` maps each of the six language codes to its
-`data/wordlist_<lang>_full.tsv` path.
+ultra: 5000000, megatron: 20000000}` sets the CSP search-check budget per
+attempt for the "Mode" selector; the web UI disables its Ultra and
+Megatron options off localhost (`script.js`'s `LOCALHOST_ONLY_MODES`/
+`restrictHeavyModesToLocalhost`, frontend-only — the API accepts both).
+The UI no longer offers "Graines" (`force_letters_percent`, left at its
+default 0); `Automation/Populate.py` sends `black_enrichment_percent` 15
+and `force_letters_percent` 0 explicitly. `WORDLISTS` maps each of the six language codes to its
+`data/wordlist_<lang>_freq.tsv` path.
 
 ### `crossword_gen.py` — the grid-generation engine
 
 Both a CLI (`python3 backend/crossword_gen.py ...`, run from the repo
 root) and the library `backend/app.py` imports. `load_wordlist()` reads a
-`wordlist_<lang>_full.tsv`, returning `(by_length, accents, canonicals,
+`wordlist_<lang>_freq.tsv`, returning `(by_length, accents, canonicals,
 frequencies)`; `build_index()` turns that into a `(length, position,
 letter) → word set` index for fast domain computation. `DIFFICULTY_
 PRESETS = {easy: 0.66, medium: 0.80, hard: 1.0}` are *fractions* of the
@@ -427,8 +496,11 @@ via `ProcessPoolExecutor`:
    placed that word on this slot during the attempt, `_tried_words`) with a random draw inside a `CANDIDATE_SCORE_
    WINDOW=50`-word sliding window — deliberately far narrower than a
    slot's own domain, so the statistical ranking stays in charge while two
-   attempts on the same state still diverge; a themed grid's matching words are
-   pulled to the front as a stable block first, then any still-unused
+   attempts on the same state still diverge; the slot's words of its
+   direction's Scrabble dictionary (`Filler.scrabble_words`) are then
+   pulled ahead of the rest as a stable block (`Filler.scrabble_first`),
+   a themed grid's matching words are
+   pulled to the front as a stable block next (ahead of the Scrabble block), then any still-unused
    "Mots Défi" word geometrically fitting the chosen slot is injected
    ahead of that block (even when absent from the loaded lexicon
    entirely) — the same precedence `interactive_place_word`'s own
@@ -977,12 +1049,46 @@ pre-fill length/candidate checks) resolves the right dictionary via
 `index.for_cells(cells)`/`.for_direction(direction)` based on `slot_
 direction(cells)`.
 
+**Scrabble dictionary**: `generate_grid` merges each language's Scrabble
+wordlist (whole, or only its words with a known inflection at "easy" —
+see "Easy difficulty and the Scrabble dictionary") into the lexicon
+`load_wordlist` returned for it
+(`merge_scrabble_lexicon(language, by_length, accents, canonicals,
+frequencies, easy)`, whatever `max_words` cut: a missing word is
+added with its own ACCENTUE/CANONIQUE, and every Scrabble word's frequency
+is raised to at least `NOISE_FREQUENCY_THRESHOLD`, so `_noise_slot_cells`
+never flags it) and removes every Scrabble word from `proper_noun_words`/
+`non_gloss_words` — never counted against
+`MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`. `load_scrabble_lexicon`/
+`load_scrabble_words` read the TSV once per process
+(`scrabble_wordlist_path`); `scrabble_words_for_languages` returns a
+frozenset or, bilingual, a `DualSet`. The grid's set (a `DualSet` when
+bilingual) reaches the workers through the pool initializer
+(`_worker_scrabble_words`) and the two search `try_fill` calls
+(`_pattern_attempt`/`_pattern_continue`, `try_fill(scrabble_words=)` ->
+`Filler`). The candidate order of a slot is therefore "Mots Défi", theme
+glossary, Scrabble dictionary, rest of the dictionary; the Scrabble family
+counts as a descent like any ordinary word and carries no content-score
+bonus. Interactive mode's general-dictionary tier orders each swept
+slot's candidates the same way (`_general_dictionary_pick`'s `_rank`),
+and `interactive_place_word(scrabble_words=)` reports `placed.from_
+scrabble` for a general-dictionary word found in its direction's Scrabble
+set. `scrabble_word_cells(grid, scrabble_words)` lists the cells of every
+fully lettered run (≥2) spelling a Scrabble word.
+
 **Themed generation**: `priority_words`/`bilingual_priority_words` (sets
 of preferred words, built by `backend/app.py` from an LLM-expanded,
 Qdrant-searched glossary — see below) are a soft preference throughout
 the CSP fill (cascade level 4 above, plus front-loading matching
 candidates within a chosen slot) — never a hard restriction; the full
-lexicon is always still available.
+lexicon is always still available. `_build_theme_glossary` (Java
+`Themes.buildThemeGlossary`) compiles a glossary of at least
+`THEME_MIN_GLOSSARY_WORDS` (1000) words: while the glossary left by the
+Qdrant search and the whole-theme filter holds fewer, the score threshold
+is lowered by `THEME_PRECISION_STEP` (0.03, `_lowered_theme_precision`,
+never below 0) and both are re-run on the same keywords; `LOG_THEME/`
+records the threshold finally used and, when it differs, the requested
+one (`# requested score threshold`).
 
 **"Mots Défi" in automatic generation**: `challenge_words` (`GenerateRequest.
 challenge_words` on the web UI's main generation form, alongside
@@ -2045,7 +2151,12 @@ cancel/"attempt done" events are `AtomicBoolean`s, `checks_progress`/
 `attempt_active` are `AtomicLongArray`/`AtomicIntegerArray`, the
 best-state queue a `BlockingQueue`, and each search thread lowers its own
 priority by `CROSSWORDFALCON_GENERATION_NICE` (`renice` of its Linux thread
-id). Loaded lexicons + indices are cached per (wordlist, difficulty) for
+id). Scrabble lexicons are cached per language (`Words.loadScrabbleLexicon`/
+`loadScrabbleWords`, merged into `Generator.load`'s cached lexicon by
+`Words.mergeScrabbleLexicon`, removed from its proper-noun/no-gloss sets;
+`Filler.scrabbleWords` is a field set after construction, `Fill.FillArgs.
+scrabbleWords`, `Generator.Ctx.scrabbleWords`, `App.annotateScrabbleCells`,
+`Session.scrabbleWords`). Loaded lexicons + indices are cached per (wordlist, difficulty) for
 the process lifetime. RNGs are seeded per attempt like Python's, but with
 Java's generator, so a given seed does not reproduce Python's exact grid.
 The daily RSS/SCRAPP refresh runs the Python scrapers through `.venv`.
@@ -2083,11 +2194,15 @@ state, unlike the backend).
   rendering/keyboard input/solution-checking; the end-of-generation grid
   choice (`pollJob` arms `pendingGridChoiceJobId` while the job's
   `grid_choice_count` is set and jumps to the `choose_grid` entry,
-  `renderAttemptPreview` makes each tile carrying a `choice_index`
+  `renderAttemptPreview` colours each example's `scrabble_cells` dark cyan
+  (`.scrabble`, `--scrabble-fg`, declared before `.theme`/`.challenge` so
+  those win a shared cell) and makes each tile carrying a `choice_index`
   clickable, `chooseGeneratedGrid` posts the pick); the interactive-authoring
   mode (by far the largest block — zone selection, undo stack, per-cell
   editing, calls to every `/api/interactive/*` endpoint, candidate/
-  crossing-word panels, a "Mots Défi" challenge-word list — stored and
+  crossing-word panels, dark-cyan letters (`interactiveScrabbleCells`,
+  `.interactive-scrabble`) for a "Suivant" word with `placed.from_
+  scrabble`, like the theme/challenge sets; a "Mots Défi" challenge-word list — stored and
   shown exactly as the author typed it (accents/case kept), with a
   derived bare-uppercase grid form (`challengeWordGridForm()`) computed
   on demand wherever a comparison against actual grid cells is needed:
@@ -2152,7 +2267,9 @@ state, unlike the backend).
   third-party request at load. Each `.ai-btn` carries its service's
   prompt-in-URL entry point (`data-ai-url`: `?q=` for all but Euria,
   `?message=`); `script.js` appends the encoded definition query
-  (`PERPLEXITY_DEFINE_QUERY_TEMPLATES`) or paraphrase query
+  (`PERPLEXITY_DEFINE_QUERY_TEMPLATES`, followed on a new line by
+  `PERPLEXITY_THEME_HINT_TEMPLATES`' "Indication thématique : <words>"
+  while `themeKeywords` is non-empty) or paraphrase query
   (`PERPLEXITY_PARAPHRASE_QUERY_TEMPLATES`); each group's tooltip comes
   from its own `data-ai-title-key`, `{service}` filled in. Gemini and Copilot have no
   such entry point.
@@ -2211,8 +2328,9 @@ cours de développement"), surfaced via `GET /api/system_info`'s
 the `project-best-practices` SKILL's "Ports and environment variables"
 section for the full variable list and the dual-GPU LLM routing scheme.
 
-- **`Install.sh`** — installs `rsvg-convert` (runtime dependency), sets
-  up the Python venv, installs a JDK 21 + Maven (system package manager,
+- **`Install.sh`** — installs `rsvg-convert` (runtime dependency) and
+  `hunspell`/`xz` (data pipeline only), sets
+  up the Python venv, unpacks the reference-corpus archives, installs a JDK 21 + Maven (system package manager,
   or a user-local Temurin JDK/Apache Maven under `~/.local` without root)
   and builds the Java back end, and interactively configures which local
   LLM engine/model to run based on detected hardware.
@@ -2259,11 +2377,12 @@ section for the full variable list and the dual-GPU LLM routing scheme.
 # Full pipeline to rebuild one language's dictionary from scratch (data/
 # already ships every artifact — only needed to refresh/extend it)
 data_builder/build_fr.sh   # or build_en.sh / build_de.sh / build_es.sh / build_it.sh / build_pt.sh
+data_builder/build_all.sh  # the six languages in turn
 
 # Generate a crossword grid from the CLI (defaults: 15x10, easy)
 python3 backend/crossword_gen.py
 python3 backend/crossword_gen.py --width 15 --height 15 --difficulty hard --seed 42
-python3 backend/crossword_gen.py --wordlist data/wordlist_en_full.tsv
+python3 backend/crossword_gen.py --wordlist data/wordlist_en_freq.tsv
 
 # Web UI: run both servers, then open http://127.0.0.1:3000
 ./run_Falcon.sh            # Python back end

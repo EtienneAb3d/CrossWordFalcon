@@ -240,6 +240,21 @@ plusieurs signaux) :
   `Filler._backtrack`, `_general_dictionary_pick`,
   `_find_priority_word_placement`.)
 
+- **Dictionnaire Scrabble** : `data/wordlist_<langue>_scrabble.tsv`, la
+  liste Scrabble officielle (ou de référence) de chaque langue
+  (`data/scrabble/<langue>/`) mise au format du dictionnaire de fréquences,
+  sans fréquence. Versé dans le lexique de toute grille — en entier aux
+  niveaux moyen et difficile, et au niveau facile seulement pour ses mots
+  dont la forme accentuée figure dans la table des formes fléchies — et hors
+  quotas de noms propres et de mots sans
+  définition. C'est la troisième famille de l'ordre des candidats d'un
+  emplacement : après les Mots Défi et le glossaire thématique, avant le
+  reste du dictionnaire général. Les mots qui en sont issus s'affichent en
+  lettres cyan sombre dans les aperçus et en mode Interactif.
+  (`backend/crossword_gen.py`, `merge_scrabble_lexicon`,
+  `Filler.scrabble_first`, `scrabble_word_cells` ; `backend/app.py`,
+  `_annotate_scrabble_cells`.)
+
 - **Case noire flottante** : case noire que le moteur a le droit de
   déplacer ou d'ajouter pour faire exister un emplacement de la longueur
   d'un Mot Défi, ou d'un mot du glossaire thématique tant que moins de 5

@@ -37,15 +37,19 @@ public final class ExampleSentences {
     private static final Map<String, Map<String, List<String>>> INDEX_CACHE = new ConcurrentHashMap<>();
 
     private static Set<String> loadWordlistWords(String language) throws IOException {
-        Path path = DATA_DIR.resolve("wordlist_" + language + "_full.tsv");
         Set<String> words = new HashSet<>();
-        try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                String[] parts = line.split("\t", -1);
-                if (parts.length >= 2) {
-                    String accented = Py.strip(parts[1]);
-                    if (!accented.isEmpty()) words.add(accented.toLowerCase(Locale.ROOT));
+        // The freq wordlist's ACCENTED column, then the Scrabble wordlist's (merged into every grid's lexicon).
+        for (String name : List.of("wordlist_" + language + "_freq.tsv", "wordlist_" + language + "_scrabble.tsv")) {
+            Path path = DATA_DIR.resolve(name);
+            if (!Files.exists(path)) continue;
+            try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    String[] parts = line.split("\t", -1);
+                    if (parts.length >= 2) {
+                        String accented = Py.strip(parts[1]);
+                        if (!accented.isEmpty()) words.add(Py.lookupKey(accented));
+                    }
                 }
             }
         }
@@ -66,7 +70,7 @@ public final class ExampleSentences {
                     if (line.isEmpty()) continue;
                     Matcher m = WORD_RE.matcher(line);
                     while (m.find()) {
-                        String w = m.group().toLowerCase(Locale.ROOT);
+                        String w = Py.lookupKey(m.group());
                         if (!targets.contains(w)) continue;
                         int count = seen.merge(w, 1, Integer::sum);
                         List<String> reservoir = reservoirs.computeIfAbsent(w, k -> new ArrayList<>());
@@ -95,7 +99,7 @@ public final class ExampleSentences {
         Map<String, List<String>> idx = index(language);
         Map<String, List<String>> result = new LinkedHashMap<>();
         for (String w : words) {
-            List<String> reservoir = idx.get(w.toLowerCase(Locale.ROOT));
+            List<String> reservoir = idx.get(Py.lookupKey(w));
             if (reservoir != null && !reservoir.isEmpty()) {
                 List<String> copy = new ArrayList<>(reservoir);
                 Collections.shuffle(copy);

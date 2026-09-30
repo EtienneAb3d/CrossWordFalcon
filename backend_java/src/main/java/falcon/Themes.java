@@ -30,6 +30,14 @@ public final class Themes {
     public static final double THEME_MIN_SCORE = 0.78;
     public static final double WHOLE_THEME_REJECT_LENIENCY = 1.5;
     public static final int THEME_MIN_KEYWORDS = 300;
+    /** Minimum size of a compiled theme glossary: while it holds fewer words, the score
+     *  threshold is lowered by THEME_PRECISION_STEP and the search re-run, down to 0. */
+    public static final int THEME_MIN_GLOSSARY_WORDS = 1000;
+    public static final double THEME_PRECISION_STEP = 0.03;
+
+    static double loweredThemePrecision(double precision) {
+        return Math.max(0.0, Math.floor((precision - THEME_PRECISION_STEP) * 10000 + 0.5) / 10000);
+    }
     public static final int THEME_KEYWORD_LLM_MAX_LOOPS = 3;
     public static final double THEME_KEYWORD_LLM_TEMPERATURE = 0.9;
     public static final double SIMILAR_TIMEOUT_S = 10.0;
@@ -222,7 +230,8 @@ public final class Themes {
     }
 
     static void writeThemeLog(String shortId, String theme, String description, List<Object[]> words, String language,
-                              List<Object[]> keywordLists, List<String> searched, Double minScore, Double rejectThreshold) {
+                              List<Object[]> keywordLists, List<String> searched, Double minScore, Double rejectThreshold,
+                              Double requestedMinScore) {
         try {
             Files.createDirectories(THEME_LOG_DIR);
             LocalDateTime now = LocalDateTime.now();
@@ -234,6 +243,8 @@ public final class Themes {
                 if (language != null) w.write("# language: " + language + "\n");
                 w.write("# theme (as typed): " + theme + "\n");
                 if (minScore != null) w.write("# score threshold (theme_precision): " + minScore + "\n");
+                if (requestedMinScore != null && !requestedMinScore.equals(minScore))
+                    w.write("# requested score threshold: " + requestedMinScore + "\n");
                 if (rejectThreshold != null) w.write("# whole-theme reject threshold: " + rejectThreshold + "\n");
                 if (keywordLists != null && !keywordLists.isEmpty()) {
                     w.write("# " + keywordLists.size() + " keyword list(s) from the LLM:\n");
@@ -339,36 +350,48 @@ public final class Themes {
         }
         Log.info("[%s] theme -> %d distinct keywords to search in Qdrant (min_score=%s)", logTag, searched.size(), themePrecision);
         List<ScoredKw> scored = new ArrayList<>();
-        try {
-            scored = compiledThemeWordsByLength(searched, language, themePrecision);
-            Log.info("[%s] theme -> %d preselected words (before whole-theme filter)", logTag, scored.size());
-        } catch (RuntimeException e) {
-            if (!isStoreError(e)) throw e;
-            Log.warning("[%s] theme pre-search unavailable (%s) — generating without a theme", logTag, e.getMessage());
-        }
         Map<String, Double> whole = new HashMap<>();
         Double rejectThreshold = null;
-        if (!scored.isEmpty()) {
+        double requestedPrecision = themePrecision;
+        while (true) {
+            if (cancel != null && cancel.get()) throw new GenerationCancelled();
             try {
-                List<String> ws = new ArrayList<>();
-                for (ScoredKw s : scored) ws.add(s.word());
-                whole = wholeThemeProximityScores(ws, theme, language);
-                double thr = Math.max(0.0, 1 - (1 - themePrecision) * WHOLE_THEME_REJECT_LENIENCY);
-                rejectThreshold = thr;
-                List<ScoredKw> kept = new ArrayList<>();
-                for (ScoredKw s : scored) if (whole.getOrDefault(s.word(), 1.0) >= thr) kept.add(s);
-                scored = kept;
-                Log.info("[%s] theme -> %d preselected words after whole-theme filter (reject threshold=%.4f)", logTag, scored.size(), thr);
+                scored = compiledThemeWordsByLength(searched, language, themePrecision);
+                Log.info("[%s] theme -> %d preselected words (before whole-theme filter)", logTag, scored.size());
             } catch (RuntimeException e) {
                 if (!isStoreError(e)) throw e;
-                Log.warning("[%s] whole-theme proximity scoring unavailable (%s) — LOG_THEME column left blank, no whole-theme filtering applied", logTag, e.getMessage());
+                Log.warning("[%s] theme pre-search unavailable (%s) — generating without a theme", logTag, e.getMessage());
+                scored = new ArrayList<>();
+                priority = null;
+                break;
             }
-            priority = new ArrayList<>();
-            for (ScoredKw s : scored) priority.add(s.word());
+            whole = new HashMap<>();
+            rejectThreshold = null;
+            if (!scored.isEmpty()) {
+                try {
+                    List<String> ws = new ArrayList<>();
+                    for (ScoredKw s : scored) ws.add(s.word());
+                    whole = wholeThemeProximityScores(ws, theme, language);
+                    double thr = Math.max(0.0, 1 - (1 - themePrecision) * WHOLE_THEME_REJECT_LENIENCY);
+                    rejectThreshold = thr;
+                    List<ScoredKw> kept = new ArrayList<>();
+                    for (ScoredKw s : scored) if (whole.getOrDefault(s.word(), 1.0) >= thr) kept.add(s);
+                    scored = kept;
+                    Log.info("[%s] theme -> %d preselected words after whole-theme filter (reject threshold=%.4f)", logTag, scored.size(), thr);
+                } catch (RuntimeException e) {
+                    if (!isStoreError(e)) throw e;
+                    Log.warning("[%s] whole-theme proximity scoring unavailable (%s) — LOG_THEME column left blank, no whole-theme filtering applied", logTag, e.getMessage());
+                }
+                priority = new ArrayList<>();
+                for (ScoredKw s : scored) priority.add(s.word());
+            }
+            if (scored.size() >= THEME_MIN_GLOSSARY_WORDS || themePrecision <= 0.0) break;
+            themePrecision = loweredThemePrecision(themePrecision);
+            Log.info("[%s] theme -> %d words < %d, score threshold lowered to %s", logTag, scored.size(), THEME_MIN_GLOSSARY_WORDS, themePrecision);
         }
         List<Object[]> logWords = new ArrayList<>();
         for (ScoredKw s : scored) logWords.add(new Object[]{s.word(), s.score(), s.keyword(), whole.get(s.word())});
-        writeThemeLog(logTag, theme, description, logWords, language, keywordLists, searched, themePrecision, rejectThreshold);
+        writeThemeLog(logTag, theme, description, logWords, language, keywordLists, searched, themePrecision, rejectThreshold, requestedPrecision);
         return new Object[]{priority, description};
     }
 }

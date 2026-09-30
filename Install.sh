@@ -34,6 +34,30 @@ if ! command -v rsvg-convert >/dev/null 2>&1; then
     fi
 fi
 
+# hunspell (the command-line spellchecker) and xz — needed only by the data
+# pipeline (data_builder/build_<lang>.sh / build_all.sh: corpus language
+# filtering, wordlist validation and lemmas, Scrabble dictionary accents),
+# never by the running app; xz also unpacks the reference-corpus archives
+# below. The Hunspell dictionaries themselves are downloaded on first use
+# into data/hunspell_cache/.
+for tool in hunspell xz; do
+    command -v "$tool" >/dev/null 2>&1 && continue
+    echo "Installing $tool (data pipeline)..."
+    if [ "$(uname -s)" = "Darwin" ]; then
+        command -v brew >/dev/null 2>&1 && brew install "$tool" \
+            || echo "Warning: install $tool manually (brew install $tool)."
+    elif command -v apt-get >/dev/null 2>&1; then
+        pkg="$tool"; [ "$tool" = "xz" ] && pkg="xz-utils"
+        sudo apt-get install -y "$pkg" || echo "Warning: 'apt-get install $pkg' failed — install it manually."
+    elif command -v dnf >/dev/null 2>&1; then
+        sudo dnf install -y "$tool" || echo "Warning: 'dnf install $tool' failed — install it manually."
+    elif command -v pacman >/dev/null 2>&1; then
+        sudo pacman -S --noconfirm "$tool" || echo "Warning: 'pacman -S $tool' failed — install it manually."
+    else
+        echo "Warning: no supported package manager found — install $tool manually."
+    fi
+done
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
@@ -60,10 +84,10 @@ pip install -r requirements-llama.txt \
 # is unpacked independently if its archive is present; a language with no
 # archive just has no example-sentence grounding for that language until
 # data_builder/build_sentence_corpus.py is run for it. NOT sufficient to regenerate a
-# language's data/wordlist_<lang>_full.tsv from scratch, though — that
+# language's data/wordlist_<lang>_freq.tsv from scratch, though — that
 # needs the FULL, uncapped corpus (<lang>_sentences_full.txt), never
 # published here (see build_sentence_corpus.py/build_wordlist_freq.py's own
-# docstrings for why) — but data/wordlist_<lang>_full.tsv is itself already
+# docstrings for why) — but data/wordlist_<lang>_freq.tsv is itself already
 # checked into the repo, so a fresh clone never needs to rebuild it just to
 # use the app; only actually regenerating it (e.g. after a pipeline change)
 # needs the full corpus, via data_builder/build_sentence_corpus.py from scratch.
@@ -643,5 +667,9 @@ echo "  - Base vectorielle (optionnel) : ./Install_qdrant.sh puis ./run_qdrant.s
 echo "                      (Qdrant en Docker, collection 'words', 1 tenant par langue)."
 echo "                      Alimenter : python -m data_builder.qdrant_populate --all"
 echo "                      (necessite ./run_qdrant.sh + ./run_embed.sh lances)."
+echo "  - Donnees        : tous les dictionnaires utiles sont deja dans le depot"
+echo "                      (data/). Reconstruction complete depuis les sources :"
+echo "                      data_builder/build_all.sh (ou build_<langue>.sh ; plusieurs"
+echo "                      heures par langue, telechargements volumineux)."
 echo "  - Changer plus tard : relancez ./Install.sh, ou editez le bloc 'LLM AUTOCONFIG'"
 echo "    dans env.sh."

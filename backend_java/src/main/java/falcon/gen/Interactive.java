@@ -351,8 +351,11 @@ public final class Interactive {
         Set<String> active = new LinkedHashSet<>(f.activeChallengeWords());
         active.removeAll(f.usedWords);
         Map<Integer, Base> baseline = baselines.computeIfAbsent(i, k -> openSlotBaseline(f, k));
-        String word = firstAcceptable(f, i, f.orderedCandidates(i, plain), active, baseline, level);
-        if (word == null && !plain.equals(cands)) word = firstAcceptable(f, i, f.orderedCandidates(i, cands), active, baseline, level);
+        // Same order as the automatic search: the Scrabble dictionary's words ahead of the rest.
+        String word = firstAcceptable(f, i, f.scrabbleFirst(i, f.orderedCandidates(i, plain)), active, baseline, level);
+        if (word == null && !plain.equals(cands)) {
+            word = firstAcceptable(f, i, f.scrabbleFirst(i, f.orderedCandidates(i, cands)), active, baseline, level);
+        }
         return word;
     }
 
@@ -431,18 +434,19 @@ public final class Interactive {
     // ================================================================== "Suivant"
 
     public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
-                                                Set<String> challengeIn) {
-        return placeWord(grid, rows, cols, index, rng, pwIn, challengeIn, null);
+                                                Set<String> challengeIn, PW scrabble) {
+        return placeWord(grid, rows, cols, index, rng, pwIn, challengeIn, null, scrabble);
     }
 
     public static Map<String, Object> placeWord(char[][] grid, int rows, int cols, DualIndex index, Rng rng, PW pwIn,
-                                                Set<String> challengeIn, List<int[]> lastPlacedCells) {
+                                                Set<String> challengeIn, List<int[]> lastPlacedCells, PW scrabble) {
         PW pw = pwIn == null ? PW.EMPTY : pwIn;
         Set<String> challenge = challengeIn == null ? Set.of() : challengeIn;
         char[][] pattern = Grids.patternOf(grid);
         Map<Integer, Character> known = Grids.knownLetters(grid);
         Object[] built = buildInteractiveFiller(pattern, rows, cols, index, rng, known, pw, challenge);
         Filler f = (Filler) built[0];
+        f.scrabbleWords = scrabble == null ? PW.EMPTY : scrabble;
         @SuppressWarnings("unchecked")
         List<int[]> slots = (List<int[]>) built[1];
         if (slots.isEmpty()) return new LinkedHashMap<>(Map.of("impossible", true));
@@ -576,6 +580,9 @@ public final class Interactive {
         placed.put("direction", Words.slotDirection(cells));
         placed.put("from_theme", placedFrom.equals("theme"));
         placed.put("from_challenge", placedFrom.equals("challenge"));
+        // A general-dictionary word belonging to the Scrabble dictionary of its direction — shown in dark cyan.
+        placed.put("from_scrabble", !placedFrom.equals("theme") && !placedFrom.equals("challenge")
+                && f.scrabbleWords.forCells(cells).contains(placedWord));
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("impossible", false);
         m.put("grid", Grids.toJson(newGrid));

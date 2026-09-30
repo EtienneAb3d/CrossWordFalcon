@@ -60,11 +60,11 @@ public final class App {
     static final Map<String, Path> WORDLISTS = new LinkedHashMap<>();
 
     static {
-        for (String l : List.of("fr", "en", "de", "es", "it", "pt")) WORDLISTS.put(l, DATA_DIR.resolve("wordlist_" + l + "_full.tsv"));
+        for (String l : List.of("fr", "en", "de", "es", "it", "pt")) WORDLISTS.put(l, DATA_DIR.resolve("wordlist_" + l + "_freq.tsv"));
     }
 
     static final Map<String, Long> BUDGET_MODES = new TreeMap<>(Map.of("flash", 1000L, "turbo", 10000L, "fast", 100000L,
-            "medium", 500000L, "ultra", 5000000L));
+            "medium", 500000L, "ultra", 5000000L, "megatron", 20000000L));
     static final Path RSS_DIR = Env.path("RSS");
     static final Path SCRAPP_DIR = Env.path("SCRAPP");
     static final int RSS_FETCH_HOUR = 8;
@@ -134,8 +134,11 @@ public final class App {
         final Rng rng;
         final Object seed;
         final String resumedFrom;
+        /** The session's Scrabble dictionary (see scrabbleWords). */
+        final PW scrabbleWords;
 
-        Session(DualIndex index, Set<String> priorityWords, Rng rng, Object seed, String resumedFrom) {
+        Session(DualIndex index, Set<String> priorityWords, Rng rng, Object seed, String resumedFrom, PW scrabbleWords) {
+            this.scrabbleWords = scrabbleWords;
             this.index = index;
             this.priorityWords = priorityWords;
             this.rng = rng;
@@ -265,7 +268,7 @@ public final class App {
             throw http(400, "difficulté inconnue : " + Log.repr(req.difficulty) + " (attendu : ['easy', 'hard', 'medium'])");
         }
         if (!BUDGET_MODES.containsKey(req.mode)) {
-            throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'medium', 'turbo', 'ultra'])");
+            throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'medium', 'megatron', 'turbo', 'ultra'])");
         }
     }
 
@@ -518,17 +521,20 @@ public final class App {
 
     static Map<String, String> loadWordlistRawLines(String language) {
         Map<String, String> lines = new HashMap<>();
-        Path p = WORDLISTS.get(language);
-        if (p == null) return lines;
-        try (BufferedReader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                if (line.isEmpty() || line.startsWith("#")) continue;
-                int tab = line.indexOf('\t');
-                String mot = (tab < 0 ? line : line.substring(0, tab)).toUpperCase(Locale.ROOT);
-                lines.putIfAbsent(mot, line);
-            }
-        } catch (IOException ignored) { }
+        Path wordlist = WORDLISTS.get(language);
+        if (wordlist == null) return lines;
+        // A word only in the Scrabble wordlist (merged into every grid's lexicon) gets that file's line.
+        for (Path p : List.of(wordlist, Words.scrabbleWordlistPath(language))) {
+            try (BufferedReader r = Files.newBufferedReader(p, StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+                    int tab = line.indexOf('\t');
+                    String mot = (tab < 0 ? line : line.substring(0, tab)).toUpperCase(Locale.ROOT);
+                    lines.putIfAbsent(mot, line);
+                }
+            } catch (IOException ignored) { }
+        }
         return lines;
     }
 
@@ -645,6 +651,26 @@ public final class App {
         }
     }
 
+    /** The grid's Scrabble dictionary (mirrors backend/app.py's _scrabble_words): one set, or one per direction on
+     * a bilingual grid, read from data/scrabble/ once per language and process. */
+    static PW scrabbleWords(String language, String bilingualLanguage, String difficulty) {
+        return Words.scrabbleWordsForLanguages(language,
+                bilingualLanguage != null && !bilingualLanguage.equals(language) ? bilingualLanguage : null,
+                "easy".equals(difficulty));
+    }
+
+    /** Adds "scrabble_cells" to every preview example (mirrors _annotate_scrabble_cells): the cells of each fully
+     * lettered run of its example_grid spelling a word of the grid's Scrabble dictionary, shown in dark cyan. */
+    @SuppressWarnings("unchecked")
+    static void annotateScrabbleCells(Object examples, PW scrabble) {
+        if (!(examples instanceof List<?> l) || l.isEmpty() || scrabble == null || scrabble.isEmpty()) return;
+        for (Object o : l) {
+            Map<String, Object> ex = (Map<String, Object>) o;
+            Object eg = ex.get("example_grid");
+            if (eg instanceof List<?> rows && !rows.isEmpty()) ex.put("scrabble_cells", Words.scrabbleWordCells(eg, scrabble));
+        }
+    }
+
     /** How long a finished automatic generation waits for the player to pick one of its grids before keeping
      * the engine's own pick, so a closed tab never holds the job forever. */
     static final double GRID_CHOICE_TIMEOUT_S = 10 * 60;
@@ -714,6 +740,9 @@ public final class App {
         String shortId = jobId.substring(0, 8);
         job.put("request", req.dump());
         Task task = new Task(jobId, req);
+        // The grid's Scrabble dictionary: the third candidate family of every slot, and the source of every
+        // preview's dark-cyan "scrabble_cells" (annotateScrabbleCells).
+        PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
         Map<String, Long> phaseTimes = new ConcurrentHashMap<>();
         // Last non-empty live-preview snapshot, recorded as a "search_final" history entry right before
         // "minimizing" (live_preview itself is cleared when the search ends; see backend/app.py).
@@ -733,6 +762,7 @@ public final class App {
                 return;
             }
             applyZoneRevert(a.zoneRevert, data.get("examples"));
+            annotateScrabbleCells(data.get("examples"), scrabble);
             Map<String, Object> newStep = new LinkedHashMap<>();
             newStep.put("code", step);
             newStep.putAll(data);
@@ -835,6 +865,7 @@ public final class App {
                         p.onProgress = progress;
                         p.onLivePreview = examples -> {
                             applyZoneRevert(a.zoneRevert, examples);
+                            annotateScrabbleCells(examples, scrabble);
                             job.put("live_preview", examples);
                             if (examples != null && !examples.isEmpty()) lastLivePreview.set(examples);
                         };
@@ -1135,8 +1166,10 @@ public final class App {
             char[][] grid = Grids.makePattern(rows, cols, 0.0, rng, Words.LengthSets.available(index, Grids.PREFILL_MIN_WORD_COUNT),
                     null, null, index, req.blackEnrichmentPercent / 100.0);
             Set<String> challenge = challengeSet(req.challengeWords);
-            Map<String, Object> placed = Interactive.placeWord(grid, rows, cols, index, rng, PW.single(priority), challenge);
-            INTERACTIVE_SESSIONS.put(jobId, new Session(index, priority, rng, req.seed, null));
+            PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
+            Map<String, Object> placed = Interactive.placeWord(grid, rows, cols, index, rng, PW.single(priority), challenge,
+                    scrabble);
+            INTERACTIVE_SESSIONS.put(jobId, new Session(index, priority, rng, req.seed, null, scrabble));
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("language", req.language);
             meta.put("bilingual_language", isBilingual ? req.bilingualLanguage : null);
@@ -1218,7 +1251,8 @@ public final class App {
             Set<String> challenge = challengeSet(rawChallenge);
             List<Object>[] diag = rows > 0 ? Interactive.fillDiagnostics(gridOf(gridJson), rows, cols, index, challenge)
                     : new List[]{List.of(), List.of(), List.of()};
-            INTERACTIVE_SESSIONS.put(jobId, new Session(index, priority, rng, seed, (String) record.get("id")));
+            INTERACTIVE_SESSIONS.put(jobId, new Session(index, priority, rng, seed, (String) record.get("id"),
+                    scrabbleWords(language, bilingual, difficulty)));
             Map<String, Object> meta = new LinkedHashMap<>();
             meta.put("language", language);
             meta.put("bilingual_language", bilingual);
@@ -1376,6 +1410,7 @@ public final class App {
             ex.put("forced_cells", List.of());
             ex.put("locked_cells", List.of());
             ex.put("theme_cells", List.of());
+            ex.put("scrabble_cells", Words.scrabbleWordCells(result.get("solution"), scrabbleWords(language, bilingual, difficulty)));
             ex.put("process_number", result.get("winning_process_number"));
             ex.put("is_best", true);
             progress.on("clues", Json.obj("current", 0, "total", words.size(), "examples", Json.list(ex), "word_table", wordTable));
@@ -1965,7 +2000,8 @@ public final class App {
             int[] d = dims(gridJson);
             Map<String, Object> placed;
             synchronized (s) {
-                placed = Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw, lastPlaced);
+                placed = Interactive.placeWord(gridOf(gridJson), d[0], d[1], s.index, s.rng, s.pw(), cw, lastPlaced,
+                        s.scrabbleWords);
             }
             boolean impossible = Boolean.TRUE.equals(placed.get("impossible"));
             Map<String, Object> out = new LinkedHashMap<>();
@@ -2302,7 +2338,7 @@ public final class App {
             List<Object> gridJson = b.grid("grid");
             List<Object> definitions = b.list("definitions", false);
             String mode = b.str("mode", "medium");
-            int bep = b.integer("black_enrichment_percent", 17, 0, 100);
+            int bep = b.integer("black_enrichment_percent", 15, 0, 100);
             int flp = b.integer("force_letters_percent", 0, 0, 100);
             String pseudo = b.str("pseudo", null);
             String reqDifficulty = b.str("difficulty", null);

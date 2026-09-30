@@ -826,6 +826,13 @@ let interactiveThemeCells = new Set();
 // comments), maintained the same way (pruned on every renderInteractive()
 // to cells still carrying a letter).
 let interactiveChallengeCells = new Set();
+// Same idea, for a general-dictionary word placed automatically that
+// belongs to the language's Scrabble dictionary (backend's
+// `placed.from_scrabble`) — shown in dark cyan letters in renderGrid().
+// Maintained the same way (pruned on every renderInteractive() to cells
+// still carrying a letter); a theme or "Mots Défi" colour wins a shared
+// cell (see the .interactive-scrabble rule's position in style.css).
+let interactiveScrabbleCells = new Set();
 // A click-dragged "zone" of the grid (Édition mode only), at the user's
 // explicit request: "add the ability to click-and-drag to select a zone
 // of the grid: select every emplacement that shares at least one letter
@@ -1397,6 +1404,7 @@ function renderAttemptPreview(examples) {
     noise_cells: noiseCells,
     theme_cells: themeCells,
     challenge_cells: challengeCells,
+    scrabble_cells: scrabbleCells,
     process_number: processNumber,
     is_best: isBest,
     live_status: liveStatus,
@@ -1566,6 +1574,14 @@ function renderAttemptPreview(examples) {
     // the overlays above. A text color, which composes cleanly with the
     // .impossible/.noise/.low-candidates backgrounds and the
     // .forced/.locked borders already in place.
+    // Dark-cyan letters for words of the language's Scrabble dictionary
+    // (backend/app.py's `_annotate_scrabble_cells`). The theme/"Mots Défi"
+    // colours below win a shared cell (see .scrabble's position in
+    // style.css).
+    for (const [r, c] of scrabbleCells || []) {
+      const cell = cellElementsByCoord.get(`${r},${c}`);
+      if (cell) cell.classList.add("scrabble");
+    }
     for (const [r, c] of themeCells || []) {
       const cell = cellElementsByCoord.get(`${r},${c}`);
       if (cell) cell.classList.add("theme");
@@ -1907,7 +1923,7 @@ function renderPreviewStatus() {
 // by its (y, x) starting coordinate (1-based, row then column — the
 // opposite order from a mathematical (x, y) pair, matching #grid's own
 // row/column headers). Column 2 checks the word really exists as a
-// MOT entry in data/wordlist_<lang>_full.tsv — the exact dictionary the
+// MOT entry in data/wordlist_<lang>_freq.tsv — the exact dictionary the
 // solver drew from — showing the entry's *entire, verbatim TSV line*
 // (`row.wordlist_line`, MOT/ACCENTUE/FREQUENCE/CANONIQUE together, exactly
 // as written in the file — not just the word's own accented spelling)
@@ -2462,6 +2478,11 @@ function renderGrid() {
       // exclusive with interactive-theme above by construction.
       if (interactiveMode && letter && interactiveChallengeCells.has(`${r},${c}`)) {
         cell.classList.add("interactive-challenge");
+      }
+      // "Interactif" mode: dark-cyan letter for a word placed automatically
+      // from the Scrabble dictionary (see interactiveScrabbleCells).
+      if (interactiveMode && letter && interactiveScrabbleCells.has(`${r},${c}`)) {
+        cell.classList.add("interactive-scrabble");
       }
       // "Interactif" mode: red/orange background for a slot that's
       // impossible / below the fill-options threshold — same meaning as
@@ -3339,17 +3360,20 @@ const REMOTE_MAX_DIMENSION = 20;
   }
 })();
 
-// "Ultra" mode (5,000,000 checks per attempt — see backend/app.py's
-// BUDGET_MODES) is only offered on localhost: off it, its <option> is
-// disabled — greyed out and non-selectable by the browser's own native
-// rendering, no extra CSS needed — and a leftover "ultra" value falls
-// back to "medium".
-(function restrictUltraModeToLocalhost() {
+// "Ultra" and "Megatron" modes (5,000,000 and 20,000,000 checks per
+// attempt — see backend/app.py's BUDGET_MODES) are only offered on
+// localhost: off it, their <option>s are disabled — greyed out and
+// non-selectable by the browser's own native rendering, no extra CSS
+// needed — and a leftover value of either falls back to "medium".
+const LOCALHOST_ONLY_MODES = ["ultra", "megatron"];
+(function restrictHeavyModesToLocalhost() {
   if (isLocalhostOrigin()) return;
   const modeSelect = document.getElementById("mode");
-  const ultraOption = modeSelect.querySelector('option[value="ultra"]');
-  if (ultraOption) ultraOption.disabled = true;
-  if (modeSelect.value === "ultra") modeSelect.value = "medium";
+  for (const mode of LOCALHOST_ONLY_MODES) {
+    const option = modeSelect.querySelector(`option[value="${mode}"]`);
+    if (option) option.disabled = true;
+  }
+  if (LOCALHOST_ONLY_MODES.includes(modeSelect.value)) modeSelect.value = "medium";
 })();
 
 // Raised from 700ms to 2000ms at the user's explicit request, after a
@@ -4790,6 +4814,18 @@ const PERPLEXITY_DEFINE_QUERY_TEMPLATES = {
   pt: (adj, word) => `Faça 5 propostas de definições para palavras cruzadas, depois defina todos os significados possíveis da palavra ${adj}: ${word}`,
 };
 
+// Thematic hint appended to the definition query while the generation
+// form's "Thématique" list (themeKeywords) holds words, in the same
+// sentence language as the query itself.
+const PERPLEXITY_THEME_HINT_TEMPLATES = {
+  fr: (words) => `Indication thématique : ${words}`,
+  en: (words) => `Thematic hint: ${words}`,
+  de: (words) => `Thematischer Hinweis: ${words}`,
+  es: (words) => `Indicación temática: ${words}`,
+  it: (words) => `Indicazione tematica: ${words}`,
+  pt: (words) => `Indicação temática: ${words}`,
+};
+
 // Every Dictionnaire external AI assistant button (index.html,
 // #dictionary-ai-buttons) sends the same query, appended to its own
 // data-ai-url.
@@ -4807,7 +4843,14 @@ dictionaryAiButtons.forEach((btn) => btn.addEventListener("click", () => {
   const template =
     PERPLEXITY_DEFINE_QUERY_TEMPLATES[sentenceLang] ||
     PERPLEXITY_DEFINE_QUERY_TEMPLATES.fr;
-  const url = `${btn.dataset.aiUrl}${encodeURIComponent(template(adjective, word))}`;
+  let query = template(adjective, word);
+  if (themeKeywords.length > 0) {
+    const hint =
+      PERPLEXITY_THEME_HINT_TEMPLATES[sentenceLang] ||
+      PERPLEXITY_THEME_HINT_TEMPLATES.fr;
+    query += `\n${hint(themeKeywords.join(", "))}`;
+  }
+  const url = `${btn.dataset.aiUrl}${encodeURIComponent(query)}`;
   window.open(url, "_blank", "noopener,noreferrer");
 }));
 
@@ -5917,6 +5960,7 @@ function interactiveDiagnosticsPayload() {
     invalid_cells: cells(interactiveInvalidCells),
     theme_cells: cells(interactiveThemeCells),
     challenge_cells: cells(interactiveChallengeCells),
+    scrabble_cells: cells(interactiveScrabbleCells),
     // [row, col, letter] triples, the same shape POST /api/interactive/
     // stats itself returns.
     stat_letters: [...interactiveStatLetters].map(
@@ -6332,6 +6376,13 @@ function renderInteractive() {
     const [r, c] = key.split(",").map(Number);
     if (!/[A-Z]/.test(interactiveGrid[r] && interactiveGrid[r][c])) {
       interactiveChallengeCells.delete(key);
+    }
+  }
+  // Same pruning for a Scrabble-dictionary cell — see interactiveScrabbleCells.
+  for (const key of interactiveScrabbleCells) {
+    const [r, c] = key.split(",").map(Number);
+    if (!/[A-Z]/.test(interactiveGrid[r] && interactiveGrid[r][c])) {
+      interactiveScrabbleCells.delete(key);
     }
   }
   syncPuzzleFromInteractive();
@@ -7656,9 +7707,6 @@ function enterInteractiveMode(state) {
     if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
       blackEnrichmentInput.value = gp.black_enrichment_percent;
     }
-    if (gp.force_letters_percent !== undefined && gp.force_letters_percent !== null) {
-      document.getElementById("force-letters").value = gp.force_letters_percent;
-    }
     if (gp.theme_precision !== undefined && gp.theme_precision !== null) {
       document.getElementById("theme-precision").value = gp.theme_precision;
     }
@@ -7679,6 +7727,10 @@ function enterInteractiveMode(state) {
   interactiveChallengeCells = new Set();
   if (state.placed && state.placed.from_challenge && state.placed.cells) {
     for (const [r, c] of state.placed.cells) interactiveChallengeCells.add(`${r},${c}`);
+  }
+  interactiveScrabbleCells = new Set();
+  if (state.placed && state.placed.from_scrabble && state.placed.cells) {
+    for (const [r, c] of state.placed.cells) interactiveScrabbleCells.add(`${r},${c}`);
   }
   // "Mots Défi" list restore, at the user's explicit request — only ever
   // set on a resumed session's own result (backend/app.py's _run_
@@ -8337,6 +8389,9 @@ interactiveNextBtn.addEventListener("click", async () => {
     }
     if (data.placed.from_challenge) {
       for (const [r, c] of data.placed.cells) interactiveChallengeCells.add(`${r},${c}`);
+    }
+    if (data.placed.from_scrabble) {
+      for (const [r, c] of data.placed.cells) interactiveScrabbleCells.add(`${r},${c}`);
     }
     setInteractiveDiagnostics(data);
     interactiveLastPlaced = data.placed;
@@ -9124,7 +9179,6 @@ async function runInteractiveFinish(zoneCells) {
           definitions: interactiveDefinitionsPayload(),
           mode: finishMode,
           black_enrichment_percent: Number(blackEnrichmentInput.value),
-          force_letters_percent: Number(document.getElementById("force-letters").value),
           difficulty: document.getElementById("difficulty").value,
           theme: themeKeywords.join(" "),
           theme_precision: readThemePrecision(),
@@ -9416,7 +9470,6 @@ form.addEventListener("submit", async (event) => {
   const difficulty = document.getElementById("difficulty").value;
   const mode = document.getElementById("mode").value;
   const blackEnrichmentPercent = Number(blackEnrichmentInput.value);
-  const forceLettersPercent = Number(document.getElementById("force-letters").value);
   // Optional Thématique (word list, "+/-" chip list — see themeKeywords/
   // renderThemeList() above) — joined back into one space-separated
   // string, omitted if empty. Whatever is still pending, untyped-in
@@ -9442,7 +9495,6 @@ form.addEventListener("submit", async (event) => {
       language, width, height, difficulty,
       bilingual_language: interactiveBilingualLanguage || undefined,
       black_enrichment_percent: blackEnrichmentPercent,
-      force_letters_percent: forceLettersPercent,
       theme: theme || undefined,
       theme_precision: themePrecision,
       pseudo: userPseudo || undefined,
@@ -9473,7 +9525,6 @@ form.addEventListener("submit", async (event) => {
           language, width, height, difficulty, mode,
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
-          force_letters_percent: forceLettersPercent,
           // Thématique: a word list semantically steering the grid
           // (a backend-side Qdrant pre-search — see backend/app.py's
           // THEME_PRESEARCH_LIMIT). Omitted if empty.

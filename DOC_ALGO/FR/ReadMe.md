@@ -113,8 +113,9 @@ C'est le fonctionnement par défaut : le programme construit toute la grille
 lui-même, sans aucune intervention manuelle.
 
 1. Configurer la grille avec les options de la page d'accueil (langue,
-   taille, difficulté, taux noir, graines, etc.).
-2. Choisir un **Mode** de génération parmi Flash/Turbo/Rapide/Moyen/Ultra
+   taille, difficulté, taux noir, etc.).
+2. Choisir un **Mode** de génération parmi Flash/Turbo/Rapide/Moyen/Ultra/
+   Megatron (Ultra et Megatron seulement quand la page est ouverte en local)
    (jamais « Interactif », réservé au mode manuel ci-dessous) — ce choix ne
    fixe qu'un budget de recherche par tentative (voir « Limites de la
    recherche », chapitre 4), pas la qualité du résultat final.
@@ -140,6 +141,29 @@ déjà confirmés) plutôt que d'une grille vierge (`backend/crossword_gen.py`,
 grille terminée, un bouton **Recalculer** génère un nouveau jeu de
 définitions pour la même grille (une copie ; la grille d'origine n'est
 jamais modifiée) sans refaire le placement des mots.
+
+### Le lexique d'une grille
+
+Le lexique dans lequel une grille puise ses mots réunit deux
+dictionnaires par langue :
+
+- `data/wordlist_<langue>_freq.tsv`, le dictionnaire issu du corpus, avec
+  ses fréquences : la difficulté n'en garde qu'une fraction, les mots les
+  plus fréquents (`DIFFICULTY_PRESETS` : 66 % en facile, 80 % en moyen,
+  tout en difficile), et le niveau facile en retire aussi les mots sans
+  définition et les noms propres probables (`load_wordlist`) ;
+- `data/wordlist_<langue>_scrabble.tsv`, le dictionnaire Scrabble, versé
+  **en entier** aux niveaux moyen et difficile ; au niveau facile, seuls
+  ses mots dont la forme accentuée figure dans la table des formes
+  fléchies (`data/inflection/<langue>.jsonl`, comme forme ou comme lemme)
+  sont versés (`load_inflection_keys`, `_scrabble_lexicon_for`). Chaque
+  mot versé absent du premier dictionnaire y est ajouté avec ses formes accentuée et canonique, et aucun mot Scrabble
+  ne compte dans les quotas de noms propres (`MAX_PROPER_NOUNS`) ni de mots
+  sans définition (`MAX_NON_GLOSS_WORDS`). Sa fréquence est relevée au
+  moins à `NOISE_FREQUENCY_THRESHOLD`, pour qu'il ne soit jamais pris pour
+  du bruit (`merge_scrabble_lexicon`, appelé par `generate_grid` pour
+  chaque langue et par `backend/app.py`, `_load_interactive_index`, pour le
+  mode Interactif).
 
 ### Mode Interactif (construction manuelle assistée)
 
@@ -572,7 +596,7 @@ d'impossibilité appliqué aux emplacements déjà partiellement verrouillés
 
 Les cases posées pendant le pré-remplissage comptent pour l'objectif de
 pourcentage de cases noires visé (champ **Taux noir** de l'interface,
-`black_enrichment_percent`, **17 %** par défaut). Ce pourcentage porte sur
+`black_enrichment_percent`, **15 %** par défaut). Ce pourcentage porte sur
 **toute la grille** (lignes × colonnes) et vise un nombre total de cases
 noires : les cases noires déjà présentes dans le motif de départ du palier
 (reprises d'un nettoyage) comme celles posées par le pré-remplissage y sont
@@ -614,7 +638,7 @@ indéfiniment. À sa première détection, on compte combien de cases blanches
 il couvre (sa taille d'origine) ; à chaque nouvelle case noire ajoutée pour
 le corriger, on compare le cumul de ces cases à son budget propre :
 l'objectif de remplissage en noir de la grille entière (le même **Taux
-noir**, 17 % par défaut) appliqué à sa taille d'origine, mais **jamais
+noir**, 15 % par défaut) appliqué à sa taille d'origine, mais **jamais
 moins d'1 case noire garantie** (`PREFILL_ZONE_BLACK_BUDGET_FLOOR`). Ce
 plancher garantit qu'un emplacement de taille normale (souvent 8 à 15
 cases) dispose toujours d'au moins 1 case avant que le pourcentage ne
@@ -811,8 +835,10 @@ mots compatibles une fois la lettre figée.
 Parmi les cases candidates, le programme en pioche **au hasard** un certain
 nombre pour en faire des **graines** — des indices qui initient les
 premiers placements ou les influencent quand d'autres lettres existent
-déjà. Leur nombre va jusqu'à un pourcentage réglable dans l'interface (0 %
-par défaut) du nombre de cases blanches **encore sans lettre connue** — pas
+déjà. Leur nombre va jusqu'à un pourcentage (`force_letters_percent`, 0 %
+par défaut ; l'interface ne le propose pas, si bien que toute génération
+lancée depuis la page ou par Populate se fait sans graine) du nombre de
+cases blanches **encore sans lettre connue** — pas
 du total des cases blanches : une case déjà connue avec certitude, héritée
 d'un palier précédent, ne compte pas dans cette base, donc le nombre de
 graines diminue naturellement à mesure qu'un palier de reprise confirme la
@@ -1356,12 +1382,16 @@ glissante — forment la **règle unique de tirage d'un mot** de ce moteur
 pas du mode automatique, son bouton **Suivant** tire ses mots exactement de
 la même façon, avec la même méthode : chacune de ses trois familles (Mots
 Défi, glossaire thématique, dictionnaire général) ordonne les candidats de
-chaque emplacement par cet appel, puis retient le premier acceptable. Deux
+chaque emplacement par cet appel — le dictionnaire général y plaçant en
+outre ses mots du dictionnaire Scrabble en tête, comme la recherche
+automatique (`_general_dictionary_pick`, `Filler.scrabble_first`) — puis
+retient le premier acceptable. Deux
 clics successifs sur un même état de grille ne proposent donc pas
 forcément le même mot, exactement comme deux tentatives parallèles du mode
 automatique explorent le même motif différemment.
 
-Par-dessus ce classement, deux familles prennent la tête, dans cet ordre :
+Par-dessus ce classement, trois familles prennent la tête, dans cet
+ordre :
 
 - **Mots Défi** — tout mot de la liste non encore posé ailleurs, ni
   abandonné pour la tentative en cours, et géométriquement compatible avec
@@ -1376,11 +1406,25 @@ Par-dessus ce classement, deux familles prennent la tête, dans cet ordre :
   hors thématique n'est atteint que si aucun mot thématique n'a mené à une
   solution. Étape sautée si tous — ou aucun — des candidats sont
   thématiques.
+- **Dictionnaire Scrabble** — parmi les mots restants, ceux du
+  dictionnaire Scrabble de la langue de l'emplacement
+  (`data/wordlist_<langue>_scrabble.tsv`, une liste par direction sur une
+  grille bilingue) passent devant les autres mots du dictionnaire général,
+  là encore en deux blocs stables qui conservent l'ordre statistique à
+  l'intérieur de chacun (`Filler.scrabble_first`, appliqué juste après
+  `Filler.ordered_candidates` et avant le bloc thématique). Ce dictionnaire
+  est versé en entier dans le lexique de la grille, quelle que soit la
+  difficulté — au niveau facile, ses seuls mots de forme fléchie connue
+  (voir « Le lexique d'une grille », chapitre 1). Un mot hors
+  liste Scrabble n'est donc atteint que si aucun mot de la liste n'a mené à
+  une solution. Étape sautée si tous — ou aucun — des candidats sont dans
+  la liste.
 
-Chaque famille est suivie de ses propres options de réaménagement
-(ci-dessous), si bien que l'ordre complet des options d'un emplacement
-est le suivant : Mots Défi, Mots Défi par réaménagement, mots thématiques,
-mots thématiques par réaménagement, puis les autres mots du dictionnaire.
+Chaque famille Défi ou thématique est suivie de ses propres options de
+réaménagement (ci-dessous), si bien que l'ordre complet des options d'un
+emplacement est le suivant : Mots Défi, Mots Défi par réaménagement, mots
+thématiques, mots thématiques par réaménagement, mots du dictionnaire
+Scrabble, puis les autres mots du dictionnaire.
 
 ### Réaménager l'emplacement choisi pour un mot Défi ou thématique
 
@@ -1612,7 +1656,8 @@ automatique : une grille par ailleurs entièrement et validement remplie
 peut être refusée par un garde-fou appliqué une fois le remplissage
 terminé — trop de noms propres (`MAX_PROPER_NOUNS`) ou trop de mots absents
 du dictionnaire de gloses (`MAX_NON_GLOSS_WORDS`), selon la difficulté
-(`try_fill`). Les mots à l'origine du refus (tout mot fautif réellement
+(`try_fill`) ; un mot du dictionnaire Scrabble n'entre jamais dans ces
+quotas. Les mots à l'origine du refus (tout mot fautif réellement
 présent dans la grille, pas seulement l'excédent au-delà du quota) sont
 alors eux aussi signalés impossibles — mêmes cases rouges, même entrée pour
 le nettoyage entre paliers (`_quota_overflow_slot_indices`) — plutôt que de
@@ -1662,9 +1707,9 @@ grille de référence 15×10 ; `try_fill`). Une « vérification » est **une
 tentative de poser un mot** (voir « Fin de la recherche » plus haut) : un
 mot immédiatement rejeté parce qu'il casserait un croisement compte autant
 qu'un mot qui mène plus loin. Depuis l'interface, le sélecteur **Mode**
-(Flash/Turbo/Rapide/Moyen/Ultra ; `backend/app.py`, `BUDGET_MODES`) fixe
-directement ce budget par tentative à une valeur choisie (1 000 à
-5 000 000), sans rapport avec la taille de la grille.
+(Flash/Turbo/Rapide/Moyen/Ultra/Megatron ; `backend/app.py`, `BUDGET_MODES`)
+fixe directement ce budget par tentative à une valeur choisie (1 000 à
+20 000 000), sans rapport avec la taille de la grille.
 
 Puisqu'un mot immédiatement rejeté compte autant qu'un mot productif, le
 mode **Flash** (1 000 vérifications) reste le plus fragile des cinq : sur
@@ -2694,6 +2739,16 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   bloquée) : voir « Qu'est-ce qu'un emplacement impossible ? », chapitre 4.
 - **Fond jaune** (emplacement écarté) : voir « Rouge, jaune : deux signaux
   distincts », chapitre 4.
+- **Lettres cyan sombre** (mot du dictionnaire Scrabble) : la case
+  appartient à une suite complète de lettres (horizontale ou verticale)
+  qui forme un mot de la liste Scrabble de sa langue. Calculé sur la
+  grille de chaque aperçu, quel que soit le chemin qui y a posé les
+  lettres (`backend/app.py`, `_annotate_scrabble_cells` ;
+  `backend/crossword_gen.py`, `scrabble_word_cells`). Les couleurs des
+  mots thématiques (magenta) et des Mots Défi (vert) l'emportent sur une
+  case partagée. En mode Interactif, la même couleur marque le mot posé
+  par **Suivant** depuis le dictionnaire général quand il figure dans la
+  liste Scrabble (`interactive_place_word`, `placed.from_scrabble`).
 - **Lettre gris clair** (lettre statistique) : dans chaque case encore
   vide, la lettre la plus probable d'après le relevé statistique croisé
   des deux sens (voir « Les graines », chapitre 4), tel qu'il se trouve au

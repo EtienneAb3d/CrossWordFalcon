@@ -8,7 +8,7 @@ env.sh*
 /data/reference_corpus/
 /data/qdrant/
 /CORPUS/
-/DICS/
+/data/wiktionary/
 /GRID_SVG/
 /GRID_PNG/
 /GRID_STORE/

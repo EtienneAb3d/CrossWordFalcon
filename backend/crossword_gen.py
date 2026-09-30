@@ -49,7 +49,7 @@ The grid can be rectangular: `width` (number of columns, horizontal) and
 `height` (number of rows, vertical) are set independently (15x10 by default).
 
 Usage (from the project root):
-    python3 backend/crossword_gen.py --width 15 --height 10 --wordlist data/wordlist_fr_full.tsv
+    python3 backend/crossword_gen.py --width 15 --height 10 --wordlist data/wordlist_fr_freq.tsv
 """
 import argparse
 import concurrent.futures
@@ -262,7 +262,7 @@ PROPER_NOUN_EXCLUDED_LANGS = {"de"}
 
 
 def _lang_from_path(path):
-    match = re.search(r"wordlist_([a-z]{2})_full\.tsv$", os.path.basename(str(path)))
+    match = re.search(r"wordlist_([a-z]{2})_freq\.tsv$", os.path.basename(str(path)))
     return match.group(1) if match else None
 
 
@@ -880,7 +880,7 @@ PREFILL_MIN_WORD_COUNT = 3
 # regression) or reverting to 10 outright.
 PREFILL_LOCKED_MIN_WORD_COUNT = 3
 
-# Raw frequency (the FREQUENCE column of data/wordlist_<lang>_full.tsv,
+# Raw frequency (the FREQUENCE column of data/wordlist_<lang>_freq.tsv,
 # see load_wordlist) below which a candidate no longer counts as
 # "playable" for `_noise_slot_cells` (see its own docstring) — at the
 # user's explicit request, to tell a genuinely unfillable cell (no real
@@ -900,7 +900,7 @@ PREFILL_LOCKED_MIN_WORD_COUNT = 3
 # four noise entries without touching real words, but stays deliberately
 # conservative: at this threshold, only 4.5% of length-2 words and 10.3%
 # of length-3 words in the real French lexicon are excluded (measured
-# live, `data/wordlist_fr_full.tsv`).
+# live, `data/wordlist_fr_freq.tsv`).
 NOISE_FREQUENCY_THRESHOLD = 5
 
 # Minimum number of new black cells always guaranteed to a single zone
@@ -1844,6 +1844,174 @@ def challenge_word_grid_form(word):
     return re.sub(r"[^A-Z]", "", stripped.upper())
 
 
+# ---------- Scrabble dictionaries ----------
+#
+# `data/wordlist_<lang>_scrabble.tsv` (`MOT<TAB>ACCENTUE<TAB>CANONIQUE`,
+# built by `data_builder/build_wordlist_scrabble.py` from the language's
+# official Scrabble list(s) in `data/scrabble/<lang>/`). Merged whole into
+# every lexicon loaded for a grid, whatever its difficulty
+# (`merge_scrabble_lexicon`); the third candidate family of a slot — after
+# "Mots Défi" and the theme glossary, before the rest of the general
+# dictionary (`Filler.scrabble_first`); its words are shown in dark cyan
+# (`scrabble_word_cells`).
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+_SCRABBLE_CACHE = {}
+_SCRABBLE_CACHE_LOCK = threading.Lock()
+
+
+def scrabble_wordlist_path(language):
+    return os.path.join(DATA_DIR, f"wordlist_{language}_scrabble.tsv")
+
+
+def load_scrabble_lexicon(language):
+    """{MOT: (ACCENTUE, [CANONIQUE, ...])} of `language`'s Scrabble
+    wordlist, read once per process (empty when the language has none)."""
+    if not language:
+        return {}
+    with _SCRABBLE_CACHE_LOCK:
+        cached = _SCRABBLE_CACHE.get(language)
+        if cached is not None:
+            return cached
+        lexicon = {}
+        path = scrabble_wordlist_path(language)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) >= 3 and parts[0].isalpha():
+                        lexicon[parts[0]] = (parts[1], [c for c in parts[2].split(";") if c] or [parts[1]])
+        _SCRABBLE_CACHE[language] = lexicon
+        return lexicon
+
+
+def load_inflection_keys(language):
+    """Frozenset of every form and every lemma of `language`'s inflection
+    table (`data/inflection/<lang>.jsonl`), lowercased with ligatures
+    folded — the words with a known inflection. Read once per process."""
+    if not language:
+        return frozenset()
+    key = ("inflection", language)
+    with _SCRABBLE_CACHE_LOCK:
+        cached = _SCRABBLE_CACHE.get(key)
+        if cached is not None:
+            return cached
+        keys = set()
+        path = os.path.join(DATA_DIR, "inflection", f"{language}.jsonl")
+        if os.path.exists(path):
+            import json
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if rec.get("form"):
+                        keys.add(_inflection_key(rec["form"]))
+                    for analysis in rec.get("analyses") or ():
+                        if analysis.get("lemma"):
+                            keys.add(_inflection_key(analysis["lemma"]))
+        result = _SCRABBLE_CACHE[key] = frozenset(keys)
+        return result
+
+
+def _inflection_key(word):
+    return word.lower().replace("œ", "oe").replace("æ", "ae")
+
+
+def _scrabble_lexicon_for(language, easy):
+    """`load_scrabble_lexicon(language)`, restricted at "easy" difficulty
+    to the words with a known inflection (`load_inflection_keys`: their
+    accented form is a form or a lemma of the inflection table)."""
+    lexicon = load_scrabble_lexicon(language)
+    if not easy:
+        return lexicon
+    key = ("easy", language)
+    with _SCRABBLE_CACHE_LOCK:
+        cached = _SCRABBLE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    known = load_inflection_keys(language)
+    filtered = {w: e for w, e in lexicon.items() if _inflection_key(e[0]) in known}
+    with _SCRABBLE_CACHE_LOCK:
+        _SCRABBLE_CACHE[key] = filtered
+    return filtered
+
+
+def load_scrabble_words(language, easy=False):
+    """Frozenset of every Scrabble word (grid form) of `language` — at
+    "easy" difficulty (`easy`), only those with a known inflection."""
+    lexicon = _scrabble_lexicon_for(language, easy)
+    key = ("words", language, easy)
+    with _SCRABBLE_CACHE_LOCK:
+        cached = _SCRABBLE_CACHE.get(key)
+        if cached is None:
+            cached = _SCRABBLE_CACHE[key] = frozenset(lexicon)
+        return cached
+
+
+def merge_scrabble_lexicon(language, by_length, accents, canonicals, frequencies, easy=False):
+    """Adds `language`'s Scrabble wordlist to a lexicon returned by
+    `load_wordlist` (in place), whatever the difficulty cut already
+    applied to it — whole, except at "easy" difficulty (`easy`), where
+    only its words with a known inflection are added
+    (`_scrabble_lexicon_for`): a word missing from the lexicon is added to
+    `by_length` with its own accented/canonical forms, and every added
+    Scrabble word gets a frequency of at least `NOISE_FREQUENCY_THRESHOLD`,
+    so `_noise_slot_cells` never takes it for noise. Returns the Scrabble
+    word set used for this lexicon (empty when the language has no
+    Scrabble wordlist)."""
+    lexicon = _scrabble_lexicon_for(language, easy)
+    for word, (accented, canonical) in lexicon.items():
+        if word not in accents:
+            accents[word] = accented
+            canonicals[word] = list(canonical)
+            by_length.setdefault(len(word), []).append(word)
+        frequencies[word] = max(frequencies.get(word, 0.0), float(NOISE_FREQUENCY_THRESHOLD))
+    return load_scrabble_words(language, easy)
+
+
+def scrabble_words_for_languages(language, bilingual_language=None, easy=False):
+    """The Scrabble word set of a grid: a frozenset on a monolingual grid,
+    a DualSet (across = `language`, down = `bilingual_language`) on a
+    bilingual one — the same shape as `priority_words`. `easy`: see
+    `load_scrabble_words`."""
+    across = load_scrabble_words(language, easy)
+    if bilingual_language and bilingual_language != language:
+        return DualSet(across, load_scrabble_words(bilingual_language, easy))
+    return across
+
+
+def scrabble_word_cells(grid, scrabble_words):
+    """[row, col] of every cell of a fully lettered run (2 letters or more,
+    across or down) of `grid` spelling a word of `scrabble_words` (that
+    run's own direction's set on a bilingual grid). `grid` holds "#",
+    "." or a letter per cell. Sorted, deduplicated."""
+    if not scrabble_words or not grid:
+        return []
+    rows, cols = len(grid), len(grid[0])
+    found = set()
+    for direction in ("across", "down"):
+        words = (scrabble_words.for_direction(direction)
+                 if isinstance(scrabble_words, DualSet) else scrabble_words)
+        if not words:
+            continue
+        outer, inner = (rows, cols) if direction == "across" else (cols, rows)
+        for a in range(outer):
+            run = []
+            for b in range(inner + 1):
+                cell = (a, b) if direction == "across" else (b, a)
+                ch = grid[cell[0]][cell[1]] if b < inner else BLACK
+                if ch != BLACK:
+                    run.append((cell, ch))
+                    continue
+                if len(run) >= 2 and all(c != WHITE for _, c in run):
+                    if "".join(c for _, c in run) in words:
+                        found.update(cell for cell, _ in run)
+                run = []
+    return [[r, c] for r, c in sorted(found)]
+
+
 def _priority_words_for(priority_words, cells):
     """The frozenset of priority theme words applicable to slot `cells`'s
     own direction — see `generate_grid`'s `priority_words`. On a bilingual
@@ -2504,7 +2672,8 @@ class Filler:
     def __init__(self, slots, index, rng, forced_letters=None, letter_scores=None,
                  excluded_slots=None, cancel_event=None, batch_abandoned_event=None,
                  attempt_done_event=None, on_new_best=None, locked_letters=None,
-                 priority_words=None, challenge_words=None, rows=None, cols=None):
+                 priority_words=None, challenge_words=None, rows=None, cols=None,
+                 scrabble_words=None):
         self.slots = slots
         self.index = index
         self.rng = rng
@@ -2532,6 +2701,11 @@ class Filler:
         # monolingual grid, a DualSet (one glossary per language) on a
         # bilingual grid; empty = no theme, no change to the order.
         self.priority_words = priority_words or frozenset()
+        # Scrabble dictionary (see `load_scrabble_words`): a slot's
+        # candidates belonging to it are tried right after its theme words
+        # and before the rest of the dictionary (`scrabble_first`). Same
+        # frozenset/DualSet shape as `priority_words`; empty = no change.
+        self.scrabble_words = scrabble_words or frozenset()
         # "Mots Défi" (web UI "Interactif" mode only, see backend/app.py's
         # `POST /api/interactive/step`), at the user's explicit request: a
         # free-form list of words the author wants to force into the grid,
@@ -3497,6 +3671,20 @@ class Filler:
             idx = self.rng.randrange(take)
             reordered.append(remaining.pop(idx))
         return reordered
+
+    def scrabble_first(self, i, cands):
+        """`cands` (an already-ordered list) stably split into two blocks:
+        the words of slot `i`'s own Scrabble dictionary first, then the
+        rest — the Scrabble family of the candidate order, applied after
+        `ordered_candidates` and before the theme block is pulled ahead of
+        it. Returns `cands` itself when all, or none, belong to it."""
+        words = _priority_words_for(self.scrabble_words, self.slots[i])
+        if not words:
+            return cands
+        head = [w for w in cands if w in words]
+        if not head or len(head) == len(cands):
+            return cands
+        return head + [w for w in cands if w not in words]
 
     def mark_immediately_impossible_slots(self):
         """Flags as "écarté" (`_impossible_this_attempt`, see its own
@@ -5243,6 +5431,10 @@ class Filler:
             cands = self.ordered_candidates(
                 best_i, [w for w in domains[best_i] if w not in self.used_words],
             )
+            # Scrabble family: the words of the Scrabble dictionary ahead of
+            # the rest of the general dictionary; the theme block and the
+            # "Mots Défi" below are then pulled ahead of both.
+            cands = self.scrabble_first(best_i, cands)
             pri_set = frozenset()
             if self.priority_words:
                 # Theme preselection: the order already obtained above is
@@ -6062,8 +6254,11 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              proper_noun_words=None, max_proper_nouns=None,
              non_gloss_words=None, max_non_gloss=None, priority_words=None,
              challenge_words=None, required_cells=None, reshape_black_cells=False,
-             permanent_black_cells=None):
-    """`reshape_black_cells` (`False` by default): lets the search reshape
+             permanent_black_cells=None, scrabble_words=None):
+    """`scrabble_words`: the Scrabble family of the candidate order (see
+    `Filler.scrabble_first`), `None` = none.
+
+    `reshape_black_cells` (`False` by default): lets the search reshape
     the black-cell pattern for a "Mots Défi"/theme word, one node at a time
     (`Filler._try_reshape`), never freeing a cell of `permanent_black_cells`.
     `grid` is then updated in place to the pattern the returned or reported
@@ -6334,7 +6529,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                      batch_abandoned_event=batch_abandoned_event,
                      attempt_done_event=attempt_done_event, locked_letters=locked_letters,
                      priority_words=priority_words, challenge_words=challenge_words,
-                     rows=rows, cols=cols)
+                     rows=rows, cols=cols, scrabble_words=scrabble_words)
     filler.pattern = [row[:] for row in grid]
     filler.best_pattern = filler.pattern
     filler.reshape_enabled = reshape_black_cells and not excluded_slots
@@ -7229,7 +7424,8 @@ def _try_reshape_for_word(base_pattern, rows, cols, rng, word, locked_letters, i
     return change["slot_cells"], copy
 
 
-def _build_interactive_filler(pattern, rows, cols, index, rng, known, priority_words, challenge_words):
+def _build_interactive_filler(pattern, rows, cols, index, rng, known, priority_words, challenge_words,
+                              scrabble_words=None):
     """Builds a fresh `Filler` (plus its own `extract_slots` list) purely
     from `pattern` — the one and only place `interactive_place_word`
     constructs a `Filler`, called once for the grid's own base pattern and
@@ -7246,7 +7442,7 @@ def _build_interactive_filler(pattern, rows, cols, index, rng, known, priority_w
         slots, index, rng,
         letter_scores=letter_scores, locked_letters=known,
         priority_words=priority_words, challenge_words=challenge_words,
-        rows=rows, cols=cols,
+        rows=rows, cols=cols, scrabble_words=scrabble_words,
     )
     for i, cells in enumerate(slots):
         if all(cell in known for cell in cells):
@@ -7532,7 +7728,9 @@ def _general_dictionary_pick(filler, viable, i, exclude, baselines, level):
     baseline = baselines[i]
 
     def _rank(pool):
-        return filler.ordered_candidates(i, pool)
+        # Same order as `_backtrack`: the Scrabble dictionary's words ahead
+        # of the rest of the general dictionary.
+        return filler.scrabble_first(i, filler.ordered_candidates(i, pool))
 
     def _first_acceptable(ranked):
         for w in ranked:
@@ -7548,7 +7746,7 @@ def _general_dictionary_pick(filler, viable, i, exclude, baselines, level):
 
 
 def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
-                            challenge_words=None, last_placed_cells=None):
+                            challenge_words=None, last_placed_cells=None, scrabble_words=None):
     """Place EXACTLY ONE additional word into `grid`, honouring every letter
     already present, with NO backtracking — the single-step primitive behind
     the web UI's "Interactif" authoring mode (see backend/app.py's
@@ -7614,6 +7812,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     }
     filler, slots = _build_interactive_filler(
         pattern, rows, cols, index, rng, known, priority_words, challenge_words,
+        scrabble_words=scrabble_words,
     )
     if not slots:
         return {"impossible": True}
@@ -7926,6 +8125,12 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
             # once, by whichever tier succeeds first).
             "from_theme": placed_from == "theme",
             "from_challenge": placed_from == "challenge",
+            # A general-dictionary word belonging to the Scrabble
+            # dictionary of its direction — shown in dark cyan.
+            "from_scrabble": (
+                placed_from not in ("theme", "challenge")
+                and word in _priority_words_for(filler.scrabble_words, cells)
+            ),
         },
     }
 
@@ -11748,6 +11953,10 @@ _worker_priority_words = None
 # `_worker_priority_words` above — a challenge word carries no language),
 # shared the same way for the same reason.
 _worker_challenge_words = None
+# Scrabble dictionary (see generate_grid's `scrabble_words` and Filler.
+# scrabble_first): a frozenset, or a DualSet on a bilingual grid, shared
+# the same way as `_worker_priority_words`.
+_worker_scrabble_words = None
 # "Stop" button (see CANCEL_CHECK_INTERVAL/Filler.__init__), at the
 # user's explicit request — like `_worker_index` right above, passed once
 # per worker via the pool's initializer rather than as an argument of
@@ -11988,7 +12197,7 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
                   best_state_queue=None, checks_progress=None, attempt_active=None, warmup_barrier=None,
                   proper_noun_words=None,
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
-                  priority_words=None, challenge_words=None):
+                  priority_words=None, challenge_words=None, scrabble_words=None):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -12013,10 +12222,11 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         _worker_warmup_barrier, \
         _worker_proper_noun_words, _worker_max_proper_nouns, \
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
-        _worker_challenge_words
+        _worker_challenge_words, _worker_scrabble_words
     _worker_index = index
     _worker_priority_words = priority_words
     _worker_challenge_words = challenge_words
+    _worker_scrabble_words = scrabble_words
     _worker_cancel_event = cancel_event
     _worker_batch_abandoned_event = batch_abandoned_event
     _worker_attempt_done_event = attempt_done_event
@@ -12660,7 +12870,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            challenge_words=_worker_challenge_words,
                            required_cells=required_cells,
                            reshape_black_cells=True,
-                           permanent_black_cells=permanent_black_cells)
+                           permanent_black_cells=permanent_black_cells,
+                           scrabble_words=_worker_scrabble_words)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -12902,7 +13113,8 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                            challenge_words=_worker_challenge_words,
                            required_cells=required_cells,
                            reshape_black_cells=True,
-                           permanent_black_cells=permanent_black_cells)
+                           permanent_black_cells=permanent_black_cells,
+                           scrabble_words=_worker_scrabble_words)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -13003,7 +13215,7 @@ def _one_step_previous(entry):
 
 def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    max_words=None, black_ratio=0.0, attempts=200, seed=None,
-                   wordlist_path="data/wordlist_fr_full.tsv", on_progress=None,
+                   wordlist_path="data/wordlist_fr_freq.tsv", on_progress=None,
                    force_letters_fraction=0.0, cancel_event=None,
                    black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
                    deadline_checks=None, resume_state=None, should_pause=None,
@@ -13011,7 +13223,15 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    bilingual_priority_words=None, permanent_locked_letters=None,
                    permanent_black_cells=None, required_cells=None, challenge_words=None,
                    on_live_preview=None):
-    """`challenge_words` (`None`/empty by default — no effect for any
+    """The Scrabble wordlist of each language (`merge_scrabble_lexicon`)
+    is merged into the lexicon loaded for it, whatever `max_words` — whole,
+    except at "easy" `difficulty`, where only its words with a known
+    inflection are merged — and its words are exempt from the proper-noun and
+    no-gloss quotas; every search tries a slot's Scrabble words after its
+    theme words and before the rest of the dictionary
+    (`Filler.scrabble_first`).
+
+    `challenge_words` (`None`/empty by default — no effect for any
     pre-existing caller): "Mots Défi", the same free-form, author-typed
     word list as Interactive mode's own panel (see `Filler.challenge_
     words`/`InteractiveStepRequest.challenge_words` in backend/app.py),
@@ -13324,6 +13544,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         exclude_proper_nouns=(difficulty == "easy"),
     )
     language = _lang_from_path(wordlist_path) or "fr"
+    scrabble_across = merge_scrabble_lexicon(
+        _lang_from_path(wordlist_path), by_length, accents, canonicals, frequencies,
+        easy=(difficulty == "easy"),
+    )
 
     # Bilingual grid (see `bilingual_wordlist_path`'s own docstring
     # above): a second lexicon is only loaded when `bilingual_wordlist_
@@ -13339,11 +13563,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             exclude_proper_nouns=(difficulty == "easy"),
         )
         bilingual_language = _lang_from_path(bilingual_wordlist_path) or bilingual_wordlist_path
+        scrabble_down = merge_scrabble_lexicon(
+            _lang_from_path(bilingual_wordlist_path), by_length_down, accents_down,
+            canonicals_down, frequencies_down, easy=(difficulty == "easy"),
+        )
     else:
         by_length_down, accents_down, canonicals_down, frequencies_down = (
             by_length, accents, canonicals, frequencies
         )
         bilingual_language = None
+        scrabble_down = scrabble_across
 
     # Proper-noun quota for this generation (see MAX_PROPER_NOUNS) and the
     # set of words (grid form) genuinely considered proper nouns for this
@@ -13369,6 +13598,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         proper_noun_words = proper_noun_words | _proper_noun_words_for(
             bilingual_wordlist_path, accents_down
         )
+    # A Scrabble word is valid at every difficulty: never counted against
+    # either quota.
+    proper_noun_words -= scrabble_across | scrabble_down
     # Quota of words with no entry in the gloss (definitions) dictionary
     # for this generation (see MAX_NON_GLOSS_WORDS), and the set of words
     # (grid form) genuinely without a gloss entry for this language — the
@@ -13398,6 +13630,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         non_gloss_words = non_gloss_words | _non_gloss_words_for(
             bilingual_wordlist_path, accents_down, canonicals_down
         )
+    non_gloss_words -= scrabble_across | scrabble_down
     # `index` is now a DualIndex (see its own docstring) — the same
     # dictionary on both sides (across/down) on a monolingual grid, two
     # distinct dictionaries on a bilingual one.
@@ -13437,6 +13670,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             priority_words = across_pw
     else:
         priority_words = frozenset()
+    # Scrabble family (see this function's own docstring): one set per
+    # language on a bilingual grid — the same shape as `priority_words`.
+    scrabble_words = DualSet(scrabble_across, scrabble_down) if bilingual_active else scrabble_across
     # "Mots Défi" (see this function's own docstring): normalized once
     # here, deliberately with NO lexicon filter (unlike priority_words
     # right above) — a challenge word is trusted even when absent from
@@ -14013,7 +14249,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
-                  non_gloss_words, max_non_gloss, priority_words, challenge_words)
+                  non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -16133,7 +16369,7 @@ def main():
                      help=f"largeur de la grille, nombre de colonnes (défaut : {DEFAULT_WIDTH})")
     ap.add_argument("--height", type=int, default=DEFAULT_HEIGHT,
                      help=f"hauteur de la grille, nombre de lignes (défaut : {DEFAULT_HEIGHT})")
-    ap.add_argument("--wordlist", default="data/wordlist_fr_full.tsv",
+    ap.add_argument("--wordlist", default="data/wordlist_fr_freq.tsv",
                      help="lexique MOT<TAB>ACCENTUE<TAB>FREQUENCE généré par "
                           "build_wordlist_freq.py (ou fichier texte libre en repli)")
     _difficulty_help = (

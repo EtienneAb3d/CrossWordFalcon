@@ -41,6 +41,17 @@ _POS_LABEL = {
 _cache = {}
 
 
+# Lookup key: lowercase, ligatures folded ("Cœur" -> "coeur") — the
+# dictionaries are written with folded ligatures (data_builder/
+# build_wordlist_freq.py's `fold_ligatures`), so a query spelled with one
+# still finds its entry.
+_LIGATURE_KEY = str.maketrans({"œ": "oe", "æ": "ae"})
+
+
+def _key(word):
+    return word.lower().translate(_LIGATURE_KEY)
+
+
 def _load(language):
     if language in _cache:
         return _cache[language]
@@ -59,6 +70,7 @@ def _load(language):
                 form = rec.get("form")
                 if not form:
                     continue
+                form = _key(form)
                 out = []
                 for a in rec.get("analyses", []):
                     pos = a.get("pos")
@@ -70,7 +82,7 @@ def _load(language):
                     if tags:
                         bits.append(tags)
                     text = ", ".join(bits)
-                    if lemma and lemma.lower() != form:
+                    if lemma and _key(lemma) != form:
                         text += f' (of "{lemma}")'
                     pair = (pos, text)
                     if pair not in out:
@@ -84,4 +96,4 @@ def describe_form(word, language):
     """`[(pos_code, description), ...]` for the exact `word` in
     `language`, or `[]` if it isn't in the table. Never raises, never
     touches the network."""
-    return _load(language).get(word.lower(), [])
+    return _load(language).get(_key(word), [])

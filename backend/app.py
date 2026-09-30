@@ -23,6 +23,7 @@ import concurrent.futures
 import datetime
 import json
 import logging
+import math
 import multiprocessing
 import os
 import random
@@ -56,6 +57,8 @@ from .crossword_gen import (
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
+    merge_scrabble_lexicon, scrabble_word_cells, scrabble_wordlist_path,
+    scrabble_words_for_languages,
 )
 from .grid_store import (
     _slugify_title, get_grid, list_grids, save_grid_json,
@@ -332,20 +335,21 @@ def _append_chat_log(session_id, language, message, reply, first_token_s=None, t
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 # Language code -> wordlist file. Add an entry here (plus the matching
-# data/wordlist_<code>_full.tsv and an option in the frontend's language
+# data/wordlist_<code>_freq.tsv and an option in the frontend's language
 # selector) to support another grid/clue language.
 WORDLISTS = {
-    "fr": DATA_DIR / "wordlist_fr_full.tsv",
-    "en": DATA_DIR / "wordlist_en_full.tsv",
-    "de": DATA_DIR / "wordlist_de_full.tsv",
-    "es": DATA_DIR / "wordlist_es_full.tsv",
-    "it": DATA_DIR / "wordlist_it_full.tsv",
-    "pt": DATA_DIR / "wordlist_pt_full.tsv",
+    "fr": DATA_DIR / "wordlist_fr_freq.tsv",
+    "en": DATA_DIR / "wordlist_en_freq.tsv",
+    "de": DATA_DIR / "wordlist_de_freq.tsv",
+    "es": DATA_DIR / "wordlist_es_freq.tsv",
+    "it": DATA_DIR / "wordlist_it_freq.tsv",
+    "pt": DATA_DIR / "wordlist_pt_freq.tsv",
 }
 
 # "Mode" selector of the web UI (see frontend/static/index.html), at the
 # user's explicit request: "Flash/1000 Turbo/10000
-# Fast/100000 Medium/500000 Ultra/5000000" — directly sets the
+# Fast/100000 Medium/500000 Ultra/5000000", plus Megatron/20000000 —
+# directly sets the
 # search budget per attempt (`crossword_gen.try_fill`'s `deadline_checks`,
 # see its own docstring for where this parameter comes from), unrelated to
 # the grid size, unlike the default formula (width ×
@@ -359,6 +363,9 @@ BUDGET_MODES = {
     "fast": 100_000,
     "medium": 500_000,
     "ultra": 5_000_000,
+    # Like "ultra", only offered by the web UI on localhost
+    # (script.js's LOCALHOST_ONLY_MODES).
+    "megatron": 20_000_000,
 }
 
 # Optional "Theme" field on the generation form, at the user's explicit
@@ -448,6 +455,19 @@ WHOLE_THEME_REJECT_LENIENCY = 1.5
 # 0.9 temperature is also used for the first pass. An
 # indicative target, not a guarantee.
 THEME_MIN_KEYWORDS = 300
+
+# Minimum size of a compiled theme glossary (_build_theme_glossary): while
+# the glossary holds fewer words, the score threshold is lowered by
+# THEME_PRECISION_STEP and the whole search + whole-theme filter re-run,
+# down to a threshold of 0.
+THEME_MIN_GLOSSARY_WORDS = 1000
+THEME_PRECISION_STEP = 0.03
+
+
+def _lowered_theme_precision(precision: float) -> float:
+    """`precision` minus THEME_PRECISION_STEP, rounded to 4 decimals,
+    never below 0."""
+    return max(0.0, math.floor((precision - THEME_PRECISION_STEP) * 10000 + 0.5) / 10000)
 THEME_KEYWORD_LLM_MAX_LOOPS = 3
 THEME_KEYWORD_LLM_TEMPERATURE = 0.9
 
@@ -780,46 +800,23 @@ class GenerateRequest(BaseModel):
     height: int = Field(default=DEFAULT_HEIGHT, ge=5, le=30, description="Grid height (vertical)")
     difficulty: str = Field(default="easy", description="easy, medium or hard")
     seed: Optional[int] = None
-    # 1 by default (raised from 0, at the user's explicit request) —
-    # the statistical "seed" sampling (see crossword_gen.py's
-    # sample_letter_biases/generate_grid — formerly called "forced
-    # letters", renamed at the user's explicit request: "slots
-    # that initiate the first placements, or influence them
-    # once other letters already exist") used to be applied
-    # systematically at a fixed fraction (5%); it is now a free-form
-    # input field on the UI (an integer between 0 and 100, rather
-    # than a list of predefined percentages — at the user's explicit
-    # request, see frontend/static/index.html), converted to a
-    # fraction (`percent / 100`) right before calling generate_grid.
+    # Statistical "seed" letters (crossword_gen.py's sample_letter_biases,
+    # "Graines"): 0 by default and no longer exposed by the web UI, so
+    # every generation — Populate's included — runs without seeds unless
+    # an API caller asks for some; converted to a fraction (`percent /
+    # 100`) right before calling generate_grid.
     force_letters_percent: int = Field(
         default=0, ge=0, le=100,
         description="Percentage of seeds at the start of filling (integer, 0 to 100)",
     )
-    # 14% by default on the API side (the UI uses this same fixed
-    # value as its initial value, see frontend/static/index.html — replaces
-    # a formula that depended on the grid size, used
-    # before, at the user's explicit request) — replaces
-    # POST_PREFILL_BLACK_FRACTION (crossword_gen.py), previously a
-    # constant fixed at 10%, not adjustable from the UI. Applied to
-    # every palier that starts from a blank grid or a cleanup
-    # (`_build_retry_seed`) — never to a "reprise telle-quelle" (as-is
-    # resume) palier (`_pattern_continue`), which never calls
-    # make_pattern again and therefore can never add any black cell
-    # either way. Free-form input field from the UI (an integer between 0
-    # and 100), at the user's explicit request, rather than a
-    # list of predefined percentages. The percentage is computed on the
-    # number of white cells *before* this palier's pre-fill
-    # (`make_pattern`'s `initial_white_count`), not on what's left of it
-    # once pre-fill is finished — at the user's explicit
-    # request ("the black cells added during pre-fill
-    # count toward the black-fill target"): if
-    # pre-fill has already placed more cells than this percentage
-    # asks for, no further cell is added for this reason.
-    # Removed once (mistakenly, alongside the unrelated per-cycle
-    # single-cell lock), then restored — only that separate lock was ever
-    # meant to go, not this percentage mechanism (see CLAUDE.md).
+    # "Taux noir": 15% by default, the web UI's own initial value too
+    # (frontend/static/index.html). A share of the WHOLE grid (see
+    # crossword_gen.py's `black_enrichment_fraction`), applied to every
+    # palier that starts from a blank grid or a cleanup, never to a
+    # "reprise telle quelle" palier (`_pattern_continue`, which never
+    # calls make_pattern); pre-fill's black cells count toward it.
     black_enrichment_percent: int = Field(
-        default=17, ge=0, le=100,
+        default=15, ge=0, le=100,
         description=(
             "Percentage of white cells (before pre-fill) turned "
             "into black cells at every palier, pre-fill included (integer, 0 to 100)"
@@ -1213,7 +1210,7 @@ class InteractiveFinishRequest(BaseModel):
     grid: list[list[str]]
     definitions: list[dict] = []
     mode: str = "medium"
-    black_enrichment_percent: int = Field(default=17, ge=0, le=100)
+    black_enrichment_percent: int = Field(default=15, ge=0, le=100)
     force_letters_percent: int = Field(default=0, ge=0, le=100)
     difficulty: Optional[str] = None
     theme: Optional[str] = None
@@ -1538,7 +1535,7 @@ def _write_users_log(count, pseudos):
 
 def _write_theme_log(short_id, theme, description, words, language=None,
                      keyword_lists=None, searched_keywords=None, min_score=None,
-                     whole_theme_reject_threshold=None):
+                     whole_theme_reject_threshold=None, requested_min_score=None):
     """Writes `LOG_THEME/<timestamp>_<short_id>.log`, the filename prefixed
     with a full timestamp (`%Y%m%d-%H%M%S-%f`) like `LOG_LLM/`
     (`backend/clues.py`, `_write_call_log`) — at the user's explicit
@@ -1629,6 +1626,8 @@ def _write_theme_log(short_id, theme, description, words, language=None,
             fh.write(f"# theme (as typed): {theme}\n")
             if min_score is not None:
                 fh.write(f"# score threshold (theme_precision): {min_score}\n")
+            if requested_min_score is not None and requested_min_score != min_score:
+                fh.write(f"# requested score threshold: {requested_min_score}\n")
             if whole_theme_reject_threshold is not None:
                 fh.write(
                     f"# whole-theme reject threshold: {whole_theme_reject_threshold}\n"
@@ -2136,7 +2135,7 @@ async def dictionary_search(q: str, lang: str = "fr"):
     """Dictionary lookup for the interface's "Dictionnaire" panel, at the
     user's explicit request: given a word (accents and case ignored),
     lists every word sharing the same root drawn from
-    data/wordlist_<lang>_full.tsv, each with its real definitions from
+    data/wordlist_<lang>_freq.tsv, each with its real definitions from
     data/gloss_dictionary/<lang>_glosses.jsonl. See
     backend/dictionary_lookup.search — the per-language index is built
     once and then cached (the French wordlist runs to ~200k lines), hence
@@ -2270,7 +2269,7 @@ RANDOM_THEME_WORD_MAX_LEN = 10
 def _random_dictionary_word(language, min_len=RANDOM_THEME_WORD_MIN_LEN,
                              max_len=RANDOM_THEME_WORD_MAX_LEN):
     """One word drawn uniformly at random from data/wordlist_<language>_
-    full.tsv's own ACCENTUE column (its natural accented/inflected
+    freq.tsv's own ACCENTUE column (its natural accented/inflected
     spelling — see CLAUDE.md's data pipeline section), restricted to
     entries whose length in letters falls in [min_len, max_len].
     Reservoir sampling over the file — never loads the whole (up to
@@ -2979,27 +2978,30 @@ async def chat(req: ChatRequest):
 
 def _load_wordlist_raw_lines(language):
     """{MOT: raw TSV line, exactly as written in data/wordlist_<language>_
-    full.tsv} — used by _build_word_verification_table (column 2) to show
+    freq.tsv} — used by _build_word_verification_table (column 2) to show
     the file's real content verbatim, not a reconstruction from a few
     parsed fields. A MOT can legitimately repeat on disk (build_wordlist_
     freq.py only dedupes by keeping the highest-frequency occurrence in
     memory, never on disk) — the first line seen is kept, matching that
     same highest-frequency-first convention closely enough for a
-    diagnostic table (this file is not re-sorted here)."""
+    diagnostic table (this file is not re-sorted here). A word only in
+    the language's Scrabble wordlist (data/wordlist_<language>_scrabble.
+    tsv, merged into every grid's lexicon) gets that file's line."""
     wordlist_path = WORDLISTS.get(language)
     lines = {}
     if not wordlist_path:
         return lines
-    try:
-        with open(wordlist_path, encoding="utf-8") as f:
-            for line in f:
-                stripped = line.rstrip("\n")
-                if not stripped or stripped.startswith("#"):
-                    continue
-                mot = stripped.split("\t", 1)[0].upper()
-                lines.setdefault(mot, stripped)
-    except OSError:
-        pass
+    for path in (wordlist_path, scrabble_wordlist_path(language)):
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.rstrip("\n")
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    mot = stripped.split("\t", 1)[0].upper()
+                    lines.setdefault(mot, stripped)
+        except OSError:
+            pass
     return lines
 
 
@@ -3041,7 +3043,7 @@ def _build_word_verification_table(words, language, bilingual_language=None):
 
     Column 2 ("wordlist entry"): whether the word's bare, accent-stripped
     grid spelling (`w["answer"]`) really exists as a MOT entry in
-    data/wordlist_<language>_full.tsv — the exact same dictionary
+    data/wordlist_<language>_freq.tsv — the exact same dictionary
     crossword_gen.py's solver draws every candidate from — and, when it
     does, the *entire, verbatim TSV line* for that entry (MOT/ACCENTUE/
     FREQUENCE/CANONIQUE together), not just the word's own accented
@@ -3331,54 +3333,71 @@ async def _build_theme_glossary(theme, language, theme_precision, short_id,
         log_tag, len(searched_keywords), theme_precision,
     )
     theme_scored_words: list[tuple[str, float, str]] = []
-    try:
-        theme_scored_words = await asyncio.to_thread(
-            _compiled_theme_words_by_length, searched_keywords, language,
-            theme_precision,
-        )
-        logger.info(
-            "[%s] theme -> %d preselected words (before whole-theme filter)",
-            log_tag, len(theme_scored_words),
-        )
-    except (QdrantStoreError, EmbedderError) as exc:
-        logger.warning(
-            "[%s] theme pre-search unavailable (%s) — generating without a theme",
-            log_tag, exc,
-        )
-        theme_priority_words = None
     whole_theme_scores: dict[str, float] = {}
     whole_theme_reject_threshold = None
-    if theme_scored_words:
+    requested_precision = theme_precision
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise GenerationCancelled()
         try:
-            whole_theme_scores = await asyncio.to_thread(
-                _whole_theme_proximity_scores,
-                [w for w, _score, _kw in theme_scored_words],
-                theme, language,
+            theme_scored_words = await asyncio.to_thread(
+                _compiled_theme_words_by_length, searched_keywords, language,
+                theme_precision,
             )
-            whole_theme_reject_threshold = max(
-                0.0, 1 - (1 - theme_precision) * WHOLE_THEME_REJECT_LENIENCY,
-            )
-            theme_scored_words = [
-                (w, score, kw) for w, score, kw in theme_scored_words
-                if whole_theme_scores.get(w, 1.0) >= whole_theme_reject_threshold
-            ]
             logger.info(
-                "[%s] theme -> %d preselected words after whole-theme filter "
-                "(reject threshold=%.4f)",
-                log_tag, len(theme_scored_words), whole_theme_reject_threshold,
+                "[%s] theme -> %d preselected words (before whole-theme filter)",
+                log_tag, len(theme_scored_words),
             )
         except (QdrantStoreError, EmbedderError) as exc:
             logger.warning(
-                "[%s] whole-theme proximity scoring unavailable (%s) — LOG_THEME "
-                "column left blank, no whole-theme filtering applied", log_tag, exc,
+                "[%s] theme pre-search unavailable (%s) — generating without a theme",
+                log_tag, exc,
             )
-        theme_priority_words = [w for w, _score, _kw in theme_scored_words]
+            theme_scored_words = []
+            theme_priority_words = None
+            break
+        whole_theme_scores = {}
+        whole_theme_reject_threshold = None
+        if theme_scored_words:
+            try:
+                whole_theme_scores = await asyncio.to_thread(
+                    _whole_theme_proximity_scores,
+                    [w for w, _score, _kw in theme_scored_words],
+                    theme, language,
+                )
+                whole_theme_reject_threshold = max(
+                    0.0, 1 - (1 - theme_precision) * WHOLE_THEME_REJECT_LENIENCY,
+                )
+                theme_scored_words = [
+                    (w, score, kw) for w, score, kw in theme_scored_words
+                    if whole_theme_scores.get(w, 1.0) >= whole_theme_reject_threshold
+                ]
+                logger.info(
+                    "[%s] theme -> %d preselected words after whole-theme filter "
+                    "(reject threshold=%.4f)",
+                    log_tag, len(theme_scored_words), whole_theme_reject_threshold,
+                )
+            except (QdrantStoreError, EmbedderError) as exc:
+                logger.warning(
+                    "[%s] whole-theme proximity scoring unavailable (%s) — LOG_THEME "
+                    "column left blank, no whole-theme filtering applied", log_tag, exc,
+                )
+            theme_priority_words = [w for w, _score, _kw in theme_scored_words]
+        if len(theme_scored_words) >= THEME_MIN_GLOSSARY_WORDS or theme_precision <= 0.0:
+            break
+        theme_precision = _lowered_theme_precision(theme_precision)
+        logger.info(
+            "[%s] theme -> %d words < %d, score threshold lowered to %s",
+            log_tag, len(theme_scored_words), THEME_MIN_GLOSSARY_WORDS,
+            theme_precision,
+        )
     await asyncio.to_thread(
         _write_theme_log, log_tag, theme, theme_description,
         [(w, score, kw, whole_theme_scores.get(w)) for w, score, kw in theme_scored_words],
         language=language, keyword_lists=keyword_lists,
         searched_keywords=searched_keywords, min_score=theme_precision,
         whole_theme_reject_threshold=whole_theme_reject_threshold,
+        requested_min_score=requested_precision,
     )
     return theme_priority_words, theme_description
 
@@ -3399,6 +3418,32 @@ def _word_cells(words, answers):
         for w in words if w["answer"] in answers
         for dk in range(len(w["answer"]))
     })
+
+
+async def _scrabble_words(language, bilingual_language=None, difficulty=None):
+    """The grid's Scrabble word set (crossword_gen.py's `scrabble_words_
+    for_languages`: a frozenset, or a DualSet on a bilingual grid), read
+    from `data/wordlist_<lang>_scrabble.tsv` once per language and
+    process — at "easy" `difficulty`, only its words with a known
+    inflection, exactly as generate_grid merges it."""
+    return await asyncio.to_thread(
+        scrabble_words_for_languages, language,
+        bilingual_language if bilingual_language != language else None,
+        difficulty == "easy",
+    )
+
+
+def _annotate_scrabble_cells(examples, scrabble_words):
+    """Adds `scrabble_cells` to every preview example: the cells of each
+    fully lettered run of its `example_grid` spelling a word of the grid's
+    Scrabble dictionary (crossword_gen.py's `scrabble_word_cells`), shown
+    in dark cyan by the web UI."""
+    if not examples or not scrabble_words:
+        return
+    for ex in examples:
+        eg = ex.get("example_grid")
+        if eg:
+            ex["scrabble_cells"] = scrabble_word_cells(eg, scrabble_words)
 
 
 async def _await_grid_choice(job, choices, progress, cancel_event, short_id,
@@ -3586,6 +3631,10 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
     # object's lifetime — see _new_job's own "request" field.
     job["request"] = req.model_dump()
     task = GenerationTask(job_id=job_id, req=req, resume_state=resume_state)
+    # The grid's Scrabble word set (generate_grid merges the Scrabble
+    # wordlist into its lexicon by itself): the source of every preview's
+    # dark-cyan `scrabble_cells` (`_annotate_scrabble_cells`).
+    scrabble_words = await _scrabble_words(req.language, req.bilingual_language, req.difficulty)
 
     # Timestamps of generate_grid()'s two internal boundaries that
     # progress() below needs to split generation duration from
@@ -3653,6 +3702,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # navigable, l'affichage temps réelle ne doit pas se faire, jusqu'à
         # ce que l'utilisateur revienne au dernier état de l'historique."
         _apply_zone_revert(examples)
+        _annotate_scrabble_cells(examples, scrabble_words)
         job["live_preview"] = examples
         if examples:
             last_live_preview["examples"] = examples
@@ -3686,6 +3736,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # `example_grid` this job's own `examples_history` ever stores gets
         # the same cell-by-cell revert as the live-preview channel does.
         _apply_zone_revert(data.get("examples"))
+        _annotate_scrabble_cells(data.get("examples"), scrabble_words)
         if step == "minimizing" and last_live_preview["examples"]:
             # See `last_live_preview` above. Each tile's `previous` field is
             # a STOP_DUMP-only diagnostic, never shown, so it is dropped.
@@ -4496,6 +4547,13 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None)
         require_gloss=(difficulty == "easy"),
         exclude_proper_nouns=(difficulty == "easy"),
     )
+    # The Scrabble wordlist joins the lexicon — whole, or only its words
+    # with a known inflection at "easy" difficulty — exactly as
+    # generate_grid merges it.
+    await asyncio.to_thread(
+        merge_scrabble_lexicon, language, by_length, accents, _canon, frequencies,
+        difficulty == "easy",
+    )
     idx = build_index(by_length, frequencies)
     is_bilingual = bool(bilingual_language) and bilingual_language != language
     if not is_bilingual:
@@ -4506,6 +4564,10 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None)
         DIFFICULTY_PRESETS.get(difficulty),
         require_gloss=(difficulty == "easy"),
         exclude_proper_nouns=(difficulty == "easy"),
+    )
+    await asyncio.to_thread(
+        merge_scrabble_lexicon, bilingual_language, by_length_down, accents_down,
+        _canon_down, frequencies_down, difficulty == "easy",
     )
     idx_down = build_index(by_length_down, frequencies_down)
     return DualIndex(idx, idx_down), set(accents) | set(accents_down)
@@ -4593,14 +4655,16 @@ async def _run_interactive_job(job_id, req):
             for w in req.challenge_words
             if w and (grid_form := challenge_word_grid_form(w))
         )
+        scrabble_words = await _scrabble_words(req.language, bilingual_language, req.difficulty)
         placed = await asyncio.to_thread(
             interactive_place_word, grid, rows, cols, index, rng, priority_words,
-            challenge_words,
+            challenge_words, None, scrabble_words,
         )
 
         INTERACTIVE_SESSIONS[job_id] = {
             "index": index,
             "priority_words": priority_words,
+            "scrabble_words": scrabble_words,
             "rng": rng,
             # The original seed this session started from — kept around
             # purely so an autosave (POST /api/interactive/save_work) can
@@ -4793,6 +4857,9 @@ async def _run_recompute_job(job_id, grid_id):
                 # grid — see grid_store), so there's no theme word to
                 # report here.
                 "theme_cells": [],
+                "scrabble_cells": scrabble_word_cells(
+                    result["solution"], await _scrabble_words(language, bilingual_language, difficulty),
+                ),
                 "process_number": result.get("winning_process_number"),
                 "is_best": True,
             }],
@@ -4914,7 +4981,7 @@ def _validate_generate_request(req):
         )
     # A language can be wired up (WORDLISTS entry, UI option, i18n block)
     # before its data pipeline has finished producing data/wordlist_<lang>_
-    # full.tsv — reject cleanly here rather than let the job fail deep
+    # freq.tsv — reject cleanly here rather than let the job fail deep
     # inside load_wordlist() with a bare FileNotFoundError.
     if not WORDLISTS[req.language].exists():
         raise HTTPException(
@@ -5049,7 +5116,7 @@ async def interactive_step(req: InteractiveStepRequest):
         interactive_place_word,
         [list(row) for row in req.grid], rows, cols,
         sess["index"], sess["rng"], sess["priority_words"],
-        challenge_words, req.last_placed_cells,
+        challenge_words, req.last_placed_cells, sess.get("scrabble_words"),
     )
     if placed["impossible"]:
         return {"width": cols, "height": rows, "grid": req.grid,
@@ -5657,6 +5724,7 @@ async def _run_interactive_resume_job(job_id, record):
         INTERACTIVE_SESSIONS[job_id] = {
             "index": index,
             "priority_words": priority_words,
+            "scrabble_words": await _scrabble_words(language, bilingual_language, difficulty),
             "rng": rng,
             "seed": seed,
             # The GRID_WORK file this session started from — read once by

@@ -1032,6 +1032,10 @@ English (see `project-best-practices`).
   5-entry backlog once `"minimizing"` hit, the fixed cursor caught up to
   0 immediately at that same poll.
 
+- The "Graines" field (`#force-letters`) is no longer part of the
+  generation form (its i18n key `forceLettersLabel` is gone too); the
+  entries below describing it are history of a removed control. The "Taux
+  noir" field's initial value is 15.
 - "Lettres forcées" relabeled "Graines" (French UI), at the user's
   explicit request, with matching translations in the other 4 languages
   (`forceLettersLabel` in `i18n.js`: en "Seeds", de "Saatbuchstaben", es
@@ -2383,7 +2387,7 @@ English (see `project-best-practices`).
 
 - **Localhost-only generation options + dimension snap-back**
   (`frontend/static/script.js`, `clampDimensionInputs` /
-  `restrictUltraModeToLocalhost` / `isLocalhostOrigin`), at the user's
+  `restrictHeavyModesToLocalhost` / `isLocalhostOrigin`), at the user's
   explicit request across three exchanges. **No CSS added by any of it**
   — the controls look and behave exactly as before, only their numeric
   bounds / the Ultra option's enabled state change:
@@ -2395,13 +2399,15 @@ English (see `project-best-practices`).
     inputs' own `max` attribute is lowered from 30 to 20 so native
     validation blocks a larger value on submit too. On `localhost` the
     `max="30"` markup is untouched.
-  - The **Ultra** `<option>` on `#mode` is `disabled` off localhost. **A
+  - The **Ultra** and **Megatron** `<option>`s on `#mode` are `disabled`
+    off localhost (`LOCALHOST_ONLY_MODES`,
+    `restrictHeavyModesToLocalhost`). **A
     disabled `<option>` is greyed out and unselectable by the browser's
     own native rendering**, which is exactly what "en grisé non
     cliquable" asks for; a custom rule would only risk diverging from the
     platform's own disabled-control convention. A leftover `"ultra"`
-    value falls back to `"medium"`.
-  Frontend-only: `backend/app.py` still accepts `mode="ultra"` and
+    or `"megatron"` value falls back to `"medium"`.
+  Frontend-only: `backend/app.py` still accepts `mode="ultra"`/`"megatron"` and
   `width`/`height` from 5 to 30 from a direct API call — the restrictions
   are the web UI's alone.
 
@@ -2658,6 +2664,15 @@ English (see `project-best-practices`).
   (`renderLibraryList()`), deliberately *not* resetting `libraryCurrentPage`
   to 1 the way changing a filter does — a plain refresh of what's already
   on screen, not a reset to the first page.
+
+- A `.scrabble` highlight (attempt previews) and `.interactive-scrabble`
+  (Interactive grid) colour the letters of a word of the language's
+  Scrabble dictionary dark cyan (`--scrabble-fg`, `#008b8b`, weight 700 —
+  a text colour like `.theme`/`.challenge`). Both rules are declared
+  BEFORE their theme/challenge counterparts at equal specificity, so a
+  cell shared with a theme (magenta) or "Mots Défi" (green) word keeps
+  that stronger colour. Previews read `scrabble_cells`; Interactive mode
+  marks the word "Suivant" placed with `placed.from_scrabble`.
 
 - A `.theme` highlight marks, in the attempt-preview grids, the cells of
   every word that comes from the themed-generation glossary (at the user's

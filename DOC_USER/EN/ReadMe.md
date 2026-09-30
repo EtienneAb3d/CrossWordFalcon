@@ -123,23 +123,23 @@ full again whenever a new generation or an Interactive session starts.
 - **Difficulté / Difficulty** (`#difficulty`) — Easy, Medium, or Hard.
   Easy and Medium use a smaller, more common vocabulary and never place a
   word that looks like it could be a proper noun (a person's or place's
-  name); Hard can use the entire dictionary, including proper nouns.
+  name); Hard can use the entire dictionary, including proper nouns. The
+  language's official Scrabble word list is available in full at Medium
+  and Hard; at Easy, only its words with a known inflection (listed in the
+  project's table of inflected forms) are used (`backend/crossword_gen.py`,
+  `merge_scrabble_lexicon`).
 - **Taux noir / Black rate** (`#black-enrichment`) — roughly how many
   black cells the finished grid aims for, as a percentage of the grid's
-  cells (0-100%, 17% by default). A higher value gives shorter, easier
+  cells (0-100%, 15% by default). A higher value gives shorter, easier
   words at the cost of a denser-looking grid.
-- **Graines / Seeds** (`#force-letters`) — a small percentage (0-100%,
-  0% by default) of cells the generator seeds with a statistically
-  likely letter before it starts searching for real words, nudging the
-  search rather than fixing an actual answer in place.
 - **Mode** (`#mode`) — how much computing effort one attempt is allowed
   before giving up and trying again: Flash (fastest, least thorough),
-  Turbo, Rapide/Fast, Moyen/Medium (the default), Ultra (slowest, most
-  thorough). A harder grid (a larger size, a stricter black rate) may
-  need a slower mode to succeed at all. **Ultra** is only selectable when
-  the page is opened on the local machine; from another machine on the
-  network its option is greyed out and unavailable
-  (`frontend/static/script.js`, `restrictUltraModeToLocalhost`).
+  Turbo, Rapide/Fast, Moyen/Medium (the default), Ultra, Megatron
+  (slowest, most thorough — four times Ultra's effort). A harder grid (a larger size, a stricter black rate) may
+  need a slower mode to succeed at all. **Ultra** and **Megatron** are only
+  selectable when the page is opened on the local machine; from another
+  machine on the network their options are greyed out and unavailable
+  (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`).
   **Interactif / Interactive** is a different kind of mode, listed above
   Flash: instead of the computer filling the whole grid on its own, it
   hands you a black-cell pattern with one word already placed and lets
@@ -149,7 +149,9 @@ full again whenever a new generation or an Interactive session starts.
   glossary, a number from 0 to 1 (0.78 by default; use a **point**, not a
   comma, for the decimal — a typed comma is converted automatically).
   Higher means a tighter, more on-topic glossary with fewer words; lower
-  means a broader one. It only affects grid generation when the
+  means a broader one. A generation's glossary holds at least 1000 words:
+  while it has fewer, the cutoff is lowered by 0.03 and the glossary
+  rebuilt (`backend/app.py`, `_build_theme_glossary`). It only affects grid generation when the
   **Thématique** field is filled in, and it also sets the closeness cutoff
   for the Dictionary panel's **Thématique** button (below).
 - **Thématique / Theme** (`#theme-field`) — an optional list of words, next
@@ -440,7 +442,9 @@ those was showing.
   word — "give 5 crossword definition suggestions, then define every
   possible meaning of the <language> word: <word>" — written in the
   selected language (both language names, joined by "/", for a combined
-  option). Hovering a button names its service. With an empty field, the
+  option). While the generation form's **Thématique** list holds words,
+  the request ends with a thematic hint listing them ("Thematic hint:
+  <words>"). Hovering a button names its service. With an empty field, the
   click just puts the cursor back in it. Some services ask you to sign in
   first; the request is only sent from your own browser, never by the app.
 - **✕** (`#dictionary-close-btn`) closes the panel.
@@ -643,6 +647,10 @@ glossary is shown in bold magenta letters; a word coming from the "Mots
 Défi (personnalisation)" list is shown in bold green letters instead —
 the same green already used for a challenge word on the Interactive
 mode grid (see "Mots Défi (personnalisation) / Challenge Words" below).
+Any other complete word that belongs to the language's official Scrabble
+word list is shown in bold dark-cyan letters; magenta and green win over
+dark cyan on a cell shared with a crossing theme or challenge word
+(`frontend/static/script.js`, `renderAttemptPreview`).
 A green outline marks whichever preview is currently considered the
 best candidate. While a preview grid is still actively being searched
 (not yet a recorded step of the back/forward history below, just the
@@ -1124,8 +1132,9 @@ real letter. Both update after every edit.
   without being added to the list is still flagged the usual way. On the
   grid itself, a word that
   "Suivant" drew automatically from this list is shown in bold green
-  letters, and one drawn from the theme glossary instead in bold magenta
-  letters — the same colors as the attempt-preview grids shown while an
+  letters, one drawn from the theme glossary instead in bold magenta
+  letters, and an ordinary dictionary word that belongs to the language's
+  Scrabble word list in bold dark-cyan letters — the same colors as the attempt-preview grids shown while an
   automatic generation runs (see "While a grid is generating" above); a
   word typed in by hand, or clicked directly from a word list, is never
   colored this way. The list is also saved with the
@@ -1240,7 +1249,7 @@ real letter. Both update after every edit.
   it stays available in your "Créations" list. The grid size and the
   language(s) stay those of the session; every other setting is read from
   the generation form at the top of the page as it stands at the moment
-  you click — Difficulté, Taux noir, Graines, Mode (an "Interactif" Mode
+  you click — Difficulté, Taux noir, Mode (an "Interactif" Mode
   counts as "Moyen"), Thématique, Précision thématique and the "Mots Défi"
   list — so you can change any of them before finishing. The session's
   theme glossary is reused only while the form still asks for the same
@@ -1492,7 +1501,14 @@ attempts from converging on the exact same choice every time, without
 letting a rare word slip in ahead of a well-scored one. Interactive
 mode's **Suivant / Next** draws its word from that very same window, so
 undoing a step and clicking it again genuinely offers the slot's other
-candidates instead of returning the same word every time. Separately
+candidates instead of returning the same word every time. On top of that
+ranking, three families of words go first, in this order: the "Challenge
+Words", then the theme glossary, then the words found in the language's
+official Scrabble word list — only after all of them come the remaining
+dictionary words. The difficulty trims the everyday, corpus-based
+vocabulary (keeping its most frequent words); the Scrabble list is kept
+whole at Medium and Hard, and limited to its words with a known
+inflection at Easy. Separately
 again, before any of this even runs, any slot whose already-known letters
 leave exactly one real dictionary word possible has that word locked in
 directly, as a plain fact rather than a mere statistical guess. This

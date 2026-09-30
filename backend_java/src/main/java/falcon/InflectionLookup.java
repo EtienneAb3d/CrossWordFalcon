@@ -58,6 +58,7 @@ public final class InflectionLookup {
                 }
                 String form = Json.str(rec, "form", null);
                 if (form == null || form.isEmpty()) continue;
+                form = Py.lookupKey(form);
                 List<Analysis> out = new ArrayList<>();
                 for (Object a : Json.listOrEmpty(rec.get("analyses"))) {
                     String pos = Json.str(a, "pos", null);
@@ -67,7 +68,7 @@ public final class InflectionLookup {
                     if (pos != null && !pos.isEmpty()) bits.add(POS_LABEL.getOrDefault(pos, pos));
                     if (tags != null && !tags.isEmpty()) bits.add(tags);
                     String text = String.join(", ", bits);
-                    if (lemma != null && !lemma.isEmpty() && !lemma.toLowerCase(Locale.ROOT).equals(form)) {
+                    if (lemma != null && !lemma.isEmpty() && !Py.lookupKey(lemma).equals(form)) {
                         text += " (of \"" + lemma + "\")";
                     }
                     Analysis pair = new Analysis(pos, text);
@@ -83,6 +84,6 @@ public final class InflectionLookup {
 
     /** Analyses of the exact {@code word}, or an empty list. Never throws. */
     public static List<Analysis> describeForm(String word, String language) {
-        return load(language).getOrDefault(word.toLowerCase(Locale.ROOT), List.of());
+        return load(language).getOrDefault(Py.lookupKey(word), List.of());
     }
 }

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """
-Populate the Qdrant "words" collection with an embedding for every word in
-`data/wordlist_<lang>_full.tsv`.
+Populate the Qdrant "words" collection with an embedding for every word of
+a language's lexicon: `data/wordlist_<lang>_freq.tsv`, then every word of
+`data/wordlist_<lang>_scrabble.tsv` it lacks (the Scrabble dictionary is
+merged whole into every grid's lexicon, see backend/crossword_gen.py's
+`merge_scrabble_lexicon`).
 
-`WordEmbeddingIndexer` reads the TSV (columns
-`MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`), embeds the natural
+`WordEmbeddingIndexer` reads the TSVs (columns
+`MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`, and
+`MOT<TAB>ACCENTUE<TAB>CANONIQUE` for the Scrabble one), embeds the natural
 accented spelling of each word via `backend/embedder.py`'s `Embedder`
 (batched), and upserts one point per word into Qdrant via
 `backend/qdrant_store.py`'s `QdrantStore` — one tenant per language
@@ -23,7 +27,13 @@ CLI (run from the repo root):
   python -m data_builder.qdrant_populate --all
   python -m data_builder.qdrant_populate fr --limit 5000 --recreate
   python -m data_builder.qdrant_populate de --batch 128 --offset 800000
+  python -m data_builder.qdrant_populate fr --source scrabble
   python -m data_builder.qdrant_populate --init-only
+
+`--source` picks the words sent: `all` (default: the freq wordlist, then
+the Scrabble words it lacks), `freq` or `scrabble` (only the Scrabble words
+the freq wordlist lacks — adds them without re-embedding the rest).
+`--offset` counts words of that stream.
 """
 import argparse
 import pathlib
@@ -39,11 +49,13 @@ from backend.qdrant_store import QdrantStore, QdrantStoreError  # noqa: E402
 
 LANGUAGES = ("fr", "en", "de", "es", "it", "pt")
 DATA_DIR = _REPO_ROOT / "data"
-WORDLIST_TEMPLATE = "wordlist_{lang}_full.tsv"
+WORDLIST_TEMPLATE = "wordlist_{lang}_freq.tsv"
+SCRABBLE_TEMPLATE = "wordlist_{lang}_scrabble.tsv"
+SOURCES = ("all", "freq", "scrabble")
 
 
 class WordEmbeddingIndexer:
-    """Reads a `wordlist_<lang>_full.tsv` and feeds every word into the
+    """Reads a `wordlist_<lang>_freq.tsv` and feeds every word into the
     Qdrant "words" collection as an embedded, language-tenanted point."""
 
     def __init__(self, store=None, embedder=None, batch_size=64,
@@ -68,22 +80,14 @@ class WordEmbeddingIndexer:
     def wordlist_path(self, lang):
         return self.data_dir / WORDLIST_TEMPLATE.format(lang=lang)
 
-    def iter_rows(self, lang, limit=None, offset=0):
-        """Yield `(word, accented, frequency, canonical)` per line.
-        `frequency` is a float or None; `canonical` is a string (possibly
-        empty, possibly ";"-separated)."""
-        path = self.wordlist_path(lang)
-        if not path.exists():
-            raise FileNotFoundError(path)
-        yielded = 0
+    def scrabble_path(self, lang):
+        return self.data_dir / SCRABBLE_TEMPLATE.format(lang=lang)
+
+    @staticmethod
+    def _freq_rows(path):
         with path.open(encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh):
-                if lineno < offset:
-                    continue
-                line = line.rstrip("\n")
-                if not line:
-                    continue
-                parts = line.split("\t")
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
                 word = parts[0].strip()
                 if not word:
                     continue
@@ -97,13 +101,52 @@ class WordEmbeddingIndexer:
                         freq = None
                 canonical = parts[3].strip() if len(parts) > 3 else ""
                 yield (word, accented, freq, canonical)
-                yielded += 1
-                if limit is not None and yielded >= limit:
-                    return
+
+    @staticmethod
+    def _scrabble_rows(path):
+        with path.open(encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                word = parts[0].strip()
+                if not word:
+                    continue
+                accented = (parts[1].strip()
+                            if len(parts) > 1 and parts[1].strip() else word)
+                canonical = parts[2].strip() if len(parts) > 2 else ""
+                yield (word, accented, None, canonical)
+
+    def iter_rows(self, lang, limit=None, offset=0, source="all"):
+        """Yield `(word, accented, frequency, canonical)` per word of
+        `source` (see the module docstring), skipping the first `offset`.
+        `frequency` is a float or None (always None for a Scrabble-only
+        word); `canonical` is a string (possibly empty, possibly
+        ";"-separated)."""
+        path = self.wordlist_path(lang)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        scrabble = self.scrabble_path(lang)
+
+        def rows():
+            if source in ("all", "freq"):
+                yield from self._freq_rows(path)
+            if source in ("all", "scrabble") and scrabble.exists():
+                known = {row[0] for row in self._freq_rows(path)}
+                for row in self._scrabble_rows(scrabble):
+                    if row[0] not in known:
+                        yield row
+
+        yielded = 0
+        for n, row in enumerate(rows()):
+            if n < offset:
+                continue
+            yield row
+            yielded += 1
+            if limit is not None and yielded >= limit:
+                return
 
     # -- indexing ------------------------------------------------
     def index_language(self, lang, limit=None, offset=0, recreate=False,
-                       log_every=5000):
+                       log_every=5000, source="all"):
         path = self.wordlist_path(lang)
         if not path.exists():
             print(f"[{lang}] SKIP — {path.name} not found", flush=True)
@@ -114,7 +157,7 @@ class WordEmbeddingIndexer:
             print(f"[{lang}] clearing existing tenant...", flush=True)
             self.store.delete_lang(lang)
 
-        rows = self.iter_rows(lang, limit=limit, offset=offset)
+        rows = self.iter_rows(lang, limit=limit, offset=offset, source=source)
         start = time.perf_counter()
         last_logged = [0]
 
@@ -158,7 +201,10 @@ def main(argv=None):
     parser.add_argument("--limit", type=int,
                         help="stop after this many words per language (testing)")
     parser.add_argument("--offset", type=int, default=0,
-                        help="skip the first N lines (resume an interrupted run)")
+                        help="skip the first N words of the stream (resume an interrupted run)")
+    parser.add_argument("--source", choices=SOURCES, default="all",
+                        help="words to send: all (default), freq, or scrabble "
+                             "(only the Scrabble words the freq wordlist lacks)")
     parser.add_argument("--batch", type=int, default=64,
                         help="embedding / upsert batch size (default 64)")
     parser.add_argument("--recreate", action="store_true",
@@ -198,7 +244,7 @@ def main(argv=None):
             for lang in langs:
                 grand_total += indexer.index_language(
                     lang, limit=args.limit, offset=args.offset,
-                    recreate=args.recreate)
+                    recreate=args.recreate, source=args.source)
             print(f"\nTotal: {grand_total} words indexed across "
                   f"{len(langs)} language(s).", flush=True)
     except (EmbedderError, QdrantStoreError) as exc:

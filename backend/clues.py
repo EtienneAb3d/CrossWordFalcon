@@ -722,13 +722,14 @@ def _strip_reasoning(content):
 
 
 def _normalize(word):
-    """Lowercased, accent-stripped form, used to match a word the model
-    echoed back without its accent against the accented form we sent it."""
+    """Lowercased, accent-stripped form with ligatures folded ("Cœur" ->
+    "coeur"), used to match a word the model echoed back without its
+    accent (or with a ligature) against the form we sent it."""
     stripped = "".join(
         c for c in unicodedata.normalize("NFKD", word)
         if not unicodedata.combining(c)
     )
-    return stripped.lower()
+    return stripped.lower().replace("œ", "oe").replace("æ", "ae")
 
 # Part-of-speech tags Wiktionary/Kaikki uses for a noun, common or proper.
 # A gloss sense with one of these is only sent to the model as grounding

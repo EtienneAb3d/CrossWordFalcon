@@ -11,7 +11,7 @@ in the project-best-practices SKILL for why this exists.
 Indexed once per language, not once per request: a single streaming pass
 over the corpus (a few million lines) tokenizes every line and checks
 each token against the language's *entire* wordlist (data/wordlist_<lang>
-_full.tsv, ~35-45k words) — checking membership in a large target set
+_freq.tsv, ~35-45k words) — checking membership in a large target set
 costs the same per line as checking a small one (both are O(1) hash
 lookups per token), so indexing the whole lexicon up front is barely
 slower than indexing just one grid's ~30-50 words would have been, and
@@ -40,6 +40,17 @@ RESERVOIR_SIZE = 20
 _index_cache = {}  # language -> {word_lower: [sentence, ...]}
 
 
+# Lookup key: lowercase, ligatures folded ("Cœur" -> "coeur") — the
+# dictionaries are written with folded ligatures (data_builder/
+# build_wordlist_freq.py's `fold_ligatures`), so a query spelled with one
+# still finds its entry.
+_LIGATURE_KEY = str.maketrans({"œ": "oe", "æ": "ae"})
+
+
+def _key(word):
+    return word.lower().translate(_LIGATURE_KEY)
+
+
 def _load_wordlist_words(language):
     """The wordlist's ACCENTED column (2nd of 4 — build_wordlist_freq.py's
     natural, accented/inflected spelling), not its bare MOT column (1st —
@@ -54,16 +65,21 @@ def _load_wordlist_words(language):
     because the user noticed a specific word's ("élu") missing example-
     sentence section in a real failure log despite the corpus visibly
     containing it — the same class of silent gap as the CORPUS_DIR
-    mix-up documented in CLAUDE.md's history for this file."""
-    path = DATA_DIR / f"wordlist_{language}_full.tsv"
+    mix-up documented in CLAUDE.md's history for this file. The Scrabble
+    wordlist's own ACCENTED column (data/wordlist_<lang>_scrabble.tsv,
+    merged into every grid's lexicon) is read too. Keys are `_key`s."""
     words = set()
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                accented = parts[1].strip()
-                if accented:
-                    words.add(accented.lower())
+    for name in (f"wordlist_{language}_freq.tsv", f"wordlist_{language}_scrabble.tsv"):
+        path = DATA_DIR / name
+        if not path.exists():
+            continue
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    accented = parts[1].strip()
+                    if accented:
+                        words.add(_key(accented))
     return words
 
 
@@ -81,7 +97,7 @@ def _build_index(language):
             if not line:
                 continue
             for token in _WORD_RE.findall(line):
-                w = token.lower()
+                w = _key(token)
                 if w not in targets:
                     continue
                 seen_counts[w] = seen_counts.get(w, 0) + 1
@@ -113,7 +129,7 @@ def find_examples_for_words(words, language, limit=DEFAULT_LIMIT):
     index = _get_index(language)
     result = {}
     for w in words:
-        reservoir = index.get(w.lower())
+        reservoir = index.get(_key(w))
         if reservoir:
             result[w] = random.sample(reservoir, min(limit, len(reservoir)))
     return result

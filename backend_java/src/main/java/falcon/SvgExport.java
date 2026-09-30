@@ -72,12 +72,12 @@ public final class SvgExport {
     private static final Map<String, String> MODE_LABEL = Map.of(
             "fr", "Mode", "en", "Mode", "de", "Modus", "es", "Modo", "it", "Modalità", "pt", "Modo");
     private static final Map<String, Map<String, String>> MODE_NAMES = Map.of(
-            "fr", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rapide", "medium", "Moyen", "ultra", "Ultra"),
-            "en", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Fast", "medium", "Medium", "ultra", "Ultra"),
-            "de", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Schnell", "medium", "Mittel", "ultra", "Ultra"),
-            "es", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rápido", "medium", "Medio", "ultra", "Ultra"),
-            "it", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Veloce", "medium", "Medio", "ultra", "Ultra"),
-            "pt", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rápido", "medium", "Médio", "ultra", "Ultra"));
+            "fr", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rapide", "medium", "Moyen", "ultra", "Ultra", "megatron", "Megatron"),
+            "en", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Fast", "medium", "Medium", "ultra", "Ultra", "megatron", "Megatron"),
+            "de", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Schnell", "medium", "Mittel", "ultra", "Ultra", "megatron", "Megatron"),
+            "es", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rápido", "medium", "Medio", "ultra", "Ultra", "megatron", "Megatron"),
+            "it", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Veloce", "medium", "Medio", "ultra", "Ultra", "megatron", "Megatron"),
+            "pt", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rápido", "medium", "Médio", "ultra", "Ultra", "megatron", "Megatron"));
     private static final Map<String, String[]> DURATION_LABELS = Map.of(
             "fr", new String[]{"Grille générée en", "Optimisation en", "Définitions générées en"},
             "en", new String[]{"Grid generated in", "Optimized in", "Definitions generated in"},

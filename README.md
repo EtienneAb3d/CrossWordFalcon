@@ -27,7 +27,13 @@ From a terminal, at the project root:
 ./Install.sh
 ```
 
-This script prepares everything the app needs to run.
+This script prepares everything the app needs to run. Every dictionary
+the app uses already ships with the project; rebuilding them all from
+their original sources is optional and takes several hours per language:
+
+```bash
+data_builder/build_all.sh
+```
 
 ## Generating clues
 
@@ -172,7 +178,13 @@ On the page:
    generated; the solver will even try to reshape the black-cell pattern
    itself to make room for one of these words (or a theme word, until 5
    theme words are placed) when no slot of the right size already exists,
-   and undoes that change whenever the word doesn't work out. A word you list this way never
+   and undoes that change whenever the word doesn't work out. After those
+   two lists, the generator prefers words found in the language's official
+   Scrabble word list (shipped in `data/scrabble/`), shown in dark cyan in
+   the preview grids and in Interactive mode. The Scrabble list is
+   available in full at Medium and Hard, on top of the everyday vocabulary
+   the chosen difficulty keeps; at Easy, only its words whose inflected
+   forms are known are used. A word you list this way never
    shows up in the Library's own grid listing, since it's meant to stay a
    hidden answer to a spot you chose yourself.
 3. Click **"Generate grid"** (the button's own label follows your chosen
@@ -374,7 +386,8 @@ looking words up in the chosen language:
 - Five buttons with the logos of **Perplexity, ChatGPT, Claude, Mistral
   and Euria** open that assistant in a new tab, already asked to
   suggest crossword definitions for the word you typed and to explain
-  all of its meanings.
+  all of its meanings. If the **Thématique** field of the creation form
+  holds words, they are added to the request as a thematic hint.
 
 If you're playing a bilingual grid (or you've picked two different
 languages in the generation form), the Dictionary's own language selector

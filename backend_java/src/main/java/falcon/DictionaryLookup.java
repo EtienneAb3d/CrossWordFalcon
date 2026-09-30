@@ -53,7 +53,7 @@ public final class DictionaryLookup {
     }
 
     private static Optional<LangIndex> build(String language) {
-        Path path = WORDLIST_DIR.resolve("wordlist_" + language + "_full.tsv");
+        Path path = WORDLIST_DIR.resolve("wordlist_" + language + "_freq.tsv");
         if (!Files.exists(path)) return Optional.empty();
         LangIndex idx = new LangIndex();
         try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {

@@ -243,7 +243,7 @@ project's engineering language.
 16. **`DOC_ALGO/FR/ReadMe.md` must always be tracked in git — never
     gitignored.** Found live: `/DOC_ALGO/` had been listed in `.gitignore`
     (alongside genuinely generated/cache directories like `CORPUS/`,
-    `DICS/`, `GRID_SVG/`) even though this specific file is a hand-
+    `data/wiktionary/`, `GRID_SVG/`) even though this specific file is a hand-
     maintained reference doc, updated on the same footing as `CLAUDE.md`/
     `README.md` (see permanent rule 11) — every edit to it was silently
     invisible to `git status`/`git diff`, so a real update could easily
@@ -457,7 +457,7 @@ project's engineering language.
   whatever's left, adding new black cells/words wherever still needed.
   `POST /api/interactive/finish` (matching `frontend/server.py` proxy
   route per rule 15) keeps the session's grid size and language(s) and
-  takes every other setting (mode, Taux noir, Graines, difficulty,
+  takes every other setting (mode, Taux noir, difficulty,
   Thématique, Précision thématique, "Mots Défi") from the generation
   form's current values — the player may have changed them since the
   session started. It reuses the interactive session's own already-
@@ -622,7 +622,7 @@ project's engineering language.
     only set `QDRANT_ON_DISK=1` on SSD storage). Deterministic point ids
     (`uuid5("<lang>:<word>")`) make the populator idempotent/resumable.
   - `data_builder/qdrant_populate.py` (`WordEmbeddingIndexer`) fills the
-    collection from `data/wordlist_<lang>_full.tsv` — embeds, via
+    collection from `data/wordlist_<lang>_freq.tsv` — embeds, via
     `Embedder` (batched), the compiled text `backend/qdrant_store.py`'s
     `_compose_embed_text` builds for each word (its accented/inflected
     spelling, bare uppercase MOT form, and canonical form(s), space-
@@ -789,7 +789,7 @@ project's engineering language.
 ### Data & git hygiene
 
 - Gitignored, generated/regenerable directories that must never be
-  committed directly: `CORPUS/` (raw per-source sentence cache), `DICS/`
+  committed directly: `CORPUS/` (raw per-source sentence cache), `data/wiktionary/`
   (raw Wiktionary/Kaikki dumps), `GRID_SVG/`, `GRID_PNG/`, `LOG_LLM/`,
   `LOG_CHAT/`, `LOG_USERS/` (one daily `LOG_USERS/<YYYY-MM-DD>.log` per
   day: one line — `date time | count | active pseudo list` — appended by
@@ -826,7 +826,7 @@ project's engineering language.
   100MB hard limit and its 50MB soft warning. Same "small + load-bearing,
   ship it, don't make every deploy re-run a multi-MB-download build" call
   as the gloss dictionary; no unpack step, so `Install.sh` needs nothing
-  for it. Its own raw source dumps live in `DICS/` (gitignored) like the
+  for it. Its own raw source dumps live in `data/wiktionary/` (gitignored) like the
   gloss dumps.
 - `build_sentence_corpus.py` writes TWO files per language, not one, at the
   user's explicit request once it was noticed that capping the corpus for
@@ -888,7 +888,7 @@ project's engineering language.
   multi-gigabyte file into memory at once) without re-running the download/
   filter pipeline. Each source's own raw sentences are cached under
   `CORPUS/` so a reprocessing pass doesn't re-download from opus.nlpl.eu.
-- `build_wordlist_freq.py` writes `data/wordlist_<lang>_full.tsv` as
+- `build_wordlist_freq.py` writes `data/wordlist_<lang>_freq.tsv` as
   `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE` — the bare accent-stripped
   uppercase grid form, its natural accented/inflected spelling, a blended
   frequency score, and every candidate canonical form/lemma
@@ -897,7 +897,8 @@ project's engineering language.
   `œ`/`Œ`/`æ`/`Æ`) into its two separate ASCII letters before MOT is
   derived (`œ`→`oe`, `æ`→`ae` — "sœur" -> `SOEUR`, never `SŒUR`), so MOT
   always stays a plain run of A-Z letters typable on a simple keyboard;
-  `ACCENTUE`/`CANONIQUE` keep the natural ligature spelling.
+  `ACCENTUE`/`CANONIQUE` fold ligatures too — see the ligature bullet
+  below.
   `backend/crossword_gen.py`'s `challenge_word_grid_form` and
   `backend/dictionary_lookup.py`'s `_norm` apply the same fold before
   deriving their own grid/search-key forms, for the same reason. Minimum word length is 2 (a
@@ -918,15 +919,15 @@ project's engineering language.
   gives English glosses for every language) — filters it down to the lemmas
   `CANONIQUE` actually needs, and writes
   `data/gloss_dictionary/<lang>_glosses.jsonl`. Raw dumps are cached under
-  `DICS/` so a later rebuild re-filters instead of re-downloading several
+  `data/wiktionary/` so a later rebuild re-filters instead of re-downloading several
   gigabytes per language.
 - `build_inflections.py` downloads the **English-Wiktionary** Kaikki dump
   per language (`kaikki.org-dictionary-<Name>.jsonl.gz`, ~54-96 MB gzip,
-  cached in `DICS/` as `<Name>-en.jsonl.gz`) — the English edition, not
+  cached in `data/wiktionary/` as `<Name>-en.jsonl.gz`) — the English edition, not
   the own-language one `build_gloss_dictionary.py` uses, because only it
   tags inflection with a consistent structured vocabulary — extracts every
   `form-of` sense's grammatical tags, filters to the surface forms in
-  `data/wordlist_<lang>_full.tsv`, and writes
+  `data/wordlist_<lang>_freq.tsv`, and writes
   `data/inflection/<lang>.jsonl` (committed, plain uncompressed). Read at runtime by
   `backend/inflection_lookup.py` for the clue prompt's `A=` line. It reads
   the wordlist, so re-run it after a wordlist rebuild.
@@ -942,7 +943,7 @@ project's engineering language.
   steps 1-5 are the real deliverables). It
   `cd`s to the repo root, points `PATH`/`LD_LIBRARY_PATH` at this host's
   rootless `~/.local` hunspell build, and is safe to re-run (every stage
-  reuses its own on-disk cache: `CORPUS/`, `DICS/`, `data/hunspell_cache/`;
+  reuses its own on-disk cache: `CORPUS/`, `data/wiktionary/`, `data/hunspell_cache/`;
   step 6's `--recreate` deliberately re-embeds from the just-rebuilt
   wordlist rather than reusing anything).
   These scripts live alongside the `build_*.py`/`compress_*.py` stages in
@@ -993,7 +994,7 @@ the current defaults/behavior to know before touching this code.
   A flat, non-escalating `POST_PREFILL_BLACK_FRACTION` is layered on top of
   pre-fill. The web UI exposes this as `black_enrichment_percent` — a
   free-text integer field (0-100, `GenerateRequest.Field(ge=0, le=100)`,
-  default 14) — applied only at a fresh-pattern palier: the very first
+  default 15, also sent explicitly by Populate) — applied only at a fresh-pattern palier: the very first
   one, or any palier immediately following a full cleanup (never a
   "reprise telle quelle" palier, which never calls `make_pattern` at all).
   The fraction is a share of the WHOLE grid, with no scaling by the
@@ -1231,7 +1232,8 @@ the current defaults/behavior to know before touching this code.
 - `try_fill`'s `deadline_checks` default is `rows * cols * 2000` (see
   above) only when the caller passes `None` — the web UI's "Mode"
   selector (`backend/app.py`'s `BUDGET_MODES`: flash=1,000, turbo=10,000,
-  fast=100,000, medium=500,000 [default], ultra=5,000,000) instead sends
+  fast=100,000, medium=500,000 [default], ultra=5,000,000,
+  megatron=20,000,000 — Ultra and Megatron offered by the UI on localhost only) instead sends
   an explicit value, threaded through `generate_grid(deadline_checks=...)`
   → `_pattern_attempt`/`_pattern_continue` → `try_fill`, overriding the
   grid-size formula entirely for that request. The CLI and any other
@@ -1450,6 +1452,48 @@ the current defaults/behavior to know before touching this code.
   the same word on every click for a given grid state with no way to
   reach the other candidates that slot genuinely has. Do not reintroduce
   a strict-argmax candidate choice anywhere.
+- **Scrabble dictionaries.** The raw official/reference lists
+  (`data/scrabble/<lang>/*.txt`, committed, ~41 MB, downloaded from GitHub
+  `FlandersBurger/scrabble-dictionary` by `data_builder/download_scrabble_
+  dictionaries.py`; provenance and licenses in `data/scrabble/ReadMe.md`)
+  are turned by `data_builder/build_wordlist_scrabble.py` into
+  `data/wordlist_<lang>_scrabble.tsv` (`MOT<TAB>ACCENTUE<TAB>CANONIQUE`,
+  the freq wordlist's columns minus FREQUENCE, committed); the runtime
+  reads only that TSV, never the raw lists. It is built right after
+  `build_wordlist_freq.py` (`build_<lang>.sh` step 3/7) and must be rebuilt
+  after it, then followed by the gloss dictionary and inflection table,
+  which both cover its words too. It is merged whole into every grid's
+  lexicon at Medium/Hard and, at Easy, only for its words whose ACCENTUE
+  is a form or a lemma of the inflection table (`merge_scrabble_lexicon`), exempt from the
+  proper-noun and no-gloss quotas and never "noise"; it is the third
+  candidate family of every slot ("Mots Défi", theme glossary, Scrabble
+  dictionary, then the rest — `Filler.scrabble_first`), in both the
+  automatic search and Interactive "Suivant", with no descent-cap
+  exemption nor content-score bonus. Its words are shown dark cyan in
+  every preview (`scrabble_cells`, computed from each example's grid in
+  `backend/app.py`) and for a "Suivant" word with `placed.from_scrabble`.
+- **No ligature letter in any dictionary.** Every text column of the
+  wordlists, the gloss dictionary, the inflection table and Qdrant spells
+  `œ`/`æ` (and their capitals) as two plain letters (`fold_ligatures`,
+  "Œdipe" -> "Oedipe"), and every lookup folds its key the same way; a new
+  builder or lookup must do the same.
+- **The corpus-based wordlist is `data/wordlist_<lang>_freq.tsv`** (named
+  after its frequency column, next to `wordlist_<lang>_scrabble.tsv`).
+- **A from-scratch reinstall rebuilds everything.** Every artefact the
+  running app reads is committed under `data/` (freq and Scrabble
+  wordlists, raw Scrabble lists, gloss dictionaries, inflection tables,
+  corpus archives unpacked by `Install.sh`, prompt configs); Qdrant is
+  refilled by `qdrant_populate --all` (freq words + the Scrabble words
+  they lack). The whole data pipeline reruns from its upstream sources
+  with `data_builder/build_all.sh` (or `build_<lang>.sh`), which downloads
+  every missing input itself; its only system tools are `curl`, `xz` and
+  the `hunspell` CLI, which `Install.sh` installs. Any new pipeline step
+  or tool must keep this true (add it to `build_<lang>.sh` and, for a
+  system tool, to `Install.sh`).
+- **Raw Wiktionary/Kaikki dumps live in `data/wiktionary/`** (gitignored,
+  kept for later reuse), shared by `build_gloss_dictionary.py`,
+  `build_inflections.py` and `build_wordlist_scrabble.py`.
+
 - **Themed generation** (`generate_grid(priority_words=...)`,
   `Filler(priority_words=...)`): an optional set of preferred words. When
   non-empty, `Filler._backtrack` stably partitions each slot's own
@@ -1557,6 +1601,10 @@ the current defaults/behavior to know before touching this code.
   length (stable, so score-descending order survives within each
   length) for `LOG_THEME/`'s own readability — `crossword_gen.py`'s
   `priority_words` only ever treats it as an unordered set of words.
+  A grid glossary holds at least `THEME_MIN_GLOSSARY_WORDS`
+  (1000) words: while the search + whole-theme filter leave fewer, the
+  threshold is lowered by `THEME_PRECISION_STEP` (0.03) and both re-run
+  (grid glossary only, never the Dictionary panel's buttons).
   Best-effort — Qdrant/embed-server down or the
   collection unpopulated for that language → logged, generation
   proceeds with no theme. The LLM keyword list
@@ -1569,9 +1617,9 @@ the current defaults/behavior to know before touching this code.
 - "Graines" (French UI label; internally still `forced_letters`/
   `force_letters_percent` in code — renamed in the UI only, at the user's
   explicit request, from "Lettres forcées"/"Forced letters") are a
-  separate, UI-configurable option (`force_letters_percent`, a free-text
-  integer field 0-100, `GenerateRequest.Field(ge=0, le=100)`, static "0"
-  default) — at most one seed per slot, drawn at random among eligible
+  separate option (`force_letters_percent`, 0-100,
+  `GenerateRequest.Field(ge=0, le=100)`, default 0) that the web UI no
+  longer exposes — every UI or Populate generation runs with no seed — at most one seed per slot, drawn at random among eligible
   candidates (not the statistically strongest one, to avoid always forcing
   the same dominant letter), each needing `LETTER_BIAS_MIN_COUNT` (1)
   occurrences out of the 10-word sample to be eligible at all. A seeded
@@ -2225,7 +2273,7 @@ the current defaults/behavior to know before touching this code.
     `build_wordlist_freq.py`, `build_gloss_dictionary.py`, and
     `compress_reference_corpus.py` build and package this project's
     per-language dictionaries (`data/reference_corpus/`, `data/wordlist_
-    <lang>_full.tsv`, `data/gloss_dictionary/`, `data/reference_corpus_
+    <lang>_freq.tsv`, `data/gloss_dictionary/`, `data/reference_corpus_
     <lang>.tar.xz`) — this list of scripts is itself illustrative, not
     exhaustive: any future script added to this same corpus/wordlist/
     gloss/packaging pipeline family falls under this same rule

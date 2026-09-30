@@ -230,7 +230,7 @@ public final class Clues {
 
     // ================================================================== text helpers
 
-    /** Lowercased, accent-stripped form (NFKD, combining marks dropped). */
+    /** Lowercased, accent-stripped form (NFKD, combining marks dropped), ligatures folded ("Cœur" -> "coeur"). */
     public static String normalize(String word) {
         String d = Normalizer.normalize(word, Normalizer.Form.NFKD);
         StringBuilder sb = new StringBuilder(d.length());
@@ -240,7 +240,7 @@ public final class Clues {
                 sb.appendCodePoint(cp);
             }
         });
-        return sb.toString().toLowerCase(Locale.ROOT);
+        return sb.toString().toLowerCase(Locale.ROOT).replace("œ", "oe").replace("æ", "ae");
     }
 
     /** Python's {@code " ".join(s.split())}. */

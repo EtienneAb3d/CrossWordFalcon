@@ -2,7 +2,7 @@
 """Accent- and case-insensitive dictionary search for the web UI's
 "Dictionnaire" panel, at the user's explicit request: given a word, list
 every word of the same root (same canonical form) from
-`data/wordlist_<lang>_full.tsv`, each with its real definitions pulled
+`data/wordlist_<lang>_freq.tsv`, each with its real definitions pulled
 from `data/gloss_dictionary/<lang>_glosses.jsonl`.
 
 Distinct from `backend/gloss_lookup.py` (which only ever looks a single
@@ -59,7 +59,7 @@ class _LangIndex:
 
 
 def _build_index(language):
-    path = WORDLIST_DIR / f"wordlist_{language}_full.tsv"
+    path = WORDLIST_DIR / f"wordlist_{language}_freq.tsv"
     if not path.exists():
         return None
     idx = _LangIndex()

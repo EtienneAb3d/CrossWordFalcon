@@ -23,6 +23,17 @@ GLOSS_DIR = Path(__file__).resolve().parent.parent / "data" / "gloss_dictionary"
 _cache = {}  # language -> {lemma_lower: {"word": ..., "entries": [{"pos":..., "glosses":[...]}]}}
 
 
+# Lookup key: lowercase, ligatures folded ("Cœur" -> "coeur") — the
+# dictionaries are written with folded ligatures (data_builder/
+# build_wordlist_freq.py's `fold_ligatures`), so a query spelled with one
+# still finds its entry.
+_LIGATURE_KEY = str.maketrans({"œ": "oe", "æ": "ae"})
+
+
+def _key(word):
+    return word.lower().translate(_LIGATURE_KEY)
+
+
 def _load(language):
     if language not in _cache:
         index = {}
@@ -37,7 +48,7 @@ def _load(language):
                         entry = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    index[entry["word"].lower()] = entry
+                    index[_key(entry["word"])] = entry
         _cache[language] = index
     return _cache[language]
 
@@ -52,7 +63,7 @@ def find_glosses_for_canonicals(canonical_forms, language):
     index = _load(language)
     result = {}
     for lemma in canonical_forms:
-        entry = index.get(lemma.lower())
+        entry = index.get(_key(lemma))
         if entry:
             result[lemma] = entry["entries"]
     return result
@@ -81,4 +92,4 @@ def has_any_gloss(candidates, language):
     proper nouns, e.g. French "ABD"). Returns False (not an error) if
     `language` has no gloss dictionary built yet."""
     index = _load(language)
-    return any(c.lower() in index for c in candidates)
+    return any(_key(c) in index for c in candidates)

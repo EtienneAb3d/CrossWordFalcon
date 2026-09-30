@@ -387,6 +387,8 @@ public final class Fill {
         /** Lets the search reshape the pattern for a "Mots Défi"/theme word (mirrors reshape_black_cells). */
         public boolean reshapeBlackCells;
         public Set<Integer> permanentBlackCells;
+        /** Scrabble family of the candidate order (mirrors try_fill's scrabble_words). */
+        public PW scrabbleWords;
     }
 
     static List<Integer> quotaOverflowSlotIndices(String[] assignment, Set<String> offending) {
@@ -445,6 +447,7 @@ public final class Fill {
         Set<String> cw = a.challengeWords == null ? Set.of() : a.challengeWords;
         Filler filler = new Filler(slots, index, rng, a.forcedLetters, a.letterScores, a.excludedSlots, a.cancelEvent,
                 a.batchAbandonedEvent, a.attemptDoneEvent, null, a.lockedLetters, pw, cw, rows, cols);
+        filler.scrabbleWords = a.scrabbleWords == null ? PW.EMPTY : a.scrabbleWords;
         filler.pattern = Grids.copy(grid);
         filler.bestPattern = filler.pattern;
         filler.reshapeEnabled = a.reshapeBlackCells && (a.excludedSlots == null || a.excludedSlots.isEmpty());

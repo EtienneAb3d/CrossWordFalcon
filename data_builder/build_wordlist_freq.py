@@ -5,7 +5,7 @@ for one language, from its FULL reference sentence corpus
 (data/reference_corpus/<lang>_sentences_full.txt, built by
 build_sentence_corpus.py from OpenSubtitles + Wikipedia + Books + TED2013
 + CCMatrix) — used for all five languages (data/wordlist_{fr,en,de,es,it}
-_full.tsv). Deliberately the *_full.txt variant, never the capped <lang>_
+_freq.tsv). Deliberately the *_full.txt variant, never the capped <lang>_
 sentences.txt (build_sentence_corpus.py's own docstring covers why there
 are two): word frequency must be counted over every validated sentence
 this project actually has, not an arbitrary subset — capping the corpus
@@ -217,6 +217,20 @@ HUNSPELL_ENCODING = {
 _LIGATURE_FOLD = str.maketrans({"œ": "oe", "Œ": "OE", "æ": "ae", "Æ": "AE"})
 
 
+_UPPER_LIGATURE_RE = re.compile(r"([ŒÆ])(?=[a-zà-ÿ])")
+
+
+def fold_ligatures(s):
+    """`s` with every ligature letter (`œ`/`Œ`/`æ`/`Æ`) replaced by its
+    two plain letters — "œuvre" -> "oeuvre", "Œdipe" -> "Oedipe" (an
+    uppercase ligature followed by a lowercase letter only capitalizes its
+    first letter), "ŒUVRE" -> "OEUVRE". Every text column of the project's
+    dictionaries (wordlists, gloss dictionary, inflection table) is
+    written this way, and every lookup folds its key the same way."""
+    s = _UPPER_LIGATURE_RE.sub(lambda m: {"Œ": "Oe", "Æ": "Ae"}[m.group(1)], s)
+    return s.translate(_LIGATURE_FOLD)
+
+
 def strip_accents(s):
     return "".join(
         c for c in unicodedata.normalize("NFKD", s.translate(_LIGATURE_FOLD))
@@ -364,7 +378,7 @@ def main():
     ap.add_argument("language", choices=sorted(HUNSPELL_SOURCE))
     args = ap.parse_args()
     lang = args.language
-    dst = WORDLIST_DIR / f"wordlist_{lang}_full.tsv"
+    dst = WORDLIST_DIR / f"wordlist_{lang}_freq.tsv"
 
     candidates = []  # (raw_word, raw_count)
     for raw_word, raw_count in _count_word_frequencies(lang):
@@ -433,7 +447,8 @@ def main():
 
     with open(dst, "w", encoding="utf-8") as out:
         for word, (score, accented, canonical_forms) in sorted(scored.items(), key=lambda kv: -kv[1][0]):
-            out.write(f"{word}\t{accented}\t{score}\t{';'.join(canonical_forms)}\n")
+            canonical = ";".join(dict.fromkeys(fold_ligatures(c) for c in canonical_forms))
+            out.write(f"{word}\t{fold_ligatures(accented)}\t{score}\t{canonical}\n")
 
     proper_noun_count = sum(1 for _, _, likely_proper_noun in best.values() if likely_proper_noun)
     message = f"{len(best)} words written to {dst}"

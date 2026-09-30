@@ -14,7 +14,7 @@ ensuite pour générer une grille et ses définitions :
    reference_corpus/<lang>_sentences.txt`) — voir "Deux variantes du
    corpus" plus bas ;
 2. une liste de mots avec fréquence, orthographe naturelle et forme racine
-   (`data/wordlist_<lang>_full.tsv`) ;
+   (`data/wordlist_<lang>_freq.tsv`) ;
 3. un dictionnaire de définitions (`data/gloss_dictionary/<lang>_
    glosses.jsonl`) ;
 4. une archive compressée de la variante plafonnée du corpus (`data/
@@ -157,7 +157,7 @@ plusieurs gigaoctets.
 Cette étape lit la variante **complète** du corpus de l'étape précédente
 (`data/reference_corpus/<lang>_sentences_full.txt`, jamais la variante
 plafonnée — voir "Deux variantes du corpus" ci-dessus) et produit
-`data/wordlist_<lang>_full.tsv`, un fichier à quatre colonnes séparées par
+`data/wordlist_<lang>_freq.tsv`, un fichier à quatre colonnes séparées par
 des tabulations : `MOT<TAB>ACCENTUE<TAB>FREQUENCE<TAB>CANONIQUE`.
 
 ### Comptage des occurrences
@@ -179,7 +179,9 @@ conservés (`build_wordlist_freq.py`, `_count_word_frequencies`).
   saisissables individuellement sur un clavier alphabétique simple
   (`build_wordlist_freq.py`, `strip_accents`).
 - **ACCENTUE** — l'orthographe naturelle telle qu'écrite dans le corpus
-  (accents et casse d'origine conservés) — transmise à `backend/clues.py`
+  (accents et casse d'origine conservés, mais ligatures remplacées par
+  leurs deux lettres simples : « cœur » s'écrit « coeur », « Œdipe »
+  « Oedipe ») — transmise à `backend/clues.py`
   pour que le modèle de langage voie le genre, le nombre et la conjugaison
   réels du mot, que la forme brute (MOT) ne conserve pas.
 - **FREQUENCE** — voir "Un score corrigé" ci-dessous.
@@ -272,7 +274,7 @@ vrais noms propres.
 Cette étape télécharge l'extraction Wiktionary de Kaikki.org (kaikki.org,
 lui-même dérivé des dumps Wiktionary, sous licence CC-BY-SA/GFDL comme
 Wiktionary) et n'en garde que les définitions des lemmes réellement utilisés
-par la colonne CANONIQUE de `data/wordlist_<lang>_full.tsv` de l'étape 2.
+par la colonne CANONIQUE de `data/wordlist_<lang>_freq.tsv` de l'étape 2.
 
 ### Une édition Wiktionary par langue
 
@@ -295,7 +297,7 @@ utilement téléchargés partiellement : ils ne sont pas triés par fréquence,
 donc un téléchargement partiel ne couvrirait que les mots commençant par
 les toutes premières lettres de l'alphabet. Chaque édition est donc
 téléchargée intégralement (plusieurs gigaoctets) et mise en cache dans
-`DICS/` (racine du projet, ignoré par git) — un dump déjà présent en cache
+`data/wiktionary/` (ignoré par git, conservé pour réutilisation) — un dump déjà présent en cache
 est relu depuis le disque plutôt que retéléchargé, pour qu'un retraitement
 ultérieur (la colonne CANONIQUE a changé, `MAX_GLOSSES_PER_WORD` a changé)
 n'ait pas besoin de retélécharger plusieurs gigaoctets par langue à chaque
@@ -305,8 +307,9 @@ utilisé par l'application, `data/gloss_dictionary/<lang>_glosses.jsonl`.
 
 ### Filtrage et format de sortie
 
-Seules les entrées dont le mot défini correspond (insensible à la casse) à
-l'un des lemmes recherchés sont conservées, jusqu'à `MAX_GLOSSES_PER_WORD`
+Seules les entrées dont le mot défini correspond (insensible à la casse,
+ligatures remplacées par leurs deux lettres simples, comme dans tous les
+dictionnaires du projet) à l'un des lemmes recherchés sont conservées, jusqu'à `MAX_GLOSSES_PER_WORD`
 (3) définitions par mot (`build_gloss_dictionary.py`,
 `build_gloss_dictionary`). Le résultat est écrit au format JSON Lines, une
 ligne par lemme trouvé :
@@ -356,9 +359,9 @@ bon (`compress_reference_corpus.py`, `compress_reference_corpus`).
 Une archive publiée permet à un clone du dépôt de récupérer directement des
 exemples de phrases pour `backend/example_sentences.py`, sans passer par le
 téléchargement/filtrage complet de l'étape 1 — mais jamais de reconstruire
-`data/wordlist_<lang>_full.tsv` à partir de cette seule archive, puisqu'elle
+`data/wordlist_<lang>_freq.tsv` à partir de cette seule archive, puisqu'elle
 ne contient que la variante plafonnée du corpus, insuffisante pour l'étape 2
-(voir "Deux variantes du corpus" plus haut). `data/wordlist_<lang>_full.tsv`
+(voir "Deux variantes du corpus" plus haut). `data/wordlist_<lang>_freq.tsv`
 lui-même reste néanmoins déjà présent dans le dépôt — un clone n'a donc
 jamais besoin de reconstruire quoi que ce soit pour utiliser l'application
 telle quelle ; seule une reconstruction volontaire du dictionnaire d'une
@@ -392,7 +395,7 @@ seule l'édition anglaise étiquette la flexion de façon structurée et
 uniforme (`["form-of", "future", "singular", "third-person"]`), là où les
 autres laissent le plus souvent le détail en prose. Ces dumps sont petits
 (~55 à 95 Mo compressés, contre plusieurs Go pour les éditions natives de
-l'étape 3) et sont mis en cache sous `DICS/` comme tous les autres
+l'étape 3) et sont mis en cache sous `data/wiktionary/` comme tous les autres
 téléchargements bruts de ce pipeline (`build_inflections.py`,
 `_download_dump`).
 
@@ -402,10 +405,12 @@ Le script parcourt le dump, ne garde que les sens de type `form-of`
 (formes fléchies d'un lemme), n'en retient que les étiquettes grammaticales
 d'une liste blanche (personne, nombre, genre, temps, mode — dans cet ordre ;
 `build_inflections.py`, `_TAG_GROUPS`), et **filtre le résultat aux seules
-formes de surface présentes dans `data/wordlist_<lang>_full.tsv`** : l'appli
-ne consulte jamais que des mots de grille, qui viennent tous de ce fichier
-(`build_inflections.py`, `_wordlist_forms`). Cela ramène chaque table à
-4 à 23 Mo par langue, suivie par git comme le dictionnaire de définitions.
+formes de surface présentes dans `data/wordlist_<lang>_freq.tsv` et
+`data/wordlist_<lang>_scrabble.tsv`** : l'appli ne consulte jamais que des
+mots de grille, qui viennent tous de ces fichiers (`build_inflections.py`,
+`_wordlist_forms`). Les formes et les lemmes y sont écrits ligatures
+remplacées par leurs deux lettres simples. Chaque table pèse de 13 à 50 Mo
+selon la langue, suivie par git comme le dictionnaire de définitions.
 
 ### Utilisation
 
@@ -430,20 +435,104 @@ jamais seulement la première. La quatrième étape (compression) ne dépend,
 elle, que de la variante plafonnée produite par l'étape 1 — un changement
 purement dans `MAX_SENTENCES_PER_LANGUAGE` ou dans la méthode de
 compression n'exige pas de relancer les étapes 2 et 3. La cinquième étape
-(formes fléchies) ne dépend que de `data/wordlist_<lang>_full.tsv` produit
+(formes fléchies) ne dépend que de `data/wordlist_<lang>_freq.tsv` produit
 par l'étape 2 : il faut la relancer après une reconstruction de la liste de
 mots, mais pas après un simple changement de règle de compression.
 
 Les scripts `data_builder/build_<lang>.sh` (un par langue) enchaînent ces
-cinq étapes puis, en sixième et dernière étape, alimentent la base
-vectorielle Qdrant à partir de `data/wordlist_<lang>_full.tsv`
+cinq étapes — en construisant le dictionnaire Scrabble (voir plus bas)
+juste après l'étape 2, après avoir téléchargé les listes brutes de la
+langue si elles manquent — puis, en dernière étape, alimentent la base
+vectorielle Qdrant avec tout le lexique de la langue : les mots de
+`data/wordlist_<lang>_freq.tsv`, puis ceux de
+`data/wordlist_<lang>_scrabble.tsv` qu'il ne contient pas
 (`python -m data_builder.qdrant_populate <lang> --recreate` — voir la
-classe `WordEmbeddingIndexer`). Cette sixième étape n'est pas
+classe `WordEmbeddingIndexer` ; `--source scrabble` n'envoie que ces
+derniers, sans réencoder le reste). `data_builder/build_all.sh` enchaîne
+les six langues, chacune dans son journal `logs/build_<lang>.log`. Le
+pipeline n'a besoin que de la bibliothèque standard de Python, de
+`httpx`, de `curl`, de `xz` et de l'outil `hunspell` en ligne de commande,
+qu'`Install.sh` installe. Cette sixième étape n'est pas
 essentielle au dictionnaire lui-même : elle ne sert qu'à la recherche de
 « mots similaires » de l'interface, exige que Qdrant (`./run_qdrant.sh`)
 et le serveur d'embeddings (`./run_embed.sh`) tournent, et se contente
 d'un avertissement si ce n'est pas le cas — les fichiers des étapes 1 à 5
-restent le vrai produit du pipeline.
+et le dictionnaire Scrabble restent le vrai produit du pipeline.
+
+## Dictionnaires Scrabble
+
+### Les listes brutes
+
+`data/scrabble/<langue>/` contient la ou les listes Scrabble officielles
+(ou de référence) de chaque langue — ODS8 pour le français, SOWPODS et TWL
+pour l'anglais, FILE 2017 et FISE 2 pour l'espagnol, Zingarelli pour
+l'italien, une liste dérivée de LibreOffice pour le portugais et une liste
+de référence pour l'allemand — copiées telles quelles depuis le dépôt
+GitHub `FlandersBurger/scrabble-dictionary` par
+`data_builder/download_scrabble_dictionaries.py` (`main`, qui ne
+retélécharge un fichier déjà présent qu'avec `--force`). Un mot par ligne,
+en minuscules ; `data/scrabble/ReadMe.md` détaille la provenance et les
+licences de chaque liste.
+
+### Le dictionnaire Scrabble (`wordlist_<langue>_scrabble.tsv`)
+
+`build_wordlist_scrabble.py` en fait `data/wordlist_<langue>_scrabble.tsv`,
+au format du dictionnaire de fréquences moins la colonne FREQUENCE :
+`MOT<TAB>ACCENTUE<TAB>CANONIQUE`, trié par MOT. Tous les fichiers d'une
+langue sont fusionnés ; MOT est la forme grille de l'entrée (`grid_form` :
+ligatures dépliées, accents retirés, majuscules — « ß » devient « SS » —,
+entrée écartée si elle garde un caractère hors A-Z ou fait moins de 2
+lettres). La plupart des listes étant écrites sans accents et toutes en
+minuscules, ACCENTUE et CANONIQUE sont retrouvées dans cet ordre (`build`) :
+
+1. la ligne de même MOT de `wordlist_<langue>_freq.tsv` ;
+2. le dump Wiktionnaire anglais de la langue (celui de l'étape 5,
+   `data/wiktionary/<Nom>-en.jsonl.gz`) : chaque entrée et chacune des
+   formes fléchies qu'elle liste, avec son lemme (`_kaikki_forms`) ; entre
+   plusieurs graphies de même MOT, celle égale à l'entrée (casse mise à
+   part) l'emporte, puis une graphie en minuscules (`_pick_spelling`) ;
+3. Hunspell : l'entrée telle quelle ou avec une majuscule (noms allemands),
+   ses lemmes par `hunspell -m` ;
+4. les suggestions de Hunspell (`hunspell -a`, un processus par cœur) : la
+   première de même MOT rétablit les accents (« cheriez » → « chériez »)
+   (`_hunspell_suggestions`) ;
+5. à défaut, l'entrée elle-même, son propre lemme.
+
+Ce dictionnaire dépend de l'étape 2 et du dump de l'étape 5 ; les scripts
+`build_<langue>.sh` le construisent juste après l'étape 2, et il alimente à
+son tour les étapes 3 et 5 : le dictionnaire de définitions cherche aussi
+les lemmes de sa colonne CANONIQUE (`build_gloss_dictionary.py`,
+`_target_lemmas`), la table des formes fléchies aussi les formes de sa
+colonne ACCENTUE (`build_inflections.py`, `_wordlist_forms`).
+
+### Utilisation
+
+Le dictionnaire Scrabble est versé dans le lexique de toute grille
+(`backend/crossword_gen.py`, `merge_scrabble_lexicon`) : en entier aux
+niveaux moyen et difficile, et au niveau facile seulement pour ses mots
+dont la forme accentuée figure dans la table des formes fléchies, comme
+forme ou comme lemme (`load_inflection_keys`, `_scrabble_lexicon_for`).
+Ses mots s'ajoutent à la part du dictionnaire de fréquences retenue pour
+ce niveau, avec leurs formes accentuée et canonique, hors quotas de noms
+propres et de mots sans définition. La génération essaie en priorité ses
+mots (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot essayer »).
+
+## Les ligatures
+
+Tous les dictionnaires du projet — colonnes ACCENTUE et CANONIQUE des deux
+listes de mots, dictionnaire de définitions (mots et définitions), table
+des formes fléchies (formes et lemmes), base Qdrant (texte encodé et
+données de chaque point) — écrivent une ligature avec ses deux lettres
+simples : « œ » devient « oe », « æ » « ae », une majuscule suivie d'une
+minuscule ne gardant que sa première lettre en majuscule (« Œdipe » →
+« Oedipe », « ŒUVRE » → « OEUVRE ») (`build_wordlist_freq.py`,
+`fold_ligatures`, appliqué par chaque script en écriture ;
+`backend/qdrant_store.py`, `_fold_ligatures`). Chaque recherche replie sa
+clé de la même façon, si bien qu'un mot écrit avec une ligature (tiré du
+corpus, tapé ou renvoyé par le modèle) retrouve toujours son entrée
+(`backend/gloss_lookup.py`, `backend/inflection_lookup.py`,
+`backend/example_sentences.py`, `_key` ; `backend/clues.py`,
+`_normalize`).
 
 ## Résumé en une phrase
 

@@ -30,6 +30,9 @@
   --excluded-bg: #fef08a;
   --best: #16a34a;
   --theme-fg: #ff00fb;
+  /* Dark cyan letters for a word of the language's Scrabble dictionary
+     (.scrabble / .interactive-scrabble). */
+  --scrabble-fg: #008b8b;
   --finish-locked: #4ade80;
   /* "Interactif" mode "Stats" button: light gray suggested letter shown
      inside an otherwise-still-empty cell (script.js's
@@ -1362,6 +1365,16 @@ button:disabled {
   box-shadow: inset 0 0 0 2px var(--finish-locked);
 }
 
+/* Dark cyan letters for the cells of a word of the language's Scrabble
+   dictionary (backend/app.py's `_annotate_scrabble_cells`, script.js's
+   renderAttemptPreview()). Declared BEFORE .theme/.challenge, same
+   specificity, so a theme or "Mots Défi" colour wins a cell shared with
+   a crossing Scrabble word. */
+.attempt-preview-grid .cell.white.scrabble {
+  color: var(--scrabble-fg);
+  font-weight: 700;
+}
+
 /* Bright magenta letters for the cells of a word coming from the themed-
    generation glossary — the goal is a sharp contrast with the neighboring
    black letters of the preview, more than being readable against the
@@ -2655,6 +2668,16 @@ button:disabled {
 .cell.white.incorrect {
   background: var(--incorrect-bg);
   color: var(--incorrect-fg);
+}
+
+/* "Interactif" mode: a letter belonging to a word placed automatically
+   from the Scrabble dictionary (script.js's interactiveScrabbleCells) —
+   the same dark cyan as the attempt previews' .scrabble. Declared before
+   .interactive-theme/.interactive-challenge so either wins a shared
+   cell. */
+.cell.white.interactive-scrabble {
+  color: var(--scrabble-fg);
+  font-weight: 700;
 }
 
 /* "Interactif" mode: a letter belonging to a word placed automatically

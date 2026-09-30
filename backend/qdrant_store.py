@@ -45,6 +45,7 @@ CLI:
 """
 import argparse
 import os
+import re
 import sys
 import time
 import uuid
@@ -83,6 +84,19 @@ def word_point_id(lang, word):
 
 def _lang_filter(lang):
     return {"must": [{"key": TENANT_FIELD, "match": {"value": lang}}]}
+
+
+_UPPER_LIGATURE_RE = re.compile(r"([ŒÆ])(?=[a-zà-ÿ])")
+
+
+def _fold_ligatures(text):
+    """`text` with each ligature letter replaced by its two plain letters
+    ("Œdipe" -> "Oedipe", "cœur" -> "coeur"); the same rule as
+    data_builder/build_wordlist_freq.py's `fold_ligatures`."""
+    if not text:
+        return text
+    text = _UPPER_LIGATURE_RE.sub(lambda m: {"Œ": "Oe", "Æ": "Ae"}[m.group(1)], text)
+    return text.replace("Œ", "OE").replace("Æ", "AE").replace("œ", "oe").replace("æ", "ae")
 
 
 def _compose_embed_text(word, accented, canonical):
@@ -331,7 +345,7 @@ class QdrantStore:
         """Embed and upsert one point per word for a language.
 
         `rows`: iterable of `(word, accented, frequency, canonical)` — the
-        four `wordlist_<lang>_full.tsv` columns (`frequency` may be None,
+        four `wordlist_<lang>_freq.tsv` columns (`frequency` may be None,
         `canonical` may be ""). The text actually embedded is built by
         `_compose_embed_text`: just the accented/inflected spelling, the
         bare accent-stripped uppercase form, and each candidate canonical
@@ -385,6 +399,13 @@ class QdrantStore:
         return total
 
     def _flush(self, lang, rows, embedder, wait):
+        # Ligatures folded ("œuvre" -> "oeuvre"), like every text column of
+        # the dictionaries (data_builder/build_wordlist_freq.py's
+        # `fold_ligatures`) — in the embedded text and the payload alike.
+        rows = [
+            (word, _fold_ligatures(accented), freq, _fold_ligatures(canonical))
+            for (word, accented, freq, canonical) in rows
+        ]
         texts = [
             _compose_embed_text(word, accented, canonical)
             for (word, accented, _f, canonical) in rows

@@ -12,7 +12,7 @@ public final class GenReq {
     public String difficulty = "easy";
     public Long seed;
     public int forceLettersPercent = 0;
-    public int blackEnrichmentPercent = 17;
+    public int blackEnrichmentPercent = 15;
     public String mode = "medium";
     public String pseudo;
     public String theme;
@@ -30,7 +30,7 @@ public final class GenReq {
         r.difficulty = b.str("difficulty", "easy");
         r.seed = b.optLong("seed");
         r.forceLettersPercent = b.integer("force_letters_percent", 0, 0, 100);
-        r.blackEnrichmentPercent = b.integer("black_enrichment_percent", 17, 0, 100);
+        r.blackEnrichmentPercent = b.integer("black_enrichment_percent", 15, 0, 100);
         r.mode = b.str("mode", "medium");
         r.pseudo = b.str("pseudo", null);
         r.theme = b.str("theme", null);

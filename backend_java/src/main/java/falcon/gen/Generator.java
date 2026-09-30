@@ -121,8 +121,10 @@ public final class Generator {
             l = LOADED.get(key);
             if (l != null) return l;
             Words.Lexicon lex = Words.loadWordlist(path, mw, easy, easy);
-            Map<Integer, LenIndex> idx = Words.buildIndex(lex.byLength(), lex.frequencies());
             String lang = Words.langFromPath(path);
+            // The whole Scrabble wordlist joins the lexicon, whatever the difficulty (merge_scrabble_lexicon).
+            Set<String> scrabble = Words.mergeScrabbleLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, easy);
+            Map<Integer, LenIndex> idx = Words.buildIndex(lex.byLength(), lex.frequencies());
             Set<String> proper = new HashSet<>();
             if (!Words.PROPER_NOUN_EXCLUDED_LANGS.contains(lang)) {
                 lex.accents().forEach((w, acc) -> {
@@ -138,6 +140,9 @@ public final class Generator {
                     if (!GlossLookup.hasAnyGloss(cands, lang)) nonGloss.add(w);
                 });
             }
+            // A Scrabble word is valid at every difficulty: never counted against either quota.
+            proper.removeAll(scrabble);
+            nonGloss.removeAll(scrabble);
             l = new Loaded(lex, idx, proper, nonGloss);
             if (LOADED.size() >= LOADED_CACHE_MAX) LOADED.clear();
             LOADED.put(key, l);
@@ -151,6 +156,7 @@ public final class Generator {
     static final class Ctx {
         DualIndex index;
         PW priorityWords;
+        PW scrabbleWords;
         Set<String> challengeWords;
         AtomicBoolean cancelEvent, attemptDoneEvent;
         Consumer<Diag> bestStateQueue;
@@ -249,6 +255,7 @@ public final class Generator {
         a.preseedAssignment = preseed;
         a.lockedLetters = locked;
         a.reshapeBlackCells = true;
+        a.scrabbleWords = ctx.scrabbleWords;
         a.permanentBlackCells = permanentBlack;
         // A replacement gets no sibling visibility, so its own budget is a
         // hard stop (no elastic extension): it only uses a free process.
@@ -321,6 +328,7 @@ public final class Generator {
         a.excludedSlots = excludedSlots;
         a.lockedLetters = known;
         a.reshapeBlackCells = true;
+        a.scrabbleWords = ctx.scrabbleWords;
         a.permanentBlackCells = permanentBlack;
         if (!racing) a.attemptActive = null;
         boolean flag = racing && checksSlot != null && ctx.attemptActive != null;
@@ -505,7 +513,7 @@ public final class Generator {
         public double blackRatio = 0.0;
         public int attempts = 200;
         public Long seed;
-        public String wordlistPath = "data/wordlist_fr_full.tsv";
+        public String wordlistPath = "data/wordlist_fr_freq.tsv";
         public Progress onProgress;
         public double forceLettersFraction = 0.0;
         public AtomicBoolean cancelEvent;
@@ -572,6 +580,11 @@ public final class Generator {
         } else {
             priority = PW.EMPTY;
         }
+        // The Scrabble word set of each language, merged whole into its lexicon by load(): tried by every search
+        // after the theme words and before the rest of the dictionary.
+        Set<String> scrabbleAcross = Words.loadScrabbleWords(Words.langFromPath(p.wordlistPath), easy);
+        PW scrabble = bilingual ? new PW(scrabbleAcross, Words.loadScrabbleWords(Words.langFromPath(p.bilingualWordlistPath), easy), true)
+                : PW.single(scrabbleAcross);
         Set<String> challenge = new LinkedHashSet<>(Words.challengeSet(p.challengeWords));
         LengthSets availablePreview = LengthSets.available(index, Grids.PREFILL_MIN_WORD_COUNT);
         Map<String, Object> lengthCounts = new LinkedHashMap<>();
@@ -672,6 +685,7 @@ public final class Generator {
         Ctx ctx = new Ctx();
         ctx.index = index;
         ctx.priorityWords = priority;
+        ctx.scrabbleWords = scrabble;
         ctx.challengeWords = challenge;
         ctx.cancelEvent = p.cancelEvent;
         ctx.attemptDoneEvent = attemptDoneEvent;

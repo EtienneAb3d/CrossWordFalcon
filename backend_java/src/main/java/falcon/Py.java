@@ -20,6 +20,12 @@ public final class Py {
     }
 
     /** Python's {@code str.strip()} (Unicode whitespace, NBSP included). */
+    /** Dictionary lookup key: lowercase, ligatures folded ("Cœur" -> "coeur") — the dictionaries are written with
+     * folded ligatures (data_builder/build_wordlist_freq.py's fold_ligatures). */
+    public static String lookupKey(String s) {
+        return s.toLowerCase(java.util.Locale.ROOT).replace("œ", "oe").replace("æ", "ae");
+    }
+
     public static String strip(String s) {
         if (s == null) return null;
         int a = 0, b = s.length();
