@@ -1060,10 +1060,11 @@ English (see `project-best-practices`).
   `justify-items: start` still governs sizing the same way it always did,
   just one level up. `.attempt-preview-stats` is small/muted
   (`font-size: 0.7rem`, `opacity: 0.7`) since it's a secondary readout,
-  not the main content of the preview. Both percentages share the *same*
-  denominator (total cells in that `example_grid`) so they stay directly
-  additive/comparable — e.g. seeing "62% noir, 30% rempli" also implicitly
-  says 8% of the grid is still blank. The fill count comes straight from
+  not the main content of the preview. The black-cell rate is a share of
+  the grid's total cells; the fill rate is a share of its WHITE cells
+  only (letters placed / white cells, like Interactive mode's own fill
+  figure), so a fully lettered grid reads 100 % whatever its black-cell
+  rate. The fill count comes straight from
   `example_grid` (any character that isn't "." or "#"), independent of
   `showPreviewLetters` — it's the search's real progress at that snapshot,
   not whatever the letter-visibility toggle currently reveals. New
@@ -1087,7 +1088,7 @@ English (see `project-best-practices`).
   user's explicit request: the "réputées injouables" (unplayable) rate,
   reusing `impossibleSet` (already computed just above for the
   `.impossible` cell highlight, so no second pass over `impossible_cells`)
-  divided by the same `totalCells` denominator as the other two. `attemptPreviewStats(blackPercent, fillPercent, impossiblePercent)` gained
+  divided by the grid's total cell count, like the black-cell rate. `attemptPreviewStats(blackPercent, fillPercent, impossiblePercent)` gained
   a third parameter in all 5 languages (fr "X % noir, Y % rempli, Z %
   injouable", en "X% black, Y% filled, Z% unplayable", de "X% schwarz, Y%
   gefüllt, Z% unspielbar", es "X% negro, Y% relleno, Z% injugable", it "X%
@@ -4563,3 +4564,9 @@ end through the real running API (interactive start/step/save,
   **Visually confirmed** with Playwright/Chromium and an `rsvg-convert`
   render of the PDF sheet: blue centered squares on white, grid lines
   intact.
+- The DevBot page (`DevBot.html`, `body.devbot-page`) reuses the
+  `#chatbot` panel as is — same header, bubbles, input row and tokens —
+  centered, `max-width: 900px`, filling the viewport height (`100dvh`
+  minus a 1rem padding), its message list taking all the remaining height
+  (`max-height: none`), text at `0.95rem`. No collapse button. Any change
+  to the `#chatbot` look applies to both pages.

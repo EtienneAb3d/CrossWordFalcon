@@ -57,7 +57,7 @@ from .crossword_gen import (
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
     interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
-    merge_scrabble_lexicon, scrabble_word_cells, scrabble_wordlist_path,
+    merge_scrabble_lexicon, load_dictionary_frequencies, scrabble_word_cells, scrabble_wordlist_path,
     scrabble_words_for_languages,
 )
 from .grid_store import (
@@ -264,7 +264,7 @@ def _format_prompt_messages(messages):
 
 
 def _append_chat_log(session_id, language, message, reply, first_token_s=None, total_s=None,
-                     prompt_messages=None, route=None, pseudo=None):
+                     prompt_messages=None, route=None, pseudo=None, bot_name="David FALCON"):
     """Appends one conversation turn (question + full reply) to
     this session's log file — best-effort, like every other log write in
     this project (SVG/PNG, LOG_LLM/): a write failure is logged but must
@@ -320,7 +320,7 @@ def _append_chat_log(session_id, language, message, reply, first_token_s=None, t
                     f"{len(prompt_messages)} messages, {total_chars} caractères</summary>\n\n"
                     f"~~~~~~\n{_format_prompt_messages(prompt_messages)}\n~~~~~~\n\n</details>\n\n"
                 )
-            f.write(f"**David FALCON** : {reply}\n\n")
+            f.write(f"**{bot_name}** : {reply}\n\n")
             if first_token_s is not None or total_s is not None:
                 bits = []
                 if first_token_s is not None:
@@ -2976,6 +2976,59 @@ async def chat(req: ChatRequest):
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
+class DevChatRequest(BaseModel):
+    """DevBot (frontend/static/DevBot.html): same fields as ChatRequest
+    minus the interface state and the nickname — the page shows no grid."""
+    message: str
+    history: list[ChatMessage] = Field(default_factory=list)
+    language: str = Field(default="fr", description="fr, en, de, es, it ou pt")
+    session_id: Optional[str] = None
+
+
+@app.post("/api/devchat")
+async def devchat(req: DevChatRequest):
+    """A reply from DevBot, grounded on the DOC_ALGO/FR files only
+    (`ChatBot.dev_reply_stream`), written in `req.language`. Same
+    `text/event-stream` shape and same LOG_CHAT/ logging as `POST
+    /api/chat`, the reply labelled "DevBot"."""
+    async def event_stream():
+        full_reply = []
+        start = time.monotonic()
+        first_token_s = None
+        captured_prompt = []
+
+        def _capture_prompt(messages):
+            captured_prompt[:] = messages
+
+        try:
+            async for chunk in interactive_chatbot.dev_reply_stream(
+                [m.model_dump() for m in req.history], req.message, req.language,
+                on_prompt=_capture_prompt if CHATBOT_DEBUG else None,
+            ):
+                if first_token_s is None:
+                    first_token_s = time.monotonic() - start
+                full_reply.append(chunk)
+                yield f"data: {json.dumps({'delta': chunk})}\n\n"
+            total_s = time.monotonic() - start
+            yield "data: [DONE]\n\n"
+            _append_chat_log(
+                req.session_id, req.language, req.message, "".join(full_reply),
+                first_token_s, total_s, captured_prompt or None, bot_name="DevBot",
+            )
+        except ChatError as e:
+            total_s = time.monotonic() - start
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            reply_so_far = "".join(full_reply)
+            _append_chat_log(
+                req.session_id, req.language, req.message,
+                f"{reply_so_far}\n\n*(échec en cours de réponse : {e})*" if reply_so_far
+                else f"*(échec : {e})*",
+                first_token_s, total_s, captured_prompt or None, bot_name="DevBot",
+            )
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
 def _load_wordlist_raw_lines(language):
     """{MOT: raw TSV line, exactly as written in data/wordlist_<language>_
     freq.tsv} — used by _build_word_verification_table (column 2) to show
@@ -4554,7 +4607,10 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None)
         merge_scrabble_lexicon, language, by_length, accents, _canon, frequencies,
         difficulty == "easy",
     )
-    idx = build_index(by_length, frequencies)
+    idx = build_index(
+        by_length, frequencies,
+        await asyncio.to_thread(load_dictionary_frequencies, str(WORDLISTS[language])),
+    )
     is_bilingual = bool(bilingual_language) and bilingual_language != language
     if not is_bilingual:
         return DualIndex(idx, idx), set(accents)
@@ -4569,7 +4625,10 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None)
         merge_scrabble_lexicon, bilingual_language, by_length_down, accents_down,
         _canon_down, frequencies_down, difficulty == "easy",
     )
-    idx_down = build_index(by_length_down, frequencies_down)
+    idx_down = build_index(
+        by_length_down, frequencies_down,
+        await asyncio.to_thread(load_dictionary_frequencies, str(WORDLISTS[bilingual_language])),
+    )
     return DualIndex(idx, idx_down), set(accents) | set(accents_down)
 
 

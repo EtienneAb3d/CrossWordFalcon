@@ -32,6 +32,7 @@ public final class ChatBot {
     public static final List<String> CHATBOT_THINK_FILTER_CHOICES = List.of("open_close", "close_only", "none");
     public static final String DEFAULT_CHATBOT_THINK_FILTER = "open_close";
     static final Path DOC_USER_PATH = Env.path("DOC_USER", "EN", "ReadMe.md");
+    static final Path DOC_ALGO_DIR = Env.path("DOC_ALGO", "FR");
     // Routing of a question asked while a playable grid is on screen (see
     // classifyQuestion): a first, non-streamed LLM call answers with one of
     // these two keywords, and the reply is then written from a prompt holding
@@ -132,6 +133,91 @@ public final class ChatBot {
             }
         }
         return docUserCache;
+    }
+
+    private static volatile String docAlgoCache;
+
+    /** Every Markdown file of DOC_ALGO/FR, in file-name order, each under a
+     * {@code ===== <file name> =====} header line — DevBot's only knowledge. */
+    static String loadDocAlgo() {
+        if (docAlgoCache == null) {
+            StringBuilder sb = new StringBuilder();
+            List<Path> paths = new ArrayList<>();
+            try (Stream<Path> st = Files.list(DOC_ALGO_DIR)) {
+                st.filter(p -> p.getFileName().toString().endsWith(".md")).forEach(paths::add);
+            } catch (IOException e) {
+                Log.warning("could not list %s: %s", DOC_ALGO_DIR, e.getMessage());
+            }
+            paths.sort((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()));
+            for (Path path : paths) {
+                try {
+                    sb.append("===== ").append(path.getFileName()).append(" =====\n")
+                            .append(Files.readString(path, StandardCharsets.UTF_8)).append("\n\n");
+                } catch (IOException e) {
+                    Log.warning("could not read %s: %s", path, e.getMessage());
+                }
+            }
+            docAlgoCache = sb.toString();
+        }
+        return docAlgoCache;
+    }
+
+    /** Intro + DOC_ALGO/FR: the fixed head of DevBot's system prompt. */
+    static String devPromptHead(String docAlgo) {
+        return "You are DevBot, the technical assistant of CrossWordFalcon, a crossword-grid "
+                + "generator. You explain how its grid-generation algorithm works to a reader who "
+                + "wants to understand it without reading the code.\n\n"
+                + "Reference documentation of the algorithm — your ONLY source of knowledge. It is "
+                + "written in French, but that is NOT the language to reply in: use its content to "
+                + "answer, rephrased in your own words in the reader's language set by the rules "
+                + "below — never copy a French passage from it into a reply written in another "
+                + "language:\n"
+                + docAlgo + "\n";
+    }
+
+    /** DevBot's system prompt: the fixed head, then the reply-language rules. */
+    public String buildDevPrompt(String language) {
+        String languageName = Clues.LANGUAGE_NAMES.getOrDefault(language, language);
+        return devPromptHead(loadDocAlgo())
+                + "Write EVERY reply entirely in " + languageName + ". This is not optional and applies "
+                + "to every message you ever send.\n\n"
+                + "STRICT RULES:\n"
+                + "1. LANGUAGE. Your entire reply MUST be written in " + languageName + " — every word "
+                + "of it, whatever language the reader writes to you in, and even though the "
+                + "documentation above is in French. If " + languageName + " is not French, translate "
+                + "what you take from the documentation; do NOT reply in French. Only code "
+                + "identifiers (function, class, constant and file names such as "
+                + "`Filler._backtrack` or `MAX_DESCENTS_PER_NODE`) stay exactly as written. A "
+                + "French term of the documentation's own vocabulary (« emplacement écarté », "
+                + "« palier »…) is translated into " + languageName + ", with the original French term "
+                + "in parentheses the first time it appears.\n"
+                + "2. Answer ONLY from the documentation above. When it does not cover the "
+                + "question, say so plainly — never invent a mechanism, a constant, a value or a "
+                + "function name, and never answer from general knowledge about crossword "
+                + "solvers. A question unrelated to CrossWordFalcon's algorithm gets a short, "
+                + "polite reply that this assistant only covers that documentation.\n"
+                + "3. Be precise: name the functions, classes and constants the documentation "
+                + "cites for the point you explain, with their values when it gives them.\n"
+                + "4. Be concise and structured: a direct answer first, then the details that "
+                + "matter, as short paragraphs or a list. No essay, no summary of the whole "
+                + "documentation unless asked.\n"
+                + "5. NEVER start a reply with a greeting or by introducing yourself: a welcome "
+                + "message has already been shown. Start directly with the answer.\n"
+                + "6. NEVER think out loud or show your reasoning process: write only the final "
+                + "answer.\n\n"
+                + "FINAL REMINDER: reply in " + languageName + ", from the documentation above only.";
+    }
+
+    /** DevBot's reply (the DevBot.html page), streamed like replyStream: one
+     * call whose system prompt holds the DOC_ALGO/FR files only. */
+    public void devReplyStream(List<Object> history, String message, String language, double timeout,
+                                Consumer<List<Object>> onPrompt, Consumer<String> onChunk) {
+        List<Object> messages = new ArrayList<>();
+        messages.add(Json.obj("role", "system", "content", buildDevPrompt(language)));
+        messages.addAll(history);
+        messages.add(Json.obj("role", "user", "content", message));
+        if (onPrompt != null) onPrompt.accept(messages);
+        streamCompletion(messages, timeout, onChunk, false);
     }
 
     /** Intro + DOC_USER: the fixed head shared by the combined and USAGE prompts. */
@@ -1058,8 +1144,19 @@ public final class ChatBot {
      */
     static final class TagStripper {
         private final StringBuilder pending = new StringBuilder();
+        private final boolean enabled;
+
+        TagStripper() {
+            this(true);
+        }
+
+        /** {@code enabled == false}: the text passes through untouched (DevBot). */
+        TagStripper(boolean enabled) {
+            this.enabled = enabled;
+        }
 
         String feed(String text) {
+            if (!enabled) return text;
             StringBuilder out = new StringBuilder();
             text.codePoints().forEach(cp -> {
                 if (pending.length() == 0) {
@@ -1212,10 +1309,14 @@ public final class ChatBot {
 
     /** The streamed chat-completions call behind every reply: visible text, think blocks and tags removed. */
     void streamCompletion(List<Object> messages, double timeout, Consumer<String> onChunk) {
+        streamCompletion(messages, timeout, onChunk, true);
+    }
+
+    void streamCompletion(List<Object> messages, double timeout, Consumer<String> onChunk, boolean stripTags) {
         StringBuilder buffer = new StringBuilder();
         boolean yielded = false;
         // Every visible piece goes through the tag filter before it is sent.
-        TagStripper tags = new TagStripper();
+        TagStripper tags = new TagStripper(stripTags);
         String state = switch (thinkFilter) {
             case "none" -> "disabled";
             case "close_only" -> "in_reasoning";

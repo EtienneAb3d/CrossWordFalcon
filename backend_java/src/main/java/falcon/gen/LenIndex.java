@@ -18,22 +18,28 @@ public final class LenIndex {
     /** pos[p][alphaId] -> ids of the words carrying that letter at p (null = none). */
     public final BitSet[][] pos;
     public final double[] freq;
+    /** Each word's frequency in the freq wordlist itself, 0.0 for a word absent from it (index[length]["dict_freq"]). */
+    public final double[] dictFreq;
     /** Lazily computed per-position letter counts over the whole list. */
     private volatile int[][] blankCounts;
 
-    public LenIndex(int length, List<String> words, Map<String, Double> frequencies) {
+    public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
+                    Map<String, Double> dictionaryFrequencies) {
         this.length = length;
         this.words = words.toArray(new String[0]);
         this.wordList = List.of(this.words);
         this.ids = new HashMap<>(this.words.length * 2);
         this.wordSet = new HashSet<>(this.words.length * 2);
         this.freq = new double[this.words.length];
+        this.dictFreq = new double[this.words.length];
         for (int i = 0; i < this.words.length; i++) {
             String w = this.words[i];
             ids.put(w, i);
             wordSet.add(w);
             Double f = frequencies == null ? null : frequencies.get(w);
             freq[i] = f == null ? 0.0 : f;
+            Double d = dictionaryFrequencies == null ? null : dictionaryFrequencies.get(w);
+            dictFreq[i] = d == null ? 0.0 : d;
             for (int p = 0; p < length; p++) Alpha.id(w.charAt(p));
         }
         int alpha = Alpha.size();
@@ -59,6 +65,11 @@ public final class LenIndex {
         if (a < 0 || a >= pos[p].length) return null;
         BitSet bs = pos[p][a];
         return bs == null || bs.isEmpty() ? null : bs;
+    }
+
+    public double dictFreqOf(String w) {
+        Integer id = ids.get(w);
+        return id == null ? 0.0 : dictFreq[id];
     }
 
     public double freqOf(String w) {

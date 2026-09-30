@@ -669,7 +669,11 @@ its own letter count and content genuinely fluctuate — even through a
 long stretch where the search hasn't beaten its own best result yet: the
 generator periodically shares its current, real progress this way, not
 only whenever a new record is actually reached, so a slow-moving search
-never looks indistinguishable from a stuck one. While a preview is live
+never looks indistinguishable from a stuck one. Each preview's stats
+line gives three rates: black cells as a share of the whole grid, filled
+cells as a share of the white cells only (a grid with every white cell
+lettered reads 100 %), and unplayable cells as a share of the whole grid
+(`frontend/static/script.js`, `renderAttemptPreview`). While a preview is live
 (blue/yellow/orange-bordered), its stats line also names what percentage
 of its own search budget that specific attempt has consumed so far
 (`budget_percent`, `renderAttemptPreview`), refreshed every 2 seconds
@@ -1369,6 +1373,22 @@ circular-arrow button next to it (`#chatbot-reset-btn`) starts a new
 conversation: it forgets everything said so far and shows the welcome
 message again.
 
+## DevBot (technical assistant page)
+
+A separate page, `/DevBot.html` (`frontend/static/DevBot.html`,
+`devbot.js`), shows a single chat panel filling the window: DevBot, an
+assistant answering questions about how the grid-generation algorithm
+works. Its only knowledge is the technical documentation of the algorithm
+(the files of `DOC_ALGO/FR/`, sent to the language model with every
+question — `backend/chatbot.py`, `ChatBot.dev_reply_stream`); it knows
+nothing of the interface or of any grid, and says so when a question is
+outside that documentation. Although the documentation is in French,
+DevBot replies in the visitor's language: the interface language chosen
+on the main page when there is one, otherwise the browser's language;
+adding `?lang=en` (or `fr`, `de`, `es`, `it`, `pt`) to the address forces
+it (`devbot.js`, `detectLanguage`). The message field, the send button
+and the reset button work as in David FALCON's panel.
+
 ## How a grid is actually built (a summary of the generation algorithm)
 
 This section summarizes, in plain English, how `backend/crossword_gen.py`
@@ -1496,7 +1516,9 @@ before one that doesn't (a word's rank being divided by one plus the number
 of times the attempt has already tried it on that slot, so a fresh word
 overtakes one retried again and again), though the very first word actually attempted is
 still drawn at random from among a narrow window of the best-ranked
-candidates, not strictly the single best one — this keeps different
+candidates — narrowed further to the half of it made of the most frequent
+words of the language's frequency dictionary, so a common word goes before
+a rare one — not strictly the single best one — this keeps different
 attempts from converging on the exact same choice every time, without
 letting a rare word slip in ahead of a well-scored one. Interactive
 mode's **Suivant / Next** draws its word from that very same window, so

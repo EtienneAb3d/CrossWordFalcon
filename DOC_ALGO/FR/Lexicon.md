@@ -224,12 +224,15 @@ plusieurs signaux) :
 
 - **Fenêtre de tirage des mots** : la règle unique par laquelle le moteur
   décide dans quel ordre essayer les mots candidats d'un emplacement.
-  Trois étapes : les candidats sont mélangés, puis classés par leur
+  Les candidats sont mélangés, puis classés par leur
   correspondance au consensus statistique des lettres sur les cases encore
-  libres (`_candidate_score`), puis tirés un à un **au hasard parmi les
-  `CANDIDATE_SCORE_WINDOW` meilleurs candidats restants** — une fenêtre qui
+  libres (`_candidate_score`), puis tirés un à un dans la fenêtre des
+  **`CANDIDATE_SCORE_WINDOW` (100) meilleurs candidats restants** — qui
   se décale à mesure que les mots en sortent, jamais un simple « meilleur
-  score gagne ». Les deux modes emploient la même méthode : la recherche
+  score gagne » : cette fenêtre est retriée par fréquence dans le
+  dictionnaire FREQ (la plus élevée en premier, 0 pour un mot qui n'y
+  figure pas) et le tirage se fait **au hasard parmi ses
+  `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE`, soit 20) mots les plus fréquents**. Les deux modes emploient la même méthode : la recherche
   automatique sur l'emplacement qu'elle vient de choisir, et le bouton
   **Suivant** du mode Interactif pour chacune de ses trois familles (Mots
   Défi, glossaire thématique, dictionnaire général), qui retient le premier

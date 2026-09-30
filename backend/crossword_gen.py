@@ -52,6 +52,7 @@ Usage (from the project root):
     python3 backend/crossword_gen.py --width 15 --height 10 --wordlist data/wordlist_fr_freq.tsv
 """
 import argparse
+import bisect
 import concurrent.futures
 import math
 import multiprocessing
@@ -2033,8 +2034,47 @@ def _priority_words_for(priority_words, cells):
 # having `letter` at position p. Intersecting a handful of sets (one per
 # already-known letter) replaces a full scan of the lexicon.
 
-def build_index(by_length, frequencies=None):
-    """`frequencies` (a {MOT: frequency} dict, `None` by default) feeds
+_DICTIONARY_FREQUENCIES_CACHE = {}
+_DICTIONARY_FREQUENCIES_LOCK = threading.Lock()
+
+
+def load_dictionary_frequencies(path):
+    """{MOT: FREQUENCE} for every word of the freq wordlist at `path`
+    (the highest value when a MOT has several rows), whatever difficulty
+    cut `load_wordlist` applies — read once per process. A word absent
+    from the file is absent from the dict."""
+    path = str(path)
+    with _DICTIONARY_FREQUENCIES_LOCK:
+        cached = _DICTIONARY_FREQUENCIES_CACHE.get(path)
+        if cached is not None:
+            return cached
+        result = {}
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 2:
+                    continue
+                try:
+                    freq = float(parts[2] if len(parts) >= 3 else parts[1])
+                except ValueError:
+                    freq = 0.0
+                word = parts[0].upper()
+                if freq > result.get(word, 0.0):
+                    result[word] = freq
+        _DICTIONARY_FREQUENCIES_CACHE[path] = result
+        return result
+
+
+def build_index(by_length, frequencies=None, dictionary_frequencies=None):
+    """`dictionary_frequencies` (`load_dictionary_frequencies`, `None` by
+    default) feeds `index[length]["dict_freq"]` — each word's frequency in
+    the freq wordlist itself, 0.0 for a word absent from it (a
+    Scrabble-only word), read by `Filler.ordered_candidates`.
+
+    `frequencies` (a {MOT: frequency} dict, `None` by default) feeds
     `index[length]["freq"]` — used only by `_noise_slot_cells` (see
     `NOISE_FREQUENCY_THRESHOLD`) to tell a statistically credible candidate
     apart from a near-zero dictionary entry. Omitted (`None`), every word of
@@ -2043,6 +2083,7 @@ def build_index(by_length, frequencies=None):
     grid` today, but an isolated test that builds its own small lexicon
     doesn't need to supply this parameter to keep working as before)."""
     frequencies = frequencies or {}
+    dictionary_frequencies = dictionary_frequencies or {}
     index = {}
     for length, words in by_length.items():
         pos_sets = [defaultdict(set) for _ in range(length)]
@@ -2053,6 +2094,7 @@ def build_index(by_length, frequencies=None):
             "words": words,
             "pos": pos_sets,
             "freq": {w: frequencies.get(w, 0.0) for w in words},
+            "dict_freq": {w: dictionary_frequencies.get(w, 0.0) for w in words},
         }
     return index
 
@@ -2382,7 +2424,13 @@ def _slots_touching(slots, target_indices):
 # the best-scored candidates be reached first, while still leaving enough
 # room for two attempts (or two "Suivant" clicks) on the same state to
 # diverge.
-CANDIDATE_SCORE_WINDOW = 50
+CANDIDATE_SCORE_WINDOW = 100
+
+# Within that window, the words are re-sorted by their frequency in the
+# freq wordlist (`index[length]["dict_freq"]`, highest first, 0 for a word
+# absent from it) and only `CANDIDATE_FREQ_WINDOW` of the most frequent
+# ones are kept: the random draw is made among them (defined below
+# `MAX_DESCENTS_PER_NODE`, which it derives from).
 
 # Maximum number of recursive descents a single `Filler._backtrack` node
 # makes before giving up and handing control back to its parent. A
@@ -2406,6 +2454,13 @@ CANDIDATE_SCORE_WINDOW = 50
 # failure arising in its own child). Applies only where a cap applies.
 MAX_DESCENTS_PER_NODE = 10
 
+# See `CANDIDATE_SCORE_WINDOW`: twice the descents a node makes, so the
+# draw covers the words a node can actually try. With the descent cap
+# disabled (`MAX_DESCENTS_PER_NODE <= 0`), the whole score window is kept.
+CANDIDATE_FREQ_WINDOW = (
+    2 * MAX_DESCENTS_PER_NODE if MAX_DESCENTS_PER_NODE > 0 else CANDIDATE_SCORE_WINDOW
+)
+
 # Early-attempt relaxation of MAX_DESCENTS_PER_NODE: a node reached while
 # the search has placed fewer than `EARLY_DESCENTS_WORD_COUNT` words on top
 # of the attempt's own initial state (the words already in place when
@@ -2413,7 +2468,7 @@ MAX_DESCENTS_PER_NODE = 10
 # `EARLY_MAX_DESCENTS_PER_NODE` descents instead. Measured per node, from
 # the words in place when the node is entered.
 EARLY_DESCENTS_WORD_COUNT = 10
-EARLY_MAX_DESCENTS_PER_NODE = 50
+EARLY_MAX_DESCENTS_PER_NODE = 2 * MAX_DESCENTS_PER_NODE
 
 # An attempt inherited from a previous palier — one that starts with
 # locked cells (`locked_letters`, or words already assigned when
@@ -3647,11 +3702,14 @@ class Filler:
            and a word already tried here again and again yields to a fresh
            one;
         3. the order is NOT strictly descending even so: each successive
-           pick is drawn at random among the `CANDIDATE_SCORE_WINDOW` best
-           words *still remaining* (not the first `CANDIDATE_SCORE_WINDOW`
-           of the original sort, fixed once and for all — the window
-           slides as words leave it). See that constant's own docstring
-           for what it balances.
+           pick is drawn from the `CANDIDATE_SCORE_WINDOW` best words
+           *still remaining* (not the first `CANDIDATE_SCORE_WINDOW` of
+           the original sort, fixed once and for all — the window slides
+           as words leave it). That window is re-sorted by frequency in
+           the freq wordlist (`index[length]["dict_freq"]`, highest first,
+           0 for a word absent from it, ties keeping the score order) and
+           the pick is drawn at random among its `CANDIDATE_FREQ_WINDOW`
+           most frequent words. See both constants' own docstrings.
 
         `cands` is never modified: the returned list is a fresh one."""
         cands = list(cands)
@@ -3663,13 +3721,21 @@ class Filler:
             key=lambda w: self._candidate_score(i, w) / (1 + tried.get(w, 0)),
             reverse=True,
         )
-        window = CANDIDATE_SCORE_WINDOW
+        slot = self.slots[i]
+        dict_freq = self.index.for_cells(slot).get(len(slot), {}).get("dict_freq", {})
+        # `window`: the CANDIDATE_SCORE_WINDOW best-scored words not drawn
+        # yet, kept sorted by (frequency descending, score rank ascending).
+        window = []
+        upcoming = 0
+        total = len(cands)
         reordered = []
-        remaining = cands
-        while remaining:
-            take = min(window, len(remaining))
-            idx = self.rng.randrange(take)
-            reordered.append(remaining.pop(idx))
+        while upcoming < total or window:
+            while upcoming < total and len(window) < CANDIDATE_SCORE_WINDOW:
+                w = cands[upcoming]
+                bisect.insort(window, (-dict_freq.get(w, 0.0), upcoming, w))
+                upcoming += 1
+            idx = self.rng.randrange(min(CANDIDATE_FREQ_WINDOW, len(window)))
+            reordered.append(window.pop(idx)[2])
         return reordered
 
     def scrabble_first(self, i, cands):
@@ -13634,8 +13700,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # `index` is now a DualIndex (see its own docstring) — the same
     # dictionary on both sides (across/down) on a monolingual grid, two
     # distinct dictionaries on a bilingual one.
-    index_across = build_index(by_length, frequencies)
-    index_down = build_index(by_length_down, frequencies_down) if bilingual_active else index_across
+    index_across = build_index(
+        by_length, frequencies, load_dictionary_frequencies(wordlist_path)
+    )
+    index_down = build_index(
+        by_length_down, frequencies_down, load_dictionary_frequencies(bilingual_wordlist_path)
+    ) if bilingual_active else index_across
     index = DualIndex(index_across, index_down)
 
     # Theme preselection (see the docstring / `priority_words`). Words

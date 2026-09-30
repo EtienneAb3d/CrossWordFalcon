@@ -418,6 +418,16 @@ answers questions about this app or about solving the current grid; for
 anything else, it will politely point you elsewhere. Click the small
 button in its title bar to collapse or reopen it.
 
+### Asking DevBot how grids are built
+
+The page `/DevBot.html` (for instance `http://127.0.0.1:3000/DevBot.html`)
+shows a second assistant, **DevBot**, on its own. It answers questions
+about how the grid-generation algorithm works, from the project's
+technical documentation only, and replies in your language (the one
+chosen on the main page, otherwise your browser's). That documentation is
+long: the language model serving the app needs a context window of about
+45,000 tokens or more for DevBot to answer.
+
 ## Going further
 
 A technical document, for developers who want to understand or modify how

@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DevBot — CrossWordFalcon</title>
+  <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<!-- DevBot: a stand-alone page holding only a chat panel, whose replies
+     are grounded on the DOC_ALGO/FR files alone (POST /api/devchat).
+     Same markup and classes as index.html's #chatbot, laid out full-page
+     by the .devbot-page rules of style.css; logic in devbot.js. -->
+<body class="devbot-page">
+  <div id="chatbot">
+    <div id="chatbot-header">
+      <img src="logo.svg" alt="" id="chatbot-icon">
+      <span id="chatbot-title">DevBot</span>
+    </div>
+    <div id="chatbot-body">
+      <div id="chatbot-messages"></div>
+      <form id="chatbot-form">
+        <input type="text" id="chatbot-input" data-i18n-placeholder="chatbotInputPlaceholder"
+               autocomplete="off">
+        <button type="submit" id="chatbot-send-btn" class="chatbot-icon-btn"
+                data-i18n-aria="chatbotSendBtn" data-i18n-title="chatbotSendBtn">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <path d="M2.5 12 21 4l-7 17-3.2-6.8L2.5 12z" fill="currentColor"></path>
+          </svg>
+        </button>
+        <button type="button" id="chatbot-reset-btn" class="chatbot-icon-btn"
+                data-i18n-aria="chatbotResetBtn" data-i18n-title="chatbotResetBtn">
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+            <path d="M12 5V2L7.5 6.5 12 11V7.5a4.5 4.5 0 1 1-4.5 4.5H5a7 7 0 1 0 7-7z" fill="currentColor"></path>
+          </svg>
+        </button>
+      </form>
+    </div>
+  </div>
+  <script src="i18n.js"></script>
+  <script src="devbot.js"></script>
+</body>
+</html>

@@ -249,13 +249,16 @@ async def proxy_chat(request: Request):
     frontend's own chat-handling code already has to parse this event
     shape for that case regardless, so it degrades to the same handling
     here too, just reached a different way."""
-    body = await request.body()
+    return _relay_chat_stream("/api/chat", await request.body())
 
+
+def _relay_chat_stream(path, body):
+    """The streamed relay shared by proxy_chat and proxy_devchat."""
     async def relay():
         try:
             async with httpx.AsyncClient(timeout=CHAT_PROXY_TIMEOUT_S) as client:
                 async with client.stream(
-                    "POST", f"{BACKEND_URL}/api/chat",
+                    "POST", f"{BACKEND_URL}{path}",
                     content=body,
                     headers={"content-type": "application/json"},
                 ) as resp:
@@ -265,6 +268,13 @@ async def proxy_chat(request: Request):
             yield f"data: {json.dumps({'error': 'backend_unavailable'})}\n\n".encode()
 
     return StreamingResponse(relay(), media_type="text/event-stream")
+
+
+@app.post("/api/devchat")
+async def proxy_devchat(request: Request):
+    """DevBot page (frontend/static/DevBot.html) — same streamed relay
+    as proxy_chat."""
+    return _relay_chat_stream("/api/devchat", await request.body())
 
 
 @app.post("/api/generate/continue/{job_id}")

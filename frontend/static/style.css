@@ -4012,3 +4012,41 @@ button:disabled {
   font-variant-numeric: tabular-nums;
   text-shadow: 0 1px 0 var(--medal-gold-light);
 }
+
+/* DevBot page (DevBot.html, body.devbot-page): the #chatbot panel
+   alone, centered and filling the viewport height instead of floating
+   bottom-right; its message list takes all the remaining height. */
+body.devbot-page {
+  margin: 0;
+  padding: 1rem;
+  height: 100vh;
+  height: 100dvh;
+  box-sizing: border-box;
+}
+
+body.devbot-page #chatbot {
+  position: static;
+  width: 100%;
+  max-width: 900px;
+  height: 100%;
+  margin: 0 auto;
+}
+
+body.devbot-page #chatbot-body {
+  flex: 1;
+  min-height: 0;
+}
+
+body.devbot-page #chatbot-messages {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+body.devbot-page .chatbot-message {
+  font-size: 0.95rem;
+}
+
+body.devbot-page #chatbot-input {
+  font-size: 0.95rem;
+}

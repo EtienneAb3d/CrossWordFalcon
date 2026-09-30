@@ -175,12 +175,17 @@ class _TagStripper:
     """Removes every markup tag (`_TAG_RE`) from a streamed reply. A tag
     can arrive split across chunks, so the text from a "<" onwards is held
     back until it either closes as a tag (dropped) or can no longer be one
-    (a newline, a "<" or MAX_TAG_CHARS reached — released as is)."""
+    (a newline, a "<" or MAX_TAG_CHARS reached — released as is). With
+    `enabled=False` the text passes through untouched (DevBot, whose
+    replies quote names such as `wordlist_<lang>_freq.tsv`)."""
 
-    def __init__(self):
+    def __init__(self, enabled=True):
         self.pending = ""
+        self.enabled = enabled
 
     def feed(self, text):
+        if not self.enabled:
+            return text
         out = []
         for ch in text:
             if not self.pending:
@@ -250,6 +255,51 @@ def _fixed_prompt_head(doc_user):
         "the player's language set by the rules below — never copy an English passage "
         "from it into your reply:\n"
         f"{doc_user}\n\n"
+    )
+
+
+DOC_ALGO_DIR = Path(__file__).resolve().parent.parent / "DOC_ALGO" / "FR"
+
+_doc_algo_cache = None
+
+
+def _load_doc_algo():
+    """Every Markdown file of DOC_ALGO/FR/, in file-name order, each under
+    a `===== <file name> =====` header line — DevBot's only knowledge
+    (see ChatBot.dev_reply_stream). Read once and cached for the
+    process's lifetime; an unreadable directory or file is skipped, never
+    raised."""
+    global _doc_algo_cache
+    if _doc_algo_cache is None:
+        parts = []
+        try:
+            paths = sorted(DOC_ALGO_DIR.glob("*.md"), key=lambda p: p.name)
+        except OSError as e:
+            logger.warning("could not list %s: %s", DOC_ALGO_DIR, e)
+            paths = []
+        for path in paths:
+            try:
+                parts.append(f"===== {path.name} =====\n{path.read_text(encoding='utf-8')}\n\n")
+            except OSError as e:
+                logger.warning("could not read %s: %s", path, e)
+        _doc_algo_cache = "".join(parts)
+    return _doc_algo_cache
+
+
+def _dev_prompt_head(doc_algo):
+    """The part of DevBot's system prompt that never varies between two
+    requests — the introduction and the whole DOC_ALGO/FR text — placed
+    first so the LLM server's prefix cache reuses it."""
+    return (
+        "You are DevBot, the technical assistant of CrossWordFalcon, a crossword-grid "
+        "generator. You explain how its grid-generation algorithm works to a reader who "
+        "wants to understand it without reading the code.\n\n"
+        "Reference documentation of the algorithm — your ONLY source of knowledge. It is "
+        "written in French, but that is NOT the language to reply in: use its content to "
+        "answer, rephrased in your own words in the reader's language set by the rules "
+        "below — never copy a French passage from it into a reply written in another "
+        "language:\n"
+        f"{doc_algo}\n"
     )
 
 
@@ -1440,6 +1490,55 @@ class ChatBot:
             f"reply's word."
         )
 
+    def _build_dev_prompt(self, language):
+        """DevBot's system prompt: the fixed head (introduction + every
+        DOC_ALGO/FR file), then the reply-language-dependent rules."""
+        language_name = LANGUAGE_NAMES.get(language, language)
+        return (
+            _dev_prompt_head(_load_doc_algo())
+            + f"Write EVERY reply entirely in {language_name}. This is not optional and applies "
+            "to every message you ever send.\n\n"
+            "STRICT RULES:\n"
+            f"1. LANGUAGE. Your entire reply MUST be written in {language_name} — every word "
+            "of it, whatever language the reader writes to you in, and even though the "
+            f"documentation above is in French. If {language_name} is not French, translate "
+            "what you take from the documentation; do NOT reply in French. Only code "
+            "identifiers (function, class, constant and file names such as "
+            "`Filler._backtrack` or `MAX_DESCENTS_PER_NODE`) stay exactly as written. A "
+            "French term of the documentation's own vocabulary (« emplacement écarté », "
+            f"« palier »…) is translated into {language_name}, with the original French term "
+            "in parentheses the first time it appears.\n"
+            "2. Answer ONLY from the documentation above. When it does not cover the "
+            "question, say so plainly — never invent a mechanism, a constant, a value or a "
+            "function name, and never answer from general knowledge about crossword "
+            "solvers. A question unrelated to CrossWordFalcon's algorithm gets a short, "
+            "polite reply that this assistant only covers that documentation.\n"
+            "3. Be precise: name the functions, classes and constants the documentation "
+            "cites for the point you explain, with their values when it gives them.\n"
+            "4. Be concise and structured: a direct answer first, then the details that "
+            "matter, as short paragraphs or a list. No essay, no summary of the whole "
+            "documentation unless asked.\n"
+            "5. NEVER start a reply with a greeting or by introducing yourself: a welcome "
+            "message has already been shown. Start directly with the answer.\n"
+            "6. NEVER think out loud or show your reasoning process: write only the final "
+            "answer.\n\n"
+            f"FINAL REMINDER: reply in {language_name}, from the documentation above only."
+        )
+
+    async def dev_reply_stream(self, history, message, language="fr",
+                                timeout=DEFAULT_TIMEOUT, on_prompt=None):
+        """DevBot's reply (the DevBot.html page), streamed like
+        reply_stream: one LLM call whose system prompt holds the
+        DOC_ALGO/FR files and nothing of the interface or of any grid.
+        `on_prompt`, if given, receives the exact messages sent."""
+        messages = [{"role": "system", "content": self._build_dev_prompt(language)}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": message})
+        if on_prompt is not None:
+            on_prompt(messages)
+        async for chunk in self._stream_completion(messages, timeout, strip_tags=False):
+            yield chunk
+
     async def reply_stream(self, history, message, language="fr", ui_context=None,
                            timeout=DEFAULT_TIMEOUT, on_prompt=None, on_route=None):
         """Same purpose as a plain `reply()` would have, but yields the
@@ -1616,7 +1715,7 @@ class ChatBot:
             text = text[:start] + "…" + text[end:]
         return text
 
-    async def _stream_completion(self, messages, timeout):
+    async def _stream_completion(self, messages, timeout, strip_tags=True):
         """The streamed chat-completions call behind every reply: yields
         the visible text chunk by chunk, `<think>` blocks and markup tags
         removed (see reply_stream's docstring for the filtering)."""
@@ -1624,7 +1723,7 @@ class ChatBot:
         yielded_anything = False
         # Every visible piece goes through the tag filter before it is
         # yielded (see _TagStripper).
-        tags = _TagStripper()
+        tags = _TagStripper(strip_tags)
         reasoning_state = {
             "none": "disabled",
             "close_only": "in_reasoning",

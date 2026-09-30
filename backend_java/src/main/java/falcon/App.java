@@ -484,6 +484,14 @@ public final class App {
 
     static void appendChatLog(String sessionId, String language, String message, String reply, Double firstTokenS,
                               Double totalS, List<Object> promptMessages, ChatBot.Route route, String pseudo) {
+        appendChatLog(sessionId, language, message, reply, firstTokenS, totalS, promptMessages, route, pseudo,
+                "David FALCON");
+    }
+
+    /** {@code botName} labels the reply ("DevBot" for POST /api/devchat). */
+    static void appendChatLog(String sessionId, String language, String message, String reply, Double firstTokenS,
+                              Double totalS, List<Object> promptMessages, ChatBot.Route route, String pseudo,
+                              String botName) {
         Path path = chatLogPath(sessionId);
         StringBuilder sb = new StringBuilder();
         sb.append("## ").append(LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")))
@@ -502,7 +510,7 @@ public final class App {
         if (promptMessages != null && !promptMessages.isEmpty()) {
             appendPromptDetails(sb, "Prompt " + (keyword != null ? keyword : "complet") + " envoyé au LLM", promptMessages);
         }
-        sb.append("**David FALCON** : ").append(reply).append("\n\n");
+        sb.append("**").append(botName).append("** : ").append(reply).append("\n\n");
         if (firstTokenS != null || totalS != null) {
             List<String> bits = new ArrayList<>();
             if (firstTokenS != null) bits.add("premier mot reçu après " + Py.fmt(firstTokenS, 2) + "s");
@@ -1877,6 +1885,44 @@ public final class App {
                                     ? sofar + "\n\n*(échec en cours de réponse : " + e.getMessage() + ")*"
                                     : "*(échec : " + e.getMessage() + ")*", firstToken[0], total,
                             captured.isEmpty() ? null : captured, route[0], pseudo);
+                }
+            });
+        });
+        // DevBot (frontend/static/DevBot.html): grounded on DOC_ALGO/FR only.
+        w.post("/api/devchat", r -> {
+            Body b = new Body(r.json());
+            String message = b.required("message");
+            List<Object> history = new ArrayList<>();
+            for (Object m : b.list("history", false)) {
+                Body mb = new Body(Json.mapOrEmpty(m));
+                history.add(Json.obj("role", mb.required("role"), "content", mb.required("content")));
+            }
+            String language = b.str("language", "fr");
+            String sessionId = b.str("session_id", null);
+            return new Web.Stream("text/event-stream; charset=utf-8", out -> {
+                StringBuilder full = new StringBuilder();
+                long start = System.nanoTime();
+                Double[] firstToken = {null};
+                List<Object> captured = new ArrayList<>();
+                try {
+                    INTERACTIVE_CHATBOT.devReplyStream(history, message, language, ChatBot.DEFAULT_TIMEOUT,
+                            CHATBOT_DEBUG ? captured::addAll : null, chunk -> {
+                                if (firstToken[0] == null) firstToken[0] = (System.nanoTime() - start) / 1e9;
+                                full.append(chunk);
+                                writeSse(out, "data: " + Json.dumpsAscii(Json.obj("delta", chunk)) + "\n\n");
+                            });
+                    double total = (System.nanoTime() - start) / 1e9;
+                    writeSse(out, "data: [DONE]\n\n");
+                    appendChatLog(sessionId, language, message, full.toString(), firstToken[0], total,
+                            captured.isEmpty() ? null : captured, null, null, "DevBot");
+                } catch (ChatBot.ChatError e) {
+                    double total = (System.nanoTime() - start) / 1e9;
+                    writeSse(out, "data: " + Json.dumpsAscii(Json.obj("error", e.getMessage())) + "\n\n");
+                    String sofar = full.toString();
+                    appendChatLog(sessionId, language, message, !sofar.isEmpty()
+                                    ? sofar + "\n\n*(échec en cours de réponse : " + e.getMessage() + ")*"
+                                    : "*(échec : " + e.getMessage() + ")*", firstToken[0], total,
+                            captured.isEmpty() ? null : captured, null, null, "DevBot");
                 }
             });
         });

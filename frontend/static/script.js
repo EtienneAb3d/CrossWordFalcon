@@ -1371,10 +1371,9 @@ function setStatus(message, isError) {
 //
 // Each mini-grid also gets a small stats line above it (`.attempt-preview-
 // stats`, in a new `.attempt-preview-item` wrapper alongside the grid), at
-// the user's explicit request: the black-cell rate and the letter-fill
-// rate, both computed against the *same* denominator (total cells in that
-// example_grid) so the two percentages stay directly comparable — reading
-// "62% noir, 30% rempli" also implicitly says 8% is still blank. The fill
+// the user's explicit request: the black-cell rate (share of the grid's
+// total cells) and the letter-fill rate (share of its white cells only,
+// like Interactive mode's own fill figure). The fill
 // count is derived straight from `example_grid` (any character other than
 // "." or "#"), independent of `showPreviewLetters` — it reflects the
 // search's real progress at that snapshot, not whatever the toggle
@@ -1457,10 +1456,10 @@ function renderAttemptPreview(examples) {
     else if (liveStatus === "interrupted") miniGrid.classList.add("live-interrupted");
     miniGrid.style.gridTemplateColumns = `repeat(${width}, 1.1rem)`;
     const cellElementsByCoord = new Map();
-    // Rates shown above each grid, at the user's explicit request — black
-    // cells / total, white cells already carrying a real letter / total,
-    // and cells deemed unplayable / total (the same denominator for all
-    // three, so they stay directly comparable). An undetermined white
+    // Rates shown above each grid — black cells / total cells, white
+    // cells already carrying a real letter / white cells (so a fully
+    // lettered grid reads 100 % whatever its black-cell rate), and cells
+    // deemed unplayable / total cells. An undetermined white
     // cell ("." in example_grid) never counts as "filled," whether
     // showPreviewLetters shows its letter or not — this rate reflects the
     // search's real progress, not what the player currently sees on
@@ -1610,7 +1609,8 @@ function renderAttemptPreview(examples) {
     }
     const totalCells = height * width;
     const blackPercent = Math.round((100 * blackCount) / totalCells);
-    const fillPercent = Math.round((100 * filledCount) / totalCells);
+    const whiteCells = totalCells - blackCount;
+    const fillPercent = whiteCells ? Math.round((100 * filledCount) / whiteCells) : 0;
     const impossiblePercent = Math.round((100 * impossibleSet.size) / totalCells);
     const stats = document.createElement("p");
     stats.className = "attempt-preview-stats";

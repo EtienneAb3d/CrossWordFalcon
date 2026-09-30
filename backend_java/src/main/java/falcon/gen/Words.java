@@ -13,6 +13,7 @@ import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -132,10 +133,38 @@ public final class Words {
         return new Lexicon(byLength, accents, canonicals, frequencies);
     }
 
-    public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies) {
+    public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
+                                                    Map<String, Double> dictionaryFrequencies) {
         Map<Integer, LenIndex> index = new LinkedHashMap<>();
-        byLength.forEach((len, words) -> index.put(len, new LenIndex(len, words, frequencies)));
+        byLength.forEach((len, words) -> index.put(len, new LenIndex(len, words, frequencies, dictionaryFrequencies)));
         return index;
+    }
+
+    private static final Map<String, Map<String, Double>> DICTIONARY_FREQUENCIES = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** {MOT: FREQUENCE} for every word of the freq wordlist at {@code path} (the highest value when a MOT has
+     * several rows), whatever the difficulty cut, read once per process (mirrors load_dictionary_frequencies). */
+    public static Map<String, Double> loadDictionaryFrequencies(String path) throws IOException {
+        Map<String, Double> cached = DICTIONARY_FREQUENCIES.get(path);
+        if (cached != null) return cached;
+        synchronized (DICTIONARY_FREQUENCIES) {
+            cached = DICTIONARY_FREQUENCIES.get(path);
+            if (cached != null) return cached;
+            Map<String, Double> result = new HashMap<>();
+            try (BufferedReader r = Files.newBufferedReader(Path.of(path), StandardCharsets.UTF_8)) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    if (line.isEmpty() || line.startsWith("#")) continue;
+                    String[] parts = line.split("\t", -1);
+                    if (parts.length < 2) continue;
+                    double freq = parseFreq(parts.length >= 3 ? parts[2] : parts[1]);
+                    String word = parts[0].toUpperCase(Locale.ROOT);
+                    if (freq > result.getOrDefault(word, 0.0)) result.put(word, freq);
+                }
+            }
+            DICTIONARY_FREQUENCIES.put(path, result);
+            return result;
+        }
     }
 
     // ---------------------------------------------------------------- dual structures

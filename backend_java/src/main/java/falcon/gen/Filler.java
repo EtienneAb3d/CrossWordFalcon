@@ -8,6 +8,8 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -32,12 +34,16 @@ public final class Filler {
     public static final int UNFILLABLE_ABANDON_SLOT_COUNT = 3;
     public static final int UNFILLABLE_ABANDON_CHECK_INTERVAL = 500;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
-    public static final int CANDIDATE_SCORE_WINDOW = 50;
+    public static final int CANDIDATE_SCORE_WINDOW = 100;
+    // Of that window, re-sorted by frequency in the freq wordlist, the most frequent words the draw is made among.
     // A node receiving a backjump (a failure passed up through a node that
     // skipped its other candidates) may make only one more descent.
     public static final int MAX_DESCENTS_PER_NODE = 10;
+    // Twice the descents a node makes; the whole score window when the descent cap is disabled.
+    public static final int CANDIDATE_FREQ_WINDOW =
+            MAX_DESCENTS_PER_NODE > 0 ? 2 * MAX_DESCENTS_PER_NODE : CANDIDATE_SCORE_WINDOW;
     public static final int EARLY_DESCENTS_WORD_COUNT = 10;
-    public static final int EARLY_MAX_DESCENTS_PER_NODE = 50;
+    public static final int EARLY_MAX_DESCENTS_PER_NODE = 2 * MAX_DESCENTS_PER_NODE;
     // An attempt starting from locked cells (inherited from a previous
     // palier) applies no descent cap at all.
     public static final boolean BACKJUMPING_ENABLED = true;
@@ -569,7 +575,9 @@ public final class Filler {
     }
 
     /** Shuffle, rank by statistical score divided by (1 + times the word was already placed on this
-     * slot), then draw at random inside a sliding window of the CANDIDATE_SCORE_WINDOW best remaining words. */
+     * slot), then take each pick from a sliding window of the CANDIDATE_SCORE_WINDOW best remaining words: the
+     * window is re-sorted by frequency in the freq wordlist (highest first, 0 for a word absent from it, ties
+     * keeping the score order) and the pick is drawn at random among its CANDIDATE_FREQ_WINDOW most frequent. */
     public List<String> orderedCandidates(int i, Collection<String> candsIn) {
         List<String> cands = new ArrayList<>(candsIn);
         rng.shuffle(cands);
@@ -585,13 +593,23 @@ public final class Filler {
         }
         Arrays.sort(order, (a, b) -> Double.compare(scores[b], scores[a]));
         List<String> reordered = new ArrayList<>(n);
-        List<String> window = new ArrayList<>(CANDIDATE_SCORE_WINDOW);
+        LenIndex li = index.get(slots.get(i));
+        double[] dictFreq = new double[n];
+        if (li != null) for (int k = 0; k < n; k++) dictFreq[k] = li.dictFreqOf(cands.get(order[k]));
+        // window: score ranks of the best-scored words not drawn yet, sorted by (frequency descending, rank).
+        Comparator<Integer> byFreq = (a, b) -> {
+            int c = Double.compare(dictFreq[b], dictFreq[a]);
+            return c != 0 ? c : Integer.compare(a, b);
+        };
+        List<Integer> window = new ArrayList<>(CANDIDATE_SCORE_WINDOW);
         int next = 0;
-        while (next < n && window.size() < CANDIDATE_SCORE_WINDOW) window.add(cands.get(order[next++]));
-        while (!window.isEmpty()) {
-            int idx = rng.randrange(window.size());
-            reordered.add(window.remove(idx));
-            if (next < n) window.add(cands.get(order[next++]));
+        while (next < n || !window.isEmpty()) {
+            while (next < n && window.size() < CANDIDATE_SCORE_WINDOW) {
+                int at = Collections.binarySearch(window, next, byFreq);
+                window.add(-at - 1, next++);
+            }
+            int idx = rng.randrange(Math.min(CANDIDATE_FREQ_WINDOW, window.size()));
+            reordered.add(cands.get(order[window.remove(idx)]));
         }
         return reordered;
     }

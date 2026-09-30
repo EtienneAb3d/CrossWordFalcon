@@ -124,7 +124,8 @@ public final class Generator {
             String lang = Words.langFromPath(path);
             // The whole Scrabble wordlist joins the lexicon, whatever the difficulty (merge_scrabble_lexicon).
             Set<String> scrabble = Words.mergeScrabbleLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, easy);
-            Map<Integer, LenIndex> idx = Words.buildIndex(lex.byLength(), lex.frequencies());
+            Map<Integer, LenIndex> idx = Words.buildIndex(lex.byLength(), lex.frequencies(),
+                    Words.loadDictionaryFrequencies(path));
             Set<String> proper = new HashSet<>();
             if (!Words.PROPER_NOUN_EXCLUDED_LANGS.contains(lang)) {
                 lex.accents().forEach((w, acc) -> {

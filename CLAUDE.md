@@ -302,7 +302,8 @@ json`. Holds all server-side state in plain module dicts/lists:
   automatic-generation attempt-preview snapshot as an editable draft),
   `/finish` (hand the current grid to automatic generation, locking
   already-placed letters — see below).
-- *Chat*: `POST /api/chat` (streamed "David FALCON" reply).
+- *Chat*: `POST /api/chat` (streamed "David FALCON" reply), `POST
+  /api/devchat` (streamed "DevBot" reply, see `chatbot.py`).
 - *Qdrant admin* (localhost-only, gated by `frontend/server.py`): `GET
   /api/qdrant/admin`, `POST /api/qdrant/admin/recreate`, `POST /api/
   qdrant/admin/delete-tenant`.
@@ -493,10 +494,17 @@ via `ProcessPoolExecutor`:
    (square root of the sum of squared per-cell statistical letter scores
    from `sample_letter_biases`, which draws `LETTER_BIAS_SAMPLE_SIZE=10`
    words per slot) divided by (1 + the number of times the search already
-   placed that word on this slot during the attempt, `_tried_words`) with a random draw inside a `CANDIDATE_SCORE_
-   WINDOW=50`-word sliding window — deliberately far narrower than a
-   slot's own domain, so the statistical ranking stays in charge while two
-   attempts on the same state still diverge; the slot's words of its
+   placed that word on this slot during the attempt, `_tried_words`) with each pick taken from a `CANDIDATE_SCORE_
+   WINDOW=100`-word sliding window of the best remaining words —
+   deliberately far narrower than a slot's own domain, so the statistical
+   ranking stays in charge — re-sorted by frequency in the freq wordlist
+   (`index[length]["dict_freq"]`, built by `build_index` from
+   `load_dictionary_frequencies(path)`: the file's own FREQUENCE whatever
+   the difficulty cut, 0 for a word absent from it; highest first, ties
+   keeping the score order; Java `LenIndex.dictFreq`/`Words.
+   loadDictionaryFrequencies`) and drawn at random among its
+   `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE` = 20) most frequent words, so two attempts on the
+   same state still diverge; the slot's words of its
    direction's Scrabble dictionary (`Filler.scrabble_words`) are then
    pulled ahead of the rest as a stable block (`Filler.scrabble_first`),
    a themed grid's matching words are
@@ -769,7 +777,7 @@ is inherited by everything placed below a release and restores itself as
 the backtrack unwinds back above the node that released it.
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
 `MAX_DESCENTS_PER_NODE` (10; `<= 0` disables it) — set to
-`EARLY_MAX_DESCENTS_PER_NODE` (50) for a node entered while fewer than
+`EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 20) for a node entered while fewer than
 `EARLY_DESCENTS_WORD_COUNT` (10) words are in place on top of the
 attempt's initial state (`Filler._initial_assigned_count`, the words
 already assigned when `solve()` starts), and removed entirely for an
@@ -1979,6 +1987,27 @@ is in English but must be rephrased in the reply language, never quoted.
 the reply incrementally (server-sent-events style) and strips `<think>...
 </think>` reasoning blocks according to `CHATBOT_THINK_FILTER`.
 
+**DevBot** (`frontend/static/DevBot.html`, `POST /api/devchat`,
+`DevChatRequest`: `message`, `history`, `language`, `session_id`) is a
+second assistant on the same class and LLM endpoint
+(`ChatBot.dev_reply_stream`, Java `devReplyStream`), answering questions
+about the generation algorithm. One streamed LLM call, no classification,
+no interface state: its system prompt (`_build_dev_prompt`) opens with
+the fixed head `_dev_prompt_head` — an introduction, then every `*.md`
+file of `DOC_ALGO/FR/` in file-name order, each under a `===== <file
+name> =====` line (`_load_doc_algo`, read once per process) — followed by
+the rules naming the reply language (`language`, the page's own): reply
+in that language although the documentation is French, translate its
+vocabulary (French term in parentheses on first use), keep code
+identifiers as written, answer from the documentation only. The reply
+skips `_TagStripper` (`strip_tags=False`), so a quoted name such as
+`wordlist_<lang>_freq.tsv` stays whole. Each turn is logged in
+`LOG_CHAT/` like a David FALCON one, the reply labelled "DevBot"
+(`_append_chat_log(bot_name=)`). The whole prompt is about 40,000 tokens:
+the LLM server's context window must hold it plus the conversation and
+`MAX_TOKENS`, otherwise the server refuses the request and the page shows
+its error message.
+
 ### `grid_store.py` — persistence
 
 Four independent filesystem stores, one JSON file shape shared with the
@@ -2260,6 +2289,17 @@ state, unlike the backend).
   consumed by `script.js`'s `applyTranslations`/`describeStep`/`describe
   ErrorCode`. `SUPPORTED_UI_LANGS` in `script.js` lists the same six
   codes.
+- **`DevBot.html`/`devbot.js`** — a stand-alone page
+  (`/DevBot.html`) showing only a chat panel: the `#chatbot` markup and
+  classes of `index.html`, laid out full-page by `style.css`'s
+  `body.devbot-page` rules, without the collapse button. `devbot.js`
+  (the page loads `i18n.js` but not `script.js`) picks the language —
+  `?lang=` in the URL, else `cwf-prefs`' `lang`, else the browser's, else
+  English —, translates the page from `I18N` (`devbotPageTitle`,
+  `devbotWelcome`, the `chatbot*` strings), and streams `POST
+  /api/devchat` with its own copies of the Markdown renderer (no `_x_`
+  italics, replies being full of identifiers) and SSE reader. The
+  session id is prefixed `devbot-`.
 - **`ai-icons/`** — local copies of the official logos of the external AI
   assistants the Dictionnaire and Paraphraseur panels link to
   (`#dictionary-ai-buttons`/`#paraphrase-ai-buttons`, class `.ai-buttons`:

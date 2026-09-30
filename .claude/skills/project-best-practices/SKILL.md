@@ -1253,7 +1253,7 @@ the current defaults/behavior to know before touching this code.
   squares`, a solitary CLI run) is unaffected — same plain, unconditional
   stop as always.
 - **Each `Filler._backtrack` node makes at most `MAX_DESCENTS_PER_NODE`
-  (10) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (50) while the
+  (10) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 20) while the
   search has placed fewer than `EARLY_DESCENTS_WORD_COUNT` (10) words on
   top of the attempt's initial state — before returning `False` to its parent — one
   cap shared by all four stages of the node, `allow_breaking` included;
@@ -1431,9 +1431,12 @@ the current defaults/behavior to know before touching this code.
   cell of the placed word, each costing one `_domain` call the node
   already pays for every unassigned slot. Candidates are shuffled, ranked by a
   root-of-sum-of-squares score against `letter_scores`, then drawn via a
-  `CANDIDATE_SCORE_WINDOW`-wide sliding window (random among the best
-  remaining, not a strict rank order) — this ranking is always active,
-  independent of whether letter-forcing itself is on. The window is **50**
+  `CANDIDATE_SCORE_WINDOW`-wide sliding window of the best remaining
+  words, re-sorted by frequency in the freq wordlist (highest first, 0 for
+  a word absent from it) and cut to its `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE` = **20**)
+  most frequent words, the pick being random among those (not a strict
+  rank order) — this ranking is always active,
+  independent of whether letter-forcing itself is on. The window is **100**
   — deliberately far narrower than a slot's own domain, which routinely
   holds thousands of words: a window wider than the domain puts every
   candidate in it at every draw, which makes the order a plain uniform
@@ -2022,6 +2025,14 @@ the current defaults/behavior to know before touching this code.
 
 ### LLM clue generation (`backend/clues.py`)
 
+- **DevBot reads `DOC_ALGO/FR/` whole, at run time.** The `DevBot.html`
+  page's assistant (`POST /api/devchat`, `ChatBot.dev_reply_stream`) is
+  fed every `*.md` file of `DOC_ALGO/FR/` and nothing else, and replies in
+  the visitor's language whatever the documentation's own. A file added
+  to that directory reaches it with no code change (after a back-end
+  restart: the text is cached per process). The prompt is about as long
+  as those files (~40,000 tokens): the LLM server's context window must
+  exceed it, and growing `DOC_ALGO/FR/` grows that requirement.
 - **LLM prompts put their fixed part first.** Any long prompt text that
   never varies between requests (the ChatBot's introduction and full
   `DOC_USER` text) precedes every language-, grid- or state-dependent
