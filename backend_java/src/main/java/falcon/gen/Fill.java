@@ -19,6 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerArray;
 import java.util.concurrent.atomic.AtomicLongArray;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import static falcon.gen.Grids.BLACK;
 import static falcon.gen.Grids.WHITE;
@@ -386,11 +387,12 @@ public final class Fill {
         public Set<Integer> requiredCells;
         /** Lets the search reshape the pattern for a "Mots Défi"/theme word (mirrors reshape_black_cells). */
         public boolean reshapeBlackCells;
-        /** Early hardclean threshold in percent, 100 = off (mirrors try_fill's early_hardclean_percent). */
+        /** Early hardclean threshold in percent, 100 = off (mirrors try_fill's early_hardclean_percent). It runs
+         * inside the search (Filler.earlyHardclean), which may unlock letters and add unlocked seeds: every preview
+         * and the diagnostics read the Filler's current forced/locked letters. */
         public int earlyHardcleanPercent = 100;
-        /** Checks already spent by the same attempt before this call, so the budget, the progress shown and
-         * diag.checks stay cumulative across an early hardclean (mirrors try_fill's initial_checks). */
-        public long initialChecks;
+        /** Cells the early hardclean never clears (mirrors try_fill's permanent_locked_letters). */
+        public Map<Integer, Character> permanentLocked;
         public Set<Integer> permanentBlackCells;
         /** Scrabble family of the candidate order (mirrors try_fill's scrabble_words). */
         public PW scrabbleWords;
@@ -432,32 +434,45 @@ public final class Fill {
             }
             return null;
         }
-        Set<Integer> allSlotCells = new HashSet<>();
-        for (int[] s : slots) for (int c : s) allSlotCells.add(c);
-        List<Integer> lockedCells;
-        if (a.lockedLetters != null && !a.lockedLetters.isEmpty()) {
+        // Recomputed on every publication: an early hardclean (Filler.earlyHardclean) unlocks the locked letters
+        // it erases and takes off preseeded words.
+        final boolean lockedFromLetters = a.lockedLetters != null && !a.lockedLetters.isEmpty();
+        final Filler[] fillerRef = new Filler[1];
+        final List<int[]> initialSlots = slots;
+        Supplier<List<Integer>> lockedCells = () -> {
+            Filler f = fillerRef[0];
             TreeSet<Integer> t = new TreeSet<>();
-            for (int cell : a.lockedLetters.keySet()) if (allSlotCells.contains(cell)) t.add(cell);
-            lockedCells = new ArrayList<>(t);
-        } else if (a.preseedAssignment != null) {
-            TreeSet<Integer> t = new TreeSet<>();
-            for (int i = 0; i < a.preseedAssignment.length; i++) {
-                if (a.preseedAssignment[i] != null) for (int c : slots.get(i)) t.add(c);
+            if (lockedFromLetters) {
+                Set<Integer> allSlotCells = new HashSet<>();
+                for (int[] s : f.slots) for (int c : s) allSlotCells.add(c);
+                for (int cell : f.lockedLetters.keySet()) if (allSlotCells.contains(cell)) t.add(cell);
+            } else if (a.preseedAssignment != null) {
+                Map<Integer, Character> known = f.knownCells();
+                for (int i = 0; i < a.preseedAssignment.length; i++) {
+                    String w = a.preseedAssignment[i];
+                    if (w == null) continue;
+                    int[] cells = initialSlots.get(i);
+                    boolean present = true;
+                    for (int p = 0; p < cells.length && present; p++) {
+                        Character k = known.get(cells[p]);
+                        present = k != null && k == w.charAt(p);
+                    }
+                    if (present) for (int c : cells) t.add(c);
+                }
             }
-            lockedCells = new ArrayList<>(t);
-        } else {
-            lockedCells = new ArrayList<>();
-        }
+            return new ArrayList<>(t);
+        };
         PW pw = a.priorityWords == null ? PW.EMPTY : a.priorityWords;
         Set<String> cw = a.challengeWords == null ? Set.of() : a.challengeWords;
         Filler filler = new Filler(slots, index, rng, a.forcedLetters, a.letterScores, a.excludedSlots, a.cancelEvent,
                 a.batchAbandonedEvent, a.attemptDoneEvent, null, a.lockedLetters, pw, cw, rows, cols);
+        fillerRef[0] = filler;
         filler.scrabbleWords = a.scrabbleWords == null ? PW.EMPTY : a.scrabbleWords;
         filler.pattern = Grids.copy(grid);
         filler.bestPattern = filler.pattern;
         filler.reshapeEnabled = a.reshapeBlackCells && (a.excludedSlots == null || a.excludedSlots.isEmpty());
         filler.earlyHardcleanPercent = a.earlyHardcleanPercent;
-        filler.checks = a.initialChecks;
+        filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
         if (a.checksProgress != null && a.checksSlot != null) {
             final int slot = a.checksSlot;
@@ -472,8 +487,8 @@ public final class Fill {
             filler.onNewBest = best -> {
                 // Called right as the record is taken: the Filler's current
                 // pattern and slots are the ones `best` lives on.
-                Object[] partial = Grids.buildPartialLettersGrid(filler.pattern, filler.slots, best, a.forcedLetters,
-                        a.lockedLetters);
+                Object[] partial = Grids.buildPartialLettersGrid(filler.pattern, filler.slots, best, filler.forcedLetters,
+                        filler.lockedLetters);
                 Diag m = new Diag();
                 m.grid = Grids.copy(filler.pattern);
                 m.assignment = best.clone();
@@ -486,7 +501,7 @@ public final class Fill {
                 @SuppressWarnings("unchecked")
                 List<Integer> fc = (List<Integer>) partial[1];
                 m.forcedCells = fc;
-                m.lockedCells = lockedCells;
+                m.lockedCells = lockedCells.get();
                 m.themeCells = themeWordCells(filler.slots, best, pw);
                 m.challengeCells = challengeWordCellsFromAssignment(filler.slots, best, cw);
                 m.checks = filler.checks;
@@ -495,8 +510,8 @@ public final class Fill {
                 a.bestStateQueue.accept(m);
             };
             filler.onLiveState = current -> {
-                Object[] partial = Grids.buildPartialLettersGrid(filler.pattern, filler.slots, current, a.forcedLetters,
-                        a.lockedLetters);
+                Object[] partial = Grids.buildPartialLettersGrid(filler.pattern, filler.slots, current, filler.forcedLetters,
+                        filler.lockedLetters);
                 Diag m = new Diag();
                 m.exampleGrid = (char[][]) partial[0];
                 m.impossibleCells = filler.emptyDomainZoneCells(current);
@@ -506,7 +521,7 @@ public final class Fill {
                 @SuppressWarnings("unchecked")
                 List<Integer> fc = (List<Integer>) partial[1];
                 m.forcedCells = fc;
-                m.lockedCells = lockedCells;
+                m.lockedCells = lockedCells.get();
                 m.themeCells = themeWordCells(filler.slots, current, pw);
                 m.challengeCells = challengeWordCellsFromAssignment(filler.slots, current, cw);
                 m.checks = filler.checks;
@@ -561,11 +576,11 @@ public final class Fill {
             diag.checks = filler.checks;
             diag.reason = overProper ? "too_many_proper_nouns" : overNonGloss ? "too_many_non_gloss_words"
                     : complete ? "solved" : filler.interruptedBySibling ? "interrupted_other_attempt_done"
-                    : filler.earlyHardcleanTriggered ? "early_hardclean" : filler.abandoned ? "abandoned_too_unfillable" : filler.checks >= deadline ? "deadline_exceeded"
+                    : filler.abandoned ? "abandoned_too_unfillable" : filler.checks >= deadline ? "deadline_exceeded"
                     : solvedInternally ? "blocked_on_excluded_slot" : "search_exhausted";
             if (!complete) {
-                Object[] partial = Grids.buildPartialLettersGrid(grid, slots, filler.bestAssignment, a.forcedLetters,
-                        a.lockedLetters);
+                Object[] partial = Grids.buildPartialLettersGrid(grid, slots, filler.bestAssignment, filler.forcedLetters,
+                        filler.lockedLetters);
                 diag.exampleGrid = (char[][]) partial[0];
                 @SuppressWarnings("unchecked")
                 List<Integer> fc = (List<Integer>) partial[1];
@@ -592,8 +607,8 @@ public final class Fill {
                     for (int i : quota) for (int c : slots.get(i)) ic.add(c);
                     diag.impossibleCells = new ArrayList<>(ic);
                 }
-                diag.lockedCells = lockedCells;
-                diag.lockedLetters = a.lockedLetters == null ? Map.of() : new java.util.TreeMap<>(a.lockedLetters);
+                diag.lockedCells = lockedCells.get();
+                diag.lockedLetters = new java.util.TreeMap<>(filler.lockedLetters);
                 diag.themeCells = themeWordCells(slots, filler.bestAssignment, pw);
                 diag.challengeCells = challengeWordCellsFromAssignment(slots, filler.bestAssignment, cw);
                 diag.attemptId = a.attemptId;

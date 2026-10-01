@@ -730,27 +730,33 @@ whole search restart from a blank grid.
 
 **Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10, 100 = off; Java
 `Filler.EARLY_HARDCLEAN_PERCENT`): the second chance's hard clean, triggered
-earlier and inside the attempt. At the start of `Filler.solve` (on the
-inherited state) and in `Filler._backtrack`, right as a new
-record is taken (the one moment `best_assignment` certainly lives on the
-current slots/pattern), `_early_hardclean_due` tests whether the cells of the
-record's impossible slots reach that percentage of ALL the grid's cells; if
-so the search stops (`abandoned` + `early_hardclean_triggered`, reason
-`early_hardclean`, `try_fill(early_hardclean_percent=)`, passed only by the
-generation attempts). `_resume_after_early_hardclean` (Java `Generator.
-resumeAfterEarlyHardclean`), called by `_pattern_attempt`/`_pattern_continue`
-inside their `attempt_active` window, then hard-cleans the diagnostics with
-`_second_chance_seed` (no black cell touched) and resumes the search from the
-cleaned state through `_continue_search` (the body of `_pattern_continue`
-between its arguments and `try_fill`): same process, same `seed` (tile and
-lineage), same `rng` stream, `try_fill(initial_checks=)` keeping the check
-count and so the budget cumulative. The attempt is never reported failed nor
-ended, so the harvest loop never sees the `early_hardclean` reason and the
-palier is not left; the final `(grid, result, diag)` is the last search's.
-A cleaned state (pattern + locked letters) already produced earlier in the
-same attempt switches the early hardclean off for the rest of it. The
-resumed search starts from locked letters, hence is `Filler._inherited`
-(no descent cap), like any "reprise".
+earlier and done inside the search, which is never stopped for it. At the
+start of `Filler.solve` (on the inherited state) and in `Filler._backtrack`,
+right as a new record is taken (the one moment `best_assignment` is the
+current assignment, on the current slots/pattern), `_early_hardclean_due`
+tests whether the cells of the record's impossible slots reach that
+percentage of ALL the grid's cells (`try_fill(early_hardclean_percent=)`,
+passed only by the generation attempts, with `permanent_locked_letters`).
+If so, `Filler._early_hardclean` (Java `Filler.earlyHardclean`) runs
+`_clean_blocked_slots` on the current state (no black cell touched) and
+applies it in place: every word it removes is taken off like a backghost's
+(`_placement_seq` entry dropped, so its node finds it gone — `owned`; a
+word already there when `solve()` started simply disappears; `_undo_reshape`
+keeps such a word off); a locked letter it erases is unlocked
+(`cleared_cells_out`), a locked letter it keeps stays locked, and nothing
+becomes locked — a kept letter no remaining word or locked letter carries
+stays on its cell as an unlocked seed (`forced_letters`, which a crossing
+word overrides). The record restarts from the cleaned state and is
+published. In `_backtrack`, `_early_hardclean_and_continue` then runs a
+fresh node from there (the shape of a backghost); if it fails, the letter
+tallies re-sampled for the removed words are restored and its failure is
+passed up, the removed words staying off. A cleaned state (pattern + every
+known letter and seed) already produced earlier in the attempt switches the
+early hardclean off for the rest of it. Since the search goes on, the
+attempt keeps its seed, rng, budget, descent caps and `Filler._inherited`
+value, and the harvest loop never sees the clean. `try_fill`'s previews and
+diagnostics read the Filler's current `locked_letters`/`forced_letters`
+(`locked_cells` recomputed on each publication).
 
 **An "emplacement écarté" (yellow) is a pure deprioritization, and is
 reset to nothing at the start of every new palier.** `Filler._impossible_

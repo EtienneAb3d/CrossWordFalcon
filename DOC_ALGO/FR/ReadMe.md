@@ -1810,26 +1810,41 @@ pas toujours la fin d'une tentative. Dès qu'un nouveau record de sa
 recherche (`best_assignment`) laisse au moins `EARLY_HARDCLEAN_PERCENT`
 (10 %) des cases de la grille dans des emplacements impossibles (le total
 compte toutes les cases, noires comprises ; 100 désactive le mécanisme), la
-recherche s'interrompt, la grille subit le même nettoyage dur que pour la
-seconde chance (`_second_chance_seed` : aucune case noire ajoutée, déplacée
-ni rouverte) et la tentative **reprend aussitôt sur la grille nettoyée,
-dans la même tentative** (`_resume_after_early_hardclean`) : même
-processus, même numéro de grille, même générateur aléatoire, même budget de
-vérifications — le compteur est cumulé, il ne repart pas de zéro. La
-tentative n'est ni déclarée échouée, ni terminée, et le palier n'est pas
-quitté : elle s'achève par ses issues habituelles (réussite, budget,
-interruption par une tentative sœur, bouton Stop, ou un échec ordinaire,
-suivi alors de la seconde chance et du nettoyage de fin de palier comme
-pour toute tentative). Comme toute reprise à partir de lettres verrouillées,
-elle explore toutes les possibilités de chaque nœud, sans plafond de
-descentes (`Filler._inherited`).
+grille subit, **à l'intérieur même de la recherche**, le même nettoyage dur
+que pour la seconde chance (`Filler._early_hardclean`, qui appelle
+`_clean_blocked_slots` : aucune case noire ajoutée, déplacée ni rouverte),
+et la recherche continue depuis l'état nettoyé, sans s'interrompre
+(`Filler._early_hardclean_and_continue`). La tentative n'est ni déclarée
+échouée, ni terminée, et le palier n'est pas quitté : elle garde son
+processus, son numéro de grille, son générateur aléatoire, son budget de
+vérifications et ses plafonds de descentes, et s'achève par ses issues
+habituelles (réussite, budget, interruption par une tentative sœur, bouton
+Stop, ou un échec ordinaire, suivi alors de la seconde chance et du
+nettoyage de fin de palier comme pour toute tentative).
+
+Le nettoyage ne verrouille rien. Une lettre verrouillée qu'il efface est
+déverrouillée, pour pouvoir être remplie à nouveau ; une lettre verrouillée
+qu'il n'efface pas reste verrouillée ; une lettre qui n'était pas
+verrouillée le reste. Une grille d'un premier palier, sans lettre
+verrouillée héritée, n'en reçoit donc aucune. Chaque mot retiré quitte la
+grille comme celui d'un retrait fantôme (*backghost*) : le nœud qui l'avait
+posé le trouve absent lorsque la recherche remonte jusqu'à lui, et une
+reconfiguration de cases noires annulée ensuite ne le remet pas. Une lettre
+conservée qu'aucun mot restant ni aucune lettre verrouillée ne porte reste
+sur sa case comme graine, non verrouillée, qu'un mot croisant peut
+remplacer (`forced_letters`). Le record repart de l'état nettoyé, publié
+comme tout record. Si la recherche échoue ensuite depuis cet état, les
+statistiques de lettres recalculées pour les mots retirés sont restaurées
+et l'échec remonte comme celui d'un nœud ordinaire, les mots retirés
+restant absents. Les aperçus lisent les lettres verrouillées et les graines
+courantes de la recherche (`try_fill`).
 
 Le contrôle a lieu au départ de chaque recherche, sur l'état dont elle
 hérite (`Filler.solve`), puis à chaque nouveau record, seul instant où le record vit à
 coup sûr sur les emplacements et le motif courants, une reconfiguration
 pouvant être active ensuite (`Filler._early_hardclean_due`,
 `Filler._backtrack`). Un état nettoyé identique à un état déjà produit plus
-tôt dans la même tentative (motif et lettres) désactive le mécanisme pour
+tôt dans la même tentative (motif, lettres et graines) désactive le mécanisme pour
 le reste de cette tentative, un même nettoyage répété ne pouvant rien
 apporter ; la recherche continue alors depuis cet état. Seules les
 tentatives de génération (`_pattern_attempt`, `_pattern_continue`) s'en

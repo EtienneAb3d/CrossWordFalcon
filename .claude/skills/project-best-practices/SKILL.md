@@ -1891,14 +1891,20 @@ the current defaults/behavior to know before touching this code.
 - **Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10 in `backend/
   crossword_gen.py`, `Filler.EARLY_HARDCLEAN_PERCENT` in Java; 100 = off):
   the hard clean of the second chance, triggered earlier and INSIDE the
-  attempt — the user's rule: the hardclean is an attempt to carry the grid
+  search — the user's rule: the hardclean is an attempt to carry the grid
   on instead of declaring it failed, so triggering it earlier must neither
   change palier nor declare the grid failed. As soon as a new record leaves
-  that share of the grid's cells in impossible slots, the search stops, the
-  record is hard-cleaned (`_second_chance_seed`) and the same attempt
-  resumes from it on the same process (`_resume_after_early_hardclean`):
-  same seed/lineage, same rng, cumulative check budget. The harvest loop
-  never sees it. Interactive mode never uses it.
+  that share of the grid's cells in impossible slots, the current state is
+  hard-cleaned in place (`Filler._early_hardclean`) and the search carries
+  on from it (`_early_hardclean_and_continue`, shaped like a backghost);
+  the search is never stopped. The user's locking rules: a locked letter
+  the clean erases is unlocked; a locked letter it keeps stays locked; a
+  letter that was not locked stays unlocked — so a grid with no locked
+  letter never gets one from it. Removed words are taken off like a
+  backghost's; a kept letter left with no word stays as an unlocked seed
+  (`forced_letters`). Choices made with the change, to revisit with the
+  user: that seed form for word-less kept letters, and the cleaned state
+  becoming the new record. Interactive mode never uses it.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

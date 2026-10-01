@@ -2193,13 +2193,14 @@ UNFILLABLE_ABANDON_CHECK_INTERVAL = 500
 
 # "Early hardclean": share of the grid's cells (percent, 1-100) that may sit
 # in impossible slots (`Filler.impossible_zone_slots`, on the record just
-# taken) before a generation attempt hard-cleans its best state and carries
-# on from it (`_resume_after_early_hardclean`): the same hard clean as the
-# second chance (`_second_chance_seed`), triggered earlier, inside the
-# attempt. The attempt is neither failed nor ended, and its palier is not
-# left: same process, same lineage, same check budget. 100 disables it.
-# Only the generation attempts (`_pattern_attempt`/`_pattern_continue`)
-# enable it.
+# taken) before a generation attempt hard-cleans its state in place, inside
+# the search (`Filler._early_hardclean`): the same hard clean as the second
+# chance (`_clean_blocked_slots`, no black cell touched), after which the
+# search carries on from the cleaned state. The search is not stopped, so
+# the attempt is neither failed nor ended and its palier is not left. A
+# locked letter the clean erases is unlocked, one it keeps stays locked,
+# and no letter is locked by it. 100 disables it. Only the generation
+# attempts (`_pattern_attempt`/`_pattern_continue`) enable it.
 EARLY_HARDCLEAN_PERCENT = 10
 
 # Check frequency (in checks elapsed) for the "another
@@ -2938,10 +2939,12 @@ class Filler:
         self.abandoned = False
         # Early hardclean (see EARLY_HARDCLEAN_PERCENT): the threshold in
         # percent of the grid's cells (100 = off, the default for every
-        # caller that is not a generation attempt) and the flag set when it
-        # stopped the search, to be hard-cleaned and resumed by the caller.
+        # caller that is not a generation attempt), the cleaned states
+        # already produced in this attempt (a repeat switches it off), and
+        # the cells `_clean_blocked_slots` must never clear.
         self.early_hardclean_percent = 100
-        self.early_hardclean_triggered = False
+        self._early_hardclean_states = set()
+        self.permanent_locked_letters = {}
         # Set when a `_backtrack` call returned because the check budget
         # ran out (see `_deadline_reached_without_extension`), so `solve()`
         # can tell a strict search cut short from one genuinely exhausted.
@@ -4078,15 +4081,21 @@ class Filler:
         """Put the black cells `option` changed back to their original
         state, with the slot list and per-slot state that went with them —
         the écarté list keeps its entries made since, translated back, and
-        a word placed before the change that a backghost has taken off
-        since stays off (see MAX_BACKGHOSTS_PER_DESCENT). Returns the new
+        a word placed before the change that a backghost or an early
+        hardclean has taken off since stays off (see MAX_BACKGHOSTS_PER_
+        DESCENT, `_early_hardclean`). Returns the new
         -> original slot index map (`option.target` maps to `i`)."""
         back = {j: old_i for old_i, j in option.forward.items()}
         back[option.target] = i
         slots, pattern, assignment, tolerated, placement_seq, old_recent = saved
-        for old_i in list(placement_seq):
-            if option.forward.get(old_i) not in self._placement_seq:
-                del placement_seq[old_i]
+        # A word on the grid before the change that is no longer there was
+        # taken off by a backghost or an early hardclean: it stays off.
+        for old_i, word in enumerate(assignment):
+            if word is None:
+                continue
+            j = option.forward.get(old_i)
+            if j is None or self.assignment[j] is None:
+                placement_seq.pop(old_i, None)
                 assignment[old_i] = None
         recent = _RecentSlots(MAX_EXCLUDED_SLOTS)
         for old_i in old_recent:
@@ -4223,11 +4232,10 @@ class Filler:
         self._placement_seq = {}
         self._ghosts_in_descent = 0
         # Early hardclean on the state the search starts from (no record
-        # is taken until a word is added to it).
+        # is taken until a word is added to it). Nothing to restore: no
+        # node is running yet.
         if self._early_hardclean_due():
-            self.abandoned = True
-            self.early_hardclean_triggered = True
-            return False
+            self._early_hardclean()
         if self._backtrack(deadline_checks):
             return True
         if self.abandoned or self._budget_exhausted:
@@ -4620,6 +4628,86 @@ class Filler:
         for i in self.impossible_zone_slots():
             cells.update(self.slots[i])
         return bool(cells) and 100 * len(cells) >= self.early_hardclean_percent * total
+
+    def _early_hardclean(self):
+        """Hard-clean the current state in place (see EARLY_HARDCLEAN_
+        PERCENT), on the impossible slots of `best_assignment`, which is the
+        current assignment whenever this runs: `_clean_blocked_slots`, no
+        black cell added, moved or reopened.
+
+        Every word the clean removes is taken off the grid the way a
+        backghost takes one off: the node that placed it finds its entry
+        gone when the search unwinds to it (`owned`), and a word that was
+        already there when `solve()` started simply disappears. A locked
+        letter the clean erases is unlocked; a locked letter it keeps stays
+        locked; nothing is locked by it — a letter it keeps that no
+        remaining word or locked letter carries stays on its cell as an
+        unlocked seed (`forced_letters`, which any crossing word overrides).
+        The record restarts from the cleaned state, published like any
+        record. A cleaned state already produced in this attempt switches
+        the early hardclean off for the rest of it.
+
+        Returns the letter statistics to restore (`_restore_letter_scores`,
+        in reverse order) when the search unwinds above this point."""
+        cleared = set()
+        cleaned, confirmed, _, _ = _clean_blocked_slots(
+            self.slots, list(self.assignment), self.impossible_zone_slots(),
+            locked_letters=dict(self.locked_letters) or None, index=self.index, rng=self.rng,
+            permanent_locked_letters=self.permanent_locked_letters or None,
+            cleared_cells_out=cleared,
+        )
+        removed = []
+        for i, word in enumerate(self.assignment):
+            if word is not None and cleaned[i] is None:
+                self.assignment[i] = None
+                self.used_words.discard(word)
+                self._placement_seq.pop(i, None)
+                removed.append(i)
+        saved_scores = [self._refresh_letter_scores_around(i) for i in removed]
+        if cleared:
+            self.locked_letters = {
+                cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared
+            }
+        covered = set(self.locked_letters)
+        for i, word in enumerate(self.assignment):
+            if word is not None:
+                covered.update(self.slots[i])
+        seeds = {cell: ch for cell, ch in confirmed.items() if cell not in covered}
+        if seeds:
+            self.forced_letters = {**self.forced_letters, **seeds}
+        self.best_assigned_count = sum(1 for a in self.assignment if a is not None)
+        self.best_assignment = list(self.assignment)
+        self.best_slots = self.slots
+        self.best_pattern = self.pattern
+        self.best_stat_letters = self.stat_letters(self.assignment)
+        state = (
+            tuple("".join(row) for row in self.pattern),
+            tuple(sorted({**self.forced_letters, **self._known_cells()}.items())),
+        )
+        if state in self._early_hardclean_states:
+            self.early_hardclean_percent = 100
+        self._early_hardclean_states.add(state)
+        if self.on_new_best is not None:
+            self.on_new_best(self.best_assignment)
+        return saved_scores
+
+    def _early_hardclean_and_continue(self, deadline_checks, released):
+        """Early hardclean inside a running search (see `_early_hardclean`),
+        then a fresh `_backtrack` node carries on from the cleaned state —
+        the same shape as a backghost (`_fail_or_backghost`). Returns what
+        the node that took the record must return. When the fresh node
+        fails, the letter statistics re-tallied by the clean are restored
+        before its failure is passed up; the removed words stay off."""
+        saved_scores = self._early_hardclean()
+        if self._backtrack(deadline_checks, released):
+            return True
+        conflict = self._last_conflict
+        jumped = self._last_jumped
+        for saved in reversed(saved_scores):
+            self._restore_letter_scores(saved)
+        self._last_conflict = conflict
+        self._last_jumped = jumped
+        return False
 
     def impossible_zone_cells(self):
         """Cells belonging to an unassigned slot, in the self.best_
@@ -5339,14 +5427,12 @@ class Filler:
             if self.on_new_best is not None:
                 self.on_new_best(self.best_assignment)
             # Early hardclean: checked right as the record is taken, the
-            # only moment `best_assignment` is certain to live on the
-            # Filler's current slots and pattern (a reshape may be active
-            # later on). Unwinds exactly like any other stop
-            # (`abandoned`); `try_fill` reports it as "early_hardclean".
+            # only moment `best_assignment` is the current assignment, on
+            # the Filler's current slots and pattern. The state is cleaned
+            # in place and a fresh node carries on from it, like a
+            # backghost (`_early_hardclean_and_continue`).
             if self._early_hardclean_due():
-                self.abandoned = True
-                self.early_hardclean_triggered = True
-                return False
+                return self._early_hardclean_and_continue(deadline_checks, released)
         if not unassigned:
             return True
 
@@ -6366,15 +6452,12 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              non_gloss_words=None, max_non_gloss=None, priority_words=None,
              challenge_words=None, required_cells=None, reshape_black_cells=False,
              permanent_black_cells=None, scrabble_words=None,
-             early_hardclean_percent=100, initial_checks=0):
-    """`early_hardclean_percent`: see `EARLY_HARDCLEAN_PERCENT` (100 = off).
-    When it stops the search, `diagnostics["reason"]` is "early_hardclean"
-    and the diagnostics are those of any failure: the caller hard-cleans
-    them and resumes (`_resume_after_early_hardclean`).
-
-    `initial_checks` (0 by default): the checks already spent by the same
-    attempt before this call, so `deadline_checks`, the progress shown and
-    `diagnostics["checks"]` stay cumulative across an early hardclean.
+             early_hardclean_percent=100, permanent_locked_letters=None):
+    """`early_hardclean_percent`: see `EARLY_HARDCLEAN_PERCENT` (100 = off),
+    run inside the search (`Filler._early_hardclean`), which may unlock
+    letters of `locked_letters` and leave unlocked seeds in
+    `forced_letters`: every preview and the diagnostics read the Filler's
+    current ones. `permanent_locked_letters`: cells that clean never clears.
 
     `scrabble_words`: the Scrabble family of the candidate order (see
     `Filler.scrabble_first`), `None` = none.
@@ -6637,14 +6720,23 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     # alone, which remains a plain fallback for a caller that would supply
     # only that (no real case today: `_pattern_attempt`/`_pattern_
     # continue` always supply both together).
-    all_slot_cells = {cell for s in slots for cell in s}
-    if locked_letters:
-        locked_cells = sorted(cell for cell in locked_letters if cell in all_slot_cells)
-    elif preseed_assignment is not None:
-        locked_cells = sorted({cell for i, word in enumerate(preseed_assignment) if word is not None
-                                for cell in slots[i]})
-    else:
-        locked_cells = []
+    # Recomputed on every publication: an early hardclean
+    # (`Filler._early_hardclean`) unlocks the locked letters it erases and
+    # takes off preseeded words.
+    locked_from_letters = bool(locked_letters)
+    initial_slots = slots
+
+    def _locked_cells():
+        if locked_from_letters:
+            all_slot_cells = {cell for s in filler.slots for cell in s}
+            return sorted(cell for cell in filler.locked_letters if cell in all_slot_cells)
+        if preseed_assignment is not None:
+            known = filler._known_cells()
+            return sorted({cell for cells, word in zip(initial_slots, preseed_assignment)
+                           if word is not None
+                           and all(known.get(c) == ch for c, ch in zip(cells, word))
+                           for cell in cells})
+        return []
     filler = Filler(slots, index, rng, forced_letters=forced_letters, letter_scores=letter_scores,
                      excluded_slots=excluded_slots, cancel_event=cancel_event,
                      batch_abandoned_event=batch_abandoned_event,
@@ -6655,7 +6747,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler.best_pattern = filler.pattern
     filler.reshape_enabled = reshape_black_cells and not excluded_slots
     filler.early_hardclean_percent = early_hardclean_percent
-    filler.checks = initial_checks
+    filler.permanent_locked_letters = dict(permanent_locked_letters or {})
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
     if checks_progress is not None and checks_slot is not None:
         # See `_worker_checks_progress`'s own docstring — `checks_progress`
@@ -6696,7 +6788,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             # Called right as the record is taken, so the Filler's current
             # pattern and slots are the ones `best_assignment` lives on.
             example_grid, forced_cells, _ = build_partial_letters_grid(
-                filler.pattern, filler.slots, best_assignment, forced_letters, locked_letters
+                filler.pattern, filler.slots, best_assignment, filler.forced_letters,
+                filler.locked_letters
             )
             # `impossible_slots` (not just `impossible_cells`) is essential
             # here: on the parent side, a state published through this
@@ -6723,7 +6816,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "stat_letters": filler.best_stat_letters_for(),
                 "impossible_slots": filler.impossible_zone_slots(),
                 "forced_cells": forced_cells,
-                "locked_cells": locked_cells,
+                "locked_cells": _locked_cells(),
                 "theme_cells": _theme_word_cells(filler.slots, best_assignment, priority_words),
                 "challenge_cells": _challenge_word_cells_from_assignment(
                     filler.slots, best_assignment, challenge_words
@@ -6777,7 +6870,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
         # relevant to a message that can actually win the selection).
         def _publish_live_state(current_assignment):
             example_grid, forced_cells, _ = build_partial_letters_grid(
-                filler.pattern, filler.slots, current_assignment, forced_letters, locked_letters
+                filler.pattern, filler.slots, current_assignment, filler.forced_letters,
+                filler.locked_letters
             )
             best_state_queue.put({
                 "example_grid": example_grid,
@@ -6786,7 +6880,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "excluded_cells": filler.excluded_zone_cells(current_assignment),
                 "stat_letters": filler.stat_letters(current_assignment),
                 "forced_cells": forced_cells,
-                "locked_cells": locked_cells,
+                "locked_cells": _locked_cells(),
                 "theme_cells": _theme_word_cells(filler.slots, current_assignment, priority_words),
                 "challenge_cells": _challenge_word_cells_from_assignment(
                     filler.slots, current_assignment, challenge_words
@@ -6879,7 +6973,6 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             else "too_many_non_gloss_words" if over_non_gloss_budget
             else "solved" if truly_complete
             else "interrupted_other_attempt_done" if filler.interrupted_by_sibling
-            else "early_hardclean" if filler.early_hardclean_triggered
             else "abandoned_too_unfillable" if filler.abandoned
             else "deadline_exceeded" if filler.checks >= deadline_checks
             else "blocked_on_excluded_slot" if solved_internally
@@ -6887,7 +6980,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
         )
         if not truly_complete:
             example_grid, forced_cells, assigned_letter_count = build_partial_letters_grid(
-                grid, slots, filler.best_assignment, forced_letters, locked_letters
+                grid, slots, filler.best_assignment, filler.forced_letters, filler.locked_letters
             )
             diagnostics["example_grid"] = example_grid
             diagnostics["forced_cells"] = forced_cells
@@ -6922,12 +7015,12 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 diagnostics["impossible_cells"] = sorted(
                     set(diagnostics["impossible_cells"]) | {cell for i in quota_slots for cell in slots[i]}
                 )
-            diagnostics["locked_cells"] = locked_cells
+            diagnostics["locked_cells"] = _locked_cells()
             # The letters themselves, as `[row, col, letter]` triples: a
             # second chance (`_second_chance_seed`) resumes this grid with
             # them, minus the cells its hard clean erases.
             diagnostics["locked_letters"] = [
-                [r, c, ch] for (r, c), ch in sorted((locked_letters or {}).items())
+                [r, c, ch] for (r, c), ch in sorted(filler.locked_letters.items())
             ]
             diagnostics["theme_cells"] = _theme_word_cells(
                 slots, filler.best_assignment, priority_words
@@ -13014,14 +13107,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            reshape_black_cells=True,
                            permanent_black_cells=permanent_black_cells,
                            scrabble_words=_worker_scrabble_words,
-                           early_hardclean_percent=EARLY_HARDCLEAN_PERCENT)
-        # Early hardclean: hard-clean and carry on inside this same
-        # attempt, the flag above staying set throughout.
-        grid, result, diag = _resume_after_early_hardclean(
-            grid, result, diag, rows, cols, seed, rng, force_letters_fraction,
-            deadline_checks, permanent_locked_letters, required_cells, checks_slot,
-            permanent_black_cells, racing,
-        )
+                           early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
+                           permanent_locked_letters=permanent_locked_letters)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -13135,10 +13222,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
     (`_build_retry_seed`) and a fresh pattern."""
     rng = random.Random(seed)
     # See `_pattern_attempt`'s own matching comment for why this is set/
-    # cleared around the search. It stays set across an early hardclean's
-    # resumptions (`_resume_after_early_hardclean`): clearing it between
-    # two of them would let a sibling past its own budget see no attempt
-    # racing, a verdict that is final for that sibling.
+    # cleared around the search.
     if racing and checks_slot is not None and _worker_attempt_active is not None:
         _worker_attempt_active[checks_slot] = 1
     try:
@@ -13146,12 +13230,6 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
             rows, cols, seed, rng, seed_grid, preseed_assignment, excluded_slots,
             force_letters_fraction, deadline_checks, permanent_locked_letters, required_cells,
             checks_slot, permanent_black_cells, locked_letters, racing,
-            EARLY_HARDCLEAN_PERCENT, 0,
-        )
-        seed_grid, result, diag = _resume_after_early_hardclean(
-            seed_grid, result, diag, rows, cols, seed, rng, force_letters_fraction,
-            deadline_checks, permanent_locked_letters, required_cells, checks_slot,
-            permanent_black_cells, racing,
         )
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
@@ -13161,18 +13239,13 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
 
 def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, excluded_slots,
                       force_letters_fraction, deadline_checks, permanent_locked_letters,
-                      required_cells, checks_slot, permanent_black_cells, locked_letters, racing,
-                      early_hardclean_percent, initial_checks):
+                      required_cells, checks_slot, permanent_black_cells, locked_letters, racing):
     """One search from a seeded grid: everything `_pattern_continue` does
     between receiving its arguments and handing them to `try_fill` (known
     letters, deduced single-candidate slots, statistical sampling), then
     `try_fill` itself. Returns `(result, diag)`; `seed_grid` is updated in
     place by the search (see `try_fill`). Does not touch `attempt_active`
-    (its caller owns that flag) and draws from the `rng` it is given, so a
-    resumption after an early hardclean (`_resume_after_early_hardclean`)
-    continues the attempt's own random stream.
-
-    `early_hardclean_percent`/`initial_checks`: see `try_fill`."""
+    (its caller owns that flag)."""
     # Letters already known for certain at this point (see `known_letters`
     # in `sample_letter_biases`'s own docstring): every slot already
     # entirely filled by `preseed_assignment` — locked in as-is, never
@@ -13299,49 +13372,9 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        reshape_black_cells=True,
                        permanent_black_cells=permanent_black_cells,
                        scrabble_words=_worker_scrabble_words,
-                       early_hardclean_percent=early_hardclean_percent,
-                       initial_checks=initial_checks)
+                       early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
+                       permanent_locked_letters=permanent_locked_letters)
     return result, diag
-
-
-def _resume_after_early_hardclean(grid, result, diag, rows, cols, seed, rng, force_letters_fraction,
-                                  deadline_checks, permanent_locked_letters, required_cells,
-                                  checks_slot, permanent_black_cells, racing):
-    """Early hardclean (`EARLY_HARDCLEAN_PERCENT`). While the search of an
-    attempt stopped because its best state carries too many impossible
-    cells (`diag["reason"] == "early_hardclean"`), hard-clean that state
-    exactly as a second chance does (`_second_chance_seed`: the words
-    crossing an impossible slot and every letter they shared removed, no
-    black cell added, moved or reopened) and carry on from it, on the same
-    process and in the same attempt: same `seed` (so the same tile and
-    lineage), same `rng` stream, same check budget (`initial_checks`
-    carries what was already spent). The attempt is neither failed nor
-    ended and its palier is not left; it ends on its own terms (success,
-    budget, sibling, cancel, or a failure of its own).
-
-    A cleaned state already produced earlier in this attempt (pattern and
-    letters) switches the early hardclean off for the rest of it, since
-    repeating the same clean cannot help; the search then simply carries
-    on from that state.
-
-    Returns the final `(grid, result, diag)`."""
-    early_percent = EARLY_HARDCLEAN_PERCENT
-    seen_states = set()
-    while result is None and diag.get("reason") == "early_hardclean":
-        seed_grid, preseed, locked = _second_chance_seed(
-            grid, diag, rows, cols, _worker_index, rng, permanent_locked_letters,
-        )
-        state = (tuple("".join(row) for row in seed_grid), tuple(sorted(locked.items())))
-        if state in seen_states:
-            early_percent = 100
-        seen_states.add(state)
-        result, next_diag = _continue_search(
-            rows, cols, seed, rng, seed_grid, preseed, None, force_letters_fraction,
-            deadline_checks, permanent_locked_letters, required_cells, checks_slot,
-            permanent_black_cells, locked, racing, early_percent, diag["checks"],
-        )
-        grid, diag = seed_grid, next_diag
-    return grid, result, diag
 
 
 # ---------- "Continuer" button: resuming a total failure from where it left off ----------

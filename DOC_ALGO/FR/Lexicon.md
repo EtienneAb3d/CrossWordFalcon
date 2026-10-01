@@ -297,9 +297,11 @@ plusieurs signaux) :
   plafond. Un nœud qui reçoit un saut arrière n'a plus droit qu'à une
   seule descente supplémentaire ; il ne peut atteindre le plafond que si
   tous les échecs qui lui sont revenus sont des retours en arrière
-  ordinaires. Tant que la recherche a posé moins de 10 mots en plus de ceux
-  de l'état initial de la tentative, le plafond d'un nœud est porté à 50
-  descentes. Une grille héritée d'une étape précédente (tentative qui
+  ordinaires. Un nœud atteint alors que la recherche a posé moins de
+  `EARLY_DESCENTS_WORD_COUNT` (10) mots en plus de ceux de l'état initial
+  de la tentative a un plafond porté à `EARLY_MAX_DESCENTS_PER_NODE`
+  (2 × `MAX_DESCENTS_PER_NODE`, soit 20) descentes, le compte étant pris à
+  l'entrée du nœud. Une grille héritée d'une étape précédente (tentative qui
   démarre avec des cases verrouillées) n'a aucun plafond : tous ses
   nœuds explorent toutes leurs possibilités. (`backend/crossword_gen.py`,
   `MAX_DESCENTS_PER_NODE`, `EARLY_DESCENTS_WORD_COUNT`,
@@ -410,14 +412,18 @@ plusieurs signaux) :
   `HARD_CLEAN_ENABLED`.)
 
 - **Nettoyage dur précoce** (*early hardclean*) : nettoyage dur déclenché
-  plus tôt, en cours de recherche, dès qu'un nouveau record d'une tentative
-  de génération laisse au moins `EARLY_HARDCLEAN_PERCENT` (10 %) des cases de
-  la grille dans des emplacements impossibles (100 = désactivé). Même
-  nettoyage que la seconde chance, mais la tentative reprend aussitôt sur la
-  grille nettoyée, sans être déclarée échouée ni terminée et sans quitter
-  son palier : même processus, même numéro de grille, même budget cumulé.
-  (`backend/crossword_gen.py`, `_resume_after_early_hardclean`,
-  `Filler._early_hardclean_due`, `EARLY_HARDCLEAN_PERCENT`.)
+  plus tôt, à l'intérieur de la recherche, dès qu'un nouveau record d'une
+  tentative de génération laisse au moins `EARLY_HARDCLEAN_PERCENT` (10 %)
+  des cases de la grille dans des emplacements impossibles (100 =
+  désactivé). Même nettoyage que la seconde chance, appliqué sur place : la
+  recherche continue depuis la grille nettoyée sans s'interrompre, sans que
+  la tentative soit déclarée échouée ni terminée et sans quitter son palier.
+  Il ne verrouille aucune lettre : une case verrouillée dont il efface la
+  lettre est déverrouillée, une case verrouillée qu'il n'efface pas le
+  reste, une lettre non verrouillée le reste.
+  (`backend/crossword_gen.py`, `Filler._early_hardclean`,
+  `Filler._early_hardclean_and_continue`, `Filler._early_hardclean_due`,
+  `EARLY_HARDCLEAN_PERCENT`.)
 
 - **Seconde chance** : reprise d'une tentative qui échoue alors que le
   palier est encore en course (au moins une tentative d'origine n'a pas

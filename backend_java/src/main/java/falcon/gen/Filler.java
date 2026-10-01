@@ -34,9 +34,11 @@ public final class Filler {
     public static final int UNFILLABLE_ABANDON_SLOT_COUNT = 3;
     public static final int UNFILLABLE_ABANDON_CHECK_INTERVAL = 500;
     /** Early hardclean (mirrors EARLY_HARDCLEAN_PERCENT): percent (1-100) of the grid's cells allowed in
-     * impossible slots (of the record just taken) before a generation attempt hard-cleans its best state and
-     * carries on from it (Generator.resumeAfterEarlyHardclean) — the second chance's own hard clean, triggered
-     * earlier, inside the attempt: same process, same lineage, same check budget, palier not left. 100 = off. */
+     * impossible slots (of the record just taken) before a generation attempt hard-cleans its state in place,
+     * inside the search (earlyHardclean) — the second chance's own hard clean (Cleanup.cleanBlockedSlots, no
+     * black cell touched) — and carries on from it. The search is not stopped: the attempt is neither failed
+     * nor ended, its palier not left. A locked letter the clean erases is unlocked, one it keeps stays locked,
+     * and no letter is locked by it. 100 = off. */
     public static final int EARLY_HARDCLEAN_PERCENT = 10;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 100;
@@ -166,8 +168,8 @@ public final class Filler {
     public final Set<String> themeAbandoned = new HashSet<>();
     public Integer themeWordBudget;
     public AtomicBoolean batchAbandonedEvent, attemptDoneEvent, cancelEvent;
-    public final Map<Integer, Character> forcedLetters;
-    public final Map<Integer, Character> lockedLetters;
+    public Map<Integer, Character> forcedLetters;
+    public Map<Integer, Character> lockedLetters;
     public final Map<Integer, int[][]> letterScoresByDir;
     public final Map<Integer, int[]> letterScores;
     boolean[] slotAcross;
@@ -192,10 +194,12 @@ public final class Filler {
     public List<int[]> bestSlots;
     public char[][] bestPattern;
     public boolean abandoned, budgetExhausted, breakingPermitted, interruptedBySibling;
-    /** Early hardclean threshold in percent (100 = off, every caller that is not a generation attempt) and
-     * whether it stopped the search, to be hard-cleaned and resumed by the caller. */
+    /** Early hardclean threshold in percent (100 = off, every caller that is not a generation attempt), the
+     * cleaned states already produced in this attempt (a repeat switches it off), and the cells
+     * Cleanup.cleanBlockedSlots must never clear. */
     public int earlyHardcleanPercent = 100;
-    public boolean earlyHardcleanTriggered;
+    final Set<String> earlyHardcleanStates = new HashSet<>();
+    public Map<Integer, Character> permanentLockedLetters = Map.of();
     public Set<Integer> toleratedDry = new HashSet<>();
     Set<Integer> lastConflict;
     /** Whether the last failure was passed up by a backjump (mirrors _last_jumped). */
@@ -953,13 +957,13 @@ public final class Filler {
         for (int j : impossibleThisAttempt) if (back.containsKey(j)) recent.add(back.get(j));
         String[] oldAssignment = (String[]) saved[2];
         Map<Integer, Long> oldSeq = (Map<Integer, Long>) saved[4];
-        // A word placed before the change that a backghost has taken off
-        // since stays off.
-        for (Iterator<Integer> it = oldSeq.keySet().iterator(); it.hasNext(); ) {
-            int old = it.next();
+        // A word on the grid before the change that is no longer there was
+        // taken off by a backghost or an early hardclean: it stays off.
+        for (int old = 0; old < oldAssignment.length; old++) {
+            if (oldAssignment[old] == null) continue;
             Integer j = option.forward.get(old);
-            if (j == null || !placementSeq.containsKey(j)) {
-                it.remove();
+            if (j == null || assignment[j] == null) {
+                oldSeq.remove(old);
                 oldAssignment[old] = null;
             }
         }
@@ -1078,11 +1082,8 @@ public final class Filler {
         placementSeq = new HashMap<>();
         ghostsInDescent = 0;
         // Early hardclean on the state the search starts from (no record is taken until a word is added to it).
-        if (earlyHardcleanDue()) {
-            abandoned = true;
-            earlyHardcleanTriggered = true;
-            return false;
-        }
+        // Nothing to restore: no node is running yet.
+        if (earlyHardcleanDue()) earlyHardclean();
         if (backtrack(deadlineChecks, false)) return true;
         if (abandoned || budgetExhausted) return false;
         breakingPermitted = true;
@@ -1308,6 +1309,79 @@ public final class Filler {
         Set<Integer> cells = new HashSet<>();
         for (int i : impossibleZoneSlots()) for (int c : slots.get(i)) cells.add(c);
         return !cells.isEmpty() && 100L * cells.size() >= (long) earlyHardcleanPercent * total;
+    }
+
+    /** Mirrors _early_hardclean: hard-clean the current state in place, on the impossible slots of
+     * bestAssignment (the current assignment whenever this runs), no black cell touched. Every word the clean
+     * removes is taken off the way a backghost takes one off (its node finds its entry gone, a word there when
+     * solve() started simply disappears). A locked letter the clean erases is unlocked, one it keeps stays
+     * locked, nothing is locked by it: a kept letter no remaining word or locked letter carries stays on its
+     * cell as an unlocked seed (forcedLetters). The record restarts from the cleaned state, published like any
+     * record; a cleaned state already produced in this attempt switches the early hardclean off. Returns the
+     * letter statistics to restore (in reverse order) when the search unwinds above this point. */
+    List<Map<Integer, Object[]>> earlyHardclean() {
+        Set<Integer> cleared = new HashSet<>();
+        Object[] cleaned = Cleanup.cleanBlockedSlots(slots, assignment.clone(), impossibleZoneSlots(),
+                lockedLetters.isEmpty() ? null : new HashMap<>(lockedLetters), false, index, rng, null, null, null,
+                permanentLockedLetters.isEmpty() ? null : permanentLockedLetters, null, null, false, cleared);
+        String[] cleanedAssignment = (String[]) cleaned[0];
+        @SuppressWarnings("unchecked")
+        Map<Integer, Character> confirmed = (Map<Integer, Character>) cleaned[1];
+        List<Integer> removed = new ArrayList<>();
+        for (int i = 0; i < assignment.length; i++) {
+            String w = assignment[i];
+            if (w != null && cleanedAssignment[i] == null) {
+                assignment[i] = null;
+                usedWords.remove(w);
+                placementSeq.remove(i);
+                removed.add(i);
+            }
+        }
+        List<Map<Integer, Object[]>> savedScores = new ArrayList<>();
+        for (int i : removed) savedScores.add(refreshLetterScoresAround(i));
+        if (!cleared.isEmpty()) {
+            Map<Integer, Character> kept = new HashMap<>();
+            lockedLetters.forEach((cell, ch) -> { if (!cleared.contains(cell)) kept.put(cell, ch); });
+            lockedLetters = kept;
+        }
+        Set<Integer> covered = new HashSet<>(lockedLetters.keySet());
+        for (int i = 0; i < assignment.length; i++) {
+            if (assignment[i] != null) for (int c : slots.get(i)) covered.add(c);
+        }
+        Map<Integer, Character> seeds = new HashMap<>();
+        confirmed.forEach((cell, ch) -> { if (!covered.contains(cell)) seeds.put(cell, ch); });
+        if (!seeds.isEmpty()) {
+            Map<Integer, Character> merged = new HashMap<>(forcedLetters);
+            merged.putAll(seeds);
+            forcedLetters = merged;
+        }
+        int count = 0;
+        for (String a : assignment) if (a != null) count++;
+        bestAssignedCount = count;
+        bestAssignment = assignment.clone();
+        bestSlots = slots;
+        bestPattern = pattern;
+        bestStatLetters = statLetters(assignment);
+        Map<Integer, Character> letters = new java.util.TreeMap<>(forcedLetters);
+        letters.putAll(knownCells());
+        if (!earlyHardcleanStates.add(Grids.key(pattern) + "|" + letters)) earlyHardcleanPercent = 100;
+        if (onNewBest != null) onNewBest.accept(bestAssignment);
+        return savedScores;
+    }
+
+    /** Mirrors _early_hardclean_and_continue: early hardclean inside a running search, then a fresh backtrack
+     * node carries on from the cleaned state — the shape of a backghost. When the fresh node fails, the letter
+     * statistics re-tallied by the clean are restored before its failure is passed up; the removed words stay
+     * off. */
+    boolean earlyHardcleanAndContinue(long deadlineChecks, boolean released) {
+        List<Map<Integer, Object[]>> savedScores = earlyHardclean();
+        if (backtrack(deadlineChecks, released)) return true;
+        Set<Integer> conflict = lastConflict;
+        boolean jumped = lastJumped;
+        for (int k = savedScores.size() - 1; k >= 0; k--) restoreLetterScores(savedScores.get(k));
+        lastConflict = conflict;
+        lastJumped = jumped;
+        return false;
     }
 
     public List<Integer> impossibleZoneSlots() {
@@ -1541,14 +1615,10 @@ public final class Filler {
             bestPattern = pattern;
             bestStatLetters = statLetters(assignment);
             if (onNewBest != null) onNewBest.accept(bestAssignment);
-            // Early hardclean: checked right as the record is taken, the only moment bestAssignment is certain
-            // to live on the current slots and pattern (a reshape may be active later on). Unwinds like any
-            // other stop (abandoned); Fill.tryFill reports it as "early_hardclean".
-            if (earlyHardcleanDue()) {
-                abandoned = true;
-                earlyHardcleanTriggered = true;
-                return false;
-            }
+            // Early hardclean: checked right as the record is taken, the only moment bestAssignment is the
+            // current assignment, on the current slots and pattern. The state is cleaned in place and a fresh
+            // node carries on from it, like a backghost (earlyHardcleanAndContinue).
+            if (earlyHardcleanDue()) return earlyHardcleanAndContinue(deadlineChecks, released);
         }
         if (unassigned.isEmpty()) return true;
         Set<String> active = activeChallengeWords();

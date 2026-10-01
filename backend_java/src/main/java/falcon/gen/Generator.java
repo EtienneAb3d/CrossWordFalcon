@@ -257,6 +257,7 @@ public final class Generator {
         a.lockedLetters = locked;
         a.reshapeBlackCells = true;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
+        a.permanentLocked = permanentLocked;
         a.scrabbleWords = ctx.scrabbleWords;
         a.permanentBlackCells = permanentBlack;
         // A replacement gets no sibling visibility, so its own budget is a
@@ -266,10 +267,7 @@ public final class Generator {
         if (flag) ctx.attemptActive.set(checksSlot, 1);
         try {
             Fill.Result result = Fill.tryFill(grid, rows, cols, ctx.index, rng, a);
-            // Early hardclean: hard-clean and carry on inside this same attempt, the flag above staying set
-            // throughout.
-            return resumeAfterEarlyHardclean(ctx, rows, cols, seed, rng, new Outcome(grid, result, diag),
-                    forceFraction, deadlineChecks, permanentLocked, requiredCells, checksSlot, permanentBlack, racing);
+            return new Outcome(grid, result, diag);
         } finally {
             if (flag) ctx.attemptActive.set(checksSlot, 0);
         }
@@ -295,16 +293,12 @@ public final class Generator {
                                    Integer checksSlot, Set<Integer> permanentBlack,
                                    Map<Integer, Character> lockedLetters, boolean racing) {
         Rng rng = new Rng(seed);
-        // The flag stays set across an early hardclean's resumptions: clearing it between two of them would let
-        // a sibling past its own budget see no attempt racing, a verdict that is final for that sibling.
         boolean flag = racing && checksSlot != null && ctx.attemptActive != null;
         if (flag) ctx.attemptActive.set(checksSlot, 1);
         try {
-            Outcome first = continueSearch(ctx, rows, cols, seed, rng, seedGrid, preseedIn, excludedSlots,
+            return continueSearch(ctx, rows, cols, seed, rng, seedGrid, preseedIn, excludedSlots,
                     forceFraction, deadlineChecks, permanentLocked, requiredCells, checksSlot, permanentBlack,
-                    lockedLetters, racing, Filler.EARLY_HARDCLEAN_PERCENT, 0L);
-            return resumeAfterEarlyHardclean(ctx, rows, cols, seed, rng, first, forceFraction, deadlineChecks,
-                    permanentLocked, requiredCells, checksSlot, permanentBlack, racing);
+                    lockedLetters, racing);
         } finally {
             if (flag) ctx.attemptActive.set(checksSlot, 0);
         }
@@ -312,15 +306,13 @@ public final class Generator {
 
     /** One search from a seeded grid: everything patternContinue does between receiving its arguments and
      * handing them to tryFill (known letters, deduced single-candidate slots, statistical sampling), then
-     * tryFill itself (mirrors _continue_search). Does not touch attemptActive (its caller owns that flag) and
-     * draws from the rng it is given, so a resumption after an early hardclean continues the attempt's own
-     * random stream. seedGrid is updated in place by the search. */
+     * tryFill itself (mirrors _continue_search). Does not touch attemptActive (its caller owns that flag).
+     * seedGrid is updated in place by the search. */
     static Outcome continueSearch(Ctx ctx, int rows, int cols, long seed, Rng rng, char[][] seedGrid,
                                   String[] preseedIn, Set<Integer> excludedSlots, double forceFraction,
                                   Long deadlineChecks, Map<Integer, Character> permanentLocked,
                                   Set<Integer> requiredCells, Integer checksSlot, Set<Integer> permanentBlack,
-                                  Map<Integer, Character> lockedLetters, boolean racing,
-                                  int earlyHardcleanPercent, long initialChecks) {
+                                  Map<Integer, Character> lockedLetters, boolean racing) {
         List<int[]> slots = Grids.extractSlots(seedGrid, rows, cols);
         Map<Integer, Character> known = new LinkedHashMap<>();
         for (int i = 0; i < slots.size(); i++) {
@@ -358,43 +350,14 @@ public final class Generator {
         a.excludedSlots = excludedSlots;
         a.lockedLetters = known;
         a.reshapeBlackCells = true;
-        a.earlyHardcleanPercent = earlyHardcleanPercent;
-        a.initialChecks = initialChecks;
+        a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
+        a.permanentLocked = permanentLocked;
         a.scrabbleWords = ctx.scrabbleWords;
         a.permanentBlackCells = permanentBlack;
         if (!racing) a.attemptActive = null;
         Fill.Result result = Fill.tryFill(seedGrid, rows, cols, ctx.index, rng, a);
         return new Outcome(seedGrid, result, diag);
     }
-
-    /** Early hardclean (Filler.EARLY_HARDCLEAN_PERCENT; mirrors _resume_after_early_hardclean). While the search
-     * of an attempt stopped because its best state carries too many impossible cells (reason "early_hardclean"),
-     * hard-clean that state exactly as a second chance does (secondChanceSeed: the words crossing an impossible
-     * slot and every letter they shared removed, no black cell added, moved or reopened) and carry on from it,
-     * on the same thread and in the same attempt: same seed (so the same tile and lineage), same rng stream,
-     * same check budget (initialChecks carries what was already spent). The attempt is neither failed nor ended
-     * and its palier is not left; it ends on its own terms (success, budget, sibling, cancel, or a failure of
-     * its own). A cleaned state already produced earlier in this attempt (pattern and letters) switches the
-     * early hardclean off for the rest of it, since repeating the same clean cannot help. */
-    static Outcome resumeAfterEarlyHardclean(Ctx ctx, int rows, int cols, long seed, Rng rng, Outcome outcome,
-                                             double forceFraction, Long deadlineChecks,
-                                             Map<Integer, Character> permanentLocked, Set<Integer> requiredCells,
-                                             Integer checksSlot, Set<Integer> permanentBlack, boolean racing) {
-        int earlyPercent = Filler.EARLY_HARDCLEAN_PERCENT;
-        Set<String> seenStates = new HashSet<>();
-        while (outcome.result() == null && "early_hardclean".equals(outcome.diag().reason)) {
-            Object[] sc = secondChanceSeed(outcome.grid(), outcome.diag(), rows, cols, ctx.index, rng, permanentLocked);
-            char[][] seedGrid = (char[][]) sc[0];
-            @SuppressWarnings("unchecked")
-            Map<Integer, Character> locked = (Map<Integer, Character>) sc[2];
-            if (!seenStates.add(Grids.key(seedGrid) + "|" + new java.util.TreeMap<>(locked))) earlyPercent = 100;
-            outcome = continueSearch(ctx, rows, cols, seed, rng, seedGrid, (String[]) sc[1], null, forceFraction,
-                    deadlineChecks, permanentLocked, requiredCells, checksSlot, permanentBlack, locked, racing,
-                    earlyPercent, outcome.diag().checks);
-        }
-        return outcome;
-    }
-
 
     // ================================================================== resume state
 
