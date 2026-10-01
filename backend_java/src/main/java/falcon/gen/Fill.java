@@ -678,7 +678,7 @@ public final class Fill {
                                 break;
                             }
                             LenIndex li = index.forCells(cells).get(w.length());
-                            boolean real = li != null && li.wordSet.contains(w);
+                            boolean real = li != null && li.contains(w);
                             if (!real && !(!merged.isEmpty() && Grids.allKnown(cells, merged))) {
                                 allReal = false;
                                 break;

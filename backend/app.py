@@ -51,13 +51,13 @@ from .qdrant_store import QdrantStore, QdrantStoreError
 from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_index, build_letters_grid,
+    PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
-    interactive_place_word, interactive_slot_candidates, load_wordlist, make_pattern,
-    merge_scrabble_lexicon, load_dictionary_frequencies, scrabble_word_cells, scrabble_wordlist_path,
+    interactive_place_word, interactive_slot_candidates, load_lexicon, make_pattern,
+    scrabble_word_cells, scrabble_wordlist_path,
     scrabble_words_for_languages,
 )
 from .grid_store import (
@@ -3107,8 +3107,8 @@ def _build_word_verification_table(words, language, bilingual_language=None):
     residual bug, if it ever recurs, is immediately visible on screen
     rather than silently shipped in a finished grid. Read directly from
     the TSV file (`_load_wordlist_raw_lines`) rather than reusing
-    crossword_gen.py's own in-memory `accents`/`canonicals` dicts (not
-    returned by generate_grid() at all) — this also makes the check
+    crossword_gen.py's in-memory index (which keeps no accented form nor
+    lemma, only each word's row position) — this also makes the check
     genuinely independent of whatever difficulty-based subset the solver
     happened to restrict itself to for this one request.
 
@@ -4593,43 +4593,34 @@ async def _load_interactive_index(language, difficulty, bilingual_language=None)
     is the union of every word actually in either lexicon loaded (just
     the one lexicon's own words for a monolingual session), used to
     filter a theme/saved `priority_words` list down to real entries."""
-    by_length, accents, _canon, frequencies = await asyncio.to_thread(
-        load_wordlist,
-        str(WORDLISTS[language]),
-        DIFFICULTY_PRESETS.get(difficulty),
-        require_gloss=(difficulty == "easy"),
-        exclude_proper_nouns=(difficulty == "easy"),
-    )
-    # The Scrabble wordlist joins the lexicon — whole, or only its words
+    # The process-wide lexicon cache (crossword_gen.py's `load_lexicon`):
+    # the Scrabble wordlist already merged in — whole, or only its words
     # with a known inflection at "easy" difficulty — exactly as
-    # generate_grid merges it.
-    await asyncio.to_thread(
-        merge_scrabble_lexicon, language, by_length, accents, _canon, frequencies,
-        difficulty == "easy",
-    )
-    idx = build_index(
-        by_length, frequencies,
-        await asyncio.to_thread(load_dictionary_frequencies, str(WORDLISTS[language])),
+    # generate_grid uses it, and shared by every session and generation.
+    easy = difficulty == "easy"
+    across = await asyncio.to_thread(
+        load_lexicon, str(WORDLISTS[language]), DIFFICULTY_PRESETS.get(difficulty), easy,
     )
     is_bilingual = bool(bilingual_language) and bilingual_language != language
     if not is_bilingual:
-        return DualIndex(idx, idx), set(accents)
-    by_length_down, accents_down, _canon_down, frequencies_down = await asyncio.to_thread(
-        load_wordlist,
-        str(WORDLISTS[bilingual_language]),
-        DIFFICULTY_PRESETS.get(difficulty),
-        require_gloss=(difficulty == "easy"),
-        exclude_proper_nouns=(difficulty == "easy"),
+        return DualIndex(across.index, across.index), across
+    down = await asyncio.to_thread(
+        load_lexicon, str(WORDLISTS[bilingual_language]), DIFFICULTY_PRESETS.get(difficulty), easy,
     )
-    await asyncio.to_thread(
-        merge_scrabble_lexicon, bilingual_language, by_length_down, accents_down,
-        _canon_down, frequencies_down, difficulty == "easy",
-    )
-    idx_down = build_index(
-        by_length_down, frequencies_down,
-        await asyncio.to_thread(load_dictionary_frequencies, str(WORDLISTS[bilingual_language])),
-    )
-    return DualIndex(idx, idx_down), set(accents) | set(accents_down)
+    return DualIndex(across.index, down.index), _KnownWords(across, down)
+
+
+class _KnownWords:
+    """Membership in either of two `LoadedLexicon`s (a bilingual session's
+    `known_words`)."""
+
+    __slots__ = ("lexicons",)
+
+    def __init__(self, *lexicons):
+        self.lexicons = lexicons
+
+    def __contains__(self, word):
+        return any(word in lex for lex in self.lexicons)
 
 
 async def _run_interactive_job(job_id, req):

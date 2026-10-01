@@ -36,8 +36,9 @@ public final class Filler {
     /** Early hardclean (mirrors EARLY_HARDCLEAN_PERCENT): percent (1-100) of the grid's cells allowed in
      * impossible slots (of the record just taken) before a generation attempt hard-cleans its state in place,
      * inside the search (earlyHardclean) — the second chance's own hard clean (Cleanup.cleanBlockedSlots, no
-     * black cell touched) — and carries on from it. The search is not stopped: the attempt is neither failed
-     * nor ended, its palier not left. A locked letter the clean erases is unlocked, one it keeps stays locked,
+     * black cell touched). The whole backtracking stack is dropped: the search unwinds to solve(), takes the
+     * cleaned record back flat as its new root and restarts its backtracking from zero. The attempt is neither
+     * failed nor ended, its palier not left. A locked letter the clean erases is unlocked, one it keeps stays locked,
      * and no letter is locked by it. 100 = off. */
     public static final int EARLY_HARDCLEAN_PERCENT = 10;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
@@ -199,6 +200,9 @@ public final class Filler {
      * Cleanup.cleanBlockedSlots must never clear. */
     public int earlyHardcleanPercent = 100;
     final Set<String> earlyHardcleanStates = new HashSet<>();
+    /** Set by backtrack when a record calls for an early hardclean: every node then unwinds like on an abandon
+     * (running its own undo), and solve() restarts the search flat from the record (restartFromRecord). */
+    boolean restartPending;
     public Map<Integer, Character> permanentLockedLetters = Map.of();
     public Set<Integer> toleratedDry = new HashSet<>();
     Set<Integer> lastConflict;
@@ -680,7 +684,8 @@ public final class Filler {
 
     /** Slot a backghost should take the word off, or -1 (mirrors _backghost_target). */
     int backghostTarget(Set<Integer> conflict) {
-        if (conflict == null || placementSeq.isEmpty() || ghostsInDescent >= MAX_BACKGHOSTS_PER_DESCENT) return -1;
+        if (conflict == null || placementSeq.isEmpty() || restartPending
+                || ghostsInDescent >= MAX_BACKGHOSTS_PER_DESCENT) return -1;
         int target = -1;
         long targetSeq = -1;
         for (int k : conflict) {
@@ -958,7 +963,7 @@ public final class Filler {
         String[] oldAssignment = (String[]) saved[2];
         Map<Integer, Long> oldSeq = (Map<Integer, Long>) saved[4];
         // A word on the grid before the change that is no longer there was
-        // taken off by a backghost or an early hardclean: it stays off.
+        // taken off by a backghost: it stays off.
         for (int old = 0; old < oldAssignment.length; old++) {
             if (oldAssignment[old] == null) continue;
             Integer j = option.forward.get(old);
@@ -1074,20 +1079,47 @@ public final class Filler {
     public boolean solve(long deadlineChecks) {
         if (!challengeWords.isEmpty()) challengeWordBudget = (int) Math.max(1, Math.rint(FALLBACK_PHASE_BUDGET_FRACTION * deadlineChecks));
         if (!priorityWords.isEmpty()) themeWordBudget = (int) Math.max(1, Math.rint(FALLBACK_PHASE_BUDGET_FRACTION * deadlineChecks));
-        toleratedDry = dryOpenSlots();
+        // An early hardclean ends both passes early (restartPending): the record that called for it is taken
+        // back flat (restartFromRecord) and the loop starts over from it as a new root, with no backtracking
+        // history. The attempt's descent caps (inherited, initialAssignedCount) are those of its first start.
         int count = 0;
         for (String a : assignment) if (a != null) count++;
         initialAssignedCount = count;
         inherited = !lockedLetters.isEmpty() || count > 0;
-        placementSeq = new HashMap<>();
-        ghostsInDescent = 0;
-        // Early hardclean on the state the search starts from (no record is taken until a word is added to it).
-        // Nothing to restore: no node is running yet.
-        if (earlyHardcleanDue()) earlyHardclean();
-        if (backtrack(deadlineChecks, false)) return true;
-        if (abandoned || budgetExhausted) return false;
-        breakingPermitted = true;
-        return backtrack(deadlineChecks, false);
+        while (true) {
+            // Early hardclean on the state the search starts from (no record is taken until a word is added to
+            // it). Nothing to restore: no node is running yet.
+            if (earlyHardcleanDue()) earlyHardclean();
+            toleratedDry = dryOpenSlots();
+            placementSeq = new HashMap<>();
+            ghostsInDescent = 0;
+            breakingPermitted = false;
+            if (backtrack(deadlineChecks, false)) return true;
+            if (restartPending) {
+                restartFromRecord();
+                continue;
+            }
+            if (abandoned || budgetExhausted) return false;
+            breakingPermitted = true;
+            if (backtrack(deadlineChecks, false)) return true;
+            if (restartPending) {
+                restartFromRecord();
+                continue;
+            }
+            return false;
+        }
+    }
+
+    /** Mirrors _restart_from_record: take bestAssignment back flat as the search's new root, once an early
+     * hardclean has unwound the whole backtracking stack — its slot list and pattern (adoptBestStructure), its
+     * words, and letter statistics re-sampled around each of them (the unwinding restored those of the
+     * previous root). Its words become part of the root: only a later early hardclean can take them off. */
+    void restartFromRecord() {
+        restartPending = false;
+        adoptBestStructure();
+        assignment = bestAssignment.clone();
+        usedWords = usedOf(assignment);
+        for (int i = 0; i < assignment.length; i++) if (assignment[i] != null) refreshLetterScoresAround(i);
     }
 
     // ================================================================== letter options
@@ -1120,7 +1152,7 @@ public final class Filler {
         BitSet[] letters;
         if (idx != null && d.isFull()) {
             List<String> usedIn = new ArrayList<>();
-            for (String u : used) if (u.length() == cells.length && idx.wordSet.contains(u)) usedIn.add(u);
+            for (String u : used) if (u.length() == cells.length && idx.contains(u)) usedIn.add(u);
             letters = lettersFromCounts(idx.blankCounts(), usedIn);
         } else {
             letters = new BitSet[cells.length];
@@ -1246,11 +1278,11 @@ public final class Filler {
             counts = new int[base.length][];
             for (int p = 0; p < base.length; p++) counts[p] = base[p].clone();
             for (String u : used) {
-                if (u.length() == cells.length && idx.wordSet.contains(u)) {
+                if (u.length() == cells.length && idx.contains(u)) {
                     for (int p = 0; p < u.length(); p++) counts[p][Alpha.id(u.charAt(p))]--;
                 }
             }
-            fullMembers = idx.wordSet;
+            fullMembers = idx.ids.keySet();
         } else {
             counts = new int[cells.length][Alpha.size()];
             for (String w : d) {
@@ -1312,14 +1344,13 @@ public final class Filler {
     }
 
     /** Mirrors _early_hardclean: hard-clean the current state in place, on the impossible slots of
-     * bestAssignment (the current assignment whenever this runs), no black cell touched. Every word the clean
-     * removes is taken off the way a backghost takes one off (its node finds its entry gone, a word there when
-     * solve() started simply disappears). A locked letter the clean erases is unlocked, one it keeps stays
+     * bestAssignment (the current assignment whenever this runs), no black cell touched. It runs at the root
+     * of a search (solve(), after any restartFromRecord), so no node is running: every word the clean removes
+     * simply disappears from the grid. A locked letter the clean erases is unlocked, one it keeps stays
      * locked, nothing is locked by it; a kept letter no remaining word or locked letter carries (an orphan
      * letter) is erased. The record restarts from the cleaned state, published like any
-     * record; a cleaned state already produced in this attempt switches the early hardclean off. Returns the
-     * letter statistics to restore (in reverse order) when the search unwinds above this point. */
-    List<Map<Integer, Object[]>> earlyHardclean() {
+     * record; a cleaned state already produced in this attempt switches the early hardclean off. */
+    void earlyHardclean() {
         Set<Integer> cleared = new HashSet<>();
         Object[] cleaned = Cleanup.cleanBlockedSlots(slots, assignment.clone(), impossibleZoneSlots(),
                 lockedLetters.isEmpty() ? null : new HashMap<>(lockedLetters), false, index, rng, null, null, null,
@@ -1335,8 +1366,7 @@ public final class Filler {
                 removed.add(i);
             }
         }
-        List<Map<Integer, Object[]>> savedScores = new ArrayList<>();
-        for (int i : removed) savedScores.add(refreshLetterScoresAround(i));
+        for (int i : removed) refreshLetterScoresAround(i);
         if (!cleared.isEmpty()) {
             Map<Integer, Character> kept = new HashMap<>();
             lockedLetters.forEach((cell, ch) -> { if (!cleared.contains(cell)) kept.put(cell, ch); });
@@ -1352,22 +1382,6 @@ public final class Filler {
         Map<Integer, Character> letters = new java.util.TreeMap<>(knownCells());
         if (!earlyHardcleanStates.add(Grids.key(pattern) + "|" + letters)) earlyHardcleanPercent = 100;
         if (onNewBest != null) onNewBest.accept(bestAssignment);
-        return savedScores;
-    }
-
-    /** Mirrors _early_hardclean_and_continue: early hardclean inside a running search, then a fresh backtrack
-     * node carries on from the cleaned state — the shape of a backghost. When the fresh node fails, the letter
-     * statistics re-tallied by the clean are restored before its failure is passed up; the removed words stay
-     * off. */
-    boolean earlyHardcleanAndContinue(long deadlineChecks, boolean released) {
-        List<Map<Integer, Object[]>> savedScores = earlyHardclean();
-        if (backtrack(deadlineChecks, released)) return true;
-        Set<Integer> conflict = lastConflict;
-        boolean jumped = lastJumped;
-        for (int k = savedScores.size() - 1; k >= 0; k--) restoreLetterScores(savedScores.get(k));
-        lastConflict = conflict;
-        lastJumped = jumped;
-        return false;
     }
 
     public List<Integer> impossibleZoneSlots() {
@@ -1582,7 +1596,7 @@ public final class Filler {
         lastConflict = null;
         lastJumped = false;
         final boolean entryReleased = released;
-        if (abandoned) return false;
+        if (abandoned || restartPending) return false;
         if (deadlineReachedWithoutExtension(deadlineChecks)) {
             budgetExhausted = true;
             return false;
@@ -1602,9 +1616,12 @@ public final class Filler {
             bestStatLetters = statLetters(assignment);
             if (onNewBest != null) onNewBest.accept(bestAssignment);
             // Early hardclean: checked right as the record is taken, the only moment bestAssignment is the
-            // current assignment, on the current slots and pattern. The state is cleaned in place and a fresh
-            // node carries on from it, like a backghost (earlyHardcleanAndContinue).
-            if (earlyHardcleanDue()) return earlyHardcleanAndContinue(deadlineChecks, released);
+            // current assignment, on the current slots and pattern. Every node unwinds (restartPending) and
+            // solve() restarts flat from this record, cleaned.
+            if (earlyHardcleanDue()) {
+                restartPending = true;
+                return fail(null);
+            }
         }
         if (unassigned.isEmpty()) return true;
         Set<String> active = activeChallengeWords();
@@ -1700,7 +1717,7 @@ public final class Filler {
             while (stream.hasNext()) {
                 Object candidate = stream.next();
                 checks++;
-                if (abandoned) return fail(null);
+                if (abandoned || restartPending) return fail(null);
                 if (deadlineReachedWithoutExtension(deadlineChecks)) {
                     budgetExhausted = true;
                     return fail(null);

@@ -16,11 +16,14 @@ freq.py keeps every one found for a genuinely ambiguous word, e.g. French
 appears in the grid.
 """
 import json
+from collections.abc import Mapping
 from pathlib import Path
+
+from .text_lines import iter_lines_with_offsets, read_line_at
 
 GLOSS_DIR = Path(__file__).resolve().parent.parent / "data" / "gloss_dictionary"
 
-_cache = {}  # language -> {lemma_lower: {"word": ..., "entries": [{"pos":..., "glosses":[...]}]}}
+_cache = {}  # language -> _GlossIndex
 
 
 # Lookup key: lowercase, ligatures folded ("Cœur" -> "coeur") — the
@@ -34,22 +37,45 @@ def _key(word):
     return word.lower().translate(_LIGATURE_KEY)
 
 
+class _GlossIndex(Mapping):
+    """{lemma key: entry} of one language's gloss dictionary, holding only
+    each entry's byte offset in the JSONL file: the entry itself
+    (`{"word", "entries": [{"pos", "glosses"}]}`) is read and parsed from
+    disk when looked up."""
+
+    def __init__(self, path, offsets):
+        self._path = path
+        self._offsets = offsets
+
+    def __getitem__(self, key):
+        offset = self._offsets[key]
+        return json.loads(read_line_at(self._path, offset).strip())
+
+    def __contains__(self, key):
+        return key in self._offsets
+
+    def __iter__(self):
+        return iter(self._offsets)
+
+    def __len__(self):
+        return len(self._offsets)
+
+
 def _load(language):
     if language not in _cache:
-        index = {}
+        offsets = {}
         path = GLOSS_DIR / f"{language}_glosses.jsonl"
         if path.exists():
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    index[_key(entry["word"])] = entry
-        _cache[language] = index
+            for offset, line in iter_lines_with_offsets(path):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                offsets[_key(entry["word"])] = offset
+        _cache[language] = _GlossIndex(path, offsets)
     return _cache[language]
 
 
@@ -63,9 +89,11 @@ def find_glosses_for_canonicals(canonical_forms, language):
     index = _load(language)
     result = {}
     for lemma in canonical_forms:
-        entry = index.get(_key(lemma))
-        if entry:
-            result[lemma] = entry["entries"]
+        key = _key(lemma)
+        if key in index:
+            entry = index[key]
+            if entry:
+                result[lemma] = entry["entries"]
     return result
 
 

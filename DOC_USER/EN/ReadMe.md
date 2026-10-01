@@ -1443,7 +1443,10 @@ wins — spreading them out rather than letting them clump into ugly
 generator never places a black cell right next to another one, on any
 cycle: a cycle whose black-cell density target can't be reached without
 doing so simply ends up with fewer black cells than aimed for, left as-is,
-rather than forcing an adjacent one.
+rather than forcing an adjacent one. The draw toward the density target
+also never blackens a cell of the 2×2 square at each of the grid's four
+corners; only the unfillable-slot pre-fill or a later repair may put a
+black cell there.
 
 The pattern itself is never adjusted ahead of the search. Instead, while
 filling the grid, the generator may reshape the slot it is working on for a

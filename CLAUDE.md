@@ -168,15 +168,39 @@ _normalize`; Java `Py.lookupKey`, `Clues.normalize`.
 
 **Easy difficulty and the Scrabble dictionary**: at "easy", only the
 Scrabble words whose ACCENTUE is a form or a lemma of the inflection table
-join the lexicon (`load_inflection_keys` -> `_scrabble_lexicon_for`,
+join the lexicon (`load_inflection_keys` -> `_scrabble_entries`,
 `load_scrabble_words(language, easy)`, `merge_scrabble_lexicon(...,
 easy)`, `scrabble_words_for_languages(..., easy)`; `backend/app.py`'s
 `_scrabble_words(..., difficulty)`/`_load_interactive_index`; Java
-`Words.loadInflectionKeys`/`scrabbleLexiconFor`).
+`Words.loadInflectionKeys`/`scrabbleEntries`). The inflection keys are
+read only while that selection is made, never cached.
 
 `backend/gloss_lookup.py`/`backend/example_sentences.py`/`backend/
 inflection_lookup.py` each lazily build and cache their own index once
-per process lifetime, never per request.
+per process lifetime, never per request. The gloss index holds only each
+entry's byte offset in its JSONL file (`_GlossIndex`, Java `GlossLookup.
+GlossIndex`): an entry is read and parsed from disk when looked up
+(`backend/text_lines.py`'s `read_line_at`, Java `TextLines.readLineAt`).
+
+**What a lexicon keeps in memory**: grid generation only ever uses the
+bare A-Z form of a word, so a loaded lexicon (`load_lexicon` ->
+`LoadedLexicon`, Java `Generator.load` -> `Generator.Loaded`) keeps, per
+length (`build_index`, Java `LenIndex`): the words, their ids, the
+(position, letter) index, two float32 frequency columns (`freq`,
+`dict_freq` — `array('f')` behind `_WordColumn`, Java `float[]`) and one
+row reference per word (`refs`: the byte offset of the word's row in its
+wordlist shifted left one bit, low bit 1 for the Scrabble wordlist —
+`_freq_row_ref`/`_scrabble_row_ref`; `array('I')`, Java `int[]`), plus
+the two wordlist paths (`sources`). The accented form and the lemmas are
+read back from that row only when a grid's words get their `accented`/
+`canonical` fields (`word_forms`, Java `Words.wordForms`). Besides the
+index, a `LoadedLexicon` holds the proper-noun and no-gloss quota sets
+and the Scrabble word set; it is built once per (wordlist path, cut,
+easy) key and process, shared read-only by every generation and every
+Interactive session, the cache being emptied once it holds
+`LEXICON_CACHE_MAX` (8) entries. Everything else read while loading
+(rows, the freq wordlist's own frequencies, the Scrabble rows) is
+transient.
 
 ## Backend (`backend/`)
 
@@ -337,9 +361,11 @@ and `force_letters_percent` 0 explicitly. `WORDLISTS` maps each of the six langu
 
 Both a CLI (`python3 backend/crossword_gen.py ...`, run from the repo
 root) and the library `backend/app.py` imports. `load_wordlist()` reads a
-`wordlist_<lang>_freq.tsv`, returning `(by_length, accents, canonicals,
-frequencies)`; `build_index()` turns that into a `(length, position,
-letter) → word set` index for fast domain computation. `DIFFICULTY_
+`wordlist_<lang>_freq.tsv`, returning `(by_length, refs, frequencies,
+proper_nouns, non_gloss)`; `build_index()` turns that into a `(length,
+position, letter) → word set` index for fast domain computation, and
+`load_lexicon()` caches the result per process (see "What a lexicon keeps
+in memory" above). `DIFFICULTY_
 PRESETS = {easy: 0.66, medium: 0.80, hard: 1.0}` are *fractions* of the
 gloss-filtered lexicon kept (not fixed counts, so the effect is
 comparable across languages with very different vocabulary sizes); "easy"
@@ -375,7 +401,10 @@ via `ProcessPoolExecutor`:
    empty), then a 32-cell look-ahead window of that pool prefers the
    cell farthest from every black cell already placed (greatest
    Euclidean distance to the closest one, `_nearest_black_distance_sq`,
-   ties keeping the shuffled order), restricted to
+   ties keeping the shuffled order — this ratio-based draw never
+   considers a cell of the four corner 2x2 squares, `_in_corner_square`/
+   `CORNER_SQUARE_SIZE=2`, which only pre-fill and the repair mechanisms
+   below may blacken), restricted to
    non-adjacent candidates satisfying
    `STRUCTURAL_MIN_INTERIOR_FREE=4` (an interior white zone must be at
    least this long), relaxed down to 1 — but adjacency itself is never
@@ -498,7 +527,7 @@ via `ProcessPoolExecutor`:
    WINDOW=100`-word sliding window of the best remaining words —
    deliberately far narrower than a slot's own domain, so the statistical
    ranking stays in charge — re-sorted by frequency in the freq wordlist
-   (`index[length]["dict_freq"]`, built by `build_index` from
+   (`index[length]["dict_freq"]`, float32, built by `build_index` from
    `load_dictionary_frequencies(path)`: the file's own FREQUENCE whatever
    the difficulty cut, 0 for a word absent from it; highest first, ties
    keeping the score order; Java `LenIndex.dictFreq`/`Words.
@@ -730,30 +759,39 @@ whole search restart from a blank grid.
 
 **Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10, 100 = off; Java
 `Filler.EARLY_HARDCLEAN_PERCENT`): the second chance's hard clean, triggered
-earlier and done inside the search, which is never stopped for it. At the
-start of `Filler.solve` (on the inherited state) and in `Filler._backtrack`,
-right as a new record is taken (the one moment `best_assignment` is the
-current assignment, on the current slots/pattern), `_early_hardclean_due`
-tests whether the cells of the record's impossible slots reach that
-percentage of ALL the grid's cells (`try_fill(early_hardclean_percent=)`,
-passed only by the generation attempts, with `permanent_locked_letters`).
-If so, `Filler._early_hardclean` (Java `Filler.earlyHardclean`) runs
-`_clean_blocked_slots` on the current state (no black cell touched) and
-applies it in place: every word it removes is taken off like a backghost's
-(`_placement_seq` entry dropped, so its node finds it gone — `owned`; a
-word already there when `solve()` started simply disappears; `_undo_reshape`
-keeps such a word off); a locked letter it erases is unlocked
-(`cleared_cells_out`), a locked letter it keeps stays locked, and nothing
-becomes locked; a kept letter no remaining word or locked letter carries
-(an orphan letter) is erased. The record restarts from the cleaned state and is
-published. In `_backtrack`, `_early_hardclean_and_continue` then runs a
-fresh node from there (the shape of a backghost); if it fails, the letter
-tallies re-sampled for the removed words are restored and its failure is
-passed up, the removed words staying off. A cleaned state (pattern + every
-known letter) already produced earlier in the attempt switches the
-early hardclean off for the rest of it. Since the search goes on, the
-attempt keeps its seed, rng, budget, descent caps and `Filler._inherited`
-value, and the harvest loop never sees the clean. `try_fill`'s previews and
+earlier, inside the attempt, which is never stopped for it. In
+`Filler._backtrack`, right as a new record is taken (the one moment
+`best_assignment` is the current assignment, on the current slots/pattern),
+`_early_hardclean_due` tests whether the cells of the record's impossible
+slots reach that percentage of ALL the grid's cells
+(`try_fill(early_hardclean_percent=)`, passed only by the generation
+attempts, with `permanent_locked_letters`). If so, the whole backtracking
+stack is dropped: `Filler._restart_pending` is set and every node unwinds
+the way it does on an abandon (`return self._fail(None)`, its own undo
+included — words, letter tallies, `_tolerated_dry`, reshapes; no backghost
+is attempted). `Filler.solve` runs its strict and last-resort passes in a
+loop: when a pass ends on `_restart_pending`, `_restart_from_record` (Java
+`restartFromRecord`) takes the record back flat — `adopt_best_structure`,
+`assignment`/`used_words` from `best_assignment`, letter tallies re-sampled
+around every placed word — and the loop starts over from it as a new root.
+At the start of each iteration, on that root, `_early_hardclean_due` is
+tested again and `Filler._early_hardclean` (Java `earlyHardclean`) runs
+`_clean_blocked_slots` on it (no black cell touched) and applies it in
+place: the words it removes simply disappear; a locked letter it erases is
+unlocked (`cleared_cells_out`), a locked letter it keeps stays locked, and
+nothing becomes locked; a kept letter no remaining word or locked letter
+carries (an orphan letter) is erased. The record restarts from the cleaned
+state and is published. The root's `_tolerated_dry`, `_placement_seq` and
+backghost count are then reset, so the words of the root are never
+backtracked or backghosted: only a later early hardclean takes them off. A
+reshape the record carried stays in the pattern, even when the clean
+removes the word it was made for. A cleaned state (pattern + every known
+letter) already produced earlier in the attempt switches the early
+hardclean off for the rest of it. The recursion depth is therefore bounded
+by the open slots of one root, never stacked across cleans. The attempt
+keeps its seed, rng, budget, `_tried_words`, the descent caps of its first
+start (`_inherited`, `_initial_assigned_count`), and the harvest loop never
+sees the clean. `try_fill`'s previews and
 diagnostics read the Filler's current `locked_letters` (`locked_cells`
 recomputed on each publication).
 
@@ -1093,14 +1131,14 @@ direction(cells)`.
 wordlist (whole, or only its words with a known inflection at "easy" —
 see "Easy difficulty and the Scrabble dictionary") into the lexicon
 `load_wordlist` returned for it
-(`merge_scrabble_lexicon(language, by_length, accents, canonicals,
-frequencies, easy)`, whatever `max_words` cut: a missing word is
-added with its own ACCENTUE/CANONIQUE, and every Scrabble word's frequency
+(`merge_scrabble_lexicon(language, by_length, refs, frequencies, easy)`,
+whatever `max_words` cut: a missing word is added with the reference of
+its own Scrabble row, and every Scrabble word's frequency
 is raised to at least `NOISE_FREQUENCY_THRESHOLD`, so `_noise_slot_cells`
 never flags it) and removes every Scrabble word from `proper_noun_words`/
 `non_gloss_words` — never counted against
-`MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`. `load_scrabble_lexicon`/
-`load_scrabble_words` read the TSV once per process
+`MAX_PROPER_NOUNS`/`MAX_NON_GLOSS_WORDS`. `load_scrabble_words` caches
+only the Scrabble word set, once per language and difficulty class
 (`scrabble_wordlist_path`); `scrabble_words_for_languages` returns a
 frozenset or, bilingual, a `DualSet`. The grid's set (a `DualSet` when
 bilingual) reaches the workers through the pool initializer
@@ -2169,7 +2207,8 @@ point ids make it resumable/idempotent.
 
 ### Small lookup helpers
 
-`gloss_lookup.py` (Wiktionary gloss by canonical form, plus `has_gloss_
+`text_lines.py` (byte-offset line access: `iter_lines_with_offsets`,
+`read_line_at`), `gloss_lookup.py` (Wiktionary gloss by canonical form, plus `has_gloss_
 dictionary`/`has_any_gloss` used by the difficulty filters), `inflection_
 lookup.py` (exact-form grammatical analysis), `example_sentences.py`
 (reservoir-sampled real usage sentences per exact inflected form),
@@ -2192,7 +2231,7 @@ its own lock); the theme-glossary/Qdrant part of `app.py` → `Themes.java`;
 `grid_store.py` → `GridStore.java`; `svg_export.py` → `SvgExport.java`;
 `embedder.py`/`qdrant_store.py`/`system_info.py`/`gloss_lookup.py`/
 `inflection_lookup.py`/`example_sentences.py`/`dictionary_lookup.py`/
-`secret_store.py` → one class each; `crossword_gen.py` → package
+`secret_store.py`/`text_lines.py` → one class each; `crossword_gen.py` → package
 `falcon.gen` (`Words`: lexicon loading, `DualIndex`/`PW`, slot candidates;
 `Grids`: structure, slots, black-cell patterns; `Filler`: the CSP solver;
 `Fill`: seeding, `tryFill`, minimization, overlays, content score;
@@ -2212,13 +2251,14 @@ cancel/"attempt done" events are `AtomicBoolean`s, `checks_progress`/
 `attempt_active` are `AtomicLongArray`/`AtomicIntegerArray`, the
 best-state queue a `BlockingQueue`, and each search thread lowers its own
 priority by `CROSSWORDFALCON_GENERATION_NICE` (`renice` of its Linux thread
-id). Scrabble lexicons are cached per language (`Words.loadScrabbleLexicon`/
-`loadScrabbleWords`, merged into `Generator.load`'s cached lexicon by
+id). Scrabble word sets are cached per language (`Words.loadScrabbleWords`;
+the rows are merged into `Generator.load`'s cached lexicon by
 `Words.mergeScrabbleLexicon`, removed from its proper-noun/no-gloss sets;
 `Filler.scrabbleWords` is a field set after construction, `Fill.FillArgs.
 scrabbleWords`, `Generator.Ctx.scrabbleWords`, `App.annotateScrabbleCells`,
-`Session.scrabbleWords`). Loaded lexicons + indices are cached per (wordlist, difficulty) for
-the process lifetime. RNGs are seeded per attempt like Python's, but with
+`Session.scrabbleWords`). Loaded lexicons (`Generator.Loaded`: index + quota
+sets + Scrabble words, no accented form nor lemma) are cached per
+(wordlist, difficulty) for the process lifetime. RNGs are seeded per attempt like Python's, but with
 Java's generator, so a given seed does not reproduce Python's exact grid.
 The daily RSS/SCRAPP refresh runs the Python scrapers through `.venv`.
 Python text semantics are reproduced where Java differs (`Py.strip`/

@@ -21,6 +21,8 @@ public final class Grids {
     public static final char BLACK = '#';
     public static final char WHITE = '.';
     public static final int STRUCTURAL_MIN_INTERIOR_FREE = 4;
+    /** Side of the corner squares the ratio-based ("Taux noir") draw never blackens. */
+    public static final int CORNER_SQUARE_SIZE = 2;
     public static final int PREFILL_MIN_WORD_COUNT = 3;
     public static final int PREFILL_LOCKED_MIN_WORD_COUNT = 3;
     public static final int NOISE_FREQUENCY_THRESHOLD = 5;
@@ -292,6 +294,12 @@ public final class Grids {
      * Squared Euclidean distance from (r, c) to the closest of {@code blacks} ({@code Long.MAX_VALUE} when there
      * is none) — {@link #placeBlackCells}' ranking criterion within its 32-candidate window.
      */
+    /** True for a cell of one of the grid's four corner 2x2 squares (never drawn by the ratio-based placement). */
+    static boolean inCornerSquare(int rows, int cols, int r, int c) {
+        return (r < CORNER_SQUARE_SIZE || r >= rows - CORNER_SQUARE_SIZE)
+                && (c < CORNER_SQUARE_SIZE || c >= cols - CORNER_SQUARE_SIZE);
+    }
+
     static long nearestBlackDistanceSq(List<Integer> blacks, int r, int c) {
         long best = Long.MAX_VALUE;
         for (int b : blacks) {
@@ -511,7 +519,16 @@ public final class Grids {
         int placed = countBlack(grid);
         int target = (int) Math.max(placed, Math.max(Math.rint(rows * cols * blackRatio),
                 Math.rint(blackEnrichmentFraction * rows * cols)));
-        placeBlackCells(grid, rows, cols, rowBlack, colBlack, candidates, target, placed, index, locked, available, true);
+        // The ratio-based draw never blackens a corner 2x2 square; pre-fill and later repairs still may.
+        List<Integer> ratioCandidates = new ArrayList<>();
+        for (int cell : candidates) if (!inCornerSquare(rows, cols, Cells.r(cell), Cells.c(cell))) ratioCandidates.add(cell);
+        placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, placed, index, locked, available, true);
+        Set<Integer> stillCandidates = new HashSet<>(ratioCandidates);
+        List<Integer> kept = new ArrayList<>();
+        for (int cell : candidates) {
+            if (stillCandidates.contains(cell) || inCornerSquare(rows, cols, Cells.r(cell), Cells.c(cell))) kept.add(cell);
+        }
+        candidates = kept;
         if (available != null && locked != null && !locked.isEmpty()) {
             prefillUnfillableSlots(grid, rows, cols, rowBlack, colBlack, candidates, available, index, locked, rng,
                     fillObjective, true);

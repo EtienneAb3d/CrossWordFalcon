@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
@@ -1127,19 +1128,18 @@ public final class App {
         boolean easy = "easy".equals(difficulty);
         Generator.Loaded a = Generator.load(WORDLISTS.get(language).toString(), mw, easy);
         boolean isBilingual = bilingual != null && !bilingual.isEmpty() && !bilingual.equals(language);
-        if (!isBilingual) return new Object[]{new DualIndex(a.index(), a.index()), new HashSet<>(a.lexicon().accents().keySet())};
+        if (!isBilingual) return new Object[]{new DualIndex(a.index(), a.index()), (Predicate<String>) a::contains};
         Generator.Loaded d = Generator.load(WORDLISTS.get(bilingual).toString(), mw, easy);
-        Set<String> known = new HashSet<>(a.lexicon().accents().keySet());
-        known.addAll(d.lexicon().accents().keySet());
+        Predicate<String> known = w -> a.contains(w) || d.contains(w);
         return new Object[]{new DualIndex(a.index(), d.index()), known};
     }
 
-    static Set<String> knownUpper(Collection<?> words, Set<String> known) {
+    static Set<String> knownUpper(Collection<?> words, Predicate<String> known) {
         Set<String> out = new LinkedHashSet<>();
         if (words == null) return out;
         for (Object w : words) {
             String u = String.valueOf(w).toUpperCase(Locale.ROOT);
-            if (known.contains(u)) out.add(u);
+            if (known.test(u)) out.add(u);
         }
         return out;
     }
@@ -1167,7 +1167,7 @@ public final class App {
             Object[] loaded = loadInteractiveIndex(req.language, req.difficulty, req.bilingualLanguage);
             DualIndex index = (DualIndex) loaded[0];
             @SuppressWarnings("unchecked")
-            Set<String> known = (Set<String>) loaded[1];
+            Predicate<String> known = (Predicate<String>) loaded[1];
             Set<String> priority = knownUpper(themePriority, known);
             Rng rng = Rng.of(req.seed);
             int rows = req.height, cols = req.width;
@@ -1246,7 +1246,7 @@ public final class App {
             Object[] loaded = loadInteractiveIndex(language, difficulty, bilingual);
             DualIndex index = (DualIndex) loaded[0];
             @SuppressWarnings("unchecked")
-            Set<String> known = (Set<String>) loaded[1];
+            Predicate<String> known = (Predicate<String>) loaded[1];
             Set<String> priority = knownUpper(Json.listOrEmpty(record.get("priority_words")), known);
             Object seed = record.containsKey("seed") ? record.get("seed") : 0;
             Rng rng = seed instanceof Number n ? new Rng(n.longValue()) : new Rng();
@@ -2171,7 +2171,7 @@ public final class App {
                 if (!seen.add(direction + "\u0000" + answer)) continue;
                 if (cw.contains(answer)) continue;
                 LenIndex li = s.index.forDirection(direction).get(answer.length());
-                if (li == null || !li.wordSet.contains(answer)) invalid.add(answer);
+                if (li == null || !li.contains(answer)) invalid.add(answer);
             }
             return Json.obj("invalid_words", invalid);
         });

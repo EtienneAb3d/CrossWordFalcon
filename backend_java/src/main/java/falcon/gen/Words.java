@@ -42,11 +42,12 @@ public final class Words {
         return m.find() ? m.group(1) : null;
     }
 
-    /** The loaded lexicon (Python's {@code (by_length, accents, canonicals, frequencies)}). */
-    public record Lexicon(Map<Integer, List<String>> byLength, Map<String, String> accents,
-                          Map<String, List<String>> canonicals, Map<String, Double> frequencies) {}
+    /** The loaded lexicon (Python's {@code (by_length, refs, frequencies, proper_nouns, non_gloss)}): each word's
+     * row reference stands for its accented form and lemmas, which stay on disk ({@link #wordForms}). */
+    public record Lexicon(Map<Integer, List<String>> byLength, Map<String, Integer> refs,
+                          Map<String, Double> frequencies, Set<String> properNouns, Set<String> nonGloss) {}
 
-    private record Entry(String word, String accented, double freq, List<String> canonical) {}
+    private record Entry(String word, String accented, double freq, List<String> canonical, int ref) {}
 
     static boolean isAlpha(String s) {
         if (s.isEmpty()) return false;
@@ -65,35 +66,43 @@ public final class Words {
         }
     }
 
+    /** Row reference of a freq-wordlist row starting at byte {@code offset} (mirrors _freq_row_ref). */
+    static int freqRowRef(long offset) {
+        return (int) (offset << 1);
+    }
+
+    /** Row reference of a Scrabble-wordlist row starting at byte {@code offset} (mirrors _scrabble_row_ref). */
+    static int scrabbleRowRef(long offset) {
+        return (int) ((offset << 1) | 1);
+    }
+
     /** {@code maxWords}: null, an Integer (absolute count) or a Double
      * (fraction of the loaded lexicon). */
     public static Lexicon loadWordlist(String path, Number maxWords, boolean requireGloss, boolean excludeProperNouns)
             throws IOException {
         List<Entry> entries = new ArrayList<>();
-        try (BufferedReader r = Files.newBufferedReader(Path.of(path), StandardCharsets.UTF_8)) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                if (line.isEmpty() || line.startsWith("#")) continue;
-                String[] parts = line.split("\t", -1);
-                if (parts.length >= 4) {
-                    String word = parts[0].toUpperCase(Locale.ROOT);
-                    List<String> canonical = new ArrayList<>();
-                    for (String c : parts[3].split(";", -1)) if (!c.isEmpty()) canonical.add(c);
-                    if (isAlpha(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]),
-                            canonical.isEmpty() ? List.of(parts[1]) : canonical));
-                } else if (parts.length == 3) {
-                    String word = parts[0].toUpperCase(Locale.ROOT);
-                    if (isAlpha(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]), List.of(parts[1])));
-                } else if (parts.length == 2) {
-                    String word = parts[0].toUpperCase(Locale.ROOT);
-                    if (isAlpha(word)) entries.add(new Entry(word, word, parseFreq(parts[1]), List.of(word)));
-                } else {
-                    String t = Py.strip(line.toUpperCase(Locale.ROOT));
-                    if (t.isEmpty()) continue;
-                    for (String tok : Py.split(t)) if (isAlpha(tok)) entries.add(new Entry(tok, tok, 0.0, List.of(tok)));
-                }
+        falcon.TextLines.forEachLine(Path.of(path), (offset, line) -> {
+            if (line.isEmpty() || line.startsWith("#")) return;
+            int ref = freqRowRef(offset);
+            String[] parts = line.split("\t", -1);
+            if (parts.length >= 4) {
+                String word = parts[0].toUpperCase(Locale.ROOT);
+                List<String> canonical = new ArrayList<>();
+                for (String c : parts[3].split(";", -1)) if (!c.isEmpty()) canonical.add(c);
+                if (isAlpha(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]),
+                        canonical.isEmpty() ? List.of(parts[1]) : canonical, ref));
+            } else if (parts.length == 3) {
+                String word = parts[0].toUpperCase(Locale.ROOT);
+                if (isAlpha(word)) entries.add(new Entry(word, parts[1], parseFreq(parts[2]), List.of(parts[1]), ref));
+            } else if (parts.length == 2) {
+                String word = parts[0].toUpperCase(Locale.ROOT);
+                if (isAlpha(word)) entries.add(new Entry(word, word, parseFreq(parts[1]), List.of(word), ref));
+            } else {
+                String t = Py.strip(line.toUpperCase(Locale.ROOT));
+                if (t.isEmpty()) return;
+                for (String tok : Py.split(t)) if (isAlpha(tok)) entries.add(new Entry(tok, tok, 0.0, List.of(tok), ref));
             }
-        }
+        });
         LinkedHashMap<String, Entry> best = new LinkedHashMap<>();
         for (Entry e : entries) {
             Entry cur = best.get(e.word);
@@ -102,69 +111,112 @@ public final class Words {
                 else best.replace(e.word, e);
             }
         }
+        entries.clear();
         String lang = langFromPath(path);
-        if (requireGloss && lang != null && GlossLookup.hasGlossDictionary(lang)) {
-            best.values().removeIf(v -> {
-                List<String> cands = new ArrayList<>();
-                cands.add(v.accented);
-                cands.addAll(v.canonical);
-                return !GlossLookup.hasAnyGloss(cands, lang);
-            });
+        boolean glossAvailable = lang != null && GlossLookup.hasGlossDictionary(lang);
+        if (requireGloss && glossAvailable) {
+            best.values().removeIf(v -> !hasAnyGloss(v, lang));
         }
         if (excludeProperNouns && lang != null && !PROPER_NOUN_EXCLUDED_LANGS.contains(lang)) {
             best.values().removeIf(v -> !v.accented.isEmpty() && Character.isUpperCase(v.accented.charAt(0)));
         }
         List<Entry> ranked = new ArrayList<>(best.values());
+        best.clear();
         ranked.sort((a, b) -> Double.compare(b.freq, a.freq));
         if (maxWords != null && maxWords.doubleValue() != 0) {
             int keep = maxWords instanceof Double d ? (int) Math.rint(ranked.size() * d) : maxWords.intValue();
             if (keep < ranked.size()) ranked = new ArrayList<>(ranked.subList(0, Math.max(0, keep)));
         }
         Map<Integer, List<String>> byLength = new LinkedHashMap<>();
-        Map<String, String> accents = new LinkedHashMap<>();
-        Map<String, List<String>> canonicals = new LinkedHashMap<>();
-        Map<String, Double> frequencies = new LinkedHashMap<>();
+        Map<String, Integer> refs = new HashMap<>();
+        Map<String, Double> frequencies = new HashMap<>();
+        Set<String> properNouns = new HashSet<>();
+        Set<String> nonGloss = new HashSet<>();
+        boolean checkProper = lang == null || !PROPER_NOUN_EXCLUDED_LANGS.contains(lang);
         for (Entry e : ranked) {
             byLength.computeIfAbsent(e.word.length(), k -> new ArrayList<>()).add(e.word);
-            accents.put(e.word, e.accented);
-            canonicals.put(e.word, e.canonical);
+            refs.put(e.word, e.ref);
             frequencies.put(e.word, e.freq);
+            if (checkProper && !e.accented.isEmpty() && Character.isUpperCase(e.accented.charAt(0))) properNouns.add(e.word);
+            if (glossAvailable && !hasAnyGloss(e, lang)) nonGloss.add(e.word);
         }
-        return new Lexicon(byLength, accents, canonicals, frequencies);
+        return new Lexicon(byLength, refs, frequencies, properNouns, nonGloss);
+    }
+
+    private static boolean hasAnyGloss(Entry e, String lang) {
+        List<String> cands = new ArrayList<>();
+        cands.add(e.accented);
+        cands.addAll(e.canonical);
+        return GlossLookup.hasAnyGloss(cands, lang);
+    }
+
+    /** (accented, [canonical, ...]) of {@code word} read from its wordlist row {@code line} — the same parsing as
+     * loadWordlist (freq wordlist) or the Scrabble merge ({@code scrabble}) (mirrors _row_forms). */
+    static Object[] rowForms(String line, String word, boolean scrabble) {
+        String[] parts = line.split("\t", -1);
+        if (scrabble) {
+            if (parts.length < 3) return new Object[]{word, List.of(word)};
+            return new Object[]{parts[1], splitCanonical(parts[2], parts[1])};
+        }
+        if (parts.length >= 4) return new Object[]{parts[1], splitCanonical(parts[3], parts[1])};
+        if (parts.length == 3) return new Object[]{parts[1], List.of(parts[1])};
+        return new Object[]{word, List.of(word)};
+    }
+
+    private static List<String> splitCanonical(String column, String accented) {
+        List<String> canonical = new ArrayList<>();
+        for (String c : column.split(";", -1)) if (!c.isEmpty()) canonical.add(c);
+        return canonical.isEmpty() ? List.of(accented) : canonical;
+    }
+
+    /** {accented, [canonical, ...]} of {@code word}, read back from its own wordlist row through {@code idx} (one
+     * length's index); {word, [word]} for a word with no row reference (mirrors word_forms). */
+    public static Object[] wordForms(LenIndex idx, String word) {
+        if (idx == null || idx.refs == null || idx.sources == null) return new Object[]{word, List.of(word)};
+        Integer id = idx.ids.get(word);
+        if (id == null) return new Object[]{word, List.of(word)};
+        int ref = idx.refs[id];
+        boolean scrabble = (ref & 1) != 0;
+        String path = scrabble ? idx.sources[1] : idx.sources[0];
+        if (path == null) return new Object[]{word, List.of(word)};
+        try {
+            return rowForms(falcon.TextLines.readLineAt(Path.of(path), Integer.toUnsignedLong(ref) >>> 1), word, scrabble);
+        } catch (IOException e) {
+            return new Object[]{word, List.of(word)};
+        }
     }
 
     public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
                                                     Map<String, Double> dictionaryFrequencies) {
+        return buildIndex(byLength, frequencies, dictionaryFrequencies, null, null);
+    }
+
+    public static Map<Integer, LenIndex> buildIndex(Map<Integer, List<String>> byLength, Map<String, Double> frequencies,
+                                                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> refs,
+                                                    String[] sources) {
         Map<Integer, LenIndex> index = new LinkedHashMap<>();
-        byLength.forEach((len, words) -> index.put(len, new LenIndex(len, words, frequencies, dictionaryFrequencies)));
+        byLength.forEach((len, words) -> index.put(len,
+                new LenIndex(len, words, frequencies, dictionaryFrequencies, refs, sources)));
         return index;
     }
 
-    private static final Map<String, Map<String, Double>> DICTIONARY_FREQUENCIES = new java.util.concurrent.ConcurrentHashMap<>();
-
     /** {MOT: FREQUENCE} for every word of the freq wordlist at {@code path} (the highest value when a MOT has
-     * several rows), whatever the difficulty cut, read once per process (mirrors load_dictionary_frequencies). */
+     * several rows), whatever the difficulty cut. Transient: only read while a lexicon is being indexed
+     * (mirrors load_dictionary_frequencies). */
     public static Map<String, Double> loadDictionaryFrequencies(String path) throws IOException {
-        Map<String, Double> cached = DICTIONARY_FREQUENCIES.get(path);
-        if (cached != null) return cached;
-        synchronized (DICTIONARY_FREQUENCIES) {
-            cached = DICTIONARY_FREQUENCIES.get(path);
-            if (cached != null) return cached;
-            Map<String, Double> result = new HashMap<>();
-            try (BufferedReader r = Files.newBufferedReader(Path.of(path), StandardCharsets.UTF_8)) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    if (line.isEmpty() || line.startsWith("#")) continue;
-                    String[] parts = line.split("\t", -1);
-                    if (parts.length < 2) continue;
-                    double freq = parseFreq(parts.length >= 3 ? parts[2] : parts[1]);
-                    String word = parts[0].toUpperCase(Locale.ROOT);
-                    if (freq > result.getOrDefault(word, 0.0)) result.put(word, freq);
-                }
+        Map<String, Double> result = new HashMap<>();
+        try (BufferedReader r = Files.newBufferedReader(Path.of(path), StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.isEmpty() || line.startsWith("#")) continue;
+                String[] parts = line.split("\t", -1);
+                if (parts.length < 2) continue;
+                double freq = parseFreq(parts.length >= 3 ? parts[2] : parts[1]);
+                String word = parts[0].toUpperCase(Locale.ROOT);
+                if (freq > result.getOrDefault(word, 0.0)) result.put(word, freq);
             }
-            DICTIONARY_FREQUENCIES.put(path, result);
-            return result;
         }
+        return result;
     }
 
     // ---------------------------------------------------------------- dual structures
@@ -318,48 +370,39 @@ public final class Words {
         return falcon.Env.ROOT.resolve("data").resolve("wordlist_" + language + "_scrabble.tsv");
     }
 
-    /** One row of a Scrabble wordlist. */
-    public record ScrabbleEntry(String accented, List<String> canonical) {}
-
-    private static final Map<String, Map<String, ScrabbleEntry>> SCRABBLE_LEXICON = new java.util.HashMap<>();
     private static final Map<String, Set<String>> SCRABBLE_WORDS = new java.util.HashMap<>();
 
-    /** {MOT: (ACCENTUE, [CANONIQUE...])} of the language's Scrabble wordlist in file order, read once per process
-     * (empty when the language has none). Mirrors load_scrabble_lexicon. */
-    public static synchronized Map<String, ScrabbleEntry> loadScrabbleLexicon(String language) {
-        if (language == null || language.isEmpty()) return Map.of();
-        Map<String, ScrabbleEntry> cached = SCRABBLE_LEXICON.get(language);
-        if (cached != null) return cached;
-        Map<String, ScrabbleEntry> lexicon = new LinkedHashMap<>();
+    /** {MOT: row reference} of the language's Scrabble wordlist, in file order (empty when the language has none)
+     * — transient, built only while a lexicon is loaded. At "easy" difficulty, only the words whose accented form is
+     * a form or a lemma of the inflection table (mirrors _scrabble_entries). */
+    static Map<String, Integer> scrabbleEntries(String language, boolean easy) {
+        Map<String, Integer> refs = new LinkedHashMap<>();
+        if (language == null || language.isEmpty()) return refs;
         Path path = scrabbleWordlistPath(language);
-        if (Files.exists(path)) {
-            try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
-                String line;
-                while ((line = r.readLine()) != null) {
-                    String[] parts = line.split("\t", -1);
-                    if (parts.length < 3 || !isAlpha(parts[0])) continue;
-                    List<String> canonical = new ArrayList<>();
-                    for (String c : parts[2].split(";", -1)) if (!c.isEmpty()) canonical.add(c);
-                    lexicon.put(parts[0], new ScrabbleEntry(parts[1], canonical.isEmpty() ? List.of(parts[1]) : canonical));
-                }
-            } catch (IOException e) {
-                throw new java.io.UncheckedIOException(e);
-            }
+        if (!Files.exists(path)) return refs;
+        Map<String, String> accented = easy ? new HashMap<>() : null;
+        try {
+            falcon.TextLines.forEachLine(path, (offset, line) -> {
+                String[] parts = line.split("\t", -1);
+                if (parts.length < 3 || !isAlpha(parts[0])) return;
+                refs.put(parts[0], scrabbleRowRef(offset));
+                if (accented != null) accented.put(parts[0], parts[1]);
+            });
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
         }
-        lexicon = java.util.Collections.unmodifiableMap(lexicon);
-        SCRABBLE_LEXICON.put(language, lexicon);
-        return lexicon;
+        if (easy) {
+            Set<String> known = loadInflectionKeys(language);
+            refs.keySet().removeIf(w -> !known.contains(Py.lookupKey(accented.get(w))));
+        }
+        return refs;
     }
 
-    private static final Map<String, Set<String>> INFLECTION_KEYS = new java.util.HashMap<>();
-    private static final Map<String, Map<String, ScrabbleEntry>> SCRABBLE_EASY = new java.util.HashMap<>();
-
     /** Every form and every lemma of the language's inflection table (data/inflection/&lt;lang&gt;.jsonl),
-     * lowercased with ligatures folded — the words with a known inflection (mirrors load_inflection_keys). */
-    public static synchronized Set<String> loadInflectionKeys(String language) {
+     * lowercased with ligatures folded — the words with a known inflection. Not cached: only read while an "easy"
+     * lexicon's Scrabble words are being selected (mirrors load_inflection_keys). */
+    public static Set<String> loadInflectionKeys(String language) {
         if (language == null || language.isEmpty()) return Set.of();
-        Set<String> cached = INFLECTION_KEYS.get(language);
-        if (cached != null) return cached;
         Set<String> keys = new HashSet<>();
         Path path = falcon.Env.ROOT.resolve("data").resolve("inflection").resolve(language + ".jsonl");
         if (Files.exists(path)) {
@@ -386,56 +429,47 @@ public final class Words {
                 throw new java.io.UncheckedIOException(e);
             }
         }
-        cached = java.util.Collections.unmodifiableSet(keys);
-        INFLECTION_KEYS.put(language, cached);
-        return cached;
+        return keys;
     }
 
-    /** The language's Scrabble lexicon, restricted at "easy" difficulty to the words whose accented form is a form
-     * or a lemma of the inflection table (mirrors _scrabble_lexicon_for). */
-    public static synchronized Map<String, ScrabbleEntry> scrabbleLexiconFor(String language, boolean easy) {
-        Map<String, ScrabbleEntry> lexicon = loadScrabbleLexicon(language);
-        if (!easy || language == null || language.isEmpty()) return lexicon;
-        Map<String, ScrabbleEntry> cached = SCRABBLE_EASY.get(language);
-        if (cached != null) return cached;
-        Set<String> known = loadInflectionKeys(language);
-        Map<String, ScrabbleEntry> filtered = new LinkedHashMap<>();
-        lexicon.forEach((w, e) -> {
-            if (known.contains(Py.lookupKey(e.accented()))) filtered.put(w, e);
-        });
-        cached = java.util.Collections.unmodifiableMap(filtered);
-        SCRABBLE_EASY.put(language, cached);
-        return cached;
-    }
-
-    /** Every Scrabble word (grid form) of the language — at "easy" difficulty, only those with a known inflection
-     * (mirrors load_scrabble_words). */
-    public static synchronized Set<String> loadScrabbleWords(String language, boolean easy) {
-        if (language == null || language.isEmpty()) return Set.of();
+    /** Stores {@code words} as the language's Scrabble word set for {@code easy}, unless one is cached already;
+     * returns the cached set (mirrors _cache_scrabble_words). */
+    private static synchronized Set<String> cacheScrabbleWords(String language, boolean easy, Collection<String> words) {
         String key = language + "|" + easy;
         Set<String> cached = SCRABBLE_WORDS.get(key);
         if (cached == null) {
-            cached = java.util.Collections.unmodifiableSet(new HashSet<>(scrabbleLexiconFor(language, easy).keySet()));
+            cached = java.util.Collections.unmodifiableSet(new HashSet<>(words));
             SCRABBLE_WORDS.put(key, cached);
         }
         return cached;
     }
 
+    /** Every Scrabble word (grid form) of the language — at "easy" difficulty, only those with a known inflection.
+     * The only Scrabble data kept in memory, once per language and difficulty class (mirrors load_scrabble_words). */
+    public static Set<String> loadScrabbleWords(String language, boolean easy) {
+        if (language == null || language.isEmpty()) return Set.of();
+        synchronized (Words.class) {
+            Set<String> cached = SCRABBLE_WORDS.get(language + "|" + easy);
+            if (cached != null) return cached;
+        }
+        return cacheScrabbleWords(language, easy, scrabbleEntries(language, easy).keySet());
+    }
+
     /** Adds the language's Scrabble wordlist to a loaded lexicon, in place, whatever its difficulty cut — whole, or
-     * only its words with a known inflection when {@code easy}: a missing word joins byLength with its own
-     * accented/canonical forms, and every added Scrabble word gets a frequency of at least NOISE_FREQUENCY_THRESHOLD.
+     * only its words with a known inflection when {@code easy}: a missing word joins byLength with the reference of
+     * its own Scrabble row, and every added Scrabble word gets a frequency of at least NOISE_FREQUENCY_THRESHOLD.
      * Returns the Scrabble word set used (mirrors merge_scrabble_lexicon). */
     public static Set<String> mergeScrabbleLexicon(String language, Lexicon lex, double noiseThreshold, boolean easy) {
-        Map<String, ScrabbleEntry> lexicon = scrabbleLexiconFor(language, easy);
-        lexicon.forEach((word, e) -> {
-            if (!lex.accents().containsKey(word)) {
-                lex.accents().put(word, e.accented());
-                lex.canonicals().put(word, new ArrayList<>(e.canonical()));
+        Map<String, Integer> entries = scrabbleEntries(language, easy);
+        entries.forEach((word, ref) -> {
+            if (!lex.refs().containsKey(word)) {
+                lex.refs().put(word, ref);
                 lex.byLength().computeIfAbsent(word.length(), k -> new ArrayList<>()).add(word);
             }
             lex.frequencies().put(word, Math.max(lex.frequencies().getOrDefault(word, 0.0), noiseThreshold));
         });
-        return loadScrabbleWords(language, easy);
+        if (language == null || language.isEmpty()) return Set.of();
+        return cacheScrabbleWords(language, easy, entries.keySet());
     }
 
     /** The Scrabble word set of a grid: one set, or one per direction on a bilingual grid (mirrors

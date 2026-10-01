@@ -125,13 +125,24 @@ Le lexique réunit deux dictionnaires par langue :
   **en entier** aux niveaux moyen et difficile ; au niveau facile, seuls
   ses mots dont la forme accentuée figure dans la table des formes
   fléchies (`data/inflection/<langue>.jsonl`, comme forme ou comme lemme)
-  le sont (`load_inflection_keys`, `_scrabble_lexicon_for`). Un mot versé
-  absent du premier dictionnaire y est ajouté avec ses formes accentuée et
-  canonique ; aucun mot Scrabble ne compte dans les quotas de noms propres
+  le sont (`load_inflection_keys`, `_scrabble_entries`). Un mot versé
+  absent du premier dictionnaire y est ajouté avec la référence de sa
+  ligne du dictionnaire Scrabble ; aucun mot Scrabble ne compte dans les quotas de noms propres
   (`MAX_PROPER_NOUNS`) ni de mots sans définition (`MAX_NON_GLOSS_WORDS`),
   et sa fréquence est relevée au moins à `NOISE_FREQUENCY_THRESHOLD` pour
   qu'il ne soit jamais pris pour du bruit (`merge_scrabble_lexicon`, appelé
-  par `generate_grid` et par `backend/app.py`, `_load_interactive_index`).
+  par `load_lexicon`).
+
+La construction de la grille n'utilise que la forme nue des mots (26
+lettres sans accent). Le lexique chargé ne garde donc en mémoire, par
+longueur, que les mots, leur index (position, lettre), leurs deux
+fréquences en flottant 32 bits et, pour chaque mot, la position de sa
+ligne dans son fichier (`build_index`). La forme accentuée et les lemmes
+ne sont relus sur le disque qu'au moment de préparer les définitions
+(`word_forms`). Ce lexique est chargé une seule fois par langue et niveau
+de difficulté, puis partagé par toutes les générations et toutes les
+sessions Interactif (`load_lexicon`, appelé par `generate_grid` et par
+`backend/app.py`, `_load_interactive_index`).
 
 ### Mode Interactif (construction manuelle assistée)
 
@@ -393,6 +404,14 @@ case noire à la fois (`_least_loaded_pool`). Dans ce lot, on tire **32**
 positions et on retient la plus **éloignée des cases noires déjà posées**
 (distance euclidienne à la plus proche ; à égalité, l'ordre du tirage)
 (`_place_black_cells`, `_nearest_black_distance_sq`).
+
+**Coins interdits au tirage.** Le tirage vers l'objectif « Taux noir » ne
+pose jamais de case noire dans le carré de 2×2 cases de chacun des quatre
+coins de la grille (`CORNER_SQUARE_SIZE`) : ces cases sont retirées de ses
+candidates (`make_pattern`, `_in_corner_square`). Une case noire ne peut y
+apparaître que par un autre mécanisme : le pré-remplissage, la reprise
+entre paliers, la résolution des zones impossibles ou le réaménagement
+d'une case noire flottante.
 
 **Éviter l'isolement.** Parmi ces 32 candidates, on cherche la meilleure
 qui **ne touche aucune autre case noire** et respecte l'exigence de 4
@@ -957,7 +976,7 @@ mot écarté par sa fréquence reste dans la fenêtre et sort quand elle se
 vide. La
 fréquence lue est celle du fichier, quelle que soit la difficulté
 (`load_dictionary_frequencies`, `build_index` :
-`index[longueur]["dict_freq"]`).
+`index[longueur]["dict_freq"]`, en flottant 32 bits).
 
 C'est la **règle unique de tirage d'un mot** (`Filler.ordered_candidates`),
 partagée avec le bouton **Suivant** du mode Interactif, dont les trois
@@ -1810,14 +1829,32 @@ pas toujours la fin d'une tentative. Dès qu'un nouveau record de sa
 recherche (`best_assignment`) laisse au moins `EARLY_HARDCLEAN_PERCENT`
 (10 %) des cases de la grille dans des emplacements impossibles (le total
 compte toutes les cases, noires comprises ; 100 désactive le mécanisme), la
-grille subit, **à l'intérieur même de la recherche**, le même nettoyage dur
+grille subit, **à l'intérieur même de la tentative**, le même nettoyage dur
 que pour la seconde chance (`Filler._early_hardclean`, qui appelle
-`_clean_blocked_slots` : aucune case noire ajoutée, déplacée ni rouverte),
-et la recherche continue depuis l'état nettoyé, sans s'interrompre
-(`Filler._early_hardclean_and_continue`). La tentative n'est ni déclarée
+`_clean_blocked_slots` : aucune case noire ajoutée, déplacée ni rouverte).
+
+À ce stade la grille est saturée, et l'historique des descentes n'a plus
+d'utilité : il est effacé. Tous les nœuds de la recherche se défont, chacun
+annulant ses propres modifications comme lors d'un abandon
+(`Filler._restart_pending`, sans retrait fantôme), jusqu'à `Filler.solve`.
+Celle-ci reprend alors la grille **à plat** dans l'état du record
+(`Filler._restart_from_record` : motif et emplacements du record, ses mots,
+statistiques de lettres ré-échantillonnées autour de chacun), lui applique
+le nettoyage dur, et recommence le retour arrière de zéro depuis cet état,
+qui devient la nouvelle racine de la recherche (passe stricte d'abord, puis
+passe de dernier recours si elle est épuisée). Les mots de cette racine ne
+sont plus jamais défaits par le retour arrière ni par un retrait fantôme :
+seul un nettoyage dur précoce ultérieur peut les retirer. La profondeur de
+la récursion reste ainsi bornée par les emplacements ouverts d'une seule
+racine, au lieu de s'empiler à chaque nettoyage. Une reconfiguration de
+cases noires que portait le record reste dans le motif, même si le
+nettoyage retire le mot pour lequel elle avait été faite.
+
+La tentative n'est ni déclarée
 échouée, ni terminée, et le palier n'est pas quitté : elle garde son
 processus, son numéro de grille, son générateur aléatoire, son budget de
-vérifications et ses plafonds de descentes, et s'achève par ses issues
+vérifications, l'historique des mots essayés (`_tried_words`) et les
+plafonds de descentes fixés à son premier départ, et s'achève par ses issues
 habituelles (réussite, budget, interruption par une tentative sœur, bouton
 Stop, ou un échec ordinaire, suivi alors de la seconde chance et du
 nettoyage de fin de palier comme pour toute tentative).
@@ -1826,23 +1863,19 @@ Le nettoyage ne verrouille rien. Une lettre verrouillée qu'il efface est
 déverrouillée, pour pouvoir être remplie à nouveau ; une lettre verrouillée
 qu'il n'efface pas reste verrouillée ; une lettre qui n'était pas
 verrouillée le reste. Une grille d'un premier palier, sans lettre
-verrouillée héritée, n'en reçoit donc aucune. Chaque mot retiré quitte la
-grille comme celui d'un retrait fantôme (*backghost*) : le nœud qui l'avait
-posé le trouve absent lorsque la recherche remonte jusqu'à lui, et une
-reconfiguration de cases noires annulée ensuite ne le remet pas. Une lettre
+verrouillée héritée, n'en reçoit donc aucune. Le nettoyage ayant lieu à la
+racine, aucun nœud n'est en cours : chaque mot retiré disparaît simplement
+de la grille. Une lettre
 qu'aucun mot complet restant ni aucun verrou ne porte plus (lettre
 orpheline) est effacée. Le record repart de l'état nettoyé, publié
-comme tout record. Si la recherche échoue ensuite depuis cet état, les
-statistiques de lettres recalculées pour les mots retirés sont restaurées
-et l'échec remonte comme celui d'un nœud ordinaire, les mots retirés
-restant absents. Les aperçus lisent les lettres verrouillées courantes de la
+comme tout record. Les aperçus lisent les lettres verrouillées courantes de la
 recherche (`try_fill`).
 
-Le contrôle a lieu au départ de chaque recherche, sur l'état dont elle
-hérite (`Filler.solve`), puis à chaque nouveau record, seul instant où le record vit à
-coup sûr sur les emplacements et le motif courants, une reconfiguration
-pouvant être active ensuite (`Filler._early_hardclean_due`,
-`Filler._backtrack`). Un état nettoyé identique à un état déjà produit plus
+Le contrôle a lieu au départ de chaque recherche et de chaque reprise à
+plat, sur l'état de la racine (`Filler.solve`), puis à chaque nouveau
+record, seul instant où le record vit à coup sûr sur les emplacements et le
+motif courants, une reconfiguration pouvant être active ensuite
+(`Filler._early_hardclean_due`, `Filler._backtrack`). Un état nettoyé identique à un état déjà produit plus
 tôt dans la même tentative (motif et lettres) désactive le mécanisme pour
 le reste de cette tentative, un même nettoyage répété ne pouvant rien
 apporter ; la recherche continue alors depuis cet état. Seules les

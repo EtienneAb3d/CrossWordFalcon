@@ -950,7 +950,7 @@ project's engineering language.
   `data_builder/`, not in `Automation/`.
 - `backend/gloss_lookup.py`/`backend/example_sentences.py` each lazily
   build and cache their index once per process lifetime (not per request):
-  gloss lookup is keyed by canonical form(s); example-sentence lookup is
+  gloss lookup is keyed by canonical form(s) and holds entry offsets only; example-sentence lookup is
   keyed by the exact accented/inflected spelling (the corpus isn't
   accent-stripped) — using the wordlist's bare `MOT` column instead would
   silently return zero examples for every accented word, a real bug fixed
@@ -973,6 +973,11 @@ the current defaults/behavior to know before touching this code.
 
 - Black-cell placement is **not** 180°-symmetric (dropped in favor of
   independent, non-paired placement, which reaches sparser valid patterns).
+- The ratio-based ("Taux noir") black-cell draw of `make_pattern` never
+  blackens a cell of the 2x2 square at each corner (`_in_corner_square`,
+  `CORNER_SQUARE_SIZE`); a corner black cell can only come from another
+  mechanism (pre-fill, cross-palier cleanup, impossible-zone repair,
+  floating-black-cell reshape).
 - `is_structurally_valid`: an *interior* white zone (black cells on both
   sides) must be at least 3 cells long; a zone touching the grid's own
   border on at least one side is unrestricted in length or count. One
@@ -1480,6 +1485,17 @@ the current defaults/behavior to know before touching this code.
   `œ`/`æ` (and their capitals) as two plain letters (`fold_ligatures`,
   "Œdipe" -> "Oedipe"), and every lookup folds its key the same way; a new
   builder or lookup must do the same.
+- **A loaded lexicon keeps only what grid construction uses.** Per word:
+  its bare A-Z form, its index entries, two float32 frequencies and the
+  byte position of its wordlist row (`build_index`, Java `LenIndex`). The
+  accented form and the lemmas stay on disk and are read back from that
+  row when definitions are prepared (`word_forms`, Java
+  `Words.wordForms`); the gloss dictionary likewise keeps only each
+  entry's offset (`gloss_lookup._GlossIndex`, Java `GlossLookup.
+  GlossIndex`). A lexicon is loaded once per (wordlist, cut, easy) and
+  process (`load_lexicon`, Java `Generator.load`) and shared by every
+  generation and Interactive session. Any new per-word data needed only
+  for definitions must be read from the row, not cached with the index.
 - **The corpus-based wordlist is `data/wordlist_<lang>_freq.tsv`** (named
   after its frequency column, next to `wordlist_<lang>_scrabble.tsv`).
 - **A from-scratch reinstall rebuilds everything.** Every artefact the
@@ -1894,17 +1910,26 @@ the current defaults/behavior to know before touching this code.
   search — the user's rule: the hardclean is an attempt to carry the grid
   on instead of declaring it failed, so triggering it earlier must neither
   change palier nor declare the grid failed. As soon as a new record leaves
-  that share of the grid's cells in impossible slots, the current state is
-  hard-cleaned in place (`Filler._early_hardclean`) and the search carries
-  on from it (`_early_hardclean_and_continue`, shaped like a backghost);
-  the search is never stopped. The user's locking rules: a locked letter
+  that share of the grid's cells in impossible slots, the backtracking
+  history is dropped — the user's rule: once hardcleans start the grid is
+  saturated and the descent history is of little use, so every node
+  unwinds (`Filler._restart_pending`), the record is taken back flat
+  (`Filler._restart_from_record`), hard-cleaned (`Filler._early_hardclean`)
+  and backtracking restarts from zero with that state as the new root
+  (`Filler.solve`'s loop). The words of that root are then only ever taken
+  off by a later early hardclean. Nesting a fresh node per clean on top of
+  the live stack (the previous shape) made the recursion depth, and every
+  node's retained caches, grow without bound — a 30×30 Megatron job ran
+  out of a 30 GB Java heap. The user's locking rules: a locked letter
   the clean erases is unlocked; a locked letter it keeps stays locked; a
   letter that was not locked stays unlocked — so a grid with no locked
-  letter never gets one from it. Removed words are taken off like a
-  backghost's, and a letter left with no complete word and no lock (an
-  orphan letter) is erased — the user's choice: orphan letters must not
-  constrain the search as seeds would. Choice made with the change, to
-  revisit with the user: the cleaned state becomes the new record. Interactive mode never uses it.
+  letter never gets one from it. A letter left with no complete word and
+  no lock (an orphan letter) is erased — the user's choice: orphan letters
+  must not constrain the search as seeds would. Choices made with the
+  change, to revisit with the user: the cleaned state becomes the new
+  record; the attempt keeps the descent caps of its first start; a reshape
+  carried by the record stays in the pattern even when the clean removes
+  its word. Interactive mode never uses it.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

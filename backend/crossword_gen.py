@@ -64,7 +64,13 @@ import sys
 import threading
 import time
 import unicodedata
+from array import array
 from collections import Counter, defaultdict
+
+try:
+    from .text_lines import iter_lines_with_offsets, read_line_at
+except ImportError:  # run as a standalone script (python3 backend/crossword_gen.py)
+    from text_lines import iter_lines_with_offsets, read_line_at
 
 BLACK = "#"
 WHITE = "."
@@ -323,70 +329,76 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
     filtering, if any), so the same `difficulty` value retains a
     comparable share of the vocabulary regardless of language, rather
     than a fixed word count that has a different effect depending on
-    each language's own lexicon size. Returns (by_length, accents,
-    canonicals, frequencies):
+    each language's own lexicon size. Returns (by_length, refs,
+    frequencies, proper_nouns, non_gloss):
     - by_length = {length: [words]} — only the `max_words` most frequent
       words *globally* (across every length combined), if given, are
       kept, then grouped by length for the CSP solver;
-    - accents = {MOT: accented/natural form}, for the words kept in
-      by_length (used to give the LLM the real spelling — gender,
-      number, conjugation — when it writes definitions; see
-      backend/clues.py);
-    - canonicals = {MOT: [canonical form(s)/lemma(s)]}, for the words
-      kept in by_length (used to look up a dictionary definition by
-      lemma rather than by inflected form; see backend/clues.py);
+    - refs = {MOT: row reference}, for the words kept in by_length: the
+      byte offset of the word's row in `path`, shifted left by one bit
+      (`_freq_row_ref`). The accented/natural form and the canonical
+      form(s)/lemma(s) are not kept in memory — the grid only ever uses
+      the bare A-Z form — and are read back from that row when a
+      definition is written (`word_forms`);
     - frequencies = {MOT: raw frequency (float)}, for the words kept in
       by_length — passed to `build_index` (see `NOISE_FREQUENCY_
       THRESHOLD`/`_noise_slot_cells`), to tell a statistically credible
       candidate apart from a near-zero dictionary entry (corpus noise,
-      an acronym, a foreign fragment)."""
+      an acronym, a foreign fragment);
+    - proper_nouns = the kept words whose ACCENTUE is capitalized (empty
+      for a language of `PROPER_NOUN_EXCLUDED_LANGS`), counted against
+      `MAX_PROPER_NOUNS`;
+    - non_gloss = the kept words with no gloss-dictionary entry under
+      their ACCENTUE nor any CANONIQUE (empty when the language has no
+      gloss dictionary), counted against `MAX_NON_GLOSS_WORDS`."""
     entries = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 4:
-                word = parts[0].upper()
-                accented = parts[1]
-                try:
-                    freq = float(parts[2])
-                except ValueError:
-                    freq = 0.0
-                canonical = [c for c in parts[3].split(";") if c]
-                if word.isalpha():
-                    entries.append((word, accented, freq, canonical or [accented]))
-            elif len(parts) == 3:
-                word = parts[0].upper()
-                accented = parts[1]
-                try:
-                    freq = float(parts[2])
-                except ValueError:
-                    freq = 0.0
-                if word.isalpha():
-                    entries.append((word, accented, freq, [accented]))
-            elif len(parts) == 2:
-                word = parts[0].upper()
-                try:
-                    freq = float(parts[1])
-                except ValueError:
-                    freq = 0.0
-                if word.isalpha():
-                    entries.append((word, word, freq, [word]))
-            else:
-                for tok in line.upper().split():
-                    if tok.isalpha():
-                        entries.append((tok, tok, 0.0, [tok]))
+    for offset, line in iter_lines_with_offsets(path):
+        if not line or line.startswith("#"):
+            continue
+        ref = _freq_row_ref(offset)
+        parts = line.split("\t")
+        if len(parts) >= 4:
+            word = parts[0].upper()
+            accented = parts[1]
+            try:
+                freq = float(parts[2])
+            except ValueError:
+                freq = 0.0
+            canonical = [c for c in parts[3].split(";") if c]
+            if word.isalpha():
+                entries.append((word, accented, freq, canonical or [accented], ref))
+        elif len(parts) == 3:
+            word = parts[0].upper()
+            accented = parts[1]
+            try:
+                freq = float(parts[2])
+            except ValueError:
+                freq = 0.0
+            if word.isalpha():
+                entries.append((word, accented, freq, [accented], ref))
+        elif len(parts) == 2:
+            word = parts[0].upper()
+            try:
+                freq = float(parts[1])
+            except ValueError:
+                freq = 0.0
+            if word.isalpha():
+                entries.append((word, word, freq, [word], ref))
+        else:
+            for tok in line.upper().split():
+                if tok.isalpha():
+                    entries.append((tok, tok, 0.0, [tok], ref))
 
-    best = {}  # word -> (accented, best_freq, canonical)
-    for word, accented, freq, canonical in entries:
+    best = {}  # word -> (accented, best_freq, canonical, ref)
+    for word, accented, freq, canonical, ref in entries:
         if word not in best or freq > best[word][1]:
-            best[word] = (accented, freq, canonical)
+            best[word] = (accented, freq, canonical, ref)
+    del entries
 
+    lang = _lang_from_path(path)
+    has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
+    gloss_available = bool(has_any_gloss and lang and has_gloss_dictionary(lang))
     if require_gloss:
-        has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
-        lang = _lang_from_path(path)
         # Guard on the language actually *having* a gloss dictionary built,
         # not just on the import succeeding — `has_any_gloss` returning
         # False for a word with no dictionary at all is indistinguishable
@@ -395,14 +407,13 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
         # dictionary built (an optional, gitignored artifact a deploy can
         # easily skip — see build_gloss_dictionary.py) would have every
         # single word rejected instead of the filter no-op'ing as intended.
-        if has_any_gloss and lang and has_gloss_dictionary(lang):
+        if gloss_available:
             best = {
                 word: v for word, v in best.items()
                 if has_any_gloss([v[0], *v[2]], lang)
             }
 
     if exclude_proper_nouns:
-        lang = _lang_from_path(path)
         if lang and lang not in PROPER_NOUN_EXCLUDED_LANGS:
             best = {
                 word: v for word, v in best.items()
@@ -424,15 +435,46 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
         ranked = ranked[:max_words]
 
     result = defaultdict(list)
-    accents = {}
-    canonicals = {}
+    refs = {}
     frequencies = {}
-    for word, (accented, freq, canonical) in ranked:
+    proper_nouns = set()
+    non_gloss = set()
+    check_proper = lang not in PROPER_NOUN_EXCLUDED_LANGS
+    for word, (accented, freq, canonical, ref) in ranked:
         result[len(word)].append(word)
-        accents[word] = accented
-        canonicals[word] = canonical
+        refs[word] = ref
         frequencies[word] = freq
-    return dict(result), accents, canonicals, frequencies
+        if check_proper and accented[:1].isupper():
+            proper_nouns.add(word)
+        if gloss_available and not has_any_gloss([accented, *canonical], lang):
+            non_gloss.add(word)
+    return dict(result), refs, frequencies, proper_nouns, non_gloss
+
+
+def _freq_row_ref(offset):
+    """Row reference of a freq-wordlist row starting at byte `offset`."""
+    return offset << 1
+
+
+def _scrabble_row_ref(offset):
+    """Row reference of a Scrabble-wordlist row starting at byte `offset`."""
+    return (offset << 1) | 1
+
+
+def _row_forms(line, word, scrabble):
+    """(accented, [canonical, ...]) of `word` read from its wordlist row
+    `line` — the same parsing as `load_wordlist` (freq wordlist) or
+    `merge_scrabble_lexicon` (Scrabble wordlist, `scrabble` true)."""
+    parts = line.split("\t")
+    if scrabble:
+        if len(parts) < 3:
+            return word, [word]
+        return parts[1], [c for c in parts[2].split(";") if c] or [parts[1]]
+    if len(parts) >= 4:
+        return parts[1], [c for c in parts[3].split(";") if c] or [parts[1]]
+    if len(parts) == 3:
+        return parts[1], [parts[1]]
+    return word, [word]
 
 
 # ---------- Black-cell pattern generation ----------
@@ -449,6 +491,12 @@ def load_wordlist(path, max_words=None, require_gloss=False, exclude_proper_noun
 # and retries, so the progressive relaxation stays coherent whatever value
 # is chosen here.
 STRUCTURAL_MIN_INTERIOR_FREE = 4
+
+# Side of the square, at each of the grid's four corners, where
+# `make_pattern`'s ratio-based ("Taux noir") placement never draws a black
+# cell (`_in_corner_square`). Pre-fill and every repair mechanism may
+# still blacken a corner cell.
+CORNER_SQUARE_SIZE = 2
 
 
 def is_structurally_valid(grid, rows, cols, min_interior_free=STRUCTURAL_MIN_INTERIOR_FREE):
@@ -663,6 +711,13 @@ def _nearest_black_distance_sq(blacks, r, c):
     `blacks` (`math.inf` when there is none) — `_place_black_cells`'s
     ranking criterion within its 32-candidate window."""
     return min(((r - br) ** 2 + (c - bc) ** 2 for br, bc in blacks), default=math.inf)
+
+
+def _in_corner_square(rows, cols, r, c):
+    """True for a cell of one of the grid's four corner 2x2 squares — never
+    drawn by `make_pattern`'s ratio-based ("Taux noir") placement."""
+    return (r < CORNER_SQUARE_SIZE or r >= rows - CORNER_SQUARE_SIZE) and (
+        c < CORNER_SQUARE_SIZE or c >= cols - CORNER_SQUARE_SIZE)
 
 
 def _least_loaded_pool(remaining, row_black, col_black):
@@ -1461,6 +1516,10 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     even this one criterion is a soft preference, not a hard constraint —
     it never makes a fillable ratio/size combination infeasible.
 
+    This ratio-based draw never places a black cell in one of the grid's
+    four corner 2x2 squares (`_in_corner_square`, `CORNER_SQUARE_SIZE`);
+    the pre-fill pass and every later repair mechanism still may.
+
     Structural validity itself (`is_structurally_valid`) is equally simple
     now: an *interior* white zone (bounded by a black cell on both sides)
     must be at least `min_interior_free` cells long
@@ -1681,9 +1740,19 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         round(rows * cols * black_ratio),
         round(black_enrichment_fraction * rows * cols),
     )
-    _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
+    # The ratio-based draw never places a black cell in a corner 2x2
+    # square (`_in_corner_square`); pre-fill and every later repair
+    # mechanism still may. Corner cells stay in `candidates` for the
+    # pre-fill pass below, in their shuffled order.
+    ratio_candidates = [cell for cell in candidates if not _in_corner_square(rows, cols, *cell)]
+    _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
                         index=index, locked_letters=locked_letters, available_lengths=available_lengths,
                         forbid_adjacency=True)
+    still_candidates = set(ratio_candidates)
+    candidates = [
+        cell for cell in candidates
+        if cell in still_candidates or _in_corner_square(rows, cols, *cell)
+    ]
 
     if available_lengths is not None and locked_letters:
         _prefill_unfillable_slots(
@@ -1865,111 +1934,102 @@ def scrabble_wordlist_path(language):
     return os.path.join(DATA_DIR, f"wordlist_{language}_scrabble.tsv")
 
 
-def load_scrabble_lexicon(language):
-    """{MOT: (ACCENTUE, [CANONIQUE, ...])} of `language`'s Scrabble
-    wordlist, read once per process (empty when the language has none)."""
+def _scrabble_entries(language, easy):
+    """{MOT: (row reference, ACCENTUE)} of `language`'s Scrabble wordlist,
+    in file order (empty when the language has none) — transient, built
+    only while a lexicon is loaded. At "easy" difficulty (`easy`), only
+    the words with a known inflection (`load_inflection_keys`: their
+    accented form is a form or a lemma of the inflection table)."""
+    entries = {}
     if not language:
-        return {}
-    with _SCRABBLE_CACHE_LOCK:
-        cached = _SCRABBLE_CACHE.get(language)
-        if cached is not None:
-            return cached
-        lexicon = {}
-        path = scrabble_wordlist_path(language)
-        if os.path.exists(path):
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    parts = line.rstrip("\n").split("\t")
-                    if len(parts) >= 3 and parts[0].isalpha():
-                        lexicon[parts[0]] = (parts[1], [c for c in parts[2].split(";") if c] or [parts[1]])
-        _SCRABBLE_CACHE[language] = lexicon
-        return lexicon
+        return entries
+    path = scrabble_wordlist_path(language)
+    if not os.path.exists(path):
+        return entries
+    for offset, line in iter_lines_with_offsets(path):
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0].isalpha():
+            entries[parts[0]] = (_scrabble_row_ref(offset), parts[1])
+    if easy:
+        known = load_inflection_keys(language)
+        entries = {w: e for w, e in entries.items() if _inflection_key(e[1]) in known}
+    return entries
 
 
 def load_inflection_keys(language):
     """Frozenset of every form and every lemma of `language`'s inflection
     table (`data/inflection/<lang>.jsonl`), lowercased with ligatures
-    folded — the words with a known inflection. Read once per process."""
+    folded — the words with a known inflection. Not cached: only read
+    while an "easy" lexicon's Scrabble words are being selected."""
     if not language:
         return frozenset()
-    key = ("inflection", language)
-    with _SCRABBLE_CACHE_LOCK:
-        cached = _SCRABBLE_CACHE.get(key)
-        if cached is not None:
-            return cached
-        keys = set()
-        path = os.path.join(DATA_DIR, "inflection", f"{language}.jsonl")
-        if os.path.exists(path):
-            import json
-            with open(path, encoding="utf-8") as f:
-                for line in f:
-                    try:
-                        rec = json.loads(line)
-                    except ValueError:
-                        continue
-                    if rec.get("form"):
-                        keys.add(_inflection_key(rec["form"]))
-                    for analysis in rec.get("analyses") or ():
-                        if analysis.get("lemma"):
-                            keys.add(_inflection_key(analysis["lemma"]))
-        result = _SCRABBLE_CACHE[key] = frozenset(keys)
-        return result
+    keys = set()
+    path = os.path.join(DATA_DIR, "inflection", f"{language}.jsonl")
+    if os.path.exists(path):
+        import json
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("form"):
+                    keys.add(_inflection_key(rec["form"]))
+                for analysis in rec.get("analyses") or ():
+                    if analysis.get("lemma"):
+                        keys.add(_inflection_key(analysis["lemma"]))
+    return frozenset(keys)
 
 
 def _inflection_key(word):
     return word.lower().replace("œ", "oe").replace("æ", "ae")
 
 
-def _scrabble_lexicon_for(language, easy):
-    """`load_scrabble_lexicon(language)`, restricted at "easy" difficulty
-    to the words with a known inflection (`load_inflection_keys`: their
-    accented form is a form or a lemma of the inflection table)."""
-    lexicon = load_scrabble_lexicon(language)
-    if not easy:
-        return lexicon
-    key = ("easy", language)
+def _cache_scrabble_words(language, easy, words):
+    """Stores `words` as `language`'s Scrabble word set for `easy`, unless
+    one is cached already; returns the cached set."""
+    key = (language, bool(easy))
     with _SCRABBLE_CACHE_LOCK:
         cached = _SCRABBLE_CACHE.get(key)
-    if cached is not None:
+        if cached is None:
+            cached = _SCRABBLE_CACHE[key] = frozenset(words)
         return cached
-    known = load_inflection_keys(language)
-    filtered = {w: e for w, e in lexicon.items() if _inflection_key(e[0]) in known}
-    with _SCRABBLE_CACHE_LOCK:
-        _SCRABBLE_CACHE[key] = filtered
-    return filtered
 
 
 def load_scrabble_words(language, easy=False):
     """Frozenset of every Scrabble word (grid form) of `language` — at
-    "easy" difficulty (`easy`), only those with a known inflection."""
-    lexicon = _scrabble_lexicon_for(language, easy)
-    key = ("words", language, easy)
+    "easy" difficulty (`easy`), only those with a known inflection. The
+    only Scrabble data kept in memory, once per language and difficulty
+    class."""
+    if not language:
+        return frozenset()
     with _SCRABBLE_CACHE_LOCK:
-        cached = _SCRABBLE_CACHE.get(key)
-        if cached is None:
-            cached = _SCRABBLE_CACHE[key] = frozenset(lexicon)
+        cached = _SCRABBLE_CACHE.get((language, bool(easy)))
+    if cached is not None:
         return cached
+    return _cache_scrabble_words(language, easy, _scrabble_entries(language, easy))
 
 
-def merge_scrabble_lexicon(language, by_length, accents, canonicals, frequencies, easy=False):
+def merge_scrabble_lexicon(language, by_length, refs, frequencies, easy=False):
     """Adds `language`'s Scrabble wordlist to a lexicon returned by
     `load_wordlist` (in place), whatever the difficulty cut already
     applied to it — whole, except at "easy" difficulty (`easy`), where
     only its words with a known inflection are added
-    (`_scrabble_lexicon_for`): a word missing from the lexicon is added to
-    `by_length` with its own accented/canonical forms, and every added
-    Scrabble word gets a frequency of at least `NOISE_FREQUENCY_THRESHOLD`,
-    so `_noise_slot_cells` never takes it for noise. Returns the Scrabble
-    word set used for this lexicon (empty when the language has no
-    Scrabble wordlist)."""
-    lexicon = _scrabble_lexicon_for(language, easy)
-    for word, (accented, canonical) in lexicon.items():
-        if word not in accents:
-            accents[word] = accented
-            canonicals[word] = list(canonical)
+    (`_scrabble_entries`): a word missing from the lexicon is added to
+    `by_length` with the reference of its own Scrabble row
+    (`_scrabble_row_ref`), and every added Scrabble word gets a frequency
+    of at least `NOISE_FREQUENCY_THRESHOLD`, so `_noise_slot_cells` never
+    takes it for noise. Returns the Scrabble word set used for this
+    lexicon (empty when the language has no Scrabble wordlist)."""
+    entries = _scrabble_entries(language, easy)
+    for word, (ref, _accented) in entries.items():
+        if word not in refs:
+            refs[word] = ref
             by_length.setdefault(len(word), []).append(word)
         frequencies[word] = max(frequencies.get(word, 0.0), float(NOISE_FREQUENCY_THRESHOLD))
-    return load_scrabble_words(language, easy)
+    if not language:
+        return frozenset()
+    return _cache_scrabble_words(language, easy, entries)
 
 
 def scrabble_words_for_languages(language, bilingual_language=None, easy=False):
@@ -2034,54 +2094,77 @@ def _priority_words_for(priority_words, cells):
 # having `letter` at position p. Intersecting a handful of sets (one per
 # already-known letter) replaces a full scan of the lexicon.
 
-_DICTIONARY_FREQUENCIES_CACHE = {}
-_DICTIONARY_FREQUENCIES_LOCK = threading.Lock()
-
-
 def load_dictionary_frequencies(path):
     """{MOT: FREQUENCE} for every word of the freq wordlist at `path`
     (the highest value when a MOT has several rows), whatever difficulty
-    cut `load_wordlist` applies — read once per process. A word absent
-    from the file is absent from the dict."""
-    path = str(path)
-    with _DICTIONARY_FREQUENCIES_LOCK:
-        cached = _DICTIONARY_FREQUENCIES_CACHE.get(path)
-        if cached is not None:
-            return cached
-        result = {}
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.rstrip("\n")
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split("\t")
-                if len(parts) < 2:
-                    continue
-                try:
-                    freq = float(parts[2] if len(parts) >= 3 else parts[1])
-                except ValueError:
-                    freq = 0.0
-                word = parts[0].upper()
-                if freq > result.get(word, 0.0):
-                    result[word] = freq
-        _DICTIONARY_FREQUENCIES_CACHE[path] = result
-        return result
+    cut `load_wordlist` applies. Transient: only read while a lexicon is
+    being indexed (`build_index` keeps the values it needs as float32).
+    A word absent from the file is absent from the dict."""
+    result = {}
+    with open(str(path), encoding="utf-8") as f:
+        for line in f:
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            try:
+                freq = float(parts[2] if len(parts) >= 3 else parts[1])
+            except ValueError:
+                freq = 0.0
+            word = parts[0].upper()
+            if freq > result.get(word, 0.0):
+                result[word] = freq
+    return result
 
 
-def build_index(by_length, frequencies=None, dictionary_frequencies=None):
-    """`dictionary_frequencies` (`load_dictionary_frequencies`, `None` by
-    default) feeds `index[length]["dict_freq"]` — each word's frequency in
-    the freq wordlist itself, 0.0 for a word absent from it (a
-    Scrabble-only word), read by `Filler.ordered_candidates`.
+class _WordColumn:
+    """A per-word float32 column of one length's index (`build_index`'s
+    `freq`/`dict_freq`): read like a dict keyed by word, stored as an
+    `array('f')` indexed by the word's id (`ids`)."""
+
+    __slots__ = ("ids", "values")
+
+    def __init__(self, ids, values):
+        self.ids = ids
+        self.values = values
+
+    def get(self, word, default=0.0):
+        i = self.ids.get(word)
+        return default if i is None else self.values[i]
+
+    def __getitem__(self, word):
+        return self.values[self.ids[word]]
+
+    def __contains__(self, word):
+        return word in self.ids
+
+    def __len__(self):
+        return len(self.values)
+
+
+def build_index(by_length, frequencies=None, dictionary_frequencies=None, refs=None,
+                sources=None):
+    """One entry per length: `words` (the list of its words, a word's id
+    being its position there), `ids` ({word: id}), `pos` (per position, a
+    {letter: set of words} map), `freq`/`dict_freq` (float32 columns,
+    `_WordColumn`), `refs` (each word's row reference, an `array('I')`
+    indexed by id, `None` when `refs` is not given) and `sources` (the
+    `(freq wordlist path, Scrabble wordlist path)` pair these references
+    point into, read back by `word_forms`). A word is held only as its
+    bare A-Z grid form: its accented form and lemmas stay on disk.
+
+    `dictionary_frequencies` (`load_dictionary_frequencies`, `None` by
+    default) feeds `dict_freq` — each word's frequency in the freq
+    wordlist itself, 0.0 for a word absent from it (a Scrabble-only
+    word), read by `Filler.ordered_candidates`.
 
     `frequencies` (a {MOT: frequency} dict, `None` by default) feeds
-    `index[length]["freq"]` — used only by `_noise_slot_cells` (see
-    `NOISE_FREQUENCY_THRESHOLD`) to tell a statistically credible candidate
-    apart from a near-zero dictionary entry. Omitted (`None`), every word of
-    `index[length]["freq"]` falls back to `0.0` — a no-op for any caller
-    that doesn't use this feature (no real caller other than `generate_
-    grid` today, but an isolated test that builds its own small lexicon
-    doesn't need to supply this parameter to keep working as before)."""
+    `freq` — used only by `_noise_slot_cells` (see
+    `NOISE_FREQUENCY_THRESHOLD`) to tell a statistically credible
+    candidate apart from a near-zero dictionary entry. Omitted (`None`),
+    every word's `freq` is `0.0`."""
     frequencies = frequencies or {}
     dictionary_frequencies = dictionary_frequencies or {}
     index = {}
@@ -2090,13 +2173,98 @@ def build_index(by_length, frequencies=None, dictionary_frequencies=None):
         for w in words:
             for p, ch in enumerate(w):
                 pos_sets[p][ch].add(w)
+        ids = {w: i for i, w in enumerate(words)}
         index[length] = {
             "words": words,
-            "pos": pos_sets,
-            "freq": {w: frequencies.get(w, 0.0) for w in words},
-            "dict_freq": {w: dictionary_frequencies.get(w, 0.0) for w in words},
+            "ids": ids,
+            "pos": [dict(d) for d in pos_sets],
+            "freq": _WordColumn(ids, array("f", (frequencies.get(w, 0.0) for w in words))),
+            "dict_freq": _WordColumn(
+                ids, array("f", (dictionary_frequencies.get(w, 0.0) for w in words))
+            ),
+            "refs": array("I", (refs[w] for w in words)) if refs is not None else None,
+            "sources": sources,
         }
     return index
+
+
+class LoadedLexicon:
+    """A language's indexed lexicon for one difficulty class, cached for
+    the process lifetime (`load_lexicon`): `index` (`build_index`),
+    `proper_nouns`/`non_gloss` (the quota word sets, Scrabble words
+    removed) and `scrabble_words` (`load_scrabble_words`)."""
+
+    __slots__ = ("index", "proper_nouns", "non_gloss", "scrabble_words")
+
+    def __init__(self, index, proper_nouns, non_gloss, scrabble_words):
+        self.index = index
+        self.proper_nouns = proper_nouns
+        self.non_gloss = non_gloss
+        self.scrabble_words = scrabble_words
+
+    def __contains__(self, word):
+        entry = self.index.get(len(word))
+        return entry is not None and word in entry["ids"]
+
+    def word_count(self):
+        return sum(len(d["words"]) for d in self.index.values())
+
+
+_LEXICON_CACHE = {}
+_LEXICON_CACHE_LOCK = threading.Lock()
+LEXICON_CACHE_MAX = 8
+
+
+def load_lexicon(wordlist_path, max_words, easy):
+    """The `LoadedLexicon` of `wordlist_path` cut to `max_words`
+    (`load_wordlist`), "easy" filters on when `easy`, with the language's
+    Scrabble wordlist merged in (`merge_scrabble_lexicon`) — built once
+    per (path, cut, easy) key and process, shared read-only by every
+    generation and Interactive session (the cache is emptied once it
+    holds `LEXICON_CACHE_MAX` entries)."""
+    key = (str(wordlist_path), max_words, bool(easy))
+    with _LEXICON_CACHE_LOCK:
+        loaded = _LEXICON_CACHE.get(key)
+        if loaded is not None:
+            return loaded
+        by_length, refs, frequencies, proper_nouns, non_gloss = load_wordlist(
+            wordlist_path, max_words, require_gloss=easy, exclude_proper_nouns=easy,
+        )
+        language = _lang_from_path(wordlist_path)
+        scrabble = merge_scrabble_lexicon(language, by_length, refs, frequencies, easy=easy)
+        sources = (str(wordlist_path), scrabble_wordlist_path(language) if language else None)
+        index = build_index(
+            by_length, frequencies, load_dictionary_frequencies(wordlist_path), refs, sources,
+        )
+        del refs, frequencies
+        loaded = LoadedLexicon(
+            index, frozenset(proper_nouns - scrabble), frozenset(non_gloss - scrabble), scrabble,
+        )
+        if len(_LEXICON_CACHE) >= LEXICON_CACHE_MAX:
+            _LEXICON_CACHE.clear()
+        _LEXICON_CACHE[key] = loaded
+        return loaded
+
+
+def word_forms(length_index, word):
+    """(accented, [canonical, ...]) of `word`, read back from its own
+    wordlist row through `length_index` (one length's `build_index`
+    entry); `(word, [word])` for a word with no row reference."""
+    if length_index is None:
+        return word, [word]
+    i = length_index["ids"].get(word)
+    refs = length_index.get("refs")
+    sources = length_index.get("sources")
+    if i is None or refs is None or not sources:
+        return word, [word]
+    ref = refs[i]
+    scrabble = bool(ref & 1)
+    path = sources[1] if scrabble else sources[0]
+    try:
+        line = read_line_at(path, ref >> 1)
+    except OSError:
+        return word, [word]
+    return _row_forms(line, word, scrabble)
 
 
 # ---------- CSP: backtracking fill ----------
@@ -2195,9 +2363,11 @@ UNFILLABLE_ABANDON_CHECK_INTERVAL = 500
 # in impossible slots (`Filler.impossible_zone_slots`, on the record just
 # taken) before a generation attempt hard-cleans its state in place, inside
 # the search (`Filler._early_hardclean`): the same hard clean as the second
-# chance (`_clean_blocked_slots`, no black cell touched), after which the
-# search carries on from the cleaned state. The search is not stopped, so
-# the attempt is neither failed nor ended and its palier is not left. A
+# chance (`_clean_blocked_slots`, no black cell touched). The whole
+# backtracking stack is dropped: the search unwinds to `solve()`, takes the
+# cleaned record back flat as its new root and restarts its backtracking
+# from zero. The attempt is neither failed nor ended and its palier is not
+# left. A
 # locked letter the clean erases is unlocked, one it keeps stays locked,
 # and no letter is locked by it. 100 disables it. Only the generation
 # attempts (`_pattern_attempt`/`_pattern_continue`) enable it.
@@ -2945,6 +3115,11 @@ class Filler:
         self.early_hardclean_percent = 100
         self._early_hardclean_states = set()
         self.permanent_locked_letters = {}
+        # Set by `_backtrack` when a record calls for an early hardclean:
+        # every node then unwinds like on an abandon (running its own
+        # undo), and `solve()` restarts the search flat from the record
+        # (`_restart_from_record`).
+        self._restart_pending = False
         # Set when a `_backtrack` call returned because the check budget
         # ran out (see `_deadline_reached_without_extension`), so `solve()`
         # can tell a strict search cut short from one genuinely exhausted.
@@ -3864,7 +4039,7 @@ class Filler:
         the backghost budget of this descent used up, no word of the set
         placed by this search, or its most recent one lying within
         MAX_BACKJUMP_LEVELS words of the top, which a backjump reaches."""
-        if (conflict is None or not self._placement_seq
+        if (conflict is None or not self._placement_seq or self._restart_pending
                 or self._ghosts_in_descent >= MAX_BACKGHOSTS_PER_DESCENT):
             return None
         ghostable = [k for k in conflict if k in self._placement_seq]
@@ -4081,15 +4256,14 @@ class Filler:
         """Put the black cells `option` changed back to their original
         state, with the slot list and per-slot state that went with them —
         the écarté list keeps its entries made since, translated back, and
-        a word placed before the change that a backghost or an early
-        hardclean has taken off since stays off (see MAX_BACKGHOSTS_PER_
-        DESCENT, `_early_hardclean`). Returns the new
+        a word placed before the change that a backghost has taken off
+        since stays off (see MAX_BACKGHOSTS_PER_DESCENT). Returns the new
         -> original slot index map (`option.target` maps to `i`)."""
         back = {j: old_i for old_i, j in option.forward.items()}
         back[option.target] = i
         slots, pattern, assignment, tolerated, placement_seq, old_recent = saved
         # A word on the grid before the change that is no longer there was
-        # taken off by a backghost or an early hardclean: it stays off.
+        # taken off by a backghost: it stays off.
         for old_i, word in enumerate(assignment):
             if word is None:
                 continue
@@ -4226,22 +4400,55 @@ class Filler:
         # pass leaves the assignment exactly as it found it (every
         # placement is reverted on the way back up), and `best_assignment`
         # keeps whatever record it reached.
-        self._tolerated_dry = self._dry_open_slots()
+        #
+        # An early hardclean ends both passes early (`_restart_pending`):
+        # the record that called for it is taken back flat
+        # (`_restart_from_record`), and the loop starts over from it as a
+        # new root, with no backtracking history. The attempt's descent
+        # caps (`_inherited`, `_initial_assigned_count`) are those of its
+        # first start.
         self._initial_assigned_count = sum(1 for a in self.assignment if a is not None)
         self._inherited = bool(self.locked_letters) or self._initial_assigned_count > 0
-        self._placement_seq = {}
-        self._ghosts_in_descent = 0
-        # Early hardclean on the state the search starts from (no record
-        # is taken until a word is added to it). Nothing to restore: no
-        # node is running yet.
-        if self._early_hardclean_due():
-            self._early_hardclean()
-        if self._backtrack(deadline_checks):
-            return True
-        if self.abandoned or self._budget_exhausted:
+        while True:
+            # Early hardclean on the state the search starts from (no
+            # record is taken until a word is added to it). Nothing to
+            # restore: no node is running yet.
+            if self._early_hardclean_due():
+                self._early_hardclean()
+            self._tolerated_dry = self._dry_open_slots()
+            self._placement_seq = {}
+            self._ghosts_in_descent = 0
+            self.breaking_permitted = False
+            if self._backtrack(deadline_checks):
+                return True
+            if self._restart_pending:
+                self._restart_from_record()
+                continue
+            if self.abandoned or self._budget_exhausted:
+                return False
+            self.breaking_permitted = True
+            if self._backtrack(deadline_checks):
+                return True
+            if self._restart_pending:
+                self._restart_from_record()
+                continue
             return False
-        self.breaking_permitted = True
-        return self._backtrack(deadline_checks)
+
+    def _restart_from_record(self):
+        """Take `best_assignment` back flat as the search's new root, once
+        an early hardclean has unwound the whole backtracking stack (see
+        `_restart_pending`): its slot list and pattern (`adopt_best_
+        structure`), its words, and letter statistics re-sampled around
+        each of them (`_refresh_letter_scores_around`, the unwinding having
+        restored those of the previous root). Its words become part of the
+        root: only a later early hardclean can take them off."""
+        self._restart_pending = False
+        self.adopt_best_structure()
+        self.assignment = list(self.best_assignment)
+        self.used_words = {w for w in self.assignment if w is not None}
+        for i, w in enumerate(self.assignment):
+            if w is not None:
+                self._refresh_letter_scores_around(i)
 
     def _slot_letter_options(self, i, used_words, challenge_words=()):
         """Per-position sets of letters slot `i` can still legitimately
@@ -4635,19 +4842,15 @@ class Filler:
         current assignment whenever this runs: `_clean_blocked_slots`, no
         black cell added, moved or reopened.
 
-        Every word the clean removes is taken off the grid the way a
-        backghost takes one off: the node that placed it finds its entry
-        gone when the search unwinds to it (`owned`), and a word that was
-        already there when `solve()` started simply disappears. A locked
+        It runs at the root of a search (`solve()`), after any restart
+        (`_restart_from_record`), so no node is running: every word the
+        clean removes simply disappears from the grid. A locked
         letter the clean erases is unlocked; a locked letter it keeps stays
         locked; nothing is locked by it. A letter it keeps that no
         remaining word or locked letter carries (an orphan letter) is erased.
         The record restarts from the cleaned state, published like any
         record. A cleaned state already produced in this attempt switches
-        the early hardclean off for the rest of it.
-
-        Returns the letter statistics to restore (`_restore_letter_scores`,
-        in reverse order) when the search unwinds above this point."""
+        the early hardclean off for the rest of it."""
         cleared = set()
         cleaned, _, _, _ = _clean_blocked_slots(
             self.slots, list(self.assignment), self.impossible_zone_slots(),
@@ -4662,7 +4865,8 @@ class Filler:
                 self.used_words.discard(word)
                 self._placement_seq.pop(i, None)
                 removed.append(i)
-        saved_scores = [self._refresh_letter_scores_around(i) for i in removed]
+        for i in removed:
+            self._refresh_letter_scores_around(i)
         if cleared:
             self.locked_letters = {
                 cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared
@@ -4681,25 +4885,6 @@ class Filler:
         self._early_hardclean_states.add(state)
         if self.on_new_best is not None:
             self.on_new_best(self.best_assignment)
-        return saved_scores
-
-    def _early_hardclean_and_continue(self, deadline_checks, released):
-        """Early hardclean inside a running search (see `_early_hardclean`),
-        then a fresh `_backtrack` node carries on from the cleaned state —
-        the same shape as a backghost (`_fail_or_backghost`). Returns what
-        the node that took the record must return. When the fresh node
-        fails, the letter statistics re-tallied by the clean are restored
-        before its failure is passed up; the removed words stay off."""
-        saved_scores = self._early_hardclean()
-        if self._backtrack(deadline_checks, released):
-            return True
-        conflict = self._last_conflict
-        jumped = self._last_jumped
-        for saved in reversed(saved_scores):
-            self._restore_letter_scores(saved)
-        self._last_conflict = conflict
-        self._last_jumped = jumped
-        return False
 
     def impossible_zone_cells(self):
         """Cells belonging to an unassigned slot, in the self.best_
@@ -5387,7 +5572,7 @@ class Filler:
         self._last_conflict = None
         self._last_jumped = False
         entry_released = released
-        if self.abandoned:
+        if self.abandoned or self._restart_pending:
             return False
         # See `_deadline_reached_without_extension`'s own docstring — the
         # per-candidate check further below (`for w in cands:`) is the one
@@ -5420,11 +5605,12 @@ class Filler:
                 self.on_new_best(self.best_assignment)
             # Early hardclean: checked right as the record is taken, the
             # only moment `best_assignment` is the current assignment, on
-            # the Filler's current slots and pattern. The state is cleaned
-            # in place and a fresh node carries on from it, like a
-            # backghost (`_early_hardclean_and_continue`).
+            # the Filler's current slots and pattern. Every node unwinds
+            # (`_restart_pending`) and `solve()` restarts flat from this
+            # record, cleaned.
             if self._early_hardclean_due():
-                return self._early_hardclean_and_continue(deadline_checks, released)
+                self._restart_pending = True
+                return self._fail(None)
         if not unassigned:
             return True
 
@@ -5716,7 +5902,7 @@ class Filler:
                 # recursive call finally notices via its own `if self.
                 # abandoned: return False`.
                 self.checks += 1
-                if self.abandoned:
+                if self.abandoned or self._restart_pending:
                     return self._fail(None)
                 if self._deadline_reached_without_extension(deadline_checks):
                     self._budget_exhausted = True
@@ -6479,8 +6665,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     at most 2 proper nouns, in HARD mode allow up to 5 proper nouns" (see
     MAX_PROPER_NOUNS). `proper_noun_words` is the set of words (grid form,
     no accent) considered proper nouns for this language (see
-    generate_grid, which builds it once from `accents`/`PROPER_NOUN_
-    EXCLUDED_LANGS`). Checked here, once the search has ended, as a final
+    generate_grid, which takes it from `load_lexicon`'s capitalized-
+    ACCENTUE set, honoring `PROPER_NOUN_EXCLUDED_LANGS`). Checked here, once the search has ended, as a final
     safety net rather than as an active constraint inside `Filler.
     _backtrack` itself (an area of this file documented as particularly
     fragile — see MAX_PROPER_NOUNS): if the number of `filler.assignment`
@@ -13778,115 +13964,60 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
 
     rng = random.Random(seed)
     mw = max_words or DIFFICULTY_PRESETS.get(difficulty)
-    by_length, accents, canonicals, frequencies = load_wordlist(
-        wordlist_path, mw, require_gloss=(difficulty == "easy"),
-        # Only "easy" now excludes proper nouns from the lexicon entirely
-        # — "medium"/"hard" now tolerate them, but within a real per-grid
-        # quota (see MAX_PROPER_NOUNS/proper_noun_words below), at the
-        # user's explicit request: "en mode FACILE ne pas autoriser à
-        # placer des noms propres, en mode MOYEN autoriser au plus 2 noms
-        # propres, en mode DIFFICILE autoriser jusqu'à 5 noms propres."
-        # Replaces the old all-or-nothing rule that excluded "medium" just
-        # as strictly as "easy".
-        exclude_proper_nouns=(difficulty == "easy"),
-    )
+    # The lexicon (index, quota word sets, Scrabble words) comes from the
+    # process-wide cache (`load_lexicon`). Only "easy" excludes proper
+    # nouns from the lexicon entirely — "medium"/"hard" tolerate them
+    # within a per-grid quota (MAX_PROPER_NOUNS/proper_noun_words below).
+    easy = difficulty == "easy"
+    lexicon_across = load_lexicon(wordlist_path, mw, easy)
     language = _lang_from_path(wordlist_path) or "fr"
-    scrabble_across = merge_scrabble_lexicon(
-        _lang_from_path(wordlist_path), by_length, accents, canonicals, frequencies,
-        easy=(difficulty == "easy"),
-    )
+    scrabble_across = lexicon_across.scrabble_words
 
     # Bilingual grid (see `bilingual_wordlist_path`'s own docstring
     # above): a second lexicon is only loaded when `bilingual_wordlist_
     # path` is genuinely given AND different from `wordlist_path` — `None`
     # or an identical path cleanly degrades into ordinary monolingual
-    # generation, with no second `load_wordlist`/`build_index` call
-    # (`by_length_down`/`accents_down`/`canonicals_down`/`frequencies_down`
-    # then simply alias the values already loaded above).
+    # generation (`lexicon_down` then aliases `lexicon_across`).
     bilingual_active = bool(bilingual_wordlist_path) and bilingual_wordlist_path != wordlist_path
     if bilingual_active:
-        by_length_down, accents_down, canonicals_down, frequencies_down = load_wordlist(
-            bilingual_wordlist_path, mw, require_gloss=(difficulty == "easy"),
-            exclude_proper_nouns=(difficulty == "easy"),
-        )
+        lexicon_down = load_lexicon(bilingual_wordlist_path, mw, easy)
         bilingual_language = _lang_from_path(bilingual_wordlist_path) or bilingual_wordlist_path
-        scrabble_down = merge_scrabble_lexicon(
-            _lang_from_path(bilingual_wordlist_path), by_length_down, accents_down,
-            canonicals_down, frequencies_down, easy=(difficulty == "easy"),
-        )
+        scrabble_down = lexicon_down.scrabble_words
     else:
-        by_length_down, accents_down, canonicals_down, frequencies_down = (
-            by_length, accents, canonicals, frequencies
-        )
+        lexicon_down = lexicon_across
         bilingual_language = None
         scrabble_down = scrabble_across
 
     # Proper-noun quota for this generation (see MAX_PROPER_NOUNS) and the
     # set of words (grid form) genuinely considered proper nouns for this
-    # language — the same signal, computed the same way, as the one
-    # `exclude_proper_nouns` above already uses (`accents[word][:1].
-    # isupper()`), never recomputed a second time. Always computed, even
-    # for "easy": `by_length`/`accents` then already contain no proper
-    # noun at all (excluded above), so this set naturally comes out empty
-    # and this quota (0) simply never gets a chance to apply. On a
-    # bilingual grid, the union of both languages' own proper nouns (see
-    # `bilingual_wordlist_path`'s own docstring) — a single quota shared
-    # across the whole grid, not one per direction.
+    # language (capitalized ACCENTUE, `load_wordlist`). Empty for "easy",
+    # whose lexicon holds no proper noun at all. On a bilingual grid, the
+    # union of both languages' own proper nouns — a single quota shared
+    # across the whole grid, not one per direction. A Scrabble word is
+    # valid at every difficulty: never counted against either quota.
     max_proper_nouns = MAX_PROPER_NOUNS.get(difficulty, MAX_PROPER_NOUNS["hard"])
-
-    def _proper_noun_words_for(path, accents_map):
-        lang = _lang_from_path(path)
-        if lang in PROPER_NOUN_EXCLUDED_LANGS:
-            return set()
-        return {w for w, acc in accents_map.items() if acc[:1].isupper()}
-
-    proper_noun_words = _proper_noun_words_for(wordlist_path, accents)
+    proper_noun_words = set(lexicon_across.proper_nouns)
     if bilingual_active:
-        proper_noun_words = proper_noun_words | _proper_noun_words_for(
-            bilingual_wordlist_path, accents_down
-        )
-    # A Scrabble word is valid at every difficulty: never counted against
-    # either quota.
+        proper_noun_words |= lexicon_down.proper_nouns
     proper_noun_words -= scrabble_across | scrabble_down
     # Quota of words with no entry in the gloss (definitions) dictionary
     # for this generation (see MAX_NON_GLOSS_WORDS), and the set of words
     # (grid form) genuinely without a gloss entry for this language — the
-    # same signal `load_wordlist(require_gloss=...)` already uses,
-    # reused here. Empty (so the quota never triggers) if the language
-    # can't be inferred from the path, if the dictionary isn't built, or
-    # for "easy" (where
+    # same signal `load_wordlist(require_gloss=...)` uses. Empty (so the
+    # quota never triggers) if the language can't be inferred from the
+    # path, if the dictionary isn't built, or for "easy" (where
     # `require_gloss=True` has already removed these words from the
-    # lexicon upstream). Union of both languages on a bilingual grid, the
-    # same principle as `proper_noun_words` above.
+    # lexicon). Union of both languages on a bilingual grid.
     max_non_gloss = MAX_NON_GLOSS_WORDS.get(difficulty, MAX_NON_GLOSS_WORDS["hard"])
-
-    def _non_gloss_words_for(path, accents_map, canonicals_map):
-        lang = _lang_from_path(path)
-        if not lang:
-            return set()
-        has_any_gloss, has_gloss_dictionary = _try_import_gloss_lookup()
-        if not (has_any_gloss and has_gloss_dictionary and has_gloss_dictionary(lang)):
-            return set()
-        return {
-            w for w in accents_map
-            if not has_any_gloss([accents_map[w], *canonicals_map.get(w, [])], lang)
-        }
-
-    non_gloss_words = _non_gloss_words_for(wordlist_path, accents, canonicals)
+    non_gloss_words = set(lexicon_across.non_gloss)
     if bilingual_active:
-        non_gloss_words = non_gloss_words | _non_gloss_words_for(
-            bilingual_wordlist_path, accents_down, canonicals_down
-        )
+        non_gloss_words |= lexicon_down.non_gloss
     non_gloss_words -= scrabble_across | scrabble_down
-    # `index` is now a DualIndex (see its own docstring) — the same
-    # dictionary on both sides (across/down) on a monolingual grid, two
-    # distinct dictionaries on a bilingual one.
-    index_across = build_index(
-        by_length, frequencies, load_dictionary_frequencies(wordlist_path)
-    )
-    index_down = build_index(
-        by_length_down, frequencies_down, load_dictionary_frequencies(bilingual_wordlist_path)
-    ) if bilingual_active else index_across
+    # `index` is a DualIndex (see its own docstring) — the same dictionary
+    # on both sides (across/down) on a monolingual grid, two distinct
+    # dictionaries on a bilingual one.
+    index_across = lexicon_across.index
+    index_down = lexicon_down.index
     index = DualIndex(index_across, index_down)
 
     # Theme preselection (see the docstring / `priority_words`). Words
@@ -13906,12 +14037,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # a plain frozenset (unchanged behavior, `bilingual_priority_words`
     # ignored).
     if priority_words or bilingual_priority_words:
-        _known_across = set(accents)
+        _known_across = lexicon_across
         across_pw = frozenset(
             u for w in (priority_words or ()) if (u := str(w).upper()) in _known_across
         )
         if bilingual_active:
-            _known_down = set(accents_down)
+            _known_down = lexicon_down
             down_pw = frozenset(
                 u for w in (bilingual_priority_words or ())
                 if (u := str(w).upper()) in _known_down
@@ -13954,11 +14085,11 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # that shrinks a length to 0 words fails every pattern instantly, in
     # a way that looks identical in the per-attempt log to ordinary bad
     # luck unless this baseline is on record too.
-    progress("wordlist_loaded", word_count=sum(len(w) for w in by_length.values()),
-             length_counts=dict(sorted((length, len(words)) for length, words in by_length.items())),
+    progress("wordlist_loaded", word_count=lexicon_across.word_count(),
+             length_counts=dict(sorted((length, len(d["words"])) for length, d in index_across.items())),
              bilingual_language=bilingual_language,
              bilingual_word_count=(
-                 sum(len(w) for w in by_length_down.values()) if bilingual_active else None
+                 lexicon_down.word_count() if bilingual_active else None
              ))
 
     rows, cols = height, width
@@ -16534,14 +16665,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         # `language` — always the same value — with no other change to
         # behavior.
         for w in words:
-            if bilingual_active and w["direction"] == "down":
-                w["accented"] = accents_down.get(w["answer"], w["answer"])
-                w["canonical"] = canonicals_down.get(w["answer"], [w["accented"]])
-                w["language"] = bilingual_language
-            else:
-                w["accented"] = accents.get(w["answer"], w["answer"])
-                w["canonical"] = canonicals.get(w["answer"], [w["accented"]])
-                w["language"] = language
+            down_word = bilingual_active and w["direction"] == "down"
+            side = index_down if down_word else index_across
+            w["accented"], w["canonical"] = word_forms(side.get(len(w["answer"])), w["answer"])
+            w["language"] = bilingual_language if down_word else language
         solution = build_letters_grid(rows, cols, slots, assignment)
         # Safety net for `required_cells`/"Finir la zone": a locked cell whose
         # BOTH crossing slots end up unresolved (an edge case — one of the two

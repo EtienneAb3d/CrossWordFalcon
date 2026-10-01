@@ -11,6 +11,7 @@ import falcon.gen.Words.PW;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -106,9 +107,22 @@ public final class Generator {
 
     // ================================================================== loaded languages (cached)
 
-    /** A language's lexicon + index + quota word sets, cached per load key. */
-    public record Loaded(Words.Lexicon lexicon, Map<Integer, LenIndex> index, Set<String> properNouns,
-                         Set<String> nonGloss) {}
+    /** A language's index + quota word sets + Scrabble words, cached per load key (mirrors LoadedLexicon). The
+     * accented forms and lemmas are not kept: each word's row reference reads them back ({@link Words#wordForms}). */
+    public record Loaded(Map<Integer, LenIndex> index, Set<String> properNouns, Set<String> nonGloss,
+                         Set<String> scrabbleWords) {
+        /** True if {@code word} is in this lexicon. */
+        public boolean contains(String word) {
+            LenIndex li = index.get(word.length());
+            return li != null && li.contains(word);
+        }
+
+        public int wordCount() {
+            int n = 0;
+            for (LenIndex li : index.values()) n += li.size();
+            return n;
+        }
+    }
 
     private static final Map<String, Loaded> LOADED = new ConcurrentHashMap<>();
     private static final int LOADED_CACHE_MAX = 8;
@@ -122,29 +136,17 @@ public final class Generator {
             if (l != null) return l;
             Words.Lexicon lex = Words.loadWordlist(path, mw, easy, easy);
             String lang = Words.langFromPath(path);
-            // The whole Scrabble wordlist joins the lexicon, whatever the difficulty (merge_scrabble_lexicon).
+            // The Scrabble wordlist joins the lexicon (merge_scrabble_lexicon).
             Set<String> scrabble = Words.mergeScrabbleLexicon(lang, lex, Grids.NOISE_FREQUENCY_THRESHOLD, easy);
+            String[] sources = {path, lang == null ? null : Words.scrabbleWordlistPath(lang).toString()};
             Map<Integer, LenIndex> idx = Words.buildIndex(lex.byLength(), lex.frequencies(),
-                    Words.loadDictionaryFrequencies(path));
-            Set<String> proper = new HashSet<>();
-            if (!Words.PROPER_NOUN_EXCLUDED_LANGS.contains(lang)) {
-                lex.accents().forEach((w, acc) -> {
-                    if (!acc.isEmpty() && Character.isUpperCase(acc.charAt(0))) proper.add(w);
-                });
-            }
-            Set<String> nonGloss = new HashSet<>();
-            if (lang != null && GlossLookup.hasGlossDictionary(lang)) {
-                lex.accents().forEach((w, acc) -> {
-                    List<String> cands = new ArrayList<>();
-                    cands.add(acc);
-                    cands.addAll(lex.canonicals().getOrDefault(w, List.of()));
-                    if (!GlossLookup.hasAnyGloss(cands, lang)) nonGloss.add(w);
-                });
-            }
+                    Words.loadDictionaryFrequencies(path), lex.refs(), sources);
             // A Scrabble word is valid at every difficulty: never counted against either quota.
+            Set<String> proper = new HashSet<>(lex.properNouns());
             proper.removeAll(scrabble);
+            Set<String> nonGloss = new HashSet<>(lex.nonGloss());
             nonGloss.removeAll(scrabble);
-            l = new Loaded(lex, idx, proper, nonGloss);
+            l = new Loaded(idx, Collections.unmodifiableSet(proper), Collections.unmodifiableSet(nonGloss), scrabble);
             if (LOADED.size() >= LOADED_CACHE_MAX) LOADED.clear();
             LOADED.put(key, l);
             return l;
@@ -582,13 +584,13 @@ public final class Generator {
             Set<String> ap = new HashSet<>();
             if (p.priorityWords != null) for (String w : p.priorityWords) {
                 String u = w.toUpperCase(java.util.Locale.ROOT);
-                if (across.lexicon().accents().containsKey(u)) ap.add(u);
+                if (across.contains(u)) ap.add(u);
             }
             if (bilingual) {
                 Set<String> dp = new HashSet<>();
                 if (p.bilingualPriorityWords != null) for (String w : p.bilingualPriorityWords) {
                     String u = w.toUpperCase(java.util.Locale.ROOT);
-                    if (down.lexicon().accents().containsKey(u)) dp.add(u);
+                    if (down.contains(u)) dp.add(u);
                 }
                 priority = new PW(ap, dp, true);
             } else {
@@ -599,21 +601,21 @@ public final class Generator {
         }
         // The Scrabble word set of each language, merged whole into its lexicon by load(): tried by every search
         // after the theme words and before the rest of the dictionary.
-        Set<String> scrabbleAcross = Words.loadScrabbleWords(Words.langFromPath(p.wordlistPath), easy);
-        PW scrabble = bilingual ? new PW(scrabbleAcross, Words.loadScrabbleWords(Words.langFromPath(p.bilingualWordlistPath), easy), true)
-                : PW.single(scrabbleAcross);
+        Set<String> scrabbleAcross = across.scrabbleWords();
+        PW scrabble = bilingual ? new PW(scrabbleAcross, down.scrabbleWords(), true) : PW.single(scrabbleAcross);
+        if (bilingual) {
+            // A Scrabble word of either language is never counted against either quota.
+            properNouns.removeAll(scrabbleAcross);
+            properNouns.removeAll(down.scrabbleWords());
+            nonGloss.removeAll(scrabbleAcross);
+            nonGloss.removeAll(down.scrabbleWords());
+        }
         Set<String> challenge = new LinkedHashSet<>(Words.challengeSet(p.challengeWords));
         LengthSets availablePreview = LengthSets.available(index, Grids.PREFILL_MIN_WORD_COUNT);
         Map<String, Object> lengthCounts = new LinkedHashMap<>();
-        new TreeMap<>(across.lexicon().byLength()).forEach((len, ws) -> lengthCounts.put(String.valueOf(len), ws.size()));
-        int wordCount = 0;
-        for (List<String> ws : across.lexicon().byLength().values()) wordCount += ws.size();
-        Integer bilingualWordCount = null;
-        if (bilingual) {
-            int n = 0;
-            for (List<String> ws : down.lexicon().byLength().values()) n += ws.size();
-            bilingualWordCount = n;
-        }
+        new TreeMap<>(across.index()).forEach((len, li) -> lengthCounts.put(String.valueOf(len), li.size()));
+        int wordCount = across.wordCount();
+        Integer bilingualWordCount = bilingual ? down.wordCount() : null;
         progress.on("wordlist_loaded", data("word_count", wordCount, "length_counts", lengthCounts,
                 "bilingual_language", bilingualLanguage, "bilingual_word_count", bilingualWordCount));
         final int rows = p.height, cols = p.width;
@@ -1466,8 +1468,8 @@ public final class Generator {
             slots = s;
             assignment = (String[]) m[2];
         }
-        Words.Lexicon acrossLex = across.lexicon();
-        Words.Lexicon downLex = bilingual ? down.lexicon() : null;
+        Map<Integer, LenIndex> acrossLex = across.index();
+        Map<Integer, LenIndex> downLex = bilingual ? down.index() : null;
         Map<String, Object> out = finalResult(grid, slots, assignment, winningProcess, rows, cols, acrossLex, downLex,
                 language, bilingualLanguage, permanentLocked);
         progress.on("grid_ready", data("word_count", slots.size(), "black_count", out.get("black_count")));
@@ -1511,7 +1513,7 @@ public final class Generator {
      * or any other success offered as a "choices" entry. {@code downLex} is
      * null on a monolingual grid. */
     static Map<String, Object> finalResult(char[][] grid, List<int[]> slots, String[] assignment, Integer process,
-                                           int rows, int cols, Words.Lexicon acrossLex, Words.Lexicon downLex,
+                                           int rows, int cols, Map<Integer, LenIndex> acrossLex, Map<Integer, LenIndex> downLex,
                                            String language, String bilingualLanguage,
                                            Map<Integer, Character> permanentLocked) {
         boolean bilingual = downLex != null;
@@ -1522,10 +1524,12 @@ public final class Generator {
         }
         for (Map<String, Object> w : words) {
             String ans = (String) w.get("answer");
-            Words.Lexicon lex = bilingual && "down".equals(w.get("direction")) ? downLex : acrossLex;
-            String acc = lex.accents().getOrDefault(ans, ans);
-            w.put("accented", acc);
-            w.put("canonical", new ArrayList<>(lex.canonicals().getOrDefault(ans, List.of(acc))));
+            Map<Integer, LenIndex> lex = bilingual && "down".equals(w.get("direction")) ? downLex : acrossLex;
+            Object[] forms = Words.wordForms(lex.get(ans.length()), ans);
+            w.put("accented", forms[0]);
+            @SuppressWarnings("unchecked")
+            List<String> canonical = (List<String>) forms[1];
+            w.put("canonical", new ArrayList<>(canonical));
             w.put("language", bilingual && "down".equals(w.get("direction")) ? bilingualLanguage : language);
         }
         char[][] solution = Grids.buildLettersGrid(rows, cols, slots, assignment);

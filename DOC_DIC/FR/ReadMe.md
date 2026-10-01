@@ -320,7 +320,9 @@ ligne par lemme trouvé :
 
 `backend/gloss_lookup.py` lit ensuite ce fichier pour retrouver, au moment
 de rédiger une définition (`backend/clues.py`), une vraie définition d'un
-mot de la grille par sa forme canonique.
+mot de la grille par sa forme canonique. Il ne garde en mémoire que la
+position de chaque entrée dans le fichier, et relit l'entrée sur le
+disque quand elle est demandée (`_GlossIndex`).
 
 ## Étape 4 — Compresser le corpus pour publication
 
@@ -511,9 +513,9 @@ Le dictionnaire Scrabble est versé dans le lexique de toute grille
 (`backend/crossword_gen.py`, `merge_scrabble_lexicon`) : en entier aux
 niveaux moyen et difficile, et au niveau facile seulement pour ses mots
 dont la forme accentuée figure dans la table des formes fléchies, comme
-forme ou comme lemme (`load_inflection_keys`, `_scrabble_lexicon_for`).
+forme ou comme lemme (`load_inflection_keys`, `_scrabble_entries`).
 Ses mots s'ajoutent à la part du dictionnaire de fréquences retenue pour
-ce niveau, avec leurs formes accentuée et canonique, hors quotas de noms
+ce niveau, avec la référence de leur ligne, hors quotas de noms
 propres et de mots sans définition. La génération essaie en priorité ses
 mots (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot essayer »).
 

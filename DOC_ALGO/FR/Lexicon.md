@@ -415,15 +415,19 @@ plusieurs signaux) :
   plus tôt, à l'intérieur de la recherche, dès qu'un nouveau record d'une
   tentative de génération laisse au moins `EARLY_HARDCLEAN_PERCENT` (10 %)
   des cases de la grille dans des emplacements impossibles (100 =
-  désactivé). Même nettoyage que la seconde chance, appliqué sur place : la
-  recherche continue depuis la grille nettoyée sans s'interrompre, sans que
-  la tentative soit déclarée échouée ni terminée et sans quitter son palier.
+  désactivé). Même nettoyage que la seconde chance. L'historique des
+  descentes est effacé : tous les nœuds se défont, la grille est reprise à
+  plat dans l'état du record, nettoyée, et le retour arrière recommence de
+  zéro depuis cet état, qui devient la nouvelle racine de la recherche ; ses
+  mots ne sont plus défaits que par un nettoyage dur précoce ultérieur. La
+  tentative n'est ni déclarée échouée ni terminée, et ne quitte pas son
+  palier.
   Il ne verrouille aucune lettre : une case verrouillée dont il efface la
   lettre est déverrouillée, une case verrouillée qu'il n'efface pas le
   reste, une lettre non verrouillée le reste, et une lettre qu'aucun mot
   complet ni aucun verrou ne porte plus (lettre orpheline) est effacée.
   (`backend/crossword_gen.py`, `Filler._early_hardclean`,
-  `Filler._early_hardclean_and_continue`, `Filler._early_hardclean_due`,
+  `Filler._restart_from_record`, `Filler._early_hardclean_due`,
   `EARLY_HARDCLEAN_PERCENT`.)
 
 - **Seconde chance** : reprise d'une tentative qui échoue alors que le

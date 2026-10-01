@@ -1,11 +1,11 @@
 package falcon.gen;
 
+import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /** Every word of one length, indexed by (position, letter) as BitSets over
  * the words' own ids (mirrors one entry of Python's build_index). */
@@ -14,32 +14,44 @@ public final class LenIndex {
     public final String[] words;
     public final List<String> wordList;
     public final Map<String, Integer> ids;
-    public final Set<String> wordSet;
     /** pos[p][alphaId] -> ids of the words carrying that letter at p (null = none). */
     public final BitSet[][] pos;
-    public final double[] freq;
-    /** Each word's frequency in the freq wordlist itself, 0.0 for a word absent from it (index[length]["dict_freq"]). */
-    public final double[] dictFreq;
+    /** Each word's lexicon frequency, as float32 (index[length]["freq"]). */
+    public final float[] freq;
+    /** Each word's frequency in the freq wordlist itself, 0.0 for a word absent from it, as float32
+     * (index[length]["dict_freq"]). */
+    public final float[] dictFreq;
+    /** Each word's row reference (byte offset of its wordlist row << 1 | 1 for the Scrabble wordlist), or null
+     * (index[length]["refs"]). The accented form and lemmas stay on disk: see {@link Words#wordForms}. */
+    public final int[] refs;
+    /** The (freq wordlist, Scrabble wordlist) paths {@link #refs} point into, or null (index[length]["sources"]). */
+    public final String[] sources;
     /** Lazily computed per-position letter counts over the whole list. */
     private volatile int[][] blankCounts;
 
     public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
                     Map<String, Double> dictionaryFrequencies) {
+        this(length, words, frequencies, dictionaryFrequencies, null, null);
+    }
+
+    public LenIndex(int length, List<String> words, Map<String, Double> frequencies,
+                    Map<String, Double> dictionaryFrequencies, Map<String, Integer> wordRefs, String[] sources) {
         this.length = length;
         this.words = words.toArray(new String[0]);
-        this.wordList = List.of(this.words);
+        this.wordList = Collections.unmodifiableList(Arrays.asList(this.words));
         this.ids = new HashMap<>(this.words.length * 2);
-        this.wordSet = new HashSet<>(this.words.length * 2);
-        this.freq = new double[this.words.length];
-        this.dictFreq = new double[this.words.length];
+        this.freq = new float[this.words.length];
+        this.dictFreq = new float[this.words.length];
+        this.refs = wordRefs == null ? null : new int[this.words.length];
+        this.sources = sources;
         for (int i = 0; i < this.words.length; i++) {
             String w = this.words[i];
             ids.put(w, i);
-            wordSet.add(w);
             Double f = frequencies == null ? null : frequencies.get(w);
-            freq[i] = f == null ? 0.0 : f;
+            freq[i] = f == null ? 0.0f : (float) (double) f;
             Double d = dictionaryFrequencies == null ? null : dictionaryFrequencies.get(w);
-            dictFreq[i] = d == null ? 0.0 : d;
+            dictFreq[i] = d == null ? 0.0f : (float) (double) d;
+            if (refs != null) refs[i] = wordRefs.get(w);
             for (int p = 0; p < length; p++) Alpha.id(w.charAt(p));
         }
         int alpha = Alpha.size();
@@ -53,6 +65,11 @@ public final class LenIndex {
                 bs.set(i);
             }
         }
+    }
+
+    /** True if {@code w} is a word of this length's lexicon. */
+    public boolean contains(String w) {
+        return ids.containsKey(w);
     }
 
     public int size() {
