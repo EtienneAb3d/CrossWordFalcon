@@ -395,15 +395,39 @@ absence de case orpheline).
 
 ### Choisir où poser une case
 
-Pour éviter les paquets de cases noires, avant chaque tirage on compte les
-cases noires de chaque ligne et colonne, et le tirage est limité aux cases
-situées à la fois dans une des colonnes et une des lignes qui en comptent
-le moins (minimum pris parmi celles possédant encore une case candidate) ;
-si ce croisement est vide, les deux seuils sont relevés ensemble d'une
-case noire à la fois (`_least_loaded_pool`). Dans ce lot, on tire **32**
-positions et on retient la plus **éloignée des cases noires déjà posées**
-(distance euclidienne à la plus proche ; à égalité, l'ordre du tirage)
-(`_place_black_cells`, `_nearest_black_distance_sq`).
+Pour éviter les paquets de cases noires, chaque tirage commence par
+classer les lignes, et séparément les colonnes, qui possèdent encore une
+case candidate selon leur nombre de cases noires (les moins chargées
+d'abord, égalités au hasard), et retient les `BLACK_DRAW_WINDOW_PERCENT`
+(**5 %**) les moins chargées de chacune (au moins une). Le tirage est
+limité aux candidates situées dans une ligne retenue **ou** dans une
+colonne retenue : les lignes et colonnes entières, pas seulement leurs
+croisements.
+
+Dans cette sélection, on calcule pour chaque case la distance
+(euclidienne) à la case noire déjà posée la plus proche, la distance à une
+case noire située sur la **même ligne ou la même colonne** comptant pour
+`BLACK_ALIGNED_DISTANCE_FACTOR` (**10**) fois la distance réelle
+(`_black_distance_sq`), et on classe les cases de la plus éloignée à la
+plus proche (à égalité, l'ordre de leur mélange initial). La **fenêtre** retient les **5 %** les plus éloignées
+(au moins une case), et une case y est tirée **au hasard**. Si elle ne
+respecte pas les contraintes fortes, elle est écartée et le tirage
+recommence dans la même fenêtre ; une fois toute la fenêtre écartée, elle
+est **élargie de 5 %** de plus (10 %, 15 %…) jusqu'à couvrir toute la
+sélection. Si aucune case de la sélection ne convient, les sélections de
+lignes et de colonnes sont à leur tour **élargies de 5 %**, et le tirage
+reprend avec une fenêtre de distance de 5 % (`backend/crossword_gen.py`,
+`_place_black_cells`, `_nearest_black_distance_sq`).
+
+Les contraintes fortes : la case est encore blanche, ne **touche aucune
+autre case noire**, ne fait pas tomber un emplacement touchant une lettre
+verrouillée sous son seuil de candidats
+(`_new_black_cell_breaks_locked_slot`, voir « Prise en compte des lettres
+déjà verrouillées ») et laisse la grille structurellement valide avec
+l'exigence de 4 cases. Quand toutes les lignes et colonnes sont retenues
+sans qu'aucune case convienne, le tirage reprend depuis des sélections de
+5 % avec l'exigence abaissée d'un cran (3, 2, puis 1) ; si même l'exigence de 1
+case ne laisse aucune candidate, plus aucune case noire n'est posée.
 
 **Coins interdits au tirage.** Le tirage vers l'objectif « Taux noir » ne
 pose jamais de case noire dans le carré de 2×2 cases de chacun des quatre
@@ -413,12 +437,9 @@ apparaître que par un autre mécanisme : le pré-remplissage, la reprise
 entre paliers, la résolution des zones impossibles ou le réaménagement
 d'une case noire flottante.
 
-**Éviter l'isolement.** Parmi ces 32 candidates, on cherche la meilleure
-qui **ne touche aucune autre case noire** et respecte l'exigence de 4
-cases ; à défaut, l'exigence est abaissée d'un cran à la fois (3, 2, 1).
-
 **L'adjacence n'est jamais acceptée par la génération de motif**, à aucun
-palier : si aucune candidate isolée ne convient, la case n'est pas posée.
+palier : si aucune candidate isolée ne convient, plus aucune case n'est
+posée.
 Un palier peut donc finir avec moins de cases noires que visé ; la
 recherche est tentée sur la grille telle quelle. Le pré-remplissage
 (`_prefill_unfillable_slots`) suit la même règle : un emplacement qu'il ne

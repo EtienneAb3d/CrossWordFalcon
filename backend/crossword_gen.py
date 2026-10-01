@@ -706,11 +706,27 @@ def _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_let
     return False
 
 
+# Factor applied to the distance between two cells of the same row or the
+# same column in `_black_distance_sq`.
+BLACK_ALIGNED_DISTANCE_FACTOR = 10
+
+
+def _black_distance_sq(r, c, br, bc):
+    """Squared distance from (r, c) to the black cell (br, bc) as
+    `_place_black_cells` ranks it: Euclidean, multiplied by
+    `BLACK_ALIGNED_DISTANCE_FACTOR` when both cells share a row or a
+    column."""
+    d = (r - br) ** 2 + (c - bc) ** 2
+    if r == br or c == bc:
+        d *= BLACK_ALIGNED_DISTANCE_FACTOR ** 2
+    return d
+
+
 def _nearest_black_distance_sq(blacks, r, c):
-    """Squared Euclidean distance from (r, c) to the closest cell of
-    `blacks` (`math.inf` when there is none) — `_place_black_cells`'s
-    ranking criterion within its 32-candidate window."""
-    return min(((r - br) ** 2 + (c - bc) ** 2 for br, bc in blacks), default=math.inf)
+    """`_black_distance_sq` from (r, c) to the closest cell of `blacks`
+    (`math.inf` when there is none) — `_place_black_cells`'s ranking
+    criterion."""
+    return min((_black_distance_sq(r, c, br, bc) for br, bc in blacks), default=math.inf)
 
 
 def _in_corner_square(rows, cols, r, c):
@@ -720,179 +736,143 @@ def _in_corner_square(rows, cols, r, c):
         c < CORNER_SQUARE_SIZE or c >= cols - CORNER_SQUARE_SIZE)
 
 
-def _least_loaded_pool(remaining, row_black, col_black):
-    """Indices into `remaining` (shuffled order kept) of the candidates lying
-    both in a column and in a row holding the fewest black cells, the
-    minimum being taken over the rows/columns that still own a candidate.
-    When no candidate sits at the intersection of such a row and such a
-    column, both bounds are raised together, one black cell at a time,
-    until one does."""
-    row_min = min(row_black[r] for r, _ in remaining)
-    col_min = min(col_black[c] for _, c in remaining)
-    slack = 0
-    while True:
-        pool = [
-            i for i, (r, c) in enumerate(remaining)
-            if row_black[r] <= row_min + slack and col_black[c] <= col_min + slack
-        ]
-        if pool:
-            return pool
-        slack += 1
+# `_place_black_cells`' draw windows, in percent, and their widening step:
+# the share of rows and of columns holding the fewest black cells the draw
+# is restricted to, and, within those, the share of candidates farthest
+# from every black cell already placed.
+BLACK_DRAW_WINDOW_PERCENT = 5
+
+
+def _window_size(count, percent):
+    """Number of items a `percent` % window keeps out of `count` (at least
+    one, at most all)."""
+    return min(count, max(1, math.ceil(count * percent / 100)))
 
 
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
-                        index=None, locked_letters=None, available_lengths=None,
+                        rng, index=None, locked_letters=None, available_lengths=None,
                         forbid_adjacency=False):
-    """Core of black-cell placement, shared by make_pattern and its own
-    pre-fill phase (see below) — shuffled once, drawn from a small
-    already-shuffled window of `candidates`. Places at most `target -
-    placed` new black cells; also stops as soon as `candidates` is
-    exhausted. Before every draw, the pool is restricted to the
-    candidates lying both in a least-loaded column and in a least-loaded
-    row (`_least_loaded_pool`); a window of 32 candidates of that
-    restricted pool is then considered, ranked by a single criterion —
-    the greatest distance to the closest black cell already placed
-    (`_nearest_black_distance_sq`, Euclidean), ties keeping the pool's
-    shuffled order.
+    """Ratio-based black-cell placement of `make_pattern` ("Taux noir"):
+    places black cells one at a time until `placed` reaches `target` or no
+    candidate can be placed any more.
 
-    Within this window, at the user's explicit request, a cell that
-    touches no other black cell (`_has_black_neighbor`) is always
-    preferred: the best candidate (by the criterion above) that's both
-    isolated and structurally valid under the normal requirement
-    (`is_structurally_valid`, `min_interior_free=STRUCTURAL_MIN_INTERIOR_
-    FREE`, 4 — at least 4 free cells per interior slot) is sought first.
-    If this requirement leaves no candidate that's both isolated and
-    valid, it's lowered one level at a time (3, then 2, then 1),
-    at the user's explicit request ("if no cell can be placed while
-    respecting this number... lower the number and start retrying to
-    place black cells"), before accepting adjacency: this relaxation
-    only applies to this specific placement attempt, not to the whole
-    grid nor to later attempts. Only if no isolated candidate works at
-    any of these levels is adjacency accepted, retrying the same cascade
-    (`STRUCTURAL_MIN_INTERIOR_FREE` down to 1, one level at a time) with
-    no more isolation requirement — **unless `forbid_adjacency` is true**
-    (`False` by default, kept only for a caller outside `make_pattern`
-    that might still want the old last-resort behavior; `make_pattern`
-    itself always passes `forbid_adjacency=True`, at the user's explicit
-    request — originally only for the very first, entirely white grid of
-    a `generate_grid()` call ("When first initializing black cells,
-    forbid any draw that would place 2 black cells with an adjacent
-    side"), then widened to every palier without exception, including
-    one resuming an already partially-blackened `seed_grid` from a
-    previous palier: "La génération de motif cases noires (au début de
-    chaque cycle) ne doit jamais poser de case noire adjacente à une case
-    noire déjà posée. Si l'objectif de pourcentage ne peut pas être
-    atteint sans poser des cases adjacentes, laisser la grille telle
-    quelle." — in which case this very last attempt (accepting adjacency)
-    is skipped entirely). No isolated candidate found across the whole
-    window at this point then behaves exactly like the residual case
-    below — the best candidate is refused and removed from the pool, the
-    loop continues with the rest of the pool, never a crash or a
-    deadlock — so a palier whose density target can't be reached without
-    adjacency simply ends up short of `target`, left as-is, rather than
-    forcing an adjacent cell: the CSP fill is attempted on that grid as
-    it stands, exactly like any other case where `target` isn't fully
-    reached (see this function's own `Returns` note and `make_pattern`'s
-    own docstring). In the residual case where even this finds nothing
-    across the whole window (all 32 candidates break connectivity or
-    create an orphaned cell, or — with `forbid_adjacency` — are all
-    adjacent to an already-black cell), the best candidate by the main
-    criterion is simply refused and removed from the pool, to guarantee
-    the loop always makes progress.
+    Every draw first ranks the rows, and separately the columns, still
+    owning a candidate by their number of black cells (fewest first, ties
+    in random order), and keeps the `BLACK_DRAW_WINDOW_PERCENT` % fewest
+    of each (at least one): the draw is restricted to the candidates lying
+    in a selected row OR a selected column — whole rows and whole columns,
+    not only their intersections. Within that restriction, the candidates
+    are ranked by their distance to the closest black cell already on the
+    grid (`_nearest_black_distance_sq`, Euclidean, 10x for a black cell
+    of the same row or column, farthest first, ties
+    keeping `candidates`' shuffled order), the `BLACK_DRAW_WINDOW_PERCENT`
+    % farthest (at least one) form the distance window, and a cell is drawn
+    at random in it. A drawn cell that breaks a hard constraint is set
+    aside and another one is drawn in the same window; once the whole
+    window is set aside, it is widened by `BLACK_DRAW_WINDOW_PERCENT` more,
+    up to the whole restriction. When the whole restriction is set aside,
+    the row and column windows are widened by `BLACK_DRAW_WINDOW_PERCENT`
+    more and the distance window starts over at its first step.
 
-    This prohibition is scoped to pattern generation itself
-    (`make_pattern`, called once at the start of every palier/cycle,
-    before the CSP fill even starts) — it says nothing about, and never
-    constrains, the cross-palier cleanup mechanisms (`_clean_blocked_
-    slots`/`_build_retry_seed`) or the impossible-zone-resolution passes
-    (`_shorten_impossible_zones`/`_lengthen_impossible_zones`/
-    `interactive_clean_impossible_zones`), every one of which may still
-    place or relocate a black cell adjacent to an existing one when
-    that's what repairing an already-impossible zone requires.
+    Hard constraints: the cell is still white; it touches no black cell
+    (`_has_black_neighbor`); it does not drop a slot touching a locked
+    letter below its candidate threshold (`_new_black_cell_breaks_locked_
+    slot`); the grid stays structurally valid (`is_structurally_valid`)
+    with `min_interior_free` = `STRUCTURAL_MIN_INTERIOR_FREE`. When every
+    row and column is selected without a valid cell, the draw starts over
+    from the first windows with `min_interior_free` lowered by one (down
+    to 1); when even 1 fails, with adjacency accepted unless
+    `forbid_adjacency` (which `make_pattern` always passes) — and when
+    that fails too, nothing can be placed and the function stops short of
+    `target`, leaving the grid as it is.
 
-    Returns (placed, rejected) — `rejected` covers EVERY cell not placed,
-    whether the loop stops for lack of candidates or because `target` is
-    reached: the refused cells, followed by whichever were still in
-    `candidates` without even having been tried (only possible when
-    `target` is reached before `candidates` is exhausted) — a caller that
-    needs to continue (like `_prefill_unfillable_slots`, which calls this
-    function with a deliberately small `target`, one cell at a time)
-    starts from this complete list rather than silently losing never-
-    tried candidates (a real bug found by direct testing before
-    `_prefill_unfillable_slots` was considered done: without this fix, a
-    success on the very first try returned an empty `rejected`, even
-    though almost the entire original candidate pool remained perfectly
-    usable for the next step).
+    This adjacency prohibition is scoped to pattern generation itself — the
+    cross-palier cleanups and the impossible-zone repairs may still place
+    or move a black cell next to another one.
 
-    `index`/`locked_letters` (both `None` by default — every caller
-    pre-dating this feature, as well as any call with no locked letters,
-    is unchanged), at the user's explicit request, on top of
-    `is_structurally_valid`: a candidate cell that would break, on one of
-    its 4 sides, a slot of at least 2 cells touching an already-locked
-    letter with not enough real dictionary candidates
-    (`_new_black_cell_breaks_locked_slot`, see its own docstring) is
-    refused just like a structurally invalid cell — a preventive filter,
-    not merely an after-the-fact repair. If no cell in the whole window
-    passes this filter, the existing behavior takes over unchanged: the
-    best candidate is refused and removed from the pool like any other
-    residual case, letting the loop progress normally with, at worst,
-    fewer cells placed than `target` — at the user's explicit request,
-    this is deliberately not treated as a deadlock to work around here
-    but left to surface as-is: the CSP fill will simply be attempted on
-    the resulting pattern, and if it fails, the already-in-place
-    cross-palier cleanup mechanism (`_build_retry_seed`) gives it another
-    chance at the next palier by freeing up room again, exactly as it
-    already does for any other failure cause."""
-    window = 32
-    rejected = []
+    `candidates` is updated in place (placed cells removed). Returns
+    (placed, unplaced cells)."""
     remaining = candidates
 
-    def _first_valid(indices, min_free):
-        for idx in indices:
-            r, c = remaining[idx]
-            if grid[r][c] == BLACK:
-                continue
-            if _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_letters,
-                                                   available_lengths):
-                continue
-            grid[r][c] = BLACK
-            ok = is_structurally_valid(grid, rows, cols, min_interior_free=min_free)
-            grid[r][c] = WHITE
-            if ok:
-                return idx
+    def _valid(r, c, min_free, allow_adjacency):
+        if grid[r][c] == BLACK:
+            return False
+        if not allow_adjacency and _has_black_neighbor(grid, rows, cols, r, c):
+            return False
+        if _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_letters,
+                                               available_lengths):
+            return False
+        grid[r][c] = BLACK
+        ok = is_structurally_valid(grid, rows, cols, min_interior_free=min_free)
+        grid[r][c] = WHITE
+        return ok
+
+    def _draw(order, min_free, allow_adjacency, set_aside):
+        # Distance window over `order`; `set_aside` holds the cells already
+        # found invalid at this level during this draw.
+        percent = BLACK_DRAW_WINDOW_PERCENT
+        start = 0
+        while start < len(order):
+            size = _window_size(len(order), percent)
+            window = [i for i in order[start:size] if i not in set_aside]
+            while window:
+                idx = window.pop(rng.randrange(len(window)))
+                if _valid(*remaining[idx], min_free, allow_adjacency):
+                    return idx
+                set_aside.add(idx)
+            start = size
+            percent += BLACK_DRAW_WINDOW_PERCENT
         return None
 
-    while remaining and placed < target:
-        pool = _least_loaded_pool(remaining, row_black, col_black)
-        blacks = [(br, bc) for br in range(rows) for bc in range(cols) if grid[br][bc] == BLACK]
-        order = sorted(
-            pool[:window],
-            key=lambda i: -_nearest_black_distance_sq(blacks, *remaining[i]),
-        )
-        non_adjacent = [i for i in order if not _has_black_neighbor(grid, rows, cols, *remaining[i])]
+    def _least_loaded(lines, counts):
+        lines = list(lines)
+        rng.shuffle(lines)
+        lines.sort(key=lambda line: counts[line])
+        return lines
 
+    blacks = [(br, bc) for br in range(rows) for bc in range(cols) if grid[br][bc] == BLACK]
+    # Squared distance of each candidate to its closest black cell, kept
+    # parallel to `remaining` and updated as each new black cell is placed.
+    dist = [_nearest_black_distance_sq(blacks, r, c) for r, c in remaining]
+    while remaining and placed < target:
+        order = sorted(range(len(remaining)), key=lambda i: -dist[i])
+        row_order = _least_loaded({r for r, _ in remaining}, row_black)
+        col_order = _least_loaded({c for _, c in remaining}, col_black)
         chosen = None
-        for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
-            chosen = _first_valid(non_adjacent, min_free)
-            if chosen is not None:
-                break
-        if chosen is None and not forbid_adjacency:
+        for allow_adjacency in ((False,) if forbid_adjacency else (False, True)):
             for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
-                chosen = _first_valid(order, min_free)
+                set_aside = set()
+                percent = BLACK_DRAW_WINDOW_PERCENT
+                while chosen is None:
+                    row_count = _window_size(len(row_order), percent)
+                    col_count = _window_size(len(col_order), percent)
+                    sel_rows = set(row_order[:row_count])
+                    sel_cols = set(col_order[:col_count])
+                    restricted = [
+                        i for i in order
+                        if remaining[i][0] in sel_rows or remaining[i][1] in sel_cols
+                    ]
+                    chosen = _draw(restricted, min_free, allow_adjacency, set_aside)
+                    if row_count == len(row_order) and col_count == len(col_order):
+                        break
+                    percent += BLACK_DRAW_WINDOW_PERCENT
                 if chosen is not None:
                     break
-
+            if chosen is not None:
+                break
         if chosen is None:
-            r, c = remaining.pop(order[0])
-            rejected.append((r, c))
-            continue
-
+            break
         r, c = remaining.pop(chosen)
+        dist.pop(chosen)
+        for i, (cr, cc) in enumerate(remaining):
+            d = _black_distance_sq(cr, cc, r, c)
+            if d < dist[i]:
+                dist[i] = d
         grid[r][c] = BLACK
         row_black[r] += 1
         col_black[c] += 1
         placed += 1
-    return placed, rejected + remaining
+    return placed, list(remaining)
 
 
 # Minimum number of words of a given length in the dictionary for that
@@ -1508,13 +1488,12 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     black cells in that row/column). Keeping black cells apart avoids
     that directly.
 
-    Implemented as a small look-ahead (`_place_black_cells`): at each step,
-    restrict the draw to the least-loaded rows and columns, sample a window
-    of 32 of those cells and prefer the one farthest from every black cell
-    already placed (greatest distance to the closest one) — a single main
-    criterion. Falls back to shuffle order once the window is exhausted, so
-    even this one criterion is a soft preference, not a hard constraint —
-    it never makes a fillable ratio/size combination infeasible.
+    Implemented by `_place_black_cells`: at each step, the draw is
+    restricted to the `BLACK_DRAW_WINDOW_PERCENT` % rows and columns
+    holding the fewest black cells (whole rows and columns), and a cell is
+    drawn at random among the `BLACK_DRAW_WINDOW_PERCENT` % of those
+    candidates farthest from every black cell already placed, each window
+    widening by the same step while none of its cells can be placed.
 
     This ratio-based draw never places a black cell in one of the grid's
     four corner 2x2 squares (`_in_corner_square`, `CORNER_SQUARE_SIZE`);
@@ -1527,17 +1506,10 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     comment for the relaxation cascade); a zone
     touching the grid's own border on at least one side is always allowed,
     whatever its length and however many of them the grid ends up with.
-    `_place_black_cells` reintroduces a preference for keeping black cells
-    apart, at the user's explicit request, but expressed by relaxing this
-    structural minimum rather than by a secondary tie-break criterion: among
-    the window, it first looks for the best candidate (by the row/column
-    criterion) that is *not* adjacent to any existing black cell and valid
-    at `min_interior_free=STRUCTURAL_MIN_INTERIOR_FREE`; if that requirement
-    leaves no such isolated candidate, it's relaxed one step at a time (7,
-    then 6, ... down to 1), still only considering isolated candidates —
-    only once even the most relaxed level finds none is adjacency accepted
-    at all, again cascading `STRUCTURAL_MIN_INTERIOR_FREE` down to 1 before
-    giving up on that specific placement attempt.
+    `_place_black_cells` never places a black cell next to another one
+    (`forbid_adjacency=True`) and relaxes this structural minimum one step
+    at a time, down to 1, once no cell of the whole candidate list can be
+    placed at the current level.
 
     `available_lengths` (`None` by default — every existing caller
     unaffected), at the user's explicit request: the set of slot lengths
@@ -1551,8 +1523,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     runs first, before the ratio-based placement below even starts: as long
     as the grid has a slot whose length isn't in `available_lengths` (too
     long for any word the list has, or simply too poorly covered), it keeps
-    placing black cells with this exact same look-ahead algorithm until
-    that's no longer the case. Cells placed this way are never counted
+    placing black cells until that's no longer the case. Cells placed this way are never counted
     against `black_ratio`'s own target — placement below only starts
     counting *after* the pre-fill phase returns, so a slot that would
     otherwise have too few candidate words (and make the whole pattern hard
@@ -1746,7 +1717,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     # pre-fill pass below, in their shuffled order.
     ratio_candidates = [cell for cell in candidates if not _in_corner_square(rows, cols, *cell)]
     _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
-                        index=index, locked_letters=locked_letters, available_lengths=available_lengths,
+                        rng, index=index, locked_letters=locked_letters, available_lengths=available_lengths,
                         forbid_adjacency=True)
     still_candidates = set(ratio_candidates)
     candidates = [
@@ -2593,7 +2564,7 @@ def _slots_touching(slots, target_indices):
 # sorted by `_candidate_score` (see `Filler.ordered_candidates`, the one
 # place this draw is implemented, used by the automatic search and by
 # Interactive mode's "Suivant" alike) — a bit like `_place_black_cells`'s
-# own 32-cell window for black cells: it keeps the overall priority on the
+# own draw window for black cells: it keeps the overall priority on the
 # statistically best-scored words while avoiding trying them in exactly
 # the sort order, which would amount to an entirely deterministic choice
 # (for a given seed) rather than genuine exploration.

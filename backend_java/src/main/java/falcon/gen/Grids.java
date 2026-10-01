@@ -5,7 +5,6 @@ import falcon.gen.Words.LengthSets;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -268,109 +267,151 @@ public final class Grids {
         return false;
     }
 
-    /**
-     * Indices into {@code remaining} (shuffled order kept) of the candidates lying both in a column and in a row
-     * holding the fewest black cells, the minimum being taken over the rows/columns that still own a candidate.
-     * When no candidate sits at the intersection of such a row and such a column, both bounds are raised together,
-     * one black cell at a time, until one does.
-     */
-    static List<Integer> leastLoadedPool(List<Integer> remaining, int[] rowBlack, int[] colBlack) {
-        int rowMin = Integer.MAX_VALUE, colMin = Integer.MAX_VALUE;
-        for (int cell : remaining) {
-            rowMin = Math.min(rowMin, rowBlack[Cells.r(cell)]);
-            colMin = Math.min(colMin, colBlack[Cells.c(cell)]);
-        }
-        for (int slack = 0; ; slack++) {
-            List<Integer> pool = new ArrayList<>();
-            for (int i = 0; i < remaining.size(); i++) {
-                int cell = remaining.get(i);
-                if (rowBlack[Cells.r(cell)] <= rowMin + slack && colBlack[Cells.c(cell)] <= colMin + slack) pool.add(i);
-            }
-            if (!pool.isEmpty()) return pool;
-        }
-    }
-
-    /**
-     * Squared Euclidean distance from (r, c) to the closest of {@code blacks} ({@code Long.MAX_VALUE} when there
-     * is none) — {@link #placeBlackCells}' ranking criterion within its 32-candidate window.
-     */
     /** True for a cell of one of the grid's four corner 2x2 squares (never drawn by the ratio-based placement). */
     static boolean inCornerSquare(int rows, int cols, int r, int c) {
         return (r < CORNER_SQUARE_SIZE || r >= rows - CORNER_SQUARE_SIZE)
                 && (c < CORNER_SQUARE_SIZE || c >= cols - CORNER_SQUARE_SIZE);
     }
 
+    /**
+     * {@link #blackDistanceSq} from (r, c) to the closest of {@code blacks} ({@code Long.MAX_VALUE} when there is
+     * none) — {@link #placeBlackCells}' ranking criterion.
+     */
     static long nearestBlackDistanceSq(List<Integer> blacks, int r, int c) {
         long best = Long.MAX_VALUE;
-        for (int b : blacks) {
-            long dr = r - Cells.r(b), dc = c - Cells.c(b);
-            best = Math.min(best, dr * dr + dc * dc);
-        }
+        for (int b : blacks) best = Math.min(best, blackDistanceSq(r, c, Cells.r(b), Cells.c(b)));
         return best;
     }
 
-    /** Returns the cells still unplaced (rejected ones, then untried ones). */
+    /** Factor applied to the distance between two cells of the same row or column in {@link #blackDistanceSq}. */
+    static final int BLACK_ALIGNED_DISTANCE_FACTOR = 10;
+
+    /** Squared Euclidean distance, multiplied by {@link #BLACK_ALIGNED_DISTANCE_FACTOR} for a shared row or column. */
+    static long blackDistanceSq(int r, int c, int br, int bc) {
+        long dr = r - br, dc = c - bc;
+        long d = dr * dr + dc * dc;
+        if (dr == 0 || dc == 0) d *= (long) BLACK_ALIGNED_DISTANCE_FACTOR * BLACK_ALIGNED_DISTANCE_FACTOR;
+        return d;
+    }
+
+    /**
+     * {@link #placeBlackCells}' draw windows, in percent, and their widening step: the share of rows and of columns
+     * holding the fewest black cells the draw is restricted to, and, within those, the share of candidates farthest
+     * from every black cell already placed.
+     */
+    static final int BLACK_DRAW_WINDOW_PERCENT = 5;
+
+    /** Number of items a {@code percent} % window keeps out of {@code count} (at least one, at most all). */
+    static int windowSize(int count, int percent) {
+        return Math.min(count, Math.max(1, (int) Math.ceil(count * percent / 100.0)));
+    }
+
+    /**
+     * Ratio-based black-cell placement: each draw restricts the candidates to whole rows and whole columns among the
+     * {@link #BLACK_DRAW_WINDOW_PERCENT} % rows and columns holding the fewest black cells (ties in random order),
+     * ranks them by distance to the closest black cell (farthest first, ties keeping the shuffled order), draws at
+     * random among the {@link #BLACK_DRAW_WINDOW_PERCENT} % farthest, redraws while the drawn cell breaks a hard
+     * constraint, widens the distance window by the same step up to the whole restriction, then widens the row and
+     * column windows and restarts the distance window. Every row and column failing relaxes {@code minInteriorFree}
+     * one step (down to 1), then accepts adjacency unless {@code forbidAdjacency}; failing that, it stops short of
+     * {@code target}. {@code candidates} is updated in place. Returns the cells still unplaced.
+     */
     static List<Integer> placeBlackCells(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
-                                         List<Integer> candidates, int target, int placed, DualIndex index,
-                                         Map<Integer, Character> locked, LengthSets available,
+                                         List<Integer> candidates, int target, int placed, Rng rng,
+                                         DualIndex index, Map<Integer, Character> locked, LengthSets available,
                                          boolean forbidAdjacency) {
-        final int window = 32;
-        List<Integer> rejected = new ArrayList<>();
         List<Integer> remaining = candidates;
+        List<Integer> blacks = new ArrayList<>();
+        for (int br = 0; br < rows; br++) {
+            for (int bc = 0; bc < cols; bc++) if (grid[br][bc] == BLACK) blacks.add(Cells.of(br, bc));
+        }
+        // Squared distance of each candidate to its closest black cell, parallel to remaining, updated per placement.
+        List<Long> dist = new ArrayList<>();
+        for (int cell : remaining) dist.add(nearestBlackDistanceSq(blacks, Cells.r(cell), Cells.c(cell)));
         while (!remaining.isEmpty() && placed < target) {
-            List<Integer> pool = leastLoadedPool(remaining, rowBlack, colBlack);
-            List<Integer> order = new ArrayList<>(pool.subList(0, Math.min(window, pool.size())));
-            List<Integer> blacks = new ArrayList<>();
-            for (int br = 0; br < rows; br++) {
-                for (int bc = 0; bc < cols; bc++) if (grid[br][bc] == BLACK) blacks.add(Cells.of(br, bc));
-            }
-            Map<Integer, Long> dist = new HashMap<>();
-            for (int i : order) {
-                int cell = remaining.get(i);
-                dist.put(i, nearestBlackDistanceSq(blacks, Cells.r(cell), Cells.c(cell)));
-            }
+            List<Integer> order = new ArrayList<>();
+            for (int i = 0; i < remaining.size(); i++) order.add(i);
             order.sort((a, b) -> Long.compare(dist.get(b), dist.get(a)));
-            List<Integer> nonAdjacent = new ArrayList<>();
-            for (int i : order) {
-                int cell = remaining.get(i);
-                if (!hasBlackNeighbor(grid, rows, cols, Cells.r(cell), Cells.c(cell))) nonAdjacent.add(i);
+            Set<Integer> rowSet = new LinkedHashSet<>(), colSet = new LinkedHashSet<>();
+            for (int cell : remaining) {
+                rowSet.add(Cells.r(cell));
+                colSet.add(Cells.c(cell));
             }
+            List<Integer> rowOrder = leastLoaded(rowSet, rowBlack, rng);
+            List<Integer> colOrder = leastLoaded(colSet, colBlack, rng);
             Integer chosen = null;
-            for (int minFree = STRUCTURAL_MIN_INTERIOR_FREE; minFree > 0 && chosen == null; minFree--) {
-                chosen = firstValid(grid, rows, cols, remaining, nonAdjacent, minFree, index, locked, available);
-            }
-            if (chosen == null && !forbidAdjacency) {
+            for (int adj = 0; adj < (forbidAdjacency ? 1 : 2) && chosen == null; adj++) {
                 for (int minFree = STRUCTURAL_MIN_INTERIOR_FREE; minFree > 0 && chosen == null; minFree--) {
-                    chosen = firstValid(grid, rows, cols, remaining, order, minFree, index, locked, available);
+                    Set<Integer> setAside = new HashSet<>();
+                    for (int percent = BLACK_DRAW_WINDOW_PERCENT; chosen == null; percent += BLACK_DRAW_WINDOW_PERCENT) {
+                        int rowCount = windowSize(rowOrder.size(), percent);
+                        int colCount = windowSize(colOrder.size(), percent);
+                        Set<Integer> selRows = new HashSet<>(rowOrder.subList(0, rowCount));
+                        Set<Integer> selCols = new HashSet<>(colOrder.subList(0, colCount));
+                        List<Integer> restricted = new ArrayList<>();
+                        for (int i : order) {
+                            int cell = remaining.get(i);
+                            if (selRows.contains(Cells.r(cell)) || selCols.contains(Cells.c(cell))) restricted.add(i);
+                        }
+                        chosen = drawBlackCell(grid, rows, cols, remaining, restricted, minFree, adj == 1, setAside,
+                                rng, index, locked, available);
+                        if (rowCount == rowOrder.size() && colCount == colOrder.size()) break;
+                    }
                 }
             }
-            if (chosen == null) {
-                rejected.add(remaining.remove((int) order.get(0)));
-                continue;
-            }
+            if (chosen == null) break;
             int cell = remaining.remove((int) chosen);
+            dist.remove((int) chosen);
             int r = Cells.r(cell), c = Cells.c(cell);
+            for (int i = 0; i < remaining.size(); i++) {
+                long d = blackDistanceSq(Cells.r(remaining.get(i)), Cells.c(remaining.get(i)), r, c);
+                if (d < dist.get(i)) dist.set(i, d);
+            }
             grid[r][c] = BLACK;
             rowBlack[r]++;
             colBlack[c]++;
             placed++;
         }
-        List<Integer> out = new ArrayList<>(rejected);
-        out.addAll(remaining);
+        return new ArrayList<>(remaining);
+    }
+
+    /** {@code lines} by increasing black-cell count, ties in random order. */
+    private static List<Integer> leastLoaded(Set<Integer> lines, int[] counts, Rng rng) {
+        List<Integer> out = new ArrayList<>(lines);
+        rng.shuffle(out);
+        out.sort((a, b) -> Integer.compare(counts[a], counts[b]));
         return out;
     }
 
-    private static Integer firstValid(char[][] grid, int rows, int cols, List<Integer> remaining, List<Integer> indices,
-                                      int minFree, DualIndex index, Map<Integer, Character> locked, LengthSets available) {
-        for (int idx : indices) {
-            int cell = remaining.get(idx);
-            int r = Cells.r(cell), c = Cells.c(cell);
-            if (grid[r][c] == BLACK) continue;
-            if (newBlackCellBreaksLockedSlot(grid, rows, cols, r, c, index, locked, available)) continue;
-            grid[r][c] = BLACK;
-            boolean ok = isStructurallyValid(grid, rows, cols, minFree);
-            grid[r][c] = WHITE;
-            if (ok) return idx;
+    /** Distance window over {@code order}; {@code setAside} holds the cells already found invalid at this level. */
+    private static Integer drawBlackCell(char[][] grid, int rows, int cols, List<Integer> remaining,
+                                         List<Integer> order, int minFree, boolean allowAdjacency,
+                                         Set<Integer> setAside, Rng rng, DualIndex index,
+                                         Map<Integer, Character> locked, LengthSets available) {
+        int percent = BLACK_DRAW_WINDOW_PERCENT;
+        int start = 0;
+        int n = order.size();
+        while (start < n) {
+            int size = windowSize(n, percent);
+            List<Integer> window = new ArrayList<>();
+            for (int i : order.subList(start, size)) if (!setAside.contains(i)) window.add(i);
+            while (!window.isEmpty()) {
+                int idx = window.remove(rng.randrange(window.size()));
+                int cell = remaining.get(idx);
+                int r = Cells.r(cell), c = Cells.c(cell);
+                boolean ok = grid[r][c] != BLACK
+                        && (allowAdjacency || !hasBlackNeighbor(grid, rows, cols, r, c))
+                        && !newBlackCellBreaksLockedSlot(grid, rows, cols, r, c, index, locked, available);
+                if (ok) {
+                    grid[r][c] = BLACK;
+                    ok = isStructurallyValid(grid, rows, cols, minFree);
+                    grid[r][c] = WHITE;
+                }
+                if (ok) return idx;
+                setAside.add(idx);
+            }
+            start = size;
+            percent += BLACK_DRAW_WINDOW_PERCENT;
         }
         return null;
     }
@@ -522,7 +563,8 @@ public final class Grids {
         // The ratio-based draw never blackens a corner 2x2 square; pre-fill and later repairs still may.
         List<Integer> ratioCandidates = new ArrayList<>();
         for (int cell : candidates) if (!inCornerSquare(rows, cols, Cells.r(cell), Cells.c(cell))) ratioCandidates.add(cell);
-        placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, placed, index, locked, available, true);
+        placeBlackCells(grid, rows, cols, rowBlack, colBlack, ratioCandidates, target, placed, rng, index, locked, available,
+                true);
         Set<Integer> stillCandidates = new HashSet<>(ratioCandidates);
         List<Integer> kept = new ArrayList<>();
         for (int cell : candidates) {
