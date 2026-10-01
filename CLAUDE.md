@@ -744,19 +744,18 @@ applies it in place: every word it removes is taken off like a backghost's
 word already there when `solve()` started simply disappears; `_undo_reshape`
 keeps such a word off); a locked letter it erases is unlocked
 (`cleared_cells_out`), a locked letter it keeps stays locked, and nothing
-becomes locked — a kept letter no remaining word or locked letter carries
-stays on its cell as an unlocked seed (`forced_letters`, which a crossing
-word overrides). The record restarts from the cleaned state and is
+becomes locked; a kept letter no remaining word or locked letter carries
+(an orphan letter) is erased. The record restarts from the cleaned state and is
 published. In `_backtrack`, `_early_hardclean_and_continue` then runs a
 fresh node from there (the shape of a backghost); if it fails, the letter
 tallies re-sampled for the removed words are restored and its failure is
 passed up, the removed words staying off. A cleaned state (pattern + every
-known letter and seed) already produced earlier in the attempt switches the
+known letter) already produced earlier in the attempt switches the
 early hardclean off for the rest of it. Since the search goes on, the
 attempt keeps its seed, rng, budget, descent caps and `Filler._inherited`
 value, and the harvest loop never sees the clean. `try_fill`'s previews and
-diagnostics read the Filler's current `locked_letters`/`forced_letters`
-(`locked_cells` recomputed on each publication).
+diagnostics read the Filler's current `locked_letters` (`locked_cells`
+recomputed on each publication).
 
 **An "emplacement écarté" (yellow) is a pure deprioritization, and is
 reset to nothing at the start of every new palier.** `Filler._impossible_

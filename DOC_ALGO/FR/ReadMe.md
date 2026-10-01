@@ -1830,21 +1830,20 @@ verrouillée héritée, n'en reçoit donc aucune. Chaque mot retiré quitte la
 grille comme celui d'un retrait fantôme (*backghost*) : le nœud qui l'avait
 posé le trouve absent lorsque la recherche remonte jusqu'à lui, et une
 reconfiguration de cases noires annulée ensuite ne le remet pas. Une lettre
-conservée qu'aucun mot restant ni aucune lettre verrouillée ne porte reste
-sur sa case comme graine, non verrouillée, qu'un mot croisant peut
-remplacer (`forced_letters`). Le record repart de l'état nettoyé, publié
+qu'aucun mot complet restant ni aucun verrou ne porte plus (lettre
+orpheline) est effacée. Le record repart de l'état nettoyé, publié
 comme tout record. Si la recherche échoue ensuite depuis cet état, les
 statistiques de lettres recalculées pour les mots retirés sont restaurées
 et l'échec remonte comme celui d'un nœud ordinaire, les mots retirés
-restant absents. Les aperçus lisent les lettres verrouillées et les graines
-courantes de la recherche (`try_fill`).
+restant absents. Les aperçus lisent les lettres verrouillées courantes de la
+recherche (`try_fill`).
 
 Le contrôle a lieu au départ de chaque recherche, sur l'état dont elle
 hérite (`Filler.solve`), puis à chaque nouveau record, seul instant où le record vit à
 coup sûr sur les emplacements et le motif courants, une reconfiguration
 pouvant être active ensuite (`Filler._early_hardclean_due`,
 `Filler._backtrack`). Un état nettoyé identique à un état déjà produit plus
-tôt dans la même tentative (motif, lettres et graines) désactive le mécanisme pour
+tôt dans la même tentative (motif et lettres) désactive le mécanisme pour
 le reste de cette tentative, un même nettoyage répété ne pouvant rien
 apporter ; la recherche continue alors depuis cet état. Seules les
 tentatives de génération (`_pattern_attempt`, `_pattern_continue`) s'en

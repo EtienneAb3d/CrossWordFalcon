@@ -4640,9 +4640,8 @@ class Filler:
         gone when the search unwinds to it (`owned`), and a word that was
         already there when `solve()` started simply disappears. A locked
         letter the clean erases is unlocked; a locked letter it keeps stays
-        locked; nothing is locked by it — a letter it keeps that no
-        remaining word or locked letter carries stays on its cell as an
-        unlocked seed (`forced_letters`, which any crossing word overrides).
+        locked; nothing is locked by it. A letter it keeps that no
+        remaining word or locked letter carries (an orphan letter) is erased.
         The record restarts from the cleaned state, published like any
         record. A cleaned state already produced in this attempt switches
         the early hardclean off for the rest of it.
@@ -4650,7 +4649,7 @@ class Filler:
         Returns the letter statistics to restore (`_restore_letter_scores`,
         in reverse order) when the search unwinds above this point."""
         cleared = set()
-        cleaned, confirmed, _, _ = _clean_blocked_slots(
+        cleaned, _, _, _ = _clean_blocked_slots(
             self.slots, list(self.assignment), self.impossible_zone_slots(),
             locked_letters=dict(self.locked_letters) or None, index=self.index, rng=self.rng,
             permanent_locked_letters=self.permanent_locked_letters or None,
@@ -4668,13 +4667,6 @@ class Filler:
             self.locked_letters = {
                 cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared
             }
-        covered = set(self.locked_letters)
-        for i, word in enumerate(self.assignment):
-            if word is not None:
-                covered.update(self.slots[i])
-        seeds = {cell: ch for cell, ch in confirmed.items() if cell not in covered}
-        if seeds:
-            self.forced_letters = {**self.forced_letters, **seeds}
         self.best_assigned_count = sum(1 for a in self.assignment if a is not None)
         self.best_assignment = list(self.assignment)
         self.best_slots = self.slots
@@ -4682,7 +4674,7 @@ class Filler:
         self.best_stat_letters = self.stat_letters(self.assignment)
         state = (
             tuple("".join(row) for row in self.pattern),
-            tuple(sorted({**self.forced_letters, **self._known_cells()}.items())),
+            tuple(sorted(self._known_cells().items())),
         )
         if state in self._early_hardclean_states:
             self.early_hardclean_percent = 100
@@ -6455,9 +6447,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              early_hardclean_percent=100, permanent_locked_letters=None):
     """`early_hardclean_percent`: see `EARLY_HARDCLEAN_PERCENT` (100 = off),
     run inside the search (`Filler._early_hardclean`), which may unlock
-    letters of `locked_letters` and leave unlocked seeds in
-    `forced_letters`: every preview and the diagnostics read the Filler's
-    current ones. `permanent_locked_letters`: cells that clean never clears.
+    letters of `locked_letters`: every preview and the diagnostics read the
+    Filler's current ones. `permanent_locked_letters`: cells that clean never clears.
 
     `scrabble_words`: the Scrabble family of the candidate order (see
     `Filler.scrabble_first`), `None` = none.

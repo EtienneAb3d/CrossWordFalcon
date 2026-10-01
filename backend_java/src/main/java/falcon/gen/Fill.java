@@ -388,8 +388,8 @@ public final class Fill {
         /** Lets the search reshape the pattern for a "Mots Défi"/theme word (mirrors reshape_black_cells). */
         public boolean reshapeBlackCells;
         /** Early hardclean threshold in percent, 100 = off (mirrors try_fill's early_hardclean_percent). It runs
-         * inside the search (Filler.earlyHardclean), which may unlock letters and add unlocked seeds: every preview
-         * and the diagnostics read the Filler's current forced/locked letters. */
+         * inside the search (Filler.earlyHardclean), which may unlock letters: every preview and the diagnostics
+         * read the Filler's current locked letters. */
         public int earlyHardcleanPercent = 100;
         /** Cells the early hardclean never clears (mirrors try_fill's permanent_locked_letters). */
         public Map<Integer, Character> permanentLocked;

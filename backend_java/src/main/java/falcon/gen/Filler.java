@@ -1315,8 +1315,8 @@ public final class Filler {
      * bestAssignment (the current assignment whenever this runs), no black cell touched. Every word the clean
      * removes is taken off the way a backghost takes one off (its node finds its entry gone, a word there when
      * solve() started simply disappears). A locked letter the clean erases is unlocked, one it keeps stays
-     * locked, nothing is locked by it: a kept letter no remaining word or locked letter carries stays on its
-     * cell as an unlocked seed (forcedLetters). The record restarts from the cleaned state, published like any
+     * locked, nothing is locked by it; a kept letter no remaining word or locked letter carries (an orphan
+     * letter) is erased. The record restarts from the cleaned state, published like any
      * record; a cleaned state already produced in this attempt switches the early hardclean off. Returns the
      * letter statistics to restore (in reverse order) when the search unwinds above this point. */
     List<Map<Integer, Object[]>> earlyHardclean() {
@@ -1325,8 +1325,6 @@ public final class Filler {
                 lockedLetters.isEmpty() ? null : new HashMap<>(lockedLetters), false, index, rng, null, null, null,
                 permanentLockedLetters.isEmpty() ? null : permanentLockedLetters, null, null, false, cleared);
         String[] cleanedAssignment = (String[]) cleaned[0];
-        @SuppressWarnings("unchecked")
-        Map<Integer, Character> confirmed = (Map<Integer, Character>) cleaned[1];
         List<Integer> removed = new ArrayList<>();
         for (int i = 0; i < assignment.length; i++) {
             String w = assignment[i];
@@ -1344,17 +1342,6 @@ public final class Filler {
             lockedLetters.forEach((cell, ch) -> { if (!cleared.contains(cell)) kept.put(cell, ch); });
             lockedLetters = kept;
         }
-        Set<Integer> covered = new HashSet<>(lockedLetters.keySet());
-        for (int i = 0; i < assignment.length; i++) {
-            if (assignment[i] != null) for (int c : slots.get(i)) covered.add(c);
-        }
-        Map<Integer, Character> seeds = new HashMap<>();
-        confirmed.forEach((cell, ch) -> { if (!covered.contains(cell)) seeds.put(cell, ch); });
-        if (!seeds.isEmpty()) {
-            Map<Integer, Character> merged = new HashMap<>(forcedLetters);
-            merged.putAll(seeds);
-            forcedLetters = merged;
-        }
         int count = 0;
         for (String a : assignment) if (a != null) count++;
         bestAssignedCount = count;
@@ -1362,8 +1349,7 @@ public final class Filler {
         bestSlots = slots;
         bestPattern = pattern;
         bestStatLetters = statLetters(assignment);
-        Map<Integer, Character> letters = new java.util.TreeMap<>(forcedLetters);
-        letters.putAll(knownCells());
+        Map<Integer, Character> letters = new java.util.TreeMap<>(knownCells());
         if (!earlyHardcleanStates.add(Grids.key(pattern) + "|" + letters)) earlyHardcleanPercent = 100;
         if (onNewBest != null) onNewBest.accept(bestAssignment);
         return savedScores;

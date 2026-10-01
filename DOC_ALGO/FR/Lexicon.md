@@ -420,7 +420,8 @@ plusieurs signaux) :
   la tentative soit déclarée échouée ni terminée et sans quitter son palier.
   Il ne verrouille aucune lettre : une case verrouillée dont il efface la
   lettre est déverrouillée, une case verrouillée qu'il n'efface pas le
-  reste, une lettre non verrouillée le reste.
+  reste, une lettre non verrouillée le reste, et une lettre qu'aucun mot
+  complet ni aucun verrou ne porte plus (lettre orpheline) est effacée.
   (`backend/crossword_gen.py`, `Filler._early_hardclean`,
   `Filler._early_hardclean_and_continue`, `Filler._early_hardclean_due`,
   `EARLY_HARDCLEAN_PERCENT`.)

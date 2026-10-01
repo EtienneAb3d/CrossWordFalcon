@@ -1901,10 +1901,10 @@ the current defaults/behavior to know before touching this code.
   the clean erases is unlocked; a locked letter it keeps stays locked; a
   letter that was not locked stays unlocked — so a grid with no locked
   letter never gets one from it. Removed words are taken off like a
-  backghost's; a kept letter left with no word stays as an unlocked seed
-  (`forced_letters`). Choices made with the change, to revisit with the
-  user: that seed form for word-less kept letters, and the cleaned state
-  becoming the new record. Interactive mode never uses it.
+  backghost's, and a letter left with no complete word and no lock (an
+  orphan letter) is erased — the user's choice: orphan letters must not
+  constrain the search as seeds would. Choice made with the change, to
+  revisit with the user: the cleaned state becomes the new record. Interactive mode never uses it.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça
