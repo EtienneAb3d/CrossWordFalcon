@@ -33,6 +33,11 @@ public final class Filler {
     public static final boolean UNFILLABLE_ABANDON_ENABLED = false;
     public static final int UNFILLABLE_ABANDON_SLOT_COUNT = 3;
     public static final int UNFILLABLE_ABANDON_CHECK_INTERVAL = 500;
+    /** Early hardclean (mirrors EARLY_HARDCLEAN_PERCENT): percent (1-100) of the grid's cells allowed in
+     * impossible slots (of the record just taken) before a generation attempt hard-cleans its best state and
+     * carries on from it (Generator.resumeAfterEarlyHardclean) — the second chance's own hard clean, triggered
+     * earlier, inside the attempt: same process, same lineage, same check budget, palier not left. 100 = off. */
+    public static final int EARLY_HARDCLEAN_PERCENT = 10;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 100;
     // Of that window, re-sorted by frequency in the freq wordlist, the most frequent words the draw is made among.
@@ -187,6 +192,10 @@ public final class Filler {
     public List<int[]> bestSlots;
     public char[][] bestPattern;
     public boolean abandoned, budgetExhausted, breakingPermitted, interruptedBySibling;
+    /** Early hardclean threshold in percent (100 = off, every caller that is not a generation attempt) and
+     * whether it stopped the search, to be hard-cleaned and resumed by the caller. */
+    public int earlyHardcleanPercent = 100;
+    public boolean earlyHardcleanTriggered;
     public Set<Integer> toleratedDry = new HashSet<>();
     Set<Integer> lastConflict;
     /** Whether the last failure was passed up by a backjump (mirrors _last_jumped). */
@@ -1068,6 +1077,12 @@ public final class Filler {
         inherited = !lockedLetters.isEmpty() || count > 0;
         placementSeq = new HashMap<>();
         ghostsInDescent = 0;
+        // Early hardclean on the state the search starts from (no record is taken until a word is added to it).
+        if (earlyHardcleanDue()) {
+            abandoned = true;
+            earlyHardcleanTriggered = true;
+            return false;
+        }
         if (backtrack(deadlineChecks, false)) return true;
         if (abandoned || budgetExhausted) return false;
         breakingPermitted = true;
@@ -1285,6 +1300,16 @@ public final class Filler {
     }
 
     @SuppressWarnings("unchecked")
+    /** True when the cells of the impossible slots of bestAssignment make up at least earlyHardcleanPercent of
+     * the grid's cells (never with no impossible cell at all, nor when the threshold is 100). */
+    private boolean earlyHardcleanDue() {
+        if (earlyHardcleanPercent >= 100 || pattern == null || pattern.length == 0) return false;
+        long total = (long) pattern.length * pattern[0].length;
+        Set<Integer> cells = new HashSet<>();
+        for (int i : impossibleZoneSlots()) for (int c : slots.get(i)) cells.add(c);
+        return !cells.isEmpty() && 100L * cells.size() >= (long) earlyHardcleanPercent * total;
+    }
+
     public List<Integer> impossibleZoneSlots() {
         String[] saved = assignment;
         assignment = bestAssignment;
@@ -1516,6 +1541,14 @@ public final class Filler {
             bestPattern = pattern;
             bestStatLetters = statLetters(assignment);
             if (onNewBest != null) onNewBest.accept(bestAssignment);
+            // Early hardclean: checked right as the record is taken, the only moment bestAssignment is certain
+            // to live on the current slots and pattern (a reshape may be active later on). Unwinds like any
+            // other stop (abandoned); Fill.tryFill reports it as "early_hardclean".
+            if (earlyHardcleanDue()) {
+                abandoned = true;
+                earlyHardcleanTriggered = true;
+                return false;
+            }
         }
         if (unassigned.isEmpty()) return true;
         Set<String> active = activeChallengeWords();

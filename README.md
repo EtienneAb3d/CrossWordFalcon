@@ -251,6 +251,8 @@ on that grid (percentage of correct letters and time) can no longer
 improve and stays as it was. Choose **"Solution"** to show it anyway, or
 **"Keep playing"** to go back to the grid.
 
+At the top left of the grid, a **statistics** button shows how many words the grid holds for each length, longest first.
+
 To the right of the grid, a **ranking** lists the 10 best players of that
 grid: first by how much of the grid they filled in correctly, then by the
 fastest time. Each line shows the rank, the nickname, the percentage of

@@ -3893,6 +3893,65 @@ button:disabled {
   color: var(--correct-fg);
 }
 
+/* Grid word statistics (#grid-stats, script.js's showGridStats): play
+   mode only. Absolutely positioned in #board (position: relative), at its
+   left edge — the central column's margin — and its top, which is the
+   grid's own top (#board aligns its children on flex-start). The square
+   icon button opens #grid-stats-panel right below it, an overlay card
+   (same look as #leaderboard) listing the number of words per length. */
+#grid-stats {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 3;
+}
+#grid-stats[hidden] {
+  display: none;
+}
+#grid-stats-btn {
+  color: var(--accent);
+}
+#grid-stats-btn[aria-expanded="true"] {
+  border-color: var(--accent);
+}
+.grid-stats-icon {
+  display: block;
+}
+#grid-stats-panel {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 0.25rem);
+  padding: 0.4rem 0.6rem;
+  background: var(--white-cell);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  font-size: 0.75rem;
+}
+#grid-stats-panel[hidden] {
+  display: none;
+}
+#grid-stats-table {
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+#grid-stats-table th,
+#grid-stats-table td {
+  padding: 0.1rem 0.5rem;
+  text-align: right;
+  white-space: nowrap;
+}
+#grid-stats-table thead th {
+  color: #777;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+#grid-stats-table tfoot th,
+#grid-stats-table tfoot td {
+  font-weight: 700;
+  border-top: 1px dashed var(--border);
+}
+
 /* Player ranking (#leaderboard, script.js's showLeaderboard): absolutely
    positioned against the page (it scrolls with the grid), flush with the
    right edge of the window over main's right margin, its top level with

@@ -573,6 +573,9 @@ public final class Cleanup {
                 }
             }
         };
+        // Impossible slots resolved by a black cell cast on them instead of a removal: no longer the same slot,
+        // so the hard clean leaves their other letters alone.
+        Set<Integer> blackenedSlots = new HashSet<>();
         if (index != null && rng != null) {
             Set<Integer> impossibleSet = new HashSet<>(impossibleSlots);
             for (int i : impossibleSlots) {
@@ -627,7 +630,10 @@ public final class Cleanup {
                         working[br][bc] = WHITE;
                     }
                 }
-                if (placedBlack) continue;
+                if (placedBlack) {
+                    blackenedSlots.add(i);
+                    continue;
+                }
                 for (int j : crossing) {
                     assignment[j] = null;
                     revert.accept(j);
@@ -682,11 +688,20 @@ public final class Cleanup {
             }
         }
         Map<Integer, Character> leftover = new LinkedHashMap<>();
+        Set<Integer> cleared = new HashSet<>();
         if (HARD_CLEAN_ENABLED) {
-            Set<Integer> cleared = new HashSet<>();
             for (int j = 0; j < assignment.length; j++) {
                 if (assignment[j] != null || before[j] == null) continue;
                 for (int cell : slots.get(j)) {
+                    if (permanentLocked != null && permanentLocked.containsKey(cell)) continue;
+                    cleared.add(cell);
+                }
+            }
+            // The hard clean works per impossible SLOT, not only per word: every letter standing on an
+            // impossible slot is cleared too, whether or not a word carries it, so the slot is free again.
+            for (int i : impossibleSlots) {
+                if (blackenedSlots.contains(i)) continue;
+                for (int cell : slots.get(i)) {
                     if (permanentLocked != null && permanentLocked.containsKey(cell)) continue;
                     cleared.add(cell);
                 }
@@ -725,6 +740,7 @@ public final class Cleanup {
                     clearedOut.add(cell);
                 }
             }
+            for (int cell : cleared) if (!confirmed.containsKey(cell)) clearedOut.add(cell);
         }
         return new Object[]{assignment, confirmed, newBlack, reopened};
     }

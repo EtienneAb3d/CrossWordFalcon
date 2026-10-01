@@ -4570,3 +4570,15 @@ end through the real running API (interactive start/step/save,
   minus a 1rem padding), its message list taking all the remaining height
   (`max-height: none`), text at `0.95rem`. No collapse button. Any change
   to the `#chatbot` look applies to both pages.
+
+- **Grid statistics button** (`#grid-stats`, `#grid-stats-btn`,
+  `#grid-stats-panel`), play mode only: a square `.nav-btn.clear-icon-btn`
+  bar-chart icon (inline SVG, `currentColor`, `--accent`) absolutely
+  positioned at the left edge and top of `#board` (`position: relative`),
+  i.e. flush with the central column's margin and level with the grid's top.
+  Its panel is an overlay card right below it (same white card, border,
+  radius and shadow as `#leaderboard`, `z-index: 3`), a right-aligned
+  tabular table (letters, words; longest first; dashed-separated total).
+  `[hidden]` overrides guard the bare-id `display` trap. No new token.
+  Visually confirmed with Playwright/Chromium: button top equals grid top,
+  panel directly below.

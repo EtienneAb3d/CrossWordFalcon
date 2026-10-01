@@ -684,7 +684,10 @@ HARD_CLEAN_ENABLED`): once `_clean_blocked_slots` has done every removal,
 every cell of a removed word is cleared, including one it shared with a
 still-assigned word that does not cross the impossible slot — that word
 is unassigned too (its `black_cell_links` change reverted), its other
-letters kept in the returned `confirmed` as plain letters (never on a
+letters kept in the returned `confirmed` as plain letters; every letter
+standing on an impossible slot itself is cleared too, word-borne or not (a
+slot resolved by a black cell cast on it excepted), so `cleared_cells_out`
+unlocks those cells (never on a
 cell `new_black_cells` blackened; a `permanent_locked_letters` cell is
 never cleared). Every caller inherits it: the "reprise telle quelle" and
 full/deep cleanups, and Interactive "Nettoyer" (`interactive_clean_
@@ -724,6 +727,30 @@ palier gives its place to one more blank-grid worker (`carry_discarded_
 count`, added to `FULL_RESET_ATTEMPT_COUNT` in `reset_count`) while every
 other candidate is kept. Only when every candidate is dropped does the
 whole search restart from a blank grid.
+
+**Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10, 100 = off; Java
+`Filler.EARLY_HARDCLEAN_PERCENT`): the second chance's hard clean, triggered
+earlier and inside the attempt. At the start of `Filler.solve` (on the
+inherited state) and in `Filler._backtrack`, right as a new
+record is taken (the one moment `best_assignment` certainly lives on the
+current slots/pattern), `_early_hardclean_due` tests whether the cells of the
+record's impossible slots reach that percentage of ALL the grid's cells; if
+so the search stops (`abandoned` + `early_hardclean_triggered`, reason
+`early_hardclean`, `try_fill(early_hardclean_percent=)`, passed only by the
+generation attempts). `_resume_after_early_hardclean` (Java `Generator.
+resumeAfterEarlyHardclean`), called by `_pattern_attempt`/`_pattern_continue`
+inside their `attempt_active` window, then hard-cleans the diagnostics with
+`_second_chance_seed` (no black cell touched) and resumes the search from the
+cleaned state through `_continue_search` (the body of `_pattern_continue`
+between its arguments and `try_fill`): same process, same `seed` (tile and
+lineage), same `rng` stream, `try_fill(initial_checks=)` keeping the check
+count and so the budget cumulative. The attempt is never reported failed nor
+ended, so the harvest loop never sees the `early_hardclean` reason and the
+palier is not left; the final `(grid, result, diag)` is the last search's.
+A cleaned state (pattern + locked letters) already produced earlier in the
+same attempt switches the early hardclean off for the rest of it. The
+resumed search starts from locked letters, hence is `Filler._inherited`
+(no descent cap), like any "reprise".
 
 **An "emplacement écarté" (yellow) is a pure deprioritization, and is
 reset to nothing at the start of every new palier.** `Filler._impossible_
@@ -2220,7 +2247,10 @@ state, unlike the backend).
   that unfolds it; the tool buttons stay visible. `runGeneration`/
   `runInteractive`/`enterInteractiveMode` unfold it.
 - **`script.js`** — all client logic in one file. Major areas: grid
-  rendering/keyboard input/solution-checking; the end-of-generation grid
+  rendering/keyboard input/solution-checking; the play-mode word statistics
+  (`#grid-stats`: an icon button at `#board`'s left edge, level with the
+  grid's top, opening an overlay panel of word counts per length, longest
+  first — `showGridStats`/`renderGridStatsPanel`, hidden in Interactive mode); the end-of-generation grid
   choice (`pollJob` arms `pendingGridChoiceJobId` while the job's
   `grid_choice_count` is set and jumps to the `choose_grid` entry,
   `renderAttemptPreview` colours each example's `scrabble_cells` dark cyan

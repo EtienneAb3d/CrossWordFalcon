@@ -174,6 +174,11 @@ const leaderboardPanel = document.getElementById("leaderboard");
 const leaderboardList = document.getElementById("leaderboard-list");
 const leaderboardMe = document.getElementById("leaderboard-me");
 const leaderboardEmpty = document.getElementById("leaderboard-empty");
+const gridStatsEl = document.getElementById("grid-stats");
+const gridStatsBtn = document.getElementById("grid-stats-btn");
+const gridStatsPanel = document.getElementById("grid-stats-panel");
+const gridStatsBody = document.getElementById("grid-stats-body");
+const gridStatsTotal = document.getElementById("grid-stats-total");
 const libraryBtn = document.getElementById("library-btn");
 const createGridBtn = document.getElementById("create-grid-btn");
 const libraryPanel = document.getElementById("library");
@@ -3582,6 +3587,58 @@ async function scheduleGridGameSave() {
   refreshLeaderboard();
 }
 
+// Word statistics of the grid on screen (#grid-stats), play mode only: an
+// icon button at the left edge of the central column, level with the top
+// of the grid, opening a panel right below it that lists the number of
+// words per length (in letters), longest first, then the total. Closed by
+// a second click, a click anywhere else, or Escape.
+function hideGridStats() {
+  gridStatsEl.hidden = true;
+  setGridStatsPanelOpen(false);
+}
+
+function showGridStats() {
+  if (interactiveMode || !puzzle) {
+    hideGridStats();
+    return;
+  }
+  setGridStatsPanelOpen(false);
+  gridStatsEl.hidden = false;
+}
+
+function renderGridStatsPanel() {
+  const counts = new Map();
+  for (const w of (puzzle && puzzle.words) || []) {
+    const length = (w.answer || "").length;
+    if (length) counts.set(length, (counts.get(length) || 0) + 1);
+  }
+  const lengths = [...counts.keys()].sort((a, b) => b - a);
+  gridStatsBody.replaceChildren(...lengths.map((length) => {
+    const tr = document.createElement("tr");
+    for (const value of [length, counts.get(length)]) {
+      const td = document.createElement("td");
+      td.textContent = String(value);
+      tr.appendChild(td);
+    }
+    return tr;
+  }));
+  gridStatsTotal.textContent = String(lengths.reduce((sum, length) => sum + counts.get(length), 0));
+}
+
+function setGridStatsPanelOpen(open) {
+  if (open) renderGridStatsPanel();
+  gridStatsPanel.hidden = !open;
+  gridStatsBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+gridStatsBtn.addEventListener("click", () => setGridStatsPanelOpen(gridStatsPanel.hidden));
+document.addEventListener("click", (event) => {
+  if (!gridStatsPanel.hidden && !gridStatsEl.contains(event.target)) setGridStatsPanelOpen(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !gridStatsPanel.hidden) setGridStatsPanelOpen(false);
+});
+
 // Ranking of the players of the grid on screen (#leaderboard), at the
 // user's explicit request: fixed against the page's right edge, over the
 // margin, level with the top of the grid. The 10 best by correct-fill
@@ -4146,6 +4203,7 @@ function displayFinalGrid(gridData) {
   renderGrid();
   renderClues(gridData.words);
   showLeaderboard();
+  showGridStats();
   const t = I18N[uiLanguage];
   stats.textContent = t.stats(gridData.word_count, gridData.black_count, (gridData.black_ratio * 100).toFixed(1));
   // A grid built by hand from scratch was never generated, optimized or
@@ -7617,6 +7675,7 @@ async function proposeInteractiveTitle(autoFill) {
 // ---- Mode lifecycle ----
 function enterInteractiveMode(state) {
   hideLeaderboard();
+  hideGridStats();
   interactiveMode = true;
   setGenerateFormCollapsed(false);
   interactiveJobId = currentJobId || interactiveJobId;

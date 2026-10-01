@@ -823,6 +823,13 @@ Once generation completes, the search-progress panel disappears and
   grid; the solution can then be toggled freely without a new warning.
   **"Continuer à jouer / Keep playing"** (focused by default, also
   Escape or a click outside the dialog) closes it and changes nothing.
+- **Grid statistics** (`#grid-stats`, `frontend/static/script.js`,
+  `showGridStats`/`renderGridStatsPanel`) — in play mode, an icon button
+  (a small bar chart) sits at the left edge of the central column, level
+  with the top of the grid. A click opens a panel right below it giving
+  the number of words of the grid per length in letters, longest first,
+  then the total. A second click, a click elsewhere or Escape closes it.
+  The button is hidden in Interactive mode.
 - **Ranking** (`#leaderboard`, `frontend/static/script.js`,
   `showLeaderboard`/`refreshLeaderboard`) — a small card against the
   window's right edge, over the page margin, level with the top of the

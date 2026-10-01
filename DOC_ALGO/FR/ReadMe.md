@@ -213,7 +213,8 @@ Une tentative se poursuit jusqu'à ce qu'il n'y ait plus aucun emplacement
 jouable, que son budget de vérifications soit dépassé, ou qu'une tentative
 sœur l'interrompe. La décision « reprise telle quelle » / « nettoyage
 complet » n'intervient qu'après coup, et aucun processus en cours n'est
-jamais tué.
+jamais tué. Un nettoyage dur précoce (chapitre 5) ne met pas fin à une
+tentative : il la fait reprendre sur sa grille nettoyée.
 
 ### Interruption anticipée du lot
 
@@ -1778,7 +1779,12 @@ impossible. Ce second mot perd sa lettre à cette case : il n'est plus un mot
 entier et est retiré à son tour (avec la case noire qui lui était associée,
 comme tout retrait), mais ses autres lettres restent en place comme simples
 lettres confirmées. Sans l'option, les lettres partagées restent en place,
-portées par le mot non croisant. Une lettre posée par l'utilisateur
+portées par le mot non croisant. Le nettoyage dur opère par **emplacement
+impossible**, pas seulement par mot : toute lettre présente sur un
+emplacement impossible est effacée aussi, qu'un mot la porte ou non (lettre
+laissée par un nettoyage antérieur, lettre verrouillée), de sorte que
+l'emplacement redevient libre ; un emplacement impossible résolu par une
+case noire posée dessus n'est pas concerné. Une lettre posée par l'utilisateur
 (`permanent_locked_letters`) n'est jamais effacée. L'option vaut pour tous
 les nettoyages : reprise « telle quelle », nettoyage complet et nettoyage
 profond, et bouton **Nettoyer** du mode Interactif, qui passent tous par le
@@ -1798,6 +1804,36 @@ début de cycle les montre : il reçoit ce même `confirmed`, qui contient
 toutes les lettres portées par le palier, et non le seul découpage en mots
 entiers (`_cycle_start_preview` ne lit qu'une de ses deux formes de
 reprise, jamais les deux).
+
+**Nettoyage dur précoce (*early hardclean*).** Le nettoyage dur n'attend
+pas toujours la fin d'une tentative. Dès qu'un nouveau record de sa
+recherche (`best_assignment`) laisse au moins `EARLY_HARDCLEAN_PERCENT`
+(10 %) des cases de la grille dans des emplacements impossibles (le total
+compte toutes les cases, noires comprises ; 100 désactive le mécanisme), la
+recherche s'interrompt, la grille subit le même nettoyage dur que pour la
+seconde chance (`_second_chance_seed` : aucune case noire ajoutée, déplacée
+ni rouverte) et la tentative **reprend aussitôt sur la grille nettoyée,
+dans la même tentative** (`_resume_after_early_hardclean`) : même
+processus, même numéro de grille, même générateur aléatoire, même budget de
+vérifications — le compteur est cumulé, il ne repart pas de zéro. La
+tentative n'est ni déclarée échouée, ni terminée, et le palier n'est pas
+quitté : elle s'achève par ses issues habituelles (réussite, budget,
+interruption par une tentative sœur, bouton Stop, ou un échec ordinaire,
+suivi alors de la seconde chance et du nettoyage de fin de palier comme
+pour toute tentative). Comme toute reprise à partir de lettres verrouillées,
+elle explore toutes les possibilités de chaque nœud, sans plafond de
+descentes (`Filler._inherited`).
+
+Le contrôle a lieu au départ de chaque recherche, sur l'état dont elle
+hérite (`Filler.solve`), puis à chaque nouveau record, seul instant où le record vit à
+coup sûr sur les emplacements et le motif courants, une reconfiguration
+pouvant être active ensuite (`Filler._early_hardclean_due`,
+`Filler._backtrack`). Un état nettoyé identique à un état déjà produit plus
+tôt dans la même tentative (motif et lettres) désactive le mécanisme pour
+le reste de cette tentative, un même nettoyage répété ne pouvant rien
+apporter ; la recherche continue alors depuis cet état. Seules les
+tentatives de génération (`_pattern_attempt`, `_pattern_continue`) s'en
+servent, pas le mode Interactif.
 
 Le nettoyage dur laisse davantage d'emplacements libres, donc la reprise
 « telle quelle » reste possible plus longtemps : les paliers à motif neuf —

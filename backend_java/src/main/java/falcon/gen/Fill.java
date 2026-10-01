@@ -386,6 +386,11 @@ public final class Fill {
         public Set<Integer> requiredCells;
         /** Lets the search reshape the pattern for a "Mots Défi"/theme word (mirrors reshape_black_cells). */
         public boolean reshapeBlackCells;
+        /** Early hardclean threshold in percent, 100 = off (mirrors try_fill's early_hardclean_percent). */
+        public int earlyHardcleanPercent = 100;
+        /** Checks already spent by the same attempt before this call, so the budget, the progress shown and
+         * diag.checks stay cumulative across an early hardclean (mirrors try_fill's initial_checks). */
+        public long initialChecks;
         public Set<Integer> permanentBlackCells;
         /** Scrabble family of the candidate order (mirrors try_fill's scrabble_words). */
         public PW scrabbleWords;
@@ -451,6 +456,8 @@ public final class Fill {
         filler.pattern = Grids.copy(grid);
         filler.bestPattern = filler.pattern;
         filler.reshapeEnabled = a.reshapeBlackCells && (a.excludedSlots == null || a.excludedSlots.isEmpty());
+        filler.earlyHardcleanPercent = a.earlyHardcleanPercent;
+        filler.checks = a.initialChecks;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
         if (a.checksProgress != null && a.checksSlot != null) {
             final int slot = a.checksSlot;
@@ -554,7 +561,7 @@ public final class Fill {
             diag.checks = filler.checks;
             diag.reason = overProper ? "too_many_proper_nouns" : overNonGloss ? "too_many_non_gloss_words"
                     : complete ? "solved" : filler.interruptedBySibling ? "interrupted_other_attempt_done"
-                    : filler.abandoned ? "abandoned_too_unfillable" : filler.checks >= deadline ? "deadline_exceeded"
+                    : filler.earlyHardcleanTriggered ? "early_hardclean" : filler.abandoned ? "abandoned_too_unfillable" : filler.checks >= deadline ? "deadline_exceeded"
                     : solvedInternally ? "blocked_on_excluded_slot" : "search_exhausted";
             if (!complete) {
                 Object[] partial = Grids.buildPartialLettersGrid(grid, slots, filler.bestAssignment, a.forcedLetters,

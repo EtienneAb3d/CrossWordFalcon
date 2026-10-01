@@ -402,10 +402,22 @@ plusieurs signaux) :
   bloqués, activée par défaut, qui efface toutes les lettres des mots
   retirés parce qu'ils croisent un emplacement bloqué — y compris celles
   qu'ils partagent avec un mot qui ne le croise pas ; ce mot, amputé d'une
-  lettre, est retiré à son tour, ses autres lettres restant en place.
+  lettre, est retiré à son tour, ses autres lettres restant en place. Il
+  efface aussi toute lettre présente sur un emplacement bloqué lui-même,
+  qu'un mot la porte ou non.
   Commune à la génération automatique et au bouton **Nettoyer** du mode
   Interactif. (`backend/crossword_gen.py`, `_clean_blocked_slots`,
   `HARD_CLEAN_ENABLED`.)
+
+- **Nettoyage dur précoce** (*early hardclean*) : nettoyage dur déclenché
+  plus tôt, en cours de recherche, dès qu'un nouveau record d'une tentative
+  de génération laisse au moins `EARLY_HARDCLEAN_PERCENT` (10 %) des cases de
+  la grille dans des emplacements impossibles (100 = désactivé). Même
+  nettoyage que la seconde chance, mais la tentative reprend aussitôt sur la
+  grille nettoyée, sans être déclarée échouée ni terminée et sans quitter
+  son palier : même processus, même numéro de grille, même budget cumulé.
+  (`backend/crossword_gen.py`, `_resume_after_early_hardclean`,
+  `Filler._early_hardclean_due`, `EARLY_HARDCLEAN_PERCENT`.)
 
 - **Seconde chance** : reprise d'une tentative qui échoue alors que le
   palier est encore en course (au moins une tentative d'origine n'a pas

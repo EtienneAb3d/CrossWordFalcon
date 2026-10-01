@@ -1880,10 +1880,25 @@ the current defaults/behavior to know before touching this code.
   letter of each word it removes, even a letter shared with a word that
   does NOT cross the impossible emplacement — that word, left with a hole,
   is unassigned in turn (its paired black-cell change reverted like any
-  other removal), its other letters kept as plain confirmed letters. A
+  other removal), its other letters kept as plain confirmed letters. It
+  works per impossible EMPLACEMENT, not only per word (the user's rule:
+  "impossible" is a property of an emplacement): every letter standing on
+  an impossible emplacement is cleared too, whether or not a word carries
+  it. A
   `permanent_locked_letters` cell is never cleared. It lives in
   `_clean_blocked_slots` itself, so automatic generation and Interactive
   "Nettoyer" share it, as the user required ("ça doit être le même code").
+- **Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10 in `backend/
+  crossword_gen.py`, `Filler.EARLY_HARDCLEAN_PERCENT` in Java; 100 = off):
+  the hard clean of the second chance, triggered earlier and INSIDE the
+  attempt — the user's rule: the hardclean is an attempt to carry the grid
+  on instead of declaring it failed, so triggering it earlier must neither
+  change palier nor declare the grid failed. As soon as a new record leaves
+  that share of the grid's cells in impossible slots, the search stops, the
+  record is hard-cleaned (`_second_chance_seed`) and the same attempt
+  resumes from it on the same process (`_resume_after_early_hardclean`):
+  same seed/lineage, same rng, cumulative check budget. The harvest loop
+  never sees it. Interactive mode never uses it.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

@@ -757,6 +757,40 @@
                 data-i18n-aria="attemptPreviewNextBtn" disabled>▶</button>
       </p>
       <div id="board">
+        <!-- Play mode only: word-count statistics of the grid on screen.
+             An icon button at #board's left edge (the central column's
+             margin), level with the top of the grid; a click opens the
+             panel right below it — number of words per length, longest
+             first (script.js's showGridStats/renderGridStatsPanel). -->
+        <div id="grid-stats" hidden>
+          <button type="button" id="grid-stats-btn" class="nav-btn clear-icon-btn"
+                  data-i18n-title="gridStatsBtn" data-i18n-aria="gridStatsBtn"
+                  aria-expanded="false" aria-controls="grid-stats-panel">
+            <svg class="grid-stats-icon" viewBox="0 0 24 24" width="16" height="16"
+                 aria-hidden="true" fill="currentColor">
+              <rect x="3" y="12" width="4" height="9"/>
+              <rect x="10" y="4" width="4" height="17"/>
+              <rect x="17" y="8" width="4" height="13"/>
+            </svg>
+          </button>
+          <div id="grid-stats-panel" hidden>
+            <table id="grid-stats-table">
+              <thead>
+                <tr>
+                  <th data-i18n="gridStatsColLength">Lettres</th>
+                  <th data-i18n="gridStatsColCount">Mots</th>
+                </tr>
+              </thead>
+              <tbody id="grid-stats-body"></tbody>
+              <tfoot>
+                <tr>
+                  <th data-i18n="gridStatsTotal">Total</th>
+                  <td id="grid-stats-total"></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
         <!-- Groups #clues and #grid-column so they keep centering together
              as their own unit (#board's original, pre-"Mots Défi" behavior:
              "en mode jeu, centrer le bloc grille+définition+flèches") within
