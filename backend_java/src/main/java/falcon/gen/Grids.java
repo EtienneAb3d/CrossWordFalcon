@@ -275,13 +275,58 @@ public final class Grids {
     }
 
     /**
-     * {@link #blackDistanceSq} from (r, c) to the closest of {@code blacks} ({@code Long.MAX_VALUE} when there is
-     * none) — {@link #placeBlackCells}' ranking criterion.
+     * Number of black cells {@link NearestBlacks#score} averages over: the closest aligned one in each of the four
+     * directions (the grid's edges included, so always four), then the closest non-aligned ones up to this total.
      */
-    static long nearestBlackDistanceSq(List<Integer> blacks, int r, int c) {
-        long best = Long.MAX_VALUE;
-        for (int b : blacks) best = Math.min(best, blackDistanceSq(r, c, Cells.r(b), Cells.c(b)));
-        return best;
+    static final int BLACK_DISTANCE_NEIGHBORS = 7;
+
+    /**
+     * A candidate's closest black cells: the smallest {@link #blackDistanceSq} per direction (left, right, up, down;
+     * -1 while none) and the {@code BLACK_DISTANCE_NEIGHBORS - 4} smallest among non-aligned cells, ascending.
+     */
+    static final class NearestBlacks {
+        final long[] aligned = {-1, -1, -1, -1};
+        final List<Long> others = new ArrayList<>();
+
+        /** Adds the black cell (br, bc) seen from (r, c); returns whether anything changed. */
+        boolean record(int r, int c, int br, int bc) {
+            long d = blackDistanceSq(r, c, br, bc);
+            int direction = br == r ? (bc < c ? 0 : 1) : bc == c ? (br < r ? 2 : 3) : -1;
+            if (direction >= 0) {
+                if (aligned[direction] < 0 || d < aligned[direction]) {
+                    aligned[direction] = d;
+                    return true;
+                }
+                return false;
+            }
+            int keep = BLACK_DISTANCE_NEIGHBORS - aligned.length;
+            if (others.size() >= keep && d >= others.get(others.size() - 1)) return false;
+            int k = 0;
+            while (k < others.size() && others.get(k) <= d) k++;
+            others.add(k, d);
+            while (others.size() > keep) others.remove(others.size() - 1);
+            return true;
+        }
+
+        /**
+         * {@link #placeBlackCells}' ranking criterion: the mean, over these black cells, of the square root of the
+         * weighted distance (the aligned factor applied before the root).
+         */
+        double score() {
+            double sum = 0;
+            int n = 0;
+            for (long d : aligned) {
+                if (d >= 0) {
+                    sum += Math.sqrt(Math.sqrt((double) d));
+                    n++;
+                }
+            }
+            for (long d : others) {
+                sum += Math.sqrt(Math.sqrt((double) d));
+                n++;
+            }
+            return n == 0 ? Double.POSITIVE_INFINITY : sum / n;
+        }
     }
 
     /** Factor applied to the distance between two cells of the same row or column in {@link #blackDistanceSq}. */
@@ -370,19 +415,27 @@ public final class Grids {
         for (int br = 0; br < rows; br++) {
             for (int bc = 0; bc < cols; bc++) if (grid[br][bc] == BLACK) blacks.add(Cells.of(br, bc));
         }
-        // Distance of each candidate to its closest black cell, parallel to remaining, updated per placement; the
-        // grid's edges count as a ring of virtual black cells just outside the grid.
-        List<Long> dist = new ArrayList<>();
+        // The grid's edges count as black cells: a ring of virtual black cells just outside the grid.
+        List<int[]> virtualBlacks = new ArrayList<>();
+        for (int bc = -1; bc <= cols; bc++) {
+            virtualBlacks.add(new int[]{-1, bc});
+            virtualBlacks.add(new int[]{rows, bc});
+        }
+        for (int br = 0; br < rows; br++) {
+            virtualBlacks.add(new int[]{br, -1});
+            virtualBlacks.add(new int[]{br, cols});
+        }
+        // Per candidate, parallel to remaining and updated per placement: its closest aligned and non-aligned black
+        // cells, and the resulting score.
+        List<NearestBlacks> nearest = new ArrayList<>();
+        List<Double> dist = new ArrayList<>();
         for (int cell : remaining) {
             int r = Cells.r(cell), c = Cells.c(cell);
-            long d = nearestBlackDistanceSq(blacks, r, c);
-            for (int bc = -1; bc <= cols; bc++) {
-                d = Math.min(d, Math.min(blackDistanceSq(r, c, -1, bc), blackDistanceSq(r, c, rows, bc)));
-            }
-            for (int br = 0; br < rows; br++) {
-                d = Math.min(d, Math.min(blackDistanceSq(r, c, br, -1), blackDistanceSq(r, c, br, cols)));
-            }
-            dist.add(d);
+            NearestBlacks closest = new NearestBlacks();
+            for (int b : blacks) closest.record(r, c, Cells.r(b), Cells.c(b));
+            for (int[] b : virtualBlacks) closest.record(r, c, b[0], b[1]);
+            nearest.add(closest);
+            dist.add(closest.score());
         }
         while (!remaining.isEmpty() && placed < target) {
             Map<Integer, Integer> position = new HashMap<>();
@@ -400,10 +453,12 @@ public final class Grids {
             if (chosen == null) break;
             int cell = remaining.remove((int) chosen);
             dist.remove((int) chosen);
+            nearest.remove((int) chosen);
             int r = Cells.r(cell), c = Cells.c(cell);
             for (int i = 0; i < remaining.size(); i++) {
-                long d = blackDistanceSq(Cells.r(remaining.get(i)), Cells.c(remaining.get(i)), r, c);
-                if (d < dist.get(i)) dist.set(i, d);
+                if (nearest.get(i).record(Cells.r(remaining.get(i)), Cells.c(remaining.get(i)), r, c)) {
+                    dist.set(i, nearest.get(i).score());
+                }
             }
             runs = splitRuns(runs, cell);
             grid[r][c] = BLACK;
@@ -414,7 +469,7 @@ public final class Grids {
         return new ArrayList<>(remaining);
     }
 
-    private static Integer drawBlackCell(char[][] grid, int rows, int cols, List<Integer> remaining, List<Long> dist,
+    private static Integer drawBlackCell(char[][] grid, int rows, int cols, List<Integer> remaining, List<Double> dist,
                                          List<int[]> runOrder, Map<Integer, Integer> position, int minFree,
                                          boolean allowAdjacency, Rng rng, DualIndex index,
                                          Map<Integer, Character> locked, LengthSets available) {
@@ -444,7 +499,7 @@ public final class Grids {
                 if (ok) valid.add(i);
             }
             if (!valid.isEmpty()) {
-                valid.sort((a, b) -> Long.compare(dist.get(b), dist.get(a)));
+                valid.sort((a, b) -> Double.compare(dist.get(b), dist.get(a)));
                 List<Integer> window = valid.subList(0, windowSize(valid.size(), percent));
                 return window.get(rng.randrange(window.size()));
             }

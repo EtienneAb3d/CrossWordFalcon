@@ -400,14 +400,17 @@ via `ProcessPoolExecutor`:
    side (`_split_runs`). Every draw ranks the runs by decreasing length
    (ties in random order), keeps the `BLACK_DRAW_WINDOW_PERCENT` (5) %
    longest (at least one), keeps their candidates satisfying the hard
-   constraints, ranks those by squared Euclidean distance to the closest
-   black cell already placed, a black cell sharing the candidate's row or
-   column counting at `BLACK_ALIGNED_DISTANCE_FACTOR` (10) times its real
-   distance and the grid's edges counting as a ring of virtual black
-   cells just outside it (`_black_distance_sq`, `_nearest_black_distance_sq`, kept per
-   candidate and updated as each cell is placed; farthest first, ties
-   keeping the shuffled order), and draws at random among the same
-   percentage farthest (at least one); when the selected runs hold no
+   constraints, ranks those by `_black_spread_score` — the mean, over
+   `BLACK_DISTANCE_NEIGHBORS` (7) black cells (the closest aligned one in
+   each of the four directions, edges included so always four, then the 3
+   closest non-aligned ones, `_record_black`), of the square root
+   of the Euclidean distance to each, a black cell sharing the candidate's
+   row or column counting at `BLACK_ALIGNED_DISTANCE_FACTOR` (10) times
+   its real distance before the root, and the grid's edges counting as a
+   ring of virtual black cells just outside it (`_black_distance_sq`,
+   `_nearest_black_distances_sq`, kept per candidate and updated as each
+   cell is placed; highest first, ties keeping the shuffled order), and
+   draws at random among the same percentage best scored (at least one); when the selected runs hold no
    valid cell, the percentage grows by 5 and the draw starts over. The
    hard constraints: still white, not adjacent to a black cell,
    `_new_black_cell_breaks_locked_slot` false, structurally valid at

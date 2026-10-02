@@ -859,7 +859,7 @@ BLACK_ALIGNED_DISTANCE_FACTOR = 10
 
 def _black_distance_sq(r, c, br, bc):
     """Squared distance from (r, c) to the black cell (br, bc) as
-    `_place_black_cells` ranks it: Euclidean, multiplied by
+    `_place_black_cells` weighs it: Euclidean, multiplied by
     `BLACK_ALIGNED_DISTANCE_FACTOR` when both cells share a row or a
     column."""
     d = (r - br) ** 2 + (c - bc) ** 2
@@ -868,11 +868,63 @@ def _black_distance_sq(r, c, br, bc):
     return d
 
 
-def _nearest_black_distance_sq(blacks, r, c):
-    """`_black_distance_sq` from (r, c) to the closest cell of `blacks`
-    (`math.inf` when there is none) — `_place_black_cells`'s ranking
-    criterion."""
-    return min((_black_distance_sq(r, c, br, bc) for br, bc in blacks), default=math.inf)
+# Number of black cells `_black_spread_score` averages over: the closest
+# aligned one in each of the four directions (left, right, up, down — the
+# grid's edges included, so always four), then the closest non-aligned
+# ones up to this total.
+BLACK_DISTANCE_NEIGHBORS = 7
+
+
+def _black_direction(r, c, br, bc):
+    """Index (0 left, 1 right, 2 up, 3 down) of the direction of the black
+    cell (br, bc) seen from (r, c) when both share a row or a column, else
+    None."""
+    if br == r:
+        return 0 if bc < c else 1
+    if bc == c:
+        return 2 if br < r else 3
+    return None
+
+
+def _record_black(nearest, r, c, br, bc):
+    """Adds the black cell (br, bc) to `nearest` — (r, c)'s `[aligned,
+    others]` pair: the smallest `_black_distance_sq` per direction, and the
+    `BLACK_DISTANCE_NEIGHBORS - 4` smallest among non-aligned cells,
+    ascending. Returns whether `nearest` changed."""
+    aligned, others = nearest
+    d = _black_distance_sq(r, c, br, bc)
+    direction = _black_direction(r, c, br, bc)
+    if direction is not None:
+        if aligned[direction] is None or d < aligned[direction]:
+            aligned[direction] = d
+            return True
+        return False
+    keep = BLACK_DISTANCE_NEIGHBORS - len(aligned)
+    if len(others) < keep or d < others[-1]:
+        bisect.insort(others, d)
+        del others[keep:]
+        return True
+    return False
+
+
+def _nearest_black_distances_sq(blacks, r, c):
+    """(r, c)'s `[aligned, others]` pair over `blacks` (see
+    `_record_black`)."""
+    nearest = [[None] * 4, []]
+    for br, bc in blacks:
+        _record_black(nearest, r, c, br, bc)
+    return nearest
+
+
+def _black_spread_score(nearest):
+    """`_place_black_cells`' ranking criterion: the mean, over the black
+    cells of `nearest` (`_record_black`), of the square root of the
+    weighted distance — the `BLACK_ALIGNED_DISTANCE_FACTOR` is applied
+    before the root."""
+    values = [d for d in nearest[0] if d is not None] + nearest[1]
+    if not values:
+        return math.inf
+    return sum(math.sqrt(math.sqrt(d)) for d in values) / len(values)
 
 
 def _in_corner_square(rows, cols, r, c):
@@ -946,12 +998,14 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     Every draw ranks the runs by decreasing length (ties in random order)
     and keeps the `BLACK_DRAW_WINDOW_PERCENT` % longest (at least one).
     Only the candidates lying in those runs that satisfy the hard
-    constraints are kept; they are ranked by their distance to the closest
-    black cell already on the grid (`_nearest_black_distance_sq`,
-    `_black_distance_sq`: Euclidean, a black cell of the same row or
-    column counting `BLACK_ALIGNED_DISTANCE_FACTOR` times its real
-    distance, the grid's edges counting as a ring of black cells just
-    outside it; farthest first, ties keeping `candidates`' shuffled order),
+    constraints are kept; they are ranked by `_black_spread_score`: the
+    mean, over `BLACK_DISTANCE_NEIGHBORS` black cells — the closest aligned
+    one in each of the four directions, then the closest non-aligned ones
+    — of the square root of the distance to each (`_black_distance_sq`: Euclidean,
+    a black cell of the same row or column counting `BLACK_ALIGNED_
+    DISTANCE_FACTOR` times its real distance, before the root; the grid's
+    edges count as a ring of black cells just outside it) — highest
+    first, ties keeping `candidates`' shuffled order,
     and a cell is drawn at random among the same percentage of them
     farthest (at least one). When the selected runs hold no valid cell,
     the percentage grows by `BLACK_DRAW_WINDOW_PERCENT` and the draw starts
@@ -1017,9 +1071,11 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     # just outside the grid.
     blacks += [(br, bc) for br in (-1, rows) for bc in range(-1, cols + 1)]
     blacks += [(br, bc) for br in range(rows) for bc in (-1, cols)]
-    # Distance of each candidate to its closest black cell, kept parallel
-    # to `remaining` and updated as each new black cell is placed.
-    dist = [_nearest_black_distance_sq(blacks, r, c) for r, c in remaining]
+    # Per candidate, kept parallel to `remaining` and updated as each new
+    # black cell is placed: its closest aligned and non-aligned black cells'
+    # squared weighted distances, and the resulting score.
+    nearest = [_nearest_black_distances_sq(blacks, r, c) for r, c in remaining]
+    dist = [_black_spread_score(n) for n in nearest]
     while remaining and placed < target:
         position = {cell: i for i, cell in enumerate(remaining)}
         run_order = list(runs)
@@ -1037,10 +1093,10 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
             break
         r, c = remaining.pop(chosen)
         dist.pop(chosen)
+        nearest.pop(chosen)
         for i, (cr, cc) in enumerate(remaining):
-            d = _black_distance_sq(cr, cc, r, c)
-            if d < dist[i]:
-                dist[i] = d
+            if _record_black(nearest[i], cr, cc, r, c):
+                dist[i] = _black_spread_score(nearest[i])
         runs = _split_runs(runs, (r, c))
         grid[r][c] = BLACK
         row_black[r] += 1

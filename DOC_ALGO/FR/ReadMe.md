@@ -407,16 +407,21 @@ Chaque tirage classe les emplacements du plus long au plus court
 (égalités au hasard) et retient les `BLACK_DRAW_WINDOW_PERCENT`
 (**5 %**) les plus longs (au moins un). Parmi les cases candidates de ces
 emplacements, seules celles qui respectent les **contraintes fortes**
-sont conservées. Pour chacune, on calcule la distance (euclidienne) à la
-case noire déjà posée la plus proche, la distance à une case noire située
-sur la **même ligne ou la même colonne** comptant pour
-`BLACK_ALIGNED_DISTANCE_FACTOR` (**10**) fois la distance réelle
-(`_black_distance_sq`, `_nearest_black_distance_sq`). Les **bords** de la
-grille comptent comme des cases noires : un anneau de cases noires
-virtuelles entoure la grille, juste à l'extérieur ; on les classe de la
-plus éloignée à la plus proche (à égalité, l'ordre de leur mélange
-initial) et une case est tirée **au hasard** parmi les **5 %** les plus
-éloignées (au moins une). Si les emplacements retenus ne contiennent
+sont conservées. Pour chacune, on retient `BLACK_DISTANCE_NEIGHBORS`
+(**7**) cases noires : d'abord les cases **alignées**, la plus proche dans
+chacune des quatre directions (gauche, droite, haut, bas — bords compris,
+donc toujours quatre), puis les **3** cases non alignées les plus proches.
+Son **score** est la **moyenne des racines carrées** des distances
+(euclidiennes) à ces 7 cases.
+La distance à une case noire située sur la **même ligne ou la même
+colonne** compte pour `BLACK_ALIGNED_DISTANCE_FACTOR` (**10**) fois la
+distance réelle, ce facteur étant appliqué avant la racine
+(`_black_distance_sq`, `_record_black`, `_nearest_black_distances_sq`,
+`_black_spread_score`). Les **bords** de la grille comptent comme des
+cases noires : un anneau de cases noires virtuelles entoure la grille,
+juste à l'extérieur. On classe les cases du meilleur score au moins bon
+(à égalité, l'ordre de leur mélange initial) et une case est tirée **au
+hasard** parmi les **5 %** de meilleur score (au moins une). Si les emplacements retenus ne contiennent
 aucune case valide, le pourcentage est **augmenté de 5 %** (10 %, 15 %…),
 pour les emplacements comme pour la fenêtre de distance, et le tirage
 recommence (`_place_black_cells`).
