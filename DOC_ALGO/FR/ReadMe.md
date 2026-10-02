@@ -1961,13 +1961,13 @@ servent, pas le mode Interactif.
 
 **Nettoyage dur sur mot répété.** Un nettoyage dur se déclenche aussi
 quand la recherche d'une tentative de génération pose **le même mot au même
-emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (100) fois de suite**, sans
+emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (1000) fois de suite**, sans
 qu'aucun autre mot n'y ait été posé entre-temps : seul le dernier mot posé
 sur chaque emplacement est retenu, avec son décompte, qui repart de 1 dès
 qu'un autre mot y est posé (`Filler._last_word_streak`,
 `Filler._record_tried_word`). Ce mot est alors devenu obligatoire dans une
 boucle qui rejoue le même scénario. Au moment où il y est posé pour la
-101ᵉ fois de suite, l'emplacement est déclaré impossible et nettoyé
+1001ᵉ fois de suite, l'emplacement est déclaré impossible et nettoyé
 **sur place**, à l'intérieur de la recherche (`Filler._descend`,
 `Filler._repeat_hardclean`) : `_clean_blocked_slots` reçoit cet emplacement
 pour seul emplacement impossible, son propre mot retiré d'abord ; son mot,

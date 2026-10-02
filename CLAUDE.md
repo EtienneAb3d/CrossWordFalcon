@@ -819,7 +819,7 @@ sees the clean. `try_fill`'s previews and
 diagnostics read the Filler's current `locked_letters` (`locked_cells`
 recomputed on each publication).
 
-**Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 100, `None`/0 =
+**Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 1000, `None`/0 =
 off; Java `Filler.MAX_SAME_WORD_PLACEMENTS`): `Filler._last_word_streak`
 keeps, per slot (cells), the last word the search placed there and how many
 times in a row; another word restarts it at 1 (`_record_tried_word`, Java

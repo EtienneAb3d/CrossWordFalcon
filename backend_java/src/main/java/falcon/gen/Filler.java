@@ -48,7 +48,7 @@ public final class Filler {
      * words crossing it and the letters left on it are cleared, no black cell touched), the slot becomes an
      * "emplacement écarté" and a fresh node carries on. Like a backghost, the backtracking stack is kept: every
      * word the clean takes off stays off. The streak restarts from zero. 0 = off. */
-    public static final int MAX_SAME_WORD_PLACEMENTS = 100;
+    public static final int MAX_SAME_WORD_PLACEMENTS = 1000;
     /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), first palier only: a node only places a word on a slot
      * holding a still-free cell inside the attention zone, the grid's first N rows and N columns from (0, 0)
      * (attentionPool). N starts at INCREMENTAL_FILL_START_SIZE and grows by INCREMENTAL_FILL_STEP once the node

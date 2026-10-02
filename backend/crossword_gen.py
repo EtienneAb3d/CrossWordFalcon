@@ -2588,7 +2588,7 @@ EARLY_HARDCLEAN_PERCENT = 10
 # search unwinds to it. The word's count on that slot restarts from zero.
 # `None`/0 disables it. Only the generation attempts (`_pattern_attempt`/
 # `_pattern_continue`) enable it.
-MAX_SAME_WORD_PLACEMENTS = 100
+MAX_SAME_WORD_PLACEMENTS = 1000
 
 # Incremental fill ("remplissage incrémental"), first palier only: a node
 # only places a word on a slot holding at least one still-free cell (no

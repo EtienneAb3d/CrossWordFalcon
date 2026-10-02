@@ -449,7 +449,7 @@ plusieurs signaux) :
 
 - **Nettoyage dur sur mot répété** : nettoyage dur déclenché à l'intérieur
   de la recherche d'une tentative de génération quand elle pose le même mot
-  au même emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (100) fois de suite,
+  au même emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (1000) fois de suite,
   sans autre mot posé à cet emplacement entre-temps. L'emplacement est
   déclaré impossible et nettoyé sur place, avec cet emplacement pour seul
   emplacement impossible (son mot, les mots qui le croisent et les lettres

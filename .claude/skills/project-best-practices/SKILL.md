@@ -1966,9 +1966,9 @@ the current defaults/behavior to know before touching this code.
   record; the attempt keeps the descent caps of its first start; a reshape
   carried by the record stays in the pattern even when the clean removes
   its word. Interactive mode never uses it.
-- **Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 100 in `backend/
+- **Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 1000 in `backend/
   crossword_gen.py`, `Filler.MAX_SAME_WORD_PLACEMENTS` in Java) — the
-  user's rule: in automatic fill, when the same word is placed more than 100
+  user's rule: in automatic fill, when the same word is placed more than 1000
   times on the same slot, declare the slot impossible and trigger a
   hardclean on that slot; only the last word placed on each slot is kept
   with its count, which restarts when another word is placed there, so the
@@ -1986,8 +1986,9 @@ the current defaults/behavior to know before touching this code.
   seeds): each clean takes off 40-55 % of the placed words (the hardclean
   cascade through partially erased words); at a limit of 5 that meant about
   30 cleans per attempt and far more free cells inside the attention zone
-  than without the rule (median 7-100 vs 6-27), at 100 it fires 0-1 times
-  per attempt and the zone fills as well as without it (median 2-7).
+  than without the rule (median 7-100 vs 6-27), at 100 it fired 0-1 times
+  per attempt and the zone filled as well as without it (median 2-7); the
+  current limit is 1000.
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça
