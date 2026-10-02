@@ -1298,23 +1298,32 @@ the current defaults/behavior to know before touching this code.
   backghosts on one descent, the backjump is made in full (bounds the
   recursion). Backghosting and in-search reshapes coexist:
   `_undo_reshape` keeps a word ghosted since the reshape off the grid.
-- **Incremental fill on the first palier** (`INCREMENTAL_FILL_ENABLED`,
-  on "pour le moment", in the user's words; Java mirror in `Filler`): the
-  user's rule — on step 1 only, limit the slots a placement may choose to
-  an NxN "attention zone" starting at (0,0), N=6 first, fill until nothing
-  more can be placed within it, then N+=2, until the zone is the whole
-  grid. Choices made with the change, to revisit with the user: a slot is
-  in the zone when one of its still-free cells is (a slot reaching into
-  the zone with only known cells there is not); "nothing more can be
-  placed" is the node's own stages 1-2 (non-écarté, then released écarté)
-  exhausted inside the zone, after which the node widens instead of
-  failing — a dry slot or a blameable all-rejected slot still backtracks
-  as usual, and the descent cap can still end the node first; the zone
-  size is a recursion parameter, restored on unwinding like `released`,
-  and every root (`solve()`, early-hardclean restarts included) starts
-  again at 6; "step 1" is palier 0 of a call with no `resume_state`
-  (never "Continuer", "Finir la grille/la zone", nor a resumed pause),
-  replacement and second-chance attempts of that palier included.
+- **Incremental fill on every palier** (`INCREMENTAL_FILL_ENABLED`, on
+  "pour le moment", in the user's words; Java mirror in `Filler`): the
+  user's rule — limit the slots a placement may choose to an NxN
+  "attention zone" starting at (0,0), N=6 first, fill until nothing more
+  can be placed within it, then N+=2, until the zone is the whole grid;
+  applied at every palier ("à toutes les étapes"), to resumed and freshly
+  created grids alike. From palier 2 on, when every locked cell of an
+  attempt has been unlocked, the zone is reset — once per grid (the
+  user's words: "ne le faire qu'une fois pour une grille, ensuite, il ne
+  devrait plus y avoir de case verrouillée avant l'étape suivante";
+  `Filler._attention_after_unlock`). Choices made with the change, to
+  revisit with the user: a slot is in the zone when one of its still-free
+  cells is (a slot reaching into the zone with only known cells there is
+  not); "nothing more can be placed" is the node's own stages 1-2
+  (non-écarté, then released écarté) exhausted inside the zone, after
+  which the node widens instead of failing — a dry slot or a blameable
+  all-rejected slot still backtracks as usual, and the descent cap can
+  still end the node first; the zone size is a recursion parameter,
+  restored on unwinding like `released`, and every root (`solve()`,
+  early-hardclean restarts included) starts again at 6; "from palier 2
+  on" is implemented as "the attempt started with locked letters" (also
+  true of "Continuer"; never true of "Finir la grille/la zone", whose
+  permanent locks are never cleared); the reset happens after the
+  repeated-word hardclean (its fresh node starts at 6) and is merely used
+  up by an early hardclean (whose root starts at 6 anyway); "once per
+  grid" means once per attempt.
 - **The last-resort `allow_breaking` stage is gated globally, not per
   node.** `Filler.solve` runs a strict pass from the root first; only if
   the root itself fails (not the budget, not an abandon) is the search

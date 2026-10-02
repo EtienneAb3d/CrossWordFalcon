@@ -884,10 +884,9 @@ récursion).
 
 **Remplissage incrémental** (`INCREMENTAL_FILL_ENABLED`, activé ;
 `backend/crossword_gen.py`, `Filler._attention_pool`,
-`Filler._widen_attention`) : au premier palier seulement d'une recherche
-partie de zéro (`generate_grid`, ni « Continuer », ni « Finir la
-grille/la zone », ni reprise après mise en pause), les temps 1 et 2 se
-déroulent d'abord dans une **zone d'attention** : le carré des N premières
+`Filler._widen_attention`) : à chaque palier (`generate_grid`), pour
+toutes ses tentatives — grilles reprises comme grilles neuves —, les temps
+1 et 2 se déroulent d'abord dans une **zone d'attention** : le carré des N premières
 lignes et N premières colonnes, à partir de la case (0, 0). Seul un
 emplacement ayant au moins une case encore libre (ni mot posé, ni lettre
 verrouillée) dans ce carré peut recevoir une pose. N vaut d'abord
@@ -899,10 +898,15 @@ essayés par ce nœud le restent), jusqu'à couvrir toute la grille ; le
 temps 3 ne vient qu'ensuite. La taille de la zone est un paramètre de
 récursion comme `released` : héritée par la descente qui suit,
 restaurée en remontant ; chaque racine (`solve()`, y compris après un
-nettoyage précoce) repart de 6. Un emplacement asséché, où qu'il soit,
-provoque le retour en arrière habituel : seule la sélection est limitée
-par la zone. Les tentatives des paliers suivants n'utilisent pas de zone
-(`try_fill`, `incremental_fill`). Un emplacement écarté est repris dès que son domaine
+nettoyage précoce) repart de 6. Une tentative partie de lettres
+verrouillées (palier 2 et suivants) qui les perd toutes à la suite d'un
+nettoyage dur (précoce ou sur mot répété) ramène sa zone à 6, une seule
+fois par tentative (`Filler._attention_after_unlock`) : le nœud qui
+poursuit après le nettoyage sur mot répété repart de 6 ; après un
+nettoyage précoce, la racine repart de 6 de toute façon et la
+réinitialisation est simplement consommée. Un emplacement asséché, où
+qu'il soit, provoque le retour en arrière habituel : seule la sélection
+est limitée par la zone (`try_fill`, `incremental_fill`). Un emplacement écarté est repris dès que son domaine
 redevient non vide (`_domain` est recalculé à chaque nœud) et cesse d'être
 jaune dès qu'un mot y est posé.
 
@@ -1978,7 +1982,9 @@ la pile de retour arrière est conservée : aucun nœud n'est défait, les mots
 retirés quittent la grille et y restent absents, le nœud qui avait posé
 chacun d'eux ne trouve plus rien à retirer quand la recherche revient à
 lui, et un nouveau nœud poursuit la recherche depuis l'état nettoyé, dans
-la même zone d'attention. L'emplacement devient un **emplacement écarté**
+la même zone d'attention (ramenée à 6 si le nettoyage vient de retirer la
+dernière lettre verrouillée, voir « Remplissage incrémental »).
+L'emplacement devient un **emplacement écarté**
 et son décompte repart de zéro. Les statistiques de lettres recalculées
 pour les retraits sont restaurées si ce nouveau nœud échoue. Le record
 n'est pas modifié. Seules les tentatives de génération (`_pattern_attempt`,
@@ -2313,14 +2319,12 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   aperçus de début de cycle ni après le nettoyage. Comme les vraies
   lettres, elle ne s'affiche que lorsque le bouton **Voir** est activé
   (`frontend/static/script.js`, `renderAttemptPreview`).
-- **Cadre gras en pointillés** (zone d'attention) : au premier palier, le
-  carré des N premières lignes et colonnes où la recherche peut encore
+- **Cadre gras en pointillés** (zone d'attention) : le carré des N premières lignes et colonnes où la recherche peut encore
   poser un mot (voir « Remplissage incrémental », chapitre 4), à sa taille
   du moment (`Filler.attention_size` pour les aperçus en direct,
   `Filler.best_attention_size` pour l'état record ; champ
   `attention_size`). Présent sur les mêmes aperçus que les lettres
-  statistiques ; absent dès que la zone couvre toute la grille et après le
-  premier palier (`frontend/static/script.js`, `renderAttemptPreview`).
+  statistiques ; absent dès que la zone couvre toute la grille (`frontend/static/script.js`, `renderAttemptPreview`).
 
 ### Cas particulier : palier « motif neuf »
 

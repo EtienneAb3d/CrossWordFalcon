@@ -167,8 +167,7 @@ public final class Generator {
         AtomicIntegerArray attemptActive;
         Set<String> properNounWords, nonGlossWords;
         Integer maxProperNouns, maxNonGloss;
-        /** Incremental fill for the attempts of the current palier: the first palier of a search started from
-         * scratch only (Filler.INCREMENTAL_FILL_ENABLED). */
+        /** Incremental fill for the attempts of the current palier: every palier (Filler.INCREMENTAL_FILL_ENABLED). */
         volatile boolean incrementalFill;
     }
 
@@ -809,7 +808,7 @@ public final class Generator {
         try {
             for (attempt = 0; attempt < p.attempts; attempt++) {
                 if (p.cancelEvent != null && p.cancelEvent.get()) throw new GenerationCancelled();
-                ctx.incrementalFill = Filler.INCREMENTAL_FILL_ENABLED && attempt == 0 && p.resumeState == null;
+                ctx.incrementalFill = Filler.INCREMENTAL_FILL_ENABLED;
                 if (p.shouldPause != null && p.shouldPause.getAsBoolean()) {
                     throw new GenerationPaused(carrySeedGrid != null
                             ? serializeResumeState(carrySeedGrid, carryLocked, carryPreseed, carryExcluded,

@@ -2590,17 +2590,19 @@ EARLY_HARDCLEAN_PERCENT = 10
 # `_pattern_continue`) enable it.
 MAX_SAME_WORD_PLACEMENTS = 1000
 
-# Incremental fill ("remplissage incrémental"), first palier only: a node
-# only places a word on a slot holding at least one still-free cell (no
-# placed word nor locked letter on it) inside the "attention zone", the
-# square of the grid's first N rows and N columns from (0, 0) (`Filler.
+# Incremental fill ("remplissage incrémental"), every palier: a node only
+# places a word on a slot holding at least one still-free cell (no placed
+# word nor locked letter on it) inside the "attention zone", the square of
+# the grid's first N rows and N columns from (0, 0) (`Filler.
 # _attention_pool`). N starts at INCREMENTAL_FILL_START_SIZE; once the node
 # can place nothing more inside the zone (no such slot left, or every one
 # tried, écarté ones released included), the zone grows by
 # INCREMENTAL_FILL_STEP and the node carries on, until it covers the whole
 # grid. The size is a `_backtrack` recursion parameter, like `released`.
-# Only `generate_grid`'s first palier of a call with no `resume_state`
-# enables it (`try_fill(incremental_fill=True)`).
+# An attempt that starts from locked letters resets the zone to its start
+# size once, the first time a hardclean leaves it no locked letter at all
+# (`Filler._attention_after_unlock`). `generate_grid` enables it on every
+# attempt (`try_fill(incremental_fill=True)`).
 INCREMENTAL_FILL_ENABLED = True
 INCREMENTAL_FILL_START_SIZE = 6
 INCREMENTAL_FILL_STEP = 2
@@ -3353,6 +3355,10 @@ class Filler:
         # grid) — published with every preview (`attention_size`).
         self.attention_size = None
         self.best_attention_size = None
+        # True while the attempt, started from locked letters, has not yet
+        # reset its attention zone for losing them all (see
+        # `_attention_after_unlock`).
+        self._attention_reset_pending = False
         self._early_hardclean_states = set()
         self.permanent_locked_letters = {}
         # Set by `_backtrack` when a record calls for an early hardclean:
@@ -3946,6 +3952,7 @@ class Filler:
                 cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared
             }
         self._impossible_this_attempt.add(i)
+        attention = self._attention_after_unlock(attention)
         if self._backtrack(deadline_checks, released, attention):
             return True
         for scores in reversed(saved):
@@ -4371,6 +4378,16 @@ class Filler:
             return None
         return self._widen_attention(INCREMENTAL_FILL_START_SIZE - INCREMENTAL_FILL_STEP)
 
+    def _attention_after_unlock(self, attention):
+        """The attention-zone size a node carries on with after a hardclean
+        that may have unlocked letters (`attention` otherwise): the start
+        size, once per attempt, the first time an attempt started from
+        locked letters is left with none (see INCREMENTAL_FILL_ENABLED)."""
+        if self._attention_reset_pending and not self.locked_letters:
+            self._attention_reset_pending = False
+            return self._initial_attention()
+        return attention
+
     def _widen_attention(self, size):
         """The attention-zone size after `size`, None once it covers the
         whole grid."""
@@ -4750,12 +4767,16 @@ class Filler:
         # first start.
         self._initial_assigned_count = sum(1 for a in self.assignment if a is not None)
         self._inherited = bool(self.locked_letters) or self._initial_assigned_count > 0
+        self._attention_reset_pending = self.incremental_fill and bool(self.locked_letters)
         while True:
             # Early hardclean on the state the search starts from (no
             # record is taken until a word is added to it). Nothing to
-            # restore: no node is running yet.
+            # restore: no node is running yet. Every root starts at the
+            # attention zone's start size anyway, so a clean leaving no
+            # locked letter only uses up the attempt's one zone reset.
             if self._early_hardclean_due():
                 self._early_hardclean()
+                self._attention_after_unlock(None)
             self._tolerated_dry = self._dry_open_slots()
             self._placement_seq = {}
             self._ghosts_in_descent = 0
@@ -15089,9 +15110,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         for attempt in range(attempts):
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
-            # Incremental fill (see INCREMENTAL_FILL_ENABLED): the first
-            # palier of a search started from scratch only.
-            incremental_fill = INCREMENTAL_FILL_ENABLED and attempt == 0 and resume_state is None
+            # Incremental fill (see INCREMENTAL_FILL_ENABLED): every palier.
+            incremental_fill = INCREMENTAL_FILL_ENABLED
             if should_pause is not None and should_pause():
                 # The same serialization mechanism as the "attempts
                 # exhausted" exit further below (see _serialize_resume_

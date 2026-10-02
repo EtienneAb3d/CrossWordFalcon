@@ -49,11 +49,12 @@ public final class Filler {
      * "emplacement écarté" and a fresh node carries on. Like a backghost, the backtracking stack is kept: every
      * word the clean takes off stays off. The streak restarts from zero. 0 = off. */
     public static final int MAX_SAME_WORD_PLACEMENTS = 1000;
-    /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), first palier only: a node only places a word on a slot
+    /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), every palier: a node only places a word on a slot
      * holding a still-free cell inside the attention zone, the grid's first N rows and N columns from (0, 0)
      * (attentionPool). N starts at INCREMENTAL_FILL_START_SIZE and grows by INCREMENTAL_FILL_STEP once the node
      * can place nothing more inside the zone, until it covers the whole grid; a backtrack recursion parameter,
-     * like released. */
+     * like released. An attempt that starts from locked letters resets the zone to its start size once, the first
+     * time a hardclean leaves it no locked letter at all (attentionAfterUnlock). */
     public static final boolean INCREMENTAL_FILL_ENABLED = true;
     public static final int INCREMENTAL_FILL_START_SIZE = 6;
     public static final int INCREMENTAL_FILL_STEP = 2;
@@ -221,6 +222,9 @@ public final class Filler {
      * (null = the whole grid), published with every preview as attention_size. */
     public volatile Integer attentionSize;
     public Integer bestAttentionSize;
+    /** True while the attempt, started from locked letters, has not yet reset its attention zone for losing them
+     * all (attentionAfterUnlock). */
+    boolean attentionResetPending;
     final Set<String> earlyHardcleanStates = new HashSet<>();
     /** Set by backtrack when a record calls for an early hardclean: every node then unwinds like on an abandon
      * (running its own undo), and solve() restarts the search flat from the record (restartFromRecord). */
@@ -527,6 +531,7 @@ public final class Filler {
             lockedLetters = kept;
         }
         impossibleThisAttempt.add(i);
+        attention = attentionAfterUnlock(attention);
         if (backtrack(deadlineChecks, released, attention)) return true;
         for (int k = saved.size() - 1; k >= 0; k--) restoreLetterScores(saved.get(k));
         return false;
@@ -787,6 +792,17 @@ public final class Filler {
     int initialAttention() {
         if (!incrementalFill) return -1;
         return widenAttention(INCREMENTAL_FILL_START_SIZE - INCREMENTAL_FILL_STEP);
+    }
+
+    /** Mirrors _attention_after_unlock: the attention-zone size a node carries on with after a hardclean that may
+     * have unlocked letters (attention otherwise) — the start size, once per attempt, the first time an attempt
+     * started from locked letters is left with none. */
+    int attentionAfterUnlock(int attention) {
+        if (attentionResetPending && lockedLetters.isEmpty()) {
+            attentionResetPending = false;
+            return initialAttention();
+        }
+        return attention;
     }
 
     /** The attention-zone size after size, -1 once it covers the whole grid (mirrors _widen_attention). */
@@ -1198,10 +1214,15 @@ public final class Filler {
         for (String a : assignment) if (a != null) count++;
         initialAssignedCount = count;
         inherited = !lockedLetters.isEmpty() || count > 0;
+        attentionResetPending = incrementalFill && !lockedLetters.isEmpty();
         while (true) {
             // Early hardclean on the state the search starts from (no record is taken until a word is added to
-            // it). Nothing to restore: no node is running yet.
-            if (earlyHardcleanDue()) earlyHardclean();
+            // it). Nothing to restore: no node is running yet. Every root starts at the attention zone's start
+            // size anyway, so a clean leaving no locked letter only uses up the attempt's one zone reset.
+            if (earlyHardcleanDue()) {
+                earlyHardclean();
+                attentionAfterUnlock(-1);
+            }
             toleratedDry = dryOpenSlots();
             placementSeq = new HashMap<>();
             ghostsInDescent = 0;

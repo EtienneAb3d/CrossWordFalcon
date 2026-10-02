@@ -887,10 +887,9 @@ backtracking resume. `released` is a plain `_backtrack` parameter, so it
 is inherited by everything placed below a release and restores itself as
 the backtrack unwinds back above the node that released it.
 **Incremental fill** (`INCREMENTAL_FILL_ENABLED`, on; Java `Filler.
-INCREMENTAL_FILL_ENABLED`): on the first palier of a search started from
-scratch only (`generate_grid`'s `attempt == 0` with no `resume_state`,
-`try_fill(incremental_fill=True)` via `_pattern_attempt`/`_pattern_
-continue`; Java `Generator.Ctx.incrementalFill`), stages 1 and 2 first run
+INCREMENTAL_FILL_ENABLED`): on every palier and every attempt of it
+(`generate_grid`, `try_fill(incremental_fill=True)` via `_pattern_attempt`/
+`_pattern_continue`; Java `Generator.Ctx.incrementalFill`), stages 1 and 2 first run
 inside an "attention zone" — rows and columns 0 to N-1 — over the slots
 holding a still-free cell (no placed word nor locked letter) there
 (`Filler._attention_pool`). N starts at `INCREMENTAL_FILL_START_SIZE` (6);
@@ -901,7 +900,12 @@ on the larger pool, slots it already tried staying tried
 `allow_breaking` stage comes only after. The size is a `_backtrack`
 parameter (`attention`) inherited and restored like `released`, passed
 through `_try_reshape`/`_fail_or_backghost`; every root (`solve()`)
-restarts at 6. Dry-slot detection and backtracking are unchanged.
+restarts at 6. An attempt started from locked letters resets the zone to 6
+once (`Filler._attention_after_unlock`, armed by `solve()` as
+`_attention_reset_pending`; Java `attentionAfterUnlock`), the first time a
+hardclean leaves `locked_letters` empty: `_repeat_hardclean`'s fresh node
+starts at 6; after `_early_hardclean` the root starts at 6 anyway and the
+reset is only used up. Dry-slot detection and backtracking are unchanged.
 `Filler.attention_size` (the current node's zone, kept current on entry,
 widening and return from a child) and `best_attention_size` (the zone a
 record was taken under) feed every preview's `attention_size` (`None` =

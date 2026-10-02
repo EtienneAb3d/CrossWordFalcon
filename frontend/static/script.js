@@ -1521,8 +1521,8 @@ function renderAttemptPreview(examples) {
     // Incremental fill's attention zone (backend/crossword_gen.py's
     // INCREMENTAL_FILL_ENABLED, `attention_size`): the square of the first
     // N rows and columns the search may currently place a word in, framed
-    // by a bold dashed border laid over the cells. Absent (null) once the
-    // zone covers the whole grid, and on every tile past the first palier.
+    // by a bold dashed border laid over the cells. Absent once the
+    // zone covers the whole grid (`attention_size` null).
     if (typeof attentionSize === "number" && attentionSize < Math.max(width, height)) {
       const zone = document.createElement("div");
       zone.className = "attention-zone";
