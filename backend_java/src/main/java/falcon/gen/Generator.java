@@ -167,6 +167,9 @@ public final class Generator {
         AtomicIntegerArray attemptActive;
         Set<String> properNounWords, nonGlossWords;
         Integer maxProperNouns, maxNonGloss;
+        /** Incremental fill for the attempts of the current palier: the first palier of a search started from
+         * scratch only (Filler.INCREMENTAL_FILL_ENABLED). */
+        volatile boolean incrementalFill;
     }
 
     /** One finished attempt: the grid it worked on, the solved fill (or
@@ -192,6 +195,7 @@ public final class Generator {
         a.priorityWords = ctx.priorityWords;
         a.challengeWords = ctx.challengeWords;
         a.requiredCells = requiredCells;
+        a.incrementalFill = ctx.incrementalFill;
         return a;
     }
 
@@ -803,6 +807,7 @@ public final class Generator {
         try {
             for (attempt = 0; attempt < p.attempts; attempt++) {
                 if (p.cancelEvent != null && p.cancelEvent.get()) throw new GenerationCancelled();
+                ctx.incrementalFill = Filler.INCREMENTAL_FILL_ENABLED && attempt == 0 && p.resumeState == null;
                 if (p.shouldPause != null && p.shouldPause.getAsBoolean()) {
                     throw new GenerationPaused(carrySeedGrid != null
                             ? serializeResumeState(carrySeedGrid, carryLocked, carryPreseed, carryExcluded,
@@ -1082,7 +1087,8 @@ public final class Generator {
                                 Map<String, Object> dj = res.diag().toJson(false);
                                 entry = new LinkedHashMap<>();
                                 for (String k : List.of("example_grid", "impossible_cells", "deadlock_cells", "excluded_cells",
-                                        "forced_cells", "locked_cells", "theme_cells", "challenge_cells", "stat_letters")) {
+                                        "forced_cells", "locked_cells", "theme_cells", "challenge_cells", "stat_letters",
+                                        "attention_size")) {
                                     if (dj.containsKey(k)) entry.put(k, dj.get(k));
                                 }
                                 entry.put("live_status", "interrupted_other_attempt_done".equals(res.diag().reason)
@@ -1262,6 +1268,7 @@ public final class Generator {
                     m.put("deadlock_cells", Cells.toJson(d.deadlockCells == null ? List.of() : d.deadlockCells));
                     m.put("excluded_cells", Cells.toJson(d.excludedCells == null ? List.of() : d.excludedCells));
                     m.put("stat_letters", d.statLetters == null ? List.of() : d.statLetters);
+                    m.put("attention_size", d.attentionSize);
                     m.put("forced_cells", Cells.toJson(d.forcedCells));
                     m.put("locked_cells", Cells.toJson(d.lockedCells == null ? List.of() : d.lockedCells));
                     m.put("theme_cells", Cells.toJson(d.themeCells == null ? List.of() : d.themeCells));
@@ -1281,6 +1288,8 @@ public final class Generator {
                 List<int[]> selSlots = Grids.extractSlots(selGrid, rows, cols);
                 Set<Integer> selDead = new HashSet<>(selImpossible);
                 selDead.addAll(slotsTouching(selSlots, selImpossible));
+                // "Finir la zone": an empty slot outside the zone is never searched.
+                selDead.addAll(Fill.outsideZoneSlotIndices(selSlots, p.requiredCells, null, null));
                 boolean stillHasHope = false;
                 for (int i = 0; i < selDiag.assignment.length; i++) {
                     if (selDiag.assignment[i] == null && !selDead.contains(i)) {

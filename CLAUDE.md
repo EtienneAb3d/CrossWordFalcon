@@ -869,6 +869,29 @@ nothing can be placed even on those does the node fail and ordinary
 backtracking resume. `released` is a plain `_backtrack` parameter, so it
 is inherited by everything placed below a release and restores itself as
 the backtrack unwinds back above the node that released it.
+**Incremental fill** (`INCREMENTAL_FILL_ENABLED`, on; Java `Filler.
+INCREMENTAL_FILL_ENABLED`): on the first palier of a search started from
+scratch only (`generate_grid`'s `attempt == 0` with no `resume_state`,
+`try_fill(incremental_fill=True)` via `_pattern_attempt`/`_pattern_
+continue`; Java `Generator.Ctx.incrementalFill`), stages 1 and 2 first run
+inside an "attention zone" — rows and columns 0 to N-1 — over the slots
+holding a still-free cell (no placed word nor locked letter) there
+(`Filler._attention_pool`). N starts at `INCREMENTAL_FILL_START_SIZE` (6);
+once both stages place nothing in the zone (or the zone has no such slot),
+it grows by `INCREMENTAL_FILL_STEP` (2) and the node goes back to stage 1
+on the larger pool, slots it already tried staying tried
+(`_widen_attention`, `None` once it covers the grid); the
+`allow_breaking` stage comes only after. The size is a `_backtrack`
+parameter (`attention`) inherited and restored like `released`, passed
+through `_try_reshape`/`_fail_or_backghost`; every root (`solve()`)
+restarts at 6. Dry-slot detection and backtracking are unchanged.
+`Filler.attention_size` (the current node's zone, kept current on entry,
+widening and return from a child) and `best_attention_size` (the zone a
+record was taken under) feed every preview's `attention_size` (`None` =
+whole grid; `_publish_live_state`, `_publish_new_best`, the final
+diagnostics, the "failed" live-tile whitelist and `last_examples`; Java
+`Diag.attentionSize`); `renderAttemptPreview()` frames it with a bold
+dashed `.attention-zone` overlay.
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
 `MAX_DESCENTS_PER_NODE` (10; `<= 0` disables it) — set to
 `EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 20) for a node entered while fewer than
@@ -943,14 +966,17 @@ filters to still-unassigned slots).
 "emplacement écarté": it drops a slot out of the grid the search has to
 solve at all — never selected, never required by `truly_complete`, never
 counted as a broken crossing, and never surfaced by any diagnostic or
-overlay. `_optimize_before_cleanup` is its only caller, on both of its
+overlay. `try_fill` fills it with the open slots outside the zone of a
+"Finir la zone" run (`_outside_zone_slot_indices`, see "Finir la grille"
+below), which also turns in-search reshapes off for that run.
+`_optimize_before_cleanup` is its only other caller, on both of its
 own fills: the ordinary one (completing what it can while deliberately
 leaving an entirely-empty or already-impossible zone untouched) and the
 last-chance one right below, where naming the impossible slots here is
 exactly what lets a word cross them — `_backtrack` skips an excluded slot
 in its per-candidate crossing check, so neither `crossing_broken` nor
 `crossing_still_impossible` can reject a candidate on its account. Every
-generation palier leaves it `None`.
+other generation palier leaves it `None`.
 
 **Last-chance enrichment before cleanup**: the final thing
 `_optimize_before_cleanup` does, once its ordinary fill and its
@@ -1920,7 +1946,12 @@ via `permanent_locked_letters`/`permanent_black_cells` (every already-
 placed cell becomes a hard, permanent constraint) and `required_cells`
 (when a zone is selected rather than the whole grid, only that zone's
 cells must end up resolved for the search to declare success — cells
-outside it may remain unresolved).
+outside it may remain unresolved). `try_fill` adds every still-open slot
+touching no required cell to `excluded_slots` (`_outside_zone_slot_
+indices`, Java `Fill.outsideZoneSlotIndices`), so the search spends its
+budget on the zone only, and `generate_grid`'s `still_has_hope` ignores
+those slots too; empty for "Finir la grille", where every blank cell is
+required.
 
 ### `clues.py` — `LLMClueGenerator`
 

@@ -176,7 +176,12 @@ s'ouvre aussi dans l'interface par le bouton **?** à gauche de **Mots**.
 chaque case déjà posée devient une contrainte permanente
 (`permanent_locked_letters`/`permanent_black_cells`), et, avec une zone
 sélectionnée, seules ses cases doivent être résolues pour que la recherche
-se déclare réussie (`required_cells`).
+se déclare réussie (`required_cells`). Un emplacement encore ouvert qui ne
+touche aucune case de la zone est retiré de la recherche (`excluded_slots`,
+`_outside_zone_slot_indices`, `backend/crossword_gen.py`, `try_fill`) : tout
+le budget va aux emplacements de la zone, et ces emplacements hors zone ne
+comptent pas non plus comme un espoir de progrès entre deux étapes
+(`generate_grid`, `still_has_hope`).
 
 ### Grilles bilingues
 
@@ -875,14 +880,38 @@ Chaque nœud se déroule en quatre temps :
 
 Ils partagent le même plafond de descentes. La libération vaut pour toute
 la descente qui suit et se défait en remontant (`released`, paramètre de
-récursion). Un emplacement écarté est repris dès que son domaine
+récursion).
+
+**Remplissage incrémental** (`INCREMENTAL_FILL_ENABLED`, activé ;
+`backend/crossword_gen.py`, `Filler._attention_pool`,
+`Filler._widen_attention`) : au premier palier seulement d'une recherche
+partie de zéro (`generate_grid`, ni « Continuer », ni « Finir la
+grille/la zone », ni reprise après mise en pause), les temps 1 et 2 se
+déroulent d'abord dans une **zone d'attention** : le carré des N premières
+lignes et N premières colonnes, à partir de la case (0, 0). Seul un
+emplacement ayant au moins une case encore libre (ni mot posé, ni lettre
+verrouillée) dans ce carré peut recevoir une pose. N vaut d'abord
+`INCREMENTAL_FILL_START_SIZE` (6). Quand le nœud ne peut plus rien poser
+dans la zone — plus aucun emplacement concerné, ou tous essayés, écartés
+libérés compris —, la zone grandit de `INCREMENTAL_FILL_STEP` (2) et le
+nœud reprend au temps 1 sur l'ensemble agrandi (les emplacements déjà
+essayés par ce nœud le restent), jusqu'à couvrir toute la grille ; le
+temps 3 ne vient qu'ensuite. La taille de la zone est un paramètre de
+récursion comme `released` : héritée par la descente qui suit,
+restaurée en remontant ; chaque racine (`solve()`, y compris après un
+nettoyage précoce) repart de 6. Un emplacement asséché, où qu'il soit,
+provoque le retour en arrière habituel : seule la sélection est limitée
+par la zone. Les tentatives des paliers suivants n'utilisent pas de zone
+(`try_fill`, `incremental_fill`). Un emplacement écarté est repris dès que son domaine
 redevient non vide (`_domain` est recalculé à chaque nœud) et cesse d'être
 jaune dès qu'un mot y est posé.
 
 **`Filler.excluded_slots` est un mécanisme distinct** : il retire un
 emplacement de la grille à résoudre — jamais sélectionné, jamais exigé par
-la réussite, jamais compté comme croisement cassé, jamais montré. Son seul
-utilisateur est `_optimize_before_cleanup` (chapitre 5).
+la réussite, jamais compté comme croisement cassé, jamais montré. Ses deux
+utilisateurs sont `_optimize_before_cleanup` (chapitre 5) et « Finir la
+zone », qui y place les emplacements ouverts hors de la zone (`try_fill`,
+`_outside_zone_slot_indices`).
 
 La liste n'a aucun effet en mode Interactif (`interactive_place_word`),
 qui construit sa propre liste d'emplacements sélectionnables.
@@ -891,7 +920,10 @@ qui construit sa propre liste d'emplacements sélectionnables.
 
 Le choix suit une cascade de **niveaux de priorité**
 (`Filler._select_target_slot`, réutilisé tel quel par
-`interactive_place_word`) :
+`interactive_place_word`), appliquée aux emplacements que les temps du
+nœud rendent sélectionnables — au premier palier, ceux de la zone
+d'attention du remplissage incrémental (voir « Les emplacements
+écartés ») :
 
 1. **désactivé** (`ALTERNATE_DIRECTION_ENABLED`) : activé, il tire d'abord
    la direction, avec une probabilité proportionnelle au nombre
@@ -1071,7 +1103,8 @@ ou thématique posé.
 
 Une option de réaménagement compte toujours comme une **descente**, et un
 refus pour croisement compte dans le budget d'abandon du mot. Le mécanisme
-est désactivé avec `Filler.excluded_slots` ; seules les tentatives de
+est désactivé avec un `Filler.excluded_slots` non vide (donc pendant
+« Finir la zone » dès qu'un emplacement ouvert est hors zone) ; seules les tentatives de
 palier l'activent (`try_fill`, `reshape_black_cells`).
 
 Un record (`best_assignment`) est mémorisé avec son motif et sa liste
@@ -2254,6 +2287,14 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   aperçus de début de cycle ni après le nettoyage. Comme les vraies
   lettres, elle ne s'affiche que lorsque le bouton **Voir** est activé
   (`frontend/static/script.js`, `renderAttemptPreview`).
+- **Cadre gras en pointillés** (zone d'attention) : au premier palier, le
+  carré des N premières lignes et colonnes où la recherche peut encore
+  poser un mot (voir « Remplissage incrémental », chapitre 4), à sa taille
+  du moment (`Filler.attention_size` pour les aperçus en direct,
+  `Filler.best_attention_size` pour l'état record ; champ
+  `attention_size`). Présent sur les mêmes aperçus que les lettres
+  statistiques ; absent dès que la zone couvre toute la grille et après le
+  premier palier (`frontend/static/script.js`, `renderAttemptPreview`).
 
 ### Cas particulier : palier « motif neuf »
 

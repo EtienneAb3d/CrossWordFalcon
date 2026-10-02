@@ -4599,3 +4599,21 @@ end through the real running API (interactive start/step/save,
   bare-id `display` trap. No new token. **Visually confirmed** with
   Playwright/Chromium at 1400×900: list open over the form fields, bold
   names, picking "Expresso latte" set 10/10/10.
+
+- **Attention-zone frame on the preview grids** (`.attempt-preview-grid
+  .attention-zone`), at the user's explicit request ("dessiner un
+  encadrement en gras pointillé autour de la zone d'attention"): during
+  the first palier's incremental fill, a 2px dashed `--fg` frame around
+  the first N rows and columns (`attention_size`, script.js's
+  `renderAttemptPreview`). An absolutely positioned child of the
+  mini-grid (`.attempt-preview-grid` gains `position: relative`), so it
+  takes no part in the grid's own cell placement and composes with every
+  cell overlay underneath (`pointer-events: none`); sized by CSS from
+  `--zone-rows`/`--zone-cols` (N × (1.1rem + 1px) + 3px, starting at
+  -2px on the grid's border), its right/bottom edge sitting on the grid
+  line after the zone. Dark `--fg` rather than a colour: every colour is
+  already a cell or tile state there. No frame when the zone covers the
+  whole grid. **Visually confirmed** with Playwright/Chromium: on a 15×10
+  tile, N=6 frames exactly the 6×6 corner (edge across the line between
+  cells 5 and 6), N=10 the 10 first columns over the full height, and a
+  null size draws nothing.

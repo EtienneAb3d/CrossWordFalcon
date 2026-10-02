@@ -41,6 +41,14 @@ public final class Filler {
      * failed nor ended, its palier not left. A locked letter the clean erases is unlocked, one it keeps stays locked,
      * and no letter is locked by it. 100 = off. */
     public static final int EARLY_HARDCLEAN_PERCENT = 10;
+    /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), first palier only: a node only places a word on a slot
+     * holding a still-free cell inside the attention zone, the grid's first N rows and N columns from (0, 0)
+     * (attentionPool). N starts at INCREMENTAL_FILL_START_SIZE and grows by INCREMENTAL_FILL_STEP once the node
+     * can place nothing more inside the zone, until it covers the whole grid; a backtrack recursion parameter,
+     * like released. */
+    public static final boolean INCREMENTAL_FILL_ENABLED = true;
+    public static final int INCREMENTAL_FILL_START_SIZE = 6;
+    public static final int INCREMENTAL_FILL_STEP = 2;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 100;
     // Of that window, re-sorted by frequency in the freq wordlist, the most frequent words the draw is made among.
@@ -199,6 +207,12 @@ public final class Filler {
      * cleaned states already produced in this attempt (a repeat switches it off), and the cells
      * Cleanup.cleanBlockedSlots must never clear. */
     public int earlyHardcleanPercent = 100;
+    /** Incremental fill (INCREMENTAL_FILL_ENABLED): off unless Fill.tryFill turns it on. */
+    public boolean incrementalFill;
+    /** Attention-zone size of the node the search is currently in, and the one bestAssignment was recorded under
+     * (null = the whole grid), published with every preview as attention_size. */
+    public volatile Integer attentionSize;
+    public Integer bestAttentionSize;
     final Set<String> earlyHardcleanStates = new HashSet<>();
     /** Set by backtrack when a record calls for an early hardclean: every node then unwinds like on an abandon
      * (running its own undo), and solve() restarts the search flat from the record (restartFromRecord). */
@@ -702,8 +716,40 @@ public final class Filler {
         return target;
     }
 
+    /** Attention-zone size a root node starts with (mirrors _initial_attention); -1 = the whole grid. */
+    int initialAttention() {
+        if (!incrementalFill) return -1;
+        return widenAttention(INCREMENTAL_FILL_START_SIZE - INCREMENTAL_FILL_STEP);
+    }
+
+    /** The attention-zone size after size, -1 once it covers the whole grid (mirrors _widen_attention). */
+    int widenAttention(int size) {
+        size += INCREMENTAL_FILL_STEP;
+        return size >= Math.max(rows, cols) ? -1 : size;
+    }
+
+    /** The slots holding a still-free cell (no placed word nor locked letter on it) inside the attention zone of
+     * size size; all of them when size is -1 (mirrors _attention_pool). */
+    List<Integer> attentionPool(List<Integer> pool, int size) {
+        if (size < 0) return new ArrayList<>(pool);
+        Set<Integer> known = new HashSet<>(lockedLetters.keySet());
+        for (int j = 0; j < assignment.length; j++) {
+            if (assignment[j] != null) for (int cell : slots.get(j)) known.add(cell);
+        }
+        List<Integer> out = new ArrayList<>();
+        for (int i : pool) {
+            for (int cell : slots.get(i)) {
+                if (Cells.r(cell) < size && Cells.c(cell) < size && !known.contains(cell)) {
+                    out.add(i);
+                    break;
+                }
+            }
+        }
+        return out;
+    }
+
     /** Report a failure, backghosting first when allowed (mirrors _fail_or_backghost). */
-    boolean failOrBackghost(Set<Integer> conflict, long deadlineChecks, boolean released) {
+    boolean failOrBackghost(Set<Integer> conflict, long deadlineChecks, boolean released, int attention) {
         while (true) {
             int target = backghostTarget(conflict);
             if (target < 0) return fail(conflict);
@@ -713,7 +759,7 @@ public final class Filler {
             usedWords.remove(w);
             Map<Integer, Object[]> savedScores = refreshLetterScoresAround(target);
             ghostsInDescent++;
-            boolean solved = backtrack(deadlineChecks, released);
+            boolean solved = backtrack(deadlineChecks, released, attention);
             ghostsInDescent--;
             if (solved) return true;
             Set<Integer> retryConflict = lastConflict;
@@ -983,7 +1029,7 @@ public final class Filler {
 
     /** Mirrors _try_reshape: returns {outcome, conflict-or-null, blame-or-null}. */
     Object[] tryReshape(Reshape option, int i, Map<Integer, Dom> domains, Set<String> active, boolean allowBreaking,
-                        long deadlineChecks, boolean released) {
+                        long deadlineChecks, boolean released, int attention) {
         Object[] saved = applyReshape(option);
         int t = option.target;
         String w = option.word;
@@ -1035,7 +1081,7 @@ public final class Filler {
         toleratedDry.addAll(newlyTolerated);
         placementSeq.put(t, placementCounter++);
         recordTriedWord(t, w);
-        if (backtrack(deadlineChecks, released)) return new Object[]{"success", null, null};
+        if (backtrack(deadlineChecks, released, attention)) return new Object[]{"success", null, null};
         Set<Integer> child = lastConflict;
         toleratedDry.removeAll(newlyTolerated);
         restoreLetterScores(savedScores);
@@ -1094,14 +1140,14 @@ public final class Filler {
             placementSeq = new HashMap<>();
             ghostsInDescent = 0;
             breakingPermitted = false;
-            if (backtrack(deadlineChecks, false)) return true;
+            if (backtrack(deadlineChecks, false, initialAttention())) return true;
             if (restartPending) {
                 restartFromRecord();
                 continue;
             }
             if (abandoned || budgetExhausted) return false;
             breakingPermitted = true;
-            if (backtrack(deadlineChecks, false)) return true;
+            if (backtrack(deadlineChecks, false, initialAttention())) return true;
             if (restartPending) {
                 restartFromRecord();
                 continue;
@@ -1592,10 +1638,13 @@ public final class Filler {
 
     // ================================================================== search
 
-    boolean backtrack(long deadlineChecks, boolean released) {
+    /** attention: the attention-zone size (INCREMENTAL_FILL_ENABLED), -1 for the whole grid. */
+    boolean backtrack(long deadlineChecks, boolean released, int attention) {
         lastConflict = null;
         lastJumped = false;
         final boolean entryReleased = released;
+        final int entryAttention = attention;
+        attentionSize = attention < 0 ? null : attention;
         if (abandoned || restartPending) return false;
         if (deadlineReachedWithoutExtension(deadlineChecks)) {
             budgetExhausted = true;
@@ -1614,6 +1663,7 @@ public final class Filler {
             bestSlots = slots;
             bestPattern = pattern;
             bestStatLetters = statLetters(assignment);
+            bestAttentionSize = attention < 0 ? null : attention;
             if (onNewBest != null) onNewBest.accept(bestAssignment);
             // Early hardclean: checked right as the record is taken, the only moment bestAssignment is the
             // current assignment, on the current slots and pattern. Every node unwinds (restartPending) and
@@ -1630,7 +1680,9 @@ public final class Filler {
             Dom d = domain(i);
             if (d.allIn(usedWords) && !challengeCanFill(i, active)) {
                 impossibleThisAttempt.add(i);
-                if (!toleratedDry.contains(i)) return failOrBackghost(drySlotConflict(i), deadlineChecks, released);
+                if (!toleratedDry.contains(i)) {
+                    return failOrBackghost(drySlotConflict(i), deadlineChecks, released, entryAttention);
+                }
                 continue;
             }
             domains.put(i, d);
@@ -1638,15 +1690,24 @@ public final class Filler {
         if (domains.isEmpty()) return fail(new HashSet<>());
         Map<Object, OptionsEntry> optionsCache = new HashMap<>();
         List<Integer> selectable = new ArrayList<>(domains.keySet());
+        // Incremental fill: the stages run inside the attention zone first (zonePool); once they have placed
+        // nothing there, the zone grows and the node goes back to its first stage on the larger pool. A zone with
+        // nothing left to fill grows at once.
+        List<Integer> zonePool = attentionPool(selectable, attention);
+        while (zonePool.isEmpty() && attention >= 0) {
+            attention = widenAttention(attention);
+            zonePool = attentionPool(selectable, attention);
+        }
+        attentionSize = attention < 0 ? null : attention;
         List<Integer> primary;
         if (released) {
-            primary = selectable;
+            primary = zonePool;
         } else {
             primary = new ArrayList<>();
-            for (int i : selectable) if (!impossibleThisAttempt.contains(i)) primary.add(i);
+            for (int i : zonePool) if (!impossibleThisAttempt.contains(i)) primary.add(i);
         }
         if (primary.isEmpty()) {
-            primary = selectable;
+            primary = zonePool;
             released = true;
         }
         boolean allowBreaking = false;
@@ -1663,8 +1724,23 @@ public final class Filler {
             for (int i : primary) if (!triedSlots.contains(i)) avail.add(i);
             if (avail.isEmpty()) {
                 if (!released) {
-                    primary = selectable;
+                    primary = zonePool;
                     released = true;
+                    continue;
+                }
+                if (attention >= 0) {
+                    // Nothing more can be placed inside the attention zone: widen it and start again from stage 1
+                    // on the larger pool (slots already tried here stay tried).
+                    attention = widenAttention(attention);
+                    zonePool = attentionPool(selectable, attention);
+                    attentionSize = attention < 0 ? null : attention;
+                    released = entryReleased;
+                    if (released) {
+                        primary = zonePool;
+                    } else {
+                        primary = new ArrayList<>();
+                        for (int i : zonePool) if (!impossibleThisAttempt.contains(i)) primary.add(i);
+                    }
                     continue;
                 }
                 if (!allowBreaking && breakingPermitted) {
@@ -1673,7 +1749,8 @@ public final class Filler {
                     triedSlots = new HashSet<>();
                     continue;
                 }
-                return failOrBackghost(conflictUnknown ? null : nodeConflict, deadlineChecks, entryReleased);
+                return failOrBackghost(conflictUnknown ? null : nodeConflict, deadlineChecks, entryReleased,
+                        entryAttention);
             }
             int bestI = selectTargetSlot(avail, domains);
             triedSlots.add(bestI);
@@ -1726,9 +1803,11 @@ public final class Filler {
                 if (candidate instanceof Reshape rs) {
                     // Its black-cell change is always undone before this
                     // returns, unless it succeeded; counts as a descent.
-                    Object[] out = tryReshape(rs, bestI, domains, active, allowBreaking, deadlineChecks, released);
+                    Object[] out = tryReshape(rs, bestI, domains, active, allowBreaking, deadlineChecks, released,
+                            attention);
                     String outcome = (String) out[0];
                     if (outcome.equals("success")) return true;
+                    attentionSize = attention < 0 ? null : attention;
                     if (outcome.equals("rejected")) {
                         @SuppressWarnings("unchecked")
                         Set<Integer> blame = (Set<Integer>) out[2];
@@ -1753,10 +1832,10 @@ public final class Filler {
                         if (jumpedIn && 0 < maxDescents) maxDescents = Math.min(maxDescents, descents + 1);
                     }
                     if (0 < maxDescents && maxDescents <= descents) {
-                        if (conflictUnknown) return failOrBackghost(null, deadlineChecks, entryReleased);
+                        if (conflictUnknown) return failOrBackghost(null, deadlineChecks, entryReleased, entryAttention);
                         Set<Integer> merged = new HashSet<>(nodeConflict);
                         merged.addAll(slotConflict);
-                        return failOrBackghost(merged, deadlineChecks, entryReleased);
+                        return failOrBackghost(merged, deadlineChecks, entryReleased, entryAttention);
                     }
                     continue;
                 }
@@ -1808,7 +1887,8 @@ public final class Filler {
                     long seq = placementCounter++;
                     placementSeq.put(bestI, seq);
                     recordTriedWord(bestI, w);
-                    if (backtrack(deadlineChecks, released)) return true;
+                    if (backtrack(deadlineChecks, released, attention)) return true;
+                    attentionSize = attention < 0 ? null : attention;
                     Set<Integer> childConflict = lastConflict;
                     boolean jumpedIn = lastJumped;
                     toleratedDry.removeAll(newlyTolerated);
@@ -1836,15 +1916,17 @@ public final class Filler {
                     usedWords.remove(w);
                 }
                 if (0 < maxDescents && maxDescents <= descents) {
-                    if (conflictUnknown) return failOrBackghost(null, deadlineChecks, entryReleased);
+                    if (conflictUnknown) return failOrBackghost(null, deadlineChecks, entryReleased, entryAttention);
                     Set<Integer> merged = new HashSet<>(nodeConflict);
                     merged.addAll(slotConflict);
-                    return failOrBackghost(merged, deadlineChecks, entryReleased);
+                    return failOrBackghost(merged, deadlineChecks, entryReleased, entryAttention);
                 }
             }
             if (!placedAny) {
                 impossibleThisAttempt.add(bestI);
-                if (blameableRejection && !breakingPermitted) return failOrBackghost(slotConflict, deadlineChecks, entryReleased);
+                if (blameableRejection && !breakingPermitted) {
+                    return failOrBackghost(slotConflict, deadlineChecks, entryReleased, entryAttention);
+                }
             }
             nodeConflict.addAll(slotConflict);
         }

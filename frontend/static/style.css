@@ -1193,6 +1193,25 @@ button:disabled {
   border: 2px solid var(--border);
   align-content: start;
   align-self: flex-start;
+  /* Containing block of the .attention-zone frame below. */
+  position: relative;
+}
+
+/* Incremental fill's attention zone (script.js's renderAttemptPreview(),
+   backend's `attention_size`): a bold dashed frame around the first N
+   rows and columns, laid over the cells (an absolutely positioned child
+   takes no part in the grid's placement). Starts on the grid's own border
+   (-2px) and spans N cells plus their gaps, so its right/bottom edge sits
+   on the grid line after row/column N. */
+.attempt-preview-grid .attention-zone {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: calc(var(--zone-cols) * (1.1rem + 1px) + 3px);
+  height: calc(var(--zone-rows) * (1.1rem + 1px) + 3px);
+  box-sizing: border-box;
+  border: 2px dashed var(--fg);
+  pointer-events: none;
 }
 
 /* Green outline around the grid the backend reports as the real winner of

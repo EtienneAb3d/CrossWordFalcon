@@ -220,6 +220,18 @@ plusieurs signaux) :
   l'orange de l'emplacement pauvre et le rouge de l'emplacement bloqué.
   (`backend/crossword_gen.py`, `_noise_slot_cells`.)
 
+- **Zone d'attention** (*remplissage incrémental*) : au premier palier
+  d'une recherche partie de zéro, carré des N premières lignes et N
+  premières colonnes de la grille, à partir de la case (0, 0) ; seul un
+  emplacement ayant une case encore libre dans ce carré peut recevoir une
+  pose. N vaut d'abord 6 et grandit de 2 chaque fois que plus rien ne peut
+  être posé dans la zone, jusqu'à couvrir toute la grille. Ne concerne que
+  le choix de l'emplacement, jamais le retour en arrière ni la détection
+  des emplacements bloqués (`backend/crossword_gen.py`,
+  `INCREMENTAL_FILL_ENABLED`, `Filler._attention_pool`,
+  `Filler._backtrack`). Encadrée en gras pointillé sur les aperçus
+  (`frontend/static/style.css`, `.attempt-preview-grid .attention-zone`).
+
 ## Choix des mots
 
 - **Fenêtre de tirage des mots** : la règle unique par laquelle le moteur

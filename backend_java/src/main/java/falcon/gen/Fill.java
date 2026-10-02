@@ -391,6 +391,8 @@ public final class Fill {
          * inside the search (Filler.earlyHardclean), which may unlock letters: every preview and the diagnostics
          * read the Filler's current locked letters. */
         public int earlyHardcleanPercent = 100;
+        /** Incremental fill (Filler.INCREMENTAL_FILL_ENABLED, mirrors try_fill's incremental_fill). */
+        public boolean incrementalFill;
         /** Cells the early hardclean never clears (mirrors try_fill's permanent_locked_letters). */
         public Map<Integer, Character> permanentLocked;
         public Set<Integer> permanentBlackCells;
@@ -402,6 +404,25 @@ public final class Fill {
         List<Integer> out = new ArrayList<>();
         if (offending.isEmpty()) return out;
         for (int i = 0; i < assignment.length; i++) if (assignment[i] != null && offending.contains(assignment[i])) out.add(i);
+        return out;
+    }
+
+    /** "Finir la zone": the still-open slots (not preseeded, with a cell no locked letter determines) touching no
+     *  cell of requiredCells — the empty slots outside the selected zone (mirrors _outside_zone_slot_indices). */
+    public static Set<Integer> outsideZoneSlotIndices(List<int[]> slots, Set<Integer> requiredCells,
+                                                      String[] preseedAssignment, Map<Integer, Character> lockedLetters) {
+        Set<Integer> out = new HashSet<>();
+        if (requiredCells == null) return out;
+        Map<Integer, Character> locked = lockedLetters == null ? Map.of() : lockedLetters;
+        for (int i = 0; i < slots.size(); i++) {
+            if (preseedAssignment != null && preseedAssignment[i] != null) continue;
+            boolean required = false, open = false;
+            for (int c : slots.get(i)) {
+                if (requiredCells.contains(c)) required = true;
+                if (!locked.containsKey(c)) open = true;
+            }
+            if (!required && open) out.add(i);
+        }
         return out;
     }
 
@@ -434,6 +455,14 @@ public final class Fill {
             }
             return null;
         }
+        // "Finir la zone": a slot touching no required cell lies wholly outside the selected zone, whose cells are
+        // reverted afterwards anyway — left out of the search so the whole budget goes to the zone.
+        Set<Integer> excludedSlots = a.excludedSlots;
+        Set<Integer> outsideZone = outsideZoneSlotIndices(slots, a.requiredCells, a.preseedAssignment, a.lockedLetters);
+        if (!outsideZone.isEmpty()) {
+            excludedSlots = new HashSet<>(a.excludedSlots == null ? Set.of() : a.excludedSlots);
+            excludedSlots.addAll(outsideZone);
+        }
         // Recomputed on every publication: an early hardclean (Filler.earlyHardclean) unlocks the locked letters
         // it erases and takes off preseeded words.
         final boolean lockedFromLetters = a.lockedLetters != null && !a.lockedLetters.isEmpty();
@@ -464,14 +493,15 @@ public final class Fill {
         };
         PW pw = a.priorityWords == null ? PW.EMPTY : a.priorityWords;
         Set<String> cw = a.challengeWords == null ? Set.of() : a.challengeWords;
-        Filler filler = new Filler(slots, index, rng, a.forcedLetters, a.letterScores, a.excludedSlots, a.cancelEvent,
+        Filler filler = new Filler(slots, index, rng, a.forcedLetters, a.letterScores, excludedSlots, a.cancelEvent,
                 a.batchAbandonedEvent, a.attemptDoneEvent, null, a.lockedLetters, pw, cw, rows, cols);
         fillerRef[0] = filler;
         filler.scrabbleWords = a.scrabbleWords == null ? PW.EMPTY : a.scrabbleWords;
         filler.pattern = Grids.copy(grid);
         filler.bestPattern = filler.pattern;
-        filler.reshapeEnabled = a.reshapeBlackCells && (a.excludedSlots == null || a.excludedSlots.isEmpty());
+        filler.reshapeEnabled = a.reshapeBlackCells && (excludedSlots == null || excludedSlots.isEmpty());
         filler.earlyHardcleanPercent = a.earlyHardcleanPercent;
+        filler.incrementalFill = a.incrementalFill;
         filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
         if (a.checksProgress != null && a.checksSlot != null) {
@@ -497,6 +527,8 @@ public final class Fill {
                 m.deadlockCells = filler.deadlockZoneCells();
                 m.excludedCells = filler.excludedZoneCells(best, true);
                 m.statLetters = filler.bestStatLettersFor();
+                m.attentionSize = filler.bestAttentionSize;
+                m.hasAttentionSize = true;
                 m.impossibleSlots = filler.impossibleZoneSlots();
                 @SuppressWarnings("unchecked")
                 List<Integer> fc = (List<Integer>) partial[1];
@@ -518,6 +550,8 @@ public final class Fill {
                 m.deadlockCells = new ArrayList<>();
                 m.excludedCells = filler.excludedZoneCells(current, false);
                 m.statLetters = filler.statLetters(current);
+                m.attentionSize = filler.attentionSize;
+                m.hasAttentionSize = true;
                 @SuppressWarnings("unchecked")
                 List<Integer> fc = (List<Integer>) partial[1];
                 m.forcedCells = fc;
@@ -589,6 +623,8 @@ public final class Fill {
                 diag.deadlockCells = filler.deadlockZoneCells();
                 diag.excludedCells = filler.excludedZoneCells(filler.bestAssignment, true);
                 diag.statLetters = filler.bestStatLettersFor();
+                diag.attentionSize = filler.bestAttentionSize;
+                diag.hasAttentionSize = true;
                 diag.assignedLetterCount = (int) partial[2];
                 diag.assignment = filler.bestAssignment.clone();
                 diag.impossibleSlots = filler.impossibleZoneSlots();

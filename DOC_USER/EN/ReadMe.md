@@ -664,6 +664,11 @@ Any other complete word that belongs to the language's official Scrabble
 word list is shown in bold dark-cyan letters; magenta and green win over
 dark cyan on a cell shared with a crossing theme or challenge word
 (`frontend/static/script.js`, `renderAttemptPreview`).
+During the first step only, a bold dashed frame marks the "attention
+zone": the square, from the top-left corner, where the search may
+currently place its next word. It starts at 6x6 and grows by 2 rows and
+2 columns each time nothing more fits inside, and disappears once it
+covers the whole grid (`renderAttemptPreview`, `.attention-zone`).
 A green outline marks whichever preview is currently considered the
 best candidate. While a preview grid is still actively being searched
 (not yet a recorded step of the back/forward history below, just the
@@ -1478,7 +1483,13 @@ it was made for.
 
 **Choosing which word slot to fill next.** Once a black-cell pattern is
 accepted, every run of at least 2 white cells (across or down) becomes a
-slot that needs a real dictionary word. Rather than filling slots in a
+slot that needs a real dictionary word. On the first cycle of a fresh
+generation, the fill grows outward from the top-left corner: only slots
+with a still-empty cell inside a 6x6 "attention zone" starting at the
+top-left cell may take the next word, and once nothing more can be placed
+there the zone grows by 2 rows and 2 columns, until it covers the whole
+grid (`backend/crossword_gen.py`, `Filler._attention_pool`); later cycles
+use no zone. Rather than filling slots in a
 fixed reading order, the generator picks the next slot through several
 layers of priority, starting from every still-open slot in the grid (an
 optional first step that would narrow this down to only "across" or only

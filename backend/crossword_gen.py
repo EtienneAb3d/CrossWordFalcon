@@ -2574,6 +2574,21 @@ UNFILLABLE_ABANDON_CHECK_INTERVAL = 500
 # attempts (`_pattern_attempt`/`_pattern_continue`) enable it.
 EARLY_HARDCLEAN_PERCENT = 10
 
+# Incremental fill ("remplissage incrémental"), first palier only: a node
+# only places a word on a slot holding at least one still-free cell (no
+# placed word nor locked letter on it) inside the "attention zone", the
+# square of the grid's first N rows and N columns from (0, 0) (`Filler.
+# _attention_pool`). N starts at INCREMENTAL_FILL_START_SIZE; once the node
+# can place nothing more inside the zone (no such slot left, or every one
+# tried, écarté ones released included), the zone grows by
+# INCREMENTAL_FILL_STEP and the node carries on, until it covers the whole
+# grid. The size is a `_backtrack` recursion parameter, like `released`.
+# Only `generate_grid`'s first palier of a call with no `resume_state`
+# enables it (`try_fill(incremental_fill=True)`).
+INCREMENTAL_FILL_ENABLED = True
+INCREMENTAL_FILL_START_SIZE = 6
+INCREMENTAL_FILL_STEP = 2
+
 # Check frequency (in checks elapsed) for the "another
 # attempt of the same palier has already finished" signal (see
 # attempt_done_event/generate_grid), at the user's explicit request:
@@ -3314,6 +3329,14 @@ class Filler:
         # already produced in this attempt (a repeat switches it off), and
         # the cells `_clean_blocked_slots` must never clear.
         self.early_hardclean_percent = 100
+        # Incremental fill (see INCREMENTAL_FILL_ENABLED): off unless
+        # `try_fill` turns it on.
+        self.incremental_fill = False
+        # Attention-zone size of the node the search is currently in, and
+        # the one `best_assignment` was recorded under (None: the whole
+        # grid) — published with every preview (`attention_size`).
+        self.attention_size = None
+        self.best_attention_size = None
         self._early_hardclean_states = set()
         self.permanent_locked_letters = {}
         # Set by `_backtrack` when a record calls for an early hardclean:
@@ -4252,7 +4275,37 @@ class Filler:
             return None
         return target
 
-    def _fail_or_backghost(self, conflict, deadline_checks, released):
+    def _initial_attention(self):
+        """Attention-zone size a root node starts with (see
+        INCREMENTAL_FILL_ENABLED): None (the whole grid) when incremental
+        fill is off."""
+        if not self.incremental_fill:
+            return None
+        return self._widen_attention(INCREMENTAL_FILL_START_SIZE - INCREMENTAL_FILL_STEP)
+
+    def _widen_attention(self, size):
+        """The attention-zone size after `size`, None once it covers the
+        whole grid."""
+        size += INCREMENTAL_FILL_STEP
+        return None if size >= max(self.rows, self.cols) else size
+
+    def _attention_pool(self, slots, size):
+        """The slots of `slots` holding at least one still-free cell (no
+        placed word nor locked letter on it) inside the attention zone of
+        size `size` — rows and columns 0 to `size` - 1. All of `slots` when
+        `size` is None."""
+        if size is None:
+            return list(slots)
+        known = set(self.locked_letters)
+        for j, word in enumerate(self.assignment):
+            if word is not None:
+                known.update(self.slots[j])
+        return [
+            i for i in slots
+            if any(r < size and c < size and (r, c) not in known for r, c in self.slots[i])
+        ]
+
+    def _fail_or_backghost(self, conflict, deadline_checks, released, attention=None):
         """Report a failure whose conflict set is `conflict`, backghosting
         first when allowed (see MAX_BACKGHOSTS_PER_DESCENT): the most recent
         word of the set is taken off the grid in place, and a fresh node
@@ -4276,7 +4329,7 @@ class Filler:
             self.used_words.discard(w)
             saved_scores = self._refresh_letter_scores_around(target)
             self._ghosts_in_descent += 1
-            solved = self._backtrack(deadline_checks, released)
+            solved = self._backtrack(deadline_checks, released, attention)
             self._ghosts_in_descent -= 1
             if solved:
                 return True
@@ -4488,7 +4541,7 @@ class Filler:
         return back
 
     def _try_reshape(self, option, i, domains, active_challenge_words, allow_breaking,
-                     deadline_checks, released):
+                     deadline_checks, released, attention=None):
         """Try one reshape candidate at the node that chose slot `i`: apply
         its black-cell change, place its word, check it exactly like any
         other candidate (the slots it crosses plus every slot the change
@@ -4547,7 +4600,7 @@ class Filler:
         self._placement_seq[t] = self._placement_counter
         self._placement_counter += 1
         self._record_tried_word(t, w)
-        if self._backtrack(deadline_checks, released):
+        if self._backtrack(deadline_checks, released, attention):
             return "success", None, None
         child = self._last_conflict
         self._tolerated_dry.difference_update(newly_tolerated)
@@ -4620,7 +4673,7 @@ class Filler:
             self._placement_seq = {}
             self._ghosts_in_descent = 0
             self.breaking_permitted = False
-            if self._backtrack(deadline_checks):
+            if self._backtrack(deadline_checks, attention=self._initial_attention()):
                 return True
             if self._restart_pending:
                 self._restart_from_record()
@@ -4628,7 +4681,7 @@ class Filler:
             if self.abandoned or self._budget_exhausted:
                 return False
             self.breaking_permitted = True
-            if self._backtrack(deadline_checks):
+            if self._backtrack(deadline_checks, attention=self._initial_attention()):
                 return True
             if self._restart_pending:
                 self._restart_from_record()
@@ -5760,7 +5813,7 @@ class Filler:
             return True
         return False
 
-    def _backtrack(self, deadline_checks, released=False):
+    def _backtrack(self, deadline_checks, released=False, attention=None):
         # `self.checks` is no longer incremented here (once per call/node)
         # but once per candidate word genuinely attempted, in the `for w in
         # cands:` loop further below — see its own comment for the reason
@@ -5773,6 +5826,10 @@ class Filler:
         self._last_conflict = None
         self._last_jumped = False
         entry_released = released
+        # Attention-zone size this node was entered with (see
+        # INCREMENTAL_FILL_ENABLED), None for the whole grid.
+        entry_attention = attention
+        self.attention_size = attention
         if self.abandoned or self._restart_pending:
             return False
         # See `_deadline_reached_without_extension`'s own docstring — the
@@ -5802,6 +5859,7 @@ class Filler:
             self.best_slots = self.slots
             self.best_pattern = self.pattern
             self.best_stat_letters = self.stat_letters(self.assignment)
+            self.best_attention_size = attention
             if self.on_new_best is not None:
                 self.on_new_best(self.best_assignment)
             # Early hardclean: checked right as the record is taken, the
@@ -5874,6 +5932,7 @@ class Filler:
                     if i not in self._tolerated_dry:
                         return self._fail_or_backghost(
                             self._dry_slot_conflict(i), deadline_checks, released,
+                            entry_attention,
                         )
                     continue
             domains[i] = domain
@@ -5947,13 +6006,24 @@ class Filler:
         # its own decision, and only after exhausting its own strict
         # options, so relaxing here never licenses a child to relax before
         # it has itself explored everything.
+        # Incremental fill (see INCREMENTAL_FILL_ENABLED): the stages above
+        # run inside the attention zone first (`zone_pool`); once they have
+        # placed nothing there, the zone grows and the node goes back to
+        # its first stage on the larger pool, until the zone covers the
+        # whole grid (`attention` None). A zone with nothing left to fill
+        # grows at once.
         selectable = list(domains)
-        set_aside = [i for i in selectable if i in self._impossible_this_attempt]
-        primary = selectable if released else [i for i in selectable if i not in set_aside]
+        zone_pool = self._attention_pool(selectable, attention)
+        while not zone_pool and attention is not None:
+            attention = self._widen_attention(attention)
+            zone_pool = self._attention_pool(selectable, attention)
+        self.attention_size = attention
+        set_aside = [i for i in zone_pool if i in self._impossible_this_attempt]
+        primary = zone_pool if released else [i for i in zone_pool if i not in set_aside]
         if not primary:
             # Only écarté slots left: release them at once rather than
             # leaving this node with nothing to try.
-            primary, released = selectable, True
+            primary, released = zone_pool, True
         allow_breaking = False
         tried_slots = set()
         # Recursive descents made by this node so far, and this node's own
@@ -5975,7 +6045,19 @@ class Filler:
                 if not released:
                     # Stage 2: release the écarté slots for the rest of
                     # this descent and carry on without backtracking.
-                    primary, released = selectable, True
+                    primary, released = zone_pool, True
+                    continue
+                if attention is not None:
+                    # Nothing more can be placed inside the attention
+                    # zone: widen it and start again from stage 1 on the
+                    # larger pool (slots already tried here stay tried).
+                    attention = self._widen_attention(attention)
+                    zone_pool = self._attention_pool(selectable, attention)
+                    self.attention_size = attention
+                    released = entry_released
+                    primary = zone_pool if released else [
+                        i for i in zone_pool if i not in self._impossible_this_attempt
+                    ]
                     continue
                 if not allow_breaking and self.breaking_permitted:
                     # Stage 3, only in `solve()`'s second pass: the strict
@@ -5997,7 +6079,7 @@ class Filler:
                 # Stage 4: nothing at all, even allowing damage.
                 return self._fail_or_backghost(
                     None if conflict_unknown else node_conflict,
-                    deadline_checks, entry_released,
+                    deadline_checks, entry_released, entry_attention,
                 )
             best_i = self._select_target_slot(avail, domains)
             tried_slots.add(best_i)
@@ -6116,10 +6198,11 @@ class Filler:
                     # Counts as a descent whatever its family.
                     outcome, child_conflict, blame = self._try_reshape(
                         w, best_i, domains, active_challenge_words, allow_breaking,
-                        deadline_checks, released,
+                        deadline_checks, released, attention,
                     )
                     if outcome == "success":
                         return True
+                    self.attention_size = attention
                     if outcome == "rejected":
                         if blame is not None:
                             blameable_rejection = True
@@ -6140,7 +6223,7 @@ class Filler:
                     if 0 < max_descents <= descents:
                         return self._fail_or_backghost(
                             None if conflict_unknown else node_conflict | slot_conflict,
-                            deadline_checks, entry_released,
+                            deadline_checks, entry_released, entry_attention,
                         )
                     continue
                 self.assignment[best_i] = w
@@ -6306,8 +6389,9 @@ class Filler:
                     self._placement_counter += 1
                     self._placement_seq[best_i] = seq
                     self._record_tried_word(best_i, w)
-                    if self._backtrack(deadline_checks, released):
+                    if self._backtrack(deadline_checks, released, attention):
                         return True
+                    self.attention_size = attention
                     child_conflict = self._last_conflict
                     jumped_in = self._last_jumped
                     self._tolerated_dry.difference_update(newly_tolerated)
@@ -6349,7 +6433,7 @@ class Filler:
                     # stuck exploring the bottom of the tree.
                     return self._fail_or_backghost(
                         None if conflict_unknown else node_conflict | slot_conflict,
-                        deadline_checks, entry_released,
+                        deadline_checks, entry_released, entry_attention,
                     )
             if not placed_any:
                 # Every candidate of `best_i` was rejected: this slot can
@@ -6380,7 +6464,7 @@ class Filler:
                     # can still reach its `allow_breaking` stage. The
                     # failure depends only on why THIS slot is unfillable.
                     return self._fail_or_backghost(
-                        slot_conflict, deadline_checks, entry_released,
+                        slot_conflict, deadline_checks, entry_released, entry_attention,
                     )
             node_conflict |= slot_conflict
 
@@ -6408,6 +6492,23 @@ LETTER_BIAS_FORCE_FRACTION = 0.05
 # guarantee enough compatible words remain to fill the slot once this
 # letter is fixed.
 LETTER_BIAS_MIN_COUNT = 1
+
+
+def _outside_zone_slot_indices(slots, required_cells, preseed_assignment=None, locked_letters=None):
+    """"Finir la zone": the still-open slots (not preseeded, with at least
+    one cell no locked letter determines) touching no cell of
+    `required_cells` — the empty slots outside the selected zone, which the
+    search must leave alone. Empty when `required_cells` is `None`, and for
+    "Finir la grille" (every blank cell required)."""
+    if required_cells is None:
+        return set()
+    locked = locked_letters or {}
+    return {
+        i for i, cells in enumerate(slots)
+        if (preseed_assignment is None or preseed_assignment[i] is None)
+        and not any(cell in required_cells for cell in cells)
+        and any(cell not in locked for cell in cells)
+    }
 
 
 def _force_single_candidate_slots(slots, index, known_letters, excluded_slots=None):
@@ -6831,8 +6932,11 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              non_gloss_words=None, max_non_gloss=None, priority_words=None,
              challenge_words=None, required_cells=None, reshape_black_cells=False,
              permanent_black_cells=None, scrabble_words=None,
-             early_hardclean_percent=100, permanent_locked_letters=None):
-    """`early_hardclean_percent`: see `EARLY_HARDCLEAN_PERCENT` (100 = off),
+             early_hardclean_percent=100, permanent_locked_letters=None,
+             incremental_fill=False):
+    """`incremental_fill`: see INCREMENTAL_FILL_ENABLED.
+
+    `early_hardclean_percent`: see `EARLY_HARDCLEAN_PERCENT` (100 = off),
     run inside the search (`Filler._early_hardclean`), which may unlock
     letters of `locked_letters`: every preview and the diagnostics read the
     Filler's current ones. `permanent_locked_letters`: cells that clean never clears.
@@ -7063,6 +7167,13 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
             diagnostics["impossible_slots"] = []
             diagnostics["locked_cells"] = []
         return None
+    # "Finir la zone": a slot touching no required cell lies wholly outside
+    # the selected zone, whose cells are reverted afterwards anyway — left
+    # out of the search (`excluded_slots`) so the whole budget goes to the
+    # zone instead of the empty area around it.
+    outside_zone = _outside_zone_slot_indices(slots, required_cells, preseed_assignment, locked_letters)
+    if outside_zone:
+        excluded_slots = set(excluded_slots or ()) | outside_zone
     # Cells already locked *even before* this search starts (see
     # `preseed_assignment` above) — at the user's explicit request, so the
     # web preview can visually tell them apart from `forced_cells`'s own
@@ -7125,6 +7236,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler.best_pattern = filler.pattern
     filler.reshape_enabled = reshape_black_cells and not excluded_slots
     filler.early_hardclean_percent = early_hardclean_percent
+    filler.incremental_fill = incremental_fill
     filler.permanent_locked_letters = dict(permanent_locked_letters or {})
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
     if checks_progress is not None and checks_slot is not None:
@@ -7192,6 +7304,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "deadlock_cells": filler.deadlock_zone_cells(),
                 "excluded_cells": filler.excluded_zone_cells(best_assignment, include_deadlock=True),
                 "stat_letters": filler.best_stat_letters_for(),
+                "attention_size": filler.best_attention_size,
                 "impossible_slots": filler.impossible_zone_slots(),
                 "forced_cells": forced_cells,
                 "locked_cells": _locked_cells(),
@@ -7257,6 +7370,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "deadlock_cells": [],
                 "excluded_cells": filler.excluded_zone_cells(current_assignment),
                 "stat_letters": filler.stat_letters(current_assignment),
+                "attention_size": filler.attention_size,
                 "forced_cells": forced_cells,
                 "locked_cells": _locked_cells(),
                 "theme_cells": _theme_word_cells(filler.slots, current_assignment, priority_words),
@@ -7368,6 +7482,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 filler.best_assignment, include_deadlock=True
             )
             diagnostics["stat_letters"] = filler.best_stat_letters_for()
+            diagnostics["attention_size"] = filler.best_attention_size
             diagnostics["assigned_letter_count"] = assigned_letter_count
             diagnostics["assignment"] = list(filler.best_assignment)
             diagnostics["impossible_slots"] = filler.impossible_zone_slots()
@@ -13222,7 +13337,7 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                       black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION,
                       deadline_checks=None, permanent_locked_letters=None,
                       permanent_black_cells=None, required_cells=None,
-                      checks_slot=None, racing=True):
+                      checks_slot=None, racing=True, incremental_fill=False):
     """`racing=False` marks a mid-palier replacement attempt (see
     `generate_grid`): it never flags its slot in `attempt_active`, so it
     never counts as a sibling still racing and never extends the budget of
@@ -13507,7 +13622,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            permanent_black_cells=permanent_black_cells,
                            scrabble_words=_worker_scrabble_words,
                            early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
-                           permanent_locked_letters=permanent_locked_letters)
+                           permanent_locked_letters=permanent_locked_letters,
+                           incremental_fill=incremental_fill)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -13518,7 +13634,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        force_letters_fraction=0.0, deadline_checks=None,
                        permanent_locked_letters=None, required_cells=None,
                        checks_slot=None, permanent_black_cells=None,
-                       locked_letters=None, racing=True):
+                       locked_letters=None, racing=True, incremental_fill=False):
     """`permanent_black_cells` is only passed on to `try_fill`, whose
     in-search reshapes never free one of them.
 
@@ -13628,7 +13744,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
         result, diag = _continue_search(
             rows, cols, seed, rng, seed_grid, preseed_assignment, excluded_slots,
             force_letters_fraction, deadline_checks, permanent_locked_letters, required_cells,
-            checks_slot, permanent_black_cells, locked_letters, racing,
+            checks_slot, permanent_black_cells, locked_letters, racing, incremental_fill,
         )
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
@@ -13638,7 +13754,8 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
 
 def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, excluded_slots,
                       force_letters_fraction, deadline_checks, permanent_locked_letters,
-                      required_cells, checks_slot, permanent_black_cells, locked_letters, racing):
+                      required_cells, checks_slot, permanent_black_cells, locked_letters, racing,
+                      incremental_fill=False):
     """One search from a seeded grid: everything `_pattern_continue` does
     between receiving its arguments and handing them to `try_fill` (known
     letters, deduced single-candidate slots, statistical sampling), then
@@ -13772,7 +13889,8 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        permanent_black_cells=permanent_black_cells,
                        scrabble_words=_worker_scrabble_words,
                        early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
-                       permanent_locked_letters=permanent_locked_letters)
+                       permanent_locked_letters=permanent_locked_letters,
+                       incremental_fill=incremental_fill)
     return result, diag
 
 
@@ -14878,6 +14996,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         for attempt in range(attempts):
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
+            # Incremental fill (see INCREMENTAL_FILL_ENABLED): the first
+            # palier of a search started from scratch only.
+            incremental_fill = INCREMENTAL_FILL_ENABLED and attempt == 0 and resume_state is None
             if should_pause is not None and should_pause():
                 # The same serialization mechanism as the "attempts
                 # exhausted" exit further below (see _serialize_resume_
@@ -15172,6 +15293,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             black_enrichment_fraction, deadline_checks,
                             permanent_locked_letters, permanent_black_cells,
                             required_cells=required_cells, checks_slot=i,
+                            incremental_fill=incremental_fill,
                         ))
                     else:
                         # The 3rd tuple element (`_task_excluded_slots`) is
@@ -15198,6 +15320,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             required_cells=required_cells, checks_slot=i,
                             permanent_black_cells=permanent_black_cells,
                             locked_letters=task_locked_letters,
+                            incremental_fill=incremental_fill,
                         ))
             else:
                 # A fraction of this palier's own workers start from a
@@ -15477,6 +15600,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         black_enrichment_fraction, deadline_checks,
                         permanent_locked_letters, permanent_black_cells,
                         required_cells=required_cells, checks_slot=i,
+                        incremental_fill=incremental_fill,
                     ))
             # Future -> seed map, for `on_live_preview`'s own use in the
             # harvesting loop below (see its own comment there) — built
@@ -15688,6 +15812,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                                     "example_grid", "impossible_cells", "deadlock_cells",
                                     "excluded_cells", "forced_cells", "locked_cells",
                                     "theme_cells", "challenge_cells", "stat_letters",
+                                    "attention_size",
                                 )
                             }
                             # An attempt stopped by `attempt_done_event`
@@ -15746,7 +15871,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             permanent_locked_letters,
                             required_cells=required_cells, checks_slot=freed_slot,
                             permanent_black_cells=permanent_black_cells,
-                            locked_letters=sc_locked, racing=False,
+                            locked_letters=sc_locked, racing=False, incremental_fill=incremental_fill,
                         )
                         pending.add(new_future)
                         future_seed[new_future] = new_seed
@@ -15770,7 +15895,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             black_enrichment_fraction, deadline_checks,
                             permanent_locked_letters, permanent_black_cells,
                             required_cells=required_cells, checks_slot=freed_slot,
-                            racing=False,
+                            racing=False, incremental_fill=incremental_fill,
                         )
                         pending.add(new_future)
                         future_seed[new_future] = new_seed
@@ -16295,6 +16420,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # as `excluded_cells` right above: shown on this key
                     # step and on the live tiles, never past the cleanup.
                     "stat_letters": d.get("stat_letters", []),
+                    # Incremental fill's attention zone (see INCREMENTAL_
+                    # FILL_ENABLED) the record was taken under, None
+                    # without one; same lifecycle as `stat_letters`.
+                    "attention_size": d.get("attention_size"),
                     "forced_cells": d["forced_cells"],
                     "locked_cells": d.get("locked_cells", []),
                     "theme_cells": d.get("theme_cells", []),
@@ -16360,6 +16489,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # cleanup from ever triggering.
             selected_slots = extract_slots(selected_grid, rows, cols)
             selected_dead = selected_impossible | _slots_touching(selected_slots, selected_impossible)
+            # "Finir la zone": an empty slot outside the zone is never searched.
+            selected_dead |= _outside_zone_slot_indices(selected_slots, required_cells)
             still_has_hope = any(
                 w is None and i not in selected_dead
                 for i, w in enumerate(selected_diag["assignment"])
