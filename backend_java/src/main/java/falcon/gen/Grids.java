@@ -20,7 +20,7 @@ public final class Grids {
 
     public static final char BLACK = '#';
     public static final char WHITE = '.';
-    public static final int STRUCTURAL_MIN_INTERIOR_FREE = 4;
+    public static final int STRUCTURAL_MIN_INTERIOR_FREE = 6;
     /** Side of the corner squares the ratio-based ("Taux noir") draw never blackens. */
     public static final int CORNER_SQUARE_SIZE = 2;
     public static final int PREFILL_MIN_WORD_COUNT = 3;
@@ -370,9 +370,20 @@ public final class Grids {
         for (int br = 0; br < rows; br++) {
             for (int bc = 0; bc < cols; bc++) if (grid[br][bc] == BLACK) blacks.add(Cells.of(br, bc));
         }
-        // Distance of each candidate to its closest black cell, parallel to remaining, updated per placement.
+        // Distance of each candidate to its closest black cell, parallel to remaining, updated per placement; the
+        // grid's edges count as a ring of virtual black cells just outside the grid.
         List<Long> dist = new ArrayList<>();
-        for (int cell : remaining) dist.add(nearestBlackDistanceSq(blacks, Cells.r(cell), Cells.c(cell)));
+        for (int cell : remaining) {
+            int r = Cells.r(cell), c = Cells.c(cell);
+            long d = nearestBlackDistanceSq(blacks, r, c);
+            for (int bc = -1; bc <= cols; bc++) {
+                d = Math.min(d, Math.min(blackDistanceSq(r, c, -1, bc), blackDistanceSq(r, c, rows, bc)));
+            }
+            for (int br = 0; br < rows; br++) {
+                d = Math.min(d, Math.min(blackDistanceSq(r, c, br, -1), blackDistanceSq(r, c, br, cols)));
+            }
+            dist.add(d);
+        }
         while (!remaining.isEmpty() && placed < target) {
             Map<Integer, Integer> position = new HashMap<>();
             for (int i = 0; i < remaining.size(); i++) position.put(remaining.get(i), i);

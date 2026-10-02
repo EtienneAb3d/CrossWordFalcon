@@ -380,15 +380,15 @@ Une case noire n'est acceptée que si :
   fois (noire sur ses 4 côtés) — règle absolue, jamais assouplie ;
 - la grille blanche reste entièrement **connectée** ;
 - un emplacement encadré par deux cases noires fait au moins
-  `STRUCTURAL_MIN_INTERIOR_FREE` cases (**4**), **sauf** si l'une de ses
+  `STRUCTURAL_MIN_INTERIOR_FREE` cases (**6**), **sauf** si l'une de ses
   extrémités touche le bord de la grille : il est alors autorisé quelle
   que soit sa longueur (y compris 1 ou 2 cases), et quel qu'en soit le
   nombre sur la grille. Une zone d'une lettre ne sert jamais de mot ; une
   zone de deux lettres devient un vrai mot à définir (« et », « ou »,
   « no »…).
 
-L'exigence des 4 cases est une préférence esthétique, abaissable d'un cran
-à la fois (4, 3, 2, 1) quand elle empêche toute pose. C'est pourquoi
+L'exigence des 6 cases est une préférence esthétique, abaissable d'un cran
+à la fois (6, 5, 4, 3, 2, 1) quand elle empêche toute pose. C'est pourquoi
 `minimize_black_squares` (chapitre 6), qui ne fait que retirer des cases
 noires, vérifie la grille avec l'exigence minimale (1 case : connexité et
 absence de case orpheline).
@@ -411,7 +411,9 @@ sont conservées. Pour chacune, on calcule la distance (euclidienne) à la
 case noire déjà posée la plus proche, la distance à une case noire située
 sur la **même ligne ou la même colonne** comptant pour
 `BLACK_ALIGNED_DISTANCE_FACTOR` (**10**) fois la distance réelle
-(`_black_distance_sq`, `_nearest_black_distance_sq`) ; on les classe de la
+(`_black_distance_sq`, `_nearest_black_distance_sq`). Les **bords** de la
+grille comptent comme des cases noires : un anneau de cases noires
+virtuelles entoure la grille, juste à l'extérieur ; on les classe de la
 plus éloignée à la plus proche (à égalité, l'ordre de leur mélange
 initial) et une case est tirée **au hasard** parmi les **5 %** les plus
 éloignées (au moins une). Si les emplacements retenus ne contiennent
@@ -424,13 +426,14 @@ autre case noire**, ne fait pas tomber un emplacement touchant une lettre
 verrouillée sous son seuil de candidats
 (`_new_black_cell_breaks_locked_slot`, voir « Prise en compte des lettres
 déjà verrouillées ») et laisse la grille structurellement valide avec
-l'exigence de 4 cases. Cette dernière vérification donne toujours le même
+l'exigence de 6 cases. Cette dernière vérification donne toujours le même
 résultat que `is_structurally_valid` sur la grille modifiée, mais sans la
 reparcourir : zones de chaque ligne et colonne, cases isolées et points
 d'articulation de la zone blanche sont calculés une fois par tirage
 (`_BlackCellValidity`). Quand tous les emplacements sont retenus sans
-qu'aucune case convienne, le tirage reprend à 5 % avec l'exigence abaissée
-d'un cran (3, 2, puis 1) ; si même l'exigence de 1 case ne laisse aucune
+qu'aucune case convienne (pourcentage à 100 %, toute la grille), le tirage
+reprend à 5 % avec l'exigence abaissée d'un cran (5, 4, 3, 2, puis 1) :
+le pourcentage est toujours augmenté avant que l'exigence soit baissée ; si même l'exigence de 1 case ne laisse aucune
 candidate, plus aucune case noire n'est posée.
 
 **Coins interdits au tirage.** Le tirage vers l'objectif « Taux noir » ne
@@ -2136,7 +2139,7 @@ quasiment remplissable). Deux issues :
   chapitre 3, mais avec la variante la plus permissive,
   `min_interior_free=1` : seules comptent encore l'absence de case
   orpheline et la connexité — la préférence esthétique pour des zones d'au
-  moins 4 cases ne s'applique qu'à la *pose* des cases noires, jamais à ce
+  moins 6 cases ne s'applique qu'à la *pose* des cases noires, jamais à ce
   retrait) **et** qu'un remplissage complet réussit **et** que chacun des
   mots du résultat existe bien dans le dictionnaire, le retrait est
   conservé ;

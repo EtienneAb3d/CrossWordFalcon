@@ -403,14 +403,15 @@ via `ProcessPoolExecutor`:
    constraints, ranks those by squared Euclidean distance to the closest
    black cell already placed, a black cell sharing the candidate's row or
    column counting at `BLACK_ALIGNED_DISTANCE_FACTOR` (10) times its real
-   distance (`_black_distance_sq`, `_nearest_black_distance_sq`, kept per
+   distance and the grid's edges counting as a ring of virtual black
+   cells just outside it (`_black_distance_sq`, `_nearest_black_distance_sq`, kept per
    candidate and updated as each cell is placed; farthest first, ties
    keeping the shuffled order), and draws at random among the same
    percentage farthest (at least one); when the selected runs hold no
    valid cell, the percentage grows by 5 and the draw starts over. The
    hard constraints: still white, not adjacent to a black cell,
    `_new_black_cell_breaks_locked_slot` false, structurally valid at
-   `STRUCTURAL_MIN_INTERIOR_FREE=4` (an interior white zone must be at
+   `STRUCTURAL_MIN_INTERIOR_FREE=6` (an interior white zone must be at
    least this long) — answered by `_BlackCellValidity`, built once per
    draw and level (zones per row/column, isolated cells, articulation
    points of the white graph), always equal to `is_structurally_valid`

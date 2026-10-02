@@ -479,18 +479,13 @@ def _row_forms(line, word, scrabble):
 
 # ---------- Black-cell pattern generation ----------
 
-# "Normal" minimum length (aesthetic, not absolute — the real, never-
-# crossed limit, connectivity/no orphaned cell, remains the literal
-# `min_interior_free=1` explicitly passed by every other caller, see
-# below) of an *interior* white zone (bounded by a black cell on both
-# sides), used as `is_structurally_valid`'s own default value and as the
-# starting point of `_place_black_cells`'s own relaxation cascade (see
-# its own docstring). If no cell can be placed while respecting this
-# number to reach the black-fill target, `_place_black_cells` lowers it one
-# level at a time down to 1 (`range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1)`)
-# and retries, so the progressive relaxation stays coherent whatever value
-# is chosen here.
-STRUCTURAL_MIN_INTERIOR_FREE = 4
+# Minimum length of an *interior* white zone (bounded by a black cell on
+# both sides) `_place_black_cells` starts from (aesthetic, not absolute —
+# the real limit, connectivity/no orphaned cell, is the literal
+# `min_interior_free=1` every other caller passes). It is lowered one level
+# at a time down to 1 only once no cell of any white run can be placed at
+# the current level. Also `is_structurally_valid`'s default value.
+STRUCTURAL_MIN_INTERIOR_FREE = 6
 
 # Side of the square, at each of the grid's four corners, where
 # `make_pattern`'s ratio-based ("Taux noir") placement never draws a black
@@ -503,7 +498,7 @@ def is_structurally_valid(grid, rows, cols, min_interior_free=STRUCTURAL_MIN_INT
     """A grid is valid if:
     - every *interior* white zone (bounded by a black cell on both sides)
       is at least `min_interior_free` cells long (`STRUCTURAL_MIN_
-      INTERIOR_FREE`, 8 by default), **except** if one of its two ends
+      INTERIOR_FREE`, 6 by default), **except** if one of its two ends
       directly touches the grid's own border (row/column 0, or the last
       one): such a border zone is always allowed, whatever its length
       (including 1 or 2 cells) and however many of them exist on the
@@ -955,7 +950,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     black cell already on the grid (`_nearest_black_distance_sq`,
     `_black_distance_sq`: Euclidean, a black cell of the same row or
     column counting `BLACK_ALIGNED_DISTANCE_FACTOR` times its real
-    distance; farthest first, ties keeping `candidates`' shuffled order),
+    distance, the grid's edges counting as a ring of black cells just
+    outside it; farthest first, ties keeping `candidates`' shuffled order),
     and a cell is drawn at random among the same percentage of them
     farthest (at least one). When the selected runs hold no valid cell,
     the percentage grows by `BLACK_DRAW_WINDOW_PERCENT` and the draw starts
@@ -1017,6 +1013,10 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
 
     runs = _white_runs(grid, rows, cols)
     blacks = [(br, bc) for br in range(rows) for bc in range(cols) if grid[br][bc] == BLACK]
+    # The grid's edges count as black cells: a ring of virtual black cells
+    # just outside the grid.
+    blacks += [(br, bc) for br in (-1, rows) for bc in range(-1, cols + 1)]
+    blacks += [(br, bc) for br in range(rows) for bc in (-1, cols)]
     # Distance of each candidate to its closest black cell, kept parallel
     # to `remaining` and updated as each new black cell is placed.
     dist = [_nearest_black_distance_sq(blacks, r, c) for r, c in remaining]
@@ -1676,7 +1676,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     Structural validity itself (`is_structurally_valid`) is equally simple
     now: an *interior* white zone (bounded by a black cell on both sides)
     must be at least `min_interior_free` cells long
-    (`STRUCTURAL_MIN_INTERIOR_FREE`, 4 by default, see that constant's own
+    (`STRUCTURAL_MIN_INTERIOR_FREE`, 6 by default, see that constant's own
     comment for the relaxation cascade); a zone
     touching the grid's own border on at least one side is always allowed,
     whatever its length and however many of them the grid ends up with.

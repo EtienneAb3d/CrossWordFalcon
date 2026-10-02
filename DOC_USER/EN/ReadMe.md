@@ -1423,7 +1423,7 @@ respect a few hard rules: a white cell can never end up boxed in on all
 four sides (it would belong to no word at all and could never receive a
 letter); the white area of the grid must stay fully connected, never
 split into isolated pockets by a wall of black cells; and an ordinary
-interior word slot should normally be at least 4 cells long, unless one
+interior word slot should normally be at least 6 cells long, unless one
 of its ends touches the grid's own border, in which case any length is
 allowed. Before this placement even starts, a separate "pre-fill" pass
 runs first: as long as some slot's own length is covered by too few
