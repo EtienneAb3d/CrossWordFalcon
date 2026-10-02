@@ -449,17 +449,17 @@ plusieurs signaux) :
 
 - **Nettoyage dur sur mot répété** : nettoyage dur déclenché à l'intérieur
   de la recherche d'une tentative de génération quand elle pose le même mot
-  au même emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (5) fois.
-  L'emplacement est déclaré impossible : tous les nœuds se défont, l'état
-  portant ce mot est repris à plat, puis nettoyé avec cet emplacement pour
-  seul emplacement impossible (son mot, les mots qui le croisent et les
-  lettres restées dessus sont effacés, mêmes règles de verrouillage que le
-  nettoyage dur précoce). L'état nettoyé devient le record et la nouvelle
-  racine de la recherche, l'emplacement devient un emplacement écarté et le
-  compteur de ce mot sur cet emplacement repart de zéro. La tentative n'est
-  ni déclarée échouée ni terminée, et ne quitte pas son palier.
-  (`backend/crossword_gen.py`, `Filler._record_tried_word`,
-  `Filler._restart`, `Filler._repeat_hardclean`, `MAX_SAME_WORD_PLACEMENTS`.)
+  au même emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (100) fois de suite,
+  sans autre mot posé à cet emplacement entre-temps. L'emplacement est
+  déclaré impossible et nettoyé sur place, avec cet emplacement pour seul
+  emplacement impossible (son mot, les mots qui le croisent et les lettres
+  restées dessus sont effacés, mêmes règles de verrouillage que le nettoyage
+  dur précoce). Aucun nœud n'est défait : comme pour un retrait fantôme, les
+  mots retirés restent absents et un nouveau nœud poursuit la recherche ;
+  l'emplacement devient un emplacement écarté et son décompte repart de
+  zéro. (`backend/crossword_gen.py`, `Filler._record_tried_word`,
+  `Filler._last_word_streak`, `Filler._descend`, `Filler._repeat_hardclean`,
+  `MAX_SAME_WORD_PLACEMENTS`.)
 
 - **Seconde chance** : reprise d'une tentative qui échoue alors que le
   palier est encore en course (au moins une tentative d'origine n'a pas

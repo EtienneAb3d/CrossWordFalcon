@@ -42,13 +42,13 @@ public final class Filler {
      * and no letter is locked by it. 100 = off. */
     public static final int EARLY_HARDCLEAN_PERCENT = 10;
     /** Repeated word (mirrors MAX_SAME_WORD_PLACEMENTS): once a generation attempt's search places the same word
-     * on the same slot more than this many times (triedWords), that slot is declared impossible and hard-cleaned
-     * inside the search the way an early hardclean does it (repeatHardclean): the whole backtracking stack is
-     * dropped, the state holding that word is taken back flat as the new root, Cleanup.cleanBlockedSlots runs with
-     * that slot as its only impossible slot (its own word, the words crossing it and the letters left on it are
-     * cleared, no black cell touched), and the slot becomes an "emplacement écarté". The word's count on that slot
-     * restarts from zero. The attempt is neither failed nor ended, its palier not left. 0 = off. */
-    public static final int MAX_SAME_WORD_PLACEMENTS = 5;
+     * on the same slot more than this many times in a row — no other word placed there in between
+     * (lastWordStreak) — that slot is declared impossible and hard-cleaned in place, inside the search
+     * (repeatHardclean): Cleanup.cleanBlockedSlots with that slot as its only impossible slot (its own word, the
+     * words crossing it and the letters left on it are cleared, no black cell touched), the slot becomes an
+     * "emplacement écarté" and a fresh node carries on. Like a backghost, the backtracking stack is kept: every
+     * word the clean takes off stays off. The streak restarts from zero. 0 = off. */
+    public static final int MAX_SAME_WORD_PLACEMENTS = 100;
     /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), first palier only: a node only places a word on a slot
      * holding a still-free cell inside the attention zone, the grid's first N rows and N columns from (0, 0)
      * (attentionPool). N starts at INCREMENTAL_FILL_START_SIZE and grows by INCREMENTAL_FILL_STEP once the node
@@ -226,9 +226,11 @@ public final class Filler {
      * (running its own undo), and solve() restarts the search flat from the record (restartFromRecord). */
     boolean restartPending;
     /** Repeated-word rule (MAX_SAME_WORD_PLACEMENTS): the limit (0 = off, every caller that is not a generation
-     * attempt), and, while a restart it called for is pending, the state to take back flat. */
+     * attempt), and the last word the search placed on each slot with its count in a row (slot cells -> word,
+     * count). */
     public int sameWordLimit;
-    private Object[] repeatRestart;
+    final Map<String, String> lastWord = new HashMap<>();
+    final Map<String, Integer> lastWordCount = new HashMap<>();
     public Map<Integer, Character> permanentLockedLetters = Map.of();
     public Set<Integer> toleratedDry = new HashSet<>();
     Set<Integer> lastConflict;
@@ -471,18 +473,63 @@ public final class Filler {
         return false;
     }
 
-    /** Mirrors _record_tried_word: past sameWordLimit placements of the word on that slot, the current state is
-     * kept for repeatHardclean, the word's count restarts from zero and every node unwinds (restartPending). */
-    void recordTriedWord(int i, String word) {
+    /** Mirrors _record_tried_word: true past sameWordLimit placements of the word on that slot in a row (the
+     * streak then restarts from zero and the caller hard-cleans the slot, repeatHardclean). */
+    boolean recordTriedWord(int i, String word) {
         String key = Arrays.toString(slots.get(i));
-        Map<String, Integer> words = triedWords.computeIfAbsent(key, k -> new HashMap<>());
-        int n = words.merge(word, 1, Integer::sum);
+        triedWords.computeIfAbsent(key, k -> new HashMap<>()).merge(word, 1, Integer::sum);
         triedTotals.merge(key, 1, Integer::sum);
-        if (sameWordLimit > 0 && n > sameWordLimit && !restartPending) {
-            words.put(word, 0);
-            repeatRestart = new Object[]{slots, pattern, assignment.clone(), key};
-            restartPending = true;
+        if (sameWordLimit <= 0) return false;
+        int n = word.equals(lastWord.get(key)) ? lastWordCount.get(key) + 1 : 1;
+        lastWord.put(key, word);
+        if (n > sameWordLimit) {
+            lastWordCount.put(key, 0);
+            return true;
         }
+        lastWordCount.put(key, n);
+        return false;
+    }
+
+    /** Mirrors _descend: count the placement and run a child node, or hard-clean the slot in place first when the
+     * word has been placed there too often in a row. */
+    boolean descend(int i, String word, long deadlineChecks, boolean released, int attention) {
+        if (recordTriedWord(i, word)) return repeatHardclean(i, deadlineChecks, released, attention);
+        return backtrack(deadlineChecks, released, attention);
+    }
+
+    /** Mirrors _repeat_hardclean: declare slot i impossible and hard-clean it in place (its own word taken off
+     * first, no black cell touched, same locking and orphan-letter rules as the early hardclean). The removed
+     * words leave the grid without unwinding any node, like a backghost; the slot becomes an "emplacement écarté"
+     * and a fresh node carries on. The letter statistics re-tallied for the removals are restored when that node
+     * fails; the removed words stay off. */
+    boolean repeatHardclean(int i, long deadlineChecks, boolean released, int attention) {
+        String[] work = assignment.clone();
+        work[i] = null;
+        Set<Integer> cleared = new HashSet<>();
+        Object[] cleaned = Cleanup.cleanBlockedSlots(slots, work, List.of(i),
+                lockedLetters.isEmpty() ? null : new HashMap<>(lockedLetters), false, index, rng, null, null, null,
+                permanentLockedLetters.isEmpty() ? null : permanentLockedLetters, null, null, false, cleared);
+        String[] cleanedAssignment = (String[]) cleaned[0];
+        List<Integer> removed = new ArrayList<>();
+        for (int j = 0; j < assignment.length; j++) {
+            if (assignment[j] != null && cleanedAssignment[j] == null) removed.add(j);
+        }
+        for (int j : removed) {
+            usedWords.remove(assignment[j]);
+            assignment[j] = null;
+            placementSeq.remove(j);
+        }
+        List<Map<Integer, Object[]>> saved = new ArrayList<>();
+        for (int j : removed) saved.add(refreshLetterScoresAround(j));
+        if (!cleared.isEmpty()) {
+            Map<Integer, Character> kept = new HashMap<>();
+            lockedLetters.forEach((cell, ch) -> { if (!cleared.contains(cell)) kept.put(cell, ch); });
+            lockedLetters = kept;
+        }
+        impossibleThisAttempt.add(i);
+        if (backtrack(deadlineChecks, released, attention)) return true;
+        for (int k = saved.size() - 1; k >= 0; k--) restoreLetterScores(saved.get(k));
+        return false;
     }
 
     int slotTryCount(int i) {
@@ -1100,8 +1147,7 @@ public final class Filler {
         for (int j : broken) if (!toleratedDry.contains(j)) newlyTolerated.add(j);
         toleratedDry.addAll(newlyTolerated);
         placementSeq.put(t, placementCounter++);
-        recordTriedWord(t, w);
-        if (backtrack(deadlineChecks, released, attention)) return new Object[]{"success", null, null};
+        if (descend(t, w, deadlineChecks, released, attention)) return new Object[]{"success", null, null};
         Set<Integer> child = lastConflict;
         toleratedDry.removeAll(newlyTolerated);
         restoreLetterScores(savedScores);
@@ -1127,23 +1173,16 @@ public final class Filler {
     /** Mirrors adopt_best_structure. */
     public void adoptBestStructure() {
         if (bestSlots == slots) return;
-        adoptStructure(bestSlots, bestPattern);
-        assignment = bestAssignment.clone();
-    }
-
-    /** Mirrors _adopt_structure: move onto newSlots/newPattern when they differ from the current ones, carrying
-     * the "emplacements écartés" over to the new slot indices. */
-    void adoptStructure(List<int[]> newSlots, char[][] newPattern) {
-        if (newSlots == slots) return;
         Map<Cells.Key, Integer> byCells = new HashMap<>();
-        for (int j = 0; j < newSlots.size(); j++) byCells.put(Cells.key(newSlots.get(j)), j);
+        for (int j = 0; j < bestSlots.size(); j++) byCells.put(Cells.key(bestSlots.get(j)), j);
         RecentSlots recent = new RecentSlots(MAX_EXCLUDED_SLOTS);
         for (int j : impossibleThisAttempt) {
             Integer k = byCells.get(Cells.key(slots.get(j)));
             if (k != null) recent.add(k);
         }
-        indexSlots(newSlots);
-        pattern = newPattern;
+        indexSlots(bestSlots);
+        pattern = bestPattern;
+        assignment = bestAssignment.clone();
         impossibleThisAttempt = recent;
         toleratedDry = new HashSet<>();
         placementSeq = new HashMap<>();
@@ -1154,8 +1193,7 @@ public final class Filler {
         if (!priorityWords.isEmpty()) themeWordBudget = (int) Math.max(1, Math.rint(FALLBACK_PHASE_BUDGET_FRACTION * deadlineChecks));
         // An early hardclean ends both passes early (restartPending): the record that called for it is taken
         // back flat (restartFromRecord) and the loop starts over from it as a new root, with no backtracking
-        // history. A repeated-word hardclean does the same from the state holding the repeated word (restart,
-        // repeatHardclean). The attempt's descent caps (inherited, initialAssignedCount) are those of its first start.
+        // history. The attempt's descent caps (inherited, initialAssignedCount) are those of its first start.
         int count = 0;
         for (String a : assignment) if (a != null) count++;
         initialAssignedCount = count;
@@ -1170,14 +1208,14 @@ public final class Filler {
             breakingPermitted = false;
             if (backtrack(deadlineChecks, false, initialAttention())) return true;
             if (restartPending) {
-                restart();
+                restartFromRecord();
                 continue;
             }
             if (abandoned || budgetExhausted) return false;
             breakingPermitted = true;
             if (backtrack(deadlineChecks, false, initialAttention())) return true;
             if (restartPending) {
-                restart();
+                restartFromRecord();
                 continue;
             }
             return false;
@@ -1188,24 +1226,6 @@ public final class Filler {
      * hardclean has unwound the whole backtracking stack — its slot list and pattern (adoptBestStructure), its
      * words, and letter statistics re-sampled around each of them (the unwinding restored those of the
      * previous root). Its words become part of the root: only a later early hardclean can take them off. */
-    /** Mirrors _restart: the repeated-word state (repeatRestart), hard-cleaned on its repeated slot, or else the
-     * record (restartFromRecord). */
-    @SuppressWarnings("unchecked")
-    void restart() {
-        Object[] state = repeatRestart;
-        if (state == null) {
-            restartFromRecord();
-            return;
-        }
-        repeatRestart = null;
-        restartPending = false;
-        adoptStructure((List<int[]>) state[0], (char[][]) state[1]);
-        assignment = ((String[]) state[2]).clone();
-        usedWords = usedOf(assignment);
-        for (int i = 0; i < assignment.length; i++) if (assignment[i] != null) refreshLetterScoresAround(i);
-        repeatHardclean((String) state[3]);
-    }
-
     void restartFromRecord() {
         restartPending = false;
         adoptBestStructure();
@@ -1443,34 +1463,8 @@ public final class Filler {
      * letter) is erased. The record restarts from the cleaned state, published like any
      * record; a cleaned state already produced in this attempt switches the early hardclean off. */
     void earlyHardclean() {
-        hardclean(assignment.clone(), impossibleZoneSlots());
-        Map<Integer, Character> letters = new java.util.TreeMap<>(knownCells());
-        if (!earlyHardcleanStates.add(Grids.key(pattern) + "|" + letters)) earlyHardcleanPercent = 100;
-        if (onNewBest != null) onNewBest.accept(bestAssignment);
-    }
-
-    /** Mirrors _repeat_hardclean: hard-clean the current state in place on the slot whose cells are key,
-     * declared impossible (MAX_SAME_WORD_PLACEMENTS) — the only impossible slot handed to cleanBlockedSlots, its
-     * own word taken off first. The cleaned state becomes the record, published like any record, and the slot an
-     * "emplacement écarté". */
-    void repeatHardclean(String key) {
-        int target = -1;
-        for (int i = 0; i < slots.size(); i++) {
-            if (Arrays.toString(slots.get(i)).equals(key)) { target = i; break; }
-        }
-        if (target < 0) return;
-        String[] work = assignment.clone();
-        work[target] = null;
-        hardclean(work, List.of(target));
-        impossibleThisAttempt.add(target);
-        if (onNewBest != null) onNewBest.accept(bestAssignment);
-    }
-
-    /** Mirrors _hardclean: the in-search hard clean shared by earlyHardclean and repeatHardclean, applied in
-     * place; the cleaned state becomes bestAssignment. */
-    private void hardclean(String[] work, Collection<Integer> impossible) {
         Set<Integer> cleared = new HashSet<>();
-        Object[] cleaned = Cleanup.cleanBlockedSlots(slots, work, impossible,
+        Object[] cleaned = Cleanup.cleanBlockedSlots(slots, assignment.clone(), impossibleZoneSlots(),
                 lockedLetters.isEmpty() ? null : new HashMap<>(lockedLetters), false, index, rng, null, null, null,
                 permanentLockedLetters.isEmpty() ? null : permanentLockedLetters, null, null, false, cleared);
         String[] cleanedAssignment = (String[]) cleaned[0];
@@ -1497,6 +1491,9 @@ public final class Filler {
         bestSlots = slots;
         bestPattern = pattern;
         bestStatLetters = statLetters(assignment);
+        Map<Integer, Character> letters = new java.util.TreeMap<>(knownCells());
+        if (!earlyHardcleanStates.add(Grids.key(pattern) + "|" + letters)) earlyHardcleanPercent = 100;
+        if (onNewBest != null) onNewBest.accept(bestAssignment);
     }
 
     public List<Integer> impossibleZoneSlots() {
@@ -1955,8 +1952,7 @@ public final class Filler {
                     toleratedDry.addAll(newlyTolerated);
                     long seq = placementCounter++;
                     placementSeq.put(bestI, seq);
-                    recordTriedWord(bestI, w);
-                    if (backtrack(deadlineChecks, released, attention)) return true;
+                    if (descend(bestI, w, deadlineChecks, released, attention)) return true;
                     attentionSize = attention < 0 ? null : attention;
                     Set<Integer> childConflict = lastConflict;
                     boolean jumpedIn = lastJumped;

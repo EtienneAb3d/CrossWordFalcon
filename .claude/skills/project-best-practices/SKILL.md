@@ -1966,22 +1966,28 @@ the current defaults/behavior to know before touching this code.
   record; the attempt keeps the descent caps of its first start; a reshape
   carried by the record stays in the pattern even when the clean removes
   its word. Interactive mode never uses it.
-- **Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 5 in `backend/
+- **Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 100 in `backend/
   crossword_gen.py`, `Filler.MAX_SAME_WORD_PLACEMENTS` in Java) — the
-  user's rule: in automatic fill, when the same word is placed more than 5
+  user's rule: in automatic fill, when the same word is placed more than 100
   times on the same slot, declare the slot impossible and trigger a
-  hardclean on that slot. Implemented like the early hardclean: every node
-  unwinds, the state holding the word is taken back flat, hard-cleaned with
-  that slot as the only impossible slot, and becomes the record and the new
-  root. Choices made with the change, to revisit with the user: the count is
-  per (slot cells, word) over the whole attempt (`_tried_words`), the
-  restart is taken from the state holding the 6th placement (not the
-  record), "declared impossible" means cleaned as an impossible slot and
-  flagged écarté (yellow) — not frozen for the rest of the attempt, the
-  search may fill it again —, the word's count there restarts from zero
-  after the clean, the cleaned state replaces the record, and only the
-  generation attempts use it (not `minimize_black_squares`, the
-  pre-cleanup optimization nor Interactive mode).
+  hardclean on that slot; only the last word placed on each slot is kept
+  with its count, which restarts when another word is placed there, so the
+  rule only catches a word that has become mandatory in a loop replaying
+  the same scenario, not the diversity the other mechanisms create. The
+  hardclean runs in place, like a backghost (no node unwound, removed words
+  stay off, a fresh node carries on in the same attention zone), never as
+  a flat restart from the current state, which would make the whole descent
+  an un-backtrackable root, fold the attention zone back to its start with
+  words left outside it, and let the zone grow past slots those frozen
+  words make unfillable. Choices made with the change, to revisit with the
+  user: the slot is flagged écarté, not frozen; the streak restarts from
+  zero after the clean; the record is not touched; only the generation
+  attempts use it. Measured (30×30 easy, first palier, 300 000 checks, 6
+  seeds): each clean takes off 40-55 % of the placed words (the hardclean
+  cascade through partially erased words); at a limit of 5 that meant about
+  30 cleans per attempt and far more free cells inside the attention zone
+  than without the rule (median 7-100 vs 6-27), at 100 it fires 0-1 times
+  per attempt and the zone fills as well as without it (median 2-7).
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

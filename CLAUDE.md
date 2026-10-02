@@ -819,23 +819,22 @@ sees the clean. `try_fill`'s previews and
 diagnostics read the Filler's current `locked_letters` (`locked_cells`
 recomputed on each publication).
 
-**Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 5, `None`/0 =
-off; Java `Filler.MAX_SAME_WORD_PLACEMENTS`): when a generation attempt's
-search places the same word on the same slot more than that many times
-(`Filler._record_tried_word`, counted in `_tried_words`, enabled by
-`try_fill(same_word_limit=)`, passed only by `_pattern_attempt`/
-`_pattern_continue`), that slot is declared impossible: the current state
-(slots, pattern, assignment with that word) is kept in `Filler._repeat_
-restart`, the word's count on that slot is reset to 0 and `_restart_
-pending` unwinds every node like an early hardclean. `Filler.solve`'s
-restart (`_restart`, Java `restart`) takes that state back flat
-(`_adopt_structure`, letter tallies re-sampled) and `_repeat_hardclean`
-runs `_clean_blocked_slots` with that slot as the only impossible slot,
-its own word taken off first (`_hardclean`, the in-search clean shared with
-`_early_hardclean`; same locking and orphan-letter rules); the cleaned state
-becomes the record (published) and the new root, and the slot is added to
-`_impossible_this_attempt`. It neither touches the early hardclean's
-repeated-state set nor ends the attempt.
+**Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 100, `None`/0 =
+off; Java `Filler.MAX_SAME_WORD_PLACEMENTS`): `Filler._last_word_streak`
+keeps, per slot (cells), the last word the search placed there and how many
+times in a row; another word restarts it at 1 (`_record_tried_word`, Java
+`lastWord`/`lastWordCount`; enabled by `try_fill(same_word_limit=)`, passed
+only by `_pattern_attempt`/`_pattern_continue`). Past the limit, the
+placement's recursion (`Filler._descend`, used at both `_record_tried_word`
+call sites) runs `_repeat_hardclean` instead of a plain child node:
+`_clean_blocked_slots` with that slot as the only impossible slot, its own
+word taken off first, applied in place without unwinding anything — the
+removed words leave `assignment`/`used_words`/`_placement_seq` (their
+owners find nothing to remove, as after a backghost; `_undo_reshape` keeps
+them off), locked letters it erases are unlocked, the slot joins
+`_impossible_this_attempt`, and a fresh `_backtrack` node carries on with
+the same `released`/`attention`; the tallies re-sampled for the removals are
+restored if it fails. The streak restarts from 0; the record is not touched.
 
 **An "emplacement écarté" (yellow) is a pure deprioritization, and is
 reset to nothing at the start of every new palier.** `Filler._impossible_
