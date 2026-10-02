@@ -932,7 +932,11 @@ button:disabled {
   padding: 0.15rem 0.6rem;
 }
 
+/* --cell-size is set by script.js's fitGridToViewport() so the whole grid
+   (header row included) is at most 3/4 of the window height; 2rem is the
+   ceiling. Every #grid text size scales with it. */
 #grid {
+  --cell-size: 2rem;
   display: inline-grid;
   flex-shrink: 0;
   align-self: flex-start;
@@ -2817,7 +2821,7 @@ button:disabled {
   position: absolute;
   top: 1px;
   left: 2px;
-  font-size: 0.55rem;
+  font-size: calc(var(--cell-size, 2rem) * 0.275);
   font-weight: 400;
   line-height: 1;
 }
@@ -2837,6 +2841,17 @@ button:disabled {
   font-size: 0.75rem;
   font-weight: 400;
   cursor: default;
+}
+
+/* The playable/Interactive grid's cells follow --cell-size (see #grid). */
+#grid .cell {
+  width: var(--cell-size);
+  height: var(--cell-size);
+  font-size: calc(var(--cell-size) * 0.5);
+}
+
+#grid .header-cell {
+  font-size: calc(var(--cell-size) * 0.375);
 }
 
 #clues {

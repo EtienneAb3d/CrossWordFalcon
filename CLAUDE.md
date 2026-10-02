@@ -2374,7 +2374,9 @@ state, unlike the backend).
   that unfolds it; the tool buttons stay visible. `runGeneration`/
   `runInteractive`/`enterInteractiveMode` unfold it.
 - **`script.js`** — all client logic in one file. Major areas: grid
-  rendering/keyboard input/solution-checking; the play-mode word statistics
+  rendering/keyboard input/solution-checking (`#grid`'s `--cell-size`,
+  set by `fitGridToViewport` on render and resize, keeps the grid within
+  3/4 of the window height, 2rem cells at most); the play-mode word statistics
   (`#grid-stats`: an icon button at `#board`'s left edge, level with the
   grid's top, opening an overlay panel of word counts per length, longest
   first — `showGridStats`/`renderGridStatsPanel`, hidden in Interactive mode); the end-of-generation grid

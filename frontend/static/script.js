@@ -2400,6 +2400,29 @@ function handleKeydown(event) {
   }
 }
 
+// Grid at most this share of the window height (header row included).
+const GRID_MAX_VIEWPORT_HEIGHT_FRACTION = 0.75;
+const GRID_MIN_CELL_PX = 12;
+
+// Sets #grid's --cell-size so the grid (height + 1 rows of cells, the 2px
+// gaps and the 2px border) fits in GRID_MAX_VIEWPORT_HEIGHT_FRACTION of the
+// window height, never above the 2rem default.
+function fitGridToViewport() {
+  if (!puzzle) return;
+  const rows = puzzle.height + 1;
+  const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const available = window.innerHeight * GRID_MAX_VIEWPORT_HEIGHT_FRACTION - 4 - 2 * (rows - 1);
+  const cellPx = Math.max(GRID_MIN_CELL_PX, Math.min(2 * rootPx, Math.floor(available / rows)));
+  gridEl.style.setProperty("--cell-size", `${cellPx}px`);
+}
+
+window.addEventListener("resize", () => {
+  if (!puzzle || result.hidden) return;
+  fitGridToViewport();
+  hoverDefinitionRow.style.width = `${gridEl.offsetWidth}px`;
+  positionLeaderboard();
+});
+
 function renderGrid() {
   const { width, height, pattern, solution, words } = puzzle;
   const numberByCell = new Map();
@@ -2411,7 +2434,8 @@ function renderGrid() {
   // the style-guide SKILL. The header row/column share the same #grid CSS
   // grid as the puzzle cells rather than a separate layout, so everything
   // stays aligned automatically.
-  gridEl.style.gridTemplateColumns = `repeat(${width + 1}, 2rem)`;
+  gridEl.style.gridTemplateColumns = `repeat(${width + 1}, var(--cell-size))`;
+  fitGridToViewport();
   gridEl.innerHTML = "";
   // The grid is fully rebuilt below, so every previous cell element (and
   // any hover state referring to it) is about to become stale.

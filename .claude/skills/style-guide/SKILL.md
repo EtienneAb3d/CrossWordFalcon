@@ -4617,3 +4617,17 @@ end through the real running API (interactive start/step/save,
   tile, N=6 frames exactly the 6×6 corner (edge across the line between
   cells 5 and 6), N=10 the 10 first columns over the full height, and a
   null size draws nothing.
+
+- **The playable/Interactive grid is at most 3/4 of the window height**
+  (`#grid`'s `--cell-size`, `script.js`'s `fitGridToViewport`), at the
+  user's explicit request: the cell size is computed from
+  `window.innerHeight × 0.75` (header row, 2px gaps and border included),
+  capped at the former 2rem and floored at 12px, recomputed on every
+  `renderGrid()` and on window resize (which also re-measures
+  `#hover-definition-row` and re-places `#leaderboard`). Cell letters
+  (×0.5), clue numbers (×0.275) and header numbers (×0.375) scale with it
+  so their proportions stay those of the 2rem grid. The attempt-preview
+  mini-grids keep their own fixed 1.1rem cells. **Visually confirmed**
+  with Playwright/Chromium: a 14×15 grid measures 515px in a 700px-high
+  window (25px cells), 648px (2rem cells, unchanged) in a 1200px one, and
+  363px after resizing to 500px.

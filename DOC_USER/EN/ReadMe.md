@@ -782,7 +782,9 @@ Once generation completes, the search-progress panel disappears and
   preview panel showed, now that the grid is finished.
 - **The grid itself** (`#grid`, `frontend/static/script.js`,
   `renderGrid`) — a crossword grid with 1-based
-  row/column headers. A black cell is drawn as a black square half the
+  row/column headers. The grid is never taller than three quarters of
+  the window: its cells shrink (from their full size) to fit, and follow
+  the window when it is resized (`fitGridToViewport`). A black cell is drawn as a black square half the
   cell's size, centered in a white cell — the same in every grid of the
   page: play, Interactive mode and the generation previews
   (`frontend/static/style.css`, `.cell.black`). Click a white cell to select it (`selectCell`, a
