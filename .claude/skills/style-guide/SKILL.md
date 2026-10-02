@@ -4582,3 +4582,20 @@ end through the real running API (interactive start/step/save,
   `[hidden]` overrides guard the bare-id `display` trap. No new token.
   Visually confirmed with Playwright/Chromium: button top equals grid top,
   panel directly below.
+
+- **"Préconfigurations" drop-down** (`#preset-row`, `#preset-select`), the
+  first line of `#generate-form` (`flex-basis: 100%`): the label, then a
+  custom listbox — a native `<select>` cannot render the bold preset name
+  the user asked for. The button is a white field (16rem min, "▾" on the
+  right, `--fg` text, `font-weight: normal` overriding the shared bold
+  button rule so the selected preset keeps its bold name / regular
+  description split, not the accent-blue button look) so it reads as a
+  selector, not an action; its list opens below it as a white card
+  (`--border`, 6px radius, soft shadow, `z-index: 10`), one
+  `.preset-option` per line ("**name** : WxH N % noir"), hover/focus and
+  the current preset tinted `--selected`, an off-localhost oversized
+  preset at `opacity: 0.45`. Hidden with the other fields in
+  `.play-collapsed`. `#preset-select-list[hidden]` override for the
+  bare-id `display` trap. No new token. **Visually confirmed** with
+  Playwright/Chromium at 1400×900: list open over the form fields, bold
+  names, picking "Expresso latte" set 10/10/10.

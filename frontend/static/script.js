@@ -5,6 +5,9 @@ const WHITE = ".";
 // i18n.js, loaded before this one — see index.html.
 
 let uiLanguage = "fr";
+// Set once the "Préconfigurations" drop-down is built (renderGridPresets):
+// setUiLanguage() runs at load before that code is reached.
+let gridPresetsReady = false;
 
 function applyTranslations() {
   const t = I18N[uiLanguage];
@@ -3074,6 +3077,8 @@ function setUiLanguage(lang) {
   // translated (see renderGridDifficulty), so it must be re-applied on a
   // language change.
   renderGridDifficulty();
+  // The "Préconfigurations" options carry a translated "% noir" suffix.
+  if (gridPresetsReady) renderGridPresets();
   // The "Interactif" mode panel carries translated labels/messages.
   if (interactiveMode) renderInteractive();
   // The "Interactif" mode help panel builds its list dynamically (see
@@ -3380,6 +3385,127 @@ const LOCALHOST_ONLY_MODES = ["ultra", "megatron"];
   }
   if (LOCALHOST_ONLY_MODES.includes(modeSelect.value)) modeSelect.value = "medium";
 })();
+
+// "Préconfigurations" drop-down (#preset-select): one click fills
+// Largeur (horizontal), Hauteur (vertical) and Taux noir. A custom
+// listbox rather than a <select>, since an <option> cannot show the
+// preset name in bold. The button shows the preset matching the three
+// fields' current values, or "Personnalisée" when none does. A preset
+// larger than REMOTE_MAX_DIMENSION is disabled off localhost, like the
+// dimension inputs themselves.
+const GRID_PRESETS = [
+  { name: "Ristretto noisette", width: 6, height: 6, black: 0 },
+  { name: "Expresso latte", width: 10, height: 10, black: 10 },
+  { name: "Macchiato", width: 15, height: 10, black: 12 },
+  { name: "Cappuccino", width: 15, height: 15, black: 15 },
+  { name: "Mocha", width: 20, height: 20, black: 15 },
+  { name: "Americano", width: 30, height: 20, black: 15 },
+  { name: "Frappuccino", width: 30, height: 30, black: 15 },
+];
+const presetSelectBtn = document.getElementById("preset-select-btn");
+const presetSelectList = document.getElementById("preset-select-list");
+
+function gridPresetAllowed(preset) {
+  return isLocalhostOrigin()
+    || (preset.width <= REMOTE_MAX_DIMENSION && preset.height <= REMOTE_MAX_DIMENSION);
+}
+
+function matchingGridPreset() {
+  return GRID_PRESETS.find((p) => String(p.width) === widthInput.value
+    && String(p.height) === heightInput.value
+    && String(p.black) === blackEnrichmentInput.value) || null;
+}
+
+// Fills `el` with "<b>name</b> : WxH N % noir".
+function fillGridPresetText(el, preset) {
+  const t = I18N[uiLanguage];
+  el.textContent = "";
+  const name = document.createElement("strong");
+  name.textContent = preset.name;
+  el.append(name, t.presetDescription(preset.width, preset.height, preset.black));
+}
+
+function syncGridPresetSelection() {
+  const current = matchingGridPreset();
+  if (current) fillGridPresetText(presetSelectBtn, current);
+  else presetSelectBtn.textContent = I18N[uiLanguage].presetCustom;
+  presetSelectList.querySelectorAll(".preset-option").forEach((li, i) => {
+    li.setAttribute("aria-selected", GRID_PRESETS[i] === current ? "true" : "false");
+  });
+}
+
+function renderGridPresets() {
+  presetSelectList.textContent = "";
+  GRID_PRESETS.forEach((preset) => {
+    const li = document.createElement("li");
+    li.className = "preset-option";
+    li.setAttribute("role", "option");
+    li.tabIndex = -1;
+    if (!gridPresetAllowed(preset)) li.setAttribute("aria-disabled", "true");
+    fillGridPresetText(li, preset);
+    li.addEventListener("click", () => applyGridPreset(preset));
+    li.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        applyGridPreset(preset);
+      }
+    });
+    presetSelectList.append(li);
+  });
+  syncGridPresetSelection();
+}
+
+function closeGridPresetList() {
+  presetSelectList.hidden = true;
+  presetSelectBtn.setAttribute("aria-expanded", "false");
+}
+
+function applyGridPreset(preset) {
+  if (!gridPresetAllowed(preset)) return;
+  widthInput.value = String(preset.width);
+  heightInput.value = String(preset.height);
+  blackEnrichmentInput.value = String(preset.black);
+  syncGridPresetSelection();
+  closeGridPresetList();
+  presetSelectBtn.focus();
+}
+
+presetSelectBtn.addEventListener("click", () => {
+  const opening = presetSelectList.hidden;
+  presetSelectList.hidden = !opening;
+  presetSelectBtn.setAttribute("aria-expanded", String(opening));
+  if (opening) {
+    const target = presetSelectList.querySelector('[aria-selected="true"]')
+      || presetSelectList.querySelector(".preset-option:not([aria-disabled])");
+    if (target) target.focus();
+  }
+});
+
+presetSelectList.addEventListener("keydown", (event) => {
+  const options = [...presetSelectList.querySelectorAll(".preset-option:not([aria-disabled])")];
+  const index = options.indexOf(document.activeElement);
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    const next = options[(index + step + options.length) % options.length];
+    if (next) next.focus();
+  } else if (event.key === "Escape") {
+    event.preventDefault();
+    closeGridPresetList();
+    presetSelectBtn.focus();
+  }
+});
+
+document.addEventListener("click", (event) => {
+  if (!presetSelectList.hidden && !event.target.closest("#preset-select")) closeGridPresetList();
+});
+
+for (const input of [widthInput, heightInput, blackEnrichmentInput]) {
+  input.addEventListener("input", syncGridPresetSelection);
+  input.addEventListener("change", syncGridPresetSelection);
+}
+renderGridPresets();
+gridPresetsReady = true;
 
 // Raised from 700ms to 2000ms at the user's explicit request, after a
 // reported sporadic 502 on /api/generate/status with no corresponding trace
@@ -7765,6 +7891,7 @@ function enterInteractiveMode(state) {
     if (gp.mode) document.getElementById("mode").value = gp.mode;
     if (gp.black_enrichment_percent !== undefined && gp.black_enrichment_percent !== null) {
       blackEnrichmentInput.value = gp.black_enrichment_percent;
+      syncGridPresetSelection();
     }
     if (gp.theme_precision !== undefined && gp.theme_precision !== null) {
       document.getElementById("theme-precision").value = gp.theme_precision;

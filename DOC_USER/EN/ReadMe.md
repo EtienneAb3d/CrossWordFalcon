@@ -92,6 +92,17 @@ the tool buttons (Bibliothèque, Dictionnaire, Paraphraseur, Créations…)
 stay visible. Clicking it unfolds the full form. The form is shown in
 full again whenever a new generation or an Interactive session starts.
 
+- **Préconfigurations / Presets** (`#preset-select`, first line of the
+  form) — a drop-down of ready-made grid formats, each shown as its name
+  in bold followed by width x height and black rate: Ristretto noisette
+  (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
+  Cappuccino (15x15, 15 %), Mocha (20x20, 15 %), Americano (30x20, 15 %),
+  Frappuccino (30x30, 15 %). Picking one fills Largeur, Hauteur and Taux
+  noir at once; the three fields stay editable. The button shows the
+  preset matching the current values, or "Personnalisée / Custom" when
+  none does. Presets wider or taller than 20 cells are greyed out when the
+  page is not opened on the local machine (`frontend/static/script.js`,
+  `GRID_PRESETS`, `applyGridPreset`, `syncGridPresetSelection`).
 - **Langue / Language** (`#language`) — which of the six supported
   languages (French, English, German, Spanish, Italian, Portuguese) the grid's own
   words and clues are written in. Also switches every label/message on

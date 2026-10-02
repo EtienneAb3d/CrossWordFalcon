@@ -72,6 +72,19 @@
     </header>
 
     <form id="generate-form">
+      <!-- "Préconfigurations": a custom drop-down (a native <select> cannot
+           show a bold preset name) that fills Largeur/Hauteur/Taux noir in
+           one click. Options are built by script.js (GRID_PRESETS,
+           renderGridPresets). -->
+      <div id="preset-row">
+        <span id="preset-label" data-i18n="presetLabel">Préconfigurations</span>
+        <div id="preset-select">
+          <button type="button" id="preset-select-btn" aria-haspopup="listbox"
+                  aria-expanded="false" aria-labelledby="preset-label preset-select-btn"></button>
+          <ul id="preset-select-list" role="listbox" aria-labelledby="preset-label" hidden></ul>
+        </div>
+      </div>
+
       <label for="language">
         <span data-i18n="languageLabel">Langue</span>
         <select id="language" name="language">

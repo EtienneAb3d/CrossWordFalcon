@@ -2300,6 +2300,12 @@ state, unlike the backend).
   sidebars), a collapsible virtual keyboard, and a set of togglable
   panels (library, dictionary, paraphraser, Qdrant admin, chatbot,
   interactive-mode controls), plus the first-visit welcome overlay.
+  Its first line, "Préconfigurations" (`#preset-select`), is a custom
+  listbox (`script.js`'s `GRID_PRESETS`/`renderGridPresets`/
+  `applyGridPreset`) filling `#width`/`#height`/`#black-enrichment` from
+  seven named formats (6x6 0 % to 30x30 15 %), frontend-only; the
+  button shows the preset matching the three fields (`syncGridPresetSelection`),
+  presets above `REMOTE_MAX_DIMENSION` are disabled off localhost.
   While a playable grid is on screen (`displayFinalGrid`), the creation
   form is folded (`#generate-form.play-collapsed`, `setGenerateFormCollapsed`
   in `script.js`) behind a `#create-grid-btn` "Créer une grille" button

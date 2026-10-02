@@ -156,7 +156,10 @@ plain, unthemed grids — pass `--no-theme` to turn this off.
 On the page:
 
 1. Choose a **language** (the interface itself switches to that language
-   too), a **width**, a **height** (15×10 by default), and a **difficulty
+   too), a **width**, a **height** (15×10 by default) — or pick a ready-made
+   format in **"Préconfigurations"** (from the 6×6 "Ristretto noisette" to
+   the 30×30 "Frappuccino"), which sets the size and black-cell rate in one
+   click — and a **difficulty
    level** ("Easy" uses everyday vocabulary, "Hard" allows rarer words).
    For a bilingual grid — its across (horizontal) words in one language,
    its down (vertical) words in a different one — set the **"Bilingue" /

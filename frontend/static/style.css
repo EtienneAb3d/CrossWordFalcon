@@ -407,6 +407,7 @@ form {
    input-alignment top margin. Toggled by script.js's
    setGenerateFormCollapsed(). */
 #generate-form.play-collapsed > label,
+#generate-form.play-collapsed #preset-row,
 #generate-form.play-collapsed #theme-field,
 #generate-form.play-collapsed #generate-challenge-panel,
 #generate-form.play-collapsed #generate-btn {
@@ -415,6 +416,82 @@ form {
 
 #generate-form.play-collapsed #form-actions > button {
   margin-top: 0;
+}
+
+/* "Préconfigurations" row: its own first line of #generate-form
+   (flex-basis 100%), the label then a custom drop-down — a native <select>
+   cannot render the bold preset name. The list opens below the button,
+   over the page (absolute, z-index above the form fields). */
+#preset-row {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+}
+
+#preset-select {
+  position: relative;
+}
+
+#preset-select-btn {
+  min-width: 16rem;
+  text-align: left;
+  font-size: 0.9rem;
+  /* The shared button rule is bold: keep the bold name / regular
+     description split of the options. */
+  font-weight: normal;
+  background: var(--white-cell);
+  color: var(--fg);
+}
+
+#preset-select-btn strong {
+  font-weight: 700;
+}
+
+#preset-select-btn::after {
+  content: "▾";
+  float: right;
+  margin-left: 0.6rem;
+  color: #777;
+}
+
+#preset-select-list {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  z-index: 10;
+  min-width: 100%;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  background: var(--white-cell);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+}
+
+#preset-select-list[hidden] {
+  display: none;
+}
+
+.preset-option {
+  padding: 0.35rem 0.75rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.preset-option:hover,
+.preset-option:focus-visible,
+.preset-option[aria-selected="true"] {
+  background: var(--selected);
+  outline: none;
+}
+
+.preset-option[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: default;
+  background: none;
 }
 
 /* Play-mode buttons (Vérification, Solution, Définitions, Recalculer) on
