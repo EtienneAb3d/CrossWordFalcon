@@ -393,28 +393,29 @@ override, else `os.cpu_count()`) independent worker processes in parallel
 via `ProcessPoolExecutor`:
 
 1. **Black-cell placement** (`make_pattern`) — places black cells one at
-   a time (never symmetric pairs), via `_place_black_cells`: every draw
-   first keeps the `BLACK_DRAW_WINDOW_PERCENT` (5) % rows and, separately,
-   the 5 % columns still owning a candidate with the fewest black cells
-   (at least one each, ties in random order) and restricts the draw to
-   the candidates lying in a selected row OR a selected column (whole
-   rows and columns, not only their intersections); within that, it
-   ranks the candidates by squared Euclidean distance to the closest
+   a time (never symmetric pairs), via `_place_black_cells`, which keeps
+   the grid's white runs (`_white_runs`: every maximal run of non-black
+   cells, across and down, single cells included) up to date — a new
+   black cell splits its across and down runs into the pieces on either
+   side (`_split_runs`). Every draw ranks the runs by decreasing length
+   (ties in random order), keeps the `BLACK_DRAW_WINDOW_PERCENT` (5) %
+   longest (at least one), keeps their candidates satisfying the hard
+   constraints, ranks those by squared Euclidean distance to the closest
    black cell already placed, a black cell sharing the candidate's row or
    column counting at `BLACK_ALIGNED_DISTANCE_FACTOR` (10) times its real
    distance (`_black_distance_sq`, `_nearest_black_distance_sq`, kept per
    candidate and updated as each cell is placed; farthest first, ties
-   keeping the shuffled order), takes the 5 % farthest (at least one) as
-   a window and draws a cell at random in it; a cell breaking a hard
-   constraint is set aside and another drawn, a fully set-aside window is
-   widened by 5 % more up to the whole restriction, and a fully set-aside
-   restriction widens the row and column selections by 5 % more,
-   restarting the distance window at 5 %. The hard constraints: still
-   white, not adjacent to a black cell, `_new_black_cell_breaks_locked_
-   slot` false, structurally valid at `STRUCTURAL_MIN_INTERIOR_FREE=4`
-   (an interior white zone must be at least this long); once every row
-   and column is selected and nothing fits, the draw restarts from the
-   first windows with that minimum lowered by one, down to 1. This ratio-based draw never
+   keeping the shuffled order), and draws at random among the same
+   percentage farthest (at least one); when the selected runs hold no
+   valid cell, the percentage grows by 5 and the draw starts over. The
+   hard constraints: still white, not adjacent to a black cell,
+   `_new_black_cell_breaks_locked_slot` false, structurally valid at
+   `STRUCTURAL_MIN_INTERIOR_FREE=4` (an interior white zone must be at
+   least this long) — answered by `_BlackCellValidity`, built once per
+   draw and level (zones per row/column, isolated cells, articulation
+   points of the white graph), always equal to `is_structurally_valid`
+   on the modified grid; once every run is selected and nothing fits, the
+   draw restarts at 5 % with that minimum lowered by one, down to 1. This ratio-based draw never
    considers a cell of the four corner 2x2 squares (`_in_corner_square`/
    `CORNER_SQUARE_SIZE=2`, which only pre-fill and the repair mechanisms
    below may blacken). Adjacency is never accepted at all, on any palier

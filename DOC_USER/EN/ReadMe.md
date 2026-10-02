@@ -1435,10 +1435,10 @@ words gets shortened the same way, by removing a black cell from right
 within that slot's own cells (never from some unrelated part of the
 grid), or, if that isn't enough, by removing one of the crossing words
 that pinned those letters in place to begin with. Each new black cell is
-drawn only in the 5% of rows and the 5% of columns holding the fewest
-black cells (whole rows and columns), at random among the 5% of those
-cells lying farthest from every black cell already placed (each window
-widening by 5% at a time whenever none of its cells can take one) — spreading them out rather than letting them clump into ugly
+drawn only in the 5% longest white runs (across or down), at random
+among the 5% of their usable cells lying farthest from every black cell
+already placed (the share widening by 5% at a time whenever those runs
+hold no usable cell) — spreading them out rather than letting them clump into ugly
 "walls" — and the
 generator never places a black cell right next to another one, on any
 cycle: a cycle whose black-cell density target can't be reached without

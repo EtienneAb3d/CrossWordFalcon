@@ -607,6 +607,157 @@ def is_structurally_valid(grid, rows, cols, min_interior_free=STRUCTURAL_MIN_INT
     return len(seen) == len(white)
 
 
+class _BlackCellValidity:
+    """Answers, for one grid state and one `min_interior_free`, whether
+    blackening one white cell leaves the grid structurally valid — always
+    exactly `is_structurally_valid` on the modified grid, without
+    rescanning it: the row and column zones, the isolated cells and the
+    white graph's articulation points (Tarjan) are computed once, and each
+    query only re-examines the row and column of the cell. Used by
+    `_place_black_cells`, which tests many cells of the same grid state."""
+
+    def __init__(self, grid, rows, cols, min_interior_free):
+        self.grid = grid
+        self.rows = rows
+        self.cols = cols
+        self.min_free = min_interior_free
+        # Per cell: (start, end) of its across and down white zone.
+        self.h_zone = {}
+        self.v_zone = {}
+        self.bad_rows = [0] * rows  # zones of the row failing the length rule
+        self.bad_cols = [0] * cols
+        for r in range(rows):
+            for start, end in self._zones([grid[r][c] for c in range(cols)]):
+                if not self._zone_ok(start, end, cols):
+                    self.bad_rows[r] += 1
+                for c in range(start, end):
+                    self.h_zone[(r, c)] = (start, end)
+        for c in range(cols):
+            for start, end in self._zones([grid[r][c] for r in range(rows)]):
+                if not self._zone_ok(start, end, rows):
+                    self.bad_cols[c] += 1
+                for r in range(start, end):
+                    self.v_zone[(r, c)] = (start, end)
+        self.total_bad_rows = sum(1 for n in self.bad_rows if n)
+        self.total_bad_cols = sum(1 for n in self.bad_cols if n)
+        self.isolated = {
+            cell for cell in self.h_zone
+            if self.h_zone[cell][1] - self.h_zone[cell][0] < 2
+            and self.v_zone[cell][1] - self.v_zone[cell][0] < 2
+        }
+        self._components_and_articulations()
+
+    @staticmethod
+    def _zones(line):
+        zones = []
+        start = None
+        for i, value in enumerate(line + [BLACK]):
+            if value == WHITE:
+                if start is None:
+                    start = i
+            elif start is not None:
+                zones.append((start, i))
+                start = None
+        return zones
+
+    def _zone_ok(self, start, end, length):
+        return end - start >= self.min_free or start == 0 or end == length
+
+    def _neighbors(self, r, c):
+        for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
+            if (nr, nc) in self.h_zone:
+                yield nr, nc
+
+    def _components_and_articulations(self):
+        disc, low = {}, {}
+        self.articulations = set()
+        self.component_sizes = []
+        counter = 0
+        for root in self.h_zone:
+            if root in disc:
+                continue
+            size = 0
+            disc[root] = low[root] = counter
+            counter += 1
+            size += 1
+            root_children = 0
+            stack = [(root, None, self._neighbors(*root))]
+            while stack:
+                cell, parent, it = stack[-1]
+                advanced = False
+                for nb in it:
+                    if nb == parent:
+                        continue
+                    if nb in disc:
+                        low[cell] = min(low[cell], disc[nb])
+                    else:
+                        disc[nb] = low[nb] = counter
+                        counter += 1
+                        size += 1
+                        if cell == root:
+                            root_children += 1
+                        stack.append((nb, cell, self._neighbors(*nb)))
+                        advanced = True
+                        break
+                if advanced:
+                    continue
+                stack.pop()
+                if parent is not None:
+                    low[parent] = min(low[parent], low[cell])
+                    if parent != root and low[cell] >= disc[parent]:
+                        self.articulations.add(parent)
+            if root_children > 1:
+                self.articulations.add(root)
+            self.component_sizes.append(size)
+
+    def valid_with_black(self, r, c):
+        if (r, c) not in self.h_zone:
+            grid = self.grid
+            previous = grid[r][c]
+            grid[r][c] = BLACK
+            ok = is_structurally_valid(grid, self.rows, self.cols, min_interior_free=self.min_free)
+            grid[r][c] = previous
+            return ok
+        # Every other row and column keeps its zones.
+        if self.total_bad_rows - (1 if self.bad_rows[r] else 0):
+            return False
+        if self.total_bad_cols - (1 if self.bad_cols[c] else 0):
+            return False
+        h_start, h_end = self.h_zone[(r, c)]
+        v_start, v_end = self.v_zone[(r, c)]
+        # Row r: its other zones, then the two pieces of the split zone.
+        if self.bad_rows[r] - (0 if self._zone_ok(h_start, h_end, self.cols) else 1):
+            return False
+        if self.bad_cols[c] - (0 if self._zone_ok(v_start, v_end, self.rows) else 1):
+            return False
+        for start, end, length in ((h_start, c, self.cols), (c + 1, h_end, self.cols),
+                                   (v_start, r, self.rows), (r + 1, v_end, self.rows)):
+            if end > start and not self._zone_ok(start, end, length):
+                return False
+        # Isolated cells: only the cells of the two split zones change.
+        changed = {(r, cc) for cc in range(h_start, h_end)} | {(rr, c) for rr in range(v_start, v_end)}
+        if any(cell not in changed for cell in self.isolated):
+            return False
+        for cc in range(h_start, h_end):
+            if cc != c:
+                piece = c - h_start if cc < c else h_end - c - 1
+                v0, v1 = self.v_zone[(r, cc)]
+                if piece < 2 and v1 - v0 < 2:
+                    return False
+        for rr in range(v_start, v_end):
+            if rr != r:
+                piece = r - v_start if rr < r else v_end - r - 1
+                h0, h1 = self.h_zone[(rr, c)]
+                if piece < 2 and h1 - h0 < 2:
+                    return False
+        # Connectivity of the remaining white cells.
+        sizes = self.component_sizes
+        if len(sizes) == 1:
+            return sizes[0] > 1 and (r, c) not in self.articulations
+        return len(sizes) == 2 and 1 in sizes and not any(
+            nb for nb in self._neighbors(r, c))
+
+
 def _has_black_neighbor(grid, rows, cols, r, c):
     """True if at least one of (r, c)'s up-to-4 orthogonal neighbors is
     already black (diagonal contact doesn't count) — used by
@@ -736,10 +887,10 @@ def _in_corner_square(rows, cols, r, c):
         c < CORNER_SQUARE_SIZE or c >= cols - CORNER_SQUARE_SIZE)
 
 
-# `_place_black_cells`' draw windows, in percent, and their widening step:
-# the share of rows and of columns holding the fewest black cells the draw
-# is restricted to, and, within those, the share of candidates farthest
-# from every black cell already placed.
+# `_place_black_cells`' draw window, in percent, and its widening step: the
+# share of the longest white runs the draw is restricted to, and, among
+# their valid cells, the share farthest from every black cell already
+# placed.
 BLACK_DRAW_WINDOW_PERCENT = 5
 
 
@@ -749,6 +900,42 @@ def _window_size(count, percent):
     return min(count, max(1, math.ceil(count * percent / 100)))
 
 
+def _white_runs(grid, rows, cols):
+    """Every maximal run of non-black cells, across then down, as a tuple
+    of (row, col) cells — single cells included."""
+    runs = []
+    for r in range(rows):
+        run = []
+        for c in range(cols + 1):
+            if c < cols and grid[r][c] != BLACK:
+                run.append((r, c))
+            elif run:
+                runs.append(tuple(run))
+                run = []
+    for c in range(cols):
+        run = []
+        for r in range(rows + 1):
+            if r < rows and grid[r][c] != BLACK:
+                run.append((r, c))
+            elif run:
+                runs.append(tuple(run))
+                run = []
+    return runs
+
+
+def _split_runs(runs, cell):
+    """`runs` with the across and the down run holding `cell` (just
+    blackened) each replaced by its non-empty pieces on either side of it."""
+    out = []
+    for run in runs:
+        if cell in run:
+            k = run.index(cell)
+            out.extend(piece for piece in (run[:k], run[k + 1:]) if piece)
+        else:
+            out.append(run)
+    return out
+
+
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
                         rng, index=None, locked_letters=None, available_lengths=None,
                         forbid_adjacency=False):
@@ -756,35 +943,35 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     places black cells one at a time until `placed` reaches `target` or no
     candidate can be placed any more.
 
-    Every draw first ranks the rows, and separately the columns, still
-    owning a candidate by their number of black cells (fewest first, ties
-    in random order), and keeps the `BLACK_DRAW_WINDOW_PERCENT` % fewest
-    of each (at least one): the draw is restricted to the candidates lying
-    in a selected row OR a selected column — whole rows and whole columns,
-    not only their intersections. Within that restriction, the candidates
-    are ranked by their distance to the closest black cell already on the
-    grid (`_nearest_black_distance_sq`, Euclidean, 10x for a black cell
-    of the same row or column, farthest first, ties
-    keeping `candidates`' shuffled order), the `BLACK_DRAW_WINDOW_PERCENT`
-    % farthest (at least one) form the distance window, and a cell is drawn
-    at random in it. A drawn cell that breaks a hard constraint is set
-    aside and another one is drawn in the same window; once the whole
-    window is set aside, it is widened by `BLACK_DRAW_WINDOW_PERCENT` more,
-    up to the whole restriction. When the whole restriction is set aside,
-    the row and column windows are widened by `BLACK_DRAW_WINDOW_PERCENT`
-    more and the distance window starts over at its first step.
+    The grid's white runs (`_white_runs`: every maximal run of non-black
+    cells, across and down) are kept up to date as cells are placed — a
+    new black cell splits the across and the down run holding it into the
+    pieces on either side of it (`_split_runs`; none on a grid edge).
+
+    Every draw ranks the runs by decreasing length (ties in random order)
+    and keeps the `BLACK_DRAW_WINDOW_PERCENT` % longest (at least one).
+    Only the candidates lying in those runs that satisfy the hard
+    constraints are kept; they are ranked by their distance to the closest
+    black cell already on the grid (`_nearest_black_distance_sq`,
+    `_black_distance_sq`: Euclidean, a black cell of the same row or
+    column counting `BLACK_ALIGNED_DISTANCE_FACTOR` times its real
+    distance; farthest first, ties keeping `candidates`' shuffled order),
+    and a cell is drawn at random among the same percentage of them
+    farthest (at least one). When the selected runs hold no valid cell,
+    the percentage grows by `BLACK_DRAW_WINDOW_PERCENT` and the draw starts
+    over.
 
     Hard constraints: the cell is still white; it touches no black cell
     (`_has_black_neighbor`); it does not drop a slot touching a locked
     letter below its candidate threshold (`_new_black_cell_breaks_locked_
     slot`); the grid stays structurally valid (`is_structurally_valid`)
     with `min_interior_free` = `STRUCTURAL_MIN_INTERIOR_FREE`. When every
-    row and column is selected without a valid cell, the draw starts over
-    from the first windows with `min_interior_free` lowered by one (down
-    to 1); when even 1 fails, with adjacency accepted unless
-    `forbid_adjacency` (which `make_pattern` always passes) — and when
-    that fails too, nothing can be placed and the function stops short of
-    `target`, leaving the grid as it is.
+    run is selected without a valid cell, the draw starts over from the
+    first percentage with `min_interior_free` lowered by one (down to 1);
+    when even 1 fails, with adjacency accepted unless `forbid_adjacency`
+    (which `make_pattern` always passes) — and when that fails too,
+    nothing can be placed and the function stops short of `target`,
+    leaving the grid as it is.
 
     This adjacency prohibition is scoped to pattern generation itself — the
     cross-palier cleanups and the impossible-zone repairs may still place
@@ -794,7 +981,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     (placed, unplaced cells)."""
     remaining = candidates
 
-    def _valid(r, c, min_free, allow_adjacency):
+    def _valid(r, c, structure, allow_adjacency):
         if grid[r][c] == BLACK:
             return False
         if not allow_adjacency and _has_black_neighbor(grid, rows, cols, r, c):
@@ -802,60 +989,46 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         if _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_letters,
                                                available_lengths):
             return False
-        grid[r][c] = BLACK
-        ok = is_structurally_valid(grid, rows, cols, min_interior_free=min_free)
-        grid[r][c] = WHITE
-        return ok
+        return structure.valid_with_black(r, c)
 
-    def _draw(order, min_free, allow_adjacency, set_aside):
-        # Distance window over `order`; `set_aside` holds the cells already
-        # found invalid at this level during this draw.
+    def _draw(run_order, position, min_free, allow_adjacency):
+        structure = _BlackCellValidity(grid, rows, cols, min_free)
+        checked = {}  # candidate index -> valid at this level, during this draw
         percent = BLACK_DRAW_WINDOW_PERCENT
-        start = 0
-        while start < len(order):
-            size = _window_size(len(order), percent)
-            window = [i for i in order[start:size] if i not in set_aside]
-            while window:
-                idx = window.pop(rng.randrange(len(window)))
-                if _valid(*remaining[idx], min_free, allow_adjacency):
-                    return idx
-                set_aside.add(idx)
-            start = size
+        while True:
+            run_count = _window_size(len(run_order), percent)
+            in_runs = sorted({
+                position[cell] for run in run_order[:run_count] for cell in run
+                if cell in position
+            })
+            valid = []
+            for i in in_runs:
+                if i not in checked:
+                    checked[i] = _valid(*remaining[i], structure, allow_adjacency)
+                if checked[i]:
+                    valid.append(i)
+            if valid:
+                valid.sort(key=lambda i: -dist[i])
+                window = valid[:_window_size(len(valid), percent)]
+                return window[rng.randrange(len(window))]
+            if run_count == len(run_order):
+                return None
             percent += BLACK_DRAW_WINDOW_PERCENT
-        return None
 
-    def _least_loaded(lines, counts):
-        lines = list(lines)
-        rng.shuffle(lines)
-        lines.sort(key=lambda line: counts[line])
-        return lines
-
+    runs = _white_runs(grid, rows, cols)
     blacks = [(br, bc) for br in range(rows) for bc in range(cols) if grid[br][bc] == BLACK]
-    # Squared distance of each candidate to its closest black cell, kept
-    # parallel to `remaining` and updated as each new black cell is placed.
+    # Distance of each candidate to its closest black cell, kept parallel
+    # to `remaining` and updated as each new black cell is placed.
     dist = [_nearest_black_distance_sq(blacks, r, c) for r, c in remaining]
     while remaining and placed < target:
-        order = sorted(range(len(remaining)), key=lambda i: -dist[i])
-        row_order = _least_loaded({r for r, _ in remaining}, row_black)
-        col_order = _least_loaded({c for _, c in remaining}, col_black)
+        position = {cell: i for i, cell in enumerate(remaining)}
+        run_order = list(runs)
+        rng.shuffle(run_order)
+        run_order.sort(key=lambda run: -len(run))
         chosen = None
         for allow_adjacency in ((False,) if forbid_adjacency else (False, True)):
             for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
-                set_aside = set()
-                percent = BLACK_DRAW_WINDOW_PERCENT
-                while chosen is None:
-                    row_count = _window_size(len(row_order), percent)
-                    col_count = _window_size(len(col_order), percent)
-                    sel_rows = set(row_order[:row_count])
-                    sel_cols = set(col_order[:col_count])
-                    restricted = [
-                        i for i in order
-                        if remaining[i][0] in sel_rows or remaining[i][1] in sel_cols
-                    ]
-                    chosen = _draw(restricted, min_free, allow_adjacency, set_aside)
-                    if row_count == len(row_order) and col_count == len(col_order):
-                        break
-                    percent += BLACK_DRAW_WINDOW_PERCENT
+                chosen = _draw(run_order, position, min_free, allow_adjacency)
                 if chosen is not None:
                     break
             if chosen is not None:
@@ -868,6 +1041,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
             d = _black_distance_sq(cr, cc, r, c)
             if d < dist[i]:
                 dist[i] = d
+        runs = _split_runs(runs, (r, c))
         grid[r][c] = BLACK
         row_black[r] += 1
         col_black[c] += 1
@@ -1489,11 +1663,11 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     that directly.
 
     Implemented by `_place_black_cells`: at each step, the draw is
-    restricted to the `BLACK_DRAW_WINDOW_PERCENT` % rows and columns
-    holding the fewest black cells (whole rows and columns), and a cell is
-    drawn at random among the `BLACK_DRAW_WINDOW_PERCENT` % of those
-    candidates farthest from every black cell already placed, each window
-    widening by the same step while none of its cells can be placed.
+    restricted to the `BLACK_DRAW_WINDOW_PERCENT` % longest white runs, and
+    a valid cell is drawn at random among the same percentage of their
+    valid cells farthest from every black cell already placed, the
+    percentage widening by the same step while those runs hold no valid
+    cell.
 
     This ratio-based draw never places a black cell in one of the grid's
     four corner 2x2 squares (`_in_corner_square`, `CORNER_SQUARE_SIZE`);

@@ -5,6 +5,7 @@ import falcon.gen.Words.LengthSets;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -295,9 +296,8 @@ public final class Grids {
     }
 
     /**
-     * {@link #placeBlackCells}' draw windows, in percent, and their widening step: the share of rows and of columns
-     * holding the fewest black cells the draw is restricted to, and, within those, the share of candidates farthest
-     * from every black cell already placed.
+     * {@link #placeBlackCells}' draw window, in percent, and its widening step: the share of the longest white runs
+     * the draw is restricted to, and, among their valid cells, the share farthest from every black cell placed.
      */
     static final int BLACK_DRAW_WINDOW_PERCENT = 5;
 
@@ -306,57 +306,84 @@ public final class Grids {
         return Math.min(count, Math.max(1, (int) Math.ceil(count * percent / 100.0)));
     }
 
+    /** Every maximal run of non-black cells, across then down — single cells included. */
+    static List<int[]> whiteRuns(char[][] grid, int rows, int cols) {
+        List<int[]> runs = new ArrayList<>();
+        for (int r = 0; r < rows; r++) {
+            List<Integer> run = new ArrayList<>();
+            for (int c = 0; c <= cols; c++) {
+                if (c < cols && grid[r][c] != BLACK) {
+                    run.add(Cells.of(r, c));
+                } else if (!run.isEmpty()) {
+                    runs.add(run.stream().mapToInt(Integer::intValue).toArray());
+                    run.clear();
+                }
+            }
+        }
+        for (int c = 0; c < cols; c++) {
+            List<Integer> run = new ArrayList<>();
+            for (int r = 0; r <= rows; r++) {
+                if (r < rows && grid[r][c] != BLACK) {
+                    run.add(Cells.of(r, c));
+                } else if (!run.isEmpty()) {
+                    runs.add(run.stream().mapToInt(Integer::intValue).toArray());
+                    run.clear();
+                }
+            }
+        }
+        return runs;
+    }
+
+    /** {@code runs} with the runs holding {@code cell} (just blackened) replaced by their non-empty pieces. */
+    static List<int[]> splitRuns(List<int[]> runs, int cell) {
+        List<int[]> out = new ArrayList<>();
+        for (int[] run : runs) {
+            int k = -1;
+            for (int i = 0; i < run.length; i++) if (run[i] == cell) k = i;
+            if (k < 0) {
+                out.add(run);
+                continue;
+            }
+            if (k > 0) out.add(java.util.Arrays.copyOfRange(run, 0, k));
+            if (k + 1 < run.length) out.add(java.util.Arrays.copyOfRange(run, k + 1, run.length));
+        }
+        return out;
+    }
+
     /**
-     * Ratio-based black-cell placement: each draw restricts the candidates to whole rows and whole columns among the
-     * {@link #BLACK_DRAW_WINDOW_PERCENT} % rows and columns holding the fewest black cells (ties in random order),
-     * ranks them by distance to the closest black cell (farthest first, ties keeping the shuffled order), draws at
-     * random among the {@link #BLACK_DRAW_WINDOW_PERCENT} % farthest, redraws while the drawn cell breaks a hard
-     * constraint, widens the distance window by the same step up to the whole restriction, then widens the row and
-     * column windows and restarts the distance window. Every row and column failing relaxes {@code minInteriorFree}
-     * one step (down to 1), then accepts adjacency unless {@code forbidAdjacency}; failing that, it stops short of
-     * {@code target}. {@code candidates} is updated in place. Returns the cells still unplaced.
+     * Ratio-based black-cell placement: each draw ranks the white runs (kept up to date, a new black cell splitting
+     * its across and down runs) by decreasing length (ties in random order), keeps the
+     * {@link #BLACK_DRAW_WINDOW_PERCENT} % longest, keeps their candidates satisfying the hard constraints, ranks
+     * those by distance to the closest black cell (farthest first, ties keeping the shuffled order) and draws at
+     * random among the same percentage farthest; with no valid cell, the percentage grows by the same step. Every
+     * run failing relaxes {@code minInteriorFree} one step (down to 1), then accepts adjacency unless
+     * {@code forbidAdjacency}; failing that, it stops short of {@code target}. {@code candidates} is updated in place.
+     * Returns the cells still unplaced.
      */
     static List<Integer> placeBlackCells(char[][] grid, int rows, int cols, int[] rowBlack, int[] colBlack,
                                          List<Integer> candidates, int target, int placed, Rng rng,
                                          DualIndex index, Map<Integer, Character> locked, LengthSets available,
                                          boolean forbidAdjacency) {
         List<Integer> remaining = candidates;
+        List<int[]> runs = whiteRuns(grid, rows, cols);
         List<Integer> blacks = new ArrayList<>();
         for (int br = 0; br < rows; br++) {
             for (int bc = 0; bc < cols; bc++) if (grid[br][bc] == BLACK) blacks.add(Cells.of(br, bc));
         }
-        // Squared distance of each candidate to its closest black cell, parallel to remaining, updated per placement.
+        // Distance of each candidate to its closest black cell, parallel to remaining, updated per placement.
         List<Long> dist = new ArrayList<>();
         for (int cell : remaining) dist.add(nearestBlackDistanceSq(blacks, Cells.r(cell), Cells.c(cell)));
         while (!remaining.isEmpty() && placed < target) {
-            List<Integer> order = new ArrayList<>();
-            for (int i = 0; i < remaining.size(); i++) order.add(i);
-            order.sort((a, b) -> Long.compare(dist.get(b), dist.get(a)));
-            Set<Integer> rowSet = new LinkedHashSet<>(), colSet = new LinkedHashSet<>();
-            for (int cell : remaining) {
-                rowSet.add(Cells.r(cell));
-                colSet.add(Cells.c(cell));
-            }
-            List<Integer> rowOrder = leastLoaded(rowSet, rowBlack, rng);
-            List<Integer> colOrder = leastLoaded(colSet, colBlack, rng);
+            Map<Integer, Integer> position = new HashMap<>();
+            for (int i = 0; i < remaining.size(); i++) position.put(remaining.get(i), i);
+            List<int[]> runOrder = new ArrayList<>(runs);
+            rng.shuffle(runOrder);
+            runOrder.sort((a, b) -> Integer.compare(b.length, a.length));
             Integer chosen = null;
             for (int adj = 0; adj < (forbidAdjacency ? 1 : 2) && chosen == null; adj++) {
                 for (int minFree = STRUCTURAL_MIN_INTERIOR_FREE; minFree > 0 && chosen == null; minFree--) {
-                    Set<Integer> setAside = new HashSet<>();
-                    for (int percent = BLACK_DRAW_WINDOW_PERCENT; chosen == null; percent += BLACK_DRAW_WINDOW_PERCENT) {
-                        int rowCount = windowSize(rowOrder.size(), percent);
-                        int colCount = windowSize(colOrder.size(), percent);
-                        Set<Integer> selRows = new HashSet<>(rowOrder.subList(0, rowCount));
-                        Set<Integer> selCols = new HashSet<>(colOrder.subList(0, colCount));
-                        List<Integer> restricted = new ArrayList<>();
-                        for (int i : order) {
-                            int cell = remaining.get(i);
-                            if (selRows.contains(Cells.r(cell)) || selCols.contains(Cells.c(cell))) restricted.add(i);
-                        }
-                        chosen = drawBlackCell(grid, rows, cols, remaining, restricted, minFree, adj == 1, setAside,
-                                rng, index, locked, available);
-                        if (rowCount == rowOrder.size() && colCount == colOrder.size()) break;
-                    }
+                    chosen = drawBlackCell(grid, rows, cols, remaining, dist, runOrder, position, minFree, adj == 1,
+                            rng, index, locked, available);
                 }
             }
             if (chosen == null) break;
@@ -367,6 +394,7 @@ public final class Grids {
                 long d = blackDistanceSq(Cells.r(remaining.get(i)), Cells.c(remaining.get(i)), r, c);
                 if (d < dist.get(i)) dist.set(i, d);
             }
+            runs = splitRuns(runs, cell);
             grid[r][c] = BLACK;
             rowBlack[r]++;
             colBlack[c]++;
@@ -375,45 +403,222 @@ public final class Grids {
         return new ArrayList<>(remaining);
     }
 
-    /** {@code lines} by increasing black-cell count, ties in random order. */
-    private static List<Integer> leastLoaded(Set<Integer> lines, int[] counts, Rng rng) {
-        List<Integer> out = new ArrayList<>(lines);
-        rng.shuffle(out);
-        out.sort((a, b) -> Integer.compare(counts[a], counts[b]));
-        return out;
+    private static Integer drawBlackCell(char[][] grid, int rows, int cols, List<Integer> remaining, List<Long> dist,
+                                         List<int[]> runOrder, Map<Integer, Integer> position, int minFree,
+                                         boolean allowAdjacency, Rng rng, DualIndex index,
+                                         Map<Integer, Character> locked, LengthSets available) {
+        BlackCellValidity structure = new BlackCellValidity(grid, rows, cols, minFree);
+        Map<Integer, Boolean> checked = new HashMap<>(); // candidate index -> valid at this level, during this draw
+        for (int percent = BLACK_DRAW_WINDOW_PERCENT; ; percent += BLACK_DRAW_WINDOW_PERCENT) {
+            int runCount = windowSize(runOrder.size(), percent);
+            java.util.TreeSet<Integer> inRuns = new java.util.TreeSet<>();
+            for (int[] run : runOrder.subList(0, runCount)) {
+                for (int cell : run) {
+                    Integer i = position.get(cell);
+                    if (i != null) inRuns.add(i);
+                }
+            }
+            List<Integer> valid = new ArrayList<>();
+            for (int i : inRuns) {
+                Boolean ok = checked.get(i);
+                if (ok == null) {
+                    int cell = remaining.get(i);
+                    int r = Cells.r(cell), c = Cells.c(cell);
+                    ok = grid[r][c] != BLACK
+                            && (allowAdjacency || !hasBlackNeighbor(grid, rows, cols, r, c))
+                            && !newBlackCellBreaksLockedSlot(grid, rows, cols, r, c, index, locked, available)
+                            && structure.validWithBlack(r, c);
+                    checked.put(i, ok);
+                }
+                if (ok) valid.add(i);
+            }
+            if (!valid.isEmpty()) {
+                valid.sort((a, b) -> Long.compare(dist.get(b), dist.get(a)));
+                List<Integer> window = valid.subList(0, windowSize(valid.size(), percent));
+                return window.get(rng.randrange(window.size()));
+            }
+            if (runCount == runOrder.size()) return null;
+        }
     }
 
-    /** Distance window over {@code order}; {@code setAside} holds the cells already found invalid at this level. */
-    private static Integer drawBlackCell(char[][] grid, int rows, int cols, List<Integer> remaining,
-                                         List<Integer> order, int minFree, boolean allowAdjacency,
-                                         Set<Integer> setAside, Rng rng, DualIndex index,
-                                         Map<Integer, Character> locked, LengthSets available) {
-        int percent = BLACK_DRAW_WINDOW_PERCENT;
-        int start = 0;
-        int n = order.size();
-        while (start < n) {
-            int size = windowSize(n, percent);
-            List<Integer> window = new ArrayList<>();
-            for (int i : order.subList(start, size)) if (!setAside.contains(i)) window.add(i);
-            while (!window.isEmpty()) {
-                int idx = window.remove(rng.randrange(window.size()));
-                int cell = remaining.get(idx);
-                int r = Cells.r(cell), c = Cells.c(cell);
-                boolean ok = grid[r][c] != BLACK
-                        && (allowAdjacency || !hasBlackNeighbor(grid, rows, cols, r, c))
-                        && !newBlackCellBreaksLockedSlot(grid, rows, cols, r, c, index, locked, available);
-                if (ok) {
-                    grid[r][c] = BLACK;
-                    ok = isStructurallyValid(grid, rows, cols, minFree);
-                    grid[r][c] = WHITE;
+    /**
+     * Whether blackening one white cell leaves the grid structurally valid — always exactly
+     * {@link #isStructurallyValid} on the modified grid, without rescanning it: zones, isolated cells and the white
+     * graph's articulation points (Tarjan) are computed once per grid state, each query re-examining only the row
+     * and column of the cell.
+     */
+    static final class BlackCellValidity {
+        private final char[][] grid;
+        private final int rows, cols, minFree;
+        private final int[][] hStart, hEnd, vStart, vEnd; // -1 for a non-white cell
+        private final int[] badRows, badCols;
+        private int totalBadRows, totalBadCols;
+        private final Set<Integer> isolated = new HashSet<>();
+        private final Set<Integer> articulations = new HashSet<>();
+        private final List<Integer> componentSizes = new ArrayList<>();
+
+        BlackCellValidity(char[][] grid, int rows, int cols, int minFree) {
+            this.grid = grid;
+            this.rows = rows;
+            this.cols = cols;
+            this.minFree = minFree;
+            hStart = new int[rows][cols];
+            hEnd = new int[rows][cols];
+            vStart = new int[rows][cols];
+            vEnd = new int[rows][cols];
+            for (int[] row : hStart) java.util.Arrays.fill(row, -1);
+            for (int[] row : vStart) java.util.Arrays.fill(row, -1);
+            badRows = new int[rows];
+            badCols = new int[cols];
+            for (int r = 0; r < rows; r++) {
+                int start = -1;
+                for (int c = 0; c <= cols; c++) {
+                    if (c < cols && grid[r][c] == WHITE) {
+                        if (start < 0) start = c;
+                    } else if (start >= 0) {
+                        if (!zoneOk(start, c, cols)) badRows[r]++;
+                        for (int cc = start; cc < c; cc++) {
+                            hStart[r][cc] = start;
+                            hEnd[r][cc] = c;
+                        }
+                        start = -1;
+                    }
                 }
-                if (ok) return idx;
-                setAside.add(idx);
+                if (badRows[r] > 0) totalBadRows++;
             }
-            start = size;
-            percent += BLACK_DRAW_WINDOW_PERCENT;
+            for (int c = 0; c < cols; c++) {
+                int start = -1;
+                for (int r = 0; r <= rows; r++) {
+                    if (r < rows && grid[r][c] == WHITE) {
+                        if (start < 0) start = r;
+                    } else if (start >= 0) {
+                        if (!zoneOk(start, r, rows)) badCols[c]++;
+                        for (int rr = start; rr < r; rr++) {
+                            vStart[rr][c] = start;
+                            vEnd[rr][c] = r;
+                        }
+                        start = -1;
+                    }
+                }
+                if (badCols[c] > 0) totalBadCols++;
+            }
+            for (int r = 0; r < rows; r++) {
+                for (int c = 0; c < cols; c++) {
+                    if (hStart[r][c] >= 0 && hEnd[r][c] - hStart[r][c] < 2 && vEnd[r][c] - vStart[r][c] < 2) {
+                        isolated.add(Cells.of(r, c));
+                    }
+                }
+            }
+            componentsAndArticulations();
         }
-        return null;
+
+        private boolean zoneOk(int start, int end, int length) {
+            return end - start >= minFree || start == 0 || end == length;
+        }
+
+        private boolean white(int r, int c) {
+            return r >= 0 && r < rows && c >= 0 && c < cols && hStart[r][c] >= 0;
+        }
+
+        private List<Integer> neighbors(int cell) {
+            int r = Cells.r(cell), c = Cells.c(cell);
+            List<Integer> out = new ArrayList<>(4);
+            int[][] steps = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (int[] d : steps) if (white(r + d[0], c + d[1])) out.add(Cells.of(r + d[0], c + d[1]));
+            return out;
+        }
+
+        private void componentsAndArticulations() {
+            Map<Integer, Integer> disc = new HashMap<>(), low = new HashMap<>();
+            int counter = 0;
+            for (int r0 = 0; r0 < rows; r0++) {
+                for (int c0 = 0; c0 < cols; c0++) {
+                    int root = Cells.of(r0, c0);
+                    if (hStart[r0][c0] < 0 || disc.containsKey(root)) continue;
+                    int size = 1, rootChildren = 0;
+                    disc.put(root, counter);
+                    low.put(root, counter);
+                    counter++;
+                    // Frames: cell, parent (or -1), neighbor list, next neighbor position.
+                    List<int[]> frames = new ArrayList<>();
+                    List<List<Integer>> nbLists = new ArrayList<>();
+                    frames.add(new int[]{root, -1, 0});
+                    nbLists.add(neighbors(root));
+                    while (!frames.isEmpty()) {
+                        int top = frames.size() - 1;
+                        int[] f = frames.get(top);
+                        List<Integer> nbs = nbLists.get(top);
+                        int cell = f[0], parent = f[1];
+                        boolean advanced = false;
+                        while (f[2] < nbs.size()) {
+                            int nb = nbs.get(f[2]++);
+                            if (nb == parent) continue;
+                            Integer dn = disc.get(nb);
+                            if (dn != null) {
+                                low.put(cell, Math.min(low.get(cell), dn));
+                            } else {
+                                disc.put(nb, counter);
+                                low.put(nb, counter);
+                                counter++;
+                                size++;
+                                if (cell == root) rootChildren++;
+                                frames.add(new int[]{nb, cell, 0});
+                                nbLists.add(neighbors(nb));
+                                advanced = true;
+                                break;
+                            }
+                        }
+                        if (advanced) continue;
+                        frames.remove(top);
+                        nbLists.remove(top);
+                        if (parent >= 0) {
+                            low.put(parent, Math.min(low.get(parent), low.get(cell)));
+                            if (parent != root && low.get(cell) >= disc.get(parent)) articulations.add(parent);
+                        }
+                    }
+                    if (rootChildren > 1) articulations.add(root);
+                    componentSizes.add(size);
+                }
+            }
+        }
+
+        boolean validWithBlack(int r, int c) {
+            if (hStart[r][c] < 0) {
+                char previous = grid[r][c];
+                grid[r][c] = BLACK;
+                boolean ok = isStructurallyValid(grid, rows, cols, minFree);
+                grid[r][c] = previous;
+                return ok;
+            }
+            if (totalBadRows - (badRows[r] > 0 ? 1 : 0) > 0) return false;
+            if (totalBadCols - (badCols[c] > 0 ? 1 : 0) > 0) return false;
+            int h0 = hStart[r][c], h1 = hEnd[r][c], v0 = vStart[r][c], v1 = vEnd[r][c];
+            if (badRows[r] - (zoneOk(h0, h1, cols) ? 0 : 1) > 0) return false;
+            if (badCols[c] - (zoneOk(v0, v1, rows) ? 0 : 1) > 0) return false;
+            if (c > h0 && !zoneOk(h0, c, cols)) return false;
+            if (h1 > c + 1 && !zoneOk(c + 1, h1, cols)) return false;
+            if (r > v0 && !zoneOk(v0, r, rows)) return false;
+            if (v1 > r + 1 && !zoneOk(r + 1, v1, rows)) return false;
+            for (int cell : isolated) {
+                int ir = Cells.r(cell), ic = Cells.c(cell);
+                boolean changed = (ir == r && ic >= h0 && ic < h1) || (ic == c && ir >= v0 && ir < v1);
+                if (!changed) return false;
+            }
+            for (int cc = h0; cc < h1; cc++) {
+                if (cc == c) continue;
+                int piece = cc < c ? c - h0 : h1 - c - 1;
+                if (piece < 2 && vEnd[r][cc] - vStart[r][cc] < 2) return false;
+            }
+            for (int rr = v0; rr < v1; rr++) {
+                if (rr == r) continue;
+                int piece = rr < r ? r - v0 : v1 - r - 1;
+                if (piece < 2 && hEnd[rr][c] - hStart[rr][c] < 2) return false;
+            }
+            if (componentSizes.size() == 1) {
+                return componentSizes.get(0) > 1 && !articulations.contains(Cells.of(r, c));
+            }
+            return componentSizes.size() == 2 && componentSizes.contains(1) && neighbors(Cells.of(r, c)).isEmpty();
+        }
     }
 
     static int[] slotWithInsufficientCandidates(char[][] grid, int rows, int cols, LengthSets available,
