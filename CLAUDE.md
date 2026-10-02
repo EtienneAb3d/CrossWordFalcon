@@ -290,7 +290,10 @@ json`. Holds all server-side state in plain module dicts/lists:
   online count + CPU/GPU occupancy + queue lengths), `POST /api/pseudo/
   claim` (claims/verifies a nickname's secret word via `backend/secret_
   store.py`), `GET /api/system_info`, `GET /api/rss`, `GET /api/scrapp`.
-- *Library*: `GET|POST /api/library` (paginated, filterable listing),
+- *Library*: `GET|POST /api/library` (paginated, filterable listing;
+  each returned grid carries `player_count`, its number of `GRID_GAME`
+  records — `grid_store.grid_game_player_count` — shown in the
+  "Joueurs" column),
   `GET /api/library/{grid_id}` (optionally merges a player's saved play
   state), `GET /api/library/{grid_id}/pdf` (answer-free printable sheet),
   `POST /api/game/save` (autosave play state to `GRID_GAME`), `GET
@@ -725,17 +728,24 @@ cell added or moved for it are always kept or discarded together.
 **Hardclean** (`HARD_CLEAN_ENABLED`, on by default; Java `Cleanup.
 HARD_CLEAN_ENABLED`): once `_clean_blocked_slots` has done every removal,
 every cell of a removed word is cleared, including one it shared with a
-still-assigned word that does not cross the impossible slot — that word
-is unassigned too (its `black_cell_links` change reverted), its other
-letters kept in the returned `confirmed` as plain letters; every letter
-standing on an impossible slot itself is cleared too, word-borne or not (a
-slot resolved by a black cell cast on it excepted), so `cleared_cells_out`
-unlocks those cells (never on a
-cell `new_black_cells` blackened; a `permanent_locked_letters` cell is
-never cleared). Every caller inherits it: the "reprise telle quelle" and
-full/deep cleanups, and Interactive "Nettoyer" (`interactive_clean_
-impossible_zones`, which carries those plain letters into the returned
-grid). Both resume paths differ only in their cleanup, never in how the
+still-assigned word that does not cross the impossible slot — that word,
+partially erased, is removed whole (its `black_cell_links` change
+reverted) and its other letters are erased too, except where a remaining
+whole word still carries them; every letter standing on an impossible
+slot itself is cleared too, word-borne or not (a slot resolved by a black
+cell cast on it excepted). A `permanent_locked_letters` cell is never
+cleared. `_clean_blocked_slots` is the one cleanup procedure, shared by
+every end-of-palier cleanup (the "reprise telle quelle" candidates,
+`_clean_continue_candidate`; the full/deep cleanups, `_build_retry_seed`;
+the second chance; the selection score `_cleaned_playable_score`), the
+early hardclean (`Filler._early_hardclean`) and Interactive "Nettoyer"
+(`interactive_clean_impossible_zones`), and they all leave the same
+state: its `confirmed` holds the letters of every remaining whole word
+plus every one of the attempt's locked letters (`_diag_locked_letters`,
+from `diag["locked_letters"]`) on a cell it did not erase or blacken; a
+locked letter on an erased cell is unlocked (`cleared_cells_out`), and a
+letter neither a whole word nor a lock carries (an orphan letter) is
+erased. Both resume paths differ only in their cleanup, never in how the
 next palier starts: each hands it every letter its own cleanup confirmed.
 "Reprise telle quelle" passes them as locked letters (`_pattern_continue`'s
 own `locked_letters`, the cleanup's `confirmed` carried by `_continue_seed_

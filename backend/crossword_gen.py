@@ -9204,10 +9204,10 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng, challenge_w
     # impossibles. Ils doivent aussi retirer les emplacements impossibles
     # eux-mêmes." Cleared explicitly here, and `confirmed` rebuilt from the
     # corrected list rather than reused from `_clean_blocked_slots`'s own
-    # (now-stale) return value. The plain letters a hard clean leaves
-    # behind (`HARD_CLEAN_ENABLED`: the other letters of a word that lost
-    # one to a removed crossing word) are carried over from it — never a
-    # cell of an impossible slot, which only its own cleared word covered.
+    # (now-stale) return value. No lock exists here, so the cleaned grid
+    # keeps the letters of its remaining whole words only: a letter no
+    # whole word carries any more (an orphan letter) is erased, as in
+    # every other cleanup.
     cleaned_assignment = list(cleaned_assignment)
     for i in impossible:
         cleaned_assignment[i] = None
@@ -9217,10 +9217,6 @@ def interactive_clean_impossible_zones(grid, rows, cols, index, rng, challenge_w
             continue
         for cell, ch in zip(slots[i], word):
             confirmed[cell] = ch
-    impossible_cells = {cell for i in impossible for cell in slots[i]}
-    for cell, ch in _confirmed.items():
-        if cell not in impossible_cells:
-            confirmed.setdefault(cell, ch)
     # How many words were genuinely removed (a slot that had a word
     # before and no longer has one after) — the only other possible
     # action of `_clean_blocked_slots` (`new_black_cells`) is already
@@ -9927,7 +9923,8 @@ def _cleaned_playable_score(grid, diag, rows, cols, index, rng,
     if len(slots) != len(diag["assignment"]):
         return _playable_score(grid, diag, rows, cols, priority_words, challenge_words)
     cleaned_assignment, _, _, _ = _clean_blocked_slots(
-        slots, diag["assignment"], diag["impossible_slots"], index=index, rng=rng,
+        slots, diag["assignment"], diag["impossible_slots"],
+        locked_letters=_diag_locked_letters(diag, grid), index=index, rng=rng,
     )
     return _content_score(
         zip(cleaned_assignment, slots), priority_words, challenge_words,
@@ -11455,16 +11452,24 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     `HARD_CLEAN_ENABLED` (hardclean): once every removal above is done,
     every cell of a word this call removed is cleared, even when a
     still-assigned word that does not cross the impossible slot shares
-    it. Such a word is unassigned (paired black-cell change reverted like
-    any other removal); its letters outside the cleared cells stay in
-    `confirmed` as plain letters. A `permanent_locked_letters` cell is
-    never cleared.
+    it. Such a word, partially erased, is removed whole (paired black-cell
+    change reverted like any other removal): its other letters are erased
+    too, and unlocked if they were locked, except where a remaining whole
+    word still carries them. A `permanent_locked_letters` cell is never
+    cleared.
+
+    `confirmed` is the cleaned grid's letters, the same state every
+    cleanup leaves (`Filler._early_hardclean` included): the letters of
+    every remaining whole word, plus every `locked_letters` letter the
+    clean does not erase. A locked letter on a cell the clean erases (a
+    cell of a removed word, a hard-cleared cell, or a cell just blackened)
+    is erased, i.e. unlocked; a letter neither a whole word nor
+    a lock carries any more (an orphan letter) is erased.
 
     `cleared_cells_out` (`None` by default): a set this call fills with
-    every cell whose letter it removed — a cell of a removed word left out
-    of `confirmed` (never a `permanent_locked_letters` cell). A caller that
-    carries locked letters of its own past this cleanup unlocks exactly
-    these cells (see `_second_chance_seed`)."""
+    every cell it erases (see `confirmed`) left out of `confirmed` (never
+    a `permanent_locked_letters` cell). A caller that carries locked letters of its own past
+    this cleanup unlocks exactly these cells (see `_second_chance_seed`)."""
     if locked_letters:
         assignment = list(assignment)
         impossible_set = set(impossible_slots) if exclude_impossible_locked else set()
@@ -11699,7 +11704,6 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                         assignment[k] = None
                         _revert_black_cell_link(k)
 
-    leftover_letters = {}
     cleared_cells = set()
     if HARD_CLEAN_ENABLED:
         cleared_cells = {
@@ -11725,32 +11729,49 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                 continue
             assignment[k] = None
             _revert_black_cell_link(k)
-            for cell, ch in zip(slots[k], word):
-                if cell not in cleared_cells:
-                    leftover_letters[cell] = ch
 
+    # The letters the cleaned grid keeps: those of every remaining whole
+    # word, plus every locked letter the clean does not erase. Every cell
+    # of a removed word is erased — a word the hard clean removed because
+    # it lost one letter included — and so is every hard-cleared cell; a
+    # locked letter on an erased cell, or on a cell just blackened, is
+    # unlocked. A letter neither a whole word nor a lock carries any more
+    # (an orphan letter) is erased: the same state `Filler._early_
+    # hardclean` leaves.
     confirmed = {}
     for i, word in enumerate(assignment):
         if word is None:
             continue
         for cell, ch in zip(slots[i], word):
             confirmed[cell] = ch
-    for cell, ch in leftover_letters.items():
-        if cell not in new_black_cells:
+    erased_cells = cleared_cells | {
+        cell
+        for j, word in enumerate(assignment)
+        if word is None and assignment_before_removal[j] is not None
+        for cell in slots[j]
+        if not (permanent_locked_letters and cell in permanent_locked_letters)
+    }
+    for cell, ch in (locked_letters or {}).items():
+        if cell not in erased_cells and cell not in new_black_cells:
             confirmed.setdefault(cell, ch)
 
     if cleared_cells_out is not None:
-        cleared_cells_out.update(
-            cell
-            for j, word in enumerate(assignment)
-            if word is None and assignment_before_removal[j] is not None
-            for cell in slots[j]
-            if cell not in confirmed
-            and not (permanent_locked_letters and cell in permanent_locked_letters)
-        )
-        cleared_cells_out.update(cell for cell in cleared_cells if cell not in confirmed)
+        cleared_cells_out.update(cell for cell in erased_cells if cell not in confirmed)
 
     return assignment, confirmed, new_black_cells, reopened_cells
+
+
+def _diag_locked_letters(diag, grid=None):
+    """The locked letters a failed attempt ended with (`diag["locked_
+    letters"]`, `[row, col, letter]` triples) as a cell -> letter map, or
+    `None` when it has none — the locks every cleanup of that attempt
+    starts from (see `_clean_blocked_slots`'s `confirmed`). With `grid`, a
+    cell black in it is left out (a pattern reshaped since)."""
+    locked = {
+        (r, c): ch for r, c, ch in diag.get("locked_letters", ())
+        if grid is None or grid[r][c] != BLACK
+    }
+    return locked or None
 
 
 def _second_chance_seed(grid, diag, rows, cols, index, rng, permanent_locked_letters=None):
@@ -11765,7 +11786,7 @@ def _second_chance_seed(grid, diag, rows, cols, index, rng, permanent_locked_let
     erased — a locked cell whose letter is removed is unlocked — plus the
     letters the clean confirmed."""
     slots = extract_slots(grid, rows, cols)
-    attempt_locked = {(r, c): ch for r, c, ch in diag.get("locked_letters", ())}
+    attempt_locked = _diag_locked_letters(diag) or {}
     cleared = set()
     cleaned_assignment, confirmed, _, _ = _clean_blocked_slots(
         slots, diag["assignment"], diag["impossible_slots"],
@@ -12489,6 +12510,7 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
     cand_deadlocked = _crossing_deadlock_indices(cand_slots, index, cand_known, challenge_words)
     cleaned_assignment, confirmed, new_black_cells, reopened_cells = _clean_blocked_slots(
         cand_slots, cand_assignment, cand_impossible,
+        locked_letters=_diag_locked_letters(cand_diag, cand_grid),
         index=index, rng=rng, grid=cand_grid, rows=rows, cols=cols,
         permanent_locked_letters=permanent_locked_letters,
         black_cell_links=cand_black_cell_links,
@@ -12538,12 +12560,11 @@ def _clean_continue_candidate(cand_grid, cand_diag, rows, cols, index, rng,
 #
 # `confirmed` (`sc[1]`) is the cleanup's own cell -> letter map, carried
 # for exactly the same reason the full-cleanup pool carries it as
-# `carry_locked_letters` (see `_build_retry_seed`/`_pattern_attempt`): a
-# hard clean (`HARD_CLEAN_ENABLED`) removes a word that shared a letter
-# with a removed crossing word, so its own remaining letters survive as
-# plain letters with no whole word left to carry them into `preseed_
-# assignment`. Both resume paths differ only in their cleanup, never in
-# how the next palier starts.
+# `carry_locked_letters` (see `_build_retry_seed`/`_pattern_attempt`):
+# besides the whole words, it holds the attempt's locked letters the
+# cleanup kept, which `preseed_assignment` (whole words only) cannot
+# carry. Both resume paths differ only in their cleanup, never in how the
+# next palier starts.
 def _continue_seed_pool(sorted_candidates):
     return _seed_pool(sorted_candidates, extract=lambda sc: (sc[0], sc[3], sc[4], sc[1]))
 
@@ -13789,9 +13810,8 @@ def _serialize_resume_state(seed_grid, locked_letters, preseed_assignment, exclu
     confirmed letters (`carry_continue_locked`), encoded exactly like
     `locked_letters` and kept in its own field since the two paths are
     mutually exclusive but reuse distinct variables — without it a
-    "Continuer" resuming on that path would drop every letter a hard clean
-    (`HARD_CLEAN_ENABLED`) left standing on its own, no whole word being
-    there to carry it in `preseed_assignment`."""
+    "Continuer" resuming on that path would drop every kept locked letter
+    no whole word carries in `preseed_assignment`."""
     return {
         "seed_grid": seed_grid,
         "locked_letters": (
@@ -14420,7 +14440,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # exact counterpart of `carry_locked_letters` for the full-cleanup
     # path, so both paths hand the next palier every letter the cleanup
     # confirmed, not just the ones a whole word still carries (see
-    # `_continue_seed_pool`/`HARD_CLEAN_ENABLED`).
+    # `_continue_seed_pool`).
     carry_continue_locked = None
     # Pool of cleaned candidate grids for the next "reprise telle quelle"
     # palier — the counterpart of `carry_seed_pool` above, but for
@@ -16599,7 +16619,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     cand_seed, cand_confirmed = _build_retry_seed(
                         cand_grid, rows, cols, cand_slots,
                         cand_diag["assignment"], cand_diag["impossible_slots"],
-                        locked_letters=carry_locked_letters,
+                        locked_letters=(
+                            _diag_locked_letters(cand_diag, cand_grid)
+                            if "locked_letters" in cand_diag else carry_locked_letters
+                        ),
                         exclude_impossible_locked=deep, deep=deep,
                         seed_grid=carry_seed_grid, index=index, rng=rng,
                         permanent_locked_letters=permanent_locked_letters,

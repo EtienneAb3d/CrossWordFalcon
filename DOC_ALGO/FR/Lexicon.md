@@ -403,10 +403,15 @@ plusieurs signaux) :
 - **Nettoyage dur** (*hardclean*) : option du nettoyage des emplacements
   bloqués, activée par défaut, qui efface toutes les lettres des mots
   retirés parce qu'ils croisent un emplacement bloqué — y compris celles
-  qu'ils partagent avec un mot qui ne le croise pas ; ce mot, amputé d'une
-  lettre, est retiré à son tour, ses autres lettres restant en place. Il
-  efface aussi toute lettre présente sur un emplacement bloqué lui-même,
-  qu'un mot la porte ou non.
+  qu'ils partagent avec un mot qui ne le croise pas ; ce mot, partiellement
+  effacé, est retiré entièrement à son tour, ses autres lettres effacées et
+  déverrouillées si elles étaient verrouillées (sauf là où un mot entier
+  restant les porte). Il efface aussi toute lettre présente sur un
+  emplacement bloqué lui-même, qu'un mot la porte ou non. Une lettre
+  verrouillée qu'il n'efface pas reste verrouillée, et une lettre qu'aucun
+  mot entier ni aucun verrou ne porte plus (lettre orpheline) est effacée.
+  Le nettoyage de fin d'étape, la seconde chance et le nettoyage dur
+  précoce appliquent cette même procédure.
   Commune à la génération automatique et au bouton **Nettoyer** du mode
   Interactif. (`backend/crossword_gen.py`, `_clean_blocked_slots`,
   `HARD_CLEAN_ENABLED`.)

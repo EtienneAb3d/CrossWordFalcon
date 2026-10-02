@@ -276,8 +276,9 @@ public final class Generator {
     }
 
     /** lockedLetters: the cleanup's own confirmed letters, exactly what patternAttempt already gets after a
-     * full cleanup — a hard clean (HARD_CLEAN_ENABLED) leaves letters standing with no whole word left to
-     * carry them in preseedAssignment. Both resume paths differ in their cleanup, never in how a palier starts. */
+     * full cleanup — besides the whole words, the attempt's locked letters the cleanup kept, which
+     * preseedAssignment (whole words only) cannot carry. Both resume paths differ in their cleanup, never in how
+     * a palier starts. */
     static Outcome patternContinue(Ctx ctx, int rows, int cols, long seed, char[][] seedGrid, String[] preseedIn,
                                    Set<Integer> excludedSlots, double forceFraction, Long deadlineChecks,
                                    Map<Integer, Character> permanentLocked, Set<Integer> requiredCells,
@@ -365,7 +366,7 @@ public final class Generator {
 
     /** continueLocked: the "reprise telle quelle" path's own confirmed letters, in its own field since the two
      * paths are mutually exclusive but keep distinct variables — without it a "Continuer" resuming on that path
-     * drops every letter a hard clean (HARD_CLEAN_ENABLED) left with no whole word to carry it in preseed. */
+     * drops every kept locked letter no whole word carries in preseed. */
     public static Map<String, Object> serializeResumeState(char[][] seedGrid, Map<Integer, Character> locked,
                                                            String[] preseed, Set<Integer> excluded,
                                                            Map<Integer, Character> continueLocked) {
@@ -477,7 +478,8 @@ public final class Generator {
     static Object[] secondChanceSeed(char[][] grid, Diag diag, int rows, int cols, DualIndex index, Rng rng,
                                      Map<Integer, Character> permanentLocked) {
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
-        Map<Integer, Character> attemptLocked = diag.lockedLetters == null ? Map.of() : diag.lockedLetters;
+        Map<Integer, Character> attemptLocked = Cleanup.diagLockedLetters(diag, null);
+        if (attemptLocked == null) attemptLocked = Map.of();
         Set<Integer> cleared = new HashSet<>();
         Object[] cleaned = Cleanup.cleanBlockedSlots(slots, diag.assignment, diag.impossibleSlots,
                 attemptLocked.isEmpty() ? null : attemptLocked, false, index, rng, null, null, null,
@@ -650,7 +652,7 @@ public final class Generator {
         List<Integer> carrySeedPoolContinueLineage = null;
         // The best "reprise telle quelle" entry's own confirmed letters — the exact counterpart of carryLocked
         // for the full-cleanup path, so both hand the next palier every letter the cleanup confirmed, not just
-        // the ones a whole word still carries (see Cleanup.HARD_CLEAN_ENABLED).
+        // the ones a whole word still carries.
         Map<Integer, Character> carryContinueLocked = null;
         if (p.resumeState != null) {
             Object[] st = deserializeResumeState(p.resumeState);
@@ -1553,7 +1555,8 @@ public final class Generator {
                                    char[][] carrySeed, DualIndex index, Rng rng, Map<Integer, Character> permanentLocked,
                                    Set<Integer> permanentBlack, boolean deep) {
         List<int[]> slots = Grids.extractSlots(cg, rows, cols);
-        Object[] seed = Cleanup.buildRetrySeed(cg, rows, cols, slots, cd.assignment, cd.impossibleSlots, carryLocked, deep,
+        Map<Integer, Character> locked = cd.lockedLetters != null ? Cleanup.diagLockedLetters(cd, cg) : carryLocked;
+        Object[] seed = Cleanup.buildRetrySeed(cg, rows, cols, slots, cd.assignment, cd.impossibleSlots, locked, deep,
                 carrySeed, index, rng, permanentLocked, permanentBlack, deep);
         return new Object[]{seed[0], seed[1], slots, cd.processNumber};
     }

@@ -805,6 +805,19 @@ def correct_fill_percent(user_letters, solution):
     return (correct * 1000 // white) / 10 if white else 0.0
 
 
+def grid_game_player_count(grid_id):
+    """Number of players with a GRID_GAME record for `grid_id` (one
+    `<pseudo-slug>.json` file each) — the Library's "Joueurs" column. 0
+    for a grid nobody has played or an id not matching the expected
+    shape."""
+    if not _GRID_ID_RE.match(grid_id or ""):
+        return 0
+    directory = GRID_GAME_DIR / grid_id
+    if not directory.is_dir():
+        return 0
+    return sum(1 for _ in directory.glob("*.json"))
+
+
 def grid_game_leaderboard(grid_id, pseudo, solution, limit=10):
     """Ranking of every player with a GRID_GAME record for `grid_id`: by
     `correct_percent` descending, then `elapsed_seconds` ascending (then

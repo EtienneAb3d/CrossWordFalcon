@@ -96,7 +96,7 @@ full again whenever a new generation or an Interactive session starts.
   form) — a drop-down of ready-made grid formats, each shown as its name
   in bold followed by width x height and black rate: Ristretto noisette
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
-  Cappuccino (15x15, 15 %), Mocha (20x20, 15 %), Americano (30x20, 15 %),
+  Cappuccino (15x15, 15 %), Mocha (20x20, 15 %), Tazza grande (30x20, 15 %),
   Frappuccino (30x30, 15 %). Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
   preset matching the current values, or "Personnalisée / Custom" when
@@ -551,7 +551,9 @@ server (`backend/grid_store.py`, `GET /api/library`), one row per grid:
 its language, creation date, title, the theme words it was generated with
 (if any), difficulty, size, and the pseudo of
 whoever generated it — a grid generated with no pseudo set is credited to
-"Falcon Auto Bot" — sorted with
+"Falcon Auto Bot" — then **Joueurs / Players**, the number of players
+who have tried that grid (one per saved play state, `backend/
+grid_store.py`, `grid_game_player_count`) — sorted with
 the interface's current language first, then English, then everything
 else, most recent first within each group. The one exception is the
 "Toutes les langues / All languages" filter, which drops that
@@ -1173,9 +1175,9 @@ real letter. Both update after every edit.
   removes every word crossing it and clears its own letters too. Every
   letter of a removed word goes, including one it shared with a word that
   does not itself cross the impossible emplacement: that word, now missing
-  a letter, is no longer a whole word, so it is removed as well, and its
-  remaining letters simply stay on the grid as loose letters you can build
-  on or erase. Turning a
+  a letter, is no longer a whole word, so it is removed as well, all its
+  letters with it — except those another remaining whole word still holds.
+  No loose letter is left on the grid. Turning a
   cell black is a separate mechanism this button never reaches for: for
   the last kind of conflict above specifically, the other word is itself
   still open, so there is nothing already placed to remove there either —

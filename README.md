@@ -344,7 +344,7 @@ you enter this mode, so you can look up words while you fill in the grid:
 
 The **"Library"** button (always visible, top right of the form) opens a
 list of every grid you've ever generated on this server — its language,
-date, title, difficulty, and size, 20 per page, most recent first. A
+date, title, difficulty, size, and how many players have tried it, 20 per page, most recent first. A
 language filter lets you narrow the list to one language, or to
 **"Bilingue" / "Bilingual"** for every grid made of two languages, and a
 level filter narrows it to Easy, Medium, or Hard grids (**"All levels"**

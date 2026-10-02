@@ -1894,9 +1894,13 @@ the current defaults/behavior to know before touching this code.
   `Cleanup.HARD_CLEAN_ENABLED` in Java; on by default "pour le moment", in
   the user's words): the cleanup of blocked emplacements clears every
   letter of each word it removes, even a letter shared with a word that
-  does NOT cross the impossible emplacement — that word, left with a hole,
-  is unassigned in turn (its paired black-cell change reverted like any
-  other removal), its other letters kept as plain confirmed letters. It
+  does NOT cross the impossible emplacement — that word, partially erased,
+  is removed whole in turn (its paired black-cell change reverted like any
+  other removal): its other letters are erased too, and unlocked if they
+  were locked, except where a remaining whole word still carries them
+  (the user's rule: "Le hardclean doit effacer les mots partiellement
+  effacés par un retrait de lettres, et déverrouiller ses lettres si elles
+  étaient verrouillées"). It
   works per impossible EMPLACEMENT, not only per word (the user's rule:
   "impossible" is a property of an emplacement): every letter standing on
   an impossible emplacement is cleared too, whether or not a word carries
@@ -1904,6 +1908,17 @@ the current defaults/behavior to know before touching this code.
   `permanent_locked_letters` cell is never cleared. It lives in
   `_clean_blocked_slots` itself, so automatic generation and Interactive
   "Nettoyer" share it, as the user required ("ça doit être le même code").
+  **The end-of-palier cleanup is the early hardclean's procedure, not a
+  separate one** (the user's rule: "En fin d'étape, le nettoyage des
+  impossibles doit appliquer la même procédure que le Early hardclean").
+  Every cleanup — end-of-palier ("reprise telle quelle", full, deep),
+  second chance, early hardclean, the cleaned-state selection score, and
+  Interactive "Nettoyer" — leaves the same state: the remaining whole
+  words, plus the attempt's own locked letters (`diag["locked_letters"]`)
+  the clean did not erase; a locked letter it erases is unlocked, and a
+  letter neither a whole word nor a lock carries (an orphan letter) is
+  erased. The next palier then starts from those letters as locks (see
+  the resume-paths entry below).
 - **Early hardclean** (`EARLY_HARDCLEAN_PERCENT` = 10 in `backend/
   crossword_gen.py`, `Filler.EARLY_HARDCLEAN_PERCENT` in Java; 100 = off):
   the hard clean of the second chance, triggered earlier and INSIDE the
@@ -1939,8 +1954,7 @@ the current defaults/behavior to know before touching this code.
   `_pattern_continue`'s `locked_letters` (carried as each
   `_continue_seed_pool` entry's 4th element), exactly as the full cleanup
   already does via `_pattern_attempt`. `preseed_assignment` holds whole
-  words only, so it cannot carry them — which is what made hardclean's
-  leftover letters vanish on that path before. `_serialize_resume_state`'s
+  words only, so it cannot carry the kept locked letters. `_serialize_resume_state`'s
   own `continue_locked_letters` field keeps them across "Continuer".
 - **Crossing an already-impossible emplacement is allowed in exactly one
   place**: the last-chance enrichment at the very end of

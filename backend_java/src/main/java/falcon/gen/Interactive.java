@@ -818,14 +818,8 @@ public final class Interactive {
             int[] cells = slots.get(i);
             for (int p = 0; p < cells.length; p++) confirmed.put(cells[p], ca[i].charAt(p));
         }
-        // Plain letters a hard clean leaves behind (never on an impossible slot's own cells).
-        Set<Integer> impossibleCells = new HashSet<>();
-        for (int i : impossible) for (int cell : slots.get(i)) impossibleCells.add(cell);
-        @SuppressWarnings("unchecked")
-        Map<Integer, Character> cleanedConfirmed = (Map<Integer, Character>) cleaned[1];
-        for (Map.Entry<Integer, Character> e : cleanedConfirmed.entrySet()) {
-            if (!impossibleCells.contains(e.getKey())) confirmed.putIfAbsent(e.getKey(), e.getValue());
-        }
+        // No lock exists here: the cleaned grid keeps the letters of its remaining whole words only, a letter no
+        // whole word carries any more (an orphan letter) being erased, as in every other cleanup.
         int removed = 0;
         for (int i = 0; i < ca.length; i++) if (assignment[i] != null && ca[i] == null) removed++;
         int cleared = removed + newBlack.size();

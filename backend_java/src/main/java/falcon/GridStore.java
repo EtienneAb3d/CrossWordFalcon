@@ -362,6 +362,12 @@ public final class GridStore {
         return white > 0 ? (correct * 1000 / white) / 10.0 : 0.0;
     }
 
+    /** Number of GRID_GAME records of {@code gridId} (grid_store.grid_game_player_count). */
+    public static int gridGamePlayerCount(String gridId) {
+        if (gridId == null || !GRID_ID_RE.matcher(gridId).matches()) return 0;
+        return glob(GRID_GAME_DIR.resolve(gridId), "*.json").size();
+    }
+
     /** Ranking of every GRID_GAME record of {@code gridId} (grid_store.grid_game_leaderboard). */
     public static Map<String, Object> gridGameLeaderboard(String gridId, String pseudo, Object solution, int limit) {
         if (gridId == null || !GRID_ID_RE.matcher(gridId).matches()) return null;

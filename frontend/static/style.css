@@ -1799,6 +1799,11 @@ button:disabled {
   font-weight: 600;
 }
 
+/* "Joueurs" column: a plain count, centered under its header. */
+#library-table td.library-players {
+  text-align: center;
+}
+
 /* Provenance ("(créée depuis ...)") under the title of a grid that came
    from editing an existing Library grid (script.js's renderLibraryList,
    `entry.origin` — see backend/grid_store.py's save_grid_json/

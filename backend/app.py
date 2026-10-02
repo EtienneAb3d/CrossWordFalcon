@@ -63,7 +63,8 @@ from .crossword_gen import (
 from .grid_store import (
     _slugify_title, get_grid, list_grids, save_grid_json,
     save_grid_work, list_grid_work, get_grid_work, delete_grid_work,
-    save_grid_game, get_grid_game, grid_game_leaderboard, save_stop_dump,
+    save_grid_game, get_grid_game, grid_game_leaderboard, grid_game_player_count,
+    save_stop_dump,
 )
 from .svg_export import (
     render_puzzle_svg,
@@ -2005,8 +2006,14 @@ def _library_page(preferred_language, page, seen_filter, seen_ids,
         rows.sort(key=lambda e: e.get("created_at") or "", reverse=True)
     page = max(1, page)
     start = (page - 1) * LIBRARY_PAGE_SIZE
+    # "Joueurs" column: counted for the returned page only, one directory
+    # listing per grid.
+    page_rows = [
+        {**g, "player_count": grid_game_player_count(g.get("id"))}
+        for g in rows[start:start + LIBRARY_PAGE_SIZE]
+    ]
     return {
-        "grids": rows[start:start + LIBRARY_PAGE_SIZE],
+        "grids": page_rows,
         "total": len(rows),
         "page": page,
         "page_size": LIBRARY_PAGE_SIZE,

@@ -3399,7 +3399,7 @@ const GRID_PRESETS = [
   { name: "Macchiato", width: 15, height: 10, black: 12 },
   { name: "Cappuccino", width: 15, height: 15, black: 15 },
   { name: "Mocha", width: 20, height: 20, black: 15 },
-  { name: "Americano", width: 30, height: 20, black: 15 },
+  { name: "Tazza grande", width: 30, height: 20, black: 15 },
   { name: "Frappuccino", width: 30, height: 30, black: 15 },
 ];
 const presetSelectBtn = document.getElementById("preset-select-btn");
@@ -4615,6 +4615,11 @@ async function renderLibraryList() {
     // A grid built via "Interactif" mode: "(Création)" tag next to the
     // author (see backend/grid_store.py's save_grid_json's `interactive`).
     if (entry.interactive) authorTd.textContent += ` ${t.libraryCreationTag}`;
+    // "Joueurs" column: number of players with a saved play state for
+    // this grid (GRID_GAME — the entry's own `player_count`).
+    const playersTd = document.createElement("td");
+    playersTd.className = "library-players";
+    playersTd.textContent = String(entry.player_count || 0);
     // Last column: shareable link to the grid, at the user's explicit
     // request. Opens SHARE_BASE_URL + "?grid=<id>" in a new tab (the
     // public domain, regardless of the current host). stopPropagation so
@@ -4689,7 +4694,7 @@ async function renderLibraryList() {
     pdfTd.appendChild(pdfLink);
     tr.append(
       languageTd, dateTd, titleTd, themeTd, difficultyTd, sizeTd, authorTd,
-      linkTd, interactiveTd, pdfTd,
+      playersTd, linkTd, interactiveTd, pdfTd,
     );
     tr.addEventListener("click", () => loadLibraryGrid(entry.id));
     tr.addEventListener("keydown", (event) => {

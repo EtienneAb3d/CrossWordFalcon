@@ -27,7 +27,8 @@ public final class Cleanup {
 
     public static final double BLACK_CELL_INSTEAD_OF_REMOVAL_PROBABILITY = 1.0 / 10;
     /** Hardclean option of cleanBlockedSlots (mirrors HARD_CLEAN_ENABLED): every letter of a removed
-     * crossing word is cleared, even one shared with a word that does not cross the impossible slot. */
+     * crossing word is cleared, even one shared with a word that does not cross the impossible slot, which,
+     * partially erased, is removed whole in turn. */
     public static final boolean HARD_CLEAN_ENABLED = true;
     public static final int PER_CYCLE_OPTIMIZATION_SAMPLE_SIZE = 50;
     public static final int WIDEN_BLACK_CELL_WINDOW = 40;
@@ -522,9 +523,12 @@ public final class Cleanup {
                 rng, grid, rows, cols, permanentLocked, links, deadlockedSlots, deep, null);
     }
 
-    /** clearedOut (nullable) receives every cell whose letter this call removed — a cell of a removed word left
-     * out of confirmed, never a permanentLocked cell; a caller carrying locked letters of its own past this
-     * cleanup unlocks exactly these cells (Generator.secondChanceSeed). */
+    /** confirmed is the cleaned grid's letters, the same state every cleanup leaves (Filler.earlyHardclean
+     * included): the letters of every remaining whole word, plus every lockedLetters letter the clean does not
+     * erase; a letter neither a whole word nor a lock carries any more (an orphan letter) is erased.
+     * clearedOut (nullable) receives every cell this call erases left out of confirmed, never a permanentLocked
+     * cell; a caller carrying locked letters of
+     * its own past this cleanup unlocks exactly these cells (Generator.secondChanceSeed). */
     public static Object[] cleanBlockedSlots(List<int[]> slots, String[] assignmentIn, Collection<Integer> impossibleSlots,
                                              Map<Integer, Character> lockedLetters, boolean excludeImpossibleLocked,
                                              DualIndex index, Rng rng, char[][] grid, Integer rows, Integer cols,
@@ -687,7 +691,6 @@ public final class Cleanup {
                 }
             }
         }
-        Map<Integer, Character> leftover = new LinkedHashMap<>();
         Set<Integer> cleared = new HashSet<>();
         if (HARD_CLEAN_ENABLED) {
             for (int j = 0; j < assignment.length; j++) {
@@ -718,9 +721,13 @@ public final class Cleanup {
                 if (!hit) continue;
                 assignment[k] = null;
                 revert.accept(k);
-                for (int p = 0; p < cells.length; p++) if (!cleared.contains(cells[p])) leftover.put(cells[p], w.charAt(p));
             }
         }
+        // The letters the cleaned grid keeps: those of every remaining whole word, plus every locked letter the
+        // clean does not erase. Every cell of a removed word is erased — a word the hard clean removed because it
+        // lost one letter included — and so is every hard-cleared cell; a locked letter on an erased cell, or on a
+        // cell just blackened, is unlocked. A letter neither a whole word nor a lock carries any more (an orphan
+        // letter) is erased: the same state Filler.earlyHardclean leaves.
         Map<Integer, Character> confirmed = new LinkedHashMap<>();
         for (int i = 0; i < assignment.length; i++) {
             String w = assignment[i];
@@ -728,21 +735,38 @@ public final class Cleanup {
             int[] cells = slots.get(i);
             for (int p = 0; p < cells.length; p++) confirmed.put(cells[p], w.charAt(p));
         }
-        for (Map.Entry<Integer, Character> e : leftover.entrySet()) {
-            if (!newBlack.contains(e.getKey())) confirmed.putIfAbsent(e.getKey(), e.getValue());
+        Set<Integer> erased = new LinkedHashSet<>(cleared);
+        for (int j = 0; j < assignment.length; j++) {
+            if (assignment[j] != null || before[j] == null) continue;
+            for (int cell : slots.get(j)) {
+                if (permanentLocked != null && permanentLocked.containsKey(cell)) continue;
+                erased.add(cell);
+            }
         }
-        if (clearedOut != null) {
-            for (int j = 0; j < assignment.length; j++) {
-                if (assignment[j] != null || before[j] == null) continue;
-                for (int cell : slots.get(j)) {
-                    if (confirmed.containsKey(cell)) continue;
-                    if (permanentLocked != null && permanentLocked.containsKey(cell)) continue;
-                    clearedOut.add(cell);
+        if (lockedLetters != null) {
+            for (Map.Entry<Integer, Character> e : lockedLetters.entrySet()) {
+                if (!erased.contains(e.getKey()) && !newBlack.contains(e.getKey())) {
+                    confirmed.putIfAbsent(e.getKey(), e.getValue());
                 }
             }
-            for (int cell : cleared) if (!confirmed.containsKey(cell)) clearedOut.add(cell);
+        }
+        if (clearedOut != null) {
+            for (int cell : erased) if (!confirmed.containsKey(cell)) clearedOut.add(cell);
         }
         return new Object[]{assignment, confirmed, newBlack, reopened};
+    }
+
+    /** The locked letters a failed attempt ended with (diag.lockedLetters), or null when it has none — the locks
+     * every cleanup of that attempt starts from (see cleanBlockedSlots's confirmed). With grid, a cell black in it
+     * is left out (a pattern reshaped since). Mirrors crossword_gen._diag_locked_letters. */
+    public static Map<Integer, Character> diagLockedLetters(Diag diag, char[][] grid) {
+        if (diag.lockedLetters == null) return null;
+        Map<Integer, Character> out = new LinkedHashMap<>();
+        for (Map.Entry<Integer, Character> e : diag.lockedLetters.entrySet()) {
+            int c = e.getKey();
+            if (grid == null || grid[Cells.r(c)][Cells.c(c)] != BLACK) out.put(c, e.getValue());
+        }
+        return out.isEmpty() ? null : out;
     }
 
     /** Returns {grid, slots, assignment} or null. */
@@ -847,8 +871,8 @@ public final class Cleanup {
                                               PW pw, Set<String> challenge) {
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
         if (slots.size() != diag.assignment.length) return playableScore(grid, diag, rows, cols, pw, challenge);
-        Object[] cleaned = cleanBlockedSlots(slots, diag.assignment, diag.impossibleSlots, null, false, index, rng, null,
-                null, null, null, null, null, false);
+        Object[] cleaned = cleanBlockedSlots(slots, diag.assignment, diag.impossibleSlots, diagLockedLetters(diag, grid),
+                false, index, rng, null, null, null, null, null, null, false);
         return Math.sqrt(Fill.contentScore((String[]) cleaned[0], slots, pw, challenge));
     }
 
@@ -1015,7 +1039,8 @@ public final class Cleanup {
                 permanentLocked, permanentBlack, challenge, z.links());
         Map<Integer, Character> known = knownFromAssignment(z.slots(), z.assignment(), null);
         Set<Integer> deadlocked = crossingDeadlockIndices(z.slots(), index, known, challenge);
-        Object[] cleaned = cleanBlockedSlots(z.slots(), z.assignment(), z.impossible(), null, false, index, rng, z.grid(),
+        Object[] cleaned = cleanBlockedSlots(z.slots(), z.assignment(), z.impossible(), diagLockedLetters(candDiag, z.grid()),
+                false, index, rng, z.grid(),
                 rows, cols, permanentLocked, z.links(), deadlocked, false);
         String[] cleanedAssignment = (String[]) cleaned[0];
         @SuppressWarnings("unchecked")

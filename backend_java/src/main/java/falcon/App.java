@@ -1544,7 +1544,12 @@ public final class App {
         page = Math.max(1, page);
         int start = (page - 1) * LIBRARY_PAGE_SIZE;
         List<Object> slice = new ArrayList<>();
-        for (int k = start; k < Math.min(rows.size(), start + LIBRARY_PAGE_SIZE); k++) slice.add(rows.get(k));
+        for (int k = start; k < Math.min(rows.size(), start + LIBRARY_PAGE_SIZE); k++) {
+            Map<String, Object> row = rows.get(k);
+            Object id = row.get("id");
+            row.put("player_count", GridStore.gridGamePlayerCount(id == null ? null : String.valueOf(id)));
+            slice.add(row);
+        }
         return Json.obj("grids", slice, "total", rows.size(), "page", page, "page_size", LIBRARY_PAGE_SIZE);
     }
 

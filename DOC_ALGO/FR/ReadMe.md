@@ -1827,10 +1827,11 @@ là où elle s'était arrêtée.
 (`HARD_CLEAN_ENABLED`) : une fois les retraits faits, **toutes** les lettres
 des mots retirés sont effacées, y compris une lettre qu'un mot retiré
 partageait avec un autre mot qui, lui, ne croise pas l'emplacement
-impossible. Ce second mot perd sa lettre à cette case : il n'est plus un mot
-entier et est retiré à son tour (avec la case noire qui lui était associée,
-comme tout retrait), mais ses autres lettres restent en place comme simples
-lettres confirmées. Sans l'option, les lettres partagées restent en place,
+impossible. Ce second mot, partiellement effacé, est retiré entièrement à
+son tour (avec la case noire qui lui était associée, comme tout retrait) :
+ses autres lettres sont effacées aussi, et déverrouillées si elles étaient
+verrouillées, sauf là où un mot entier restant les porte encore. Sans
+l'option, les lettres partagées restent en place,
 portées par le mot non croisant. Le nettoyage dur opère par **emplacement
 impossible**, pas seulement par mot : toute lettre présente sur un
 emplacement impossible est effacée aussi, qu'un mot la porte ou non (lettre
@@ -1841,6 +1842,16 @@ case noire posée dessus n'est pas concerné. Une lettre posée par l'utilisateu
 les nettoyages : reprise « telle quelle », nettoyage complet et nettoyage
 profond, et bouton **Nettoyer** du mode Interactif, qui passent tous par le
 même code (`_clean_blocked_slots`).
+
+Le nettoyage de fin d'étape n'est pas une procédure à part : c'est celle
+du nettoyage dur précoce (ci-dessous) et de la seconde chance. Tous
+laissent le même état : les mots entiers restants, plus les lettres
+verrouillées de la tentative (`_diag_locked_letters`, tirées de
+`diag["locked_letters"]`) que le nettoyage n'a ni effacées ni noircies.
+Une lettre verrouillée effacée est déverrouillée, et une lettre qu'aucun
+mot entier ni aucun verrou ne porte plus (lettre orpheline) est effacée
+(`_clean_blocked_slots`, `_clean_continue_candidate`, `_build_retry_seed`,
+`_cleaned_playable_score`, `interactive_clean_impossible_zones`).
 
 Les deux chemins de reprise ne diffèrent que par leur nettoyage, jamais par
 la façon dont le palier suivant démarre : chacun transmet au palier suivant
