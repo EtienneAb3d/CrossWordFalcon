@@ -819,6 +819,24 @@ sees the clean. `try_fill`'s previews and
 diagnostics read the Filler's current `locked_letters` (`locked_cells`
 recomputed on each publication).
 
+**Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 5, `None`/0 =
+off; Java `Filler.MAX_SAME_WORD_PLACEMENTS`): when a generation attempt's
+search places the same word on the same slot more than that many times
+(`Filler._record_tried_word`, counted in `_tried_words`, enabled by
+`try_fill(same_word_limit=)`, passed only by `_pattern_attempt`/
+`_pattern_continue`), that slot is declared impossible: the current state
+(slots, pattern, assignment with that word) is kept in `Filler._repeat_
+restart`, the word's count on that slot is reset to 0 and `_restart_
+pending` unwinds every node like an early hardclean. `Filler.solve`'s
+restart (`_restart`, Java `restart`) takes that state back flat
+(`_adopt_structure`, letter tallies re-sampled) and `_repeat_hardclean`
+runs `_clean_blocked_slots` with that slot as the only impossible slot,
+its own word taken off first (`_hardclean`, the in-search clean shared with
+`_early_hardclean`; same locking and orphan-letter rules); the cleaned state
+becomes the record (published) and the new root, and the slot is added to
+`_impossible_this_attempt`. It neither touches the early hardclean's
+repeated-state set nor ends the attempt.
+
 **An "emplacement écarté" (yellow) is a pure deprioritization, and is
 reset to nothing at the start of every new palier.** `Filler._impossible_
 this_attempt` is the single set that holds them, and is the single

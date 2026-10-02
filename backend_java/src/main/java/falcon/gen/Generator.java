@@ -263,6 +263,7 @@ public final class Generator {
         a.lockedLetters = locked;
         a.reshapeBlackCells = true;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
+        a.sameWordLimit = Filler.MAX_SAME_WORD_PLACEMENTS;
         a.permanentLocked = permanentLocked;
         a.scrabbleWords = ctx.scrabbleWords;
         a.permanentBlackCells = permanentBlack;
@@ -358,6 +359,7 @@ public final class Generator {
         a.lockedLetters = known;
         a.reshapeBlackCells = true;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
+        a.sameWordLimit = Filler.MAX_SAME_WORD_PLACEMENTS;
         a.permanentLocked = permanentLocked;
         a.scrabbleWords = ctx.scrabbleWords;
         a.permanentBlackCells = permanentBlack;

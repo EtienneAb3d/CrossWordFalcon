@@ -1966,6 +1966,22 @@ the current defaults/behavior to know before touching this code.
   record; the attempt keeps the descent caps of its first start; a reshape
   carried by the record stays in the pattern even when the clean removes
   its word. Interactive mode never uses it.
+- **Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 5 in `backend/
+  crossword_gen.py`, `Filler.MAX_SAME_WORD_PLACEMENTS` in Java) — the
+  user's rule: in automatic fill, when the same word is placed more than 5
+  times on the same slot, declare the slot impossible and trigger a
+  hardclean on that slot. Implemented like the early hardclean: every node
+  unwinds, the state holding the word is taken back flat, hard-cleaned with
+  that slot as the only impossible slot, and becomes the record and the new
+  root. Choices made with the change, to revisit with the user: the count is
+  per (slot cells, word) over the whole attempt (`_tried_words`), the
+  restart is taken from the state holding the 6th placement (not the
+  record), "declared impossible" means cleaned as an impossible slot and
+  flagged écarté (yellow) — not frozen for the rest of the attempt, the
+  search may fill it again —, the word's count there restarts from zero
+  after the clean, the cleaned state replaces the record, and only the
+  generation attempts use it (not `minimize_black_squares`, the
+  pre-cleanup optimization nor Interactive mode).
 - **Both cross-palier resume paths start the next palier the same way**,
   differing only in their cleanup — the user's rule: "La différence est au
   niveau du nettoyage, pas au niveau du démarrage du cycle suivant. Ça

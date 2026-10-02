@@ -1959,6 +1959,28 @@ apporter ; la recherche continue alors depuis cet état. Seules les
 tentatives de génération (`_pattern_attempt`, `_pattern_continue`) s'en
 servent, pas le mode Interactif.
 
+**Nettoyage dur sur mot répété.** Le même mécanisme se déclenche aussi
+quand la recherche d'une tentative de génération pose **le même mot au même
+emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (5) fois** (compté dans
+`_tried_words`, `Filler._record_tried_word`) : la recherche tourne alors en
+rond autour de cet emplacement. Au moment où le mot y est posé pour la
+sixième fois, l'emplacement est déclaré impossible : l'état courant (motif,
+emplacements, mots, ce mot compris) est mémorisé, tous les nœuds se défont
+comme pour le nettoyage dur précoce (`Filler._restart_pending`), puis
+`Filler.solve` reprend cet état **à plat** (`Filler._restart`) et lui
+applique le nettoyage dur avec cet emplacement pour seul emplacement
+impossible (`Filler._repeat_hardclean`, `_clean_blocked_slots`) : son mot
+est retiré, tous les mots qui le croisent aussi, et toute lettre restée sur
+lui est effacée, avec les mêmes règles de verrouillage et de lettres
+orphelines, sans toucher aux cases noires. L'état nettoyé devient le record,
+publié comme tout record, l'emplacement devient un **emplacement écarté**,
+et le compteur de ce mot sur cet emplacement repart de zéro. Le retour
+arrière recommence de zéro depuis cet état, nouvelle racine de la recherche.
+Comme le nettoyage dur précoce, ce mécanisme ne déclare la tentative ni
+échouée ni terminée et ne quitte pas le palier ; seules les tentatives de
+génération (`_pattern_attempt`, `_pattern_continue`, paramètre
+`same_word_limit` de `try_fill`) s'en servent.
+
 Le nettoyage dur laisse davantage d'emplacements libres, donc la reprise
 « telle quelle » reste possible plus longtemps : les paliers à motif neuf —
 les seuls qui posent des cases noires, et donc les seuls à produire

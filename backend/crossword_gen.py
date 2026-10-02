@@ -2574,6 +2574,20 @@ UNFILLABLE_ABANDON_CHECK_INTERVAL = 500
 # attempts (`_pattern_attempt`/`_pattern_continue`) enable it.
 EARLY_HARDCLEAN_PERCENT = 10
 
+# "Repeated word": once a generation attempt's search places the same word
+# on the same slot more than this many times (`Filler._tried_words`), that
+# slot is declared impossible and hard-cleaned, inside the search, the way
+# an early hardclean does it (`Filler._repeat_hardclean`): the whole
+# backtracking stack is dropped, the state holding that word is taken back
+# flat as the new root, `_clean_blocked_slots` runs with that slot as its
+# only impossible slot (its own word, the words crossing it and the letters
+# left on it are cleared, no black cell touched), and the slot becomes an
+# "emplacement écarté". The word's count on that slot restarts from zero.
+# The attempt is neither failed nor ended and its palier is not left.
+# `None`/0 disables it. Only the generation attempts (`_pattern_attempt`/
+# `_pattern_continue`) enable it.
+MAX_SAME_WORD_PLACEMENTS = 5
+
 # Incremental fill ("remplissage incrémental"), first palier only: a node
 # only places a word on a slot holding at least one still-free cell (no
 # placed word nor locked letter on it) inside the "attention zone", the
@@ -3344,6 +3358,13 @@ class Filler:
         # undo), and `solve()` restarts the search flat from the record
         # (`_restart_from_record`).
         self._restart_pending = False
+        # Repeated-word rule (see MAX_SAME_WORD_PLACEMENTS): the limit
+        # (None = off, the default for every caller that is not a
+        # generation attempt), and, while a restart it called for is
+        # pending, the state to take back flat — (slots, pattern,
+        # assignment, cells of the repeated slot).
+        self.same_word_limit = None
+        self._repeat_restart = None
         # Set when a `_backtrack` call returned because the check budget
         # ran out (see `_deadline_reached_without_extension`), so `solve()`
         # can tell a strict search cut short from one genuinely exhausted.
@@ -3858,11 +3879,23 @@ class Filler:
 
     def _record_tried_word(self, i, word):
         """Count one more placement of `word` on slot `i` by the search
-        (see `_tried_words`)."""
+        (see `_tried_words`). Called with the word in place, right before
+        the search recurses: past `same_word_limit` placements of that word
+        there (MAX_SAME_WORD_PLACEMENTS), the current state is kept for
+        `_repeat_hardclean`, the word's count restarts from zero and every
+        node unwinds (`_restart_pending`) — the recursive call that follows
+        returns at once."""
         key = tuple(self.slots[i])
         words = self._tried_words.setdefault(key, {})
         words[word] = words.get(word, 0) + 1
         self._tried_totals[key] = self._tried_totals.get(key, 0) + 1
+        if (
+            self.same_word_limit and words[word] > self.same_word_limit
+            and not self._restart_pending
+        ):
+            words[word] = 0
+            self._repeat_restart = (self.slots, self.pattern, list(self.assignment), key)
+            self._restart_pending = True
 
     def _slot_try_count(self, i):
         """Total number of word placements the search has made on slot
@@ -4619,15 +4652,23 @@ class Filler:
         them differ from the current ones (see `try_fill`)."""
         if self.best_slots is self.slots:
             return
-        by_cells = {tuple(cells): j for j, cells in enumerate(self.best_slots)}
+        self._adopt_structure(self.best_slots, self.best_pattern)
+        self.assignment = list(self.best_assignment)
+
+    def _adopt_structure(self, slots, pattern):
+        """Move the Filler onto `slots`/`pattern` when they differ from the
+        current ones (a reshape), carrying the "emplacements écartés" over
+        to the new slot indices."""
+        if slots is self.slots:
+            return
+        by_cells = {tuple(cells): j for j, cells in enumerate(slots)}
         recent = _RecentSlots(MAX_EXCLUDED_SLOTS)
         for j in self._impossible_this_attempt:
             k = by_cells.get(tuple(self.slots[j]))
             if k is not None:
                 recent.add(k)
-        self._index_slots(self.best_slots)
-        self.pattern = self.best_pattern
-        self.assignment = list(self.best_assignment)
+        self._index_slots(slots)
+        self.pattern = pattern
         self._impossible_this_attempt = recent
         self._tolerated_dry = set()
         self._placement_seq = {}
@@ -4658,7 +4699,9 @@ class Filler:
         # An early hardclean ends both passes early (`_restart_pending`):
         # the record that called for it is taken back flat
         # (`_restart_from_record`), and the loop starts over from it as a
-        # new root, with no backtracking history. The attempt's descent
+        # new root, with no backtracking history. A repeated-word hardclean
+        # does the same from the state holding the repeated word (`_restart`,
+        # `_repeat_hardclean`). The attempt's descent
         # caps (`_inherited`, `_initial_assigned_count`) are those of its
         # first start.
         self._initial_assigned_count = sum(1 for a in self.assignment if a is not None)
@@ -4676,7 +4719,7 @@ class Filler:
             if self._backtrack(deadline_checks, attention=self._initial_attention()):
                 return True
             if self._restart_pending:
-                self._restart_from_record()
+                self._restart()
                 continue
             if self.abandoned or self._budget_exhausted:
                 return False
@@ -4684,9 +4727,28 @@ class Filler:
             if self._backtrack(deadline_checks, attention=self._initial_attention()):
                 return True
             if self._restart_pending:
-                self._restart_from_record()
+                self._restart()
                 continue
             return False
+
+    def _restart(self):
+        """Take the state an unwound restart asked for back flat: the
+        repeated-word state (`_repeat_restart`), hard-cleaned on its
+        repeated slot, or else the record (`_restart_from_record`)."""
+        state = self._repeat_restart
+        if state is None:
+            self._restart_from_record()
+            return
+        self._repeat_restart = None
+        self._restart_pending = False
+        slots, pattern, assignment, key = state
+        self._adopt_structure(slots, pattern)
+        self.assignment = list(assignment)
+        self.used_words = {w for w in self.assignment if w is not None}
+        for i, w in enumerate(self.assignment):
+            if w is not None:
+                self._refresh_letter_scores_around(i)
+        self._repeat_hardclean(key)
 
     def _restart_from_record(self):
         """Take `best_assignment` back flat as the search's new root, once
@@ -5105,9 +5167,45 @@ class Filler:
         The record restarts from the cleaned state, published like any
         record. A cleaned state already produced in this attempt switches
         the early hardclean off for the rest of it."""
+        self._hardclean(list(self.assignment), self.impossible_zone_slots())
+        state = (
+            tuple("".join(row) for row in self.pattern),
+            tuple(sorted(self._known_cells().items())),
+        )
+        if state in self._early_hardclean_states:
+            self.early_hardclean_percent = 100
+        self._early_hardclean_states.add(state)
+        if self.on_new_best is not None:
+            self.on_new_best(self.best_assignment)
+
+    def _repeat_hardclean(self, key):
+        """Hard-clean the current state in place on the slot whose cells
+        are `key`, declared impossible (see MAX_SAME_WORD_PLACEMENTS): it
+        is handed to `_clean_blocked_slots` as the only impossible slot,
+        with its own word taken off first, so its word, every word
+        crossing it and every letter left on it are cleared (hardclean),
+        no black cell touched. Runs at the root, like `_early_hardclean`,
+        with the same locking rules; the cleaned state becomes the record,
+        published like any record, and the slot an "emplacement écarté"."""
+        target = next((i for i, cells in enumerate(self.slots) if tuple(cells) == key), None)
+        if target is None:
+            return
+        work = list(self.assignment)
+        work[target] = None
+        self._hardclean(work, [target])
+        self._impossible_this_attempt.add(target)
+        if self.on_new_best is not None:
+            self.on_new_best(self.best_assignment)
+
+    def _hardclean(self, assignment, impossible):
+        """The in-search hard clean shared by `_early_hardclean` and
+        `_repeat_hardclean`: `_clean_blocked_slots` on `assignment` (the
+        current one, possibly with words already taken off) with the
+        `impossible` slots, applied in place; the cleaned state becomes
+        `best_assignment`."""
         cleared = set()
         cleaned, _, _, _ = _clean_blocked_slots(
-            self.slots, list(self.assignment), self.impossible_zone_slots(),
+            self.slots, assignment, impossible,
             locked_letters=dict(self.locked_letters) or None, index=self.index, rng=self.rng,
             permanent_locked_letters=self.permanent_locked_letters or None,
             cleared_cells_out=cleared,
@@ -5130,15 +5228,6 @@ class Filler:
         self.best_slots = self.slots
         self.best_pattern = self.pattern
         self.best_stat_letters = self.stat_letters(self.assignment)
-        state = (
-            tuple("".join(row) for row in self.pattern),
-            tuple(sorted(self._known_cells().items())),
-        )
-        if state in self._early_hardclean_states:
-            self.early_hardclean_percent = 100
-        self._early_hardclean_states.add(state)
-        if self.on_new_best is not None:
-            self.on_new_best(self.best_assignment)
 
     def impossible_zone_cells(self):
         """Cells belonging to an unassigned slot, in the self.best_
@@ -6933,8 +7022,12 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              challenge_words=None, required_cells=None, reshape_black_cells=False,
              permanent_black_cells=None, scrabble_words=None,
              early_hardclean_percent=100, permanent_locked_letters=None,
-             incremental_fill=False):
+             incremental_fill=False, same_word_limit=None):
     """`incremental_fill`: see INCREMENTAL_FILL_ENABLED.
+
+    `same_word_limit`: see MAX_SAME_WORD_PLACEMENTS (None = off), run inside
+    the search (`Filler._repeat_hardclean`) with the same locking rules as
+    the early hardclean.
 
     `early_hardclean_percent`: see `EARLY_HARDCLEAN_PERCENT` (100 = off),
     run inside the search (`Filler._early_hardclean`), which may unlock
@@ -7236,6 +7329,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler.best_pattern = filler.pattern
     filler.reshape_enabled = reshape_black_cells and not excluded_slots
     filler.early_hardclean_percent = early_hardclean_percent
+    filler.same_word_limit = same_word_limit
     filler.incremental_fill = incremental_fill
     filler.permanent_locked_letters = dict(permanent_locked_letters or {})
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
@@ -13623,7 +13717,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            scrabble_words=_worker_scrabble_words,
                            early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
                            permanent_locked_letters=permanent_locked_letters,
-                           incremental_fill=incremental_fill)
+                           incremental_fill=incremental_fill,
+                           same_word_limit=MAX_SAME_WORD_PLACEMENTS)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -13890,7 +13985,8 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        scrabble_words=_worker_scrabble_words,
                        early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
                        permanent_locked_letters=permanent_locked_letters,
-                       incremental_fill=incremental_fill)
+                       incremental_fill=incremental_fill,
+                       same_word_limit=MAX_SAME_WORD_PLACEMENTS)
     return result, diag
 
 

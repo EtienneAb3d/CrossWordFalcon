@@ -391,6 +391,8 @@ public final class Fill {
          * inside the search (Filler.earlyHardclean), which may unlock letters: every preview and the diagnostics
          * read the Filler's current locked letters. */
         public int earlyHardcleanPercent = 100;
+        /** Repeated-word limit, 0 = off (mirrors try_fill's same_word_limit, Filler.MAX_SAME_WORD_PLACEMENTS). */
+        public int sameWordLimit;
         /** Incremental fill (Filler.INCREMENTAL_FILL_ENABLED, mirrors try_fill's incremental_fill). */
         public boolean incrementalFill;
         /** Cells the early hardclean never clears (mirrors try_fill's permanent_locked_letters). */
@@ -501,6 +503,7 @@ public final class Fill {
         filler.bestPattern = filler.pattern;
         filler.reshapeEnabled = a.reshapeBlackCells && (excludedSlots == null || excludedSlots.isEmpty());
         filler.earlyHardcleanPercent = a.earlyHardcleanPercent;
+        filler.sameWordLimit = a.sameWordLimit;
         filler.incrementalFill = a.incrementalFill;
         filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
