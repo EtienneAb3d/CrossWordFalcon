@@ -58,7 +58,7 @@ import urllib.request
 
 LANGUAGES = ["fr", "en", "de", "es", "it", "pt"]
 DIFFICULTIES = ["easy", "medium", "hard"]
-MODES = ["flash", "turbo", "fast", "medium", "ultra", "megatron"]
+MODES = ["flash", "turbo", "fast", "medium", "ultra", "megatron", "gridzilla"]
 
 # GET /api/theme/random makes an LLM round-trip (see backend/app.py's
 # `random_theme` / backend/clues.py's `generate_random_theme`) — generous

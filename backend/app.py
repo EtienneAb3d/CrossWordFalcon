@@ -349,7 +349,8 @@ WORDLISTS = {
 
 # "Mode" selector of the web UI (see frontend/static/index.html), at the
 # user's explicit request: "Flash/1000 Turbo/10000
-# Fast/100000 Medium/500000 Ultra/5000000", plus Megatron/20000000 —
+# Fast/100000 Medium/500000 Ultra/5000000", plus Megatron/20000000 and
+# GridZilla/100000000 —
 # directly sets the
 # search budget per attempt (`crossword_gen.try_fill`'s `deadline_checks`,
 # see its own docstring for where this parameter comes from), unrelated to
@@ -367,6 +368,7 @@ BUDGET_MODES = {
     # Like "ultra", only offered by the web UI on localhost
     # (script.js's LOCALHOST_ONLY_MODES).
     "megatron": 20_000_000,
+    "gridzilla": 100_000_000,
 }
 
 # Optional "Theme" field on the generation form, at the user's explicit

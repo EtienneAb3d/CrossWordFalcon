@@ -339,7 +339,7 @@ json`. Holds all server-side state in plain module dicts/lists:
 (`language`, `bilingual_language`, `width`/`height` [5-30], `difficulty`
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
 `black_enrichment_percent` [0-100, default 15], `mode` [flash/turbo/fast/
-medium/ultra/megatron, default medium], `pseudo`, `theme`, `theme_precision`
+medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_precision`
 [0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
 [list of free-form "Mots Défi" strings, default empty]); `RecomputeRequest`;
 the `Interactive*Request` family (`Step`, `Clean`, `Candidates`,
@@ -351,10 +351,10 @@ automatic completion to a selected region instead of the whole grid,
 `ChatRequest`/`ChatMessage`.
 
 `BUDGET_MODES = {flash: 1000, turbo: 10000, fast: 100000, medium: 500000,
-ultra: 5000000, megatron: 20000000}` sets the CSP search-check budget per
-attempt for the "Mode" selector; the web UI disables its Ultra and
-Megatron options off localhost (`script.js`'s `LOCALHOST_ONLY_MODES`/
-`restrictHeavyModesToLocalhost`, frontend-only — the API accepts both).
+ultra: 5000000, megatron: 20000000, gridzilla: 100000000}` sets the CSP search-check budget per
+attempt for the "Mode" selector; the web UI disables its Ultra,
+Megatron and GridZilla options off localhost (`script.js`'s `LOCALHOST_ONLY_MODES`/
+`restrictHeavyModesToLocalhost`, frontend-only — the API accepts them all).
 The UI no longer offers "Graines" (`force_letters_percent`, left at its
 default 0); `Automation/Populate.py` sends `black_enrichment_percent` 15
 and `force_letters_percent` 0 explicitly. `WORDLISTS` maps each of the six language codes to its

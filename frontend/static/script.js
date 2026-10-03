@@ -3407,12 +3407,12 @@ const REMOTE_MAX_DIMENSION = 20;
   }
 })();
 
-// "Ultra" and "Megatron" modes (5,000,000 and 20,000,000 checks per
-// attempt — see backend/app.py's BUDGET_MODES) are only offered on
+// "Ultra", "Megatron" and "GridZilla" modes (5,000,000, 20,000,000 and
+// 100,000,000 checks per attempt — see backend/app.py's BUDGET_MODES) are only offered on
 // localhost: off it, their <option>s are disabled — greyed out and
 // non-selectable by the browser's own native rendering, no extra CSS
-// needed — and a leftover value of either falls back to "medium".
-const LOCALHOST_ONLY_MODES = ["ultra", "megatron"];
+// needed — and a leftover value of any of them falls back to "medium".
+const LOCALHOST_ONLY_MODES = ["ultra", "megatron", "gridzilla"];
 (function restrictHeavyModesToLocalhost() {
   if (isLocalhostOrigin()) return;
   const modeSelect = document.getElementById("mode");

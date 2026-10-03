@@ -146,8 +146,9 @@ full again whenever a new generation or an Interactive session starts.
 - **Mode** (`#mode`) — how much computing effort one attempt is allowed
   before giving up and trying again: Flash (fastest, least thorough),
   Turbo, Rapide/Fast, Moyen/Medium (the default), Ultra, Megatron
-  (slowest, most thorough — four times Ultra's effort). A harder grid (a larger size, a stricter black rate) may
-  need a slower mode to succeed at all. **Ultra** and **Megatron** are only
+  (four times Ultra's effort), GridZilla (slowest, most thorough — five
+  times Megatron's effort). A harder grid (a larger size, a stricter black rate) may
+  need a slower mode to succeed at all. **Ultra**, **Megatron** and **GridZilla** are only
   selectable when the page is opened on the local machine; from another
   machine on the network their options are greyed out and unavailable
   (`frontend/static/script.js`, `restrictHeavyModesToLocalhost`).

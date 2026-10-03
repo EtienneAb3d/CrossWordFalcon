@@ -111,38 +111,44 @@ _DIFFICULTY_LABELS = {
 }
 
 # Mirrors frontend/static/i18n.js's modeLabel/modeFlash/modeTurbo/modeFast/
-# modeMedium/modeUltra/modeMegatron per language, for the metadata header line (see
+# modeMedium/modeUltra/modeMegatron/modeGridzilla per language, for the metadata header line (see
 # backend/app.py's BUDGET_MODES for the internal key -> budget mapping).
 _MODE_LABELS = {
     "fr": ("Mode", {
         "flash": "Flash", "turbo": "Turbo", "fast": "Rapide",
         "medium": "Moyen", "ultra": "Ultra",
         "megatron": "Megatron",
+        "gridzilla": "GridZilla",
     }),
     "en": ("Mode", {
         "flash": "Flash", "turbo": "Turbo", "fast": "Fast",
         "medium": "Medium", "ultra": "Ultra",
         "megatron": "Megatron",
+        "gridzilla": "GridZilla",
     }),
     "de": ("Modus", {
         "flash": "Flash", "turbo": "Turbo", "fast": "Schnell",
         "medium": "Mittel", "ultra": "Ultra",
         "megatron": "Megatron",
+        "gridzilla": "GridZilla",
     }),
     "es": ("Modo", {
         "flash": "Flash", "turbo": "Turbo", "fast": "Rápido",
         "medium": "Medio", "ultra": "Ultra",
         "megatron": "Megatron",
+        "gridzilla": "GridZilla",
     }),
     "it": ("Modalità", {
         "flash": "Flash", "turbo": "Turbo", "fast": "Veloce",
         "medium": "Medio", "ultra": "Ultra",
         "megatron": "Megatron",
+        "gridzilla": "GridZilla",
     }),
     "pt": ("Modo", {
         "flash": "Flash", "turbo": "Turbo", "fast": "Rápido",
         "medium": "Médio", "ultra": "Ultra",
         "megatron": "Megatron",
+        "gridzilla": "GridZilla",
     }),
 }
 

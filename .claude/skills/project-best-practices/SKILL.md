@@ -1238,7 +1238,8 @@ the current defaults/behavior to know before touching this code.
   above) only when the caller passes `None` — the web UI's "Mode"
   selector (`backend/app.py`'s `BUDGET_MODES`: flash=1,000, turbo=10,000,
   fast=100,000, medium=500,000 [default], ultra=5,000,000,
-  megatron=20,000,000 — Ultra and Megatron offered by the UI on localhost only) instead sends
+  megatron=20,000,000, gridzilla=100,000,000 — Ultra, Megatron and
+  GridZilla offered by the UI on localhost only) instead sends
   an explicit value, threaded through `generate_grid(deadline_checks=...)`
   → `_pattern_attempt`/`_pattern_continue` → `try_fill`, overriding the
   grid-size formula entirely for that request. The CLI and any other

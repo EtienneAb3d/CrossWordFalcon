@@ -91,8 +91,8 @@ et tout le moteur décrit ici.
 ### Mode tout automatique
 
 1. Configurer la grille (langue, taille, difficulté, taux noir, etc.).
-2. Choisir un **Mode** parmi Flash/Turbo/Rapide/Moyen/Ultra/Megatron (Ultra
-   et Megatron seulement quand la page est ouverte en local) — ce choix ne
+2. Choisir un **Mode** parmi Flash/Turbo/Rapide/Moyen/Ultra/Megatron/GridZilla
+   (Ultra, Megatron et GridZilla seulement quand la page est ouverte en local) — ce choix ne
    fixe qu'un budget de recherche par tentative (« Limites de la
    recherche », chapitre 4), pas la qualité du résultat.
 3. Facultatif : lister des mots dans le champ **Thématique** pour orienter

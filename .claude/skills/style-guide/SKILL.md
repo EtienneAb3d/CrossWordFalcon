@@ -2400,15 +2400,15 @@ English (see `project-best-practices`).
     inputs' own `max` attribute is lowered from 30 to 20 so native
     validation blocks a larger value on submit too. On `localhost` the
     `max="30"` markup is untouched.
-  - The **Ultra** and **Megatron** `<option>`s on `#mode` are `disabled`
+  - The **Ultra**, **Megatron** and **GridZilla** `<option>`s on `#mode` are `disabled`
     off localhost (`LOCALHOST_ONLY_MODES`,
     `restrictHeavyModesToLocalhost`). **A
     disabled `<option>` is greyed out and unselectable by the browser's
     own native rendering**, which is exactly what "en grisé non
     cliquable" asks for; a custom rule would only risk diverging from the
-    platform's own disabled-control convention. A leftover `"ultra"`
-    or `"megatron"` value falls back to `"medium"`.
-  Frontend-only: `backend/app.py` still accepts `mode="ultra"`/`"megatron"` and
+    platform's own disabled-control convention. A leftover `"ultra"`,
+    `"megatron"` or `"gridzilla"` value falls back to `"medium"`.
+  Frontend-only: `backend/app.py` still accepts `mode="ultra"`/`"megatron"`/`"gridzilla"` and
   `width`/`height` from 5 to 30 from a direct API call — the restrictions
   are the web UI's alone.
 

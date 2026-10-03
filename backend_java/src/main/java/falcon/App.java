@@ -65,7 +65,8 @@ public final class App {
     }
 
     static final Map<String, Long> BUDGET_MODES = new TreeMap<>(Map.of("flash", 1000L, "turbo", 10000L, "fast", 100000L,
-            "medium", 500000L, "ultra", 5000000L, "megatron", 20000000L));
+            "medium", 500000L, "ultra", 5000000L, "megatron", 20000000L,
+            "gridzilla", 100000000L));
     static final Path RSS_DIR = Env.path("RSS");
     static final Path SCRAPP_DIR = Env.path("SCRAPP");
     static final int RSS_FETCH_HOUR = 8;
@@ -269,7 +270,7 @@ public final class App {
             throw http(400, "difficulté inconnue : " + Log.repr(req.difficulty) + " (attendu : ['easy', 'hard', 'medium'])");
         }
         if (!BUDGET_MODES.containsKey(req.mode)) {
-            throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'medium', 'megatron', 'turbo', 'ultra'])");
+            throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'gridzilla', 'medium', 'megatron', 'turbo', 'ultra'])");
         }
     }
 
