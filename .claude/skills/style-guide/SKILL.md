@@ -2397,9 +2397,9 @@ English (see `project-best-practices`).
     forced back to 5 on `blur`/`change` (an empty field is left alone,
     still being edited). Off localhost, a value above 20
     (`REMOTE_MAX_DIMENSION`) is forced back to 20 the same way, and the
-    inputs' own `max` attribute is lowered from 30 to 20 so native
+    inputs' own `max` attribute is lowered from 50 to 20 so native
     validation blocks a larger value on submit too. On `localhost` the
-    `max="30"` markup is untouched.
+    `max="50"` markup is untouched.
   - The **Ultra**, **Megatron** and **GridZilla** `<option>`s on `#mode` are `disabled`
     off localhost (`LOCALHOST_ONLY_MODES`,
     `restrictHeavyModesToLocalhost`). **A
@@ -4571,13 +4571,37 @@ end through the real running API (interactive start/step/save,
   (`max-height: none`), text at `0.95rem`. No collapse button. Any change
   to the `#chatbot` look applies to both pages.
 
+- **Board tool column** (`#grid-tools`): absolutely positioned at the
+  left edge and top of `#board` (`position: relative`), i.e. flush with the
+  central column's margin and level with the grid's top, `z-index: 5`; a
+  flex column (`gap: 0.4rem`) stacking the grid statistics button (play
+  mode), the black/fill card `#interactive-cell-stats` (Interactive mode,
+  now in normal flow inside the column) and the zoom buttons.
+- **Zoom buttons** (`#grid-zoom`, `.grid-zoom-btn`), play and Interactive
+  modes: three square `.nav-btn.clear-icon-btn` icon buttons stacked
+  vertically (`gap: 0.25rem`), inline stroke SVGs in `--accent` —
+  magnifier +, magnifier −, four corners ("fit to window"); the fit button
+  gets an `--accent` border (`.active`) while it is the zoom in force; a
+  button at its limit is `disabled` (`.nav-btn:disabled`).
+- **Zoomed grid frame** (`#grid-frame`): a 2×2 CSS grid — `#grid-viewport`
+  (`overflow: auto`, native scrollbars hidden with `scrollbar-width: none`
+  and `::-webkit-scrollbar`), `#grid-vslider` on its right (range input,
+  `writing-mode: vertical-lr`, top of the track = top of the grid) and
+  `#grid-hslider` below it, both `accent-color: var(--accent)`, 1rem thick,
+  shown only while the grid overflows in their direction. `#grid` is
+  `display: grid; width: max-content`. Header cells (`.col-header`,
+  `.row-header`, `.corner-header`) are `position: sticky` (z-index 2, the
+  corner 3) with a `0 0 0 2px var(--border)` box-shadow covering the gaps
+  around them, so scrolled cells never show through. Visually confirmed
+  with Playwright/Chromium on a 50×50 grid (fit: 10px cells, no slider;
+  zoomed: sliders shown, headers 15… and 16… stuck at the edges) and in
+  Interactive mode.
 - **Grid statistics button** (`#grid-stats`, `#grid-stats-btn`,
   `#grid-stats-panel`), play mode only: a square `.nav-btn.clear-icon-btn`
-  bar-chart icon (inline SVG, `currentColor`, `--accent`) absolutely
-  positioned at the left edge and top of `#board` (`position: relative`),
-  i.e. flush with the central column's margin and level with the grid's top.
+  bar-chart icon (inline SVG, `currentColor`, `--accent`), first item of
+  `#grid-tools`.
   Its panel is an overlay card right below it (same white card, border,
-  radius and shadow as `#leaderboard`, `z-index: 3`), a right-aligned
+  radius and shadow as `#leaderboard`), a right-aligned
   tabular table (letters, words; longest first; dashed-separated total).
   `[hidden]` overrides guard the bare-id `display` trap. No new token.
   Visually confirmed with Playwright/Chromium: button top equals grid top,
@@ -4618,16 +4642,16 @@ end through the real running API (interactive start/step/save,
   cells 5 and 6), N=10 the 10 first columns over the full height, and a
   null size draws nothing.
 
-- **The playable/Interactive grid is at most 3/4 of the window height**
-  (`#grid`'s `--cell-size`, `script.js`'s `fitGridToViewport`), at the
-  user's explicit request: the cell size is computed from
-  `window.innerHeight × 0.75` (header row, 2px gaps and border included),
-  capped at the former 2rem and floored at 12px, recomputed on every
-  `renderGrid()` and on window resize (which also re-measures
-  `#hover-definition-row` and re-places `#leaderboard`). Cell letters
-  (×0.5), clue numbers (×0.275) and header numbers (×0.375) scale with it
-  so their proportions stay those of the 2rem grid. The attempt-preview
-  mini-grids keep their own fixed 1.1rem cells. **Visually confirmed**
-  with Playwright/Chromium: a 14×15 grid measures 515px in a 700px-high
-  window (25px cells), 648px (2rem cells, unchanged) in a 1200px one, and
-  363px after resizing to 500px.
+- **The playable/Interactive grid opens fitted to the window**
+  (`#grid`'s `--cell-size`, `script.js`'s `updateGridViewport`): with no
+  zoom chosen, the cell size fits the whole grid (header row/column, 2px
+  gaps and border included) in `window.innerHeight × 0.75` and in
+  `#board-main`'s width minus the `#grid-tools` column on both sides and
+  the Précédent/Suivant buttons, capped at the former 2rem and floored at
+  4px; recomputed on every `renderGrid()`, on window resize and when
+  `#board-main` changes width (which also re-measures
+  `#hover-definition-row` on `#grid-frame` and re-places `#leaderboard`).
+  The zoom buttons override it (8 to 64px, see "Zoom buttons"). Cell
+  letters (×0.5), clue numbers (×0.275) and header numbers (×0.375) scale
+  with it so their proportions stay those of the 2rem grid. The
+  attempt-preview mini-grids keep their own fixed 1.1rem cells.

@@ -67,7 +67,7 @@ from .grid_store import (
     save_stop_dump,
 )
 from .svg_export import (
-    render_puzzle_svg,
+    render_puzzle_pages,
     save_grid_png,
     save_grid_svg,
     svg_to_pdf_bytes,
@@ -799,8 +799,8 @@ class GenerateRequest(BaseModel):
     # a grid smaller than that no longer really makes sense as a crossword.
     # The CLI (`crossword_gen.py`'s `main()`) never had a
     # cap at all; this Field is therefore now aligned with it.
-    width: int = Field(default=DEFAULT_WIDTH, ge=5, le=30, description="Grid width (horizontal)")
-    height: int = Field(default=DEFAULT_HEIGHT, ge=5, le=30, description="Grid height (vertical)")
+    width: int = Field(default=DEFAULT_WIDTH, ge=5, le=50, description="Grid width (horizontal)")
+    height: int = Field(default=DEFAULT_HEIGHT, ge=5, le=50, description="Grid height (vertical)")
     difficulty: str = Field(default="easy", description="easy, medium or hard")
     seed: Optional[int] = None
     # Statistical "seed" letters (crossword_gen.py's sample_letter_biases,
@@ -2088,17 +2088,18 @@ def library_get(grid_id: str, pseudo: str = ""):
 async def library_get_pdf(grid_id: str):
     """Downloads a library grid as a printable PDF — an EMPTY grid,
     definitions and title only, never the answers — at the user's
-    explicit request. Rendered as SVG (render_puzzle_svg) then converted
+    explicit request. Rendered as one SVG per page (render_puzzle_pages:
+    one page, or two for a grid with a side above 20 cells) then converted
     to PDF via `rsvg-convert -f pdf` (svg_to_pdf_bytes)."""
     record = get_grid(grid_id)
     if record is None:
         raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
     title = (record.get("title") or "").strip()
     try:
-        svg = render_puzzle_svg(
+        pages = render_puzzle_pages(
             record, record.get("language", "fr"), title, record.get("difficulty")
         )
-        pdf_bytes = await asyncio.to_thread(svg_to_pdf_bytes, svg)
+        pdf_bytes = await asyncio.to_thread(svg_to_pdf_bytes, pages)
     except OSError as exc:
         # `rsvg-convert` missing or failing — the same dependency family
         # as the PNG generation (see svg_export.save_grid_png).

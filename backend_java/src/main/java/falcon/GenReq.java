@@ -25,8 +25,8 @@ public final class GenReq {
         GenReq r = new GenReq();
         r.language = b.str("language", "fr");
         r.bilingualLanguage = b.str("bilingual_language", null);
-        r.width = b.integer("width", falcon.gen.Generator.DEFAULT_WIDTH, 5, 30);
-        r.height = b.integer("height", falcon.gen.Generator.DEFAULT_HEIGHT, 5, 30);
+        r.width = b.integer("width", falcon.gen.Generator.DEFAULT_WIDTH, 5, 50);
+        r.height = b.integer("height", falcon.gen.Generator.DEFAULT_HEIGHT, 5, 50);
         r.difficulty = b.str("difficulty", "easy");
         r.seed = b.optLong("seed");
         r.forceLettersPercent = b.integer("force_letters_percent", 0, 0, 100);

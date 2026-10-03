@@ -99,7 +99,7 @@
 
       <label for="width">
         <span data-i18n="widthLabel">Largeur</span>
-        <input type="number" id="width" name="width" min="5" max="30" step="1" value="15" required>
+        <input type="number" id="width" name="width" min="5" max="50" step="1" value="15" required>
       </label>
 
       <!-- Bilingual grid, at the user's explicit request: "between the
@@ -124,7 +124,7 @@
 
       <label for="height">
         <span data-i18n="heightLabel">Hauteur</span>
-        <input type="number" id="height" name="height" min="5" max="30" step="1" value="10" required>
+        <input type="number" id="height" name="height" min="5" max="50" step="1" value="10" required>
       </label>
 
       <label for="difficulty">
@@ -774,38 +774,76 @@
                 data-i18n-aria="attemptPreviewNextBtn" disabled>▶</button>
       </p>
       <div id="board">
-        <!-- Play mode only: word-count statistics of the grid on screen.
-             An icon button at #board's left edge (the central column's
-             margin), level with the top of the grid; a click opens the
-             panel right below it — number of words per length, longest
-             first (script.js's showGridStats/renderGridStatsPanel). -->
-        <div id="grid-stats" hidden>
-          <button type="button" id="grid-stats-btn" class="nav-btn clear-icon-btn"
-                  data-i18n-title="gridStatsBtn" data-i18n-aria="gridStatsBtn"
-                  aria-expanded="false" aria-controls="grid-stats-panel">
-            <svg class="grid-stats-icon" viewBox="0 0 24 24" width="16" height="16"
-                 aria-hidden="true" fill="currentColor">
-              <rect x="3" y="12" width="4" height="9"/>
-              <rect x="10" y="4" width="4" height="17"/>
-              <rect x="17" y="8" width="4" height="13"/>
-            </svg>
-          </button>
-          <div id="grid-stats-panel" hidden>
-            <table id="grid-stats-table">
-              <thead>
-                <tr>
-                  <th data-i18n="gridStatsColLength">Lettres</th>
-                  <th data-i18n="gridStatsColCount">Mots</th>
-                </tr>
-              </thead>
-              <tbody id="grid-stats-body"></tbody>
-              <tfoot>
-                <tr>
-                  <th data-i18n="gridStatsTotal">Total</th>
-                  <td id="grid-stats-total"></td>
-                </tr>
-              </tfoot>
-            </table>
+        <!-- Left-hand tool column of the board (play and Interactive modes),
+             absolutely positioned at #board's top-left corner, stacked
+             top to bottom: the word statistics (play mode), the black/fill
+             percentages card (Interactive mode), then the zoom controls
+             (script.js's setGridZoom/fitGridZoom). -->
+        <div id="grid-tools">
+          <!-- Play mode only: word-count statistics of the grid on screen.
+               An icon button at #board's left edge (the central column's
+               margin), level with the top of the grid; a click opens the
+               panel right below it — number of words per length, longest
+               first (script.js's showGridStats/renderGridStatsPanel). -->
+          <div id="grid-stats" hidden>
+            <button type="button" id="grid-stats-btn" class="nav-btn clear-icon-btn"
+                    data-i18n-title="gridStatsBtn" data-i18n-aria="gridStatsBtn"
+                    aria-expanded="false" aria-controls="grid-stats-panel">
+              <svg class="grid-stats-icon" viewBox="0 0 24 24" width="16" height="16"
+                   aria-hidden="true" fill="currentColor">
+                <rect x="3" y="12" width="4" height="9"/>
+                <rect x="10" y="4" width="4" height="17"/>
+                <rect x="17" y="8" width="4" height="13"/>
+              </svg>
+            </button>
+            <div id="grid-stats-panel" hidden>
+              <table id="grid-stats-table">
+                <thead>
+                  <tr>
+                    <th data-i18n="gridStatsColLength">Lettres</th>
+                    <th data-i18n="gridStatsColCount">Mots</th>
+                  </tr>
+                </thead>
+                <tbody id="grid-stats-body"></tbody>
+                <tfoot>
+                  <tr>
+                    <th data-i18n="gridStatsTotal">Total</th>
+                    <td id="grid-stats-total"></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+          <!-- Black-cell / white-cell-fill percentages (Interactive mode),
+               kept current by script.js's renderInteractive(). -->
+          <div id="interactive-cell-stats" hidden>
+            <p id="interactive-black-stat"></p>
+            <p id="interactive-fill-stat"></p>
+          </div>
+          <!-- Zoom of #grid: zoom in, zoom out, fit the whole grid to the
+               window (script.js's GRID_ZOOM_* constants). -->
+          <div id="grid-zoom">
+            <button type="button" id="grid-zoom-in-btn" class="nav-btn clear-icon-btn grid-zoom-btn"
+                    data-i18n-title="gridZoomInBtn" data-i18n-aria="gridZoomInBtn">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"
+                   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M10.5 7.5v6M7.5 10.5h6"/>
+              </svg>
+            </button>
+            <button type="button" id="grid-zoom-out-btn" class="nav-btn clear-icon-btn grid-zoom-btn"
+                    data-i18n-title="gridZoomOutBtn" data-i18n-aria="gridZoomOutBtn">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"
+                   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M7.5 10.5h6"/>
+              </svg>
+            </button>
+            <button type="button" id="grid-zoom-fit-btn" class="nav-btn clear-icon-btn grid-zoom-btn"
+                    data-i18n-title="gridZoomFitBtn" data-i18n-aria="gridZoomFitBtn">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"
+                   fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
+              </svg>
+            </button>
           </div>
         </div>
         <!-- Groups #clues and #grid-column so they keep centering together
@@ -824,17 +862,6 @@
             <div id="clues-across" class="clue-lines"></div>
           </div>
           <div id="grid-column">
-            <!-- Black-cell / white-cell-fill percentages — a small,
-                 viewport-fixed floating card (see style.css), not an
-                 in-flow sibling of #grid, so it neither shifts with
-                 #grid's own horizontal offset (flanked by "Précédent" in
-                 Interactive mode) nor pushes #grid itself down. script.js's
-                 renderInteractive() keeps both lines current on every
-                 edit. -->
-            <div id="interactive-cell-stats" hidden>
-              <p id="interactive-black-stat"></p>
-              <p id="interactive-fill-stat"></p>
-            </div>
             <!-- "Interactif" only for Précédent/Suivant (script.js's
                  enterInteractiveMode()/hideInteractivePanel() toggle their
                  own `hidden` attribute — no class toggle needed on this
@@ -850,7 +877,20 @@
               <button type="button" id="interactive-prev-btn" class="interactive-flank-btn" hidden
                       data-i18n="interactivePrevBtn" disabled>Précédent</button>
               <div id="interactive-grid-wrap">
-                <div id="grid"></div>
+                <!-- #grid inside a scrolling viewport (header row/column
+                     kept visible, `position: sticky`), with a vertical
+                     slider on its right and a horizontal one below it,
+                     both hidden while the whole grid is visible (script.js's
+                     updateGridViewport). -->
+                <div id="grid-frame">
+                  <div id="grid-viewport">
+                    <div id="grid"></div>
+                  </div>
+                  <input type="range" id="grid-vslider" class="grid-slider" min="0" max="0" value="0" step="1"
+                         data-i18n-aria="gridVSlider" hidden>
+                  <input type="range" id="grid-hslider" class="grid-slider" min="0" max="0" value="0" step="1"
+                         data-i18n-aria="gridHSlider" hidden>
+                </div>
               </div>
               <button type="button" id="interactive-next-btn" class="interactive-flank-btn" hidden
                       data-i18n="interactiveNextBtn">Suivant</button>

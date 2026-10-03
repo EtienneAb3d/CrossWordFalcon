@@ -97,7 +97,7 @@ full again whenever a new generation or an Interactive session starts.
   in bold followed by width x height and black rate: Ristretto noisette
   (6x6, 0 %), Expresso latte (10x10, 10 %), Macchiato (15x10, 12 %),
   Cappuccino (15x15, 15 %), Mocha (20x20, 15 %), Tazza grande (30x20, 15 %),
-  Frappuccino (30x30, 15 %). Picking one fills Largeur, Hauteur and Taux
+  Frappuccino (30x30, 15 %), Caffeteria (50x50, 15 %). Picking one fills Largeur, Hauteur and Taux
   noir at once; the three fields stay editable. The button shows the
   preset matching the current values, or "Personnalisée / Custom" when
   none does. Presets wider or taller than 20 cells are greyed out when the
@@ -108,7 +108,7 @@ full again whenever a new generation or an Interactive session starts.
   words and clues are written in. Also switches every label/message on
   the page to that same language.
 - **Largeur / Width** (`#width`) — the grid's own width in cells, from 5
-  to 30 when the page is opened on the local machine, from 5 to 20 when
+  to 50 when the page is opened on the local machine, from 5 to 20 when
   it is opened from another machine on the network. A value outside the
   allowed range is snapped back to the nearest bound as soon as the
   field loses focus (`frontend/static/script.js`, `clampDimensionInputs`).
@@ -128,7 +128,7 @@ full again whenever a new generation or an Interactive session starts.
   word/direction is currently selected in the grid (see "David FALCON"
   below).
 - **Hauteur / Height** (`#height`) — the grid's own height in cells, from
-  5 to 30 on the local machine, from 5 to 20 from another machine on the
+  5 to 50 on the local machine, from 5 to 20 from another machine on the
   network; same out-of-range snap-back on blur as **Largeur / Width**
   above (`frontend/static/script.js`, `clampDimensionInputs`).
 - **Difficulté / Difficulty** (`#difficulty`) — Easy, Medium, or Hard.
@@ -578,7 +578,15 @@ autosave and never changes the stored library grid. **PDF** (a small
 red PDF icon) downloads a printable sheet of the grid: the empty grid,
 its clues and its title only — never the answers — with a footer line
 linking back to play it online, with its solution, at the same shareable
-address.
+address. A grid whose sides are both at most 20 cells fits on one A4
+landscape page: the grid sits at the top right, the clues flow in columns
+to its left and then under it, and the cell and text sizes are the
+largest that keep everything on that single page (`backend/svg_export.py`,
+`render_puzzle_svg`). A larger grid takes two pages: the first holds the
+header and the grid, as large as the page allows; the second lists the
+across clues, then the down clues, across the full width of the page, in
+the largest text that fits (very long clue lists continue on further
+pages) (`backend/svg_export.py`, `render_two_page_puzzle`).
 
 A grid created this way (`backend/grid_store.py`, `save_grid_json`'s own
 `origin` field — a snapshot of the original grid's title, author and
@@ -783,9 +791,12 @@ Once generation completes, the search-progress panel disappears and
   preview panel showed, now that the grid is finished.
 - **The grid itself** (`#grid`, `frontend/static/script.js`,
   `renderGrid`) — a crossword grid with 1-based
-  row/column headers. The grid is never taller than three quarters of
-  the window: its cells shrink (from their full size) to fit, and follow
-  the window when it is resized (`fitGridToViewport`). A black cell is drawn as a black square half the
+  row/column headers. By default the whole grid fits in the window (at
+  most three quarters of its height): its cells shrink (from their full
+  size) to fit, and follow the window when it is resized
+  (`updateGridViewport`). The zoom buttons (see **Zoom** below) enlarge
+  it; the row and column numbers then stay visible at the top and left
+  edges while the rest scrolls. A black cell is drawn as a black square half the
   cell's size, centered in a white cell — the same in every grid of the
   page: play, Interactive mode and the generation previews
   (`frontend/static/style.css`, `.cell.black`). Click a white cell to select it (`selectCell`, a
@@ -851,6 +862,19 @@ Once generation completes, the search-progress panel disappears and
   the number of words of the grid per length in letters, longest first,
   then the total. A second click, a click elsewhere or Escape closes it.
   The button is hidden in Interactive mode.
+- **Zoom** (`#grid-zoom`, `frontend/static/script.js`, `setGridZoom`/
+  `fitGridZoom`) — three icon buttons at the left edge of the central
+  column, under the statistics button (play mode) or the black/fill card
+  (Interactive mode): zoom in (magnifier +), zoom out (magnifier −), and
+  fit to window (four corners), which shows the whole grid again and is
+  framed while it is the zoom in force. Every grid opens fitted to the
+  window. Zooming keeps the center of the view; once the grid no longer
+  fits, it scrolls inside its frame: a vertical slider on its right and a
+  horizontal one below it move the view (the mouse wheel, a touchpad or a
+  finger do too), each shown only while the grid overflows in its
+  direction. The row and column numbers always stay visible. Typing or
+  moving the selection with the keyboard scrolls just enough to keep the
+  selected cell in view (`ensureSelectionVisible`).
 - **Ranking** (`#leaderboard`, `frontend/static/script.js`,
   `showLeaderboard`/`refreshLeaderboard`) — a small card against the
   window's right edge, over the page margin, level with the top of the

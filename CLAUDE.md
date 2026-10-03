@@ -336,7 +336,7 @@ json`. Holds all server-side state in plain module dicts/lists:
   qdrant/admin/delete-tenant`.
 
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
-(`language`, `bilingual_language`, `width`/`height` [5-30], `difficulty`
+(`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
 `black_enrichment_percent` [0-100, default 15], `mode` [flash/turbo/fast/
 medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_precision`
@@ -2250,8 +2250,30 @@ Four independent filesystem stores, one JSON file shape shared with the
 
 Renders a `generate_grid()`-shaped result to a self-contained SVG:
 `render_grid_svg` (empty grid + clue lists + solved grid, for the
-per-generation archive under `GRID_SVG/`) or `render_puzzle_svg` (a
-printable, answer-free sheet for the library's PDF download). Both draw
+per-generation archive under `GRID_SVG/`) or `render_puzzle_pages` (a
+printable, answer-free sheet for the library's PDF download, one SVG per
+page). A grid whose sides are both at most `PDF_ONE_PAGE_MAX_SIDE` (20)
+cells takes one page, `render_puzzle_svg`: one A4
+landscape page, `297mm`x`210mm` over a `PDF_PAGE_WIDTH`x`PDF_PAGE_HEIGHT`
+viewBox — header, grid at the top right, the across then down clues
+flowed in up to `PDF_MAX_CLUE_COLUMNS` columns left of the grid then in
+columns under it (`_layout_puzzle_clues`, a clue line never split across
+columns), the "play online" footer; for each clue font size
+(`PDF_FONT_SIZES`, 12 down to 4) and column count, a binary search finds
+the largest cell size that fits (1.0 down to 0.4 of the largest the body
+allows, `PDF_CELL_SIZE_STEP`), and the pair kept maximises
+min(cell/`PDF_TARGET_CELL_SIZE` (5 mm), font/`PDF_TARGET_FONT_SIZE`
+(7 pt)), each capped at 1, then their sum; coordinates are written with
+two decimals so the Java mirror `SvgExport.renderPuzzleSvg` is
+byte-identical). A larger grid takes two, `render_two_page_puzzle`: page 1
+the header, the grid centered under it at the largest cell the body allows
+(at most `PDF_MAX_CELL_SIZE`) and the footer; page 2 the across then down
+clues in one column spanning the page's full width, at the largest
+`PDF_FONT_SIZES` size that fits — when even 4 pt does not, the clues run
+on over further pages (at most `PDF_MAX_CLUE_PAGES`). `svg_to_pdf_bytes`
+takes one SVG (stdin) or a list (temporary files, `rsvg-convert -f pdf
+page1.svg page2.svg ...`, one PDF page each); Java `SvgExport.
+renderPuzzlePages`/`renderTwoPagePuzzle`/`svgToPdfBytes(List)`. Both draw
 a black cell like the web UI: a bordered white cell holding a centered
 half-size square of `BLACK_CELL_FILL` (`#2563eb`). `save_grid_
 png` and `svg_to_pdf_bytes` shell out to the external `rsvg-convert`
@@ -2365,7 +2387,7 @@ state, unlike the backend).
   Its first line, "Préconfigurations" (`#preset-select`), is a custom
   listbox (`script.js`'s `GRID_PRESETS`/`renderGridPresets`/
   `applyGridPreset`) filling `#width`/`#height`/`#black-enrichment` from
-  seven named formats (6x6 0 % to 30x30 15 %), frontend-only; the
+  eight named formats (6x6 0 % to 50x50 15 %), frontend-only; the
   button shows the preset matching the three fields (`syncGridPresetSelection`),
   presets above `REMOTE_MAX_DIMENSION` are disabled off localhost.
   While a playable grid is on screen (`displayFinalGrid`), the creation
@@ -2374,12 +2396,28 @@ state, unlike the backend).
   that unfolds it; the tool buttons stay visible. `runGeneration`/
   `runInteractive`/`enterInteractiveMode` unfold it.
 - **`script.js`** — all client logic in one file. Major areas: grid
-  rendering/keyboard input/solution-checking (`#grid`'s `--cell-size`,
-  set by `fitGridToViewport` on render and resize, keeps the grid within
-  3/4 of the window height, 2rem cells at most); the play-mode word statistics
-  (`#grid-stats`: an icon button at `#board`'s left edge, level with the
-  grid's top, opening an overlay panel of word counts per length, longest
-  first — `showGridStats`/`renderGridStatsPanel`, hidden in Interactive mode); the end-of-generation grid
+  rendering/keyboard input/solution-checking; the grid zoom, play and
+  Interactive modes (`#grid` sits in `#grid-viewport`, sized by
+  `updateGridViewport` on render, resize and a `ResizeObserver` on
+  `#board-main`: `#grid`'s `--cell-size` is `gridZoomCellPx`, set by the
+  `#grid-zoom` buttons — ×/÷ `GRID_ZOOM_STEP` (1.25), 8 to 64 px, around
+  the center of the view (`setGridZoom`) — or, when null ("fit to window",
+  `fitGridZoom`, the state of every newly shown grid), the size fitting the
+  whole grid, header row/column included, within 3/4 of the window height
+  and `#board-main`'s width minus the tool column on both sides and the
+  Précédent/Suivant buttons (`gridViewportRoom`), 2rem cells at most; the
+  viewport is the grid's size capped by that room, its native scrollbars
+  hidden; `#grid-hslider`/`#grid-vslider` (range inputs, kept in sync with
+  its scroll both ways) show only while the grid overflows in their
+  direction; the header cells are `position: sticky`; `renderGrid` keeps
+  the scroll position across its rebuild and, only when the selection
+  changes, scrolls just enough to show the selected cell,
+  `ensureSelectionVisible`); the board's left tool column (`#grid-tools`,
+  absolutely positioned at `#board`'s top-left: the play-mode word statistics
+  `#grid-stats` — an icon button opening an overlay panel of word counts per length, longest
+  first, `showGridStats`/`renderGridStatsPanel`, hidden in Interactive mode —
+  then Interactive mode's `#interactive-cell-stats` card, then the zoom
+  buttons `#grid-zoom`); the end-of-generation grid
   choice (`pollJob` arms `pendingGridChoiceJobId` while the job's
   `grid_choice_count` is set and jumps to the `choose_grid` entry,
   `renderAttemptPreview` colours each example's `scrabble_cells` dark cyan

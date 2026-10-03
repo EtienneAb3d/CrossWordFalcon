@@ -19,6 +19,7 @@ save_grid_png's own docstring.
 """
 import base64
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -56,10 +57,41 @@ HEADER_HEIGHT = HEADER_LOGO_SIZE + 16 + 18
 # rendered width (see render_grid_svg), not a separately-chosen constant.
 GRID_SIDEBAR_GAP = 24
 DOWN_COLUMN_GAP = 24
-# Used only by render_puzzle_svg (the printable PDF) — see its own
-# docstring/layout comment; render_grid_svg deliberately keeps the 50/50
-# split documented above.
-MAX_GRID_WIDTH_FRACTION = 0.6
+# Printable puzzle sheet (render_puzzle_pages, the library's PDF): A4
+# landscape pages (297x210 mm, in 96-DPI user units). A grid whose sides
+# are both at most PDF_ONE_PAGE_MAX_SIDE cells takes one page, the grid on
+# the right and every clue flowed in columns on its left, then under it,
+# the cell size and clue font size being the largest that make everything
+# fit (render_puzzle_svg). A larger one takes two: the header and the grid
+# alone, then the clues in one full-width column (render_two_page_puzzle).
+PDF_PAGE_WIDTH = 1122.52
+PDF_PAGE_HEIGHT = 793.7
+PDF_MARGIN = 34
+PDF_LOGO_SIZE = 44
+PDF_HEADER_GAP = 14
+PDF_FOOTER_HEIGHT = 24
+PDF_GRID_CLUES_GAP = 20
+PDF_CLUE_COLUMN_GAP = 16
+PDF_MAX_CELL_SIZE = 40
+PDF_MAX_GRID_WIDTH_FRACTION = 0.6
+PDF_MAX_CLUE_COLUMNS = 3
+PDF_MIN_CLUE_COLUMN_WIDTH = 120
+PDF_LINE_HEIGHT_FACTOR = 1.3
+PDF_ONE_PAGE_MAX_SIDE = 20
+# Two-page sheet: clue pages added past the second when even the smallest
+# font does not fit on it.
+PDF_MAX_CLUE_PAGES = 8
+# Clue font sizes tried, largest first: 12 down to 4 by halves.
+PDF_FONT_SIZES = [(24 - i) / 2 for i in range(17)]
+# Cell sizes tried, as fractions of the largest cell the body allows:
+# 1.0 down to 0.4 by 0.025.
+PDF_CELL_SIZE_STEPS = 25
+PDF_CELL_SIZE_STEP = 0.025
+# The chosen sizes maximise the smaller of cell/PDF_TARGET_CELL_SIZE and
+# font/PDF_TARGET_FONT_SIZE (each capped at 1), then their sum: a 5 mm
+# cell to write in, 7 pt clue text.
+PDF_TARGET_CELL_SIZE = 18.9
+PDF_TARGET_FONT_SIZE = 9.33
 # rsvg-convert defaults to 96 DPI (screen resolution) when the source SVG has
 # no physical units — GRID_PNG/ is a print-quality visual record (see
 # save_grid_png), so it's rendered at 300 DPI instead, scaling up the output
@@ -563,159 +595,425 @@ def render_grid_svg(result, language, difficulty=None, mode=None):
     )
 
 
-def render_puzzle_svg(result, language, title="", difficulty=None):
-    """Like render_grid_svg but for a *printable, answer-free* puzzle, at
-    the user's explicit request ("a link to download the grid as a PDF
-    (without the answers, only the empty grid, the clues, and the
-    grid's title)") — used by GET /api/library/{grid_id}/pdf. Same
-    overall pieces as render_grid_svg (empty grid + across sidebar +
-    2-column down clues) minus the "=== Solution ===" grid at the
-    bottom, plus the grid's own `title` in the header. No mode/durations
-    line: irrelevant on a puzzle sheet.
+def _n(value):
+    """Two-decimal coordinate/size formatting for render_puzzle_svg."""
+    return f"{value:.2f}"
 
-    Its own layout is deliberately NOT the 50/50 split render_grid_svg
-    uses (see GRID_SIDEBAR_GAP's own comment) — at the user's explicit
-    request: "put the grid all the way to the right of the page
-    (currently it's placed rather to the left, cramping the Across
-    clues). It must never take up more than 60% of the page's width.
-    Use the space remaining on the left for the Across clues, and the
-    space below (full width) for the Down clues." Root cause of the
-    reported "stuck on the
-    left" symptom: `canvas_width` is often floored by MIN_CANVAS_WIDTH
-    (a small grid's own natural `2*grid_width_px + gap` can fall well
-    short of it) — the old 50/50 split still sized the grid+sidebar row
-    from the grid's own width alone, leaving the extra canvas width
-    (down past that row) entirely unused on the right, with the grid
-    itself sitting flush against the sidebar rather than the page's own
-    right edge. Fixed by sizing the page around the grid instead of the
-    reverse: `canvas_width` is now whatever's needed to keep the grid at
-    exactly MAX_GRID_WIDTH_FRACTION (60%) of the page (or MIN_CANVAS_
-    WIDTH, whichever is larger — a small grid then occupies well under
-    60%, never over), the grid is placed flush against the right margin
-    (`grid_x0 = canvas_width - MARGIN - grid_width_px`), and the across
-    sidebar fills every remaining pixel to its left. Down clues are
-    unaffected — they already spanned the full `canvas_width` in 2
-    columns.
+
+def _puzzle_grid_svg(pattern, words, x0, y0, cell):
+    """Empty grid (black/white cells, clue numbers, 1-based row/column
+    headers) for render_puzzle_svg, with its top-left corner (headers
+    included) at (x0, y0) and `cell` px cells, every text sized from
+    `cell`."""
+    rows, cols = len(pattern), len(pattern[0])
+    number_by_cell = {(w["row"], w["col"]): w["number"] for w in words}
+    parts = []
+    grid_x0 = x0 + cell
+    grid_y0 = y0 + cell
+    header_font = cell * 0.4
+    for c in range(cols):
+        parts.append(
+            f'<text x="{_n(grid_x0 + c * cell + cell / 2)}" y="{_n(y0 + cell * 0.65)}" '
+            f'font-size="{_n(header_font)}" font-family="sans-serif" text-anchor="middle" '
+            f'fill="#4b5563">{c + 1}</text>'
+        )
+    for r in range(rows):
+        parts.append(
+            f'<text x="{_n(x0 + cell / 2)}" y="{_n(grid_y0 + r * cell + cell * 0.65)}" '
+            f'font-size="{_n(header_font)}" font-family="sans-serif" text-anchor="middle" '
+            f'fill="#4b5563">{r + 1}</text>'
+        )
+    for r in range(rows):
+        for c in range(cols):
+            x, y = grid_x0 + c * cell, grid_y0 + r * cell
+            parts.append(
+                f'<rect x="{_n(x)}" y="{_n(y)}" width="{_n(cell)}" height="{_n(cell)}" '
+                f'fill="#ffffff" stroke="#1f2937" stroke-width="1"/>'
+            )
+            if pattern[r][c] == BLACK:
+                parts.append(
+                    f'<rect x="{_n(x + cell / 4)}" y="{_n(y + cell / 4)}" '
+                    f'width="{_n(cell / 2)}" height="{_n(cell / 2)}" fill="{BLACK_CELL_FILL}"/>'
+                )
+                continue
+            number = number_by_cell.get((r, c))
+            if number:
+                parts.append(
+                    f'<text x="{_n(x + cell * 0.08)}" y="{_n(y + cell * 0.33)}" '
+                    f'font-size="{_n(cell * 0.27)}" font-family="sans-serif">{number}</text>'
+                )
+    return "".join(parts)
+
+
+def _layout_puzzle_clues(sections, font_size, columns, overflow=False):
+    """Flows the clue `sections` ([(heading, [(pos, text), ...]), ...])
+    into `columns` ([(x, top, width, height), ...], in reading order) at
+    `font_size`, each clue line wrapped at the width of the column it
+    lands in. A clue line (with its wrapped continuations) is never split
+    across two columns, and a heading always stays with the line
+    following it; a heading other than the first gets half a line of
+    space above it, except at the top of a column. Returns the
+    [(x, y, kind, payload), ...] items (y = top of the item), or None
+    when they do not fit — unless `overflow`, where the last column
+    simply runs past its height."""
+    line_height = font_size * PDF_LINE_HEIGHT_FACTOR
+    heading_height = (font_size + 2) * 1.6
+    section_gap = line_height * 0.5
+    blocks = []
+    for index, (heading, lines) in enumerate(sections):
+        pending = [("heading", heading, section_gap if index else 0.0)]
+        for pos, text in lines:
+            pending.append(("clue", (pos, text), 0.0))
+            blocks.append(pending)
+            pending = []
+        if pending:
+            blocks.append(pending)
+
+    def measure(block, width):
+        entries = []
+        for kind, payload, _lead in block:
+            if kind == "heading":
+                entries.append((kind, payload, heading_height))
+                continue
+            pos, text = payload
+            indent = _text_width(f"{pos + 1} ", font_size, bold=True)
+            wrapped = _wrap_line(text, font_size, width - indent)
+            entries.append((kind, (pos, wrapped, indent), line_height * len(wrapped)))
+        return entries
+
+    items = []
+    column, y = 0, 0.0
+    for block in blocks:
+        while True:
+            x, top, width, height = columns[column]
+            entries = measure(block, width)
+            lead = block[0][2] if y > 0 else 0.0
+            total = lead + sum(entry[2] for entry in entries)
+            if y + total <= height or (overflow and column == len(columns) - 1):
+                break
+            if y == 0 and not overflow and column == len(columns) - 1:
+                return None
+            column, y = column + 1, 0.0
+            if column >= len(columns):
+                return None
+        y += lead
+        for kind, payload, h in entries:
+            items.append((x, top + y, kind, payload))
+            y += h
+    return items
+
+
+def render_puzzle_svg(result, language, title="", difficulty=None):
+    """Printable, answer-free puzzle sheet — the empty grid, the clues and
+    the grid's title — used by GET /api/library/{grid_id}/pdf. One A4
+    landscape page (`PDF_PAGE_WIDTH` x `PDF_PAGE_HEIGHT`, declared as
+    297x210 mm): a header (logo, software name, title, identity line), the
+    grid at the top right of the body, the across then down clues flowed
+    in up to `PDF_MAX_CLUE_COLUMNS` columns on its left then in columns
+    under it (`clue_columns`), and the "play online" link at the bottom
+    when the record carries an id.
+
+    Fitting: for each clue font size (`PDF_FONT_SIZES`) and column count,
+    the largest cell size that fits (from the largest cell the body
+    allows, at most `PDF_MAX_CELL_SIZE` and `PDF_MAX_GRID_WIDTH_FRACTION`
+    of its width, down to 40 % of it); among those, the one balancing best
+    the cell against `PDF_TARGET_CELL_SIZE` and the font against
+    `PDF_TARGET_FONT_SIZE` (fewer columns first at equal balance). When nothing fits even at the smallest sizes, the smallest
+    grid with the most columns and the smallest font is drawn anyway.
 
     `result` is a grid_store record (or a generate_grid() result): it
     needs `pattern`, `words` (each with `clue`/`row`/`col`/`direction`/
     `answer`), `width`, `height`."""
     words = result["words"]
-    across_heading, down_heading, _solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
-    across_lines = _group_clue_lines(words, "across", "row", language)
-    down_lines = _group_clue_lines(words, "down", "col", language)
+    pattern = result["pattern"]
+    rows, cols = len(pattern), len(pattern[0])
+    sections = _puzzle_sections(words, language)
+    grid_id = result.get("id")
 
-    grid_width_px = CELL_SIZE + result["width"] * CELL_SIZE
-    canvas_width = max(grid_width_px / MAX_GRID_WIDTH_FRACTION, MIN_CANVAS_WIDTH)
-    grid_x0 = canvas_width - MARGIN - grid_width_px
-    sidebar_width = grid_x0 - GRID_SIDEBAR_GAP - MARGIN
-    parts = []
-    y = MARGIN
-
-    # Header: logo + software name, then the grid's own title (bold), then
-    # a small grey identity line (version / date / language / difficulty).
-    logo_x, logo_y = MARGIN, y
-    parts.append(
-        f'<image x="{logo_x}" y="{logo_y}" width="{HEADER_LOGO_SIZE}" height="{HEADER_LOGO_SIZE}" '
-        f'href="{_logo_data_uri()}"/>'
+    page_w, page_h, margin = PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN
+    content_w = page_w - 2 * margin
+    body_top = margin + PDF_LOGO_SIZE + PDF_HEADER_GAP
+    body_bottom = page_h - margin - (PDF_FOOTER_HEIGHT if grid_id else 0)
+    body_h = body_bottom - body_top
+    max_cell = min(
+        body_h / (rows + 1),
+        content_w * PDF_MAX_GRID_WIDTH_FRACTION / (cols + 1),
+        PDF_MAX_CELL_SIZE,
     )
-    text_x = logo_x + HEADER_LOGO_SIZE + 12
+
+    def clue_columns(cell, column_count):
+        """The clue columns for `cell` px cells: `column_count` columns
+        left of the grid, then, when there is room under the grid,
+        columns about as wide under it. None when a column would be
+        narrower than PDF_MIN_CLUE_COLUMN_WIDTH."""
+        grid_w = cell * (cols + 1)
+        grid_h = cell * (rows + 1)
+        grid_x0 = page_w - margin - grid_w
+        left_w = grid_x0 - PDF_GRID_CLUES_GAP - margin
+        column_w = (left_w - (column_count - 1) * PDF_CLUE_COLUMN_GAP) / column_count
+        if column_w < PDF_MIN_CLUE_COLUMN_WIDTH:
+            return None
+        columns = [
+            (margin + i * (column_w + PDF_CLUE_COLUMN_GAP), body_top, column_w, body_h)
+            for i in range(column_count)
+        ]
+        under_top = body_top + grid_h + PDF_GRID_CLUES_GAP
+        under_h = body_bottom - under_top
+        if under_h > 0 and grid_w >= PDF_MIN_CLUE_COLUMN_WIDTH:
+            under_count = max(1, int((grid_w + PDF_CLUE_COLUMN_GAP) // (column_w + PDF_CLUE_COLUMN_GAP)))
+            under_w = (grid_w - (under_count - 1) * PDF_CLUE_COLUMN_GAP) / under_count
+            columns += [
+                (grid_x0 + i * (under_w + PDF_CLUE_COLUMN_GAP), under_top, under_w, under_h)
+                for i in range(under_count)
+            ]
+        return columns
+
+    def attempt(font_size, cell, column_count):
+        columns = clue_columns(cell, column_count)
+        if columns is None:
+            return None
+        items = _layout_puzzle_clues(sections, font_size, columns)
+        if items is None:
+            return None
+        return font_size, cell, items
+
+    # For each (font size, column count), the largest cell size that fits
+    # (fitting only gets easier as the cell shrinks: the columns widen);
+    # among those, the best balance between the cell and the font, each
+    # measured against its target size.
+    def cell_at(step):
+        return max_cell * (1 - step * PDF_CELL_SIZE_STEP)
+
+    def balance(candidate):
+        font_size, cell = candidate[0], candidate[1]
+        cell_ratio = cell / PDF_TARGET_CELL_SIZE
+        font_ratio = font_size / PDF_TARGET_FONT_SIZE
+        return (min(cell_ratio, font_ratio, 1.0), cell_ratio + font_ratio)
+
+    layout = None
+    for font_size in PDF_FONT_SIZES:
+        for column_count in range(1, PDF_MAX_CLUE_COLUMNS + 1):
+            low, high = 0, PDF_CELL_SIZE_STEPS - 1
+            found = attempt(font_size, cell_at(high), column_count)
+            if found is None:
+                continue
+            while low < high:
+                middle = (low + high) // 2
+                candidate = attempt(font_size, cell_at(middle), column_count)
+                if candidate is None:
+                    low = middle + 1
+                else:
+                    found, high = candidate, middle
+            if layout is None or balance(found) > balance(layout):
+                layout = found
+    if layout is None:
+        # Nothing fits: the smallest configuration, its last column
+        # running past the page.
+        font_size = PDF_FONT_SIZES[-1]
+        cell = cell_at(PDF_CELL_SIZE_STEPS - 1)
+        columns = clue_columns(cell, PDF_MAX_CLUE_COLUMNS) or clue_columns(cell, 1)
+        items = _layout_puzzle_clues(sections, font_size, columns, overflow=True)
+        layout = font_size, cell, items
+    font_size, cell, items = layout
+
+    parts = [_puzzle_header_svg(language, title, difficulty)]
+    parts.append(_puzzle_grid_svg(pattern, words, page_w - margin - cell * (cols + 1), body_top, cell))
+    parts.append(_puzzle_clue_items_svg(items, font_size))
+    parts.append(_puzzle_footer_svg(language, grid_id))
+    return _puzzle_page_svg("".join(parts))
+
+
+def _puzzle_sections(words, language):
+    """The across then down clue sections of a puzzle sheet."""
+    across_heading, down_heading, _solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
+    return [
+        (across_heading, _group_clue_lines(words, "across", "row", language)),
+        (down_heading, _group_clue_lines(words, "down", "col", language)),
+    ]
+
+
+def _puzzle_header_svg(language, title, difficulty):
+    """Puzzle sheet header: logo + software name, the grid's own title
+    (bold), then a small grey identity line (version / date / language /
+    difficulty)."""
+    margin = PDF_MARGIN
+    parts = [
+        f'<image x="{_n(margin)}" y="{_n(margin)}" width="{_n(PDF_LOGO_SIZE)}" '
+        f'height="{_n(PDF_LOGO_SIZE)}" href="{_logo_data_uri()}"/>'
+    ]
+    text_x = margin + PDF_LOGO_SIZE + 12
     version = _VERSION_PATH.read_text(encoding="utf-8").strip()
     date_str = datetime.now().strftime("%Y-%m-%d")
     language_name = _NATIVE_LANGUAGE_NAMES.get(language, language)
     difficulty_label, difficulty_names = _DIFFICULTY_LABELS.get(language, _DIFFICULTY_LABELS["en"])
     difficulty_name = difficulty_names.get(difficulty, difficulty or "")
     parts.append(
-        f'<text x="{text_x}" y="{logo_y + 20}" font-size="18" font-family="sans-serif" '
+        f'<text x="{_n(text_x)}" y="{_n(margin + 14)}" font-size="16" font-family="sans-serif" '
         f'font-weight="bold">CrossWordFalcon</text>'
     )
     if title:
         parts.append(
-            f'<text x="{text_x}" y="{logo_y + 40}" font-size="15" font-family="sans-serif" '
+            f'<text x="{_n(text_x)}" y="{_n(margin + 30)}" font-size="14" font-family="sans-serif" '
             f'font-weight="bold" fill="#111827">{escape(title)}</text>'
         )
     parts.append(
-        f'<text x="{text_x}" y="{logo_y + 58}" font-size="12" font-family="sans-serif" '
+        f'<text x="{_n(text_x)}" y="{_n(margin + 44)}" font-size="11" font-family="sans-serif" '
         f'fill="#4b5563">v{escape(version)} — {escape(date_str)} — {escape(language_name)} — '
         f'{escape(difficulty_label)} : {escape(difficulty_name)}</text>'
     )
-    y += max(HEADER_LOGO_SIZE, 58) + 12
+    return "".join(parts)
 
-    # Row: across clues sidebar (left, filling whatever's left of the
-    # page) + empty grid (right, flush against the right margin — see
-    # this function's own docstring for why grid_x0/sidebar_width are no
-    # longer a plain 50/50 split).
-    parts.append(_heading_svg(MARGIN, y, across_heading))
-    across_lines_svg, across_lines_height = _clue_lines_svg(
-        MARGIN, sidebar_width, y + 22, across_lines
+
+def _puzzle_clue_items_svg(items, font_size, y_shift=0.0):
+    """The headings and clue lines laid out by _layout_puzzle_clues, each
+    moved up by `y_shift`."""
+    parts = []
+    heading_size = font_size + 2
+    line_height = font_size * PDF_LINE_HEIGHT_FACTOR
+    for x, top, kind, payload in items:
+        top -= y_shift
+        if kind == "heading":
+            parts.append(
+                f'<text x="{_n(x)}" y="{_n(top + heading_size * 1.15)}" font-size="{_n(heading_size)}" '
+                f'font-family="sans-serif" font-weight="bold">{escape(payload)}</text>'
+            )
+            continue
+        pos, wrapped, indent = payload
+        baseline = top + font_size
+        parts.append(
+            f'<text x="{_n(x)}" y="{_n(baseline)}" font-size="{_n(font_size)}" font-family="sans-serif">'
+            f'<tspan font-weight="bold">{pos + 1}</tspan> {escape(wrapped[0])}</text>'
+        )
+        for index, continuation in enumerate(wrapped[1:], start=1):
+            parts.append(
+                f'<text x="{_n(x + indent)}" y="{_n(baseline + index * line_height)}" '
+                f'font-size="{_n(font_size)}" font-family="sans-serif">{escape(continuation)}</text>'
+            )
+    return "".join(parts)
+
+
+def _puzzle_footer_svg(language, grid_id):
+    """Footer: link to play this grid online (with its solution), only
+    when the record carries an id (a grid_store record)."""
+    if not grid_id:
+        return ""
+    page_w, page_h, margin = PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN
+    play_url = f"{PLAY_ONLINE_BASE_URL}?grid={grid_id}"
+    play_template = _PLAY_ONLINE_LABELS.get(language, _PLAY_ONLINE_LABELS["en"])
+    line_y = page_h - margin - PDF_FOOTER_HEIGHT + 8
+    return (
+        f'<line x1="{_n(margin)}" y1="{_n(line_y)}" x2="{_n(page_w - margin)}" y2="{_n(line_y)}" '
+        f'stroke="#d1d5db"/>'
+        f'<text x="{_n(margin)}" y="{_n(page_h - margin)}" font-size="10" font-family="sans-serif" '
+        f'fill="#4b5563">{escape(play_template.format(url=play_url))}</text>'
     )
-    parts.append(across_lines_svg)
-    sidebar_height = 22 + across_lines_height
 
-    empty_grid_svg, grid_height, _ = _grid_svg(result["pattern"], None, words, y, x_offset=grid_x0)
-    parts.append(empty_grid_svg)
 
-    y += max(sidebar_height, grid_height) + 24
-
-    # Down clues span the full width in 2 columns.
-    parts.append(_heading_svg(MARGIN, y, down_heading))
-    y += 22
-    half = (len(down_lines) + 1) // 2
-    down_col_width = (canvas_width - 2 * MARGIN - DOWN_COLUMN_GAP) / 2
-    left_svg, left_height = _clue_lines_svg(MARGIN, down_col_width, y, down_lines[:half])
-    right_x = MARGIN + down_col_width + DOWN_COLUMN_GAP
-    right_svg, right_height = _clue_lines_svg(right_x, down_col_width, y, down_lines[half:])
-    parts.append(left_svg)
-    parts.append(right_svg)
-    y += max(left_height, right_height) + MARGIN
-
-    # Footer: link to play this grid online (with its solution), at the
-    # user's explicit request — only when the record carries an id (a
-    # grid_store record; a bare generate_grid() result has none).
-    grid_id = result.get("id")
-    if grid_id:
-        play_url = f"{PLAY_ONLINE_BASE_URL}?grid={grid_id}"
-        play_template = _PLAY_ONLINE_LABELS.get(language, _PLAY_ONLINE_LABELS["en"])
-        y += 6
-        parts.append(
-            f'<line x1="{MARGIN}" y1="{y}" x2="{canvas_width - MARGIN}" y2="{y}" '
-            f'stroke="#d1d5db"/>'
-        )
-        y += 16
-        parts.append(
-            f'<text x="{MARGIN}" y="{y}" font-size="11" font-family="sans-serif" '
-            f'fill="#4b5563">{escape(play_template.format(url=play_url))}</text>'
-        )
-        y += MARGIN
-
-    body = "".join(parts)
-    watermark_size = canvas_width * 0.9
-    watermark_x = (canvas_width - watermark_size) / 2
-    watermark_y = (y - watermark_size) / 2
+def _puzzle_page_svg(body):
+    """One A4 landscape page: white background, the logo watermark, then
+    `body`."""
+    page_w, page_h = PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT
+    watermark_size = page_h * 0.8
     watermark_svg = (
-        f'<image x="{watermark_x:.1f}" y="{watermark_y:.1f}" '
-        f'width="{watermark_size:.1f}" height="{watermark_size:.1f}" '
+        f'<image x="{_n((page_w - watermark_size) / 2)}" y="{_n((page_h - watermark_size) / 2)}" '
+        f'width="{_n(watermark_size)}" height="{_n(watermark_size)}" '
         f'href="{_logo_data_uri()}" opacity="0.1"/>'
     )
     return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{y}" '
-        f'viewBox="0 0 {canvas_width} {y}">'
-        f'<rect x="0" y="0" width="{canvas_width}" height="{y}" fill="#ffffff"/>'
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" '
+        f'viewBox="0 0 {_n(page_w)} {_n(page_h)}">'
+        f'<rect x="0" y="0" width="{_n(page_w)}" height="{_n(page_h)}" fill="#ffffff"/>'
         f"{watermark_svg}"
         f"{body}</svg>"
     )
 
 
+def render_two_page_puzzle(result, language, title="", difficulty=None):
+    """Printable puzzle sheet of a grid with a side above
+    PDF_ONE_PAGE_MAX_SIDE, as a list of page SVGs. Page 1: the header, the
+    grid centered under it at the largest cell size the body allows (at
+    most PDF_MAX_CELL_SIZE), and the "play online" footer. Page 2: the
+    across then down clues in one column spanning the page's full width,
+    at the largest font of PDF_FONT_SIZES that fits on it. When even the
+    smallest one does not, the clues run on over further pages (at most
+    PDF_MAX_CLUE_PAGES, the last one running past its bottom)."""
+    words = result["words"]
+    pattern = result["pattern"]
+    rows, cols = len(pattern), len(pattern[0])
+    sections = _puzzle_sections(words, language)
+    grid_id = result.get("id")
+
+    page_w, page_h, margin = PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN
+    content_w = page_w - 2 * margin
+    body_top = margin + PDF_LOGO_SIZE + PDF_HEADER_GAP
+    body_bottom = page_h - margin - (PDF_FOOTER_HEIGHT if grid_id else 0)
+    cell = min((body_bottom - body_top) / (rows + 1), content_w / (cols + 1), PDF_MAX_CELL_SIZE)
+    grid_x0 = margin + (content_w - cell * (cols + 1)) / 2
+    first_page = "".join([
+        _puzzle_header_svg(language, title, difficulty),
+        _puzzle_grid_svg(pattern, words, grid_x0, body_top, cell),
+        _puzzle_footer_svg(language, grid_id),
+    ])
+
+    clue_h = page_h - 2 * margin
+    layout = None
+    for font_size in PDF_FONT_SIZES:
+        items = _layout_puzzle_clues(sections, font_size, [(margin, margin, content_w, clue_h)])
+        if items is not None:
+            layout = font_size, items
+            break
+    if layout is None:
+        # Too long for one page even at the smallest font: one column per
+        # page, stacked page_h apart, the last one running past its bottom.
+        font_size = PDF_FONT_SIZES[-1]
+        columns = [(margin, k * page_h + margin, content_w, clue_h) for k in range(PDF_MAX_CLUE_PAGES)]
+        layout = font_size, _layout_puzzle_clues(sections, font_size, columns, overflow=True)
+    font_size, items = layout
+    by_page = {}
+    for item in items:
+        by_page.setdefault(int(item[1] // page_h), []).append(item)
+    pages = [_puzzle_page_svg(first_page)]
+    for k in sorted(by_page):
+        pages.append(_puzzle_page_svg(_puzzle_clue_items_svg(by_page[k], font_size, k * page_h)))
+    return pages
+
+
+def render_puzzle_pages(result, language, title="", difficulty=None):
+    """The printable puzzle sheet as a list of page SVGs: one page
+    (render_puzzle_svg) while both sides are at most
+    PDF_ONE_PAGE_MAX_SIDE cells, two or more (render_two_page_puzzle)
+    otherwise."""
+    pattern = result["pattern"]
+    if max(len(pattern), len(pattern[0])) > PDF_ONE_PAGE_MAX_SIDE:
+        return render_two_page_puzzle(result, language, title, difficulty)
+    return [render_puzzle_svg(result, language, title, difficulty)]
+
+
 def svg_to_pdf_bytes(svg_str):
-    """Renders an SVG string to PDF bytes via `rsvg-convert -f pdf` (stdin
-    -> stdout), no temp file. Same `rsvg-convert`/librsvg dependency as
-    save_grid_png. Raises OSError if the tool is missing or fails."""
+    """Renders an SVG string — or a list of them, one PDF page each — to
+    PDF bytes via `rsvg-convert -f pdf`: a single SVG goes through stdin ->
+    stdout, several are written to a temporary directory and passed in
+    page order. Same `rsvg-convert`/librsvg dependency as save_grid_png.
+    Raises OSError if the tool is missing or fails."""
+    pages = [svg_str] if isinstance(svg_str, str) else list(svg_str)
     try:
-        proc = subprocess.run(
-            ["rsvg-convert", "-f", "pdf"],
-            input=svg_str.encode("utf-8"),
-            check=True, capture_output=True,
-        )
+        if len(pages) == 1:
+            proc = subprocess.run(
+                ["rsvg-convert", "-f", "pdf"],
+                input=pages[0].encode("utf-8"),
+                check=True, capture_output=True,
+            )
+        else:
+            with tempfile.TemporaryDirectory() as tmp:
+                paths = []
+                for index, page in enumerate(pages):
+                    path = Path(tmp) / f"page{index + 1}.svg"
+                    path.write_text(page, encoding="utf-8")
+                    paths.append(str(path))
+                proc = subprocess.run(
+                    ["rsvg-convert", "-f", "pdf", *paths],
+                    check=True, capture_output=True,
+                )
     except FileNotFoundError as e:
         raise OSError(
             "`rsvg-convert` not found (install it with `brew install "

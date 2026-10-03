@@ -932,12 +932,14 @@ button:disabled {
   padding: 0.15rem 0.6rem;
 }
 
-/* --cell-size is set by script.js's fitGridToViewport() so the whole grid
-   (header row included) is at most 3/4 of the window height; 2rem is the
-   ceiling. Every #grid text size scales with it. */
+/* --cell-size is set by script.js's updateGridViewport(): the zoom chosen
+   with #grid-zoom, or by default the size fitting the whole grid (header
+   row/column included) in the room the window leaves, 2rem at most. Every
+   #grid text size scales with it. */
 #grid {
   --cell-size: 2rem;
-  display: inline-grid;
+  display: grid;
+  width: max-content;
   flex-shrink: 0;
   align-self: flex-start;
   gap: 2px;
@@ -957,30 +959,56 @@ button:disabled {
   align-items: flex-start;
 }
 
-/* Black-cell / white-cell-fill percentages, one line each, floating at
-   the top-left corner of #board — the central content column where the
-   grid itself is displayed, not the raw browser window edge and not the
-   grid's own (centered, and in Interactive mode Précédent-button-offset)
-   left edge. #board already uses align-items: flex-start, so its own top
-   edge coincides with #board-main's (no padding/border of its own),
-   which in turn coincides with #grid-column's (its own first child,
-   #interactive-flank-row, sits flush at the top with no margin/padding
-   of its own), which in turn coincides with #grid's own top edge since
-   that row (see below) uses align-items: center around #grid as its
-   tallest child — so top: 0/left: 0 against #board lands this card
-   precisely at the grid's own top-left corner without needing a JS
-   measurement. #board gets position: relative purely to serve as this
-   card's containing block; position: absolute takes the card out of
-   normal flow entirely, so it can never add height above #grid or push
-   it down, and it scrolls with the page (unlike a viewport-fixed
-   position) since #board itself is an ordinary in-flow element. A small
-   card (background/border/shadow, matching #chatbot's own card look)
-   keeps it legible over whatever content happens to sit beneath it. */
+/* Zoomable grid: #grid scrolls inside #grid-viewport, whose size
+   script.js's updateGridViewport sets to the grid's own size, capped by
+   the room the window leaves; native scrollbars are hidden in favor of
+   #grid-vslider (right) and #grid-hslider (below), each shown only while
+   the grid overflows in its direction. The wheel, a touchpad and touch
+   still scroll the viewport directly. */
+#grid-frame {
+  display: grid;
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  gap: 0.25rem;
+}
+#grid-viewport {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  overflow: auto;
+  scrollbar-width: none;
+  overscroll-behavior: contain;
+}
+#grid-viewport::-webkit-scrollbar {
+  display: none;
+}
+.grid-slider {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.grid-slider[hidden] {
+  display: none;
+}
+/* Vertical: top of the track = top of the grid. */
+#grid-vslider {
+  grid-column: 2;
+  grid-row: 1;
+  writing-mode: vertical-lr;
+  width: 1rem;
+  height: 100%;
+}
+#grid-hslider {
+  grid-column: 1;
+  grid-row: 2;
+  width: 100%;
+  height: 1rem;
+}
+
+/* Black-cell / white-cell-fill percentages, one line each — a small card
+   in #grid-tools' column (see below), at the grid's top-left, above the
+   zoom controls. */
 #interactive-cell-stats {
-  position: absolute;
-  top: 0;
-  left: 0;
-  z-index: 5;
   display: flex;
   flex-direction: column;
   gap: 0.1rem;
@@ -2852,6 +2880,24 @@ button:disabled {
 
 #grid .header-cell {
   font-size: calc(var(--cell-size) * 0.375);
+  position: sticky;
+  z-index: 2;
+  /* Covers the 2px gaps around the header so scrolled cells never show
+     through them. */
+  box-shadow: 0 0 0 2px var(--border);
+}
+/* Row/column numbers stay visible while the grid scrolls in
+   #grid-viewport: script.js's renderGrid tags each header cell. */
+#grid .header-cell.col-header {
+  top: 0;
+}
+#grid .header-cell.row-header {
+  left: 0;
+}
+#grid .header-cell.corner-header {
+  top: 0;
+  left: 0;
+  z-index: 3;
 }
 
 #clues {
@@ -4009,17 +4055,46 @@ button:disabled {
   color: var(--correct-fg);
 }
 
-/* Grid word statistics (#grid-stats, script.js's showGridStats): play
-   mode only. Absolutely positioned in #board (position: relative), at its
-   left edge — the central column's margin — and its top, which is the
-   grid's own top (#board aligns its children on flex-start). The square
-   icon button opens #grid-stats-panel right below it, an overlay card
-   (same look as #leaderboard) listing the number of words per length. */
-#grid-stats {
+/* Left-hand tool column of the board (play and Interactive modes):
+   absolutely positioned in #board (position: relative), at its left edge
+   — the central column's margin — and its top, which is the grid's own
+   top (#board aligns its children on flex-start). Stacks the word
+   statistics (#grid-stats), the black/fill card (#interactive-cell-stats)
+   and the zoom buttons (#grid-zoom). script.js's updateGridViewport keeps
+   the grid's viewport clear of this column's width. */
+#grid-tools {
   position: absolute;
   left: 0;
   top: 0;
-  z-index: 3;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+#grid-zoom {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.grid-zoom-btn {
+  color: var(--accent);
+}
+.grid-zoom-btn svg {
+  display: block;
+}
+/* "Fit to window" is the zoom in force. */
+.grid-zoom-btn.active {
+  border-color: var(--accent);
+}
+
+/* Grid word statistics (#grid-stats, script.js's showGridStats): play
+   mode only, first item of #grid-tools. The square icon button opens
+   #grid-stats-panel right below it, an overlay card (same look as
+   #leaderboard) listing the number of words per length. */
+#grid-stats {
+  position: relative;
+  z-index: 1;
 }
 #grid-stats[hidden] {
   display: none;

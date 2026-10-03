@@ -158,7 +158,7 @@ On the page:
 1. Choose a **language** (the interface itself switches to that language
    too), a **width**, a **height** (15×10 by default) — or pick a ready-made
    format in **"Préconfigurations"** (from the 6×6 "Ristretto noisette" to
-   the 30×30 "Frappuccino"), which sets the size and black-cell rate in one
+   the 50×50 "Caffeteria"), which sets the size and black-cell rate in one
    click — and a **difficulty
    level** ("Easy" uses everyday vocabulary, "Hard" allows rarer words).
    For a bilingual grid — its across (horizontal) words in one language,
@@ -215,7 +215,11 @@ On the page:
    ready to be filled in. While you play, the generation settings are
    tucked away behind a single **"Create a grid"** button (the Library,
    Dictionary and other tool buttons stay visible) — click it to bring
-   the full form back and start another grid. Above the grid, a short generated title for the puzzle
+   the full form back and start another grid. On the grid's left, zoom
+   buttons (zoom in, zoom out, fit to window) make large grids readable:
+   once zoomed in, sliders on the right of and below the grid move the
+   view, while the row and column numbers stay visible (same in
+   Interactive mode). Above the grid, a short generated title for the puzzle
    is shown, with the grid's difficulty next to it ("Difficulty: Medium"). Clues follow the usual crossword format:
    horizontal ("Horizontalement") clues appear to the left of the grid,
    grouped one line per row; vertical ("Verticalement") clues appear
@@ -352,7 +356,9 @@ by default). Click a row to load that grid straight into the player,
 exactly as if it had just finished generating.
 
 Each row also has a shareable "Play" link, a PDF download of the empty
-grid, and a small pencil button that opens the grid in Interactive mode
+grid (one A4 landscape page, sized so the grid and all its clues fit;
+for a grid with a side above 20 cells, two pages — the grid, then all
+the clues), and a small pencil button that opens the grid in Interactive mode
 with all its letters and clues already filled in — handy for editing an
 existing grid. Opening one that way starts a fresh entry in your
 "Créations" list and never changes the stored grid. When you publish

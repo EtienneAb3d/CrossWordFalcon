@@ -2400,28 +2400,172 @@ function handleKeydown(event) {
   }
 }
 
-// Grid at most this share of the window height (header row included).
+// Grid zoom (#grid-zoom, play and Interactive modes). `gridZoomCellPx` is
+// the cell size chosen with Zoom +/-, or null for "fit to window": the
+// whole grid (header row/column included) within the room the window
+// leaves — GRID_MAX_VIEWPORT_HEIGHT_FRACTION of its height, #board-main's
+// width minus the tool column and the Précédent/Suivant buttons — never
+// above the 2rem default. A grid larger than that room scrolls inside
+// #grid-viewport, moved by the two sliders.
 const GRID_MAX_VIEWPORT_HEIGHT_FRACTION = 0.75;
-const GRID_MIN_CELL_PX = 12;
+const GRID_FIT_MIN_CELL_PX = 4;
+const GRID_ZOOM_MIN_CELL_PX = 8;
+const GRID_ZOOM_MAX_CELL_PX = 64;
+const GRID_ZOOM_STEP = 1.25;
+// Room kept for a slider next to the viewport (1rem track + gap).
+const GRID_SLIDER_ROOM_PX = 22;
+// Gap kept between the tool column and the grid.
+const GRID_TOOLS_GAP_PX = 12;
+let gridZoomCellPx = null;
+// The selection last brought into view (see ensureSelectionVisible).
+let gridLastRevealedSelection = null;
 
-// Sets #grid's --cell-size so the grid (height + 1 rows of cells, the 2px
-// gaps and the 2px border) fits in GRID_MAX_VIEWPORT_HEIGHT_FRACTION of the
-// window height, never above the 2rem default.
-function fitGridToViewport() {
-  if (!puzzle) return;
+const boardMainEl = document.getElementById("board-main");
+const gridToolsEl = document.getElementById("grid-tools");
+const gridFrameEl = document.getElementById("grid-frame");
+const gridViewportEl = document.getElementById("grid-viewport");
+const gridVSlider = document.getElementById("grid-vslider");
+const gridHSlider = document.getElementById("grid-hslider");
+const gridZoomInBtn = document.getElementById("grid-zoom-in-btn");
+const gridZoomOutBtn = document.getElementById("grid-zoom-out-btn");
+const gridZoomFitBtn = document.getElementById("grid-zoom-fit-btn");
+
+// Pixel size of the grid (cells, 2px gaps, 2px border) for a cell size.
+function gridPixelSize(cellPx) {
+  const cols = puzzle.width + 1;
   const rows = puzzle.height + 1;
+  return { w: cols * cellPx + 2 * (cols - 1) + 4, h: rows * cellPx + 2 * (rows - 1) + 4 };
+}
+
+// Room available for #grid-viewport, sliders excluded. The grid is
+// centered in #board-main, so the tool column's width is kept free on
+// both sides.
+function gridViewportRoom() {
+  let w = boardMainEl.clientWidth - 2 * (gridToolsEl.offsetWidth + GRID_TOOLS_GAP_PX);
+  if (interactiveMode) {
+    const flankGap = 12;
+    if (!interactivePrevBtn.hidden) w -= interactivePrevBtn.offsetWidth + flankGap;
+    if (!interactiveNextBtn.hidden) w -= interactiveNextBtn.offsetWidth + flankGap;
+  }
+  const h = window.innerHeight * GRID_MAX_VIEWPORT_HEIGHT_FRACTION;
+  return { w: Math.max(120, w - GRID_SLIDER_ROOM_PX), h: Math.max(120, h - GRID_SLIDER_ROOM_PX) };
+}
+
+function gridFitCellPx() {
   const rootPx = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-  const available = window.innerHeight * GRID_MAX_VIEWPORT_HEIGHT_FRACTION - 4 - 2 * (rows - 1);
-  const cellPx = Math.max(GRID_MIN_CELL_PX, Math.min(2 * rootPx, Math.floor(available / rows)));
+  const room = gridViewportRoom();
+  const cols = puzzle.width + 1;
+  const rows = puzzle.height + 1;
+  const byW = Math.floor((room.w - 4 - 2 * (cols - 1)) / cols);
+  const byH = Math.floor((room.h - 4 - 2 * (rows - 1)) / rows);
+  return Math.max(GRID_FIT_MIN_CELL_PX, Math.min(2 * rootPx, byW, byH));
+}
+
+function gridCellPx() {
+  return gridZoomCellPx === null ? gridFitCellPx() : gridZoomCellPx;
+}
+
+function syncGridSliders() {
+  gridHSlider.value = String(Math.round(gridViewportEl.scrollLeft));
+  gridVSlider.value = String(Math.round(gridViewportEl.scrollTop));
+}
+
+// Sets #grid's --cell-size, sizes #grid-viewport (the grid's own size,
+// capped by the room) and shows each slider only while the grid overflows
+// in its direction.
+function updateGridViewport() {
+  if (!puzzle) return;
+  const cellPx = gridCellPx();
   gridEl.style.setProperty("--cell-size", `${cellPx}px`);
+  const size = gridPixelSize(cellPx);
+  const room = gridViewportRoom();
+  const overflowX = size.w > room.w;
+  const overflowY = size.h > room.h;
+  gridViewportEl.style.width = `${overflowX ? room.w : size.w}px`;
+  gridViewportEl.style.height = `${overflowY ? room.h : size.h}px`;
+  gridHSlider.hidden = !overflowX;
+  gridVSlider.hidden = !overflowY;
+  gridHSlider.max = String(Math.max(0, gridViewportEl.scrollWidth - gridViewportEl.clientWidth));
+  gridVSlider.max = String(Math.max(0, gridViewportEl.scrollHeight - gridViewportEl.clientHeight));
+  syncGridSliders();
+  gridZoomInBtn.disabled = cellPx >= GRID_ZOOM_MAX_CELL_PX;
+  gridZoomOutBtn.disabled = cellPx <= GRID_ZOOM_MIN_CELL_PX;
+  gridZoomFitBtn.classList.toggle("active", gridZoomCellPx === null);
+  hoverDefinitionRow.style.width = `${gridFrameEl.offsetWidth}px`;
+}
+
+// Zoom +/- around the center of the visible part of the grid.
+function setGridZoom(cellPx) {
+  if (!puzzle) return;
+  const vp = gridViewportEl;
+  const cx = (vp.scrollLeft + vp.clientWidth / 2) / (vp.scrollWidth || 1);
+  const cy = (vp.scrollTop + vp.clientHeight / 2) / (vp.scrollHeight || 1);
+  gridZoomCellPx = Math.max(GRID_ZOOM_MIN_CELL_PX, Math.min(GRID_ZOOM_MAX_CELL_PX, Math.round(cellPx)));
+  updateGridViewport();
+  vp.scrollLeft = cx * vp.scrollWidth - vp.clientWidth / 2;
+  vp.scrollTop = cy * vp.scrollHeight - vp.clientHeight / 2;
+  syncGridSliders();
+}
+
+// Back to "fit to window" — also the state of every newly shown grid.
+function fitGridZoom() {
+  gridZoomCellPx = null;
+  gridLastRevealedSelection = null;
+  gridViewportEl.scrollLeft = 0;
+  gridViewportEl.scrollTop = 0;
+  updateGridViewport();
+}
+
+gridZoomInBtn.addEventListener("click", () => setGridZoom(gridCellPx() * GRID_ZOOM_STEP));
+gridZoomOutBtn.addEventListener("click", () => setGridZoom(gridCellPx() / GRID_ZOOM_STEP));
+gridZoomFitBtn.addEventListener("click", fitGridZoom);
+gridViewportEl.addEventListener("scroll", syncGridSliders);
+gridHSlider.addEventListener("input", () => { gridViewportEl.scrollLeft = Number(gridHSlider.value); });
+gridVSlider.addEventListener("input", () => { gridViewportEl.scrollTop = Number(gridVSlider.value); });
+
+// Scrolls the viewport just enough for the selected cell to show past the
+// sticky header row/column — only when the selection changes, so a view
+// moved with the sliders stays put while the grid is re-rendered.
+function ensureSelectionVisible() {
+  const key = selected ? `${selected.row},${selected.col}` : null;
+  if (key === gridLastRevealedSelection) return;
+  gridLastRevealedSelection = key;
+  if (!selected || !puzzle) return;
+  const cols = puzzle.width + 1;
+  const cell = gridEl.children[(selected.row + 1) * cols + selected.col + 1];
+  const header = gridEl.children[0];
+  if (!cell || !header) return;
+  const vp = gridViewportEl;
+  // Grid border + header + gap (a stuck header's own offset follows the
+  // scroll, so it is not read).
+  const headW = 2 + header.offsetWidth + 2;
+  const headH = 2 + header.offsetHeight + 2;
+  if (cell.offsetLeft < vp.scrollLeft + headW) vp.scrollLeft = cell.offsetLeft - headW;
+  else if (cell.offsetLeft + cell.offsetWidth > vp.scrollLeft + vp.clientWidth) {
+    vp.scrollLeft = cell.offsetLeft + cell.offsetWidth - vp.clientWidth;
+  }
+  if (cell.offsetTop < vp.scrollTop + headH) vp.scrollTop = cell.offsetTop - headH;
+  else if (cell.offsetTop + cell.offsetHeight > vp.scrollTop + vp.clientHeight) {
+    vp.scrollTop = cell.offsetTop + cell.offsetHeight - vp.clientHeight;
+  }
+  syncGridSliders();
 }
 
 window.addEventListener("resize", () => {
   if (!puzzle || result.hidden) return;
-  fitGridToViewport();
-  hoverDefinitionRow.style.width = `${gridEl.offsetWidth}px`;
+  updateGridViewport();
   positionLeaderboard();
 });
+
+// The room changes without a window resize too (the "Mots Défi" panel or
+// the black/fill card appearing, the clue lists toggling).
+let gridRoomKey = "";
+new ResizeObserver(() => {
+  const key = `${boardMainEl.clientWidth}x${gridToolsEl.offsetWidth}`;
+  if (key === gridRoomKey) return;
+  gridRoomKey = key;
+  if (puzzle && !result.hidden) updateGridViewport();
+}).observe(boardMainEl);
 
 function renderGrid() {
   const { width, height, pattern, solution, words } = puzzle;
@@ -2435,7 +2579,10 @@ function renderGrid() {
   // grid as the puzzle cells rather than a separate layout, so everything
   // stays aligned automatically.
   gridEl.style.gridTemplateColumns = `repeat(${width + 1}, var(--cell-size))`;
-  fitGridToViewport();
+  // Rebuilding empties the viewport for a moment, which would reset its
+  // scroll position: kept and restored once the cells are back.
+  const keptScrollLeft = gridViewportEl.scrollLeft;
+  const keptScrollTop = gridViewportEl.scrollTop;
   gridEl.innerHTML = "";
   // The grid is fully rebuilt below, so every previous cell element (and
   // any hover state referring to it) is about to become stale.
@@ -2444,18 +2591,18 @@ function renderGrid() {
   renderHoverDefinitionForSelection();
 
   const corner = document.createElement("div");
-  corner.className = "cell header-cell";
+  corner.className = "cell header-cell corner-header";
   gridEl.appendChild(corner);
   for (let c = 0; c < width; c++) {
     const colHeader = document.createElement("div");
-    colHeader.className = "cell header-cell";
+    colHeader.className = "cell header-cell col-header";
     colHeader.textContent = c + 1;
     gridEl.appendChild(colHeader);
   }
 
   for (let r = 0; r < height; r++) {
     const rowHeader = document.createElement("div");
-    rowHeader.className = "cell header-cell";
+    rowHeader.className = "cell header-cell row-header";
     rowHeader.textContent = r + 1;
     gridEl.appendChild(rowHeader);
 
@@ -2610,8 +2757,13 @@ function renderGrid() {
   // infer from content. Set on the row (not #hover-definition directly)
   // now that the direction-selector buttons sit next to it in that same
   // row — #hover-definition itself still shrinks correctly within it via
-  // its own flex: 1 1 auto/min-width: 0 (see style.css).
-  hoverDefinitionRow.style.width = `${gridEl.offsetWidth}px`;
+  // its own flex: 1 1 auto/min-width: 0 (see style.css). Measured on
+  // #grid-frame (viewport + vertical slider), by updateGridViewport.
+  updateGridViewport();
+  gridViewportEl.scrollLeft = keptScrollLeft;
+  gridViewportEl.scrollTop = keptScrollTop;
+  syncGridSliders();
+  ensureSelectionVisible();
 }
 
 // Standard crossword layout: across clues are grouped grid-row by
@@ -3384,7 +3536,7 @@ const REMOTE_MAX_DIMENSION = 20;
 // Width/height are forced back into range whenever the field loses focus
 // (or the entry is committed): never below MIN_DIMENSION (5), on every
 // origin; and — off localhost only — never above REMOTE_MAX_DIMENSION
-// (20), where the <input max> attribute is also lowered from 30 to 20 so
+// (20), where the <input max> attribute is also lowered from 50 to 20 so
 // the browser's own native validation blocks a larger value on submit
 // too. An empty field is left alone (still being edited; `required` +
 // `min` already block a submit).
@@ -3438,6 +3590,7 @@ const GRID_PRESETS = [
   { name: "Mocha", width: 20, height: 20, black: 15 },
   { name: "Tazza grande", width: 30, height: 20, black: 15 },
   { name: "Frappuccino", width: 30, height: 30, black: 15 },
+  { name: "Caffeteria", width: 50, height: 50, black: 15 },
 ];
 const presetSelectBtn = document.getElementById("preset-select-btn");
 const presetSelectList = document.getElementById("preset-select-list");
@@ -4336,7 +4489,7 @@ function displayFinalGrid(gridData) {
   hideInteractivePanel();
   // #result (and so #grid, its descendant) must already be visible before
   // renderGrid() runs — see runGeneration()'s own historical note on this
-  // exact ordering requirement (renderGrid() measures gridEl.offsetWidth).
+  // exact ordering requirement (renderGrid() measures the grid to size its viewport).
   result.hidden = false;
   syncRssPanelVisibility();
   // Grid title (see backend/clues.py's LLMClueGenerator.generate_title),
@@ -4363,6 +4516,7 @@ function displayFinalGrid(gridData) {
   // (GET /api/library/{grid_id} already returns `id`). At the user's
   // explicit request: "including the grid they just generated".
   markGridSeen(gridData.id);
+  fitGridZoom();
   renderGrid();
   renderClues(gridData.words);
   showLeaderboard();
@@ -7842,6 +7996,10 @@ async function proposeInteractiveTitle(autoFill) {
 
 // ---- Mode lifecycle ----
 function enterInteractiveMode(state) {
+  gridZoomCellPx = null;
+  gridLastRevealedSelection = null;
+  gridViewportEl.scrollLeft = 0;
+  gridViewportEl.scrollTop = 0;
   hideLeaderboard();
   hideGridStats();
   interactiveMode = true;

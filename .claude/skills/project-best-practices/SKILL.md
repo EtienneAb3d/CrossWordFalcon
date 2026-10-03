@@ -338,10 +338,10 @@ project's engineering language.
   web UI text) is written in whichever of the 6 supported languages
   (fr/en/de/es/it/pt) the request is in.
 - Grid dimensions (`width`/`height`) are independent, default 15×10, with
-  only a lower bound (`ge=5` — a grid smaller than that stops making sense
-  as a crossword). There is deliberately no upper bound in either the web
-  API or the CLI; a very large grid taking a long time is the caller's own
-  choice to make, not something the API second-guesses.
+  a range of 5 to 50 in the web API (`GenerateRequest`, Java `GenReq`, and
+  the `max` of the form's `#width`/`#height` inputs — 20 off localhost);
+  the CLI has no upper bound. Below 5 a grid stops making sense as a
+  crossword; 50 is the largest preset ("Caffeteria", 50x50).
 - The web UI is a playable crossword, not a read-only viewer: the grid
   starts empty, typing a letter (lowercase advances right, uppercase/
   Shift/Caps Lock advances down) fills the selection, and "Solution"/

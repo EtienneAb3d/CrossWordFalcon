@@ -1704,8 +1704,8 @@ public final class App {
             title = title == null ? "" : Py.strip(title);
             byte[] pdf;
             try {
-                String svg = SvgExport.renderPuzzleSvg(record, Json.str(record, "language", "fr"), title, (String) record.get("difficulty"));
-                pdf = SvgExport.svgToPdfBytes(svg);
+                List<String> pages = SvgExport.renderPuzzlePages(record, Json.str(record, "language", "fr"), title, (String) record.get("difficulty"));
+                pdf = SvgExport.svgToPdfBytes(pages);
             } catch (IOException e) {
                 throw http(503, e.getMessage());
             }
@@ -2476,8 +2476,8 @@ public final class App {
             genreq.bilingualLanguage = (String) meta.get("bilingual_language");
             genreq.width = cols;
             genreq.height = rows;
-            if (cols < 5 || cols > 30 || rows < 5 || rows > 30) {
-                throw Web.validation("body", "width", "less_than_equal", "Input should be between 5 and 30", cols);
+            if (cols < 5 || cols > 50 || rows < 5 || rows > 50) {
+                throw Web.validation("body", "width", "less_than_equal", "Input should be between 5 and 50", cols);
             }
             // The generation form's current settings win over the session's
             // own (see app.py's interactive_finish); language stays the
