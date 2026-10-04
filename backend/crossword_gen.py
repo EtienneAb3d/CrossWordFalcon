@@ -5,7 +5,8 @@ Dense crossword grid generator.
 Two-phase approach:
   1. Black-cell pattern generation (no symmetry constraint — each black
      cell is placed independently) respecting structural rules (no
-     interior slot shorter than 3 cells except at the grid border, no
+     interior white zone shorter than STRUCTURAL_MIN_INTERIOR_FREE cells
+     nor border zone shorter than STRUCTURAL_MIN_BORDER_FREE, no
      white cell orphaned in both directions at once, connected white
      grid — see is_structurally_valid). The target black-cell ratio stays
      fixed at 0% (`black_ratio`) across every palier — no more escalation
@@ -479,13 +480,22 @@ def _row_forms(line, word, scrabble):
 
 # ---------- Black-cell pattern generation ----------
 
-# Minimum length of an *interior* white zone (bounded by a black cell on
-# both sides) `_place_black_cells` starts from (aesthetic, not absolute —
+# Minimum length of a white zone bounded by black cells on both sides
+# (`STRUCTURAL_MIN_BORDER_FREE` for one touching the border)
+# `_place_black_cells` starts from (aesthetic, not absolute —
 # the real limit, connectivity/no orphaned cell, is the literal
 # `min_interior_free=1` every other caller passes). It is lowered one level
 # at a time down to 1 only once no cell of any white run can be placed at
 # the current level. Also `is_structurally_valid`'s default value.
 STRUCTURAL_MIN_INTERIOR_FREE = 6
+
+# Minimum length of a white zone touching the grid's border that
+# `_place_black_cells` may leave on the run it cuts, as long as the required
+# minimum (`min_interior_free`) is at least this high (below it, that
+# minimum). The pieces of the perpendicular run a new black cell also
+# splits keep the border exception: a black cell may stand close to a
+# border to cut a run of the other direction.
+STRUCTURAL_MIN_BORDER_FREE = 3
 
 # Side of the square, at each of the grid's four corners, where
 # `make_pattern`'s ratio-based ("Taux noir") placement never draws a black
@@ -496,14 +506,12 @@ CORNER_SQUARE_SIZE = 2
 
 def is_structurally_valid(grid, rows, cols, min_interior_free=STRUCTURAL_MIN_INTERIOR_FREE):
     """A grid is valid if:
-    - every *interior* white zone (bounded by a black cell on both sides)
-      is at least `min_interior_free` cells long (`STRUCTURAL_MIN_
-      INTERIOR_FREE`, 6 by default), **except** if one of its two ends
-      directly touches the grid's own border (row/column 0, or the last
-      one): such a border zone is always allowed, whatever its length
-      (including 1 or 2 cells) and however many of them exist on the
-      whole grid — no budget or counter at all, unlike a former system
-      for this (see the project-best-practices SKILL). `min_interior_
+    - every white zone (across or down) bounded by black cells on both
+      sides is at least `min_interior_free` cells long (`STRUCTURAL_MIN_
+      INTERIOR_FREE`, 6 by default); a zone touching the grid's own border
+      is allowed whatever its length (`_place_black_cells` only requires
+      `STRUCTURAL_MIN_BORDER_FREE` of the run it cuts, see
+      `_BlackCellValidity.valid_with_black`). `min_interior_
       free` exists for `_place_black_cells`, at the user's explicit
       request: if the default requirement (`STRUCTURAL_MIN_INTERIOR_
       FREE`) leaves only cells adjacent to another black cell, it's
@@ -530,14 +538,10 @@ def is_structurally_valid(grid, rows, cols, min_interior_free=STRUCTURAL_MIN_INT
     col_run_len = [[0] * cols for _ in range(rows)]
 
     def _short_zone_ok(run, run_start, run_end, line_length):
-        """A zone shorter than `min_interior_free` cells is only accepted
-        if it touches the grid's own border (run_start == 0 or
-        run_end == line_length) — with no other limit at all (neither on
-        its exact length, nor on their total count). A zone of at least
-        `min_interior_free` cells is always accepted, border or not."""
-        if run >= min_interior_free:
-            return True
-        return run_start == 0 or run_end == line_length
+        """A zone is accepted once it is at least `min_interior_free`
+        cells long, or whatever its length when it touches the grid's own
+        border."""
+        return run >= min_interior_free or run_start == 0 or run_end == line_length
 
     for r in range(rows):
         run = 0
@@ -658,6 +662,14 @@ class _BlackCellValidity:
     def _zone_ok(self, start, end, length):
         return end - start >= self.min_free or start == 0 or end == length
 
+    def _cut_piece_ok(self, start, end, length):
+        """A piece of the run a new black cell cuts: `_zone_ok`, but a
+        piece touching the border needs `min(STRUCTURAL_MIN_BORDER_FREE,
+        min_interior_free)` cells."""
+        if end - start >= self.min_free:
+            return True
+        return (start == 0 or end == length) and end - start >= STRUCTURAL_MIN_BORDER_FREE
+
     def _neighbors(self, r, c):
         for nr, nc in ((r + 1, c), (r - 1, c), (r, c + 1), (r, c - 1)):
             if (nr, nc) in self.h_zone:
@@ -705,7 +717,10 @@ class _BlackCellValidity:
                 self.articulations.add(root)
             self.component_sizes.append(size)
 
-    def valid_with_black(self, r, c):
+    def valid_with_black(self, r, c, direction=None):
+        """`direction` ("across"/"down"): the run the black cell cuts, whose
+        pieces follow `_cut_piece_ok`; the perpendicular pieces follow
+        `_zone_ok`."""
         if (r, c) not in self.h_zone:
             grid = self.grid
             previous = grid[r][c]
@@ -725,9 +740,11 @@ class _BlackCellValidity:
             return False
         if self.bad_cols[c] - (0 if self._zone_ok(v_start, v_end, self.rows) else 1):
             return False
-        for start, end, length in ((h_start, c, self.cols), (c + 1, h_end, self.cols),
-                                   (v_start, r, self.rows), (r + 1, v_end, self.rows)):
-            if end > start and not self._zone_ok(start, end, length):
+        h_ok = self._cut_piece_ok if direction == "across" else self._zone_ok
+        v_ok = self._cut_piece_ok if direction == "down" else self._zone_ok
+        for ok, start, end, length in ((h_ok, h_start, c, self.cols), (h_ok, c + 1, h_end, self.cols),
+                                       (v_ok, v_start, r, self.rows), (v_ok, r + 1, v_end, self.rows)):
+            if end > start and not ok(start, end, length):
                 return False
         # Isolated cells: only the cells of the two split zones change.
         changed = {(r, cc) for cc in range(h_start, h_end)} | {(rr, c) for rr in range(v_start, v_end)}
@@ -940,6 +957,39 @@ def _in_corner_square(rows, cols, r, c):
 # placed.
 BLACK_DRAW_WINDOW_PERCENT = 5
 
+# `make_pattern`'s short-slot limit: once the ratio draw has reached its
+# target, a pattern holding more than `SHORT_SLOT_MAX_COUNT` slots of at
+# most `SHORT_SLOT_MAX_LENGTH` letters (across and down, a border slot
+# shorter than `STRUCTURAL_MIN_BORDER_FREE` not counted) has the black
+# cells this draw placed that bound them reopened, and the draw runs again
+# to reach the target — at most `SHORT_SLOT_REDRAW_MAX_ROUNDS` times.
+SHORT_SLOT_MAX_LENGTH = 3
+SHORT_SLOT_MAX_COUNT = 10
+SHORT_SLOT_REDRAW_MAX_ROUNDS = 10
+
+
+def _short_slot_bounding_blacks(grid, rows, cols, removable):
+    """(number of slots of at most `SHORT_SLOT_MAX_LENGTH` letters, the
+    cells of `removable` that are the black cell right before or right
+    after one of them) — a slot of fewer than `STRUCTURAL_MIN_BORDER_FREE`
+    letters touching the grid's border is not counted: it comes from a
+    black cell cutting a run of the other direction."""
+    count = 0
+    bounding = set()
+    for slot in extract_slots(grid, rows, cols):
+        if len(slot) > SHORT_SLOT_MAX_LENGTH:
+            continue
+        (r0, c0), (r1, c1) = slot[0], slot[-1]
+        dr, dc = (0, 1) if r0 == r1 else (1, 0)
+        touches_border = (c0 == 0 or c1 == cols - 1) if dr == 0 else (r0 == 0 or r1 == rows - 1)
+        if touches_border and len(slot) < STRUCTURAL_MIN_BORDER_FREE:
+            continue
+        count += 1
+        for cell in ((r0 - dr, c0 - dc), (r1 + dr, c1 + dc)):
+            if cell in removable:
+                bounding.add(cell)
+    return count, bounding
+
 
 def _window_size(count, percent):
     """Number of items a `percent` % window keeps out of `count` (at least
@@ -1015,7 +1065,11 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     (`_has_black_neighbor`); it does not drop a slot touching a locked
     letter below its candidate threshold (`_new_black_cell_breaks_locked_
     slot`); the grid stays structurally valid (`is_structurally_valid`)
-    with `min_interior_free` = `STRUCTURAL_MIN_INTERIOR_FREE`. When every
+    with `min_interior_free` = `STRUCTURAL_MIN_INTERIOR_FREE`, and the run
+    the cell is drawn from (a selected run of either direction holding it)
+    leaves no piece touching the border shorter than `min(STRUCTURAL_MIN_
+    BORDER_FREE, min_interior_free)` (`_BlackCellValidity.valid_with_black`'s
+    `direction`; the perpendicular pieces keep the border exception). When every
     run is selected without a valid cell, the draw starts over from the
     first percentage with `min_interior_free` lowered by one (down to 1);
     when even 1 fails, with adjacency accepted unless `forbid_adjacency`
@@ -1031,32 +1085,47 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     (placed, unplaced cells)."""
     remaining = candidates
 
-    def _valid(r, c, structure, allow_adjacency):
+    def _base_valid(r, c, allow_adjacency):
         if grid[r][c] == BLACK:
             return False
         if not allow_adjacency and _has_black_neighbor(grid, rows, cols, r, c):
             return False
-        if _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_letters,
-                                               available_lengths):
-            return False
-        return structure.valid_with_black(r, c)
+        return not _new_black_cell_breaks_locked_slot(grid, rows, cols, r, c, index, locked_letters,
+                                                       available_lengths)
 
     def _draw(run_order, position, min_free, allow_adjacency):
         structure = _BlackCellValidity(grid, rows, cols, min_free)
-        checked = {}  # candidate index -> valid at this level, during this draw
+        # During this draw, at this level: candidate index -> valid apart
+        # from structure, and (candidate index, direction) -> structurally
+        # valid when cutting a run of that direction.
+        base = {}
+        checked = {}
         percent = BLACK_DRAW_WINDOW_PERCENT
         while True:
             run_count = _window_size(len(run_order), percent)
-            in_runs = sorted({
-                position[cell] for run in run_order[:run_count] for cell in run
-                if cell in position
-            })
+            # Candidate index -> directions of the selected runs holding it
+            # (both for a single-cell run).
+            in_runs = {}
+            for run in run_order[:run_count]:
+                if len(run) == 1:
+                    directions = ("across", "down")
+                else:
+                    directions = ("across",) if run[0][0] == run[1][0] else ("down",)
+                for cell in run:
+                    if cell in position:
+                        in_runs.setdefault(position[cell], set()).update(directions)
             valid = []
-            for i in in_runs:
-                if i not in checked:
-                    checked[i] = _valid(*remaining[i], structure, allow_adjacency)
-                if checked[i]:
-                    valid.append(i)
+            for i in sorted(in_runs):
+                if i not in base:
+                    base[i] = _base_valid(*remaining[i], allow_adjacency)
+                if not base[i]:
+                    continue
+                for direction in sorted(in_runs[i]):
+                    if (i, direction) not in checked:
+                        checked[(i, direction)] = structure.valid_with_black(*remaining[i], direction)
+                    if checked[(i, direction)]:
+                        valid.append(i)
+                        break
             if valid:
                 valid.sort(key=lambda i: -dist[i])
                 window = valid[:_window_size(len(valid), percent)]
@@ -1730,12 +1799,12 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     the pre-fill pass and every later repair mechanism still may.
 
     Structural validity itself (`is_structurally_valid`) is equally simple
-    now: an *interior* white zone (bounded by a black cell on both sides)
-    must be at least `min_interior_free` cells long
-    (`STRUCTURAL_MIN_INTERIOR_FREE`, 6 by default, see that constant's own
-    comment for the relaxation cascade); a zone
-    touching the grid's own border on at least one side is always allowed,
-    whatever its length and however many of them the grid ends up with.
+    now: every white zone bounded by black cells on both sides must be at
+    least `min_interior_free` cells long (`STRUCTURAL_MIN_INTERIOR_FREE`, 6
+    by default, see that constant's own comment for the relaxation
+    cascade); one touching the grid's border needs `min(STRUCTURAL_MIN_
+    BORDER_FREE, min_interior_free)` cells on the run a new black cell
+    cuts, any length on the perpendicular one.
     `_place_black_cells` never places a black cell next to another one
     (`forbid_adjacency=True`) and relaxes this structural minimum one step
     at a time, down to 1, once no cell of the whole candidate list can be
@@ -1946,9 +2015,31 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     # mechanism still may. Corner cells stay in `candidates` for the
     # pre-fill pass below, in their shuffled order.
     ratio_candidates = [cell for cell in candidates if not _in_corner_square(rows, cols, *cell)]
+    drawn = set(ratio_candidates)
     _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
                         rng, index=index, locked_letters=locked_letters, available_lengths=available_lengths,
                         forbid_adjacency=True)
+    drawn -= set(ratio_candidates)
+    # Short-slot limit: once the target is reached, too many slots of at
+    # most `SHORT_SLOT_MAX_LENGTH` letters reopen the drawn black cells
+    # bounding them, and the draw runs again to reach the target.
+    for _ in range(SHORT_SLOT_REDRAW_MAX_ROUNDS):
+        short_count, bounding = _short_slot_bounding_blacks(grid, rows, cols, drawn)
+        if short_count <= SHORT_SLOT_MAX_COUNT or not bounding:
+            break
+        reopened = sorted(bounding)
+        rng.shuffle(reopened)
+        for r, c in reopened:
+            grid[r][c] = WHITE
+            row_black[r] -= 1
+            col_black[c] -= 1
+        drawn -= bounding
+        ratio_candidates.extend(reopened)
+        before = set(ratio_candidates)
+        _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target,
+                            sum(row_black), rng, index=index, locked_letters=locked_letters,
+                            available_lengths=available_lengths, forbid_adjacency=True)
+        drawn |= before - set(ratio_candidates)
     still_candidates = set(ratio_candidates)
     candidates = [
         cell for cell in candidates

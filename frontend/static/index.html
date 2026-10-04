@@ -780,11 +780,11 @@
              percentages card (Interactive mode), then the zoom controls
              (script.js's setGridZoom/fitGridZoom). -->
         <div id="grid-tools">
-          <!-- Play mode only: word-count statistics of the grid on screen.
-               An icon button at #board's left edge (the central column's
-               margin), level with the top of the grid; a click opens the
-               panel right below it — number of words per length, longest
-               first (script.js's showGridStats/renderGridStatsPanel). -->
+          <!-- Statistics of the grid on screen. An icon button at #board's
+               left edge (the central column's margin), level with the top
+               of the grid; a click opens the panel right below it — number
+               of words (play mode) or slots (Interactive mode) per length,
+               longest first (script.js's showGridStats/renderGridStatsPanel). -->
           <div id="grid-stats" hidden>
             <button type="button" id="grid-stats-btn" class="nav-btn clear-icon-btn"
                     data-i18n-title="gridStatsBtn" data-i18n-aria="gridStatsBtn"
@@ -801,7 +801,7 @@
                 <thead>
                   <tr>
                     <th data-i18n="gridStatsColLength">Lettres</th>
-                    <th data-i18n="gridStatsColCount">Mots</th>
+                    <th id="grid-stats-count-head">Mots</th>
                   </tr>
                 </thead>
                 <tbody id="grid-stats-body"></tbody>

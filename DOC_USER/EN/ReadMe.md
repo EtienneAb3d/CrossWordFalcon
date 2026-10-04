@@ -856,16 +856,18 @@ Once generation completes, the search-progress panel disappears and
   **"Continuer à jouer / Keep playing"** (focused by default, also
   Escape or a click outside the dialog) closes it and changes nothing.
 - **Grid statistics** (`#grid-stats`, `frontend/static/script.js`,
-  `showGridStats`/`renderGridStatsPanel`) — in play mode, an icon button
-  (a small bar chart) sits at the left edge of the central column, level
-  with the top of the grid. A click opens a panel right below it giving
-  the number of words of the grid per length in letters, longest first,
-  then the total. A second click, a click elsewhere or Escape closes it.
-  The button is hidden in Interactive mode.
+  `showGridStats`/`renderGridStatsPanel`) — an icon button (a small bar
+  chart) sits at the left edge of the central column, level with the top
+  of the grid. A click opens a panel right below it giving, per length in
+  letters, longest first, then the total: the number of words of the grid
+  in play mode, the number of slots (white runs of at least 2 cells,
+  filled or not) in Interactive mode, where the panel follows every change
+  of the grid while it is open. A second click, a click elsewhere or
+  Escape closes it.
 - **Zoom** (`#grid-zoom`, `frontend/static/script.js`, `setGridZoom`/
   `fitGridZoom`) — three icon buttons at the left edge of the central
-  column, under the statistics button (play mode) or the black/fill card
-  (Interactive mode): zoom in (magnifier +), zoom out (magnifier −), and
+  column, under the statistics button (and, in Interactive mode, the
+  black/fill card): zoom in (magnifier +), zoom out (magnifier −), and
   fit to window (four corners), which shows the whole grid again and is
   framed while it is the zoom in force. Every grid opens fitted to the
   window. Zooming keeps the center of the view; once the grid no longer
@@ -1468,9 +1470,10 @@ respect a few hard rules: a white cell can never end up boxed in on all
 four sides (it would belong to no word at all and could never receive a
 letter); the white area of the grid must stay fully connected, never
 split into isolated pockets by a wall of black cells; and an ordinary
-interior word slot should normally be at least 6 cells long, unless one
-of its ends touches the grid's own border, in which case any length is
-allowed. Before this placement even starts, a separate "pre-fill" pass
+word slot between two black cells should normally be at least 6 cells
+long; near a border, a black cell may only leave a stub shorter than 3
+cells against the border in the direction it is not cutting (it can sit in
+column 1-3 to split a vertical slot, not to split that row). Before this placement even starts, a separate "pre-fill" pass
 runs first: as long as some slot's own length is covered by too few
 dictionary words to be safely fillable, more black cells are added
 specifically to shorten it, and this pre-fill is itself intertwined with
@@ -1491,7 +1494,12 @@ doing so simply ends up with fewer black cells than aimed for, left as-is,
 rather than forcing an adjacent one. The draw toward the density target
 also never blackens a cell of the 2×2 square at each of the grid's four
 corners; only the unfillable-slot pre-fill or a later repair may put a
-black cell there.
+black cell there. Once the density target is reached, the generator counts
+the 2- and 3-letter slots (leaving out the stubs of fewer than 3 cells
+against a border): if there are more than 10, the black cells it
+just drew around them are removed and the draw resumes until the target is
+reached again (at most 10 times), so the grid is not cut into a mosaic of
+tiny words.
 
 The pattern itself is never adjusted ahead of the search. Instead, while
 filling the grid, the generator may reshape the slot it is working on for a

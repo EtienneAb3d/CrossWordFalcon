@@ -182,6 +182,7 @@ const gridStatsBtn = document.getElementById("grid-stats-btn");
 const gridStatsPanel = document.getElementById("grid-stats-panel");
 const gridStatsBody = document.getElementById("grid-stats-body");
 const gridStatsTotal = document.getElementById("grid-stats-total");
+const gridStatsCountHead = document.getElementById("grid-stats-count-head");
 const libraryBtn = document.getElementById("library-btn");
 const createGridBtn = document.getElementById("create-grid-btn");
 const libraryPanel = document.getElementById("library");
@@ -3903,18 +3904,20 @@ async function scheduleGridGameSave() {
   refreshLeaderboard();
 }
 
-// Word statistics of the grid on screen (#grid-stats), play mode only: an
-// icon button at the left edge of the central column, level with the top
-// of the grid, opening a panel right below it that lists the number of
-// words per length (in letters), longest first, then the total. Closed by
-// a second click, a click anywhere else, or Escape.
+// Statistics of the grid on screen (#grid-stats): an icon button at the
+// left edge of the central column, level with the top of the grid, opening
+// a panel right below it that lists, longest first, then the total, the
+// number of words per length (in letters) in play mode, or the number of
+// slots per length in Interactive mode (kept current while open by
+// renderInteractive). Closed by a second click, a click anywhere else, or
+// Escape.
 function hideGridStats() {
   gridStatsEl.hidden = true;
   setGridStatsPanelOpen(false);
 }
 
 function showGridStats() {
-  if (interactiveMode || !puzzle) {
+  if (!interactiveMode && !puzzle) {
     hideGridStats();
     return;
   }
@@ -3924,10 +3927,14 @@ function showGridStats() {
 
 function renderGridStatsPanel() {
   const counts = new Map();
-  for (const w of (puzzle && puzzle.words) || []) {
-    const length = (w.answer || "").length;
+  const lengths0 = interactiveMode
+    ? interactiveSlots().map((s) => s.cells.length)
+    : ((puzzle && puzzle.words) || []).map((w) => (w.answer || "").length);
+  for (const length of lengths0) {
     if (length) counts.set(length, (counts.get(length) || 0) + 1);
   }
+  const t = I18N[uiLanguage];
+  gridStatsCountHead.textContent = interactiveMode ? t.gridStatsColSlots : t.gridStatsColCount;
   const lengths = [...counts.keys()].sort((a, b) => b - a);
   gridStatsBody.replaceChildren(...lengths.map((length) => {
     const tr = document.createElement("tr");
@@ -6740,6 +6747,7 @@ function renderInteractiveCellStats() {
   interactiveBlackStat.textContent = I18N[uiLanguage].interactiveBlackPercent(blackPercent);
   interactiveFillStat.textContent = I18N[uiLanguage].interactiveFillPercent(fillPercent);
   interactiveCellStats.hidden = false;
+  if (!gridStatsPanel.hidden) renderGridStatsPanel();
 }
 
 function renderInteractive() {
@@ -8001,8 +8009,8 @@ function enterInteractiveMode(state) {
   gridViewportEl.scrollLeft = 0;
   gridViewportEl.scrollTop = 0;
   hideLeaderboard();
-  hideGridStats();
   interactiveMode = true;
+  showGridStats();
   setGenerateFormCollapsed(false);
   interactiveJobId = currentJobId || interactiveJobId;
   interactiveGrid = state.grid.map((row) => row.map((ch) => (ch === "." ? "" : ch)));
@@ -8296,6 +8304,7 @@ function hideInteractivePanel() {
   interactiveNextBtn.hidden = true;
   interactiveChallengePanel.hidden = true;
   interactiveCellStats.hidden = true;
+  hideGridStats();
   interactiveZoneSelection = null;
   interactiveDragStart = null;
   interactiveDragCurrent = null;

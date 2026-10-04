@@ -384,11 +384,21 @@ Une case noire n'est acceptée que si :
 - aucune case blanche ne se retrouve isolée dans les **deux** sens à la
   fois (noire sur ses 4 côtés) — règle absolue, jamais assouplie ;
 - la grille blanche reste entièrement **connectée** ;
-- un emplacement encadré par deux cases noires fait au moins
-  `STRUCTURAL_MIN_INTERIOR_FREE` cases (**6**), **sauf** si l'une de ses
-  extrémités touche le bord de la grille : il est alors autorisé quelle
-  que soit sa longueur (y compris 1 ou 2 cases), et quel qu'en soit le
-  nombre sur la grille. Une zone d'une lettre ne sert jamais de mot ; une
+- une zone blanche, horizontale ou verticale, encadrée par deux cases
+  noires fait au moins `STRUCTURAL_MIN_INTERIOR_FREE` cases (**6**) ;
+- **près d'un bord**, la nouvelle case noire ne laisse sur l'emplacement
+  qu'elle découpe aucun morceau touchant le bord de moins de
+  `STRUCTURAL_MIN_BORDER_FREE` cases (**3**) — ou de l'exigence globale,
+  quand elle est descendue en dessous (2 ou 1). Dans l'autre sens, la zone
+  qu'elle crée contre le bord peut être plus courte : une case noire peut
+  être posée près du bord gauche (colonne 1, 2 ou 3) pour découper un
+  emplacement **vertical** de cette colonne, mais pas pour découper une
+  ligne. L'emplacement découpé est celui, parmi les emplacements retenus
+  par le tirage, qui contient la case ; si elle est dans deux emplacements
+  retenus, l'un des deux sens suffit (`_BlackCellValidity.valid_with_black`,
+  `_place_black_cells`). La vérification de la grille entière
+  (`is_structurally_valid`) accepte donc toute longueur pour une zone qui
+  touche le bord. Une zone d'une lettre ne sert jamais de mot ; une
   zone de deux lettres devient un vrai mot à définir (« et », « ou »,
   « no »…).
 
@@ -445,6 +455,21 @@ qu'aucune case convienne (pourcentage à 100 %, toute la grille), le tirage
 reprend à 5 % avec l'exigence abaissée d'un cran (5, 4, 3, 2, puis 1) :
 le pourcentage est toujours augmenté avant que l'exigence soit baissée ; si même l'exigence de 1 case ne laisse aucune
 candidate, plus aucune case noire n'est posée.
+
+**Limite des emplacements courts.** Une fois l'objectif « Taux noir »
+atteint, on compte les emplacements de **2 ou 3 lettres**
+(`SHORT_SLOT_MAX_LENGTH`), horizontaux et verticaux, sans compter ceux de
+moins de 3 lettres qui touchent un bord : ils viennent d'un découpage dans
+l'autre sens, nécessaire près des bords. S'il y en a plus de
+`SHORT_SLOT_MAX_COUNT` (**10**), les cases noires posées par ce tirage qui
+les délimitent (la case juste avant ou juste après l'emplacement) sont
+retirées, puis le tirage est relancé jusqu'à retrouver l'objectif ; le
+compte est refait après chaque relance, au plus
+`SHORT_SLOT_REDRAW_MAX_ROUNDS` (**10**) fois, après quoi la grille est
+gardée telle quelle. Les cases noires du motif de départ et celles du
+pré-remplissage ne sont jamais retirées par cette règle ; une case
+retirée redevient candidate pour la relance (`make_pattern`,
+`_short_slot_bounding_blacks`).
 
 **Coins interdits au tirage.** Le tirage vers l'objectif « Taux noir » ne
 pose jamais de case noire dans le carré de 2×2 cases de chacun des quatre

@@ -4597,12 +4597,13 @@ end through the real running API (interactive start/step/save,
   zoomed: sliders shown, headers 15… and 16… stuck at the edges) and in
   Interactive mode.
 - **Grid statistics button** (`#grid-stats`, `#grid-stats-btn`,
-  `#grid-stats-panel`), play mode only: a square `.nav-btn.clear-icon-btn`
+  `#grid-stats-panel`), play and Interactive modes: a square `.nav-btn.clear-icon-btn`
   bar-chart icon (inline SVG, `currentColor`, `--accent`), first item of
   `#grid-tools`.
   Its panel is an overlay card right below it (same white card, border,
   radius and shadow as `#leaderboard`), a right-aligned
-  tabular table (letters, words; longest first; dashed-separated total).
+  tabular table (letters, words — slots in Interactive mode; longest
+  first; dashed-separated total).
   `[hidden]` overrides guard the bare-id `display` trap. No new token.
   Visually confirmed with Playwright/Chromium: button top equals grid top,
   panel directly below.

@@ -273,6 +273,13 @@ plusieurs signaux) :
   `Filler.scrabble_first`, `scrabble_word_cells` ; `backend/app.py`,
   `_annotate_scrabble_cells`.)
 
+- **Emplacement court** : emplacement de 2 ou 3 lettres. Une fois le
+  « Taux noir » atteint, un motif qui en compte plus de 10 (sans compter
+  ceux de moins de 3 lettres qui touchent un bord) voit retirées
+  les cases noires du tirage qui les délimitent, puis le tirage est
+  relancé (`backend/crossword_gen.py`, `make_pattern`,
+  `_short_slot_bounding_blacks`, `SHORT_SLOT_MAX_COUNT`).
+
 - **Case noire flottante** : case noire que le moteur a le droit de
   déplacer ou d'ajouter pour faire exister un emplacement de la longueur
   d'un Mot Défi, ou d'un mot du glossaire thématique tant que moins de 5

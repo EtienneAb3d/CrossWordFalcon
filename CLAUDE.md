@@ -417,12 +417,24 @@ via `ProcessPoolExecutor`:
    valid cell, the percentage grows by 5 and the draw starts over. The
    hard constraints: still white, not adjacent to a black cell,
    `_new_black_cell_breaks_locked_slot` false, structurally valid at
-   `STRUCTURAL_MIN_INTERIOR_FREE=6` (an interior white zone must be at
-   least this long) — answered by `_BlackCellValidity`, built once per
+   `STRUCTURAL_MIN_INTERIOR_FREE=6` (a white zone between two black
+   cells must be at least this long; on the run the cell is drawn from —
+   a selected run holding it, either direction sufficing — a piece
+   touching the border must be at least `min(STRUCTURAL_MIN_BORDER_FREE=3,
+   that minimum)`, while the perpendicular run keeps any border length:
+   `_BlackCellValidity.valid_with_black(direction)`; `is_structurally_
+   valid` accepts any border zone) — answered by `_BlackCellValidity`, built once per
    draw and level (zones per row/column, isolated cells, articulation
    points of the white graph), always equal to `is_structurally_valid`
    on the modified grid; once every run is selected and nothing fits, the
-   draw restarts at 5 % with that minimum lowered by one, down to 1. This ratio-based draw never
+   draw restarts at 5 % with that minimum lowered by one, down to 1. Once
+   the target is reached, more than `SHORT_SLOT_MAX_COUNT` (10) slots of
+   at most `SHORT_SLOT_MAX_LENGTH` (3) letters (a border slot shorter than
+   `STRUCTURAL_MIN_BORDER_FREE` not counted) reopen the black cells this
+   draw placed right before or after them (`_short_slot_bounding_blacks`;
+   the seed's and pre-fill's never), which become candidates again, and
+   the draw resumes to the target — at most `SHORT_SLOT_REDRAW_MAX_ROUNDS`
+   (10) rounds, the grid then kept as it is. This ratio-based draw never
    considers a cell of the four corner 2x2 squares (`_in_corner_square`/
    `CORNER_SQUARE_SIZE=2`, which only pre-fill and the repair mechanisms
    below may blacken). Adjacency is never accepted at all, on any palier
@@ -2413,9 +2425,10 @@ state, unlike the backend).
   the scroll position across its rebuild and, only when the selection
   changes, scrolls just enough to show the selected cell,
   `ensureSelectionVisible`); the board's left tool column (`#grid-tools`,
-  absolutely positioned at `#board`'s top-left: the play-mode word statistics
-  `#grid-stats` — an icon button opening an overlay panel of word counts per length, longest
-  first, `showGridStats`/`renderGridStatsPanel`, hidden in Interactive mode —
+  absolutely positioned at `#board`'s top-left: the grid statistics
+  `#grid-stats` — an icon button opening an overlay panel of counts per length, longest
+  first: the grid's words in play mode, `interactiveSlots()` in Interactive mode, re-rendered
+  by `renderInteractiveCellStats` while open, `showGridStats`/`renderGridStatsPanel` —
   then Interactive mode's `#interactive-cell-stats` card, then the zoom
   buttons `#grid-zoom`); the end-of-generation grid
   choice (`pollJob` arms `pendingGridChoiceJobId` while the job's
