@@ -2198,7 +2198,7 @@ the current defaults/behavior to know before touching this code.
   Messages API (`CLUE_LLM_API=anthropic`), in raw HTTP like every other
   external service of this project (no SDK; the Java back end has Jackson
   as its only dependency). Both checkouts' `env.sh` route definitions to
-  Mistral Small (`mistral-small-latest`, OpenAI-compatible, `https://api.
+  Mistral Medium (`mistral-medium-latest`, OpenAI-compatible, `https://api.
   mistral.ai/v1/chat/completions`), active only once `MISTRAL_API_KEY`/
   `CLUE_LLM_API_KEY` is set; Claude Haiku (`claude-haiku-4-5`, no
   `CLUE_LLM_EFFORT`/`CLUE_LLM_FALLBACKS`, which Haiku 4.5 rejects) is the
@@ -2206,6 +2206,14 @@ the current defaults/behavior to know before touching this code.
   endpoint fails (usage limit reached or any other error), the local LLM
   takes over for 5 minutes (`CLUE_LLM_BACKUP_SECONDS`, one window shared
   by clues and "Définir"), then that endpoint is tried again.
+- **Every call to an external LLM endpoint is recorded in `LOG_LLM/`**
+  (`<timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md`, `backend/clues.py`'s
+  `_write_external_call_log`, Java `Clues.writeExternalCallLog`), the
+  user's rule. "External" is any host but `localhost` and loopback,
+  private or link-local IP literals. A clue-generation call keeps its own
+  record (which names the endpoint that actually answered) and gets an
+  `EXT_CLUE` one only on failure. Any new external LLM call must go
+  through `_chat` with a `purpose`.
 - `LLMClueGenerator` owns all LLM handling (endpoint config, prompt text,
   the HTTP call, response parsing); `backend/app.py` builds one instance at
   module scope. Talks to any OpenAI-compatible chat-completions endpoint —

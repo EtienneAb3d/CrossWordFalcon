@@ -227,6 +227,8 @@ public final class Clues {
     public final String api;
     public final String effort;
     public final String fallbacks;
+    /** Whether {@link #baseUrl} is a third-party service (backend/clues.py, LLMClueGenerator.external). */
+    public final boolean external;
 
     public Clues() {
         this(null, null, null);
@@ -273,6 +275,41 @@ public final class Clues {
         this.baseUrl = baseUrl != null && !baseUrl.isEmpty() ? baseUrl : Env.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL);
         this.model = model != null && !model.isEmpty() ? model : Env.get("LLM_MODEL", DEFAULT_LLM_MODEL);
         this.apiKey = apiKey != null && !apiKey.isEmpty() ? apiKey : Env.get("LLM_API_KEY", DEFAULT_LLM_API_KEY);
+        this.external = isExternalEndpoint(this.baseUrl);
+    }
+
+    /** The instance whose own endpoint answered (or last failed) the current {@link #chat} call of this thread
+     *  (backend/clues.py, _LLM_CALL). */
+    private static final ThreadLocal<Clues> SERVED_BY = new ThreadLocal<>();
+
+    /** False for {@code localhost} or a loopback, private or link-local IP literal (a host name is never
+     *  resolved), true otherwise (backend/clues.py, _is_external_endpoint). */
+    static boolean isExternalEndpoint(String url) {
+        String host;
+        try {
+            host = java.net.URI.create(url).getHost();
+        } catch (IllegalArgumentException e) {
+            return true;
+        }
+        if (host == null) return true;
+        host = host.toLowerCase(Locale.ROOT);
+        if (host.startsWith("[") && host.endsWith("]")) host = host.substring(1, host.length() - 1);
+        if (host.equals("localhost")) return false;
+        boolean literal = host.matches("\\d{1,3}(\\.\\d{1,3}){3}") || host.contains(":");
+        if (!literal) return true;
+        java.net.InetAddress ip;
+        try {
+            ip = java.net.InetAddress.getByName(host);
+        } catch (java.net.UnknownHostException e) {
+            return true;
+        }
+        if (ip.isLoopbackAddress() || ip.isLinkLocalAddress()) return false;
+        byte[] a = ip.getAddress();
+        if (a.length == 4) {
+            int b0 = a[0] & 0xff, b1 = a[1] & 0xff;
+            return !(b0 == 10 || (b0 == 172 && b1 >= 16 && b1 <= 31) || (b0 == 192 && b1 == 168));
+        }
+        return (a[0] & 0xfe) != 0xfc;
     }
 
     // ================================================================== text helpers
@@ -506,25 +543,86 @@ public final class Clues {
 
     // ================================================================== HTTP
 
-    /** One chat-completions call; returns the raw message content. */
-    private String chat(String system, String user, double temperature, int maxTokens, double timeout) throws IOException {
+    /** One chat-completions call; returns the raw message content. Every call reaching an external endpoint gets
+     *  a LOG_LLM/ record labelled {@code purpose}; null (clue generation, whose own record names the endpoint
+     *  that answered) records only a failed external call (backend/clues.py, LLMClueGenerator._chat). */
+    private String chat(String system, String user, double temperature, int maxTokens, double timeout, String purpose)
+            throws IOException {
+        SERVED_BY.remove();
+        return chatRouted(system, user, temperature, maxTokens, timeout, purpose);
+    }
+
+    /** {@link #chat} through this instance's backup routing. */
+    private String chatRouted(String system, String user, double temperature, int maxTokens, double timeout,
+                              String purpose) throws IOException {
         Clues b = backup;
-        if (b == null) return chatOwn(system, user, temperature, maxTokens, timeout, false);
+        if (b == null) return chatOwn(system, user, temperature, maxTokens, timeout, false, purpose);
         if (!backupWindow.active()) {
             try {
-                return chatOwn(system, user, temperature, maxTokens, timeout, true);
+                return chatOwn(system, user, temperature, maxTokens, timeout, true, purpose);
             } catch (IOException | RuntimeException e) {
                 backupWindow.open();
                 Log.warning("LLM call failed (%s, model=%s): %s — using the backup LLM (%s, model=%s) for %.0fs",
                         baseUrl, Log.repr(model), e.getMessage(), b.baseUrl, Log.repr(b.model), backupWindow.durationS);
             }
         }
-        return b.chat(system, user, temperature, maxTokens, timeout);
+        return b.chatRouted(system, user, temperature, maxTokens, timeout, purpose);
     }
 
-    /** {@link #chat} against this instance's own endpoint only. */
+    /** {@link #chat} against this instance's own endpoint only, recorded in LOG_LLM/ when that endpoint is
+     *  external. */
     private String chatOwn(String system, String user, double temperature, int maxTokens, double timeout,
-                           boolean refusalIsError) throws IOException {
+                           boolean refusalIsError, String purpose) throws IOException {
+        SERVED_BY.set(this);
+        if (!external) return chatRequest(system, user, temperature, maxTokens, timeout, refusalIsError);
+        long started = System.nanoTime();
+        String content;
+        try {
+            content = chatRequest(system, user, temperature, maxTokens, timeout, refusalIsError);
+        } catch (IOException | RuntimeException e) {
+            writeExternalCallLog(purpose != null ? purpose : "clue", system, user, temperature, maxTokens, null, e,
+                    (System.nanoTime() - started) / 1e9);
+            throw e;
+        }
+        if (purpose != null) {
+            writeExternalCallLog(purpose, system, user, temperature, maxTokens, content, null,
+                    (System.nanoTime() - started) / 1e9);
+        }
+        return content;
+    }
+
+    /** One LOG_LLM/ record per call to an external endpoint, {@code <timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md}
+     *  (backend/clues.py, LLMClueGenerator._write_external_call_log). Best-effort. */
+    private void writeExternalCallLog(String purpose, String system, String user, double temperature, int maxTokens,
+                                      String content, Exception error, double durationS) {
+        String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSSSSS"));
+        Path path = CALL_LOG_DIR.resolve(ts + "_EXT_" + purpose.toUpperCase(Locale.ROOT) + "_"
+                + (error != null ? "ERROR" : "SUCCES") + ".md");
+        String body = "# External LLM call — " + purpose + "\n\n"
+                + "- **Date**: " + GridStore.isoNow() + "\n"
+                + "- **LLM endpoint**: " + baseUrl + "\n"
+                + "- **API**: " + api + "\n"
+                + "- **Model**: " + model + "\n"
+                + "- **Temperature**: " + temperature + "\n"
+                + "- **Max tokens**: " + maxTokens + "\n"
+                + "- **Duration**: " + Py.fmt(durationS, 2) + " s\n"
+                + "- **Outcome**: " + (error != null ? "error" : "success") + "\n\n"
+                + "## Error\n\n" + (error != null ? error.getMessage() : "None") + "\n\n"
+                + "## System prompt\n\n```\n" + system + "\n```\n\n"
+                + "## User message\n\n```\n" + user + "\n```\n\n"
+                + "## Raw LLM output\n\n```\n" + (content != null ? content : "(no response — see error above)")
+                + "\n```\n";
+        try {
+            Files.createDirectories(CALL_LOG_DIR);
+            Files.writeString(path, body, StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            Log.warning("failed to write external call log (%s): %s", purpose, e.getMessage());
+        }
+    }
+
+    /** The HTTP request of {@link #chatOwn}. */
+    private String chatRequest(String system, String user, double temperature, int maxTokens, double timeout,
+                               boolean refusalIsError) throws IOException {
         if (LLM_API_ANTHROPIC.equals(api)) return chatAnthropic(system, user, maxTokens, timeout, refusalIsError);
         Map<String, Object> body = Json.obj(
                 "model", model,
@@ -594,9 +692,14 @@ public final class Clues {
 
     private String call(String answer, String accented, int roundNumber, String system, String user, int maxTokens,
                         double timeout, int totalRounds) {
+        return call(answer, accented, roundNumber, system, user, maxTokens, timeout, totalRounds, null);
+    }
+
+    private String call(String answer, String accented, int roundNumber, String system, String user, int maxTokens,
+                        double timeout, int totalRounds, String purpose) {
         String content;
         try {
-            content = chat(system, user, TEMPERATURE, maxTokens, timeout);
+            content = chat(system, user, TEMPERATURE, maxTokens, timeout, purpose);
         } catch (IOException e) {
             throw new ClueGenerationError("LLM call failed (" + baseUrl + ", model=" + Log.repr(model) + "): "
                     + e.getMessage() + ". If you're using the default local llama.cpp server, make sure it's running "
@@ -803,7 +906,7 @@ public final class Clues {
                     + " titles, one per line:";
             String content;
             try {
-                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 60, timeout);
+                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 60, timeout, "title");
             } catch (IOException e) {
                 Log.warning("title generation attempt %d/%d failed (%s, model=%s): %s", attempt + 1, TITLE_RETRIES,
                         baseUrl, Log.repr(model), e.getMessage());
@@ -873,7 +976,7 @@ public final class Clues {
             String user = "Some words from the grid: " + String.join(", ", shown) + "\n" + count + " titles, one per line:";
             String content;
             try {
-                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout);
+                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout, "titles");
             } catch (IOException e) {
                 Log.warning("title proposals attempt %d/%d failed (%s, model=%s): %s", attempt + 1, totalRounds, baseUrl,
                         Log.repr(model), e.getMessage());
@@ -1027,7 +1130,7 @@ public final class Clues {
             if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
             String content;
             try {
-                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 150, timeout);
+                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 150, timeout, "theme");
             } catch (IOException e) {
                 Log.warning("theme description failed (%s, model=%s): %s", baseUrl, Log.repr(model), e.getMessage());
                 continue;
@@ -1075,7 +1178,7 @@ public final class Clues {
             if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
             String content;
             try {
-                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 40, timeout);
+                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 40, timeout, "random_theme");
             } catch (IOException e) {
                 Log.warning("random theme generation attempt %d/%d failed (%s, model=%s): %s", attempt + 1,
                         RANDOM_THEME_RETRIES + 1, baseUrl, Log.repr(model), e.getMessage());
@@ -1136,7 +1239,8 @@ public final class Clues {
         List<String> definitions = new ArrayList<>();
         int attempt;
         for (attempt = 0; attempt < 1 + DEFINE_RETRIES; attempt++) {
-            String content = call(entry.answer(), text, attempt + 1, system, user, maxTokens, timeout, 1 + DEFINE_RETRIES);
+            String content = call(entry.answer(), text, attempt + 1, system, user, maxTokens, timeout, 1 + DEFINE_RETRIES,
+                    "definitions");
             List<String> candidates = parseResponse(content);
             Object[] filtered = filterCandidates(candidates, entry.answer(), text, entry.canonical(), language,
                     attempt + 1, 1 + DEFINE_RETRIES);
@@ -1198,7 +1302,7 @@ public final class Clues {
         String system = buildParaphraseSystemPrompt(language, count);
         int maxTokens = REASONING_TOKEN_BUDGET + 200 + 60 * count;
         String head = text.length() > 60 ? text.substring(0, 60) : text;
-        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1);
+        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1, "paraphrases");
         Set<String> seen = new HashSet<>();
         List<String> out = new ArrayList<>();
         for (String line : parseResponse(content)) {
@@ -1240,7 +1344,7 @@ public final class Clues {
         String system = buildCorrectionSystemPrompt(language);
         int maxTokens = REASONING_TOKEN_BUDGET + 100 + 2 * text.length();
         String head = text.length() > 60 ? text.substring(0, 60) : text;
-        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1);
+        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1, "correct");
         List<String> lines = parseResponse(content);
         String corrected = lines.isEmpty() ? text : lines.get(0);
         Log.info("correct: %s (%s) -> %s", Log.repr(text), language, Log.repr(corrected));
@@ -1629,6 +1733,7 @@ public final class Clues {
                               String outcome, List<String[]> details, boolean success, String themeDescription) {
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSSSSS"));
         Path path = CALL_LOG_DIR.resolve(ts + "_" + answer + "_" + (success ? "SUCCES" : "ERROR") + ".md");
+        Clues servedBy = SERVED_BY.get() != null ? SERVED_BY.get() : this;
         String errorSection = error != null ? error.getMessage() : "None";
         String output = content != null ? content : "(no response — see error above)";
         String candidates;
@@ -1647,8 +1752,8 @@ public final class Clues {
                 + "- **Language**: " + language + "\n"
                 + "- **Difficulty**: " + difficulty + "\n"
                 + themeLine
-                + "- **LLM endpoint**: " + baseUrl + "\n"
-                + "- **Model**: " + model + "\n"
+                + "- **LLM endpoint**: " + servedBy.baseUrl + "\n"
+                + "- **Model**: " + servedBy.model + "\n"
                 + "- **Attempt**: " + roundNumber + "/3\n"
                 + "- **Outcome**: " + outcome + "\n\n"
                 + "## Error\n\n" + errorSection + "\n\n"

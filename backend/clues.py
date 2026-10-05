@@ -53,6 +53,7 @@ This lets the same code target a local llama.cpp server or a cloud API
 CLUE_LLM_* variables (read by backend/app.py) route definition writing to
 a separate endpoint, OpenAI-compatible or Anthropic's Messages API.
 """
+import ipaddress
 import json
 import logging
 import os
@@ -569,6 +570,31 @@ _prompt_config_cache = {}
 # project could plausibly grow other, unrelated kinds of logs later —
 # "LOG_LLM" says specifically what this one is for.
 CALL_LOG_DIR = Path(__file__).resolve().parent.parent / "LOG_LLM"
+
+# Per-thread record of the instance whose own endpoint answered (or last
+# failed) the current `_chat` call — read by `_write_call_log`, since a call
+# routed to the backup LLM is not served by the instance it was made on.
+_LLM_CALL = threading.local()
+
+_LOCAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16",
+    "::1/128", "fc00::/7", "fe80::/10",
+))
+
+
+def _is_external_endpoint(url):
+    """True unless `url`'s host is `localhost` or a loopback, private or
+    link-local IP literal (a host name is never resolved): an external
+    endpoint is a third-party service, whose every call gets a LOG_LLM/
+    record (`LLMClueGenerator._write_external_call_log`)."""
+    host = (httpx.URL(url).host or "").lower()
+    if host == "localhost":
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return not any(ip in net for net in _LOCAL_NETWORKS if net.version == ip.version)
 
 
 def _load_prompt_config(language):
@@ -1164,6 +1190,7 @@ class LLMClueGenerator:
         self.fallbacks = fallbacks or None
         self.backup = None
         self.backup_window = None
+        self.external = _is_external_endpoint(self.base_url)
 
     def set_backup(self, backup, window):
         """Any failure of this instance's own endpoint (HTTP error, usage
@@ -1174,15 +1201,25 @@ class LLMClueGenerator:
         self.backup = backup
         self.backup_window = window
 
-    def _chat(self, system_prompt, user_message, temperature, max_tokens, timeout):
+    def _chat(self, system_prompt, user_message, temperature, max_tokens, timeout, purpose=None):
         """One LLM call (system + user message); returns the raw text of
-        the answer. Raises httpx.HTTPError on a transport or HTTP failure."""
+        the answer. Raises httpx.HTTPError on a transport or HTTP failure.
+        Every call reaching an external endpoint gets a LOG_LLM/ record
+        labelled `purpose`; `None` (clue generation, whose own record
+        `_write_call_log` names the endpoint that answered) records only a
+        failed external call."""
+        _LLM_CALL.served_by = None
+        return self._chat_routed(system_prompt, user_message, temperature, max_tokens, timeout, purpose)
+
+    def _chat_routed(self, system_prompt, user_message, temperature, max_tokens, timeout, purpose):
+        """`_chat` through this instance's backup routing."""
         if self.backup is None:
-            return self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout)
+            return self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout,
+                                  purpose=purpose)
         if not self.backup_window.active():
             try:
                 content = self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout,
-                                         refusal_is_error=True)
+                                         refusal_is_error=True, purpose=purpose)
                 return content
             except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as e:
                 self.backup_window.open()
@@ -1191,10 +1228,72 @@ class LLMClueGenerator:
                     self.base_url, self.model, e, self.backup.base_url, self.backup.model,
                     self.backup_window.duration_s,
                 )
-        return self.backup._chat(system_prompt, user_message, temperature, max_tokens, timeout)
+        return self.backup._chat_routed(system_prompt, user_message, temperature, max_tokens, timeout, purpose)
 
-    def _chat_own(self, system_prompt, user_message, temperature, max_tokens, timeout, refusal_is_error=False):
-        """`_chat` against this instance's own endpoint only."""
+    def _chat_own(self, system_prompt, user_message, temperature, max_tokens, timeout, refusal_is_error=False,
+                  purpose=None):
+        """`_chat` against this instance's own endpoint only, recorded in
+        LOG_LLM/ when that endpoint is external (see `_chat`)."""
+        _LLM_CALL.served_by = self
+        if not self.external:
+            return self._chat_request(system_prompt, user_message, temperature, max_tokens, timeout,
+                                      refusal_is_error)
+        started = time.monotonic()
+        try:
+            content = self._chat_request(system_prompt, user_message, temperature, max_tokens, timeout,
+                                         refusal_is_error)
+        except Exception as e:
+            self._write_external_call_log(purpose or "clue", system_prompt, user_message, temperature,
+                                          max_tokens, None, e, time.monotonic() - started)
+            raise
+        if purpose is not None:
+            self._write_external_call_log(purpose, system_prompt, user_message, temperature, max_tokens,
+                                          content, None, time.monotonic() - started)
+        return content
+
+    def _write_external_call_log(self, purpose, system_prompt, user_message, temperature, max_tokens,
+                                 content, error, duration_s):
+        """One LOG_LLM/ record per call to an external endpoint, named
+        `<timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md`: endpoint, model,
+        parameters, duration, error (with the HTTP response body), both
+        prompts and the raw answer. Best-effort, like `_write_call_log`."""
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        suffix = "ERROR" if error is not None else "SUCCES"
+        path = CALL_LOG_DIR / f"{timestamp}_EXT_{purpose.upper()}_{suffix}.md"
+        if error is None:
+            error_section = "None"
+        else:
+            error_section = str(error)
+            response = getattr(error, "response", None)
+            if response is not None:
+                try:
+                    error_section += f"\n\n```\n{response.text}\n```"
+                except Exception:
+                    pass
+        output_section = content if content is not None else "(no response — see error above)"
+        body = (
+            f"# External LLM call — {purpose}\n\n"
+            f"- **Date**: {datetime.now().isoformat()}\n"
+            f"- **LLM endpoint**: {self.base_url}\n"
+            f"- **API**: {self.api}\n"
+            f"- **Model**: {self.model}\n"
+            f"- **Temperature**: {temperature}\n"
+            f"- **Max tokens**: {max_tokens}\n"
+            f"- **Duration**: {duration_s:.2f} s\n"
+            f"- **Outcome**: {'error' if error is not None else 'success'}\n\n"
+            f"## Error\n\n{error_section}\n\n"
+            f"## System prompt\n\n```\n{system_prompt}\n```\n\n"
+            f"## User message\n\n```\n{user_message}\n```\n\n"
+            f"## Raw LLM output\n\n```\n{output_section}\n```\n"
+        )
+        try:
+            CALL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        except OSError as e:
+            logger.warning("failed to write external call log (%s): %s", purpose, e)
+
+    def _chat_request(self, system_prompt, user_message, temperature, max_tokens, timeout, refusal_is_error):
+        """The HTTP request of `_chat_own`."""
         if self.api == LLM_API_ANTHROPIC:
             headers = {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_API_VERSION}
             body = {
@@ -1687,7 +1786,8 @@ class LLMClueGenerator:
                 # collapsed to one constant title for every grid without it;
                 # it also makes a retry likely to differ. Room for
                 # _TITLE_COUNT short lines.
-                content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 60, timeout)
+                content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 60, timeout,
+                                     purpose="title")
             except httpx.HTTPError as e:
                 logger.warning(
                     "title generation attempt %d/%d failed (%s, model=%r): %s",
@@ -1830,7 +1930,8 @@ class LLMClueGenerator:
             try:
                 # Same temperature as generate_title(); 20 tokens of
                 # headroom per requested line.
-                content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout)
+                content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout,
+                                     purpose="titles")
             except httpx.HTTPError as e:
                 logger.warning(
                     "title proposals attempt %d/%d failed (%s, model=%r): %s",
@@ -2106,7 +2207,8 @@ class LLMClueGenerator:
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
             try:
-                content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 150, timeout)
+                content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 150, timeout,
+                                     purpose="theme")
             except httpx.HTTPError as e:
                 logger.warning(
                     "theme description failed (%s, model=%r): %s",
@@ -2195,7 +2297,8 @@ class LLMClueGenerator:
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
             try:
-                content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 40, timeout)
+                content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 40, timeout,
+                                     purpose="random_theme")
             except httpx.HTTPError as e:
                 logger.warning(
                     "random theme generation attempt %d/%d failed (%s, model=%r): %s",
@@ -2341,7 +2444,7 @@ class LLMClueGenerator:
         for attempt in range(1 + DEFINE_RETRIES):
             content = self._call(
                 entry[0], text, attempt + 1, system_prompt, user_message, max_tokens,
-                timeout, total_rounds=1 + DEFINE_RETRIES,
+                timeout, total_rounds=1 + DEFINE_RETRIES, purpose="definitions",
             )
             candidates = self._parse_response(content)
             accepted, _details, _maskable = self._filter_candidates(
@@ -2454,7 +2557,7 @@ class LLMClueGenerator:
         max_tokens = REASONING_TOKEN_BUDGET + 200 + 60 * count
         content = self._call(
             text[:60].upper(), text, 1, system_prompt, user_message, max_tokens,
-            timeout, total_rounds=1,
+            timeout, total_rounds=1, purpose="paraphrases",
         )
         seen = set()
         paraphrases = []
@@ -2522,7 +2625,7 @@ class LLMClueGenerator:
         max_tokens = REASONING_TOKEN_BUDGET + 100 + 2 * len(text)
         content = self._call(
             text[:60].upper(), text, 1, system_prompt, user_message, max_tokens,
-            timeout, total_rounds=1,
+            timeout, total_rounds=1, purpose="correct",
         )
         lines = self._parse_response(content)
         corrected = lines[0] if lines else text
@@ -3083,9 +3186,9 @@ class LLMClueGenerator:
         return "\n\n".join(parts)
 
     def _call(self, answer, accented, round_number, system_prompt, user_message, max_tokens,
-             timeout, total_rounds=3):
+             timeout, total_rounds=3, purpose=None):
         try:
-            content = self._chat(system_prompt, user_message, TEMPERATURE, max_tokens, timeout)
+            content = self._chat(system_prompt, user_message, TEMPERATURE, max_tokens, timeout, purpose)
         except httpx.HTTPError as e:
             raise ClueGenerationError(
                 f"LLM call failed ({self.base_url}, model={self.model!r}): {e}. "
@@ -3144,6 +3247,7 @@ class LLMClueGenerator:
         since a missing diagnostic file is far less important than the
         grid itself finishing."""
         CALL_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        served_by = getattr(_LLM_CALL, "served_by", None) or self
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         suffix = "SUCCES" if success else "ERROR"
         path = CALL_LOG_DIR / f"{timestamp}_{answer}_{suffix}.md"
@@ -3166,8 +3270,8 @@ class LLMClueGenerator:
             f"- **Language**: {language}\n"
             f"- **Difficulty**: {difficulty}\n"
             f"{theme_line}"
-            f"- **LLM endpoint**: {self.base_url}\n"
-            f"- **Model**: {self.model}\n"
+            f"- **LLM endpoint**: {served_by.base_url}\n"
+            f"- **Model**: {served_by.model}\n"
             f"- **Attempt**: {round_number}/3\n"
             f"- **Outcome**: {outcome}\n\n"
             f"## Error\n\n{error_section}\n\n"

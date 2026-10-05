@@ -2087,7 +2087,19 @@ letter and unnatural word order (an adjective on the wrong side of its noun)
 fixed and its wording kept;
 the first line of the answer, the input unchanged if it is empty). Every clue-generation call
 writes a Markdown trace to `LOG_LLM/<timestamp>_<ANSWER>_<SUCCES|
-ERROR>.md` (full prompt, raw output, every candidate's verdict).
+ERROR>.md` (full prompt, raw output, every candidate's verdict), naming
+the endpoint and model that actually answered (`_LLM_CALL.served_by`, the
+backup when the call was rerouted; Java `Clues.SERVED_BY`). Every call
+to an external endpoint (`_is_external_endpoint`: any host but
+`localhost` and loopback/private/link-local IP literals; the instance's
+`external` field, Java `Clues.isExternalEndpoint`) also writes
+`LOG_LLM/<timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md`
+(`_write_external_call_log`, Java `writeExternalCallLog`: endpoint, API,
+model, temperature, max tokens, duration, error with the HTTP response
+body, both prompts, raw answer) — `_chat`'s `purpose` is `title`,
+`titles`, `theme`, `random_theme`, `definitions`, `paraphrases` or
+`correct`; a clue-generation call (`purpose=None`, already traced by its
+own record) gets one only when the external call fails (`CLUE`).
 
 ### `chatbot.py` — `ChatBot` ("David FALCON")
 
