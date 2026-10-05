@@ -908,26 +908,26 @@ premières lignes et Ch premières colonnes) et un rectangle vertical (les Rv
 premières lignes et Cv premières colonnes). Seul un emplacement ayant au
 moins une case encore libre (ni mot posé, ni lettre verrouillée) dans cette
 zone peut recevoir une pose. Les quatre valeurs valent d'abord
-`INCREMENTAL_FILL_START_SIZE` (6). Quand le nœud ne peut plus rien poser
+`INCREMENTAL_FILL_START_SIZE` (4). Quand le nœud ne peut plus rien poser
 dans la zone — plus aucun emplacement concerné, ou tous essayés, écartés
 libérés compris —, les deux rectangles grandissent ensemble
 (`Filler._widen_attention`) : l'horizontal s'élargit de
-`INCREMENTAL_FILL_COL_STEP` (4) colonnes tant qu'il n'occupe pas toute la
-largeur de la grille, puis s'allonge de `INCREMENTAL_FILL_ROW_STEP` (4)
-lignes ; le vertical s'allonge de `INCREMENTAL_FILL_ROW_STEP` (4) lignes
+`INCREMENTAL_FILL_COL_STEP` (2) colonnes tant qu'il n'occupe pas toute la
+largeur de la grille, puis s'allonge de `INCREMENTAL_FILL_ROW_STEP` (2)
+lignes ; le vertical s'allonge de `INCREMENTAL_FILL_ROW_STEP` (2) lignes
 tant qu'il n'occupe pas toute la hauteur, puis s'élargit de
-`INCREMENTAL_FILL_COL_STEP` (4) colonnes. Le nœud reprend alors au temps 1
+`INCREMENTAL_FILL_COL_STEP` (2) colonnes. Le nœud reprend alors au temps 1
 sur l'ensemble agrandi (les emplacements déjà essayés par ce nœud le
 restent), jusqu'à ce que l'un des deux rectangles couvre toute la grille ; le
 temps 3 ne vient qu'ensuite. La taille de la zone est un paramètre de
 récursion comme `released` : héritée par la descente qui suit,
 restaurée en remontant ; chaque racine (`solve()`, y compris après un
-nettoyage précoce) repart de 6x6. Une tentative partie de lettres
+nettoyage précoce) repart de 4x4. Une tentative partie de lettres
 verrouillées (palier 2 et suivants) qui les perd toutes à la suite d'un
-nettoyage dur (précoce ou sur mot répété) ramène sa zone à 6x6, une seule
+nettoyage dur (précoce ou sur mot répété) ramène sa zone à 4x4, une seule
 fois par tentative (`Filler._attention_after_unlock`) : le nœud qui
-poursuit après le nettoyage sur mot répété repart de 6x6 ; après un
-nettoyage précoce, la racine repart de 6x6 de toute façon et la
+poursuit après le nettoyage sur mot répété repart de 4x4 ; après un
+nettoyage précoce, la racine repart de 4x4 de toute façon et la
 réinitialisation est simplement consommée. Un emplacement asséché, où
 qu'il soit, provoque le retour en arrière habituel : seule la sélection
 est limitée par la zone (`try_fill`, `incremental_fill`). Un emplacement écarté est repris dès que son domaine
@@ -2006,7 +2006,7 @@ la pile de retour arrière est conservée : aucun nœud n'est défait, les mots
 retirés quittent la grille et y restent absents, le nœud qui avait posé
 chacun d'eux ne trouve plus rien à retirer quand la recherche revient à
 lui, et un nouveau nœud poursuit la recherche depuis l'état nettoyé, dans
-la même zone d'attention (ramenée à 6 si le nettoyage vient de retirer la
+la même zone d'attention (ramenée à 4 si le nettoyage vient de retirer la
 dernière lettre verrouillée, voir « Remplissage incrémental »).
 L'emplacement devient un **emplacement écarté**
 et son décompte repart de zéro. Les statistiques de lettres recalculées

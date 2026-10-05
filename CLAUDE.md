@@ -906,8 +906,8 @@ slots holding a still-free cell (no placed word nor locked letter) there
 (`Filler._attention_pool`). All four start at `INCREMENTAL_FILL_START_SIZE`
 (6); once both stages place nothing in the zone (or the zone has no such
 slot), both rectangles grow at once — the horizontal one by
-`INCREMENTAL_FILL_COL_STEP` (4) columns while narrower than the grid, then
-by `INCREMENTAL_FILL_ROW_STEP` (4) rows; the vertical one by
+`INCREMENTAL_FILL_COL_STEP` (2) columns while narrower than the grid, then
+by `INCREMENTAL_FILL_ROW_STEP` (2) rows; the vertical one by
 `INCREMENTAL_FILL_ROW_STEP` rows while shorter than the grid, then by
 `INCREMENTAL_FILL_COL_STEP` columns — and the node goes back to stage 1 on
 the larger pool, slots it already tried staying tried (`_widen_attention`,
@@ -915,11 +915,11 @@ the larger pool, slots it already tried staying tried (`_widen_attention`,
 `allow_breaking` stage comes only after. The size is a `_backtrack`
 parameter (`attention`) inherited and restored like `released`, passed
 through `_try_reshape`/`_fail_or_backghost`; every root (`solve()`)
-restarts at 6x6. An attempt started from locked letters resets the zone to 6x6
+restarts at 4x4. An attempt started from locked letters resets the zone to 4x4
 once (`Filler._attention_after_unlock`, armed by `solve()` as
 `_attention_reset_pending`; Java `attentionAfterUnlock`), the first time a
 hardclean leaves `locked_letters` empty: `_repeat_hardclean`'s fresh node
-starts at 6x6; after `_early_hardclean` the root starts at 6x6 anyway and the
+starts at 4x4; after `_early_hardclean` the root starts at 4x4 anyway and the
 reset is only used up. Dry-slot detection and backtracking are unchanged.
 `Filler.attention_size` (the current node's zone, kept current on entry,
 widening and return from a child) and `best_attention_size` (the zone a

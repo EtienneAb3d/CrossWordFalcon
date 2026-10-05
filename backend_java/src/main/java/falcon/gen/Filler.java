@@ -61,9 +61,9 @@ public final class Filler {
      * zone to its start size once, the first time a hardclean leaves it no locked letter at all
      * (attentionAfterUnlock). */
     public static final boolean INCREMENTAL_FILL_ENABLED = true;
-    public static final int INCREMENTAL_FILL_START_SIZE = 6;
-    public static final int INCREMENTAL_FILL_COL_STEP = 4;
-    public static final int INCREMENTAL_FILL_ROW_STEP = 4;
+    public static final int INCREMENTAL_FILL_START_SIZE = 4;
+    public static final int INCREMENTAL_FILL_COL_STEP = 2;
+    public static final int INCREMENTAL_FILL_ROW_STEP = 2;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 100;
     // Of that window, re-sorted by frequency in the freq wordlist, the most frequent words the draw is made among.

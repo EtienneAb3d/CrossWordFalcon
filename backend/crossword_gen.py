@@ -2668,9 +2668,9 @@ MAX_SAME_WORD_PLACEMENTS = 1000
 # (`Filler._attention_after_unlock`). `generate_grid` enables it on every
 # attempt (`try_fill(incremental_fill=True)`).
 INCREMENTAL_FILL_ENABLED = True
-INCREMENTAL_FILL_START_SIZE = 6
-INCREMENTAL_FILL_COL_STEP = 4
-INCREMENTAL_FILL_ROW_STEP = 4
+INCREMENTAL_FILL_START_SIZE = 4
+INCREMENTAL_FILL_COL_STEP = 2
+INCREMENTAL_FILL_ROW_STEP = 2
 
 # Check frequency (in checks elapsed) for the "another
 # attempt of the same palier has already finished" signal (see

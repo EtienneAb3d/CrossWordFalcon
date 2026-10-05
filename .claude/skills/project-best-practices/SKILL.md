@@ -1314,10 +1314,10 @@ the current defaults/behavior to know before touching this code.
 - **Incremental fill on every palier** (`INCREMENTAL_FILL_ENABLED`, on
   "pour le moment", in the user's words; Java mirror in `Filler`): the
   user's rule — limit the slots a placement may choose to an "attention
-  zone" starting at (0,0), 6x6 first, fill until nothing more can be
+  zone" starting at (0,0), 4x4 first, fill until nothing more can be
   placed within it, then widen it; the zone combines two rectangles, one
-  extending horizontally 4 columns at a time and one extending vertically
-  4 rows at a time, each turning to the other direction once it reaches
+  extending horizontally 2 columns at a time and one extending vertically
+  2 rows at a time, each turning to the other direction once it reaches
   the opposite edge, until the zone is the whole grid;
   applied at every palier ("à toutes les étapes"), to resumed and freshly
   created grids alike. From palier 2 on, when every locked cell of an
@@ -1335,12 +1335,12 @@ the current defaults/behavior to know before touching this code.
   all-rejected slot still backtracks as usual, and the descent cap can
   still end the node first; the zone size is a recursion parameter,
   restored on unwinding like `released`, and every root (`solve()`,
-  early-hardclean restarts included) starts again at 6x6; "from palier 2
+  early-hardclean restarts included) starts again at 4x4; "from palier 2
   on" is implemented as "the attempt started with locked letters" (also
   true of "Continuer"; never true of "Finir la grille/la zone", whose
   permanent locks are never cleared); the reset happens after the
-  repeated-word hardclean (its fresh node starts at 6) and is merely used
-  up by an early hardclean (whose root starts at 6 anyway); "once per
+  repeated-word hardclean (its fresh node starts at 4) and is merely used
+  up by an early hardclean (whose root starts at 4 anyway); "once per
   grid" means once per attempt.
 - **The last-resort `allow_breaking` stage is gated globally, not per
   node.** `Filler.solve` runs a strict pass from the root first; only if
