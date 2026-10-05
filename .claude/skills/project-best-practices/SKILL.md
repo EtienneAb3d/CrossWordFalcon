@@ -1288,7 +1288,7 @@ the current defaults/behavior to know before touching this code.
   skipped its other candidates, `Filler._last_jumped`) may make only one
   more descent — the user's rule: the cap is only reached when every
   failure came back through ordinary backtracking.
-- **Each `Filler._backtrack` node places `WORDS_PER_NODE` (3) words at
+- **Each `Filler._backtrack` node places `WORDS_PER_NODE` (5) words at
   once and takes them back off together** (`Filler._descend_group`, Java
   `descendGroup`) — the user's rule: "chaque noeud pose N mots en une seule
   fois (N=3 pour le moment) en privilégiant les cases candidates

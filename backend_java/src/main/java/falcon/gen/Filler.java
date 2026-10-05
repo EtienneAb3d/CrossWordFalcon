@@ -88,7 +88,7 @@ public final class Filler {
     // WORDS_PER_NODE - 1 more at once (descendGroup), on the slots of that choice's selection window first, then
     // on the node's other selectable slots; a failure below takes them all back off together. <= 1 places a
     // single word per node.
-    public static final int WORDS_PER_NODE = 3;
+    public static final int WORDS_PER_NODE = 5;
     public static final int MAX_EXCLUDED_SLOTS = 3;
     public static final boolean ALTERNATE_DIRECTION_ENABLED = false;
     // Level 4 of the slot-selection cascade (restrict to slots already

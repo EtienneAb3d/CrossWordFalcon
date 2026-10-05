@@ -745,7 +745,7 @@ La recherche est une fonction récursive, un emplacement à la fois
    - sinon le nœud **complète son groupe** (point 4 bis), puis le
      programme s'appelle récursivement ; un succès remonte tel quel, un
      échec fait retirer le groupe entier et essayer le candidat suivant.
-4 bis. **Un nœud pose `WORDS_PER_NODE` (3) mots d'un coup**
+4 bis. **Un nœud pose `WORDS_PER_NODE` (5) mots d'un coup**
    (`Filler._descend_group`, `Filler._extra_group_words`). Une fois son
    mot accepté, le nœud pose jusqu'à 2 autres mots avant de descendre :
    chacun sur un emplacement encore ouvert de la **fenêtre géométrique**

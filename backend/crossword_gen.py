@@ -2999,7 +2999,7 @@ MAX_BACKGHOSTS_PER_DESCENT = 10
 # node's other selectable slots — and a failure below takes them all back
 # off together. Each word tried for them costs one check, like any
 # candidate. `<= 1` places a single word per node.
-WORDS_PER_NODE = 3
+WORDS_PER_NODE = 5
 
 # Maximum number of "emplacements écartés" `Filler._impossible_this_attempt`
 # holds at once: only the most recently added ones are kept, the oldest
