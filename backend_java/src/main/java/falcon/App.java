@@ -117,6 +117,43 @@ public final class App {
         }
     }
 
+    /** Optional dedicated LLM for writing definitions (CLUE_LLM_*, see backend/app.py's definition_clue_generator). */
+    static final double DEFAULT_CLUE_LLM_BACKUP_S = 300.0;
+    static final Clues DEFINITION_CLUE_GENERATOR;
+    static final Clues DEFINITION_DEFINE_GENERATOR;
+
+    static {
+        String url = Py.strip(Env.get("CLUE_LLM_BASE_URL", ""));
+        if (!url.isEmpty()) {
+            String model = Py.strip(Env.get("CLUE_LLM_MODEL", ""));
+            if (model.isEmpty()) model = CLUE_GENERATOR.model;
+            String key = Py.strip(Env.get("CLUE_LLM_API_KEY", ""));
+            if (key.isEmpty()) key = CLUE_GENERATOR.apiKey;
+            String api = Py.strip(Env.get("CLUE_LLM_API", "")).toLowerCase(java.util.Locale.ROOT);
+            String effort = Py.strip(Env.get("CLUE_LLM_EFFORT", ""));
+            String fallbacks = Py.strip(Env.get("CLUE_LLM_FALLBACKS", ""));
+            double backupS = DEFAULT_CLUE_LLM_BACKUP_S;
+            String rawBackup = Py.strip(Env.get("CLUE_LLM_BACKUP_SECONDS", ""));
+            if (!rawBackup.isEmpty()) {
+                try {
+                    backupS = Double.parseDouble(rawBackup);
+                } catch (NumberFormatException e) {
+                    backupS = DEFAULT_CLUE_LLM_BACKUP_S;
+                }
+            }
+            Clues.BackupWindow window = new Clues.BackupWindow(backupS);
+            DEFINITION_CLUE_GENERATOR = new Clues(url, model, key, api, effort, fallbacks);
+            DEFINITION_CLUE_GENERATOR.setBackup(CLUE_GENERATOR, window);
+            DEFINITION_DEFINE_GENERATOR = new Clues(url, model, key, api, effort, fallbacks);
+            DEFINITION_DEFINE_GENERATOR.setBackup(INTERACTIVE_CLUE_GENERATOR, window);
+            Log.info("Dedicated LLM for definitions: api=%s base_url=%s model=%s (local backup for %.0fs on failure)",
+                    DEFINITION_CLUE_GENERATOR.api, url, model, backupS);
+        } else {
+            DEFINITION_CLUE_GENERATOR = CLUE_GENERATOR;
+            DEFINITION_DEFINE_GENERATOR = INTERACTIVE_CLUE_GENERATOR;
+        }
+    }
+
     // ================================================================== state
 
     static final LinkedHashMap<String, Job> JOBS = new LinkedHashMap<>();
@@ -991,7 +1028,7 @@ public final class App {
                     long cluesStart = System.nanoTime();
                     try {
                         final int before = accumulated.size();
-                        Map<String, String> newClues = CLUE_GENERATOR.generate(remaining, req.difficulty, req.language,
+                        Map<String, String> newClues = DEFINITION_CLUE_GENERATOR.generate(remaining, req.difficulty, req.language,
                                 Clues.DEFAULT_TIMEOUT, (current, total, answer, clue) -> progress.on("clues", Json.obj(
                                         "current", before + current, "total", totalForClues, "new_clue", clue != null
                                                 ? Json.obj("answer", answer, "accented", Json.str(wordsByAnswer.get(answer), "accented", answer), "clue", clue)
@@ -1438,7 +1475,7 @@ public final class App {
                     long start = System.nanoTime();
                     try {
                         final int before = accumulated.size();
-                        Map<String, String> nc = CLUE_GENERATOR.generate(remaining, difficulty, language, Clues.DEFAULT_TIMEOUT,
+                        Map<String, String> nc = DEFINITION_CLUE_GENERATOR.generate(remaining, difficulty, language, Clues.DEFAULT_TIMEOUT,
                                 (current, total, answer, clue) -> progress.on("clues", Json.obj("current", before + current,
                                         "total", words.size(), "new_clue", clue != null ? Json.obj("answer", answer, "accented",
                                                 Json.str(wordsByAnswer.get(answer), "accented", answer), "clue", clue) : null)),
@@ -1745,7 +1782,7 @@ public final class App {
             if (text.isEmpty()) throw http(400, "expression vide");
             String theme = Py.strip(r.q("theme", ""));
             try {
-                List<String> defs = INTERACTIVE_CLUE_GENERATOR.generateDefinitions(text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT, 90.0,
+                List<String> defs = DEFINITION_DEFINE_GENERATOR.generateDefinitions(text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT, 90.0,
                         theme.isEmpty() ? null : theme);
                 return Json.obj("query", text, "lang", lang, "definitions", defs);
             } catch (Clues.ClueGenerationError e) {

@@ -49,13 +49,17 @@ env.sh at the project root):
   - LLM_API_KEY  : bearer token (default "EMPTY" — llama.cpp ignores it
     unless configured to require one)
 This lets the same code target a local llama.cpp server or a cloud API
-(e.g. Mistral) just by changing env.sh, with no code change.
+(e.g. Mistral) just by changing env.sh, with no code change. The
+CLUE_LLM_* variables (read by backend/app.py) route definition writing to
+a separate endpoint, OpenAI-compatible or Anthropic's Messages API.
 """
 import json
 import logging
 import os
 import random
 import re
+import threading
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -82,6 +86,39 @@ logger = logging.getLogger("crosswordfalcon.clues")
 DEFAULT_LLM_BASE_URL = "http://127.0.0.1:3002/v1/chat/completions"
 DEFAULT_LLM_MODEL = "Qwen/Qwen3.5-9B"
 DEFAULT_LLM_API_KEY = "EMPTY"
+
+# Wire protocol of an LLMClueGenerator's endpoint: an OpenAI-compatible
+# chat-completions URL (every local server and Mistral), or Anthropic's own
+# Messages API (`CLUE_LLM_API=anthropic`, see backend/app.py's
+# `definition_clue_generator`). The Messages API takes no temperature on
+# the current Claude models (a sampling parameter is a 400 there) and
+# counts adaptive thinking against max_tokens, hence a floor on the latter;
+# billing follows the tokens actually produced, not that cap.
+LLM_API_OPENAI = "openai"
+LLM_API_ANTHROPIC = "anthropic"
+ANTHROPIC_API_VERSION = "2023-06-01"
+ANTHROPIC_MIN_MAX_TOKENS = 16000
+ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+class LLMBackupWindow:
+    """Shared "use the backup LLM until" deadline (see LLMClueGenerator.
+    set_backup): opened for `duration_s` seconds by any failed call of an
+    instance that has a backup, shared by every instance given the same
+    window so one failure switches them all."""
+
+    def __init__(self, duration_s):
+        self.duration_s = float(duration_s)
+        self._until = 0.0
+        self._lock = threading.Lock()
+
+    def active(self):
+        with self._lock:
+            return time.monotonic() < self._until
+
+    def open(self):
+        with self._lock:
+            self._until = time.monotonic() + self.duration_s
 # Generous relative to a non-reasoning model's ~2s/word (Qwen3/Qwen3.5 with
 # thinking disabled): kept high enough to also cover DeepSeek-R1-Distill (a
 # supported alternative, see env.sh), which reasons through a `<think>` block
@@ -1115,10 +1152,98 @@ class LLMClueGenerator:
     per grid.
     """
 
-    def __init__(self, base_url=None, model=None, api_key=None):
+    def __init__(self, base_url=None, model=None, api_key=None, api=None, effort=None, fallbacks=None):
         self.base_url = base_url or os.environ.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL)
         self.model = model or os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL)
         self.api_key = api_key or os.environ.get("LLM_API_KEY", DEFAULT_LLM_API_KEY)
+        # Anthropic Messages API only (see LLM_API_ANTHROPIC): `effort` is
+        # sent as output_config.effort, `fallbacks` as the server-side
+        # refusal-fallback mode; each is omitted when empty.
+        self.api = api or LLM_API_OPENAI
+        self.effort = effort or None
+        self.fallbacks = fallbacks or None
+        self.backup = None
+        self.backup_window = None
+
+    def set_backup(self, backup, window):
+        """Any failure of this instance's own endpoint (HTTP error, usage
+        limit, unreadable answer, refusal) opens `window`; while it is
+        open every call goes straight to `backup`, another LLMClueGenerator
+        (e.g. the local LLM), and the first call after it closes tries
+        this endpoint again."""
+        self.backup = backup
+        self.backup_window = window
+
+    def _chat(self, system_prompt, user_message, temperature, max_tokens, timeout):
+        """One LLM call (system + user message); returns the raw text of
+        the answer. Raises httpx.HTTPError on a transport or HTTP failure."""
+        if self.backup is None:
+            return self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout)
+        if not self.backup_window.active():
+            try:
+                content = self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout,
+                                         refusal_is_error=True)
+                return content
+            except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as e:
+                self.backup_window.open()
+                logger.warning(
+                    "LLM call failed (%s, model=%r): %s — using the backup LLM (%s, model=%r) for %.0fs",
+                    self.base_url, self.model, e, self.backup.base_url, self.backup.model,
+                    self.backup_window.duration_s,
+                )
+        return self.backup._chat(system_prompt, user_message, temperature, max_tokens, timeout)
+
+    def _chat_own(self, system_prompt, user_message, temperature, max_tokens, timeout, refusal_is_error=False):
+        """`_chat` against this instance's own endpoint only."""
+        if self.api == LLM_API_ANTHROPIC:
+            headers = {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_API_VERSION}
+            body = {
+                "model": self.model,
+                "max_tokens": max(max_tokens, ANTHROPIC_MIN_MAX_TOKENS),
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_message}],
+                "cache_control": {"type": "ephemeral"},
+            }
+            if self.effort:
+                body["output_config"] = {"effort": self.effort}
+            if self.fallbacks:
+                headers["anthropic-beta"] = ANTHROPIC_FALLBACK_BETA
+                body["fallbacks"] = self.fallbacks
+            response = httpx.post(self.base_url, headers=headers, json=body, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("stop_reason") == "refusal":
+                if refusal_is_error:
+                    raise ValueError(f"refusal: {data.get('stop_details')!r}")
+                logger.warning("LLM refusal (model=%r): %r", self.model, data.get("stop_details"))
+                return ""
+            return "".join(
+                block.get("text", "") for block in data.get("content") or [] if block.get("type") == "text"
+            )
+        response = httpx.post(
+            self.base_url,
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_message},
+                ],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                # A per-request reinforcement of the same intent as
+                # LLAMA_CHAT_TEMPLATE_KWARGS/SGLANG_CHAT_TEMPLATE_KWARGS's
+                # own enable_thinking:false (run_llm.sh/run_sglang.sh) —
+                # ignored by a server that doesn't recognize the field
+                # (llama_cpp.server's request schema doesn't forbid extra
+                # fields), and the one value that actually disables
+                # thinking for a Qwen3 chat template on SGLang.
+                "reasoning_effort": "none",
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return response.json()["choices"][0]["message"]["content"]
 
     def generate(self, word_entries, difficulty, language="fr", timeout=DEFAULT_TIMEOUT,
                  on_progress=None, cancel_event=None, should_pause=None,
@@ -1557,47 +1682,12 @@ class LLMClueGenerator:
                 + f"\n{_TITLE_COUNT} titles, one per line:"
             )
             try:
-                response = httpx.post(
-                    self.base_url,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_message},
-                        ],
-                        # Deliberately higher than the shared TEMPERATURE
-                        # (0.4, tuned for clue accuracy): a title is
-                        # creative, not factual, and the small model was
-                        # collapsing to one constant output ("L'horizon
-                        # salé") for every grid. More randomness here makes
-                        # the title actually track the grid words — and
-                        # also makes a retry likely to produce something
-                        # different from the attempt that just failed.
-                        "temperature": 0.9,
-                        # Room for _TITLE_COUNT short lines (reasoning
-                        # itself is disabled by reasoning_effort:none, so
-                        # this is essentially just the answer budget).
-                        "max_tokens": REASONING_TOKEN_BUDGET + 60,
-                        # A per-request reinforcement of the same intent as
-                        # LLAMA_CHAT_TEMPLATE_KWARGS/SGLANG_CHAT_TEMPLATE_KWARGS's
-                        # own enable_thinking:false (run_llm.sh/run_sglang.sh) —
-                        # harmless for a server that doesn't recognize this
-                        # field at all (verified live for llama_cpp.server:
-                        # its own request schema has no `model_config =
-                        # {"extra": "forbid"}`, so Pydantic's default
-                        # behavior silently ignores it), but a real,
-                        # request-level "none" for a server that does —
-                        # confirmed live earlier in this project's own
-                        # SGLang investigation: SGLang accepts this exact
-                        # field and only "none" (not "low") actually
-                        # disables thinking for a Qwen3 chat template.
-                        "reasoning_effort": "none",
-                    },
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                # Higher than the shared TEMPERATURE (0.4, tuned for clue
+                # accuracy): a title is creative, and the small local model
+                # collapsed to one constant title for every grid without it;
+                # it also makes a retry likely to differ. Room for
+                # _TITLE_COUNT short lines.
+                content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 60, timeout)
             except httpx.HTTPError as e:
                 logger.warning(
                     "title generation attempt %d/%d failed (%s, model=%r): %s",
@@ -1738,33 +1828,9 @@ class LLMClueGenerator:
                 + f"\n{count} titles, one per line:"
             )
             try:
-                response = httpx.post(
-                    self.base_url,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_message},
-                        ],
-                        # See generate_title()'s own identical field for
-                        # why this is deliberately higher than the shared
-                        # TEMPERATURE.
-                        "temperature": 0.9,
-                        # Room for `count` short lines (reasoning itself
-                        # is disabled by reasoning_effort:none) — scales
-                        # with count the same way generate_title()'s own
-                        # fixed `+ 60` scales with _TITLE_COUNT (3): 20
-                        # tokens of headroom per requested line.
-                        "max_tokens": REASONING_TOKEN_BUDGET + 20 * count,
-                        # See generate_title()'s own identical field for
-                        # the full reasoning.
-                        "reasoning_effort": "none",
-                    },
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                # Same temperature as generate_title(); 20 tokens of
+                # headroom per requested line.
+                content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout)
             except httpx.HTTPError as e:
                 logger.warning(
                     "title proposals attempt %d/%d failed (%s, model=%r): %s",
@@ -2040,25 +2106,7 @@ class LLMClueGenerator:
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
             try:
-                response = httpx.post(
-                    self.base_url,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_message},
-                        ],
-                        "temperature": temperature,
-                        # ~30 words of answer plus headroom; reasoning itself
-                        # is disabled by reasoning_effort:none.
-                        "max_tokens": REASONING_TOKEN_BUDGET + 150,
-                        "reasoning_effort": "none",
-                    },
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 150, timeout)
             except httpx.HTTPError as e:
                 logger.warning(
                     "theme description failed (%s, model=%r): %s",
@@ -2147,23 +2195,7 @@ class LLMClueGenerator:
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
             try:
-                response = httpx.post(
-                    self.base_url,
-                    headers={"Authorization": f"Bearer {self.api_key}"},
-                    json={
-                        "model": self.model,
-                        "messages": [
-                            {"role": "system", "content": system_prompt},
-                            {"role": "user", "content": user_message},
-                        ],
-                        "temperature": temperature,
-                        "max_tokens": REASONING_TOKEN_BUDGET + 40,
-                        "reasoning_effort": "none",
-                    },
-                    timeout=timeout,
-                )
-                response.raise_for_status()
-                content = response.json()["choices"][0]["message"]["content"]
+                content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 40, timeout)
             except httpx.HTTPError as e:
                 logger.warning(
                     "random theme generation attempt %d/%d failed (%s, model=%r): %s",
@@ -3053,25 +3085,7 @@ class LLMClueGenerator:
     def _call(self, answer, accented, round_number, system_prompt, user_message, max_tokens,
              timeout, total_rounds=3):
         try:
-            response = httpx.post(
-                self.base_url,
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_message},
-                    ],
-                    "temperature": TEMPERATURE,
-                    "max_tokens": max_tokens,
-                    # See the identical field on generate_title's own call
-                    # above for why this is here and why it's safe for a
-                    # server that doesn't recognize it.
-                    "reasoning_effort": "none",
-                },
-                timeout=timeout,
-            )
-            response.raise_for_status()
+            content = self._chat(system_prompt, user_message, TEMPERATURE, max_tokens, timeout)
         except httpx.HTTPError as e:
             raise ClueGenerationError(
                 f"LLM call failed ({self.base_url}, model={self.model!r}): {e}. "
@@ -3079,7 +3093,6 @@ class LLMClueGenerator:
                 "sure it's running (./run_llm.sh); otherwise check "
                 "LLM_BASE_URL/LLM_MODEL/LLM_API_KEY in env.sh."
             ) from e
-        content = response.json()["choices"][0]["message"]["content"]
         # Logged here — the exact, unmodified text the LLM returned, before
         # _strip_reasoning touches it and before any of generate()'s own
         # parsing/filtering runs — so a deployed instance's log always has

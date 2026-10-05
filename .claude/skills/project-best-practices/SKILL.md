@@ -682,7 +682,8 @@ project's engineering language.
   (`_run_recompute_job`); the **interactive** instance serves everything
   else that calls the LLM — Interactive/Edition mode's own theme-glossary
   build and "Proposer un titre", the ChatBot (`POST /api/chat`), and the
-  Dictionary panel's "Définir"/"Thématique" plus the Paraphraseur ("
+  Dictionary panel's "Définir" (unless `CLUE_LLM_BASE_URL` routes it
+  elsewhere, see "LLM clue generation")/"Thématique" plus the Paraphraseur ("
   Synonymes" makes no LLM call at all, pure Qdrant, so it's unaffected
   either way). `_build_theme_glossary` (`backend/app.py`) takes a
   `clue_gen` parameter (defaulting to the primary `clue_generator`) so
@@ -2188,6 +2189,23 @@ the current defaults/behavior to know before touching this code.
   prefix: one variable word near the top recomputes the whole ~20k-token
   documentation on SGLang's slow GGUF prefill (~300 tokens/s on this
   machine). Keep new variable text after the fixed head.
+- **Definition writing can be routed to its own LLM** (`CLUE_LLM_*` in
+  `env.sh`/`env_default.sh`, `backend/app.py`'s `definition_clue_generator`,
+  Java `App.DEFINITION_CLUE_GENERATOR`): the grid words' clues and the
+  `GET /api/dictionary/define` candidates go to `CLUE_LLM_BASE_URL` when it
+  is set, every other LLM call keeps the dual-GPU routing below. Besides
+  OpenAI-compatible chat completions, `LLMClueGenerator` speaks Anthropic's
+  Messages API (`CLUE_LLM_API=anthropic`), in raw HTTP like every other
+  external service of this project (no SDK; the Java back end has Jackson
+  as its only dependency). Both checkouts' `env.sh` route definitions to
+  Mistral Small (`mistral-small-latest`, OpenAI-compatible, `https://api.
+  mistral.ai/v1/chat/completions`), active only once `MISTRAL_API_KEY`/
+  `CLUE_LLM_API_KEY` is set; Claude Haiku (`claude-haiku-4-5`, no
+  `CLUE_LLM_EFFORT`/`CLUE_LLM_FALLBACKS`, which Haiku 4.5 rejects) is the
+  documented alternative there. The user's rule: whenever the `CLUE_LLM`
+  endpoint fails (usage limit reached or any other error), the local LLM
+  takes over for 5 minutes (`CLUE_LLM_BACKUP_SECONDS`, one window shared
+  by clues and "Définir"), then that endpoint is tried again.
 - `LLMClueGenerator` owns all LLM handling (endpoint config, prompt text,
   the HTTP call, response parsing); `backend/app.py` builds one instance at
   module scope. Talks to any OpenAI-compatible chat-completions endpoint —

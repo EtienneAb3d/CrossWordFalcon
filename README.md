@@ -94,7 +94,13 @@ instead of the default ones just above them), then restart `run_llm.sh`.
 If you'd rather use a cloud service instead of running a model locally,
 open `env.sh` at the project root and follow the commented instructions
 there to switch to a cloud provider (e.g. Mistral, which offers a free API
-key at [console.mistral.ai](https://console.mistral.ai/)). Either way, never
+key at [console.mistral.ai](https://console.mistral.ai/)). You can also
+keep the local model for everything else and have only the clues and the
+"Define" proposals written by another model — for example Claude, with an
+API key from [platform.claude.com](https://platform.claude.com/): the
+`CLUE_LLM_*` lines of `env.sh` explain how. If that service fails (usage
+limit reached, network problem...), the local model takes over for five
+minutes before the app tries it again. Either way, never
 share `env.sh` or its contents — once you've put a real key in it, it holds
 a personal secret, like a password.
 

@@ -389,6 +389,26 @@ export LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 # export LLM_MODEL="mistral-small-latest"
 # export LLM_API_KEY="your-mistral-api-key-here"
 
+# Definition writing routed to a dedicated LLM (backend/app.py's
+# definition_clue_generator): the grid words' clues (automatic generation,
+# "Recalculer") and the "Définir"/"Proposer"/"Définitions" candidates.
+# Every other LLM call keeps the routing above. CLUE_LLM_BASE_URL enables
+# it (unset: definitions use the LLM_* endpoints above); CLUE_LLM_API is
+# "openai" (chat completions, the default) or "anthropic" (Messages API);
+# CLUE_LLM_MODEL/CLUE_LLM_API_KEY fall back to LLM_MODEL/LLM_API_KEY;
+# CLUE_LLM_EFFORT (low/medium/high/xhigh/max) and CLUE_LLM_FALLBACKS
+# ("default": a refused request is retried server-side on another Claude
+# model) apply to "anthropic" only, and neither is accepted by Claude
+# Haiku 4.5. Any failure of that endpoint (usage limit reached, HTTP or
+# network error...) sends definitions to the LLM_* endpoints above for
+# CLUE_LLM_BACKUP_SECONDS (default 300), then it is tried again. To route
+# definitions to Claude Haiku (API key from platform.claude.com), uncomment:
+# export CLUE_LLM_API="anthropic"
+# export CLUE_LLM_BASE_URL="https://api.anthropic.com/v1/messages"
+# export CLUE_LLM_MODEL="claude-haiku-4-5"
+# export CLUE_LLM_API_KEY="your-anthropic-api-key-here"
+# export CLUE_LLM_BACKUP_SECONDS="300"
+
 # Alternative engine: SGLang instead of llama.cpp (run_llm.sh's own
 # default above). Faster than llama.cpp for the same model, but needs a
 # separate one-time install (its own Python 3.12 venv, `.venv-sglang/`

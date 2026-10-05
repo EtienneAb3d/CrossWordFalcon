@@ -42,7 +42,7 @@ from pydantic import BaseModel, Field
 
 from .chatbot import ChatBot, ChatError
 from .clues import (
-    ClueGenerationError, LLMClueGenerator, TITLE_PROPOSALS_COUNT,
+    ClueGenerationError, LLMBackupWindow, LLMClueGenerator, TITLE_PROPOSALS_COUNT,
     _LANGUAGE_STOPWORDS_RAW,
 )
 from .dictionary_lookup import search as dictionary_search_impl
@@ -128,6 +128,46 @@ if _interactive_llm_base_url and _interactive_llm_base_url != clue_generator.bas
 else:
     interactive_clue_generator = clue_generator
     interactive_chatbot = chatbot
+
+# Optional dedicated LLM for writing definitions: the grid words' clues
+# (_run_generate_job, _run_recompute_job) and the "Définir"/"Proposer"/
+# "Définitions" candidates (GET /api/dictionary/define). CLUE_LLM_BASE_URL
+# enables it; CLUE_LLM_API is "openai" (chat completions, the default) or
+# "anthropic" (Messages API, CLUE_LLM_EFFORT/CLUE_LLM_FALLBACKS apply).
+# Any failure of that endpoint (usage limit, HTTP or network error...)
+# sends every definition call to the LLM it replaces — the primary
+# instance for grid clues, the interactive one for "Définir" — for
+# CLUE_LLM_BACKUP_SECONDS (DEFAULT_CLUE_LLM_BACKUP_S), one window shared by
+# both. Unset, definitions follow the generation/interactive routing above.
+DEFAULT_CLUE_LLM_BACKUP_S = 300.0
+_clue_llm_base_url = os.environ.get("CLUE_LLM_BASE_URL", "").strip()
+if _clue_llm_base_url:
+    def _definition_generator(backup, window):
+        gen = LLMClueGenerator(
+            base_url=_clue_llm_base_url,
+            model=os.environ.get("CLUE_LLM_MODEL", "").strip() or clue_generator.model,
+            api_key=os.environ.get("CLUE_LLM_API_KEY", "").strip() or clue_generator.api_key,
+            api=os.environ.get("CLUE_LLM_API", "").strip().lower() or None,
+            effort=os.environ.get("CLUE_LLM_EFFORT", "").strip() or None,
+            fallbacks=os.environ.get("CLUE_LLM_FALLBACKS", "").strip() or None,
+        )
+        gen.set_backup(backup, window)
+        return gen
+
+    try:
+        _clue_llm_backup_s = float(os.environ.get("CLUE_LLM_BACKUP_SECONDS", "").strip() or DEFAULT_CLUE_LLM_BACKUP_S)
+    except ValueError:
+        _clue_llm_backup_s = DEFAULT_CLUE_LLM_BACKUP_S
+    _clue_llm_backup_window = LLMBackupWindow(_clue_llm_backup_s)
+    definition_clue_generator = _definition_generator(clue_generator, _clue_llm_backup_window)
+    definition_define_generator = _definition_generator(interactive_clue_generator, _clue_llm_backup_window)
+    logger.info(
+        "Dedicated LLM for definitions: api=%s base_url=%s model=%s (local backup for %.0fs on failure)",
+        definition_clue_generator.api, _clue_llm_base_url, definition_clue_generator.model, _clue_llm_backup_s,
+    )
+else:
+    definition_clue_generator = clue_generator
+    definition_define_generator = interactive_clue_generator
 
 # "Thématique" button in the Dictionary panel (see frontend/static/
 # script.js and GET /api/similar_words): mirrors themed-grid glossary
@@ -2191,7 +2231,7 @@ async def dictionary_define(q: str, lang: str = "fr", theme: str = ""):
         raise HTTPException(status_code=400, detail="expression vide")
     try:
         definitions = await asyncio.to_thread(
-            interactive_clue_generator.generate_definitions, text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT,
+            definition_define_generator.generate_definitions, text, lang, DEFINE_DIFFICULTY, DEFINE_COUNT,
             timeout=90.0, theme_description=theme.strip() or None,
         )
     except ClueGenerationError as exc:
@@ -4368,7 +4408,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 clues_start = time.monotonic()
                 try:
                     new_clues = await asyncio.to_thread(
-                        clue_generator.generate,
+                        definition_clue_generator.generate,
                         remaining_entries,
                         req.difficulty,
                         req.language,
@@ -4940,7 +4980,7 @@ async def _run_recompute_job(job_id, grid_id):
                 clues_start = time.monotonic()
                 try:
                     new_clues = await asyncio.to_thread(
-                        clue_generator.generate,
+                        definition_clue_generator.generate,
                         remaining_entries,
                         difficulty,
                         language,

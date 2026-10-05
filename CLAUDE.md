@@ -2021,7 +2021,30 @@ required.
 Owns all LLM interaction for clue/title/definition/paraphrase writing.
 Talks to any OpenAI-compatible chat-completions endpoint (`LLM_BASE_URL`/
 `LLM_MODEL`/`LLM_API_KEY`, local llama.cpp/SGLang by default, a cloud API
-via `env.sh` with no code change). One HTTP call per word
+via `env.sh` with no code change). Every call goes through `_chat`
+(Java `Clues.chat`), which also speaks Anthropic's Messages API when the
+instance is built with `api="anthropic"` (`LLM_API_ANTHROPIC`: `x-api-key`
++ `anthropic-version` headers, no temperature, `max_tokens` floored at
+`ANTHROPIC_MIN_MAX_TOKENS` (16000, adaptive thinking counts against it),
+top-level `cache_control`, optional `output_config.effort` and server-side
+`fallbacks` with the `ANTHROPIC_FALLBACK_BETA` header, the text blocks of
+the answer joined, a `refusal` read as an empty answer). `backend/app.py`
+builds `definition_clue_generator` from `CLUE_LLM_BASE_URL`/`CLUE_LLM_
+MODEL`/`CLUE_LLM_API_KEY`/`CLUE_LLM_API` (`openai` default, or
+`anthropic`)/`CLUE_LLM_EFFORT`/`CLUE_LLM_FALLBACKS` (model and key falling
+back to the primary instance's) when `CLUE_LLM_BASE_URL` is set; it writes
+the grid words' clues (`_run_generate_job`, `_run_recompute_job`) and,
+as `definition_define_generator`, the `GET /api/dictionary/define`
+candidates. Each has a backup (`set_backup`, Java `Clues.setBackup`):
+the primary instance for the clues, the interactive one for "Définir";
+any failure of the `CLUE_LLM` endpoint (HTTP error such as a 429 usage
+limit, network error, unreadable answer, refusal) opens one shared
+`LLMBackupWindow` (Java `Clues.BackupWindow`) of `CLUE_LLM_BACKUP_
+SECONDS` (`DEFAULT_CLUE_LLM_BACKUP_S`, 300 s), during which every call of
+both goes straight to its backup; the first call after it tries the
+`CLUE_LLM` endpoint again. Unset, those calls keep the primary/interactive
+routing (Java `App.DEFINITION_CLUE_GENERATOR`/`DEFINITION_DEFINE_
+GENERATOR`). One HTTP call per word
 (`_BATCH_SIZE=1`, more reliable on a small local model than batching),
 asking for 4 lines: an `A=` grammatical-analysis line (part of speech +
 full inflection — forces the model to reason about agreement before

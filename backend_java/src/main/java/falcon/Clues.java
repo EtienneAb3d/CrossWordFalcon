@@ -42,6 +42,12 @@ public final class Clues {
     public static final String DEFAULT_LLM_BASE_URL = "http://127.0.0.1:3002/v1/chat/completions";
     public static final String DEFAULT_LLM_MODEL = "Qwen/Qwen3.5-9B";
     public static final String DEFAULT_LLM_API_KEY = "EMPTY";
+    /** Wire protocol of an endpoint (see backend/clues.py, LLM_API_OPENAI/LLM_API_ANTHROPIC). */
+    public static final String LLM_API_OPENAI = "openai";
+    public static final String LLM_API_ANTHROPIC = "anthropic";
+    public static final String ANTHROPIC_API_VERSION = "2023-06-01";
+    public static final int ANTHROPIC_MIN_MAX_TOKENS = 16000;
+    public static final String ANTHROPIC_FALLBACK_BETA = "server-side-fallback-2026-07-01";
     public static final double DEFAULT_TIMEOUT = 300.0;
     public static final int REASONING_TOKEN_BUDGET = 2048;
     public static final double TEMPERATURE = 0.4;
@@ -217,12 +223,53 @@ public final class Clues {
     public final String baseUrl;
     public final String model;
     public final String apiKey;
+    /** Anthropic Messages API only: output_config.effort and server-side fallbacks (null = omitted). */
+    public final String api;
+    public final String effort;
+    public final String fallbacks;
 
     public Clues() {
         this(null, null, null);
     }
 
     public Clues(String baseUrl, String model, String apiKey) {
+        this(baseUrl, model, apiKey, null, null, null);
+    }
+
+    /** Shared "use the backup LLM until" deadline (backend/clues.py, LLMBackupWindow). */
+    public static final class BackupWindow {
+        public final double durationS;
+        private long untilNanos;
+        private boolean open;
+
+        public BackupWindow(double durationS) {
+            this.durationS = durationS;
+        }
+
+        public synchronized boolean active() {
+            return open && System.nanoTime() - untilNanos < 0;
+        }
+
+        public synchronized void open() {
+            untilNanos = System.nanoTime() + (long) (durationS * 1e9);
+            open = true;
+        }
+    }
+
+    private volatile Clues backup;
+    private volatile BackupWindow backupWindow;
+
+    /** Any failure of this instance's own endpoint opens {@code window}; while it is open every call goes to
+     *  {@code backup} (backend/clues.py, LLMClueGenerator.set_backup). */
+    public void setBackup(Clues backup, BackupWindow window) {
+        this.backup = backup;
+        this.backupWindow = window;
+    }
+
+    public Clues(String baseUrl, String model, String apiKey, String api, String effort, String fallbacks) {
+        this.api = api != null && !api.isEmpty() ? api : LLM_API_OPENAI;
+        this.effort = effort != null && !effort.isEmpty() ? effort : null;
+        this.fallbacks = fallbacks != null && !fallbacks.isEmpty() ? fallbacks : null;
         this.baseUrl = baseUrl != null && !baseUrl.isEmpty() ? baseUrl : Env.get("LLM_BASE_URL", DEFAULT_LLM_BASE_URL);
         this.model = model != null && !model.isEmpty() ? model : Env.get("LLM_MODEL", DEFAULT_LLM_MODEL);
         this.apiKey = apiKey != null && !apiKey.isEmpty() ? apiKey : Env.get("LLM_API_KEY", DEFAULT_LLM_API_KEY);
@@ -461,6 +508,24 @@ public final class Clues {
 
     /** One chat-completions call; returns the raw message content. */
     private String chat(String system, String user, double temperature, int maxTokens, double timeout) throws IOException {
+        Clues b = backup;
+        if (b == null) return chatOwn(system, user, temperature, maxTokens, timeout, false);
+        if (!backupWindow.active()) {
+            try {
+                return chatOwn(system, user, temperature, maxTokens, timeout, true);
+            } catch (IOException | RuntimeException e) {
+                backupWindow.open();
+                Log.warning("LLM call failed (%s, model=%s): %s — using the backup LLM (%s, model=%s) for %.0fs",
+                        baseUrl, Log.repr(model), e.getMessage(), b.baseUrl, Log.repr(b.model), backupWindow.durationS);
+            }
+        }
+        return b.chat(system, user, temperature, maxTokens, timeout);
+    }
+
+    /** {@link #chat} against this instance's own endpoint only. */
+    private String chatOwn(String system, String user, double temperature, int maxTokens, double timeout,
+                           boolean refusalIsError) throws IOException {
+        if (LLM_API_ANTHROPIC.equals(api)) return chatAnthropic(system, user, maxTokens, timeout, refusalIsError);
         Map<String, Object> body = Json.obj(
                 "model", model,
                 "messages", Json.list(Json.obj("role", "system", "content", system),
@@ -477,6 +542,51 @@ public final class Clues {
             Object choices = Json.get(r.json(), "choices");
             Object content = Json.get(Json.get(Json.asList(choices).get(0), "message"), "content");
             return content == null ? "" : content.toString();
+        } catch (RuntimeException e) {
+            throw new IOException("unexpected LLM response: " + (r.body().length() > 300 ? r.body().substring(0, 300) : r.body()), e);
+        }
+    }
+
+    /** Anthropic Messages API call (no temperature: a sampling parameter is a 400 on current Claude models). */
+    private String chatAnthropic(String system, String user, int maxTokens, double timeout, boolean refusalIsError)
+            throws IOException {
+        Map<String, Object> body = Json.obj(
+                "model", model,
+                "max_tokens", Math.max(maxTokens, ANTHROPIC_MIN_MAX_TOKENS),
+                "system", system,
+                "messages", Json.list(Json.obj("role", "user", "content", user)),
+                "cache_control", Json.obj("type", "ephemeral"));
+        Map<String, String> headers = new java.util.LinkedHashMap<>();
+        headers.put("x-api-key", apiKey);
+        headers.put("anthropic-version", ANTHROPIC_API_VERSION);
+        if (effort != null) body.put("output_config", Json.obj("effort", effort));
+        if (fallbacks != null) {
+            headers.put("anthropic-beta", ANTHROPIC_FALLBACK_BETA);
+            body.put("fallbacks", fallbacks);
+        }
+        Http.Response r = Http.postJson(baseUrl, body, headers, timeout);
+        if (r.status() >= 400) {
+            throw new IOException("Client error '" + r.status() + "' for url '" + baseUrl + "': "
+                    + (r.body().length() > 300 ? r.body().substring(0, 300) : r.body()));
+        }
+        try {
+            Object data = r.json();
+            if ("refusal".equals(Json.get(data, "stop_reason"))) {
+                if (refusalIsError) throw new IOException("refusal: " + Json.get(data, "stop_details"));
+                Log.warning("LLM refusal (model=%s): %s", Log.repr(model), Log.repr(String.valueOf(Json.get(data, "stop_details"))));
+                return "";
+            }
+            StringBuilder sb = new StringBuilder();
+            Object content = Json.get(data, "content");
+            if (content != null) {
+                for (Object block : Json.asList(content)) {
+                    if ("text".equals(Json.get(block, "type"))) {
+                        Object t = Json.get(block, "text");
+                        if (t != null) sb.append(t);
+                    }
+                }
+            }
+            return sb.toString();
         } catch (RuntimeException e) {
             throw new IOException("unexpected LLM response: " + (r.body().length() > 300 ? r.body().substring(0, 300) : r.body()), e);
         }
