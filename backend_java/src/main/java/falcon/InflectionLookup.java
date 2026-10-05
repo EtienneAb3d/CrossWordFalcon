@@ -35,16 +35,21 @@ public final class InflectionLookup {
     /** (pos_code, description) pair. */
     public record Analysis(String pos, String description) {}
 
-    private static final Map<String, Map<String, List<Analysis>>> CACHE = new ConcurrentHashMap<>();
+    /** One language's table: analyses per form, and the lemmas each form is an inflection of. */
+    private record Table(Map<String, List<Analysis>> analyses, Map<String, List<String>> lemmas) {}
 
-    private static Map<String, List<Analysis>> load(String language) {
+    private static final Map<String, Table> CACHE = new ConcurrentHashMap<>();
+
+    private static Table load(String language) {
         return CACHE.computeIfAbsent(language, InflectionLookup::build);
     }
 
-    private static Map<String, List<Analysis>> build(String language) {
+    private static Table build(String language) {
         Map<String, List<Analysis>> index = new HashMap<>();
+        Map<String, List<String>> lemmas = new HashMap<>();
+        Table table = new Table(index, lemmas);
         Path path = DIR.resolve(language + ".jsonl");
-        if (!Files.exists(path)) return index;
+        if (!Files.exists(path)) return table;
         try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
             String line;
             while ((line = r.readLine()) != null) {
@@ -60,6 +65,7 @@ public final class InflectionLookup {
                 if (form == null || form.isEmpty()) continue;
                 form = Py.lookupKey(form);
                 List<Analysis> out = new ArrayList<>();
+                List<String> formLemmas = new ArrayList<>();
                 for (Object a : Json.listOrEmpty(rec.get("analyses"))) {
                     String pos = Json.str(a, "pos", null);
                     String tags = Json.str(a, "tags", null);
@@ -70,20 +76,28 @@ public final class InflectionLookup {
                     String text = String.join(", ", bits);
                     if (lemma != null && !lemma.isEmpty() && !Py.lookupKey(lemma).equals(form)) {
                         text += " (of \"" + lemma + "\")";
+                        if (!formLemmas.contains(lemma)) formLemmas.add(lemma);
                     }
                     Analysis pair = new Analysis(pos, text);
                     if (!out.contains(pair)) out.add(pair);
                 }
                 index.put(form, out);
+                if (!formLemmas.isEmpty()) lemmas.put(form, formLemmas);
             }
         } catch (IOException e) {
             Env.log("inflection_lookup: cannot read " + path + ": " + e.getMessage());
         }
-        return index;
+        return table;
     }
 
     /** Analyses of the exact {@code word}, or an empty list. Never throws. */
     public static List<Analysis> describeForm(String word, String language) {
-        return load(language).getOrDefault(Py.lookupKey(word), List.of());
+        return load(language).analyses().getOrDefault(Py.lookupKey(word), List.of());
+    }
+
+    /** The lemmas the table gives the exact {@code word} as an inflected form of, in file order
+     *  (backend/inflection_lookup.py, lemmas_of). */
+    public static List<String> lemmasOf(String word, String language) {
+        return load(language).lemmas().getOrDefault(Py.lookupKey(word), List.of());
     }
 }

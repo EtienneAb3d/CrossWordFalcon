@@ -204,21 +204,10 @@ _TITLE_COUNT = 3
 # call.
 _TITLE_RETRIES = 3
 
-# generate_definitions re-asks the model this many extra times when a
-# whole response yields zero usable definitions at all — observed live in
-# backend.log: the small local model sometimes phrases every one of its
-# candidates as "<word> is a ..."/"<word> est un..." (repeating the target
-# word as the sentence's own subject), which the shared containment
-# filter (_filter_candidates, rule 1) correctly rejects every single time,
-# purely by chance of that one phrasing choice — reported directly by the
-# user as "Proposer" (the interactive-mode button backed by this same
-# method) spinning and then showing no result at all. A fresh call often
-# phrases things differently; a bounded retry recovers the common case
-# instead of asking the player to click again themselves. Small — a
-# handful of extra ~seconds-long calls, not the multi-round-per-word
-# budget generate() uses for a real grid clue — and it only ever loops on
-# a genuinely empty result, so a normal call still makes exactly one.
-DEFINE_RETRIES = 2
+# Candidate definitions asked of the LLM for one grid word (one is then
+# picked at random); "Définir" asks for its own `count` through the same
+# prompt (`_build_system_prompt`/`_build_user_message`).
+CLUE_CANDIDATES = 3
 
 # generate_titles() (the "Proposer un titre" button's own method — see
 # its own docstring) asks for this many distinct candidate titles and
@@ -232,8 +221,8 @@ DEFINE_RETRIES = 2
 TITLE_PROPOSALS_COUNT = 10
 
 # How many EXTRA times generate_titles() re-asks the model when a whole
-# response yields zero usable candidates at all — same bounded-retry
-# shape as DEFINE_RETRIES right above (never _TITLE_RETRIES's own
+# response yields zero usable candidates at all — a bounded retry
+# (never _TITLE_RETRIES's own
 # always-retry-until-something-usable loop: there is no single "the"
 # title to protect the quality of here by discarding a merely-small
 # batch, so a genuinely non-empty response is already useful).
@@ -656,8 +645,8 @@ _LEADING_MARKER_RE = re.compile(
     r"^\s*(?:"
     r"[-–—*•]"
     r"|\d+\s*[.):]"
-    r"|c(?:lue|andidate)?\s*[1-3]?\s*[=:.)\-–—]"
-    r"|c(?:lue|andidate)?\s*[1-3]"
+    r"|c(?:lue|andidate)?\s*(?:[1-9]\d?)?\s*[=:.)\-–—]"
+    r"|c(?:lue|andidate)?\s*[1-9]\d?"
     r")\s*",
     re.IGNORECASE,
 )
@@ -717,7 +706,7 @@ def _strip_leading_word_label(candidate, answer, accented, canonical):
 # CHAT — a different leaked shape than _LEADING_LABEL_RE's "word - " label
 # (no punctuation separates the word from the rest, a real subject/copula
 # clause instead). Observed live in backend.log, persisting even after
-# rule 1 (_build_definitions_system_prompt / the grid-clue system prompt)
+# rule 1 (the shared system prompt, _build_system_prompt)
 # was reworded to explicitly forbid it — this project's own small local
 # model has an unusually strong prior for exactly this phrasing on some
 # words (French "chat" reproduced it in every single sampled attempt).
@@ -1178,6 +1167,39 @@ class ClueGenerationError(RuntimeError):
     """Raised when the LLM call fails or returns an unusable response."""
 
 
+def _candidates_max_tokens(count):
+    """Answer budget of one definition-writing call asking for `count`
+    candidates (plus the A= line), on top of a reasoning model's
+    `<think>` block."""
+    return REASONING_TOKEN_BUDGET + 300 + 30 * count
+
+
+def _word_entry(answer, accented, canonical, language):
+    """`(ANSWER, accented, (canonical, ...))` of one word to define, the
+    one entry every definition-writing call grounds on (`generate`,
+    `generate_definitions`): `accented` is the given natural spelling, or —
+    when none is known (missing, or just the bare grid form) — that of the
+    word's first wordlist row (`dictionary_lookup.word_forms`); the base
+    forms are the given ones, then every canonical form of the wordlist
+    rows the word spells, then every lemma the inflection table gives the
+    exact form (`inflection_lookup.lemmas_of` — "foehna" -> "foehner"),
+    without repeats, the gloss dictionary being keyed by lemma."""
+    answer = str(answer).upper()
+    rows = word_forms(accented or answer, language)
+    if (not accented or accented == answer) and rows:
+        accented = rows[0][0]
+    accented = accented or answer
+    if isinstance(canonical, str):
+        canonical = [c for c in canonical.split(";") if c]
+    lemmas = list(canonical or []) + [lemma for _row, row_lemmas in rows for lemma in row_lemmas]
+    lemmas += inflection_lookup.lemmas_of(accented, language)
+    out = []
+    for lemma in lemmas:
+        if lemma and lemma.lower() not in (c.lower() for c in out):
+            out.append(lemma)
+    return answer, accented, tuple(out or [accented.lower()])
+
+
 class LLMClueGenerator:
     """Talks to an OpenAI-compatible chat-completions endpoint to write
     crossword clues. Endpoint configuration (LLM_BASE_URL/LLM_MODEL/
@@ -1491,7 +1513,8 @@ class LLMClueGenerator:
             else:
                 answer, accented, canonical = e
                 entry_language = None
-            return (answer.upper(), accented, tuple(canonical), entry_language or language)
+            entry_language = entry_language or language
+            return (*_word_entry(answer, accented, canonical, entry_language), entry_language)
 
         entries = list({_normalize_entry(e) for e in word_entries})
         if not entries:
@@ -1500,7 +1523,7 @@ class LLMClueGenerator:
 
         clues = {}
         errors = []
-        max_tokens = REASONING_TOKEN_BUDGET + 300 + 90 * _BATCH_SIZE
+        max_tokens = _candidates_max_tokens(CLUE_CANDIDATES)
         # Built once per distinct language actually in use across this
         # call's own entries (almost always just `language` itself, the
         # single-language case unchanged from before this feature) —
@@ -1610,7 +1633,7 @@ class LLMClueGenerator:
 
     def _generate_one(self, entry, user_message, system_prompt, max_tokens,
                       timeout, language, difficulty, cancel_event, should_pause,
-                      theme_description=""):
+                      theme_description="", keep_all=False, kind="Clue generation call"):
         """One word's complete clue-generation work — up to 3 immediate
         retry attempts on the *same* word — run in its own worker thread
         by generate()'s batched-parallel loop. Returns
@@ -1624,7 +1647,12 @@ class LLMClueGenerator:
         Re-checks cancel_event/should_pause before each attempt so an
         interrupted batch stops retrying promptly — it simply returns
         whatever it has; generate() re-checks after the batch and raises
-        GenerationCancelled / GenerationPaused as appropriate."""
+        GenerationCancelled / GenerationPaused as appropriate.
+
+        `keep_all` ("Définir", `generate_definitions`): the result is the
+        list of every candidate kept by `_filter_candidates` (de-duplicated,
+        in the model's order) instead of one picked at random, with no
+        masking fallback; `kind` labels the LOG_LLM/ record."""
         answer, accented, canonical = entry
         clue = None
         errors = []
@@ -1657,13 +1685,24 @@ class LLMClueGenerator:
                         attempt + 1, answer, accented,
                     )
                 else:
-                    picked, candidate_details, maskable = self._pick_clue(
-                        candidates, answer, accented, canonical, language, attempt + 1,
-                    )
+                    if keep_all:
+                        accepted, candidate_details, maskable = self._filter_candidates(
+                            candidates, answer, accented, canonical, language, attempt + 1,
+                        )
+                        candidate_details = [
+                            (c, "kept" if verdict.startswith("accepted") else verdict)
+                            for c, verdict in candidate_details
+                        ]
+                        picked = list(dict.fromkeys(c for c, _idx in accepted)) or None
+                    else:
+                        picked, candidate_details, maskable = self._pick_clue(
+                            candidates, answer, accented, canonical, language, attempt + 1,
+                        )
                     maskable_pool.extend(maskable)
                     if picked:
                         clue = picked
-                        outcome = f"selected: {picked!r}"
+                        outcome = (f"{len(picked)}/{len(candidates)} candidate(s) kept" if keep_all
+                                   else f"selected: {picked!r}")
                     else:
                         # Each candidate's own rejection reason was already
                         # logged individually inside _pick_clue() — this is
@@ -1697,7 +1736,7 @@ class LLMClueGenerator:
                 answer, accented, language, difficulty, attempt + 1,
                 system_prompt, user_message, content, error, outcome,
                 candidate_details, success=clue is not None,
-                theme_description=theme_description,
+                theme_description=theme_description, kind=kind,
             )
             if clue is not None:
                 break
@@ -1710,7 +1749,7 @@ class LLMClueGenerator:
         # parle"). A word with genuinely zero usable candidates (LLM
         # unreachable, only too-long / wrong-language output, ...) still
         # ends up with no clue, handled downstream as before.
-        if clue is None and maskable_pool:
+        if clue is None and maskable_pool and not keep_all:
             base = random.choice(list(dict.fromkeys(maskable_pool)))
             clue = _mask_target_word(base, answer, accented, canonical)
             logger.warning(
@@ -2364,211 +2403,43 @@ class LLMClueGenerator:
 
     def generate_definitions(self, text, language="fr", difficulty="medium",
                              count=10, timeout=90.0, theme_description=None):
-        """"Définir" button in the Dictionary panel (frontend/static/
-        script.js, GET /api/dictionary/define) — also reused by the
-        "Interactif" authoring mode's own "Proposer une définition"
-        button/"Définitions" button (a specific grid word, via that same
-        endpoint) — asks the LLM for up to
-        `count` (10 by default) independent definitions of the typed
-        word or expression, one per line — reusing the same grounding
-        (`_build_user_message`: real dictionary definitions, real usage
-        examples, grammatical analysis, all keyed by `text` itself) and
-        the same content filter (`_filter_candidates`) already used for a
-        real grid word's clue, but returning every surviving candidate
-        instead of picking just one.
+        """"Définir" button in the Dictionary panel (GET /api/dictionary/
+        define), also behind Interactive mode's "Proposer une définition",
+        "Définitions" and "Recalculer": up to `count` definitions of `text`.
+        The same code as a grid word's clue (`generate`): the entry resolved
+        by `_word_entry` (natural spelling, base forms from the wordlist and
+        the inflection table), the same system prompt and user message
+        (`_build_system_prompt`/`_build_user_message` asking for `count`
+        candidates: grammatical analysis of the exact form, dictionary
+        definitions of its base forms, example sentences, the theme), the
+        same call, retries, filter and LOG_LLM/ record (`_generate_one`,
+        kind "Definitions call") — only every kept candidate is returned
+        instead of one picked at random. `theme_description` is the theme
+        as typed (Interactive mode's "Thématique" field), or None.
 
-        `theme_description` (`None` by default — no effect for any
-        pre-existing caller), when given, is the CURRENT value of the
-        Interactive mode "Thématique" field — at the user's explicit
-        request: "Vérifier que le bouton 'Propose une définition' utilise
-        bien le champ thématique pour les propositions quand il est
-        renseigné." Deliberately the raw, literal theme text as typed (or
-        pre-filled from a re-edited grid's own origin, see backend/app.py's
-        `_run_interactive_resume_job`), never a richer LLM-computed
-        description — there is no per-grid `describe_theme()` sentence
-        available to a free-text lookup like this one, and re-running that
-        whole LLM pass just for one "Proposer" click would add real
-        latency for a lightweight, best-effort button. Folded into the
-        user message as a dedicated `THEME` steering paragraph, the same
-        "strongly prefer it, but accuracy always wins" framing the grid-
-        word clue prompt's own THEME block already uses (see
-        `_build_user_message`), reworded for an arbitrary `count` of
-        independent definitions rather than a fixed 3 clues of one grid
-        word.
-
-        Deliberately does NOT reuse `_build_system_prompt()` — that one
-        is tightly tuned around asking for exactly 3 candidates plus a
-        mandatory "A=" grammatical-analysis line for one specific grid
-        word's own exact inflected form (see the project-best-practices
-        SKILL for how much live-tuning history that prompt carries); a
-        free-text dictionary lookup has no single known inflected form to
-        analyse and wants an arbitrary count, so it gets its own compact
-        prompt (`_build_definitions_system_prompt`) instead of forking
-        that one. For the same reason it does NOT reuse
-        `_build_user_message()` either — that one's own opening paragraph
-        ("Each of your 3 clues must be phrased so its OWN grammar...
-        matches this exact written form") is itself worded around the
-        grid-clue prompt's fixed count and single-inflected-form premise,
-        which would actively mismatch this method's own `count` and
-        free-text input; instead this builds a grounding-only user
-        message directly from the same three block builders
-        (`_build_gloss_block`/`_build_pos_block`/`_build_examples_block`)
-        with a plain "Word or expression: ..." header of its own.
-
-        A single best-effort LLM call — no multi-round retry loop like
-        `generate()`'s per-grid-word one (a player can just click
-        "Définir" again); every attempt gets the same `LOG_LLM/` record as a
-        grid word's clue (`_write_call_log`, kind "Definitions call", named
-        after the word). `timeout` defaults to
-        90s: measured live at ~40s for a real 10-definition call on this
-        project's own small local model (Qwen3-4B) — asking for `count`
-        lines in one response is a meaningfully heavier single call than
-        a grid word's own one-line clue, so this needs real headroom, not
-        the short budget a quick single-word lookup could get away with.
-        `frontend/server.py`'s own proxy route for this endpoint uses a
-        matching, longer timeout (`DEFINE_PROXY_TIMEOUT_S`, mirroring how
-        the chat feature's `CHAT_PROXY_TIMEOUT_S` already departs from
-        the default `PROXY_TIMEOUT_S` for the same reason), and `script.
-        js`'s own fetch timeout for this button is longer still.
-
-        Returns a list of up to `count` definition strings, de-duplicated,
-        in the model's own order (fewer if it wrote less, or if some
-        candidates were filtered out) — never raises for "the model gave
-        a bad or empty answer" (an empty list simply means no definition
-        after every attempt), only `ClueGenerationError` for a genuine
-        connection failure (from `_call`). Re-asks the model up to
-        `DEFINE_RETRIES` extra times whenever a whole attempt yields zero
-        kept definitions — see that constant's own comment."""
+        Returns up to `count` definitions, possibly none; raises
+        `ClueGenerationError` only when every attempt's LLM call failed."""
         text = " ".join(str(text).split())
         if not text:
             return []
-        # Base forms: the text itself, then every canonical form of the
-        # wordlist rows it spells (the Dictionnaire panel's own lookup),
-        # since the gloss dictionary is keyed by lemma ("aspes" -> "aspe").
-        canonicals = [text.lower()]
-        for _accented, row_canonicals in word_forms(text, language):
-            for lemma in row_canonicals:
-                if lemma and lemma.lower() not in (c.lower() for c in canonicals):
-                    canonicals.append(lemma)
-        entry = (text.upper(), text, tuple(canonicals))
-        system_prompt = self._build_definitions_system_prompt(difficulty, language, count)
-        parts = [f"Word or expression: {text}"]
-        for block_builder in (self._build_gloss_block, self._build_pos_block,
-                              self._build_examples_block):
-            block = block_builder(entry, language, difficulty)
-            if block:
-                parts.append(block)
-        theme_description = " ".join(str(theme_description or "").split())
-        if theme_description:
-            parts.append(
-                "THEME — these definitions are being written in the "
-                "context of a theme. Here is that theme: "
-                f"\"{theme_description}\". STRONGLY steer each of your "
-                f"{count} definitions toward this theme: whenever the "
-                "word/expression's real meaning leaves you ANY latitude "
-                "in angle, wording, imagery, chosen example or register, "
-                "deliberately pick the formulation that best evokes this "
-                "theme — its vocabulary, its setting, its people and "
-                "activities — rather than a neutral one. Prefer a "
-                "synonym, an example or a turn of phrase drawn from the "
-                "theme's world. The ONE thing this must never do is make "
-                "a definition wrong: it must still be accurate for THIS "
-                "EXACT word/expression (its real meaning — see the "
-                "ABSOLUTE RULE above) and point at nothing else. If a "
-                "theme-flavoured phrasing would be inaccurate or "
-                "ambiguous, drop the flavour for that definition and stay "
-                "plain — accuracy always wins that trade. Never quote "
-                "this theme text verbatim."
-            )
-        user_message = "\n\n".join(parts)
-        max_tokens = REASONING_TOKEN_BUDGET + 200 + 40 * count
-        definitions = []
-        for attempt in range(1 + DEFINE_RETRIES):
-            try:
-                content = self._call(
-                    entry[0], text, attempt + 1, system_prompt, user_message, max_tokens,
-                    timeout, total_rounds=1 + DEFINE_RETRIES,
-                )
-            except ClueGenerationError as e:
-                self._write_call_log(
-                    entry[0], text, language, difficulty, attempt + 1, system_prompt, user_message,
-                    None, e, f"LLM call failed: {e}", [], success=False,
-                    theme_description=theme_description, kind="Definitions call",
-                    total_rounds=1 + DEFINE_RETRIES,
-                )
-                raise
-            candidates = self._parse_response(content)
-            accepted, details, _maskable = self._filter_candidates(
-                candidates, entry[0], text, entry[2], language, attempt + 1,
-                total_rounds=1 + DEFINE_RETRIES,
-            )
-            self._write_call_log(
-                entry[0], text, language, difficulty, attempt + 1, system_prompt, user_message,
-                content, None, f"{len(accepted)}/{len(candidates)} candidate(s) kept",
-                [(c, "kept" if verdict.startswith("accepted") else verdict) for c, verdict in details],
-                success=bool(accepted), theme_description=theme_description,
-                kind="Definitions call", total_rounds=1 + DEFINE_RETRIES,
-            )
-            seen = set()
-            for c, _idx in accepted:
-                if c in seen:
-                    continue
-                seen.add(c)
-                definitions.append(c)
-                if len(definitions) >= count:
-                    break
-            if definitions:
-                break
+        entry = _word_entry(text.upper(), text, (), language)
+        system_prompt = self._build_system_prompt(difficulty, language, count)
+        user_message = self._build_user_message(
+            entry, language, difficulty, theme_description=theme_description or "", count=count,
+        )
+        _answer, definitions, errors = self._generate_one(
+            entry, user_message, system_prompt, _candidates_max_tokens(count), timeout,
+            language, difficulty, None, None, theme_description or "",
+            keep_all=True, kind="Definitions call",
+        )
+        definitions = (definitions or [])[:count]
         logger.info(
-            "define: %r (%s) -> %d/%d definition(s) kept (%d attempt(s))",
-            text, language, len(definitions), count, attempt + 1,
+            "define: %r (%s) -> %d/%d definition(s) kept",
+            text, language, len(definitions), count,
         )
+        if not definitions and errors:
+            raise errors[0]
         return definitions
-
-    @staticmethod
-    def _build_definitions_system_prompt(difficulty, language, count):
-        """Compact, standalone system prompt for `generate_definitions()`
-        — see that method's own docstring for why this is deliberately
-        NOT a variant of `_build_system_prompt()`. Same difficulty-style
-        line and the same "ground strictly in the given dictionary
-        definitions" rule as the grid-clue prompt, scaled to `count`
-        lines instead of a fixed 3, with no "A=" analysis step (there is
-        no single known inflected form here to analyse)."""
-        style = DIFFICULTY_STYLE.get(difficulty, DIFFICULTY_STYLE["medium"])
-        language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
-        return (
-            f"You are writing dictionary-style crossword definitions in "
-            f"{language_name}, at {difficulty.upper()} difficulty: {style}\n\n"
-            "The user message gives you one word or short expression. "
-            f"Write exactly {count} different short definitions of it — "
-            "each one on its own line, nothing else on that line. It may "
-            "also include real dictionary definitions and/or real "
-            "example sentences for it.\n\n"
-            "ABSOLUTE RULE — if the user message contains a \"Dictionary "
-            "definition(s)\" section, every one of your definitions MUST "
-            "be built from a meaning written there, and from NOTHING "
-            "ELSE; never invent a meaning that is not listed there.\n\n"
-            "Rules:\n"
-            "1. Never include the word/expression itself, or a close "
-            "same-family variant of it, anywhere in a definition — this "
-            "includes using it as the sentence's own grammatical subject "
-            "(e.g. never start a definition with \"<word> is a ...\"/\"<word> "
-            "est un/une ...\" — write it as an impersonal, subject-less "
-            "definition instead, e.g. \"Small domesticated feline\" rather "
-            "than \"A cat is a small domesticated feline\").\n"
-            "2. Each definition must be a real, self-contained definition "
-            f"a reader would understand on its own — at most "
-            f"{MAX_CLUE_WORDS} words — never a bare grammatical label and "
-            "never a description of the word's own spelling or letters.\n"
-            f"3. Vary the {count} definitions: different real senses, "
-            "angles, or phrasing when more than one is possible, rather "
-            "than repeating the same one reworded.\n"
-            f"4. Write entirely in {language_name}, every definition, "
-            "from the first word to the last.\n\n"
-            f"OUTPUT FORMAT — exactly {count} lines and nothing else: no "
-            "numbering, no bullets, no labels, no blank lines, and no "
-            "commentary before, between, or after them."
-        )
 
     def generate_paraphrases(self, text, language="fr", count=5, timeout=90.0):
         """"Paraphraser" button in the new "Paraphraseur" panel (frontend/
@@ -2583,7 +2454,7 @@ class LLMClueGenerator:
         gloss dictionary, and the input can be an arbitrary sentence, not
         a lemma). So this gets its own compact system prompt
         (`_build_paraphrase_system_prompt`) rather than reusing
-        `_build_system_prompt()`/`_build_definitions_system_prompt()`,
+        `_build_system_prompt()`,
         both of which are built around a known target word.
 
         A single best-effort call via the shared `_call()` helper (so it
@@ -2781,7 +2652,7 @@ class LLMClueGenerator:
         return block
 
     @staticmethod
-    def _build_gloss_block(entry, language, difficulty):
+    def _build_gloss_block(entry, language, difficulty, count=CLUE_CANDIDATES):
         """Real dictionary definitions (from Wiktionary via Kaikki.org, see
         backend/gloss_lookup.py) for this word's candidate canonical
         form(s), if any exist. Looked up by canonical form/lemma, not the
@@ -2840,16 +2711,16 @@ class LLMClueGenerator:
             + "\n".join(word_parts) + "\n\nThese are real dictionary "
             "definitions of the word's root form(s), and they are the "
             "ONLY meanings you are allowed to clue (see the ABSOLUTE RULE "
-            "in the instructions). Every one of your 3 clues must come "
+            f"in the instructions). Every one of your {count} clues must come "
             "from a definition line above and from nothing else — not "
             "from what the word 'reminds you of', not from a similar-"
             "looking word in another language, not from a meaning you "
             "half-remember. If a root form above resembles a more "
             "familiar word, that resemblance is a trap: define only what "
             "the text after the colon says. If more than one distinct "
-            "sense is shown, treat that as a chance to make your 3 "
+            f"sense is shown, treat that as a chance to make your {count} "
             "candidates genuinely different by drawing on different "
-            "senses, rather than 3 rewordings of one — but each must "
+            f"senses, rather than {count} rewordings of one — but each must "
             "still trace back to a specific line above.\n\n"
             "NOTE — every line above was found by looking up this word's "
             "ROOT / canonical form(s), NOT the exact form "
@@ -2950,7 +2821,7 @@ class LLMClueGenerator:
             "adjective: number and gender)."
         )
 
-    def _build_system_prompt(self, difficulty, language):
+    def _build_system_prompt(self, difficulty, language, count=CLUE_CANDIDATES):
         """All of the crossword-clue-writing instructions that don't depend
         on the specific word — role, difficulty style, rules, a clearly
         delimited EXAMPLES section illustrating them, and the final
@@ -2995,8 +2866,20 @@ class LLMClueGenerator:
         in `_build_user_message()` instead, at the user's explicit request
         ("déplace la section THEME dans le prompt utilisateur"), so it
         sits in the highest-recency position, right before the word the
-        model must clue."""
+        model must clue.
+
+        `count` is the number of candidates asked for (`CLUE_CANDIDATES`
+        for a grid word, the requested count for "Définir"): one "Cn=" line
+        each after the A= line."""
         config = _load_prompt_config(language)
+        labels = [f"C{i}" for i in range(1, count + 1)]
+        labels_text = (", ".join(labels[:-1]) + " and " + labels[-1]) if count > 1 else labels[0]
+        clue_lines = "".join(
+            f"{label}=short sentence (even a single word) indirectly defining "
+            "the target word without giving it away, its own grammar "
+            "matching the A= line above\n"
+            for label in labels
+        )
         style = DIFFICULTY_STYLE.get(difficulty, DIFFICULTY_STYLE["medium"])
         language_name = LANGUAGE_NAMES.get(language, LANGUAGE_NAMES["fr"])
         diff_examples = config["difficulty_examples"]
@@ -3019,7 +2902,7 @@ class LLMClueGenerator:
             "word.\n\n"
             "ABSOLUTE RULE — THE DICTIONARY DEFINITION IS THE ONLY SOURCE "
             "OF MEANING. If the user message contains a \"Dictionary "
-            "definition(s)\" section, every one of your 3 clues MUST be "
+            f"definition(s)\" section, every one of your {count} clues MUST be "
             "built from a meaning written there, and from NOTHING ELSE. "
             "You may not clue any sense that is not in that section. If "
             "your own memory of the word disagrees with the definition "
@@ -3039,7 +2922,7 @@ class LLMClueGenerator:
             "\"are\" the area unit, never a form of \"be\", even though "
             "its root \"are\" is one). Drop any such sense, per rule 4 "
             "and the NOTE at the end of that section.\n\n"
-            "Propose exactly 3 different possible crossword clues for that "
+            f"Propose exactly {count} different possible crossword clues for that "
             "single word, all matching the difficulty level above.\n\n"
             "Rules:\n"
             "1. Never include the word being defined anywhere in the clue "
@@ -3100,7 +2983,7 @@ class LLMClueGenerator:
             "never an unrelated sentence that merely sounds plausible, and "
             "never a meaning you 'recognise' that isn't in the definitions "
             "you were given. This is the same point as the ABSOLUTE RULE "
-            "above, restated as a check: for EACH of your 3 candidates, "
+            f"above, restated as a check: for EACH of your {count} candidates, "
             "before writing it, point to the exact dictionary definition "
             "line it comes from. If you cannot, that candidate is invalid "
             "— rewrite it from a definition that IS listed. If no "
@@ -3134,7 +3017,7 @@ class LLMClueGenerator:
             "grammatical label):\n"
             f"{_bullets(config['rule_good'])}\n\n"
             "=== END OF EXAMPLES ===\n\n"
-            "GRAMMAR CHECK — before you output C1, C2 and C3, work out the "
+            f"GRAMMAR CHECK — before you output {labels_text}, work out the "
             "target word's exact grammatical form, then check EACH "
             "candidate against it:\n"
             "- Tense/mood: if the target is a future, conditional, past, "
@@ -3150,7 +3033,7 @@ class LLMClueGenerator:
             "Rewrite any candidate whose own grammar does not match before "
             "you output it. A right meaning in the wrong grammatical form "
             "is a wrong answer here.\n\n"
-            "OUTPUT FORMAT — respond with exactly these 4 lines and "
+            f"OUTPUT FORMAT — respond with exactly these {count + 1} lines and "
             "nothing else:\n"
             "A=the target word's grammatical type and inflection: its "
             "part of speech (noun, verb, adjective, adverb, ...) and then, "
@@ -3158,25 +3041,18 @@ class LLMClueGenerator:
             "adjective, its number + gender. Example: for a word that is "
             "the third-person-singular future of a verb, "
             "\"A=verb, third person singular, future\".\n"
-            "C1=short sentence (even a single word) indirectly defining "
-            "the target word without giving it away, its own grammar "
-            "matching the A= line above\n"
-            "C2=short sentence (even a single word) indirectly defining "
-            "the target word without giving it away, its own grammar "
-            "matching the A= line above\n"
-            "C3=short sentence (even a single word) indirectly defining "
-            "the target word without giving it away, its own grammar "
-            "matching the A= line above\n\n"
+            f"{clue_lines}\n"
             "The A= line is an analysis step to force you to nail the "
             "grammar before writing the clues — it is discarded and never "
             "shown to anyone, so it does not need to read like a clue. "
-            "C1, C2 and C3 are the actual clues.\n"
+            f"{labels_text} are the actual clues.\n"
             "No JSON, no markdown, no blank lines, no repeating the word "
-            "itself anywhere in A/C1/C2/C3, and no extra commentary "
-            "before, between, or after these 4 lines."
+            f"itself anywhere in A/{'/'.join(labels)}, and no extra commentary "
+            f"before, between, or after these {count + 1} lines."
         )
 
-    def _build_user_message(self, entry, language, difficulty, theme_description=""):
+    def _build_user_message(self, entry, language, difficulty, theme_description="",
+                            count=CLUE_CANDIDATES):
         """The one thing that varies per call: the word itself, plus its
         grounding block (real dictionary definitions, a Hunspell-derived
         grammatical-type line, and example sentences, when available) —
@@ -3201,13 +3077,13 @@ class LLMClueGenerator:
         # verb clued in the present, a plural clued as singular, etc.).
         parts = [
             f"Word: {accented}\n"
-            "Each of your 3 clues must be phrased so its OWN grammar — "
+            f"Each of your {count} clues must be phrased so its OWN grammar — "
             "tense, mood, person, number, gender — matches this exact "
             "written form, not merely its meaning. If this word is a "
             "future / conditional / past / imperfect / subjunctive verb "
             "form, the verbs in your clue must be in that same tense/mood."
         ]
-        gloss_block = self._build_gloss_block(entry, language, difficulty)
+        gloss_block = self._build_gloss_block(entry, language, difficulty, count)
         if gloss_block:
             parts.append(gloss_block)
         # Right after the definitions, at the user's explicit request:
@@ -3224,7 +3100,7 @@ class LLMClueGenerator:
             parts.append(
                 "THEME — this grid was built around a theme. Here is that "
                 "theme, as the keyword list produced for it: "
-                f"\"{theme_description}\". STRONGLY steer each of your 3 "
+                f"\"{theme_description}\". STRONGLY steer each of your {count} "
                 "clues toward this theme: whenever THIS word's real "
                 "meaning and its required grammar leave you ANY latitude "
                 "in angle, wording, imagery, chosen example or register, "

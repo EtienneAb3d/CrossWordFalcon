@@ -56,7 +56,8 @@ public final class Clues {
     public static final int MAX_TITLE_WORDS_ACCEPTED = 6;
     static final int TITLE_COUNT = 3;
     static final int TITLE_RETRIES = 3;
-    public static final int DEFINE_RETRIES = 2;
+    /** Candidates asked for one grid word; "Définir" asks for its own count through the same prompt. */
+    public static final int CLUE_CANDIDATES = 3;
     public static final int TITLE_PROPOSALS_COUNT = 10;
     public static final int TITLE_PROPOSALS_RETRIES = 2;
     public static final int THEME_DESCRIPTION_RETRIES = 2;
@@ -92,8 +93,8 @@ public final class Clues {
             "^\\s*(?:"
                     + "[-–—*•]"
                     + "|\\d+\\s*[.):]"
-                    + "|c(?:lue|andidate)?\\s*[1-3]?\\s*[=:.)\\-–—]"
-                    + "|c(?:lue|andidate)?\\s*[1-3]"
+                    + "|c(?:lue|andidate)?\\s*(?:[1-9]\\d?)?\\s*[=:.)\\-–—]"
+                    + "|c(?:lue|andidate)?\\s*[1-9]\\d?"
                     + ")\\s*", RE_FLAGS);
     static final Pattern ANALYSIS_LINE_RE = Pattern.compile("^\\s*(?:a\\s*\\d*|anal[iíy]\\w*|análi\\w*)\\s*[=:.)]", RE_FLAGS);
     static final Pattern LEADING_LABEL_RE = Pattern.compile("^\\s*(\\S+)\\s*[:,\\-–—]\\s*", Pattern.UNICODE_CHARACTER_CLASS);
@@ -768,6 +769,35 @@ public final class Clues {
      * Throws {@link GenerationCancelled}, or {@link GenerationPaused} whose
      * state is {@code Object[]{Map<String,String> clues, List<Entry> remaining}}.
      */
+    /** Answer budget of one definition-writing call asking for {@code count} candidates (backend/clues.py,
+     *  _candidates_max_tokens). */
+    static int candidatesMaxTokens(int count) {
+        return REASONING_TOKEN_BUDGET + 300 + 30 * count;
+    }
+
+    /** The entry every definition-writing call grounds on (backend/clues.py, _word_entry): the given natural
+     *  spelling, or the first wordlist row's when none is known; the given base forms, then the wordlist rows'
+     *  canonical forms, then the inflection table's lemmas of the exact form, without repeats. */
+    public static Entry wordEntry(String answer, String accented, List<String> canonical, String language) {
+        answer = answer.toUpperCase(Locale.ROOT);
+        List<Map.Entry<String, List<String>>> rows =
+                DictionaryLookup.wordForms(accented != null && !accented.isEmpty() ? accented : answer, language);
+        if ((accented == null || accented.isEmpty() || accented.equals(answer)) && !rows.isEmpty()) {
+            accented = rows.get(0).getKey();
+        }
+        if (accented == null || accented.isEmpty()) accented = answer;
+        List<String> lemmas = new ArrayList<>(canonical == null ? List.of() : canonical);
+        for (Map.Entry<String, List<String>> row : rows) lemmas.addAll(row.getValue());
+        lemmas.addAll(InflectionLookup.lemmasOf(accented, language));
+        List<String> out = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        for (String lemma : lemmas) {
+            if (lemma != null && !lemma.isEmpty() && seen.add(lemma.toLowerCase(Locale.ROOT))) out.add(lemma);
+        }
+        if (out.isEmpty()) out.add(accented.toLowerCase(Locale.ROOT));
+        return new Entry(answer, accented, out, language);
+    }
+
     public Map<String, String> generate(Collection<Entry> wordEntries, String difficulty, String language,
                                         double timeout, ProgressCallback onProgress, AtomicBoolean cancelEvent,
                                         BooleanSupplier shouldPause, String themeDescription,
@@ -775,14 +805,14 @@ public final class Clues {
         LinkedHashSet<Entry> dedup = new LinkedHashSet<>();
         for (Entry e : wordEntries) {
             String lang = e.language() == null || e.language().isEmpty() ? language : e.language();
-            dedup.add(new Entry(e.answer().toUpperCase(Locale.ROOT), e.accented(), List.copyOf(e.canonical()), lang));
+            dedup.add(wordEntry(e.answer(), e.accented(), e.canonical(), lang));
         }
         List<Entry> entries = new ArrayList<>(dedup);
         Map<String, String> clues = new LinkedHashMap<>();
         if (entries.isEmpty()) return clues;
         int total = entries.size();
         List<RuntimeException> errors = new ArrayList<>();
-        int maxTokens = REASONING_TOKEN_BUDGET + 300 + 90 * BATCH_SIZE;
+        int maxTokens = candidatesMaxTokens(CLUE_CANDIDATES);
         Map<String, String> systemPrompts = new HashMap<>();
         String theme = themeDescription == null ? "" : themeDescription;
 
@@ -803,7 +833,7 @@ public final class Clues {
                 String sys = systemPrompts.computeIfAbsent(e.language(), l -> buildSystemPrompt(difficulty, l));
                 String um = userMessages.get(i);
                 futures.add(ecs.submit(() -> generateOne(e, um, sys, maxTokens, timeout, e.language(), difficulty,
-                        cancelEvent, shouldPause, theme)));
+                        cancelEvent, shouldPause, theme, false, "Clue generation call")));
             }
             for (int n = 0; n < futures.size(); n++) {
                 Object[] res;
@@ -851,10 +881,10 @@ public final class Clues {
 
     private Object[] generateOne(Entry entry, String userMessage, String systemPrompt, int maxTokens, double timeout,
                                  String language, String difficulty, AtomicBoolean cancelEvent,
-                                 BooleanSupplier shouldPause, String themeDescription) {
+                                 BooleanSupplier shouldPause, String themeDescription, boolean keepAll, String kind) {
         String answer = entry.answer(), accented = entry.accented();
         List<String> canonical = entry.canonical();
-        String clue = null;
+        Object clue = null;
         List<RuntimeException> errors = new ArrayList<>();
         List<String> maskablePool = new ArrayList<>();
         String lastContent = null;
@@ -874,7 +904,22 @@ public final class Clues {
                     Log.warning("clue round %d/3: %s (%s) — model gave no candidate lines at all", attempt + 1,
                             Log.repr(answer), Log.repr(accented));
                 } else {
-                    Object[] picked = pickClue(candidates, answer, accented, canonical, language, attempt + 1);
+                    Object[] picked;
+                    if (keepAll) {
+                        Object[] filtered = filterCandidates(candidates, answer, accented, canonical, language,
+                                attempt + 1, 3);
+                        @SuppressWarnings("unchecked")
+                        List<Object[]> accepted = (List<Object[]>) filtered[0];
+                        @SuppressWarnings("unchecked")
+                        List<String[]> fd = (List<String[]>) filtered[1];
+                        List<String[]> kept = new ArrayList<>();
+                        for (String[] x : fd) kept.add(new String[]{x[0], x[1].startsWith("accepted") ? "kept" : x[1]});
+                        LinkedHashSet<String> texts = new LinkedHashSet<>();
+                        for (Object[] a : accepted) texts.add((String) a[0]);
+                        picked = new Object[]{texts.isEmpty() ? null : new ArrayList<>(texts), kept, filtered[2]};
+                    } else {
+                        picked = pickClue(candidates, answer, accented, canonical, language, attempt + 1);
+                    }
                     @SuppressWarnings("unchecked")
                     List<String[]> d = (List<String[]>) picked[1];
                     details = d;
@@ -882,8 +927,10 @@ public final class Clues {
                     List<String> maskable = (List<String>) picked[2];
                     maskablePool.addAll(maskable);
                     if (picked[0] != null) {
-                        clue = (String) picked[0];
-                        outcome = "selected: " + Log.repr(clue);
+                        clue = picked[0];
+                        outcome = keepAll
+                                ? ((List<?>) clue).size() + "/" + candidates.size() + " candidate(s) kept"
+                                : "selected: " + Log.repr((String) clue);
                     } else {
                         outcome = "all " + candidates.size() + " candidate(s) rejected (see the Candidates section "
                                 + "below, or backend.log)";
@@ -899,17 +946,18 @@ public final class Clues {
                         Log.repr(accented), e.getMessage());
             }
             writeCallLog(answer, accented, language, difficulty, attempt + 1, systemPrompt, userMessage, content, error,
-                    outcome, details, clue != null, themeDescription);
+                    outcome, details, clue != null, themeDescription, kind, 3);
             if (clue != null) break;
         }
-        if (clue == null && !maskablePool.isEmpty()) {
+        if (clue == null && !maskablePool.isEmpty() && !keepAll) {
             List<String> uniq = new ArrayList<>(new LinkedHashSet<>(maskablePool));
             String base = uniq.get(ThreadLocalRandom.current().nextInt(uniq.size()));
-            clue = maskTargetWord(base, answer, accented, canonical);
+            String masked = maskTargetWord(base, answer, accented, canonical);
+            clue = masked;
             Log.warning("clue: %s (%s) — no clue clear of the target word after 3 rounds; masking it in a rejected "
-                    + "candidate: %s -> %s", Log.repr(answer), Log.repr(accented), Log.repr(base), Log.repr(clue));
+                    + "candidate: %s -> %s", Log.repr(answer), Log.repr(accented), Log.repr(base), Log.repr(masked));
             List<String[]> det = new ArrayList<>();
-            det.add(new String[]{clue, "selected (target word masked, fallback)"});
+            det.add(new String[]{masked, "selected (target word masked, fallback)"});
             writeCallLog(answer, accented, language, difficulty, 3, systemPrompt, userMessage, lastContent, null,
                     "fallback: target word masked with '_' in a rejected candidate (" + Log.repr(base) + ")", det, true,
                     themeDescription);
@@ -1251,124 +1299,28 @@ public final class Clues {
 
     // ================================================================== definitions / paraphrases
 
+    /** "Définir" (GET /api/dictionary/define, Interactive mode's "Proposer"/"Définitions"/"Recalculer"): the same
+     *  code as a grid word's clue — {@link #wordEntry}, {@link #buildSystemPrompt}/{@link #buildUserMessage} asking
+     *  for {@code count} candidates, {@link #generateOne} — returning every kept candidate (backend/clues.py,
+     *  LLMClueGenerator.generate_definitions). */
     public List<String> generateDefinitions(String text, String language, String difficulty, int count, double timeout,
                                             String themeDescription) {
         text = collapseWs(text);
         if (text.isEmpty()) return new ArrayList<>();
-        // Base forms: the text itself, then every canonical form of the wordlist rows it spells (the Dictionnaire
-        // panel's own lookup), since the gloss dictionary is keyed by lemma ("aspes" -> "aspe").
-        List<String> canonicals = new ArrayList<>(List.of(text.toLowerCase(Locale.ROOT)));
-        Set<String> seenLemmas = new HashSet<>(List.of(text.toLowerCase(Locale.ROOT)));
-        for (Map.Entry<String, List<String>> row : DictionaryLookup.wordForms(text, language)) {
-            for (String lemma : row.getValue()) {
-                if (lemma != null && !lemma.isEmpty() && seenLemmas.add(lemma.toLowerCase(Locale.ROOT))) canonicals.add(lemma);
-            }
-        }
-        Entry entry = new Entry(text.toUpperCase(Locale.ROOT), text, canonicals, language);
-        String system = buildDefinitionsSystemPrompt(difficulty, language, count);
-        List<String> parts = new ArrayList<>();
-        parts.add("Word or expression: " + text);
-        for (String block : List.of(buildGlossBlock(entry, language, difficulty), buildPosBlock(entry, language, difficulty),
-                buildExamplesBlock(entry, language, difficulty))) {
-            if (!block.isEmpty()) parts.add(block);
-        }
-        String theme = collapseWs(themeDescription);
-        if (!theme.isEmpty()) {
-            parts.add("THEME — these definitions are being written in the "
-                    + "context of a theme. Here is that theme: "
-                    + "\"" + theme + "\". STRONGLY steer each of your "
-                    + count + " definitions toward this theme: whenever the "
-                    + "word/expression's real meaning leaves you ANY latitude "
-                    + "in angle, wording, imagery, chosen example or register, "
-                    + "deliberately pick the formulation that best evokes this "
-                    + "theme — its vocabulary, its setting, its people and "
-                    + "activities — rather than a neutral one. Prefer a "
-                    + "synonym, an example or a turn of phrase drawn from the "
-                    + "theme's world. The ONE thing this must never do is make "
-                    + "a definition wrong: it must still be accurate for THIS "
-                    + "EXACT word/expression (its real meaning — see the "
-                    + "ABSOLUTE RULE above) and point at nothing else. If a "
-                    + "theme-flavoured phrasing would be inaccurate or "
-                    + "ambiguous, drop the flavour for that definition and stay "
-                    + "plain — accuracy always wins that trade. Never quote "
-                    + "this theme text verbatim.");
-        }
-        String user = String.join("\n\n", parts);
-        int maxTokens = REASONING_TOKEN_BUDGET + 200 + 40 * count;
-        List<String> definitions = new ArrayList<>();
-        int attempt;
-        for (attempt = 0; attempt < 1 + DEFINE_RETRIES; attempt++) {
-            String content;
-            try {
-                content = call(entry.answer(), text, attempt + 1, system, user, maxTokens, timeout, 1 + DEFINE_RETRIES);
-            } catch (ClueGenerationError e) {
-                writeCallLog(entry.answer(), text, language, difficulty, attempt + 1, system, user, null, e,
-                        "LLM call failed: " + e.getMessage(), List.of(), false, themeDescription, "Definitions call",
-                        1 + DEFINE_RETRIES);
-                throw e;
-            }
-            List<String> candidates = parseResponse(content);
-            Object[] filtered = filterCandidates(candidates, entry.answer(), text, entry.canonical(), language,
-                    attempt + 1, 1 + DEFINE_RETRIES);
-            @SuppressWarnings("unchecked")
-            List<Object[]> accepted = (List<Object[]>) filtered[0];
-            @SuppressWarnings("unchecked")
-            List<String[]> filterDetails = (List<String[]>) filtered[1];
-            List<String[]> logDetails = new ArrayList<>();
-            for (String[] d : filterDetails) {
-                logDetails.add(new String[]{d[0], d[1].startsWith("accepted") ? "kept" : d[1]});
-            }
-            writeCallLog(entry.answer(), text, language, difficulty, attempt + 1, system, user, content, null,
-                    accepted.size() + "/" + candidates.size() + " candidate(s) kept", logDetails, !accepted.isEmpty(),
-                    themeDescription, "Definitions call", 1 + DEFINE_RETRIES);
-            Set<String> seen = new HashSet<>();
-            for (Object[] a : accepted) {
-                String c = (String) a[0];
-                if (!seen.add(c)) continue;
-                definitions.add(c);
-                if (definitions.size() >= count) break;
-            }
-            if (!definitions.isEmpty()) break;
-        }
-        Log.info("define: %s (%s) -> %d/%d definition(s) kept (%d attempt(s))", Log.repr(text), language,
-                definitions.size(), count, Math.min(attempt + 1, 1 + DEFINE_RETRIES));
+        Entry entry = wordEntry(text.toUpperCase(Locale.ROOT), text, List.of(), language);
+        String theme = themeDescription == null ? "" : themeDescription;
+        String system = buildSystemPrompt(difficulty, language, count);
+        String user = buildUserMessage(entry, language, difficulty, theme, count);
+        Object[] res = generateOne(entry, user, system, candidatesMaxTokens(count), timeout, language, difficulty, null,
+                null, theme, true, "Definitions call");
+        @SuppressWarnings("unchecked")
+        List<String> kept = res[1] == null ? new ArrayList<>() : (List<String>) res[1];
+        List<String> definitions = new ArrayList<>(kept.subList(0, Math.min(count, kept.size())));
+        Log.info("define: %s (%s) -> %d/%d definition(s) kept", Log.repr(text), language, definitions.size(), count);
+        @SuppressWarnings("unchecked")
+        List<RuntimeException> errors = (List<RuntimeException>) res[2];
+        if (definitions.isEmpty() && !errors.isEmpty()) throw errors.get(0);
         return definitions;
-    }
-
-    public static String buildDefinitionsSystemPrompt(String difficulty, String language, int count) {
-        String style = DIFFICULTY_STYLE.getOrDefault(difficulty, DIFFICULTY_STYLE.get("medium"));
-        String languageName = LANGUAGE_NAMES.getOrDefault(language, LANGUAGE_NAMES.get("fr"));
-        return "You are writing dictionary-style crossword definitions in "
-                + languageName + ", at " + difficulty.toUpperCase(Locale.ROOT) + " difficulty: " + style + "\n\n"
-                + "The user message gives you one word or short expression. "
-                + "Write exactly " + count + " different short definitions of it — "
-                + "each one on its own line, nothing else on that line. It may "
-                + "also include real dictionary definitions and/or real "
-                + "example sentences for it.\n\n"
-                + "ABSOLUTE RULE — if the user message contains a \"Dictionary "
-                + "definition(s)\" section, every one of your definitions MUST "
-                + "be built from a meaning written there, and from NOTHING "
-                + "ELSE; never invent a meaning that is not listed there.\n\n"
-                + "Rules:\n"
-                + "1. Never include the word/expression itself, or a close "
-                + "same-family variant of it, anywhere in a definition — this "
-                + "includes using it as the sentence's own grammatical subject "
-                + "(e.g. never start a definition with \"<word> is a ...\"/\"<word> "
-                + "est un/une ...\" — write it as an impersonal, subject-less "
-                + "definition instead, e.g. \"Small domesticated feline\" rather "
-                + "than \"A cat is a small domesticated feline\").\n"
-                + "2. Each definition must be a real, self-contained definition "
-                + "a reader would understand on its own — at most "
-                + MAX_CLUE_WORDS + " words — never a bare grammatical label and "
-                + "never a description of the word's own spelling or letters.\n"
-                + "3. Vary the " + count + " definitions: different real senses, "
-                + "angles, or phrasing when more than one is possible, rather "
-                + "than repeating the same one reworded.\n"
-                + "4. Write entirely in " + languageName + ", every definition, "
-                + "from the first word to the last.\n\n"
-                + "OUTPUT FORMAT — exactly " + count + " lines and nothing else: no "
-                + "numbering, no bullets, no labels, no blank lines, and no "
-                + "commentary before, between, or after them.";
     }
 
     public List<String> generateParaphrases(String text, String language, int count, double timeout) {
@@ -1499,6 +1451,10 @@ public final class Clues {
     }
 
     public static String buildGlossBlock(Entry entry, String language, String difficulty) {
+        return buildGlossBlock(entry, language, difficulty, CLUE_CANDIDATES);
+    }
+
+    public static String buildGlossBlock(Entry entry, String language, String difficulty, int count) {
         String accented = entry.accented();
         Map<String, List<Object>> byLemma = GlossLookup.findGlossesForCanonicals(entry.canonical(), language);
         boolean dropName = difficulty.equals("easy");
@@ -1518,16 +1474,16 @@ public final class Clues {
                 + String.join("\n", wordParts) + "\n\nThese are real dictionary "
                 + "definitions of the word's root form(s), and they are the "
                 + "ONLY meanings you are allowed to clue (see the ABSOLUTE RULE "
-                + "in the instructions). Every one of your 3 clues must come "
+                + "in the instructions). Every one of your " + count + " clues must come "
                 + "from a definition line above and from nothing else — not "
                 + "from what the word 'reminds you of', not from a similar-"
                 + "looking word in another language, not from a meaning you "
                 + "half-remember. If a root form above resembles a more "
                 + "familiar word, that resemblance is a trap: define only what "
                 + "the text after the colon says. If more than one distinct "
-                + "sense is shown, treat that as a chance to make your 3 "
+                + "sense is shown, treat that as a chance to make your " + count + " "
                 + "candidates genuinely different by drawing on different "
-                + "senses, rather than 3 rewordings of one — but each must "
+                + "senses, rather than " + count + " rewordings of one — but each must "
                 + "still trace back to a specific line above.\n\n"
                 + "NOTE — every line above was found by looking up this word's "
                 + "ROOT / canonical form(s), NOT the exact form "
@@ -1588,6 +1544,22 @@ public final class Clues {
     // ================================================================== system / user prompts
 
     public String buildSystemPrompt(String difficulty, String language) {
+        return buildSystemPrompt(difficulty, language, CLUE_CANDIDATES);
+    }
+
+    /** {@code count} candidates asked for, one "Cn=" line each after the A= line (backend/clues.py,
+     *  LLMClueGenerator._build_system_prompt). */
+    public String buildSystemPrompt(String difficulty, String language, int count) {
+        List<String> labels = new ArrayList<>();
+        for (int i = 1; i <= count; i++) labels.add("C" + i);
+        String labelsText = count > 1
+                ? String.join(", ", labels.subList(0, count - 1)) + " and " + labels.get(count - 1) : labels.get(0);
+        StringBuilder clueLines = new StringBuilder();
+        for (String label : labels) {
+            clueLines.append(label).append("=short sentence (even a single word) indirectly defining ")
+                    .append("the target word without giving it away, its own grammar ")
+                    .append("matching the A= line above\n");
+        }
         Map<String, Object> config = loadPromptConfig(language);
         String style = DIFFICULTY_STYLE.getOrDefault(difficulty, DIFFICULTY_STYLE.get("medium"));
         String languageName = LANGUAGE_NAMES.getOrDefault(language, LANGUAGE_NAMES.get("fr"));
@@ -1610,7 +1582,7 @@ public final class Clues {
                 + "word.\n\n"
                 + "ABSOLUTE RULE — THE DICTIONARY DEFINITION IS THE ONLY SOURCE "
                 + "OF MEANING. If the user message contains a \"Dictionary "
-                + "definition(s)\" section, every one of your 3 clues MUST be "
+                + "definition(s)\" section, every one of your " + count + " clues MUST be "
                 + "built from a meaning written there, and from NOTHING ELSE. "
                 + "You may not clue any sense that is not in that section. If "
                 + "your own memory of the word disagrees with the definition "
@@ -1630,7 +1602,7 @@ public final class Clues {
                 + "\"are\" the area unit, never a form of \"be\", even though "
                 + "its root \"are\" is one). Drop any such sense, per rule 4 "
                 + "and the NOTE at the end of that section.\n\n"
-                + "Propose exactly 3 different possible crossword clues for that "
+                + "Propose exactly " + count + " different possible crossword clues for that "
                 + "single word, all matching the difficulty level above.\n\n"
                 + "Rules:\n"
                 + "1. Never include the word being defined anywhere in the clue "
@@ -1691,7 +1663,7 @@ public final class Clues {
                 + "never an unrelated sentence that merely sounds plausible, and "
                 + "never a meaning you 'recognise' that isn't in the definitions "
                 + "you were given. This is the same point as the ABSOLUTE RULE "
-                + "above, restated as a check: for EACH of your 3 candidates, "
+                + "above, restated as a check: for EACH of your " + count + " candidates, "
                 + "before writing it, point to the exact dictionary definition "
                 + "line it comes from. If you cannot, that candidate is invalid "
                 + "— rewrite it from a definition that IS listed. If no "
@@ -1725,7 +1697,7 @@ public final class Clues {
                 + "grammatical label):\n"
                 + bullets(Json.listOrEmpty(config.get("rule_good"))) + "\n\n"
                 + "=== END OF EXAMPLES ===\n\n"
-                + "GRAMMAR CHECK — before you output C1, C2 and C3, work out the "
+                + "GRAMMAR CHECK — before you output " + labelsText + ", work out the "
                 + "target word's exact grammatical form, then check EACH "
                 + "candidate against it:\n"
                 + "- Tense/mood: if the target is a future, conditional, past, "
@@ -1741,7 +1713,7 @@ public final class Clues {
                 + "Rewrite any candidate whose own grammar does not match before "
                 + "you output it. A right meaning in the wrong grammatical form "
                 + "is a wrong answer here.\n\n"
-                + "OUTPUT FORMAT — respond with exactly these 4 lines and "
+                + "OUTPUT FORMAT — respond with exactly these " + (count + 1) + " lines and "
                 + "nothing else:\n"
                 + "A=the target word's grammatical type and inflection: its "
                 + "part of speech (noun, verb, adjective, adverb, ...) and then, "
@@ -1749,33 +1721,29 @@ public final class Clues {
                 + "adjective, its number + gender. Example: for a word that is "
                 + "the third-person-singular future of a verb, "
                 + "\"A=verb, third person singular, future\".\n"
-                + "C1=short sentence (even a single word) indirectly defining "
-                + "the target word without giving it away, its own grammar "
-                + "matching the A= line above\n"
-                + "C2=short sentence (even a single word) indirectly defining "
-                + "the target word without giving it away, its own grammar "
-                + "matching the A= line above\n"
-                + "C3=short sentence (even a single word) indirectly defining "
-                + "the target word without giving it away, its own grammar "
-                + "matching the A= line above\n\n"
+                + clueLines + "\n"
                 + "The A= line is an analysis step to force you to nail the "
                 + "grammar before writing the clues — it is discarded and never "
                 + "shown to anyone, so it does not need to read like a clue. "
-                + "C1, C2 and C3 are the actual clues.\n"
+                + labelsText + " are the actual clues.\n"
                 + "No JSON, no markdown, no blank lines, no repeating the word "
-                + "itself anywhere in A/C1/C2/C3, and no extra commentary "
-                + "before, between, or after these 4 lines.";
+                + "itself anywhere in A/" + String.join("/", labels) + ", and no extra commentary "
+                + "before, between, or after these " + (count + 1) + " lines.";
     }
 
     String buildUserMessage(Entry entry, String language, String difficulty, String themeDescription) {
+        return buildUserMessage(entry, language, difficulty, themeDescription, CLUE_CANDIDATES);
+    }
+
+    String buildUserMessage(Entry entry, String language, String difficulty, String themeDescription, int count) {
         List<String> parts = new ArrayList<>();
         parts.add("Word: " + entry.accented() + "\n"
-                + "Each of your 3 clues must be phrased so its OWN grammar — "
+                + "Each of your " + count + " clues must be phrased so its OWN grammar — "
                 + "tense, mood, person, number, gender — matches this exact "
                 + "written form, not merely its meaning. If this word is a "
                 + "future / conditional / past / imperfect / subjunctive verb "
                 + "form, the verbs in your clue must be in that same tense/mood.");
-        for (String block : List.of(buildGlossBlock(entry, language, difficulty), buildPosBlock(entry, language, difficulty),
+        for (String block : List.of(buildGlossBlock(entry, language, difficulty, count), buildPosBlock(entry, language, difficulty),
                 buildExamplesBlock(entry, language, difficulty))) {
             if (!block.isEmpty()) parts.add(block);
         }
@@ -1783,7 +1751,7 @@ public final class Clues {
         if (!theme.isEmpty()) {
             parts.add("THEME — this grid was built around a theme. Here is that "
                     + "theme, as the keyword list produced for it: "
-                    + "\"" + theme + "\". STRONGLY steer each of your 3 "
+                    + "\"" + theme + "\". STRONGLY steer each of your " + count + " "
                     + "clues toward this theme: whenever THIS word's real "
                     + "meaning and its required grammar leave you ANY latitude "
                     + "in angle, wording, imagery, chosen example or register, "

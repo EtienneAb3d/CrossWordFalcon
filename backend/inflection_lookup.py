@@ -39,6 +39,7 @@ _POS_LABEL = {
 
 # language -> {form_lower: [(pos_code, description), ...]}
 _cache = {}
+_lemma_cache = {}
 
 
 # Lookup key: lowercase, ligatures folded ("Cœur" -> "coeur") — the
@@ -56,6 +57,7 @@ def _load(language):
     if language in _cache:
         return _cache[language]
     index = {}
+    lemmas = {}
     path = _DIR / f"{language}.jsonl"
     if path.exists():
         with open(path, encoding="utf-8") as fh:
@@ -72,6 +74,7 @@ def _load(language):
                     continue
                 form = _key(form)
                 out = []
+                form_lemmas = []
                 for a in rec.get("analyses", []):
                     pos = a.get("pos")
                     tags = a.get("tags")
@@ -84,12 +87,24 @@ def _load(language):
                     text = ", ".join(bits)
                     if lemma and _key(lemma) != form:
                         text += f' (of "{lemma}")'
+                        if lemma not in form_lemmas:
+                            form_lemmas.append(lemma)
                     pair = (pos, text)
                     if pair not in out:
                         out.append(pair)
                 index[form] = out
+                if form_lemmas:
+                    lemmas[form] = form_lemmas
     _cache[language] = index
+    _lemma_cache[language] = lemmas
     return index
+
+
+def lemmas_of(word, language):
+    """The lemmas the table gives the exact `word` as an inflected form of
+    ("foehna" -> ["foehner"]), in file order; `[]` if none."""
+    _load(language)
+    return _lemma_cache[language].get(_key(word), [])
 
 
 def describe_form(word, language):

@@ -2198,7 +2198,7 @@ the current defaults/behavior to know before touching this code.
   Messages API (`CLUE_LLM_API=anthropic`), in raw HTTP like every other
   external service of this project (no SDK; the Java back end has Jackson
   as its only dependency). Both checkouts' `env.sh` route definitions to
-  Mistral Medium (`mistral-medium-latest`, OpenAI-compatible, `https://api.
+  Mistral Small (`mistral-small-latest`, OpenAI-compatible, `https://api.
   mistral.ai/v1/chat/completions`), active only once `MISTRAL_API_KEY`/
   `CLUE_LLM_API_KEY` is set; Claude Haiku (`claude-haiku-4-5`, no
   `CLUE_LLM_EFFORT`/`CLUE_LLM_FALLBACKS`, which Haiku 4.5 rejects) is the
@@ -2206,6 +2206,20 @@ the current defaults/behavior to know before touching this code.
   endpoint fails (usage limit reached or any other error), the local LLM
   takes over for 5 minutes (`CLUE_LLM_BACKUP_SECONDS`, one window shared
   by clues and "Définir"), then that endpoint is tried again.
+- **Every LLM-written definition goes through one code path** — the
+  user's rule: "Toutes les générations de définitions doivent passer par
+  le même code […] Il ne doit pas y avoir plusieurs codes pour faire la
+  même chose." A grid word's clue (`generate`) and "Définir"
+  (`generate_definitions`, behind the Dictionnaire panel and Interactive
+  mode's "Proposer"/"Définitions"/"Recalculer") share the entry
+  resolution (`_word_entry`: natural spelling, base forms from the
+  wordlist rows and the inflection table), the system prompt and user
+  message (grammatical analysis of the exact form with the agreement
+  rules, canonical forms, dictionary definitions, example sentences,
+  theme — parametrized by the number of candidates), the call, retries,
+  filter and LOG_LLM/ record (`_generate_one`). Only the use of the
+  candidates differs (one picked at random vs. every kept one). Never add
+  a second prompt or call path for writing a definition.
 - **`LOG_LLM/` records are written by one shared writer and named after
   their subject** (`<timestamp>_<SUBJECT>_<SUCCES|ERROR>.md`, `backend/
   clues.py`'s `_write_llm_log`, Java `Clues.writeLlmLog`), the user's

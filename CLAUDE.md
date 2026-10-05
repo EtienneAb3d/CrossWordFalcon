@@ -2044,12 +2044,28 @@ SECONDS` (`DEFAULT_CLUE_LLM_BACKUP_S`, 300 s), during which every call of
 both goes straight to its backup; the first call after it tries the
 `CLUE_LLM` endpoint again. Unset, those calls keep the primary/interactive
 routing (Java `App.DEFINITION_CLUE_GENERATOR`/`DEFINITION_DEFINE_
-GENERATOR`). One HTTP call per word
-(`_BATCH_SIZE=1`, more reliable on a small local model than batching),
-asking for 4 lines: an `A=` grammatical-analysis line (part of speech +
+GENERATOR`).
+
+Every definition written by the LLM goes through one code path — a grid
+word's clue (`generate`: automatic generation, "Recalculer", "Finir la
+grille") and "Définir" (`generate_definitions`: the Dictionnaire panel,
+Interactive mode's "Proposer"/"Définitions"/"Recalculer") alike: the
+entry `_word_entry` resolves (Java `Clues.wordEntry`: the natural
+spelling, else the first wordlist row's; the base forms given, then those
+of the wordlist rows it spells — `dictionary_lookup.word_forms` — then the
+lemmas the inflection table gives the exact form — `inflection_lookup.
+lemmas_of`, "foehna" -> "foehner"), the same system prompt and user
+message (`_build_system_prompt`/`_build_user_message`, which take the
+number of candidates: `CLUE_CANDIDATES` (3) for a grid word, the
+requested `count` (10) for "Définir"), the same call, retries, filter and
+LOG_LLM/ record (`_generate_one`, max tokens `_candidates_max_tokens`).
+A grid word keeps one candidate picked at random; "Définir" keeps every
+candidate the filter accepts (`keep_all`, no masking fallback). One HTTP
+call per word (`_BATCH_SIZE=1`, more reliable on a small local model than
+batching), asking for an `A=` grammatical-analysis line (part of speech +
 full inflection — forces the model to reason about agreement before
-answering, then discarded) followed by 3 candidate clues (`C1=`/`C2=`/
-`C3=`); one is picked at random after heavy filtering (`_filter_
+answering, then discarded) followed by the candidates (`C1=`, `C2=`, …);
+a grid word's clue is picked at random after heavy filtering (`_filter_
 candidates`/`_pick_clue`): length, non-Latin script, containing the
 target word/its canonical form(s), a leaked label prefix, wrong-language
 stopwords. Up to 3 immediate retries per word; `generate()` fires up to
@@ -2078,18 +2094,13 @@ pre-search — see "Themed generation" above), `generate_random_theme`
 (invents an original theme phrase from scratch, given only a language and
 an optional random "indicative word" folded into the prompt purely to
 perturb the model into a different answer each call — backs `GET /api/
-theme/random`, used by `Automation/Populate.py`), `generate_definitions`
-(free-text dictionary lookups for the "Définir" button), `generate_
+theme/random`, used by `Automation/Populate.py`), `generate_
 paraphrases` (the "Paraphraseur" panel), `correct_text` (Interactive
 mode's two "Corriger" buttons: one call returning the typed definition or title with its
 agreement errors, typos, missing accents, missing spaces, lowercase first
 letter and unnatural word order (an adjective on the wrong side of its noun)
 fixed and its wording kept;
 the first line of the answer, the input unchanged if it is empty).
-`generate_definitions` grounds a word on the glosses of the text itself
-and of every canonical form of the wordlist rows it spells
-(`dictionary_lookup.word_forms`, the Dictionnaire panel's own lookup —
-"aspes" -> "aspe"; Java `DictionaryLookup.wordForms`).
 
 Every `LOG_LLM/` record goes through one writer, `_write_llm_log` (Java
 `Clues.writeLlmLog`): `LOG_LLM/<timestamp>_<SUBJECT>_<SUCCES|ERROR>.md`
