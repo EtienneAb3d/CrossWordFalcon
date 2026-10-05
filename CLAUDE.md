@@ -929,7 +929,7 @@ diagnostics, the "failed" live-tile whitelist and `last_examples`; Java
 `Diag.attentionSize`) as `[[Rh, Ch], [Rv, Cv]]`; `renderAttemptPreview()`
 draws its outline as bold dashed `.attention-edge` overlays, one per
 straight run (`attentionZoneEdges`).
-**Words per node** (`WORDS_PER_NODE` = 5, `<= 1` = one word; Java
+**Words per node** (`WORDS_PER_NODE` = 2, `<= 1` = one word; Java
 `Filler.WORDS_PER_NODE`): a node places a GROUP of words before recursing.
 Once its chosen slot's candidate has passed the crossing check,
 `Filler._descend_group` (Java `descendGroup`, called from `_backtrack` and

@@ -1652,8 +1652,8 @@ not, at any point. A spot that the new letter itself puts back in play
 seeded the grid with, for instance) is not stuck any more, so it is no
 obstacle: what counts is the state a word leaves behind, never which of
 its neighbours happened to be stuck before it. Each step of this search
-actually places a small group of words at once — currently five: once
-its chosen word passes that check, the step adds four more words, each the
+actually places a small group of words at once — currently two: once
+its chosen word passes that check, the step adds one more word, the
 first candidate that leaves every neighbor still fillable, preferably on
 the slots that were competing with the chosen one for selection (the ones
 closest to where the fill is currently working), otherwise on any other

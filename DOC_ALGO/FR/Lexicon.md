@@ -317,9 +317,9 @@ plusieurs signaux) :
 
 - **Groupe d'un nœud** : les mots qu'un nœud de la recherche pose d'un
   coup avant de descendre — le mot de l'emplacement qu'il a choisi, puis
-  jusqu'à `WORDS_PER_NODE` − 1 (soit 4) autres, posés de préférence sur les
+  jusqu'à `WORDS_PER_NODE` − 1 (soit 1) autre, posé de préférence sur les
   emplacements candidats de ce choix (fenêtre géométrique du niveau 6),
-  sinon sur les autres emplacements sélectionnables du nœud, chacun le
+  sinon sur les autres emplacements sélectionnables du nœud, le
   premier candidat qui ne laisse aucun emplacement croisé bloqué. Au retour
   en arrière, le groupe est retiré en entier, d'un seul coup ; il compte
   pour une seule descente, et chaque mot essayé pour le compléter compte
