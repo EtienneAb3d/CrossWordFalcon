@@ -2992,6 +2992,15 @@ MAX_BACKJUMP_LEVELS = 5
 # full).
 MAX_BACKGHOSTS_PER_DESCENT = 10
 
+# Words `Filler._backtrack` places per node: after the word of the slot the
+# node chose, up to `WORDS_PER_NODE - 1` more words are placed at once
+# (`Filler._descend_group`) before recursing — on the slots of that choice's
+# geometric selection window first ("emplacements candidats"), then on the
+# node's other selectable slots — and a failure below takes them all back
+# off together. Each word tried for them costs one check, like any
+# candidate. `<= 1` places a single word per node.
+WORDS_PER_NODE = 3
+
 # Maximum number of "emplacements écartés" `Filler._impossible_this_attempt`
 # holds at once: only the most recently added ones are kept, the oldest
 # being dropped as a new one comes in. The list exists to steer the search
@@ -3973,14 +3982,152 @@ class Filler:
             return True
         return False
 
-    def _descend(self, i, word, deadline_checks, released, attention):
-        """Recurse below the word just placed on slot `i`: count the
-        placement (`_record_tried_word`) and run a child node, or, when the
-        word has been placed there too often, hard-clean the slot in place
-        first (`_repeat_hardclean`)."""
-        if self._record_tried_word(i, word):
-            return self._repeat_hardclean(i, deadline_checks, released, attention)
-        return self._backtrack(deadline_checks, released, attention)
+    def _descend_group(self, i, word, window, pool, deadline_checks, released, attention):
+        """Recurse below the word just placed on slot `i`, after placing up
+        to WORDS_PER_NODE - 1 more words at once (`_extra_group_words`) —
+        on the slots of `window` (the geometric selection window `i` was
+        chosen from) first, then on those of `pool` (the node's selectable
+        slots). Every word of the group is counted (`_record_tried_word`);
+        one placed too often in a row on its slot hard-cleans that slot in
+        place instead of a plain child node. When the recursion fails, the
+        extra words are all taken back off together (those a backghost or a
+        hardclean has not removed already), their letter statistics
+        restored, and the caller takes `word` off. A conflict reported on an
+        extra slot is charged to `i` plus the words crossing that extra slot
+        — what fixed its choice — so a backjump still lands on this node."""
+        group, stopped = self._extra_group_words(window, pool, deadline_checks, attention)
+        if stopped:
+            self._undo_group(group)
+            return self._fail(None)
+        hit = i if self._record_tried_word(i, word) else None
+        for k, w, _, _ in group:
+            if self._record_tried_word(k, w) and hit is None:
+                hit = k
+        if hit is not None:
+            solved = self._repeat_hardclean(hit, deadline_checks, released, attention)
+        else:
+            solved = self._backtrack(deadline_checks, released, attention)
+        if solved:
+            return True
+        conflict, jumped = self._last_conflict, self._last_jumped
+        extras = {k for k, _, _, _ in group}
+        if conflict is not None and extras & conflict:
+            mapped = set(conflict) - extras
+            mapped.add(i)
+            for k in extras & conflict:
+                mapped |= self._assigned_crossers(k)
+            conflict = frozenset(mapped - extras)
+        self._undo_group(group)
+        self._last_conflict, self._last_jumped = conflict, jumped
+        return False
+
+    def _undo_group(self, group):
+        """Take the extra words of `_descend_group` back off, the last
+        placed first: letter statistics restored, and each word removed
+        unless a backghost or a hardclean below took it off already."""
+        for k, w, seq, saved_scores in reversed(group):
+            self._restore_letter_scores(saved_scores)
+            if self._placement_seq.get(k) == seq:
+                del self._placement_seq[k]
+                self.assignment[k] = None
+                self.used_words.discard(w)
+
+    def _extra_group_words(self, window, pool, deadline_checks, attention):
+        """Place up to WORDS_PER_NODE - 1 extra words for the current node
+        (see `_descend_group`). Each step takes the still-open slots of
+        `window` holding a free cell in the attention zone, or, when none
+        has a candidate left, those of `pool`; picks one by the selection
+        cascade (`_select_target_slot`); and places the first of its
+        candidates, in the node's own candidate order, that leaves no slot
+        it crosses blocked (`slot_is_blocked`) — never a reshape, never a
+        word that creates or crosses an impossible slot. Stops at the first
+        slot with no such word, or as soon as a still-open slot is dry (the
+        child node will backtrack on it anyway). Every word tried costs one
+        check. Returns `(group, stopped)`: group lists `(slot, word,
+        placement seq, saved letter scores)`; stopped is True when the
+        budget, an abandon or a periodic stop signal interrupted it."""
+        group = []
+        if WORDS_PER_NODE <= 1:
+            return group, False
+        tried = set()
+        while len(group) < WORDS_PER_NODE - 1:
+            active = self._active_challenge_words()
+            domains = {}
+            dry = False
+            for source in (window, pool):
+                slots = [
+                    k for k in source
+                    if k not in tried and self.assignment[k] is None
+                    and k not in self.excluded_slots and k not in self._tolerated_dry
+                ]
+                for k in self._attention_pool(slots, attention):
+                    domain = self._domain(k)
+                    if all(w in self.used_words for w in domain) and not (active and any(
+                        w not in self.used_words and self._challenge_word_fits(k, w)
+                        for w in active
+                    )):
+                        dry = True
+                        break
+                    domains[k] = domain
+                if dry or domains:
+                    break
+            if dry or not domains:
+                return group, False
+            k = self._select_target_slot(list(domains), domains)
+            tried.add(k)
+            cands = self.ordered_candidates(k, [w for w in domains[k] if w not in self.used_words])
+            cands = self.scrabble_first(k, cands)
+            if self.priority_words:
+                pw = self._active_priority_words_for(self.slots[k])
+                pri = [w for w in cands if w in pw]
+                if pri and len(pri) != len(cands):
+                    pri_set = frozenset(pri)
+                    cands = pri + [w for w in cands if w not in pri_set]
+            if active:
+                challenged = [
+                    w for w in active
+                    if w not in self.used_words and self._challenge_word_fits(k, w)
+                ]
+                if challenged:
+                    challenged_set = frozenset(challenged)
+                    cands = challenged + [w for w in cands if w not in challenged_set]
+            options_cache = {}
+            crossers = self._crossing_slots[k]
+            placed = None
+            for w in cands:
+                self.checks += 1
+                if self.abandoned or self._restart_pending:
+                    return group, True
+                if self._deadline_reached_without_extension(deadline_checks):
+                    self._budget_exhausted = True
+                    return group, True
+                if self._periodic_checkpoints():
+                    return group, True
+                self.assignment[k] = w
+                self.used_words.add(w)
+                unblocked = []
+                for j in crossers:
+                    if self.assignment[j] is not None or j in self.excluded_slots:
+                        continue
+                    if self.slot_is_blocked(j, self.used_words, active, options_cache, crossers, w):
+                        unblocked = None
+                        break
+                    unblocked.append(j)
+                if unblocked is not None:
+                    placed = w
+                    for j in unblocked:
+                        self._impossible_this_attempt.discard(j)
+                    break
+                self.assignment[k] = None
+                self.used_words.discard(w)
+            if placed is None:
+                return group, False
+            saved_scores = self._refresh_letter_scores_around(k)
+            seq = self._placement_counter
+            self._placement_counter += 1
+            self._placement_seq[k] = seq
+            group.append((k, placed, seq, saved_scores))
+        return group, False
 
     def _repeat_hardclean(self, i, deadline_checks, released, attention):
         """Declare slot `i` impossible (see MAX_SAME_WORD_PLACEMENTS) and
@@ -4739,7 +4886,7 @@ class Filler:
         return back
 
     def _try_reshape(self, option, i, domains, active_challenge_words, allow_breaking,
-                     deadline_checks, released, attention=None):
+                     deadline_checks, released, attention=None, window=(), pool=()):
         """Try one reshape candidate at the node that chose slot `i`: apply
         its black-cell change, place its word, check it exactly like any
         other candidate (the slots it crosses plus every slot the change
@@ -4750,7 +4897,9 @@ class Filler:
         blame)`: outcome "success", "rejected" (blame: the slots the
         rejection depends on, or None when it only crossed a slot blocked
         already) or "failed" (conflict: the child's conflict set on the
-        original slot indices, or None)."""
+        original slot indices, or None). `window`/`pool` are the node's
+        candidate slots and selectable slots for the extra words of its group
+        (`_descend_group`), on the original slot indices."""
         saved = self._apply_reshape(option)
         t, w = option.target, option.word
         self.assignment[t] = w
@@ -4797,7 +4946,12 @@ class Filler:
         self._tolerated_dry.update(newly_tolerated)
         self._placement_seq[t] = self._placement_counter
         self._placement_counter += 1
-        if self._descend(t, w, deadline_checks, released, attention):
+        forward = option.forward
+        if self._descend_group(
+            t, w, [forward[j] for j in window if j in forward],
+            [forward[j] for j in pool if j in forward],
+            deadline_checks, released, attention,
+        ):
             return "success", None, None
         child = self._last_conflict
         self._tolerated_dry.difference_update(newly_tolerated)
@@ -6283,6 +6437,9 @@ class Filler:
                     deadline_checks, entry_released, entry_attention,
                 )
             best_i = self._select_target_slot(avail, domains)
+            # The "emplacements candidats" the extra words of this node's
+            # group are placed on first (see WORDS_PER_NODE).
+            window = self.last_selection_window
             tried_slots.add(best_i)
             # `ordered_candidates` is the one candidate-ordering rule of
             # this engine (shuffle, statistical sort, sliding-window random
@@ -6399,7 +6556,7 @@ class Filler:
                     # Counts as a descent whatever its family.
                     outcome, child_conflict, blame = self._try_reshape(
                         w, best_i, domains, active_challenge_words, allow_breaking,
-                        deadline_checks, released, attention,
+                        deadline_checks, released, attention, window, primary,
                     )
                     if outcome == "success":
                         return True
@@ -6589,7 +6746,8 @@ class Filler:
                     seq = self._placement_counter
                     self._placement_counter += 1
                     self._placement_seq[best_i] = seq
-                    if self._descend(best_i, w, deadline_checks, released, attention):
+                    if self._descend_group(best_i, w, window, primary, deadline_checks,
+                                           released, attention):
                         return True
                     self.attention_size = attention
                     child_conflict = self._last_conflict

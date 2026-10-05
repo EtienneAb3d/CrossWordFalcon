@@ -1651,7 +1651,16 @@ not, at any point. A spot that the new letter itself puts back in play
 (because the letter replaces one of the statistical guesses the generator
 seeded the grid with, for instance) is not stuck any more, so it is no
 obstacle: what counts is the state a word leaves behind, never which of
-its neighbours happened to be stuck before it. If none of a slot's own candidates work out, the whole attempt to
+its neighbours happened to be stuck before it. Each step of this search
+actually places a small group of words at once — currently three: once
+its chosen word passes that check, the step adds two more words, each the
+first candidate that leaves every neighbor still fillable, preferably on
+the slots that were competing with the chosen one for selection (the ones
+closest to where the fill is currently working), otherwise on any other
+slot the step could have picked. When the search later has to undo that
+step, the whole group comes off together; every word tried for the group
+counts against the search budget like any other candidate
+(`backend/crossword_gen.py`, `Filler._descend_group`). If none of a slot's own candidates work out, the whole attempt to
 fill that particular slot fails, and whichever slot was chosen just
 before it gets its own placed word undone so a different candidate can
 be tried there instead — this "undo and try something else" behavior can

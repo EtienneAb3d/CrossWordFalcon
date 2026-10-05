@@ -1288,6 +1288,21 @@ the current defaults/behavior to know before touching this code.
   skipped its other candidates, `Filler._last_jumped`) may make only one
   more descent — the user's rule: the cap is only reached when every
   failure came back through ordinary backtracking.
+- **Each `Filler._backtrack` node places `WORDS_PER_NODE` (3) words at
+  once and takes them back off together** (`Filler._descend_group`, Java
+  `descendGroup`) — the user's rule: "chaque noeud pose N mots en une seule
+  fois (N=3 pour le moment) en privilégiant les cases candidates
+  sélectionnées, et dépile les N mots en même temps au backtrack. Le budget
+  est toujours compté de la même manière (chaque mot prélève un élément au
+  budget)." Choices made with the change, to revisit with the user: only
+  the node's own word has alternatives — each extra word is the first
+  candidate of its slot that leaves no crossing slot blocked, strictly
+  (never `allow_breaking`, never a reshape), and the group just stops short
+  when a slot has none; "cases candidates sélectionnées" is read as the
+  level-6 window the node's slot was drawn from, then the node's other
+  selectable slots, each extra slot picked by the cascade; a conflict on an
+  extra slot is charged to the node's slot plus that slot's crossers; the
+  group is one descent; Interactive "Suivant" still places one word.
 - **`Filler._backtrack` backjumps on conflict sets** (`BACKJUMPING_ENABLED`):
   chronological backtracking with a per-node cap still costs `cap^k` nodes
   to climb k levels, so the first words of an attempt are never revisited

@@ -742,8 +742,34 @@ La recherche est une fonction récursive, un emplacement à la fois
      évalués : si l'un, encore ouvert et sain avant la pose, n'a plus
      aucun mot (`crossing_broken`), le mot est retiré sur-le-champ et le
      candidat suivant est essayé (« Sécurité des croisements ») ;
-   - sinon le programme s'appelle récursivement ; un succès remonte tel
-     quel, un échec fait retirer le mot et essayer le suivant.
+   - sinon le nœud **complète son groupe** (point 4 bis), puis le
+     programme s'appelle récursivement ; un succès remonte tel quel, un
+     échec fait retirer le groupe entier et essayer le candidat suivant.
+4 bis. **Un nœud pose `WORDS_PER_NODE` (3) mots d'un coup**
+   (`Filler._descend_group`, `Filler._extra_group_words`). Une fois son
+   mot accepté, le nœud pose jusqu'à 2 autres mots avant de descendre :
+   chacun sur un emplacement encore ouvert de la **fenêtre géométrique**
+   d'où son emplacement a été tiré (les « emplacements candidats », niveau
+   6 de la cascade), ayant une case libre dans la zone d'attention, choisi
+   par la cascade ; à défaut d'un tel emplacement ayant encore un
+   candidat, sur les autres emplacements sélectionnables du nœud. Le mot
+   retenu est le premier de l'ordre habituel des candidats (Mots Défi,
+   thématiques, Scrabble, autres ; sans réaménagement) qui ne laisse aucun
+   emplacement croisé bloqué — règle stricte quel que soit le temps du
+   nœud : un mot du groupe ne crée ni ne croise jamais d'emplacement
+   impossible. Le groupe s'arrête au premier emplacement sans tel mot, ou
+   dès qu'un emplacement ouvert est vide (le nœud suivant reviendra en
+   arrière dessus). **Chaque mot essayé compte pour le budget**, comme
+   tout candidat. Au retour en arrière, **les mots du groupe sont retirés
+   ensemble**, le dernier posé d'abord, avant que le nœud ne retire son
+   propre mot (`Filler._undo_group` ; un mot déjà retiré par un retrait
+   fantôme ou un nettoyage dur ne l'est pas deux fois). Chaque mot du
+   groupe a son propre numéro de pose et ses relevés de lettres. Un
+   ensemble de conflit qui désigne un emplacement du groupe est reporté
+   sur l'emplacement du nœud et sur les mots qui croisent cet emplacement
+   du groupe : le saut arrière s'arrête bien au nœud qui a posé le groupe.
+   Un groupe compte pour une seule descente. `WORDS_PER_NODE <= 1` ramène
+   à un mot par nœud.
 5. **Si aucun candidat n'aboutit**, le nœud échoue et son appelant retire
    son propre mot : le retour en arrière peut remonter plusieurs
    emplacements d'un coup.
@@ -841,7 +867,8 @@ vérifications qui met fin à la tentative.
 
 **Le budget compte les tentatives de poser un mot**, pas les appels
 récursifs : chaque candidat essayé vaut une unité, même rejeté
-immédiatement par le contrôle de croisement.
+immédiatement par le contrôle de croisement — y compris chaque mot essayé
+pour compléter le groupe d'un nœud.
 
 ### Les emplacements écartés
 
@@ -1996,8 +2023,9 @@ qu'un autre mot y est posé (`Filler._last_word_streak`,
 `Filler._record_tried_word`). Ce mot est alors devenu obligatoire dans une
 boucle qui rejoue le même scénario. Au moment où il y est posé pour la
 1001ᵉ fois de suite, l'emplacement est déclaré impossible et nettoyé
-**sur place**, à l'intérieur de la recherche (`Filler._descend`,
-`Filler._repeat_hardclean`) : `_clean_blocked_slots` reçoit cet emplacement
+**sur place**, à l'intérieur de la recherche (`Filler._descend_group`,
+`Filler._repeat_hardclean` ; le premier emplacement du groupe du nœud qui
+dépasse la limite) : `_clean_blocked_slots` reçoit cet emplacement
 pour seul emplacement impossible, son propre mot retiré d'abord ; son mot,
 les mots qui le croisent et toute lettre restée sur lui sont effacés, avec
 les mêmes règles de verrouillage et de lettres orphelines que le nettoyage

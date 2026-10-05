@@ -833,8 +833,9 @@ keeps, per slot (cells), the last word the search placed there and how many
 times in a row; another word restarts it at 1 (`_record_tried_word`, Java
 `lastWord`/`lastWordCount`; enabled by `try_fill(same_word_limit=)`, passed
 only by `_pattern_attempt`/`_pattern_continue`). Past the limit, the
-placement's recursion (`Filler._descend`, used at both `_record_tried_word`
-call sites) runs `_repeat_hardclean` instead of a plain child node:
+placement's recursion (`Filler._descend_group`, which counts every word of
+the node's group, the first slot of the group past the limit being the one
+cleaned) runs `_repeat_hardclean` instead of a plain child node:
 `_clean_blocked_slots` with that slot as the only impossible slot, its own
 word taken off first, applied in place without unwinding anything — the
 removed words leave `assignment`/`used_words`/`_placement_seq` (their
@@ -929,6 +930,31 @@ diagnostics, the "failed" live-tile whitelist and `last_examples`; Java
 `Diag.attentionSize`) as `[[Rh, Ch], [Rv, Cv]]`; `renderAttemptPreview()`
 draws its outline as bold dashed `.attention-edge` overlays, one per
 straight run (`attentionZoneEdges`).
+**Words per node** (`WORDS_PER_NODE` = 3, `<= 1` = one word; Java
+`Filler.WORDS_PER_NODE`): a node places a GROUP of words before recursing.
+Once its chosen slot's candidate has passed the crossing check,
+`Filler._descend_group` (Java `descendGroup`, called from `_backtrack` and
+`_try_reshape`) places up to `WORDS_PER_NODE - 1` more words
+(`_extra_group_words`): each step takes the still-open slots of the
+selection's level-6 window (`last_selection_window`, read right after
+`_select_target_slot`; the "emplacements candidats") holding a free cell in
+the attention zone, or, when none has a candidate, those of the node's
+current stage pool (`primary`; both mapped through `forward` for a reshape),
+picks one by the cascade, and places the first word of its candidate order
+(`ordered_candidates`, Scrabble/theme/"Mots Défi" blocks; no reshape) that
+leaves no crossing slot blocked (`slot_is_blocked`, strict: never creating
+nor crossing an impossible slot, whatever the node's stage; a per-slot
+`options_cache`). It stops at the first slot with no such word, at a dry
+open slot, or on a budget/abandon/stop signal (the node then fails with an
+unknown conflict). Every word tried costs one check. Each extra word gets
+its own `_placement_seq` and letter re-tally; a failure below undoes the
+extras together, last first (`_undo_group`, skipping one a backghost or a
+hardclean already removed), before the node takes its own word off; a
+conflict set naming an extra slot is rewritten as the node's own slot plus
+that extra slot's assigned crossers, so backjumping still stops at the
+node. The group counts as one descent (exempt when the node's own word is
+a "Mots Défi"/theme word), and a node's other candidates each get a fresh
+group.
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
 `MAX_DESCENTS_PER_NODE` (10; `<= 0` disables it) — set to
 `EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 20) for a node entered while fewer than

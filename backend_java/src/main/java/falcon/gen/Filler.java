@@ -84,6 +84,11 @@ public final class Filler {
     // Backghosts pending on one descent at most; past that a failure
     // backjumps however far. <= 0 disables backghosting.
     public static final int MAX_BACKGHOSTS_PER_DESCENT = 10;
+    // Words backtrack places per node (mirrors WORDS_PER_NODE): after the word of the chosen slot, up to
+    // WORDS_PER_NODE - 1 more at once (descendGroup), on the slots of that choice's selection window first, then
+    // on the node's other selectable slots; a failure below takes them all back off together. <= 1 places a
+    // single word per node.
+    public static final int WORDS_PER_NODE = 3;
     public static final int MAX_EXCLUDED_SLOTS = 3;
     public static final boolean ALTERNATE_DIRECTION_ENABLED = false;
     // Level 4 of the slot-selection cascade (restrict to slots already
@@ -501,11 +506,153 @@ public final class Filler {
         return false;
     }
 
-    /** Mirrors _descend: count the placement and run a child node, or hard-clean the slot in place first when the
-     * word has been placed there too often in a row. */
-    boolean descend(int i, String word, long deadlineChecks, boolean released, long attention) {
-        if (recordTriedWord(i, word)) return repeatHardclean(i, deadlineChecks, released, attention);
-        return backtrack(deadlineChecks, released, attention);
+    /** Mirrors _descend_group: place up to WORDS_PER_NODE - 1 extra words (extraGroupWords, on the window slots
+     * first, then on the pool), count every word of the group, and run a child node — or hard-clean in place the
+     * first slot of the group whose word has been placed there too often in a row. On failure the extra words are
+     * all taken back off together, and a conflict on an extra slot is charged to i plus the words crossing it. */
+    boolean descendGroup(int i, String word, List<Integer> window, List<Integer> pool, long deadlineChecks,
+                         boolean released, long attention) {
+        List<Object[]> group = new ArrayList<>();
+        if (extraGroupWords(window, pool, deadlineChecks, attention, group)) {
+            undoGroup(group);
+            return fail(null);
+        }
+        int hit = recordTriedWord(i, word) ? i : -1;
+        for (Object[] g : group) {
+            if (recordTriedWord((Integer) g[0], (String) g[1]) && hit < 0) hit = (Integer) g[0];
+        }
+        boolean solved = hit >= 0
+                ? repeatHardclean(hit, deadlineChecks, released, attention)
+                : backtrack(deadlineChecks, released, attention);
+        if (solved) return true;
+        Set<Integer> conflict = lastConflict;
+        boolean jumped = lastJumped;
+        Set<Integer> extras = new HashSet<>();
+        for (Object[] g : group) extras.add((Integer) g[0]);
+        if (conflict != null) {
+            Set<Integer> hits = new HashSet<>(extras);
+            hits.retainAll(conflict);
+            if (!hits.isEmpty()) {
+                Set<Integer> mapped = new HashSet<>(conflict);
+                mapped.removeAll(extras);
+                mapped.add(i);
+                for (int k : hits) mapped.addAll(assignedCrossers(k));
+                mapped.removeAll(extras);
+                conflict = mapped;
+            }
+        }
+        undoGroup(group);
+        lastConflict = conflict;
+        lastJumped = jumped;
+        return false;
+    }
+
+    /** Mirrors _undo_group: the last placed first, letter statistics restored, each word removed unless a
+     * backghost or a hardclean below took it off already. */
+    @SuppressWarnings("unchecked")
+    void undoGroup(List<Object[]> group) {
+        for (int n = group.size() - 1; n >= 0; n--) {
+            Object[] g = group.get(n);
+            int k = (Integer) g[0];
+            restoreLetterScores((Map<Integer, Object[]>) g[3]);
+            Long current = placementSeq.get(k);
+            if (current != null && current == (long) (Long) g[2]) {
+                placementSeq.remove(k);
+                assignment[k] = null;
+                usedWords.remove((String) g[1]);
+            }
+        }
+    }
+
+    /** Mirrors _extra_group_words: fills group with {slot, word, placement seq, saved letter scores}; returns true
+     * when the budget, an abandon or a periodic stop signal interrupted it. */
+    boolean extraGroupWords(List<Integer> window, List<Integer> pool, long deadlineChecks, long attention,
+                            List<Object[]> group) {
+        if (WORDS_PER_NODE <= 1) return false;
+        Set<Integer> tried = new HashSet<>();
+        while (group.size() < WORDS_PER_NODE - 1) {
+            Set<String> active = activeChallengeWords();
+            Map<Integer, Dom> domains = new LinkedHashMap<>();
+            boolean dry = false;
+            for (List<Integer> source : List.of(window, pool)) {
+                List<Integer> open = new ArrayList<>();
+                for (int k : source) {
+                    if (!tried.contains(k) && assignment[k] == null && !excludedSlots.contains(k)
+                            && !toleratedDry.contains(k)) open.add(k);
+                }
+                for (int k : attentionPool(open, attention)) {
+                    Dom d = domain(k);
+                    if (d.allIn(usedWords) && !challengeCanFill(k, active)) {
+                        dry = true;
+                        break;
+                    }
+                    domains.put(k, d);
+                }
+                if (dry || !domains.isEmpty()) break;
+            }
+            if (dry || domains.isEmpty()) return false;
+            int k = selectTargetSlot(new ArrayList<>(domains.keySet()), domains);
+            tried.add(k);
+            List<String> cands = orderedCandidates(k, domains.get(k).minus(usedWords));
+            cands = scrabbleFirst(k, cands);
+            if (!priorityWords.isEmpty()) {
+                Set<String> pw = activePriorityWordsFor(slots.get(k));
+                List<String> pri = new ArrayList<>();
+                for (String w : cands) if (pw.contains(w)) pri.add(w);
+                if (!pri.isEmpty() && pri.size() != cands.size()) {
+                    Set<String> priSet = new HashSet<>(pri);
+                    List<String> merged = new ArrayList<>(pri);
+                    for (String w : cands) if (!priSet.contains(w)) merged.add(w);
+                    cands = merged;
+                }
+            }
+            if (!active.isEmpty()) {
+                List<String> challenged = new ArrayList<>();
+                for (String w : active) if (!usedWords.contains(w) && challengeWordFits(k, w)) challenged.add(w);
+                if (!challenged.isEmpty()) {
+                    Set<String> challengedSet = new HashSet<>(challenged);
+                    List<String> merged = new ArrayList<>(challenged);
+                    for (String w : cands) if (!challengedSet.contains(w)) merged.add(w);
+                    cands = merged;
+                }
+            }
+            Map<Object, OptionsEntry> optionsCache = new HashMap<>();
+            int[] crossers = crossingSlots[k];
+            String placed = null;
+            for (String w : cands) {
+                checks++;
+                if (abandoned || restartPending) return true;
+                if (deadlineReachedWithoutExtension(deadlineChecks)) {
+                    budgetExhausted = true;
+                    return true;
+                }
+                if (periodicCheckpoints()) return true;
+                assignment[k] = w;
+                usedWords.add(w);
+                List<Integer> unblocked = new ArrayList<>();
+                for (int j : crossers) {
+                    if (assignment[j] != null || excludedSlots.contains(j)) continue;
+                    if (slotIsBlocked(j, usedWords, active, optionsCache, crossers, w)) {
+                        unblocked = null;
+                        break;
+                    }
+                    unblocked.add(j);
+                }
+                if (unblocked != null) {
+                    placed = w;
+                    for (int j : unblocked) impossibleThisAttempt.discard(j);
+                    break;
+                }
+                assignment[k] = null;
+                usedWords.remove(w);
+            }
+            if (placed == null) return false;
+            Map<Integer, Object[]> savedScores = refreshLetterScoresAround(k);
+            long seq = placementCounter++;
+            placementSeq.put(k, seq);
+            group.add(new Object[]{k, placed, seq, savedScores});
+        }
+        return false;
     }
 
     /** Mirrors _repeat_hardclean: declare slot i impossible and hard-clean it in place (its own word taken off
@@ -1152,7 +1299,8 @@ public final class Filler {
 
     /** Mirrors _try_reshape: returns {outcome, conflict-or-null, blame-or-null}. */
     Object[] tryReshape(Reshape option, int i, Map<Integer, Dom> domains, Set<String> active, boolean allowBreaking,
-                        long deadlineChecks, boolean released, long attention) {
+                        long deadlineChecks, boolean released, long attention, List<Integer> window,
+                        List<Integer> pool) {
         Object[] saved = applyReshape(option);
         int t = option.target;
         String w = option.word;
@@ -1203,7 +1351,12 @@ public final class Filler {
         for (int j : broken) if (!toleratedDry.contains(j)) newlyTolerated.add(j);
         toleratedDry.addAll(newlyTolerated);
         placementSeq.put(t, placementCounter++);
-        if (descend(t, w, deadlineChecks, released, attention)) return new Object[]{"success", null, null};
+        List<Integer> windowT = new ArrayList<>(), poolT = new ArrayList<>();
+        for (int j : window) if (option.forward.containsKey(j)) windowT.add(option.forward.get(j));
+        for (int j : pool) if (option.forward.containsKey(j)) poolT.add(option.forward.get(j));
+        if (descendGroup(t, w, windowT, poolT, deadlineChecks, released, attention)) {
+            return new Object[]{"success", null, null};
+        }
         Set<Integer> child = lastConflict;
         toleratedDry.removeAll(newlyTolerated);
         restoreLetterScores(savedScores);
@@ -1881,6 +2034,9 @@ public final class Filler {
                         entryAttention);
             }
             int bestI = selectTargetSlot(avail, domains);
+            // The "emplacements candidats" the extra words of this node's group are placed on first.
+            List<Integer> window = lastSelectionWindow;
+            List<Integer> pool = primary;
             triedSlots.add(bestI);
             List<String> cands = orderedCandidates(bestI, domains.get(bestI).minus(usedWords));
             // Scrabble family: ahead of the rest of the general dictionary; the theme block and the "Mots Défi"
@@ -1932,7 +2088,7 @@ public final class Filler {
                     // Its black-cell change is always undone before this
                     // returns, unless it succeeded; counts as a descent.
                     Object[] out = tryReshape(rs, bestI, domains, active, allowBreaking, deadlineChecks, released,
-                            attention);
+                            attention, window, pool);
                     String outcome = (String) out[0];
                     if (outcome.equals("success")) return true;
                     attentionSize = attentionJson(attention);
@@ -2014,7 +2170,7 @@ public final class Filler {
                     toleratedDry.addAll(newlyTolerated);
                     long seq = placementCounter++;
                     placementSeq.put(bestI, seq);
-                    if (descend(bestI, w, deadlineChecks, released, attention)) return true;
+                    if (descendGroup(bestI, w, window, pool, deadlineChecks, released, attention)) return true;
                     attentionSize = attentionJson(attention);
                     Set<Integer> childConflict = lastConflict;
                     boolean jumpedIn = lastJumped;

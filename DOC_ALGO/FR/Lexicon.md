@@ -315,6 +315,18 @@ plusieurs signaux) :
   sauf quand sa pose a demandé un réaménagement de case noire, qui compte
   toujours. (`backend/crossword_gen.py`, `Filler._backtrack`.)
 
+- **Groupe d'un nœud** : les mots qu'un nœud de la recherche pose d'un
+  coup avant de descendre — le mot de l'emplacement qu'il a choisi, puis
+  jusqu'à `WORDS_PER_NODE` − 1 (soit 2) autres, posés de préférence sur les
+  emplacements candidats de ce choix (fenêtre géométrique du niveau 6),
+  sinon sur les autres emplacements sélectionnables du nœud, chacun le
+  premier candidat qui ne laisse aucun emplacement croisé bloqué. Au retour
+  en arrière, le groupe est retiré en entier, d'un seul coup ; il compte
+  pour une seule descente, et chaque mot essayé pour le compléter compte
+  pour le budget. (`backend/crossword_gen.py`, `WORDS_PER_NODE`,
+  `Filler._descend_group`, `Filler._extra_group_words`,
+  `Filler._undo_group`.)
+
 - **Plafond de descentes par nœud** : nombre maximal de descentes
   qu'une étape de la recherche fait sans succès avant d'abandonner et de
   rendre la main à l'étape précédente, qui essaie alors son propre
@@ -351,7 +363,10 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `Filler._backtrack`, `BACKJUMPING_ENABLED`,
   `MAX_BACKJUMP_LEVELS`.)
 
-- **Emplacements candidats** : en mode Interactif, les emplacements de la
+- **Emplacements candidats** : en génération automatique, les emplacements
+  de la fenêtre géométrique du niveau 6 d'où un nœud a tiré son
+  emplacement ; les autres mots de son groupe y sont posés en priorité
+  (voir « Groupe d'un nœud »). En mode Interactif, les emplacements de la
   fenêtre géométrique du niveau 6 de la cascade de choix d'emplacement —
   les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du milieu du segment reliant le centre de la grille au centre du dernier mot posé par « Suivant » (du centre de la grille tant qu'il n'y en a pas)
   parmi ceux retenus par les niveaux précédents — dans laquelle a été
@@ -473,7 +488,7 @@ plusieurs signaux) :
   mots retirés restent absents et un nouveau nœud poursuit la recherche ;
   l'emplacement devient un emplacement écarté et son décompte repart de
   zéro. (`backend/crossword_gen.py`, `Filler._record_tried_word`,
-  `Filler._last_word_streak`, `Filler._descend`, `Filler._repeat_hardclean`,
+  `Filler._last_word_streak`, `Filler._descend_group`, `Filler._repeat_hardclean`,
   `MAX_SAME_WORD_PLACEMENTS`.)
 
 - **Seconde chance** : reprise d'une tentative qui échoue alors que le
