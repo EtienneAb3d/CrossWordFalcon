@@ -20,10 +20,16 @@ limits) JSON-lines file, one object per line, sorted by form:
     {"form": "humera", "analyses": [
         {"pos": "verb", "tags": "third-person singular future", "lemma": "humer"}]}
 
-filtered to just the surface forms present in
-`data/wordlist_<lang>_freq.tsv` (the app only ever looks these up: every
-grid word comes from that file), which keeps each language's file to a
-few MB up to ~20 MB. Read at runtime by `backend/inflection_lookup.py`.
+filtered to just the surface forms (ACCENTUE) present in
+`data/wordlist_<lang>_freq.tsv` and `data/wordlist_<lang>_scrabble.tsv`
+(the app only ever looks these up: every grid word comes from those
+files), which keeps each language's file to a few MB up to ~20 MB. A
+wordlist form with no accent (only ASCII letters) is also matched
+impoverished, accents aside: its accents may be unknown (the Scrabble
+lists are written without accents), so the analyses of every accented
+dump entry with the same grid form are listed under it too — "macerons"
+gets the noun "maceron" and the verb form "macérons" of "macérer"
+(`_unaccented_key`). Read at runtime by `backend/inflection_lookup.py`.
 
 Usage:
     .venv/bin/python data_builder/build_inflections.py fr
@@ -37,7 +43,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build_wordlist_freq import fold_ligatures  # noqa: E402
+from build_wordlist_freq import fold_ligatures, strip_accents  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DICS_DIR = ROOT / "data" / "wiktionary"
@@ -83,10 +89,10 @@ def _download_dump(lang):
 
 
 def _wordlist_forms(lang):
-    """Every ACCENTED spelling (2nd column) of the language's wordlists —
-    data/wordlist_<lang>_freq.tsv and, when it exists, data/wordlist_
-    <lang>_scrabble.tsv — lowercased: the inflection table is filtered to
-    just these."""
+    """Every ACCENTED spelling (2nd column, `;`-separated in the Scrabble
+    one) of the language's wordlists — data/wordlist_<lang>_freq.tsv and,
+    when it exists, data/wordlist_<lang>_scrabble.tsv — lowercased: the
+    inflection table is filtered to just these."""
     forms = set()
     for name in (f"wordlist_{lang}_freq.tsv", f"wordlist_{lang}_scrabble.tsv"):
         path = WORDLIST_DIR / name
@@ -95,14 +101,25 @@ def _wordlist_forms(lang):
         with open(path, encoding="utf-8") as f:
             for line in f:
                 parts = line.rstrip("\n").split("\t")
-                if len(parts) >= 2 and parts[1]:
-                    forms.add(parts[1].lower())
+                if len(parts) >= 2:
+                    forms.update(s.lower() for s in parts[1].split(";") if s)
     return forms
+
+
+def _unaccented_key(form):
+    """`form` (lowercase, ligature-folded) accents aside — "ß" spelled
+    "ss", like a MOT — or None when it holds no accent (an exact match
+    already covers it)."""
+    if form.isascii():
+        return None
+    key = strip_accents(form).replace("ß", "ss")
+    return key if key.isascii() else None
 
 
 def build(lang):
     dump = _download_dump(lang)
     keep = _wordlist_forms(lang)
+    unaccented = {form for form in keep if form.isascii()}
     print(f"{lang}: {len(keep)} wordlist forms to match against {dump.name}",
           file=sys.stderr)
 
@@ -120,7 +137,13 @@ def build(lang):
             # column of the project's dictionaries (build_wordlist_freq.py's
             # `fold_ligatures`).
             form = fold_ligatures((entry.get("word") or "").lower())
-            if not form or form not in keep:
+            if not form:
+                continue
+            targets = [form] if form in keep else []
+            poor = _unaccented_key(form)
+            if poor in unaccented:
+                targets.append(poor)
+            if not targets:
                 continue
             pos = entry.get("pos") or None
             for sense in entry.get("senses", []):
@@ -137,14 +160,15 @@ def build(lang):
                     lemma = fold_ligatures(lemma)
                 if not pos and not gram:
                     continue
-                key = (form, pos, gram, lemma)
-                if key in seen:
-                    continue
-                seen.add(key)
-                table.setdefault(form, []).append(
-                    {"pos": pos, "tags": gram, "lemma": lemma}
-                )
-                matched += 1
+                for target in targets:
+                    key = (target, pos, gram, lemma)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    table.setdefault(target, []).append(
+                        {"pos": pos, "tags": gram, "lemma": lemma}
+                    )
+                    matched += 1
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     out = OUT_DIR / f"{lang}.jsonl"

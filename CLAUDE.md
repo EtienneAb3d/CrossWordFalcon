@@ -109,7 +109,10 @@ Each of the six languages has its own dictionary, built independently by
    grammatical tags, filters to the surface forms (ACCENTUE) of
    `data/wordlist_<lang>_freq.tsv` and `data/wordlist_<lang>_scrabble.tsv`, and writes `data/inflection/<lang>.jsonl` (`{"form",
    "analyses": [{"pos", "tags", "lemma"}]}`) — used by `backend/
-   inflection_lookup.py` for clue-writing's grammar grounding. Committed,
+   inflection_lookup.py` for clue-writing's grammar grounding. A
+   wordlist form with no accent (ASCII only) also collects the analyses
+   of every accented dump entry with the same grid form
+   (`_unaccented_key`: "macerons" gets "macérons", a form of "macérer"). Committed,
    plain uncompressed.
 6. **`qdrant_populate.py`** (`WordEmbeddingIndexer`) — embeds and upserts
    every word of the language's lexicon — the freq wordlist, then every
@@ -120,9 +123,11 @@ Each of the six languages has its own dictionary, built independently by
    server isn't running.
 
 `data_builder/build_<lang>.sh` chains, for one language: corpus, freq
-wordlist, Scrabble download (`download_scrabble_dictionaries.py <lang>`)
-+ Scrabble dictionary, gloss dictionary, corpus archive, inflection
-table, Qdrant tenant (steps 1/7-7/7, the last one non-fatal);
+wordlist,
+lemmas of its unaccented spellings (`build_unaccented_lemmas.py`),
+Scrabble download (`download_scrabble_dictionaries.py <lang>`) + Scrabble
+dictionary, gloss dictionary, corpus archive,
+inflection table, Qdrant tenant (steps 1/8-8/8, the last one non-fatal);
 `data_builder/build_all.sh` runs the six in turn (logs/build_<lang>.log).
 Only Python's standard library, `httpx`, `curl`, `xz` and the `hunspell`
 CLI are needed (`Install.sh` installs `hunspell`/`xz`).
@@ -136,24 +141,50 @@ Qdrant index haven't caught up with).
 
 **Scrabble dictionary** (`data/wordlist_<lang>_scrabble.tsv`, committed,
 `MOT<TAB>ACCENTUE<TAB>CANONIQUE` sorted by MOT — the freq wordlist's
-columns minus FREQUENCE), built by `data_builder/build_wordlist_scrabble.
-py` right after stage 2 (`build_<lang>.sh` step 3/7) from `data/scrabble/
+columns minus FREQUENCE, ACCENTUE listing every possible spelling,
+`;`-separated, the main one first), built by `data_builder/build_wordlist_scrabble.
+py` right after stage 2 (`build_<lang>.sh` step 4/8) from `data/scrabble/
 <lang>/*.txt` (the raw official/reference Scrabble lists — fr ODS8, en
 SOWPODS + TWL, es FILE 2017 + FISE 2, it Zingarelli, pt LibreOffice-
 derived, de reference list — copied verbatim from GitHub `FlandersBurger/
 scrabble-dictionary` by `download_scrabble_dictionaries.py`;
 `data/scrabble/ReadMe.md` records provenance and licenses). Files of a
 language are merged; MOT is the entry's grid form (`grid_form`, the MOT
-convention, "ß" -> "SS", non-A-Z entries dropped). ACCENTUE/CANONIQUE come
-from, in order: the freq wordlist's row; the stage-5 English-Wiktionary
-Kaikki dump (headwords and their listed/form-of inflected forms with
-their lemma, `_kaikki_forms`/`_pick_spelling`); Hunspell as-is/title-cased
-(`-G`) with `-m` stems; Hunspell's suggestions (`-a`, one process per CPU,
-first suggestion with the same MOT, `_hunspell_suggestions`); else the
-raw entry as its own lemma. Stages 3 and 5 also cover it: `build_gloss_
+convention, "ß" -> "SS", non-A-Z entries dropped). An entry's accents
+are unknown, so every source is searched accents aside and their answers
+are combined: the spellings its accents alone tell apart from it
+(`accent_variant`; German: same MOT, any case) come from the freq
+wordlist's row (with its lemmas), the stage-5 English-Wiktionary Kaikki
+dump (headwords and their listed/form-of inflected forms with their
+lemma, `_kaikki_forms`), Hunspell as-is/title-cased (`-G`) and every
+Hunspell suggestion with the same MOT (`-a`, one process per CPU,
+`_hunspell_suggestions`), each spelling also getting its `-m` stems.
+ACCENTUE lists every spelling found, the main one first — the first
+found in that source order (`_pick_spelling` within the dump), else the
+raw entry; CANONIQUE is the union of every spelling's lemmas, the main
+one's first (`MACERONS macerons;macérons maceron;macérer`), else the main
+spelling. At run time the main spelling is the word's `accented` form
+(`_row_forms`, Java `Words.rowForms`); every spelling counts for the
+"easy" inflection filter (`_scrabble_entries`, Java `Words.
+scrabbleEntries`), the example-sentence index (`example_sentences.
+_load_wordlist_words`, Java `ExampleSentences.loadWordlistWords`), the
+inflection table (`build_inflections._wordlist_forms`) and Qdrant's
+embedded text (`qdrant_store._compose_embed_text`). Stages 3 and 5 also cover it: `build_gloss_
 dictionary._target_lemmas` adds its CANONIQUE column, `build_inflections.
-_wordlist_forms` its ACCENTUE column. Every raw Wiktionary/Kaikki dump is
+_wordlist_forms` every spelling of its ACCENTUE column. Every raw Wiktionary/Kaikki dump is
 kept in `data/wiktionary/` (gitignored) for reuse.
+
+**Unaccented spellings**: a freq-wordlist row whose ACCENTUE holds no
+accent (ASCII only) may have unknown accents, so `data_builder/
+build_unaccented_lemmas.py` (`build_<lang>.sh` step 3/8, right after
+stage 2) looks its MOT up accents aside in the stage-5 English-Wiktionary
+Kaikki dump (`build_wordlist_scrabble._kaikki_forms`) and appends to
+CANONIQUE the lemmas (from the dump and from `hunspell -m`) of every
+spelling whose accents alone tell it apart from ACCENTUE
+(`accented_variant`: same letters and case once accents are stripped;
+German: same MOT, any case) — `MACERONS macerons maceron;macérer`,
+`SUR sur sur;sûr`. Idempotent; rows with an accented ACCENTUE are left
+as they are.
 
 **Ligatures**: every text column of every dictionary — ACCENTUE/
 CANONIQUE of both wordlists, the gloss dictionary (words and glosses), the

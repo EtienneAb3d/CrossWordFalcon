@@ -16,26 +16,29 @@ LANG_CODE=de
 
 step() { echo; echo "=== $(date '+%F %T')  $*"; }
 
-step "1/7  build_sentence_corpus $LANG_CODE"
+step "1/8  build_sentence_corpus $LANG_CODE"
 $PY data_builder/build_sentence_corpus.py "$LANG_CODE" || { echo "FAILED at build_sentence_corpus"; exit 1; }
 
-step "2/7  build_wordlist_freq $LANG_CODE"
+step "2/8  build_wordlist_freq $LANG_CODE"
 $PY data_builder/build_wordlist_freq.py "$LANG_CODE" || { echo "FAILED at build_wordlist_freq"; exit 1; }
 
-step "3/7  build_wordlist_scrabble $LANG_CODE"
+step "3/8  build_unaccented_lemmas $LANG_CODE"
+$PY data_builder/build_unaccented_lemmas.py "$LANG_CODE" || { echo "FAILED at build_unaccented_lemmas"; exit 1; }
+
+step "4/8  build_wordlist_scrabble $LANG_CODE"
 $PY data_builder/download_scrabble_dictionaries.py "$LANG_CODE" || { echo "FAILED at download_scrabble_dictionaries"; exit 1; }
 $PY data_builder/build_wordlist_scrabble.py "$LANG_CODE" || { echo "FAILED at build_wordlist_scrabble"; exit 1; }
 
-step "4/7  build_gloss_dictionary $LANG_CODE"
+step "5/8  build_gloss_dictionary $LANG_CODE"
 $PY data_builder/build_gloss_dictionary.py "$LANG_CODE" || { echo "FAILED at build_gloss_dictionary"; exit 1; }
 
-step "5/7  compress_reference_corpus $LANG_CODE"
+step "6/8  compress_reference_corpus $LANG_CODE"
 $PY data_builder/compress_reference_corpus.py "$LANG_CODE" || { echo "FAILED at compress_reference_corpus"; exit 1; }
 
-step "6/7  build_inflections $LANG_CODE"
+step "7/8  build_inflections $LANG_CODE"
 $PY data_builder/build_inflections.py "$LANG_CODE" || { echo "FAILED at build_inflections"; exit 1; }
 
-step "7/7  qdrant_populate $LANG_CODE  (best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
+step "8/8  qdrant_populate $LANG_CODE  (best effort — needs ./run_qdrant.sh + ./run_embed.sh running)"
 # Non-fatal: the wordlist/gloss artefacts above are the real deliverables; feeding
 # the Qdrant "words" collection is a downstream nicety. --recreate wipes this
 # language's tenant first, since the wordlist it mirrors was just rebuilt.

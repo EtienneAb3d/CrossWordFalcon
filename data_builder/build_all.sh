@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Rebuilds every data artefact of the six languages from scratch, one
 # language after the other (data_builder/build_<lang>.sh — corpus, freq
-# wordlist, Scrabble dictionary, gloss dictionary, corpus archive,
-# inflection table, Qdrant tenant). Very long (several hours per language);
+# wordlist, lemmas of its unaccented spellings, Scrabble dictionary, gloss
+# dictionary, corpus archive, inflection table, Qdrant tenant). Very long (several hours per language);
 # each language's own log goes to logs/build_<lang>.log. Stops at the
 # first language that fails.
 set -u

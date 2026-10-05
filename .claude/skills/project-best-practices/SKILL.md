@@ -1532,11 +1532,15 @@ the current defaults/behavior to know before touching this code.
   dictionaries.py`; provenance and licenses in `data/scrabble/ReadMe.md`)
   are turned by `data_builder/build_wordlist_scrabble.py` into
   `data/wordlist_<lang>_scrabble.tsv` (`MOT<TAB>ACCENTUE<TAB>CANONIQUE`,
-  the freq wordlist's columns minus FREQUENCE, committed); the runtime
+  the freq wordlist's columns minus FREQUENCE, committed; the user's rule:
+  ACCENTUE lists every possible spelling, `;`-separated, the main one
+  first, CANONIQUE every lemma — any reader of that column must split
+  it, the runtime taking the main spelling as the word's accented form); the runtime
   reads only that TSV, never the raw lists. It is built right after
-  `build_wordlist_freq.py` (`build_<lang>.sh` step 3/7) and must be rebuilt
-  after it, then followed by the gloss dictionary and inflection table,
-  which both cover its words too. It is merged whole into every grid's
+  `build_wordlist_freq.py` and `build_unaccented_lemmas.py`
+  (`build_<lang>.sh` step 4/8) and must be rebuilt after them, then
+  followed by the gloss dictionary and the inflection table, which both
+  cover its words too. It is merged whole into every grid's
   lexicon at Medium/Hard and, at Easy, only for its words whose ACCENTUE
   is a form or a lemma of the inflection table (`merge_scrabble_lexicon`), exempt from the
   proper-noun and no-gloss quotas and never "noise"; it is the third
@@ -1546,6 +1550,24 @@ the current defaults/behavior to know before touching this code.
   exemption nor content-score bonus. Its words are shown dark cyan in
   every preview (`scrabble_cells`, computed from each example's grid in
   `backend/app.py`) and for a "Suivant" word with `placed.from_scrabble`.
+- **An unaccented spelling is looked up accents aside.** The Scrabble
+  lists carry no accents, so a wordlist row (freq or Scrabble) whose
+  ACCENTUE holds no accent has unknown accents: the user's rule is that
+  verb forms, definitions, etc. are then found by an impoverished search,
+  combining every source, each one possibly incomplete (the user's rule).
+  `build_wordlist_scrabble.py` searches each Scrabble entry accents aside
+  in the freq row, the Kaikki dump, Hunspell and Hunspell's suggestions,
+  and unions every spelling's lemmas (`hunspell -m` stems included);
+  `data_builder/build_unaccented_lemmas.py` (step 3/8) appends to an
+  unaccented freq row's CANONIQUE the lemmas (Kaikki + `hunspell -m`) of
+  every spelling differing from it by its accents alone ("macerons" ->
+  "maceron;macérer"); `build_inflections.py` lists those spellings'
+  analyses under an unaccented form. Choices made with the change, to
+  revisit with the user: a freq row whose ACCENTUE already carries an
+  accent is left alone (its accents come from the corpus, so PECHE
+  "péché" does not gain "pêche"); outside German a variant must keep the
+  entry's case; the example-sentence index stays keyed by the exact
+  ACCENTUE.
 - **No ligature letter in any dictionary.** Every text column of the
   wordlists, the gloss dictionary, the inflection table and Qdrant spells
   `œ`/`æ` (and their capitals) as two plain letters (`fold_ligatures`,

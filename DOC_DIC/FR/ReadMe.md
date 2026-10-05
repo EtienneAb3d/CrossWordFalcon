@@ -248,7 +248,11 @@ toutes les formes plutôt que la seule la plus fréquente laisse une
 ambiguïté réelle ouverte jusqu'au moment où le modèle de langage rédige
 effectivement la définition, dans le contexte du mot précis à définir,
 plutôt que de la trancher arbitrairement dès la construction du dictionnaire
-(`build_wordlist_freq.py`, `_stem_map`).
+(`build_wordlist_freq.py`, `_stem_map`). Avec un dictionnaire Hunspell qui n'est pas en UTF-8
+(l'allemand, en ISO-8859-1), `hunspell -m` écrit le lemme en UTF-8 alors
+que le reste de sa ligne garde l'encodage du dictionnaire : le lemme est
+relu en UTF-8 (`fix_stem_encoding`), sans quoi « abdrücken » deviendrait
+« abdrÃ¼cken ».
 
 ### Noms propres probables
 
@@ -410,8 +414,14 @@ d'une liste blanche (personne, nombre, genre, temps, mode — dans cet ordre ;
 formes de surface présentes dans `data/wordlist_<lang>_freq.tsv` et
 `data/wordlist_<lang>_scrabble.tsv`** : l'appli ne consulte jamais que des
 mots de grille, qui viennent tous de ces fichiers (`build_inflections.py`,
-`_wordlist_forms`). Les formes et les lemmes y sont écrits ligatures
-remplacées par leurs deux lettres simples. Chaque table pèse de 13 à 50 Mo
+`_wordlist_forms`). Une forme de ces listes sans aucun accent est aussi
+cherchée de façon appauvrie, accents mis à part, puisque ses accents
+peuvent être inconnus (les listes Scrabble sont écrites sans accents) :
+les analyses de toute entrée accentuée du dump de même forme grille sont
+rangées sous elle aussi — « macerons » reçoit le pluriel du nom
+« maceron » et la forme « macérons » du verbe « macérer »
+(`build_inflections.py`, `_unaccented_key`). Les formes et les lemmes y
+sont écrits ligatures remplacées par leurs deux lettres simples. Chaque table pèse de 13 à 50 Mo
 selon la langue, suivie par git comme le dictionnaire de définitions.
 
 ### Utilisation
@@ -444,7 +454,9 @@ mots, mais pas après un simple changement de règle de compression.
 Les scripts `data_builder/build_<lang>.sh` (un par langue) enchaînent ces
 cinq étapes — en construisant le dictionnaire Scrabble (voir plus bas)
 juste après l'étape 2, après avoir téléchargé les listes brutes de la
-langue si elles manquent — puis, en dernière étape, alimentent la base
+langue si elles manquent, et en complétant juste avant les lemmes des
+graphies sans accents de la liste de fréquences (voir « Graphies sans
+accents » plus bas) — puis, en dernière étape, alimentent la base
 vectorielle Qdrant avec tout le lexique de la langue : les mots de
 `data/wordlist_<lang>_freq.tsv`, puis ceux de
 `data/wordlist_<lang>_scrabble.tsv` qu'il ne contient pas
@@ -480,32 +492,51 @@ licences de chaque liste.
 
 `build_wordlist_scrabble.py` en fait `data/wordlist_<langue>_scrabble.tsv`,
 au format du dictionnaire de fréquences moins la colonne FREQUENCE :
-`MOT<TAB>ACCENTUE<TAB>CANONIQUE`, trié par MOT. Tous les fichiers d'une
+`MOT<TAB>ACCENTUE<TAB>CANONIQUE`, trié par MOT, la colonne ACCENTUE
+listant toutes les graphies possibles du mot, séparées par `;`. Tous les fichiers d'une
 langue sont fusionnés ; MOT est la forme grille de l'entrée (`grid_form` :
 ligatures dépliées, accents retirés, majuscules — « ß » devient « SS » —,
 entrée écartée si elle garde un caractère hors A-Z ou fait moins de 2
 lettres). La plupart des listes étant écrites sans accents et toutes en
-minuscules, ACCENTUE et CANONIQUE sont retrouvées dans cet ordre (`build`) :
+minuscules, les accents d'une entrée sont inconnus : chaque source est
+interrogée de façon appauvrie, accents mis à part, et leurs réponses sont
+combinées, chacune pouvant être incomplète (`build`). Les graphies d'une
+entrée sont toutes celles que seuls leurs accents distinguent d'elle
+(`accent_variant` : mêmes lettres et même casse une fois les accents
+retirés ; en allemand, même MOT quelle que soit la casse), trouvées dans :
 
-1. la ligne de même MOT de `wordlist_<langue>_freq.tsv` ;
+1. la ligne de même MOT de `wordlist_<langue>_freq.tsv` (sa graphie et ses
+   lemmes) ;
 2. le dump Wiktionnaire anglais de la langue (celui de l'étape 5,
    `data/wiktionary/<Nom>-en.jsonl.gz`) : chaque entrée et chacune des
-   formes fléchies qu'elle liste, avec son lemme (`_kaikki_forms`) ; entre
-   plusieurs graphies de même MOT, celle égale à l'entrée (casse mise à
-   part) l'emporte, puis une graphie en minuscules (`_pick_spelling`) ;
-3. Hunspell : l'entrée telle quelle ou avec une majuscule (noms allemands),
-   ses lemmes par `hunspell -m` ;
-4. les suggestions de Hunspell (`hunspell -a`, un processus par cœur) : la
-   première de même MOT rétablit les accents (« cheriez » → « chériez »)
-   (`_hunspell_suggestions`) ;
-5. à défaut, l'entrée elle-même, son propre lemme.
+   formes fléchies qu'elle liste, avec son lemme (`_kaikki_forms`) ;
+3. Hunspell : l'entrée telle quelle ou avec une majuscule (noms allemands) ;
+4. les suggestions de Hunspell (`hunspell -a`, un processus par cœur) :
+   toutes celles de même MOT (« macheriez » → « mâcheriez »)
+   (`_hunspell_suggestions`).
+
+Chaque graphie trouvée reçoit en plus ses lemmes par `hunspell -m`.
+ACCENTUE liste toutes les graphies trouvées, la principale en tête : la
+première trouvée dans cet ordre des sources (dans le dump, celle égale à
+l'entrée, casse mise à part, puis une graphie en minuscules,
+`_pick_spelling`), l'entrée elle-même à défaut. CANONIQUE réunit les
+lemmes de toutes les graphies, ceux de la principale en tête, la graphie
+principale à défaut : « MACERONS macerons;macérons maceron;macérer », par
+le nom « maceron » et la forme verbale « macérons ».
 
 Ce dictionnaire dépend de l'étape 2 et du dump de l'étape 5 ; les scripts
-`build_<langue>.sh` le construisent juste après l'étape 2, et il alimente à
+`build_<langue>.sh` le construisent juste après l'étape 2 et le complément
+des graphies sans accents, et il alimente à
 son tour les étapes 3 et 5 : le dictionnaire de définitions cherche aussi
 les lemmes de sa colonne CANONIQUE (`build_gloss_dictionary.py`,
-`_target_lemmas`), la table des formes fléchies aussi les formes de sa
-colonne ACCENTUE (`build_inflections.py`, `_wordlist_forms`).
+`_target_lemmas`), la table des formes fléchies aussi chacune des
+graphies de sa colonne ACCENTUE (`build_inflections.py`,
+`_wordlist_forms`). À l'exécution, la graphie principale est la forme
+naturelle du mot (`backend/crossword_gen.py`, `_row_forms`) ; toutes
+comptent pour le filtre du niveau facile (`_scrabble_entries`), l'index
+des phrases d'exemple (`backend/example_sentences.py`,
+`_load_wordlist_words`) et le texte encodé dans Qdrant
+(`backend/qdrant_store.py`, `_compose_embed_text`).
 
 ### Utilisation
 
@@ -518,6 +549,28 @@ Ses mots s'ajoutent à la part du dictionnaire de fréquences retenue pour
 ce niveau, avec la référence de leur ligne, hors quotas de noms
 propres et de mots sans définition. La génération essaie en priorité ses
 mots (voir `DOC_ALGO/FR/ReadMe.md`, « Choisir quel mot essayer »).
+
+## Graphies sans accents
+
+Une graphie du corpus peut manquer d'accents comme les listes Scrabble :
+une ligne de `wordlist_<langue>_freq.tsv` dont la colonne ACCENTUE ne
+porte aucun accent (seulement des lettres ASCII) a des accents peut-être
+inconnus. `data_builder/build_unaccented_lemmas.py` (`build`), lancé
+juste après l'étape 2, cherche donc le MOT de chacune de ces lignes de
+façon appauvrie dans le dump Wiktionnaire anglais de la langue
+(`build_wordlist_scrabble.py`, `_kaikki_forms`) : chaque graphie accentuée
+de même MOT ajoute ses lemmes, ceux du dump et ceux de `hunspell -m`, à la
+colonne CANONIQUE (« MACERONS », « macerons », « maceron »
+devient « maceron;macérer », par la forme « macérons » de « macérer » ;
+« SUR » gagne « sûr »). Une graphie compte quand seuls ses accents la
+distinguent de ACCENTUE : mêmes lettres et même casse une fois les accents
+retirés, ou même MOT quelle que soit la casse en allemand, où tout nom
+porte une majuscule et « ß » s'écrit « SS » dans un MOT
+(`accented_variant`). Une ligne dont ACCENTUE porte un accent reste telle
+quelle. Le dictionnaire Scrabble reprend ces lemmes avec la ligne, et
+combine de lui-même toutes ses sources accents mis à part (voir plus
+haut). Le dictionnaire de définitions cherche donc aussi ces lemmes (« macérer » y entre), et la table des formes fléchies fait la même
+recherche appauvrie sur les formes (voir l'étape 5).
 
 ## Les ligatures
 
@@ -542,8 +595,9 @@ CrossWordFalcon fabrique, pour chaque langue, un corpus de phrases réelles
 tiré de cinq registres d'écriture différents (gardé en deux variantes,
 complète et plafonnée), en compte les mots de la variante complète pour en
 tirer une liste triée par fréquence — corrigée par la forme canonique de
-chaque mot et par la détection des noms propres probables — puis va
-chercher, pour chaque forme canonique de cette liste, une vraie définition
+chaque mot et par la détection des noms propres probables, complétée par
+le dictionnaire Scrabble et par les lemmes des variantes accentuées de ses
+graphies sans accents — puis va chercher, pour chaque forme canonique de cette liste, une vraie définition
 dans Wiktionary, compresse la variante plafonnée du corpus pour publication,
 et extrait enfin de Wiktionary une table locale donnant la nature et la
 flexion exacte de chaque forme de la liste ; le générateur de grille

@@ -3,7 +3,8 @@
 Builds data/wordlist_<lang>_scrabble.tsv (MOT<TAB>ACCENTUE<TAB>CANONIQUE)
 from the language's Scrabble word list(s) (data/scrabble/<lang>/*.txt,
 downloaded by download_scrabble_dictionaries.py) — the same columns as
-data/wordlist_<lang>_freq.tsv minus FREQUENCE.
+data/wordlist_<lang>_freq.tsv minus FREQUENCE, ACCENTUE listing every
+possible spelling.
 
 - MOT is the entry's grid form, the wordlist's own convention
   (build_wordlist_freq.py's `strip_accents`, then uppercased — so German
@@ -11,23 +12,34 @@ data/wordlist_<lang>_freq.tsv minus FREQUENCE.
   shorter than 2 letters, is skipped. Every file of a language folder is
   merged, one row per distinct MOT.
 - Most Scrabble lists are written without accents (ODS8, FILE/FISE,
-  Zingarelli, SOWPODS/TWL) and all are lowercase, so ACCENTUE (the natural
-  spelling: accents and capitalization) and CANONIQUE (the lemma(s),
-  `;`-separated) are recovered, in this order of preference:
-  1. the row of data/wordlist_<lang>_freq.tsv with the same MOT;
-  2. the English-Wiktionary Kaikki dump of the language (data/wiktionary/<Name>-en.
-     jsonl.gz, shared with build_inflections.py, downloaded if missing):
-     every headword and every inflected form listed under it (`forms`,
-     or a `form-of` sense) with its lemma. Among several spellings with
-     the same MOT, the one equal to the entry itself (case aside) wins,
-     then a lowercase one, then the alphabetically first;
+  Zingarelli, SOWPODS/TWL) and all are lowercase: an entry's accents are
+  unknown, so every source is searched "impoverished", accents aside, and
+  their answers are combined, each source being possibly incomplete. The
+  spellings of an entry are every spelling its accents alone tell apart
+  from it (`accent_variant`: same letters and case once accents are
+  stripped; German: same MOT, any case, nouns being capitalized), found
+  in:
+  1. the row of data/wordlist_<lang>_freq.tsv with the same MOT (its
+     ACCENTUE and CANONIQUE);
+  2. the English-Wiktionary Kaikki dump of the language (data/wiktionary/
+     <Name>-en.jsonl.gz, shared with build_inflections.py, downloaded if
+     missing): every headword and every inflected form listed under it
+     (`forms`, or a `form-of` sense) with its lemma (`_kaikki_forms`);
   3. Hunspell (build_wordlist_freq.py's dictionaries): the entry as-is or
-     title-cased (German nouns), its lemma(s) from `hunspell -m`;
+     title-cased (German nouns);
   4. Hunspell's spelling suggestions (`hunspell -a`, one process per CPU
-     over chunks of the remaining entries): the first suggestion with the
-     same MOT restores the accents ("cheriez" -> "chériez"), its lemma(s)
-     again from `hunspell -m`;
-  5. the entry itself, as its own lemma.
+     over chunks of the entries): every suggestion with the same MOT
+     ("macheriez" -> "mâcheriez", `_hunspell_suggestions`).
+  Every spelling found also gets its lemma(s) from `hunspell -m`.
+  ACCENTUE lists every spelling found, `;`-separated, the main one first:
+  the first found in that order of sources (in the dump, `_pick_spelling`:
+  the one equal to the entry, case aside, then a lowercase one, then the
+  alphabetically first), the entry itself when none is — the runtime
+  takes that one as the word's natural spelling. CANONIQUE is the union
+  of the lemmas of every spelling, those of the main one first
+  ("MACERONS  macerons;macérons  maceron;macérer", from the noun
+  "maceron" and the verb form "macérons"), the main spelling itself when
+  none is known.
 
 Usage:
     python3 data_builder/build_wordlist_scrabble.py fr
@@ -44,6 +56,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_inflections  # noqa: E402
 import build_wordlist_freq  # noqa: E402
+from build_wordlist_freq import strip_accents  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRABBLE_DIR = ROOT / "data" / "scrabble"
@@ -86,8 +99,8 @@ def _freq_rows(lang):
 
 def _kaikki_forms(lang, wanted):
     """{MOT: {spelling: set(lemmas)}} for the MOTs in `wanted`, read from
-    the Kaikki dump: headwords (their own lemma) and their inflected
-    forms."""
+    the Kaikki dump: headwords (their own lemma, or the one their form-of
+    sense names) and the forms they list (with that same lemma)."""
     found = {}
 
     def add(spelling, lemma):
@@ -119,7 +132,10 @@ def _kaikki_forms(lang, wanted):
                 tags = f.get("tags") or []
                 if "table-tags" in tags or "inflection-template" in tags or "romanization" in tags:
                     continue
-                add(f.get("form") or "", word)
+                # A form listed under an inflected entry (an alternative
+                # spelling: "macèrerions" under "macérerions") shares
+                # that entry's lemma, never the entry itself.
+                add(f.get("form") or "", lemma_of_word)
     return found
 
 
@@ -132,9 +148,18 @@ def _pick_spelling(raw, spellings):
     )[0]
 
 
+def accent_variant(lang, raw, spelling):
+    """True when `spelling` is the entry `raw` up to its accents (see the
+    module docstring)."""
+    spelling = build_wordlist_freq.fold_ligatures(spelling)
+    if lang == "de":
+        return grid_form(spelling) == grid_form(raw)
+    return strip_accents(spelling) == strip_accents(raw)
+
+
 def _hunspell_suggestions(lang, raws):
-    """{raw: spelling} for each of `raws` whose Hunspell suggestions hold
-    one with the same MOT (step 4 of the module docstring)."""
+    """{raw: [spelling, ...]}: every Hunspell suggestion of each of `raws`
+    with the same MOT (step 4 of the module docstring)."""
     if not raws or lang not in build_wordlist_freq.HUNSPELL_SOURCE:
         return {}
     try:
@@ -160,10 +185,9 @@ def _hunspell_suggestions(lang, raws):
             head, suggestions = line.split(": ", 1)
             raw = head.split(" ")[1]
             target = grid_form(raw)
-            for suggestion in suggestions.split(", "):
-                if grid_form(suggestion) == target:
-                    found[raw] = suggestion
-                    break
+            matching = [s for s in suggestions.split(", ") if grid_form(s) == target]
+            if matching:
+                found[raw] = matching
         return found
 
     merged = {}
@@ -176,49 +200,73 @@ def _hunspell_suggestions(lang, raws):
 def build(lang):
     entries = _scrabble_entries(lang)
     freq = _freq_rows(lang)
-    rows = {}
+    # MOT -> {spelling: set(lemmas)}, spellings in order of discovery.
+    spellings = {form: {} for form in entries}
+    accented = {}
+
+    def add(form, spelling, lemmas=()):
+        spelling = build_wordlist_freq.fold_ligatures(spelling)
+        spellings[form].setdefault(spelling, set()).update(
+            build_wordlist_freq.fold_ligatures(l) for l in lemmas if l)
+
     for form, raw in entries.items():
         if form in freq:
-            rows[form] = freq[form]
-    missing = {form for form in entries if form not in rows}
-    print(f"{lang}: {len(entries)} Scrabble words, {len(rows)} found in the freq wordlist",
+            spelling, canonical = freq[form]
+            add(form, spelling, canonical.split(";"))
+            accented[form] = build_wordlist_freq.fold_ligatures(spelling)
+    print(f"{lang}: {len(entries)} Scrabble words, {len(accented)} found in the freq wordlist",
           file=sys.stderr)
 
-    kaikki = _kaikki_forms(lang, missing)
-    for form in list(missing):
-        spellings = kaikki.get(form)
-        if not spellings:
-            continue
-        spelling = _pick_spelling(entries[form], spellings)
-        lemmas = sorted(spellings[spelling]) or [spelling]
-        rows[form] = (spelling, ";".join(lemmas))
-        missing.discard(form)
-    print(f"{lang}: {len(entries) - len(missing) - len(freq.keys() & entries.keys())} "
-          f"more from the Kaikki dump, {len(missing)} left", file=sys.stderr)
-
-    raws = [entries[form] for form in sorted(missing)]
-    valid = build_wordlist_freq._spellcheck_valid(lang, raws) or {}
-    restored = _hunspell_suggestions(lang, [r for r in raws if r not in valid])
-    spelled = {**restored, **valid}
-    stems = build_wordlist_freq._stem_map(lang, sorted(set(spelled.values())))
-    for form in sorted(missing):
+    kaikki = _kaikki_forms(lang, set(entries))
+    from_kaikki = 0
+    for form, found in kaikki.items():
         raw = entries[form]
-        accented = spelled.get(raw)
-        if accented is not None:
-            lemmas = list(dict.fromkeys(stems.get(accented, []))) or [accented]
-        else:
-            accented, lemmas = raw, [raw]
-        rows[form] = (accented, ";".join(lemmas))
-    print(f"{lang}: {len(valid)} validated by Hunspell, {len(restored)} restored from its "
-          f"suggestions, {len(missing) - len(spelled)} kept as written", file=sys.stderr)
+        variants = {s: l for s, l in found.items() if accent_variant(lang, raw, s)}
+        if not variants:
+            continue
+        from_kaikki += 1
+        if form not in accented:
+            accented[form] = build_wordlist_freq.fold_ligatures(_pick_spelling(raw, variants))
+            add(form, accented[form])
+        for spelling in sorted(variants):
+            add(form, spelling, variants[spelling])
+    print(f"{lang}: {from_kaikki} found in the Kaikki dump", file=sys.stderr)
+
+    raws = [entries[form] for form in sorted(entries)]
+    valid = build_wordlist_freq._spellcheck_valid(lang, raws) or {}
+    suggested = _hunspell_suggestions(lang, [r for r in raws if r not in valid])
+    for form in sorted(entries):
+        raw = entries[form]
+        found = ([valid[raw]] if raw in valid else []) + suggested.get(raw, [])
+        for spelling in found:
+            if form not in accented:
+                accented[form] = build_wordlist_freq.fold_ligatures(spelling)
+                add(form, accented[form])
+            add(form, spelling)
+    print(f"{lang}: {len(valid)} validated by Hunspell, {len(suggested)} with suggestions",
+          file=sys.stderr)
+
+    stems = build_wordlist_freq._stem_map(
+        lang, sorted({s for found in spellings.values() for s in found}))
+    rows = {}
+    for form, raw in entries.items():
+        found = spellings[form]
+        for spelling in found:
+            add(form, spelling, stems.get(spelling, []))
+        spelling = accented.get(form, raw)
+        lemmas = sorted(found.get(spelling, ()))
+        for other in found:
+            if other != spelling:
+                lemmas.extend(sorted(found[other]))
+        listed = ";".join(dict.fromkeys([spelling, *found]))
+        rows[form] = (listed, ";".join(dict.fromkeys(lemmas)) or spelling)
+    print(f"{lang}: {len(entries) - len(accented)} kept as written", file=sys.stderr)
 
     dst = WORDLIST_DIR / f"wordlist_{lang}_scrabble.tsv"
     with open(dst, "w", encoding="utf-8") as out:
         for form in sorted(rows):
-            accented, canonical = rows[form]
-            canonical = ";".join(dict.fromkeys(
-                build_wordlist_freq.fold_ligatures(c) for c in canonical.split(";") if c))
-            out.write(f"{form}\t{build_wordlist_freq.fold_ligatures(accented)}\t{canonical}\n")
+            spelling, canonical = rows[form]
+            out.write(f"{form}\t{spelling}\t{canonical}\n")
     print(f"{len(rows)} words written to {dst}")
 
 

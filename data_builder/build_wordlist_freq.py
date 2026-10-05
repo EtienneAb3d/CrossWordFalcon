@@ -165,8 +165,10 @@ CANONICAL_WEIGHT = 0.9
 PROPER_NOUN_SCORE_FACTOR = 0.25
 
 # Parses one "-m" morphological-analysis output line, e.g.
-# "déterminées  st:déterminer fl:p+" -> ("déterminées", "déterminer").
-_STEM_LINE_RE = re.compile(r"^(\S+)\s+st:(\S+)")
+# "déterminées  st:déterminer fl:p+" -> ("déterminées", "déterminer"). The
+# stem stops at a plain space or tab only: read before `fix_stem_encoding`,
+# a UTF-8 "à" can end in a byte decoding as a no-break space ("voilà").
+_STEM_LINE_RE = re.compile(r"^(\S+)\s+st:([^ \t]+)")
 
 # Path (relative to LibreOffice/dictionaries' raw GitHub root) of each
 # language's .dic/.aff pair. French lives in a nested "dictionaries"
@@ -369,8 +371,21 @@ def _stem_map(lang, forms):
     for line in result.stdout.decode(encoding, errors="replace").splitlines():
         match = _STEM_LINE_RE.match(line)
         if match:
-            stems.setdefault(match.group(1), []).append(match.group(2))
+            stems.setdefault(match.group(1), []).append(fix_stem_encoding(match.group(2), encoding))
     return stems
+
+
+def fix_stem_encoding(stem, encoding):
+    """`stem` as Hunspell meant it: with a non-UTF-8 dictionary (German,
+    ISO-8859-1), `hunspell -m` writes the `st:` field in UTF-8 while the
+    rest of the line keeps the dictionary's encoding, so that field,
+    decoded with `encoding`, reads "abdrÃ¼cken" for "abdrücken"."""
+    if encoding.lower().replace("_", "-") in ("utf-8", "utf8"):
+        return stem
+    try:
+        return stem.encode(encoding).decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return stem
 
 
 def main():

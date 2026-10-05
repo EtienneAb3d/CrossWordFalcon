@@ -151,12 +151,15 @@ public final class Words {
     }
 
     /** (accented, [canonical, ...]) of {@code word} read from its wordlist row {@code line} — the same parsing as
-     * loadWordlist (freq wordlist) or the Scrabble merge ({@code scrabble}) (mirrors _row_forms). */
+     * loadWordlist (freq wordlist) or the Scrabble merge ({@code scrabble}, whose ACCENTUE column lists every possible
+     * spelling, ";"-separated, the main one first: accented is that one) (mirrors _row_forms). */
     static Object[] rowForms(String line, String word, boolean scrabble) {
         String[] parts = line.split("\t", -1);
         if (scrabble) {
             if (parts.length < 3) return new Object[]{word, List.of(word)};
-            return new Object[]{parts[1], splitCanonical(parts[2], parts[1])};
+            String accented = parts[1].split(";", -1)[0];
+            if (accented.isEmpty()) accented = word;
+            return new Object[]{accented, splitCanonical(parts[2], accented)};
         }
         if (parts.length >= 4) return new Object[]{parts[1], splitCanonical(parts[3], parts[1])};
         if (parts.length == 3) return new Object[]{parts[1], List.of(parts[1])};
@@ -373,8 +376,8 @@ public final class Words {
     private static final Map<String, Set<String>> SCRABBLE_WORDS = new java.util.HashMap<>();
 
     /** {MOT: row reference} of the language's Scrabble wordlist, in file order (empty when the language has none)
-     * — transient, built only while a lexicon is loaded. At "easy" difficulty, only the words whose accented form is
-     * a form or a lemma of the inflection table (mirrors _scrabble_entries). */
+     * — transient, built only while a lexicon is loaded. At "easy" difficulty, only the words one of whose spellings
+     * (the ";"-separated ACCENTUE column) is a form or a lemma of the inflection table (mirrors _scrabble_entries). */
     static Map<String, Integer> scrabbleEntries(String language, boolean easy) {
         Map<String, Integer> refs = new LinkedHashMap<>();
         if (language == null || language.isEmpty()) return refs;
@@ -393,7 +396,12 @@ public final class Words {
         }
         if (easy) {
             Set<String> known = loadInflectionKeys(language);
-            refs.keySet().removeIf(w -> !known.contains(Py.lookupKey(accented.get(w))));
+            refs.keySet().removeIf(w -> {
+                for (String s : accented.get(w).split(";", -1)) {
+                    if (!s.isEmpty() && known.contains(Py.lookupKey(s))) return false;
+                }
+                return true;
+            });
         }
         return refs;
     }

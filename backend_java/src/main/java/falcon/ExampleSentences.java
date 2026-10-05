@@ -38,7 +38,8 @@ public final class ExampleSentences {
 
     private static Set<String> loadWordlistWords(String language) throws IOException {
         Set<String> words = new HashSet<>();
-        // The freq wordlist's ACCENTED column, then the Scrabble wordlist's (merged into every grid's lexicon).
+        // The freq wordlist's ACCENTED column, then the Scrabble wordlist's (merged into every grid's lexicon; every
+        // ";"-separated spelling).
         for (String name : List.of("wordlist_" + language + "_freq.tsv", "wordlist_" + language + "_scrabble.tsv")) {
             Path path = DATA_DIR.resolve(name);
             if (!Files.exists(path)) continue;
@@ -47,8 +48,10 @@ public final class ExampleSentences {
                 while ((line = r.readLine()) != null) {
                     String[] parts = line.split("\t", -1);
                     if (parts.length >= 2) {
-                        String accented = Py.strip(parts[1]);
-                        if (!accented.isEmpty()) words.add(Py.lookupKey(accented));
+                        for (String spelling : parts[1].split(";", -1)) {
+                            String accented = Py.strip(spelling);
+                            if (!accented.isEmpty()) words.add(Py.lookupKey(accented));
+                        }
                     }
                 }
             }

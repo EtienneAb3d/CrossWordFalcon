@@ -464,12 +464,15 @@ def _scrabble_row_ref(offset):
 def _row_forms(line, word, scrabble):
     """(accented, [canonical, ...]) of `word` read from its wordlist row
     `line` — the same parsing as `load_wordlist` (freq wordlist) or
-    `merge_scrabble_lexicon` (Scrabble wordlist, `scrabble` true)."""
+    `merge_scrabble_lexicon` (Scrabble wordlist, `scrabble` true, whose
+    ACCENTUE column lists every possible spelling, `;`-separated, the
+    main one first: `accented` is that one)."""
     parts = line.split("\t")
     if scrabble:
         if len(parts) < 3:
             return word, [word]
-        return parts[1], [c for c in parts[2].split(";") if c] or [parts[1]]
+        accented = parts[1].split(";")[0] or word
+        return accented, [c for c in parts[2].split(";") if c] or [accented]
     if len(parts) >= 4:
         return parts[1], [c for c in parts[3].split(";") if c] or [parts[1]]
     if len(parts) == 3:
@@ -2197,8 +2200,9 @@ def _scrabble_entries(language, easy):
     """{MOT: (row reference, ACCENTUE)} of `language`'s Scrabble wordlist,
     in file order (empty when the language has none) — transient, built
     only while a lexicon is loaded. At "easy" difficulty (`easy`), only
-    the words with a known inflection (`load_inflection_keys`: their
-    accented form is a form or a lemma of the inflection table)."""
+    the words with a known inflection (`load_inflection_keys`: one of
+    their spellings, the `;`-separated ACCENTUE column, is a form or a
+    lemma of the inflection table)."""
     entries = {}
     if not language:
         return entries
@@ -2211,7 +2215,8 @@ def _scrabble_entries(language, easy):
             entries[parts[0]] = (_scrabble_row_ref(offset), parts[1])
     if easy:
         known = load_inflection_keys(language)
-        entries = {w: e for w, e in entries.items() if _inflection_key(e[1]) in known}
+        entries = {w: e for w, e in entries.items()
+                   if any(_inflection_key(s) in known for s in e[1].split(";") if s)}
     return entries
 
 

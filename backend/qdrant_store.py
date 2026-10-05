@@ -110,6 +110,9 @@ def _compose_embed_text(word, accented, canonical):
     accent-stripped uppercase form (the MOT column), and each of its
     candidate canonical form(s)/lemma(s).
 
+    `accented` may list several spellings, `;`-separated (the Scrabble
+    wordlist's ACCENTUE column): each is a part of its own.
+
     `canonical` is the wordlist's own `;`-separated CANONIQUE column
     (possibly empty — not every word has a candidate lemma). Exact
     duplicates among the parts are dropped (a lemma identical to the
@@ -118,8 +121,9 @@ def _compose_embed_text(word, accented, canonical):
     names all three explicitly. Falls back to the bare word if somehow
     every part is empty."""
     lemmas = [c.strip() for c in (canonical or "").split(";") if c.strip()]
+    spellings = [a.strip() for a in (accented or "").split(";") if a.strip()]
     parts = []
-    for p in [accented, word, *lemmas]:
+    for p in [*spellings, word, *lemmas]:
         if p and p not in parts:
             parts.append(p)
     return " ".join(parts) if parts else (accented or word or "")

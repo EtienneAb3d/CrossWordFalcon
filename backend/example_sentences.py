@@ -67,7 +67,8 @@ def _load_wordlist_words(language):
     containing it — the same class of silent gap as the CORPUS_DIR
     mix-up documented in CLAUDE.md's history for this file. The Scrabble
     wordlist's own ACCENTED column (data/wordlist_<lang>_scrabble.tsv,
-    merged into every grid's lexicon) is read too. Keys are `_key`s."""
+    merged into every grid's lexicon; every `;`-separated spelling) is
+    read too. Keys are `_key`s."""
     words = set()
     for name in (f"wordlist_{language}_freq.tsv", f"wordlist_{language}_scrabble.tsv"):
         path = DATA_DIR / name
@@ -77,9 +78,10 @@ def _load_wordlist_words(language):
             for line in f:
                 parts = line.split("\t")
                 if len(parts) >= 2:
-                    accented = parts[1].strip()
-                    if accented:
-                        words.add(_key(accented))
+                    for accented in parts[1].split(";"):
+                        accented = accented.strip()
+                        if accented:
+                            words.add(_key(accented))
     return words
 
 
