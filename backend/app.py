@@ -53,6 +53,7 @@ from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
     PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
+    word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
     _serialize_resume_state, interactive_boundary_candidates, interactive_clean_impossible_zones,
     interactive_crossing_words, interactive_minimize_black_cells,
@@ -5541,6 +5542,45 @@ async def interactive_title(req: InteractiveTitleRequest):
     return {"titles": titles}
 
 
+def _known_word_forms(index, direction, answer):
+    """`(accented, [canonical, ...])` of `answer` read from its wordlist row
+    through an Interactive session's lexicon (`index`, the DualIndex side of
+    `direction`), or `None` when the word is not in it (no known forms)."""
+    side = index.for_direction(direction).get(len(answer)) if index is not None and answer else None
+    if side is None or side["ids"].get(answer) is None:
+        return None
+    accented, canonical = word_forms(side, answer)
+    return accented, list(canonical)
+
+
+def _definitions_with_forms(index, grid, definitions):
+    """`definitions` (an Interactive session's `{row, col, direction, clue}`
+    list) with `answer`, `accented` and `canonical` added to the entry of
+    every fully lettered slot whose word the session's lexicon knows, so a
+    later definition rewrite has the word's inflected and base forms at
+    hand. Other entries are left as they are."""
+    out = []
+    for d in definitions or []:
+        d = dict(d)
+        try:
+            r, c, direction = int(d["row"]), int(d["col"]), d["direction"]
+        except (KeyError, TypeError, ValueError):
+            out.append(d)
+            continue
+        dr, dc = (0, 1) if direction == "across" else (1, 0)
+        letters = []
+        while 0 <= r < len(grid) and 0 <= c < len(grid[r]) and grid[r][c] != "#":
+            letters.append(grid[r][c] or "")
+            r, c = r + dr, c + dc
+        answer = "".join(letters)
+        if len(letters) >= 2 and all(len(ch) == 1 and "A" <= ch <= "Z" for ch in letters):
+            forms = _known_word_forms(index, direction, answer)
+            if forms is not None:
+                d["answer"], (d["accented"], d["canonical"]) = answer, forms
+        out.append(d)
+    return out
+
+
 @app.post("/api/interactive/save")
 async def interactive_save(req: InteractiveSaveRequest):
     """"Publier" button: rebuild a generate_grid()-shaped result from the
@@ -5569,10 +5609,14 @@ async def interactive_save(req: InteractiveSaveRequest):
     # language None/identical to language) leaves every word on the
     # primary language, unchanged from before this field existed.
     is_bilingual = bool(req.bilingual_language) and req.bilingual_language != req.language
+    # Each word's inflected and base forms, read from the session's lexicon
+    # like generate_grid() does for an automatic grid; a word the lexicon
+    # does not know keeps itself as both, generate_grid()'s own convention.
+    session_index = (INTERACTIVE_SESSIONS.get(req.job_id) or {}).get("index")
     for w in words:
         w["clue"] = clue_by_key.get((w["row"], w["col"], w["direction"]), "")
-        w.setdefault("accented", w["answer"])
-        w.setdefault("canonical", w["answer"])
+        forms = _known_word_forms(session_index, w["direction"], w["answer"])
+        w["accented"], w["canonical"] = forms if forms is not None else (w["answer"], [w["answer"]])
         w["language"] = req.bilingual_language if (is_bilingual and w["direction"] == "down") else req.language
     solution = build_letters_grid(rows, cols, slots, assignment)
     n_black = sum(c == "#" for row in bw for c in row)
@@ -5651,7 +5695,8 @@ async def interactive_save(req: InteractiveSaveRequest):
         try:
             await asyncio.to_thread(
                 save_grid_work,
-                req.job_id, req.grid, req.definitions, req.title,
+                req.job_id, req.grid, _definitions_with_forms(sess["index"], req.grid, req.definitions),
+                req.title,
                 meta.get("language", req.language),
                 meta.get("difficulty", req.difficulty),
                 meta.get("theme") or ((req.theme or "").strip() or None),
@@ -5700,8 +5745,8 @@ async def interactive_save_work(req: InteractiveSaveWorkRequest):
     pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
     work_id = await asyncio.to_thread(
         save_grid_work,
-        req.job_id, req.grid, req.definitions, req.title,
-        meta.get("language", "fr"), meta.get("difficulty", "easy"), meta.get("theme"),
+        req.job_id, req.grid, _definitions_with_forms(sess["index"], req.grid, req.definitions),
+        req.title, meta.get("language", "fr"), meta.get("difficulty", "easy"), meta.get("theme"),
         sess["priority_words"], sess.get("seed", 0), pseudo,
         sess.get("resumed_from"), meta.get("origin"),
         meta.get("bilingual_language"),

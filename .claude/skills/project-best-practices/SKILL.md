@@ -2206,14 +2206,25 @@ the current defaults/behavior to know before touching this code.
   endpoint fails (usage limit reached or any other error), the local LLM
   takes over for 5 minutes (`CLUE_LLM_BACKUP_SECONDS`, one window shared
   by clues and "Définir"), then that endpoint is tried again.
-- **Every call to an external LLM endpoint is recorded in `LOG_LLM/`**
-  (`<timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md`, `backend/clues.py`'s
-  `_write_external_call_log`, Java `Clues.writeExternalCallLog`), the
-  user's rule. "External" is any host but `localhost` and loopback,
-  private or link-local IP literals. A clue-generation call keeps its own
-  record (which names the endpoint that actually answered) and gets an
-  `EXT_CLUE` one only on failure. Any new external LLM call must go
-  through `_chat` with a `purpose`.
+- **`LOG_LLM/` records are written by one shared writer and named after
+  their subject** (`<timestamp>_<SUBJECT>_<SUCCES|ERROR>.md`, `backend/
+  clues.py`'s `_write_llm_log`, Java `Clues.writeLlmLog`), the user's
+  rules: every call to an external LLM endpoint is recorded, the file
+  name holds the word looked up, and the automatic generation's and
+  "Définir"'s records share the same code (`_write_call_log`, both always
+  recorded, with every candidate's verdict and the endpoint that actually
+  answered). The other calls (titles, theme, paraphrases, correction) are
+  recorded when they involve an external endpoint (served by one, or
+  rerouted after one failed). "External" is any host but `localhost` and
+  loopback, private or link-local IP literals. Any new LLM call must go
+  through `_chat` with a `log_subject`, or write its own record through
+  `_write_llm_log`.
+- **Saved grids keep each word's inflected and base forms** (`accented`/
+  `canonical`) whenever the lexicon knows the word — the user's rule, so
+  definitions can be regenerated later: automatic grids already did; an
+  Interactive publish reads them from the session's lexicon, and each
+  `GRID_WORK` definition of a complete known word carries `answer`/
+  `accented`/`canonical`.
 - `LLMClueGenerator` owns all LLM handling (endpoint config, prompt text,
   the HTTP call, response parsing); `backend/app.py` builds one instance at
   module scope. Talks to any OpenAI-compatible chat-completions endpoint —

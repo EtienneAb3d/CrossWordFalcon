@@ -72,6 +72,7 @@ from .crossword_gen import GenerationCancelled, GenerationPaused
 from . import inflection_lookup
 from .example_sentences import find_examples_for_words
 from .gloss_lookup import find_glosses_for_canonicals
+from .dictionary_lookup import word_forms
 
 # Child of backend/app.py's "crosswordfalcon" logger — same handler/format
 # (configured once, by app.py's logging.basicConfig call), so these lines
@@ -586,7 +587,7 @@ def _is_external_endpoint(url):
     """True unless `url`'s host is `localhost` or a loopback, private or
     link-local IP literal (a host name is never resolved): an external
     endpoint is a third-party service, whose every call gets a LOG_LLM/
-    record (`LLMClueGenerator._write_external_call_log`)."""
+    record (`LLMClueGenerator._write_llm_log`)."""
     host = (httpx.URL(url).host or "").lower()
     if host == "localhost":
         return False
@@ -595,6 +596,27 @@ def _is_external_endpoint(url):
     except ValueError:
         return True
     return not any(ip in net for net in _LOCAL_NETWORKS if net.version == ip.version)
+
+
+def _external_call():
+    """Whether the last `_chat` call of this thread involved an external
+    endpoint: served by one, or rerouted after one failed."""
+    served_by = getattr(_LLM_CALL, "served_by", None)
+    rerouted_from = getattr(_LLM_CALL, "rerouted_from", None)
+    return bool((served_by is not None and served_by.external)
+                or (rerouted_from is not None and rerouted_from[0].external))
+
+
+def _error_text(error):
+    """`error`'s message, plus the body of the HTTP response it carries."""
+    text = str(error)
+    response = getattr(error, "response", None)
+    if response is not None:
+        try:
+            text += f"\n\n```\n{response.text}\n```"
+        except Exception:
+            pass
+    return text
 
 
 def _load_prompt_config(language):
@@ -1201,96 +1223,106 @@ class LLMClueGenerator:
         self.backup = backup
         self.backup_window = window
 
-    def _chat(self, system_prompt, user_message, temperature, max_tokens, timeout, purpose=None):
+    def _chat(self, system_prompt, user_message, temperature, max_tokens, timeout,
+              log_subject=None, log_heading=None):
         """One LLM call (system + user message); returns the raw text of
         the answer. Raises httpx.HTTPError on a transport or HTTP failure.
-        Every call reaching an external endpoint gets a LOG_LLM/ record
-        labelled `purpose`; `None` (clue generation, whose own record
-        `_write_call_log` names the endpoint that answered) records only a
-        failed external call."""
+        With `log_subject`, a call involving an external endpoint (served
+        by one, or rerouted after one failed) gets a LOG_LLM/ record
+        (`_write_llm_log`, file named after `log_subject`, headed
+        `log_heading`); clue generation and "Définir" pass none and write
+        their own record (`_write_call_log`) with the candidates' verdicts."""
         _LLM_CALL.served_by = None
-        return self._chat_routed(system_prompt, user_message, temperature, max_tokens, timeout, purpose)
+        _LLM_CALL.rerouted_from = None
+        started = time.monotonic()
+        try:
+            content = self._chat_routed(system_prompt, user_message, temperature, max_tokens, timeout)
+        except Exception as e:
+            _LLM_CALL.duration_s = time.monotonic() - started
+            if log_subject is not None and _external_call():
+                self._write_llm_log(log_subject, log_heading, [], system_prompt, user_message, None, e,
+                                    f"LLM call failed: {e}", None, success=False)
+            raise
+        _LLM_CALL.duration_s = time.monotonic() - started
+        if log_subject is not None and _external_call():
+            self._write_llm_log(log_subject, log_heading, [], system_prompt, user_message, content, None,
+                                "answered", None, success=True)
+        return content
 
-    def _chat_routed(self, system_prompt, user_message, temperature, max_tokens, timeout, purpose):
+    def _chat_routed(self, system_prompt, user_message, temperature, max_tokens, timeout):
         """`_chat` through this instance's backup routing."""
         if self.backup is None:
-            return self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout,
-                                  purpose=purpose)
+            return self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout)
         if not self.backup_window.active():
             try:
                 content = self._chat_own(system_prompt, user_message, temperature, max_tokens, timeout,
-                                         refusal_is_error=True, purpose=purpose)
+                                         refusal_is_error=True)
                 return content
             except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError) as e:
                 self.backup_window.open()
+                _LLM_CALL.rerouted_from = (self, _error_text(e))
                 logger.warning(
                     "LLM call failed (%s, model=%r): %s — using the backup LLM (%s, model=%r) for %.0fs",
                     self.base_url, self.model, e, self.backup.base_url, self.backup.model,
                     self.backup_window.duration_s,
                 )
-        return self.backup._chat_routed(system_prompt, user_message, temperature, max_tokens, timeout, purpose)
+        return self.backup._chat_routed(system_prompt, user_message, temperature, max_tokens, timeout)
 
-    def _chat_own(self, system_prompt, user_message, temperature, max_tokens, timeout, refusal_is_error=False,
-                  purpose=None):
-        """`_chat` against this instance's own endpoint only, recorded in
-        LOG_LLM/ when that endpoint is external (see `_chat`)."""
+    def _chat_own(self, system_prompt, user_message, temperature, max_tokens, timeout, refusal_is_error=False):
+        """`_chat` against this instance's own endpoint only."""
         _LLM_CALL.served_by = self
-        if not self.external:
-            return self._chat_request(system_prompt, user_message, temperature, max_tokens, timeout,
-                                      refusal_is_error)
-        started = time.monotonic()
-        try:
-            content = self._chat_request(system_prompt, user_message, temperature, max_tokens, timeout,
-                                         refusal_is_error)
-        except Exception as e:
-            self._write_external_call_log(purpose or "clue", system_prompt, user_message, temperature,
-                                          max_tokens, None, e, time.monotonic() - started)
-            raise
-        if purpose is not None:
-            self._write_external_call_log(purpose, system_prompt, user_message, temperature, max_tokens,
-                                          content, None, time.monotonic() - started)
-        return content
+        return self._chat_request(system_prompt, user_message, temperature, max_tokens, timeout,
+                                  refusal_is_error)
 
-    def _write_external_call_log(self, purpose, system_prompt, user_message, temperature, max_tokens,
-                                 content, error, duration_s):
-        """One LOG_LLM/ record per call to an external endpoint, named
-        `<timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md`: endpoint, model,
-        parameters, duration, error (with the HTTP response body), both
-        prompts and the raw answer. Best-effort, like `_write_call_log`."""
+    def _write_llm_log(self, subject, heading, fields, system_prompt, user_message, content, error,
+                       outcome, candidate_details, success):
+        """The one LOG_LLM/ record writer, `<timestamp>_<subject>_<SUCCES|
+        ERROR>.md` (`subject` with every run of non-word characters turned
+        into "_"): `heading`, the date, `fields` (`(label, value)` pairs),
+        the endpoint and model that answered the last `_chat` call of this
+        thread, the endpoint it was rerouted from after a failure, its
+        duration, `outcome`, the error, both prompts, the raw answer and,
+        when `candidate_details` is not None, every candidate's verdict.
+        Best-effort: a failure to write is logged, never raised."""
+        served_by = getattr(_LLM_CALL, "served_by", None) or self
+        rerouted_from = getattr(_LLM_CALL, "rerouted_from", None)
+        duration_s = getattr(_LLM_CALL, "duration_s", None)
+        safe_subject = re.sub(r"[^\w-]+", "_", subject).strip("_")[:60] or "LLM"
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        suffix = "ERROR" if error is not None else "SUCCES"
-        path = CALL_LOG_DIR / f"{timestamp}_EXT_{purpose.upper()}_{suffix}.md"
-        if error is None:
-            error_section = "None"
-        else:
-            error_section = str(error)
-            response = getattr(error, "response", None)
-            if response is not None:
-                try:
-                    error_section += f"\n\n```\n{response.text}\n```"
-                except Exception:
-                    pass
+        path = CALL_LOG_DIR / f"{timestamp}_{safe_subject}_{'SUCCES' if success else 'ERROR'}.md"
+        lines = [f"# {heading}", "", f"- **Date**: {datetime.now().isoformat()}"]
+        lines += [f"- **{label}**: {value}" for label, value in fields]
+        lines.append(f"- **LLM endpoint**: {served_by.base_url}")
+        lines.append(f"- **Model**: {served_by.model}")
+        if rerouted_from is not None:
+            failed, failure = rerouted_from
+            lines.append(f"- **Rerouted after a failure of**: {failed.base_url} "
+                         f"(model {failed.model}): {failure}")
+        if duration_s is not None:
+            lines.append(f"- **Duration**: {duration_s:.2f} s")
+        lines.append(f"- **Outcome**: {outcome}")
+        error_section = _error_text(error) if error is not None else "None"
         output_section = content if content is not None else "(no response — see error above)"
-        body = (
-            f"# External LLM call — {purpose}\n\n"
-            f"- **Date**: {datetime.now().isoformat()}\n"
-            f"- **LLM endpoint**: {self.base_url}\n"
-            f"- **API**: {self.api}\n"
-            f"- **Model**: {self.model}\n"
-            f"- **Temperature**: {temperature}\n"
-            f"- **Max tokens**: {max_tokens}\n"
-            f"- **Duration**: {duration_s:.2f} s\n"
-            f"- **Outcome**: {'error' if error is not None else 'success'}\n\n"
-            f"## Error\n\n{error_section}\n\n"
+        body = "\n".join(lines) + (
+            f"\n\n## Error\n\n{error_section}\n\n"
             f"## System prompt\n\n```\n{system_prompt}\n```\n\n"
             f"## User message\n\n```\n{user_message}\n```\n\n"
             f"## Raw LLM output\n\n```\n{output_section}\n```\n"
         )
+        if candidate_details is not None:
+            if candidate_details:
+                candidates_section = "\n".join(
+                    f"- **{verdict}**: {c!r}" for c, verdict in candidate_details
+                )
+            else:
+                candidates_section = ("(none — see Error above, or the model gave no parsable "
+                                      "candidate lines)")
+            body += f"\n## Candidates\n\n{candidates_section}\n"
         try:
             CALL_LOG_DIR.mkdir(parents=True, exist_ok=True)
             path.write_text(body, encoding="utf-8")
         except OSError as e:
-            logger.warning("failed to write external call log (%s): %s", purpose, e)
+            logger.warning("failed to write call log for %r: %s", subject, e)
 
     def _chat_request(self, system_prompt, user_message, temperature, max_tokens, timeout, refusal_is_error):
         """The HTTP request of `_chat_own`."""
@@ -1787,7 +1819,7 @@ class LLMClueGenerator:
                 # it also makes a retry likely to differ. Room for
                 # _TITLE_COUNT short lines.
                 content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 60, timeout,
-                                     purpose="title")
+                                     log_subject="TITLE", log_heading="Grid title call")
             except httpx.HTTPError as e:
                 logger.warning(
                     "title generation attempt %d/%d failed (%s, model=%r): %s",
@@ -1931,7 +1963,7 @@ class LLMClueGenerator:
                 # Same temperature as generate_title(); 20 tokens of
                 # headroom per requested line.
                 content = self._chat(system_prompt, user_message, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout,
-                                     purpose="titles")
+                                     log_subject="TITLES", log_heading="Grid title proposals call")
             except httpx.HTTPError as e:
                 logger.warning(
                     "title proposals attempt %d/%d failed (%s, model=%r): %s",
@@ -2208,7 +2240,8 @@ class LLMClueGenerator:
                 raise GenerationCancelled()
             try:
                 content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 150, timeout,
-                                     purpose="theme")
+                                     log_subject=theme_text,
+                                     log_heading=f"Theme description call — {theme_text}")
             except httpx.HTTPError as e:
                 logger.warning(
                     "theme description failed (%s, model=%r): %s",
@@ -2298,7 +2331,8 @@ class LLMClueGenerator:
                 raise GenerationCancelled()
             try:
                 content = self._chat(system_prompt, user_message, temperature, REASONING_TOKEN_BUDGET + 40, timeout,
-                                     purpose="random_theme")
+                                     log_subject=hint_word or "RANDOM_THEME",
+                                     log_heading=f"Random theme call — {hint_word or ''}")
             except httpx.HTTPError as e:
                 logger.warning(
                     "random theme generation attempt %d/%d failed (%s, model=%r): %s",
@@ -2383,9 +2417,9 @@ class LLMClueGenerator:
 
         A single best-effort LLM call — no multi-round retry loop like
         `generate()`'s per-grid-word one (a player can just click
-        "Définir" again), and no per-call `LOG_LLM/` record, matching
-        `generate_title()`/`describe_theme()`'s own convention for this
-        kind of auxiliary, non-puzzle-output call. `timeout` defaults to
+        "Définir" again); every attempt gets the same `LOG_LLM/` record as a
+        grid word's clue (`_write_call_log`, kind "Definitions call", named
+        after the word). `timeout` defaults to
         90s: measured live at ~40s for a real 10-definition call on this
         project's own small local model (Qwen3-4B) — asking for `count`
         lines in one response is a meaningfully heavier single call than
@@ -2408,7 +2442,15 @@ class LLMClueGenerator:
         text = " ".join(str(text).split())
         if not text:
             return []
-        entry = (text.upper(), text, (text.lower(),))
+        # Base forms: the text itself, then every canonical form of the
+        # wordlist rows it spells (the Dictionnaire panel's own lookup),
+        # since the gloss dictionary is keyed by lemma ("aspes" -> "aspe").
+        canonicals = [text.lower()]
+        for _accented, row_canonicals in word_forms(text, language):
+            for lemma in row_canonicals:
+                if lemma and lemma.lower() not in (c.lower() for c in canonicals):
+                    canonicals.append(lemma)
+        entry = (text.upper(), text, tuple(canonicals))
         system_prompt = self._build_definitions_system_prompt(difficulty, language, count)
         parts = [f"Word or expression: {text}"]
         for block_builder in (self._build_gloss_block, self._build_pos_block,
@@ -2442,14 +2484,30 @@ class LLMClueGenerator:
         max_tokens = REASONING_TOKEN_BUDGET + 200 + 40 * count
         definitions = []
         for attempt in range(1 + DEFINE_RETRIES):
-            content = self._call(
-                entry[0], text, attempt + 1, system_prompt, user_message, max_tokens,
-                timeout, total_rounds=1 + DEFINE_RETRIES, purpose="definitions",
-            )
+            try:
+                content = self._call(
+                    entry[0], text, attempt + 1, system_prompt, user_message, max_tokens,
+                    timeout, total_rounds=1 + DEFINE_RETRIES,
+                )
+            except ClueGenerationError as e:
+                self._write_call_log(
+                    entry[0], text, language, difficulty, attempt + 1, system_prompt, user_message,
+                    None, e, f"LLM call failed: {e}", [], success=False,
+                    theme_description=theme_description, kind="Definitions call",
+                    total_rounds=1 + DEFINE_RETRIES,
+                )
+                raise
             candidates = self._parse_response(content)
-            accepted, _details, _maskable = self._filter_candidates(
+            accepted, details, _maskable = self._filter_candidates(
                 candidates, entry[0], text, entry[2], language, attempt + 1,
                 total_rounds=1 + DEFINE_RETRIES,
+            )
+            self._write_call_log(
+                entry[0], text, language, difficulty, attempt + 1, system_prompt, user_message,
+                content, None, f"{len(accepted)}/{len(candidates)} candidate(s) kept",
+                [(c, "kept" if verdict.startswith("accepted") else verdict) for c, verdict in details],
+                success=bool(accepted), theme_description=theme_description,
+                kind="Definitions call", total_rounds=1 + DEFINE_RETRIES,
             )
             seen = set()
             for c, _idx in accepted:
@@ -2557,7 +2615,7 @@ class LLMClueGenerator:
         max_tokens = REASONING_TOKEN_BUDGET + 200 + 60 * count
         content = self._call(
             text[:60].upper(), text, 1, system_prompt, user_message, max_tokens,
-            timeout, total_rounds=1, purpose="paraphrases",
+            timeout, total_rounds=1, log_heading=f"Paraphrases call — {text}",
         )
         seen = set()
         paraphrases = []
@@ -2625,7 +2683,7 @@ class LLMClueGenerator:
         max_tokens = REASONING_TOKEN_BUDGET + 100 + 2 * len(text)
         content = self._call(
             text[:60].upper(), text, 1, system_prompt, user_message, max_tokens,
-            timeout, total_rounds=1, purpose="correct",
+            timeout, total_rounds=1, log_heading=f"Correction call — {text}",
         )
         lines = self._parse_response(content)
         corrected = lines[0] if lines else text
@@ -3186,9 +3244,13 @@ class LLMClueGenerator:
         return "\n\n".join(parts)
 
     def _call(self, answer, accented, round_number, system_prompt, user_message, max_tokens,
-             timeout, total_rounds=3, purpose=None):
+             timeout, total_rounds=3, log_heading=None):
+        """`_chat` for one word or text (`answer`); `log_heading` given, a
+        call involving an external endpoint is recorded under `answer`'s
+        name (see `_chat`)."""
         try:
-            content = self._chat(system_prompt, user_message, TEMPERATURE, max_tokens, timeout, purpose)
+            content = self._chat(system_prompt, user_message, TEMPERATURE, max_tokens, timeout,
+                                 log_subject=answer if log_heading else None, log_heading=log_heading)
         except httpx.HTTPError as e:
             raise ClueGenerationError(
                 f"LLM call failed ({self.base_url}, model={self.model!r}): {e}. "
@@ -3212,78 +3274,29 @@ class LLMClueGenerator:
 
     def _write_call_log(self, answer, accented, language, difficulty, round_number,
                          system_prompt, user_message, content, error, outcome,
-                         candidate_details, success, theme_description=""):
-        """Writes a self-contained Markdown record of one LLM call — every
-        single call `generate()` makes, successes included, not just
-        failures (originally this only fired for a word that exhausted
-        all 3 retries; extended to cover every call at the user's
-        explicit request, so a whole grid's worth of calls can be
-        reviewed after the fact, not just the ones that went wrong).
-        Captures everything needed to replay this *specific* call by
-        hand: the complete system + user prompt, the raw LLM output (or
-        `None` if the call itself errored), any `ClueGenerationError`,
-        a one-line outcome summary, and — as the very last section, at
-        the user's explicit request ("précise les propositions
-        rejetées, et la proposition finalement retenue") —
-        `candidate_details` (`_pick_clue()`'s own `[(candidate, verdict),
-        ...]`, empty when the model gave no parsable candidates or the
-        call errored outright) rendered as one bullet per candidate, so
-        every rejected proposal and the one finally selected are all
-        visible together at a glance, not just the outcome line's own
-        summary. Written to CALL_LOG_DIR (LOG_LLM/, project root, gitignored
-        — a debugging artifact, not a durable record like GRID_SVG/), one
-        file per call (so a word retried across multiple rounds gets
-        more than one), named `<timestamp>_<answer>_<SUCCES|ERROR>.md` —
-        `answer` is the grid's bare uppercase, accent-stripped form
-        already (crossword convention), so no extra normalization was
-        needed to put it in the filename as requested; the trailing
-        SUCCES/ERROR suffix (`success`, also requested explicitly) lets
-        a directory listing alone show which calls need attention
-        without opening every file — SUCCES means this specific attempt
-        produced a usable clue, ERROR covers every other outcome (no
-        candidates, all rejected, or the call itself failed). Best-
-        effort, like backend/svg_export.py's own saves: a failure to
-        write this is logged, never allowed to break grid generation,
-        since a missing diagnostic file is far less important than the
-        grid itself finishing."""
-        CALL_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        served_by = getattr(_LLM_CALL, "served_by", None) or self
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        suffix = "SUCCES" if success else "ERROR"
-        path = CALL_LOG_DIR / f"{timestamp}_{answer}_{suffix}.md"
-        error_section = str(error) if error is not None else "None"
-        output_section = content if content is not None else "(no response — see error above)"
-        if candidate_details:
-            candidates_section = "\n".join(
-                f"- **{verdict}**: {c!r}" for c, verdict in candidate_details
-            )
-        else:
-            candidates_section = "(none — see Error above, or the model gave no parsable candidate lines)"
-        theme_line = (
-            f"- **Theme keywords** (whole-theme LLM list, steers the clue): "
-            f"{' '.join(str(theme_description).split())}\n"
-            if theme_description else ""
+                         candidate_details, success, theme_description="",
+                         kind="Clue generation call", total_rounds=3):
+        """The LOG_LLM/ record of one word's LLM call — every call of
+        `generate()` (a grid word's clue) and of `generate_definitions()`
+        ("Définir", `kind` "Definitions call"), successes included — through
+        `_write_llm_log`, so the file is named `<timestamp>_<answer>_<SUCCES|
+        ERROR>.md` (`answer` being the grid's bare uppercase form). SUCCES
+        means this attempt produced a usable clue/definition, ERROR covers
+        every other outcome (no candidates, all rejected, or the call itself
+        failed). Holds the language, difficulty, theme keywords, attempt
+        number, the endpoint and model that actually answered, the error,
+        both prompts, the raw output (`None` when the call errored) and every
+        candidate's verdict (`candidate_details`, `_pick_clue()`'s or
+        `_filter_candidates()`'s `[(candidate, verdict), ...]`)."""
+        fields = [("Language", language), ("Difficulty", difficulty)]
+        if theme_description:
+            fields.append(("Theme keywords (whole-theme LLM list, steers the clue)",
+                           " ".join(str(theme_description).split())))
+        fields.append(("Attempt", f"{round_number}/{total_rounds}"))
+        self._write_llm_log(
+            answer, f"{kind} — {answer} ({accented})", fields, system_prompt, user_message,
+            content, error, outcome, candidate_details, success,
         )
-        body = (
-            f"# Clue generation call — {answer} ({accented})\n\n"
-            f"- **Date**: {datetime.now().isoformat()}\n"
-            f"- **Language**: {language}\n"
-            f"- **Difficulty**: {difficulty}\n"
-            f"{theme_line}"
-            f"- **LLM endpoint**: {served_by.base_url}\n"
-            f"- **Model**: {served_by.model}\n"
-            f"- **Attempt**: {round_number}/3\n"
-            f"- **Outcome**: {outcome}\n\n"
-            f"## Error\n\n{error_section}\n\n"
-            f"## System prompt\n\n```\n{system_prompt}\n```\n\n"
-            f"## User message\n\n```\n{user_message}\n```\n\n"
-            f"## Raw LLM output\n\n```\n{output_section}\n```\n\n"
-            f"## Candidates\n\n{candidates_section}\n"
-        )
-        try:
-            path.write_text(body, encoding="utf-8")
-        except OSError as e:
-            logger.warning("failed to write call log for %r: %s", answer, e)
 
     @staticmethod
     def _parse_response(content):

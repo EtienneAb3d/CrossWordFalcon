@@ -278,9 +278,24 @@ public final class Clues {
         this.external = isExternalEndpoint(this.baseUrl);
     }
 
-    /** The instance whose own endpoint answered (or last failed) the current {@link #chat} call of this thread
-     *  (backend/clues.py, _LLM_CALL). */
-    private static final ThreadLocal<Clues> SERVED_BY = new ThreadLocal<>();
+    /** The last {@link #chat} call of this thread (backend/clues.py, _LLM_CALL): the instance whose own endpoint
+     *  answered (or last failed), the one it was rerouted from after a failure with that failure's text, and its
+     *  duration. */
+    private static final class CallTrace {
+        Clues servedBy;
+        Clues reroutedFrom;
+        String reroutedError;
+        Double durationS;
+    }
+
+    private static final ThreadLocal<CallTrace> TRACE = ThreadLocal.withInitial(CallTrace::new);
+
+    /** Whether the last {@link #chat} call of this thread involved an external endpoint: served by one, or rerouted
+     *  after one failed (backend/clues.py, _external_call). */
+    private static boolean externalCall() {
+        CallTrace t = TRACE.get();
+        return (t.servedBy != null && t.servedBy.external) || (t.reroutedFrom != null && t.reroutedFrom.external);
+    }
 
     /** False for {@code localhost} or a loopback, private or link-local IP literal (a host name is never
      *  resolved), true otherwise (backend/clues.py, _is_external_endpoint). */
@@ -543,80 +558,109 @@ public final class Clues {
 
     // ================================================================== HTTP
 
-    /** One chat-completions call; returns the raw message content. Every call reaching an external endpoint gets
-     *  a LOG_LLM/ record labelled {@code purpose}; null (clue generation, whose own record names the endpoint
-     *  that answered) records only a failed external call (backend/clues.py, LLMClueGenerator._chat). */
-    private String chat(String system, String user, double temperature, int maxTokens, double timeout, String purpose)
-            throws IOException {
-        SERVED_BY.remove();
-        return chatRouted(system, user, temperature, maxTokens, timeout, purpose);
-    }
-
-    /** {@link #chat} through this instance's backup routing. */
-    private String chatRouted(String system, String user, double temperature, int maxTokens, double timeout,
-                              String purpose) throws IOException {
-        Clues b = backup;
-        if (b == null) return chatOwn(system, user, temperature, maxTokens, timeout, false, purpose);
-        if (!backupWindow.active()) {
-            try {
-                return chatOwn(system, user, temperature, maxTokens, timeout, true, purpose);
-            } catch (IOException | RuntimeException e) {
-                backupWindow.open();
-                Log.warning("LLM call failed (%s, model=%s): %s — using the backup LLM (%s, model=%s) for %.0fs",
-                        baseUrl, Log.repr(model), e.getMessage(), b.baseUrl, Log.repr(b.model), backupWindow.durationS);
-            }
-        }
-        return b.chatRouted(system, user, temperature, maxTokens, timeout, purpose);
-    }
-
-    /** {@link #chat} against this instance's own endpoint only, recorded in LOG_LLM/ when that endpoint is
-     *  external. */
-    private String chatOwn(String system, String user, double temperature, int maxTokens, double timeout,
-                           boolean refusalIsError, String purpose) throws IOException {
-        SERVED_BY.set(this);
-        if (!external) return chatRequest(system, user, temperature, maxTokens, timeout, refusalIsError);
+    /** One chat-completions call; returns the raw message content. With {@code logSubject}, a call involving an
+     *  external endpoint gets a LOG_LLM/ record named after it (backend/clues.py, LLMClueGenerator._chat). */
+    private String chat(String system, String user, double temperature, int maxTokens, double timeout,
+                        String logSubject, String logHeading) throws IOException {
+        CallTrace t = TRACE.get();
+        t.servedBy = null;
+        t.reroutedFrom = null;
+        t.reroutedError = null;
         long started = System.nanoTime();
         String content;
         try {
-            content = chatRequest(system, user, temperature, maxTokens, timeout, refusalIsError);
+            content = chatRouted(system, user, temperature, maxTokens, timeout);
         } catch (IOException | RuntimeException e) {
-            writeExternalCallLog(purpose != null ? purpose : "clue", system, user, temperature, maxTokens, null, e,
-                    (System.nanoTime() - started) / 1e9);
+            t.durationS = (System.nanoTime() - started) / 1e9;
+            if (logSubject != null && externalCall()) {
+                writeLlmLog(logSubject, logHeading, List.of(), system, user, null, e, "LLM call failed: " + e.getMessage(),
+                        null, false);
+            }
             throw e;
         }
-        if (purpose != null) {
-            writeExternalCallLog(purpose, system, user, temperature, maxTokens, content, null,
-                    (System.nanoTime() - started) / 1e9);
+        t.durationS = (System.nanoTime() - started) / 1e9;
+        if (logSubject != null && externalCall()) {
+            writeLlmLog(logSubject, logHeading, List.of(), system, user, content, null, "answered", null, true);
         }
         return content;
     }
 
-    /** One LOG_LLM/ record per call to an external endpoint, {@code <timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md}
-     *  (backend/clues.py, LLMClueGenerator._write_external_call_log). Best-effort. */
-    private void writeExternalCallLog(String purpose, String system, String user, double temperature, int maxTokens,
-                                      String content, Exception error, double durationS) {
+    private String chat(String system, String user, double temperature, int maxTokens, double timeout) throws IOException {
+        return chat(system, user, temperature, maxTokens, timeout, null, null);
+    }
+
+    /** {@link #chat} through this instance's backup routing. */
+    private String chatRouted(String system, String user, double temperature, int maxTokens, double timeout)
+            throws IOException {
+        Clues b = backup;
+        if (b == null) return chatOwn(system, user, temperature, maxTokens, timeout, false);
+        if (!backupWindow.active()) {
+            try {
+                return chatOwn(system, user, temperature, maxTokens, timeout, true);
+            } catch (IOException | RuntimeException e) {
+                backupWindow.open();
+                CallTrace t = TRACE.get();
+                t.reroutedFrom = this;
+                t.reroutedError = e.getMessage();
+                Log.warning("LLM call failed (%s, model=%s): %s — using the backup LLM (%s, model=%s) for %.0fs",
+                        baseUrl, Log.repr(model), e.getMessage(), b.baseUrl, Log.repr(b.model), backupWindow.durationS);
+            }
+        }
+        return b.chatRouted(system, user, temperature, maxTokens, timeout);
+    }
+
+    /** {@link #chat} against this instance's own endpoint only. */
+    private String chatOwn(String system, String user, double temperature, int maxTokens, double timeout,
+                           boolean refusalIsError) throws IOException {
+        TRACE.get().servedBy = this;
+        return chatRequest(system, user, temperature, maxTokens, timeout, refusalIsError);
+    }
+
+    /** The one LOG_LLM/ record writer, {@code <timestamp>_<subject>_<SUCCES|ERROR>.md} (backend/clues.py,
+     *  LLMClueGenerator._write_llm_log). Best-effort. */
+    private void writeLlmLog(String subject, String heading, List<String[]> fields, String systemPrompt,
+                             String userMessage, String content, Exception error, String outcome,
+                             List<String[]> details, boolean success) {
+        CallTrace t = TRACE.get();
+        Clues servedBy = t.servedBy != null ? t.servedBy : this;
+        String safe = Pattern.compile("[^\\w-]+", Pattern.UNICODE_CHARACTER_CLASS).matcher(subject).replaceAll("_")
+                .replaceAll("^_+|_+$", "");
+        if (safe.length() > 60) safe = safe.substring(0, 60);
+        if (safe.isEmpty()) safe = "LLM";
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSSSSS"));
-        Path path = CALL_LOG_DIR.resolve(ts + "_EXT_" + purpose.toUpperCase(Locale.ROOT) + "_"
-                + (error != null ? "ERROR" : "SUCCES") + ".md");
-        String body = "# External LLM call — " + purpose + "\n\n"
-                + "- **Date**: " + GridStore.isoNow() + "\n"
-                + "- **LLM endpoint**: " + baseUrl + "\n"
-                + "- **API**: " + api + "\n"
-                + "- **Model**: " + model + "\n"
-                + "- **Temperature**: " + temperature + "\n"
-                + "- **Max tokens**: " + maxTokens + "\n"
-                + "- **Duration**: " + Py.fmt(durationS, 2) + " s\n"
-                + "- **Outcome**: " + (error != null ? "error" : "success") + "\n\n"
-                + "## Error\n\n" + (error != null ? error.getMessage() : "None") + "\n\n"
-                + "## System prompt\n\n```\n" + system + "\n```\n\n"
-                + "## User message\n\n```\n" + user + "\n```\n\n"
-                + "## Raw LLM output\n\n```\n" + (content != null ? content : "(no response — see error above)")
-                + "\n```\n";
+        Path path = CALL_LOG_DIR.resolve(ts + "_" + safe + "_" + (success ? "SUCCES" : "ERROR") + ".md");
+        StringBuilder sb = new StringBuilder();
+        sb.append("# ").append(heading).append("\n\n- **Date**: ").append(GridStore.isoNow()).append("\n");
+        for (String[] f : fields) sb.append("- **").append(f[0]).append("**: ").append(f[1]).append("\n");
+        sb.append("- **LLM endpoint**: ").append(servedBy.baseUrl).append("\n");
+        sb.append("- **Model**: ").append(servedBy.model).append("\n");
+        if (t.reroutedFrom != null) {
+            sb.append("- **Rerouted after a failure of**: ").append(t.reroutedFrom.baseUrl).append(" (model ")
+                    .append(t.reroutedFrom.model).append("): ").append(t.reroutedError).append("\n");
+        }
+        if (t.durationS != null) sb.append("- **Duration**: ").append(Py.fmt(t.durationS, 2)).append(" s\n");
+        sb.append("- **Outcome**: ").append(outcome).append("\n\n");
+        sb.append("## Error\n\n").append(error != null ? error.getMessage() : "None").append("\n\n");
+        sb.append("## System prompt\n\n```\n").append(systemPrompt).append("\n```\n\n");
+        sb.append("## User message\n\n```\n").append(userMessage).append("\n```\n\n");
+        sb.append("## Raw LLM output\n\n```\n").append(content != null ? content : "(no response — see error above)")
+                .append("\n```\n");
+        if (details != null) {
+            String candidates;
+            if (!details.isEmpty()) {
+                List<String> lines = new ArrayList<>();
+                for (String[] d : details) lines.add("- **" + d[1] + "**: " + Log.repr(d[0]));
+                candidates = String.join("\n", lines);
+            } else {
+                candidates = "(none — see Error above, or the model gave no parsable candidate lines)";
+            }
+            sb.append("\n## Candidates\n\n").append(candidates).append("\n");
+        }
         try {
             Files.createDirectories(CALL_LOG_DIR);
-            Files.writeString(path, body, StandardCharsets.UTF_8);
+            Files.writeString(path, sb.toString(), StandardCharsets.UTF_8);
         } catch (IOException e) {
-            Log.warning("failed to write external call log (%s): %s", purpose, e.getMessage());
+            Log.warning("failed to write call log for %s: %s", Log.repr(subject), e.getMessage());
         }
     }
 
@@ -695,11 +739,13 @@ public final class Clues {
         return call(answer, accented, roundNumber, system, user, maxTokens, timeout, totalRounds, null);
     }
 
+    /** {@link #chat} for one word or text ({@code answer}); with {@code logHeading}, a call involving an external
+     *  endpoint is recorded under {@code answer}'s name. */
     private String call(String answer, String accented, int roundNumber, String system, String user, int maxTokens,
-                        double timeout, int totalRounds, String purpose) {
+                        double timeout, int totalRounds, String logHeading) {
         String content;
         try {
-            content = chat(system, user, TEMPERATURE, maxTokens, timeout, purpose);
+            content = chat(system, user, TEMPERATURE, maxTokens, timeout, logHeading != null ? answer : null, logHeading);
         } catch (IOException e) {
             throw new ClueGenerationError("LLM call failed (" + baseUrl + ", model=" + Log.repr(model) + "): "
                     + e.getMessage() + ". If you're using the default local llama.cpp server, make sure it's running "
@@ -906,7 +952,7 @@ public final class Clues {
                     + " titles, one per line:";
             String content;
             try {
-                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 60, timeout, "title");
+                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 60, timeout, "TITLE", "Grid title call");
             } catch (IOException e) {
                 Log.warning("title generation attempt %d/%d failed (%s, model=%s): %s", attempt + 1, TITLE_RETRIES,
                         baseUrl, Log.repr(model), e.getMessage());
@@ -976,7 +1022,8 @@ public final class Clues {
             String user = "Some words from the grid: " + String.join(", ", shown) + "\n" + count + " titles, one per line:";
             String content;
             try {
-                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout, "titles");
+                content = chat(system, user, 0.9, REASONING_TOKEN_BUDGET + 20 * count, timeout, "TITLES",
+                        "Grid title proposals call");
             } catch (IOException e) {
                 Log.warning("title proposals attempt %d/%d failed (%s, model=%s): %s", attempt + 1, totalRounds, baseUrl,
                         Log.repr(model), e.getMessage());
@@ -1130,7 +1177,8 @@ public final class Clues {
             if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
             String content;
             try {
-                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 150, timeout, "theme");
+                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 150, timeout, themeText,
+                        "Theme description call — " + themeText);
             } catch (IOException e) {
                 Log.warning("theme description failed (%s, model=%s): %s", baseUrl, Log.repr(model), e.getMessage());
                 continue;
@@ -1178,7 +1226,9 @@ public final class Clues {
             if (cancelEvent != null && cancelEvent.get()) throw new GenerationCancelled();
             String content;
             try {
-                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 40, timeout, "random_theme");
+                content = chat(system, user, temperature, REASONING_TOKEN_BUDGET + 40, timeout,
+                        hintWord != null && !hintWord.isEmpty() ? hintWord : "RANDOM_THEME",
+                        "Random theme call — " + (hintWord != null ? hintWord : ""));
             } catch (IOException e) {
                 Log.warning("random theme generation attempt %d/%d failed (%s, model=%s): %s", attempt + 1,
                         RANDOM_THEME_RETRIES + 1, baseUrl, Log.repr(model), e.getMessage());
@@ -1205,7 +1255,16 @@ public final class Clues {
                                             String themeDescription) {
         text = collapseWs(text);
         if (text.isEmpty()) return new ArrayList<>();
-        Entry entry = new Entry(text.toUpperCase(Locale.ROOT), text, List.of(text.toLowerCase(Locale.ROOT)), language);
+        // Base forms: the text itself, then every canonical form of the wordlist rows it spells (the Dictionnaire
+        // panel's own lookup), since the gloss dictionary is keyed by lemma ("aspes" -> "aspe").
+        List<String> canonicals = new ArrayList<>(List.of(text.toLowerCase(Locale.ROOT)));
+        Set<String> seenLemmas = new HashSet<>(List.of(text.toLowerCase(Locale.ROOT)));
+        for (Map.Entry<String, List<String>> row : DictionaryLookup.wordForms(text, language)) {
+            for (String lemma : row.getValue()) {
+                if (lemma != null && !lemma.isEmpty() && seenLemmas.add(lemma.toLowerCase(Locale.ROOT))) canonicals.add(lemma);
+            }
+        }
+        Entry entry = new Entry(text.toUpperCase(Locale.ROOT), text, canonicals, language);
         String system = buildDefinitionsSystemPrompt(difficulty, language, count);
         List<String> parts = new ArrayList<>();
         parts.add("Word or expression: " + text);
@@ -1239,13 +1298,29 @@ public final class Clues {
         List<String> definitions = new ArrayList<>();
         int attempt;
         for (attempt = 0; attempt < 1 + DEFINE_RETRIES; attempt++) {
-            String content = call(entry.answer(), text, attempt + 1, system, user, maxTokens, timeout, 1 + DEFINE_RETRIES,
-                    "definitions");
+            String content;
+            try {
+                content = call(entry.answer(), text, attempt + 1, system, user, maxTokens, timeout, 1 + DEFINE_RETRIES);
+            } catch (ClueGenerationError e) {
+                writeCallLog(entry.answer(), text, language, difficulty, attempt + 1, system, user, null, e,
+                        "LLM call failed: " + e.getMessage(), List.of(), false, themeDescription, "Definitions call",
+                        1 + DEFINE_RETRIES);
+                throw e;
+            }
             List<String> candidates = parseResponse(content);
             Object[] filtered = filterCandidates(candidates, entry.answer(), text, entry.canonical(), language,
                     attempt + 1, 1 + DEFINE_RETRIES);
             @SuppressWarnings("unchecked")
             List<Object[]> accepted = (List<Object[]>) filtered[0];
+            @SuppressWarnings("unchecked")
+            List<String[]> filterDetails = (List<String[]>) filtered[1];
+            List<String[]> logDetails = new ArrayList<>();
+            for (String[] d : filterDetails) {
+                logDetails.add(new String[]{d[0], d[1].startsWith("accepted") ? "kept" : d[1]});
+            }
+            writeCallLog(entry.answer(), text, language, difficulty, attempt + 1, system, user, content, null,
+                    accepted.size() + "/" + candidates.size() + " candidate(s) kept", logDetails, !accepted.isEmpty(),
+                    themeDescription, "Definitions call", 1 + DEFINE_RETRIES);
             Set<String> seen = new HashSet<>();
             for (Object[] a : accepted) {
                 String c = (String) a[0];
@@ -1302,7 +1377,8 @@ public final class Clues {
         String system = buildParaphraseSystemPrompt(language, count);
         int maxTokens = REASONING_TOKEN_BUDGET + 200 + 60 * count;
         String head = text.length() > 60 ? text.substring(0, 60) : text;
-        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1, "paraphrases");
+        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1,
+                "Paraphrases call — " + text);
         Set<String> seen = new HashSet<>();
         List<String> out = new ArrayList<>();
         for (String line : parseResponse(content)) {
@@ -1344,7 +1420,8 @@ public final class Clues {
         String system = buildCorrectionSystemPrompt(language);
         int maxTokens = REASONING_TOKEN_BUDGET + 100 + 2 * text.length();
         String head = text.length() > 60 ? text.substring(0, 60) : text;
-        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1, "correct");
+        String content = call(head.toUpperCase(Locale.ROOT), text, 1, system, "Text: " + text, maxTokens, timeout, 1,
+                "Correction call — " + text);
         List<String> lines = parseResponse(content);
         String corrected = lines.isEmpty() ? text : lines.get(0);
         Log.info("correct: %s (%s) -> %s", Log.repr(text), language, Log.repr(corrected));
@@ -1731,42 +1808,25 @@ public final class Clues {
     private void writeCallLog(String answer, String accented, String language, String difficulty, int roundNumber,
                               String systemPrompt, String userMessage, String content, RuntimeException error,
                               String outcome, List<String[]> details, boolean success, String themeDescription) {
-        String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSSSSS"));
-        Path path = CALL_LOG_DIR.resolve(ts + "_" + answer + "_" + (success ? "SUCCES" : "ERROR") + ".md");
-        Clues servedBy = SERVED_BY.get() != null ? SERVED_BY.get() : this;
-        String errorSection = error != null ? error.getMessage() : "None";
-        String output = content != null ? content : "(no response — see error above)";
-        String candidates;
-        if (details != null && !details.isEmpty()) {
-            List<String> lines = new ArrayList<>();
-            for (String[] d : details) lines.add("- **" + d[1] + "**: " + Log.repr(d[0]));
-            candidates = String.join("\n", lines);
-        } else {
-            candidates = "(none — see Error above, or the model gave no parsable candidate lines)";
+        writeCallLog(answer, accented, language, difficulty, roundNumber, systemPrompt, userMessage, content, error,
+                outcome, details, success, themeDescription, "Clue generation call", 3);
+    }
+
+    /** The LOG_LLM/ record of one word's LLM call — a grid word's clue or a "Définir" attempt ({@code kind}
+     *  "Definitions call") — through {@link #writeLlmLog} (backend/clues.py, LLMClueGenerator._write_call_log). */
+    private void writeCallLog(String answer, String accented, String language, String difficulty, int roundNumber,
+                              String systemPrompt, String userMessage, String content, RuntimeException error,
+                              String outcome, List<String[]> details, boolean success, String themeDescription,
+                              String kind, int totalRounds) {
+        List<String[]> fields = new ArrayList<>();
+        fields.add(new String[]{"Language", language});
+        fields.add(new String[]{"Difficulty", difficulty});
+        if (themeDescription != null && !themeDescription.isEmpty()) {
+            fields.add(new String[]{"Theme keywords (whole-theme LLM list, steers the clue)", collapseWs(themeDescription)});
         }
-        String themeLine = themeDescription != null && !themeDescription.isEmpty()
-                ? "- **Theme keywords** (whole-theme LLM list, steers the clue): " + collapseWs(themeDescription) + "\n"
-                : "";
-        String body = "# Clue generation call — " + answer + " (" + accented + ")\n\n"
-                + "- **Date**: " + GridStore.isoNow() + "\n"
-                + "- **Language**: " + language + "\n"
-                + "- **Difficulty**: " + difficulty + "\n"
-                + themeLine
-                + "- **LLM endpoint**: " + servedBy.baseUrl + "\n"
-                + "- **Model**: " + servedBy.model + "\n"
-                + "- **Attempt**: " + roundNumber + "/3\n"
-                + "- **Outcome**: " + outcome + "\n\n"
-                + "## Error\n\n" + errorSection + "\n\n"
-                + "## System prompt\n\n```\n" + systemPrompt + "\n```\n\n"
-                + "## User message\n\n```\n" + userMessage + "\n```\n\n"
-                + "## Raw LLM output\n\n```\n" + output + "\n```\n\n"
-                + "## Candidates\n\n" + candidates + "\n";
-        try {
-            Files.createDirectories(CALL_LOG_DIR);
-            Files.writeString(path, body, StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            Log.warning("failed to write call log for %s: %s", Log.repr(answer), e.getMessage());
-        }
+        fields.add(new String[]{"Attempt", roundNumber + "/" + totalRounds});
+        writeLlmLog(answer, kind + " — " + answer + " (" + accented + ")", fields, systemPrompt, userMessage, content,
+                error, outcome, details, success);
     }
 
     public static List<String> parseResponse(String content) {

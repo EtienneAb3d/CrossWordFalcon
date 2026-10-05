@@ -2085,21 +2085,31 @@ mode's two "Corriger" buttons: one call returning the typed definition or title 
 agreement errors, typos, missing accents, missing spaces, lowercase first
 letter and unnatural word order (an adjective on the wrong side of its noun)
 fixed and its wording kept;
-the first line of the answer, the input unchanged if it is empty). Every clue-generation call
-writes a Markdown trace to `LOG_LLM/<timestamp>_<ANSWER>_<SUCCES|
-ERROR>.md` (full prompt, raw output, every candidate's verdict), naming
-the endpoint and model that actually answered (`_LLM_CALL.served_by`, the
-backup when the call was rerouted; Java `Clues.SERVED_BY`). Every call
-to an external endpoint (`_is_external_endpoint`: any host but
-`localhost` and loopback/private/link-local IP literals; the instance's
-`external` field, Java `Clues.isExternalEndpoint`) also writes
-`LOG_LLM/<timestamp>_EXT_<PURPOSE>_<SUCCES|ERROR>.md`
-(`_write_external_call_log`, Java `writeExternalCallLog`: endpoint, API,
-model, temperature, max tokens, duration, error with the HTTP response
-body, both prompts, raw answer) — `_chat`'s `purpose` is `title`,
-`titles`, `theme`, `random_theme`, `definitions`, `paraphrases` or
-`correct`; a clue-generation call (`purpose=None`, already traced by its
-own record) gets one only when the external call fails (`CLUE`).
+the first line of the answer, the input unchanged if it is empty).
+`generate_definitions` grounds a word on the glosses of the text itself
+and of every canonical form of the wordlist rows it spells
+(`dictionary_lookup.word_forms`, the Dictionnaire panel's own lookup —
+"aspes" -> "aspe"; Java `DictionaryLookup.wordForms`).
+
+Every `LOG_LLM/` record goes through one writer, `_write_llm_log` (Java
+`Clues.writeLlmLog`): `LOG_LLM/<timestamp>_<SUBJECT>_<SUCCES|ERROR>.md`
+(`SUBJECT` with every run of non-word characters turned into "_") —
+heading, date, caller fields, the endpoint and model that actually
+answered (`_LLM_CALL.served_by`, the backup when the call was rerouted;
+Java `Clues.TRACE`), the endpoint it was rerouted from with that failure
+(and the HTTP response body), duration, outcome, error, both prompts, the
+raw answer and, for a word's call, every candidate's verdict. A grid
+word's clue (`generate`) and every "Définir" attempt (`generate_
+definitions`) are always recorded, through `_write_call_log` (kind "Clue
+generation call"/"Definitions call", subject the word's grid form). Every
+other call is recorded only when it involves an external endpoint
+(`_external_call`: served by one, or rerouted after one failed;
+`_is_external_endpoint`: any host but `localhost` and loopback/private/
+link-local IP literals, the instance's `external` field, Java
+`Clues.isExternalEndpoint`), `_chat`'s `log_subject`/`log_heading` naming
+it: `TITLE`, `TITLES`, the theme words (`describe_theme`), the hint word
+or `RANDOM_THEME` (`generate_random_theme`), the text
+(`generate_paraphrases`, `correct_text`).
 
 ### `chatbot.py` — `ChatBot` ("David FALCON")
 
@@ -2245,11 +2255,18 @@ Four independent filesystem stores, one JSON file shape shared with the
   `*_duration_seconds`, snapshotted by `_library_record_to_interactive`)
   supplies the durations `interactive_save` publishes — 0 for a grid
   built from scratch. The play view labels such a grid "created"/"edited
-  manually" next to its durations.
+  manually" next to its durations. Its words carry `accented`/`canonical`
+  read from the session's lexicon like an automatic grid's
+  (`_known_word_forms`, Java `App.knownWordForms`; a word the lexicon
+  does not know keeps itself as both), so a later definition rewrite
+  ("Recalculer") has its inflected and base forms.
 - **`GRID_WORK/`** — one continuously-overwritten file per in-progress
   "Interactif" authoring session, named `<timestamp>_<pseudo-slug>_<job_
   id>.json`. `save_grid_work`/`get_grid_work`/`list_grid_work`/`delete_
-  grid_work`. Every save carries a `previous` field: every top-level field
+  grid_work`. Each `definitions` entry of a fully lettered slot whose word
+  the session's lexicon knows also carries its `answer`, `accented` and
+  `canonical` (`_definitions_with_forms`, Java `App.definitionsWithForms`,
+  applied by `/save_work` and `/save`). Every save carries a `previous` field: every top-level field
   the record held right before this save overwrote it (minus its own,
   now-stale `previous`, so this only ever holds one step of history, never
   a full chain), or `None` on a session's very first save — a diagnostic-

@@ -167,6 +167,64 @@ public final class App {
     static final Map<String, Path> CHAT_LOG_PATHS = new ConcurrentHashMap<>();
 
     /** An interactive authoring session's non-serializable state. */
+    /** {accented, [canonical, ...]} of {@code answer} from an Interactive session's lexicon, or null when the word is
+     *  not in it (backend/app.py, _known_word_forms). */
+    static Object[] knownWordForms(DualIndex index, String direction, String answer) {
+        if (index == null || answer == null || answer.isEmpty()) return null;
+        LenIndex side = index.forDirection(direction).get(answer.length());
+        if (side == null || side.ids.get(answer) == null) return null;
+        Object[] forms = Words.wordForms(side, answer);
+        @SuppressWarnings("unchecked")
+        List<String> canonical = (List<String>) forms[1];
+        return new Object[]{forms[0], new ArrayList<>(canonical)};
+    }
+
+    /** {@code definitions} with answer/accented/canonical added to the entry of every fully lettered slot whose
+     *  word the session's lexicon knows (backend/app.py, _definitions_with_forms). */
+    static List<Object> definitionsWithForms(DualIndex index, List<Object> grid, List<Object> definitions) {
+        List<Object> out = new ArrayList<>();
+        if (definitions == null) return out;
+        for (Object d : definitions) {
+            if (!(d instanceof Map<?, ?> dm)) {
+                out.add(d);
+                continue;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>();
+            dm.forEach((k, v) -> copy.put(String.valueOf(k), v));
+            Object ro = copy.get("row"), co = copy.get("col"), dir = copy.get("direction");
+            if (!(ro instanceof Number) || !(co instanceof Number) || !(dir instanceof String direction)) {
+                out.add(copy);
+                continue;
+            }
+            int r = ((Number) ro).intValue(), c = ((Number) co).intValue();
+            int dr = "across".equals(direction) ? 0 : 1, dc = "across".equals(direction) ? 1 : 0;
+            StringBuilder sb = new StringBuilder();
+            boolean letters = true;
+            int n = 0;
+            while (r >= 0 && r < grid.size()) {
+                List<Object> row = Json.asList(grid.get(r));
+                if (c < 0 || c >= row.size()) break;
+                String ch = row.get(c) == null ? "" : row.get(c).toString();
+                if (ch.equals("#")) break;
+                if (ch.length() != 1 || ch.charAt(0) < 'A' || ch.charAt(0) > 'Z') letters = false;
+                sb.append(ch);
+                n++;
+                r += dr;
+                c += dc;
+            }
+            if (n >= 2 && letters) {
+                Object[] forms = knownWordForms(index, direction, sb.toString());
+                if (forms != null) {
+                    copy.put("answer", sb.toString());
+                    copy.put("accented", forms[0]);
+                    copy.put("canonical", forms[1]);
+                }
+            }
+            out.add(copy);
+        }
+        return out;
+    }
+
     static final class Session {
         final DualIndex index;
         final Set<String> priorityWords;
@@ -2285,8 +2343,13 @@ public final class App {
             boolean isBilingual = bilingual != null && !bilingual.isEmpty() && !bilingual.equals(language);
             for (Map<String, Object> wd : words) {
                 wd.put("clue", clueByKey.getOrDefault(wd.get("row") + "|" + wd.get("col") + "|" + wd.get("direction"), ""));
-                wd.putIfAbsent("accented", wd.get("answer"));
-                wd.putIfAbsent("canonical", wd.get("answer"));
+                // Inflected and base forms from the session's lexicon, like generateGrid; an unknown word keeps
+                // itself as both.
+                Session fs = INTERACTIVE_SESSIONS.get(jobId);
+                String ans = (String) wd.get("answer");
+                Object[] forms = knownWordForms(fs == null ? null : fs.index, (String) wd.get("direction"), ans);
+                wd.put("accented", forms != null ? forms[0] : ans);
+                wd.put("canonical", forms != null ? forms[1] : new ArrayList<>(List.of(ans)));
                 wd.put("language", isBilingual && "down".equals(wd.get("direction")) ? bilingual : language);
             }
             char[][] solutionChars = new char[rows][cols];
@@ -2345,7 +2408,8 @@ public final class App {
             if (s != null) {
                 try {
                     Object mt = meta.get("theme");
-                    GridStore.saveGridWork(jobId, gridJson, definitions, title, meta.getOrDefault("language", language),
+                    GridStore.saveGridWork(jobId, gridJson, definitionsWithForms(s.index, gridJson, definitions), title,
+                            meta.getOrDefault("language", language),
                             meta.getOrDefault("difficulty", difficulty), Json.truthy(mt) ? mt : themeClean, s.priorityWords,
                             s.seed == null ? 0 : s.seed, pseudo, s.resumedFrom, meta.get("origin"), meta.get("bilingual_language"),
                             meta.get("generation_params"), challengeWords, diagnostics);
@@ -2367,7 +2431,8 @@ public final class App {
             Session s = session(jobId);
             Job job = job(jobId);
             Map<String, Object> meta = job == null ? Map.of() : Json.mapOrEmpty(job.copyOf("interactive"));
-            String workId = GridStore.saveGridWork(jobId, gridJson, definitions, title, meta.getOrDefault("language", "fr"),
+            String workId = GridStore.saveGridWork(jobId, gridJson, definitionsWithForms(s.index, gridJson, definitions),
+                    title, meta.getOrDefault("language", "fr"),
                     meta.getOrDefault("difficulty", "easy"), meta.get("theme"), s.priorityWords, s.seed == null ? 0 : s.seed,
                     pseudoOf(pseudoRaw), s.resumedFrom, meta.get("origin"), meta.get("bilingual_language"),
                     meta.get("generation_params"), challengeWords, diagnostics);
