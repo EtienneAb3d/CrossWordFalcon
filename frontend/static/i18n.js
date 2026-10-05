@@ -104,6 +104,8 @@ const I18N = {
       return `${parts.join(", ")} (mis en couleur).`;
     },
     interactiveDefinitionsBtn: "Définitions",
+    interactiveRecomputeBtn: "Recalculer",
+    interactiveRecomputeConfirm: "Recalculer toutes les définitions ? Les définitions existantes seront remplacées.",
     interactiveFinishZoneBtn: "Finir la zone",
     interactiveFinishZoneNeedsSelection: "Sélectionnez d'abord une zone (cliquer-glisser sur la grille).",
     interactiveFinishBtn: "Finir la grille",
@@ -498,6 +500,8 @@ const I18N = {
       return `${parts.join(", ")} (highlighted).`;
     },
     interactiveDefinitionsBtn: "Definitions",
+    interactiveRecomputeBtn: "Recompute",
+    interactiveRecomputeConfirm: "Recompute every definition? The existing definitions will be replaced.",
     interactiveFinishZoneBtn: "Finish the zone",
     interactiveFinishZoneNeedsSelection: "Select a zone first (click-drag on the grid).",
     interactiveFinishBtn: "Finish the grid",
@@ -885,6 +889,8 @@ const I18N = {
       return `${parts.join(", ")} (farblich markiert).`;
     },
     interactiveDefinitionsBtn: "Definitionen",
+    interactiveRecomputeBtn: "Neu berechnen",
+    interactiveRecomputeConfirm: "Alle Definitionen neu berechnen? Die vorhandenen Definitionen werden ersetzt.",
     interactiveFinishZoneBtn: "Bereich fertigstellen",
     interactiveFinishZoneNeedsSelection: "Wählen Sie zuerst einen Bereich aus (auf dem Gitter klicken und ziehen).",
     interactiveFinishBtn: "Gitter fertigstellen",
@@ -1272,6 +1278,8 @@ const I18N = {
       return `${parts.join(", ")} (resaltados).`;
     },
     interactiveDefinitionsBtn: "Definiciones",
+    interactiveRecomputeBtn: "Recalcular",
+    interactiveRecomputeConfirm: "¿Recalcular todas las definiciones? Las definiciones existentes serán reemplazadas.",
     interactiveFinishZoneBtn: "Terminar la zona",
     interactiveFinishZoneNeedsSelection: "Seleccione primero una zona (haga clic y arrastre sobre la cuadrícula).",
     interactiveFinishBtn: "Terminar el crucigrama",
@@ -1659,6 +1667,8 @@ const I18N = {
       return `${parts.join(", ")} (evidenziate).`;
     },
     interactiveDefinitionsBtn: "Definizioni",
+    interactiveRecomputeBtn: "Ricalcola",
+    interactiveRecomputeConfirm: "Ricalcolare tutte le definizioni? Le definizioni esistenti verranno sostituite.",
     interactiveFinishZoneBtn: "Completa la zona",
     interactiveFinishZoneNeedsSelection: "Seleziona prima una zona (clic e trascinamento sulla griglia).",
     interactiveFinishBtn: "Completa la griglia",
@@ -2047,6 +2057,8 @@ const I18N = {
       return `${parts.join(", ")} (destacados).`;
     },
     interactiveDefinitionsBtn: "Definições",
+    interactiveRecomputeBtn: "Recalcular",
+    interactiveRecomputeConfirm: "Recalcular todas as definições? As definições existentes serão substituídas.",
     interactiveFinishZoneBtn: "Terminar a zona",
     interactiveFinishZoneNeedsSelection: "Selecione primeiro uma zona (clique e arraste na grelha).",
     interactiveFinishBtn: "Terminar a grelha",

@@ -957,7 +957,8 @@ to the left of **Mots / Words** to open it as an overlay panel.
   (personnalisation)" list is always considered part of the dictionary
   for both of these checks, whether or not it's a real dictionary entry.
 - The **Définitions / Definitions** button automatically generates the
-  missing definitions.
+  missing definitions; **Recalculer / Recompute** regenerates all of
+  them, replacing the existing ones.
 - The **Proposer une définition / Suggest a definition** and **Proposer un
   titre / Suggest a title** buttons help you with several proposals.
 - Make sure every placed word has a definition.
@@ -1278,6 +1279,13 @@ real letter. Both update after every edit.
   remaining word and keeps the first suggestion. It works through the
   words one at a time and shows its progress; a word whose definition
   could not be produced is simply left blank.
+- **Recalculer / Recompute** (`#interactive-recompute-btn`,
+  `frontend/static/script.js`, `generateInteractiveDefinitions`) — to the
+  right of "Définitions": the same automatic generation, but for every
+  fully filled-in, valid word, replacing the definitions already there.
+  When some words already have a definition, it first asks you to
+  confirm. A word whose new definition could not be produced keeps its
+  current one.
 - **Finir la zone / Finish the zone** (`#interactive-finish-zone-btn`,
   `POST /api/interactive/finish` with `zone_cells`) — the same automatic
   completion as "Finir la grille" right below, but restricted to the zone

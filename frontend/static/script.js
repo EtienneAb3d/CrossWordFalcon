@@ -321,6 +321,7 @@ const interactiveStatsBtn = document.getElementById("interactive-stats-btn");
 const interactiveImpossibleBtn = document.getElementById("interactive-impossible-btn");
 const interactiveVerifyBtn = document.getElementById("interactive-verify-btn");
 const interactiveDefinitionsBtn = document.getElementById("interactive-definitions-btn");
+const interactiveRecomputeBtn = document.getElementById("interactive-recompute-btn");
 const interactiveFinishZoneBtn = document.getElementById("interactive-finish-zone-btn");
 const interactiveFinishBtn = document.getElementById("interactive-finish-btn");
 const interactiveResultsClearBtn = document.getElementById("interactive-results-clear-btn");
@@ -9463,27 +9464,31 @@ interactiveResultsClearBtn.addEventListener("click", () => {
   renderInteractive();
 });
 
-// "Définitions": automatically generates a definition for every fully
-// filled and valid word that doesn't have one yet, at the user's
-// explicit request. Reuses POST /api/interactive/verify (to discard
-// words absent from the dictionary — "and valid") then, word by word,
-// GET /api/dictionary/define (like "Proposer"), keeping the first
+// "Définitions" / "Recalculer": automatically generate a definition for
+// every fully filled and valid word — only those that don't have one yet
+// ("Définitions"), or all of them, replacing the existing ones
+// ("Recalculer", `overwrite`). Reuses POST /api/interactive/verify (to
+// discard words absent from the dictionary — "and valid") then, word by
+// word, GET /api/dictionary/define (like "Proposer"), keeping the first
 // proposed definition. Sequential: each call is a real LLM round trip,
 // potentially slow — progress is shown and the whole thing is
-// best-effort (a word whose generation fails is simply left with no
-// definition).
-interactiveDefinitionsBtn.addEventListener("click", async () => {
+// best-effort (a word whose generation fails keeps its current
+// definition, or none).
+async function generateInteractiveDefinitions(overwrite) {
   const t = I18N[uiLanguage];
   const filled = interactiveSlots().filter((s) => s.filled);
-  const pending = filled.filter(
-    (s) => !(interactiveDefs.get(interactiveKey(s)) || "").trim(),
-  );
+  const hasDef = (s) => !!(interactiveDefs.get(interactiveKey(s)) || "").trim();
+  const pending = overwrite ? filled : filled.filter((s) => !hasDef(s));
   if (!pending.length) {
     setInteractiveMessage(t.interactiveDefinitionsNothing, false);
     return;
   }
+  if (overwrite && pending.some(hasDef) && !window.confirm(t.interactiveRecomputeConfirm)) {
+    return;
+  }
   const busyBtns = [
     interactiveDefinitionsBtn,
+    interactiveRecomputeBtn,
     interactiveProposeBtn,
     interactiveCorrectBtn,
     interactiveImpossibleBtn,
@@ -9556,7 +9561,10 @@ interactiveDefinitionsBtn.addEventListener("click", async () => {
   } finally {
     for (const b of busyBtns) b.disabled = false;
   }
-});
+}
+
+interactiveDefinitionsBtn.addEventListener("click", () => generateInteractiveDefinitions(false));
+interactiveRecomputeBtn.addEventListener("click", () => generateInteractiveDefinitions(true));
 
 // Shared by "Finir la grille" and "Finir la zone" (see both click
 // handlers below) — the two only differ in whether `zoneCells` is `null`

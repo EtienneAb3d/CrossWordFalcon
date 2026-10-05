@@ -2491,7 +2491,11 @@ state, unlike the backend).
   those win a shared cell) and makes each tile carrying a `choice_index`
   clickable, `chooseGeneratedGrid` posts the pick); the interactive-authoring
   mode (by far the largest block — zone selection, undo stack, per-cell
-  editing, calls to every `/api/interactive/*` endpoint, candidate/
+  editing, calls to every `/api/interactive/*` endpoint, "Définitions"/
+  "Recalculer" (`generateInteractiveDefinitions`: `POST /api/interactive/
+  verify` then `GET /api/dictionary/define` per filled valid word —
+  only those lacking a definition, or all of them, replacing the
+  existing ones after a confirmation), candidate/
   crossing-word panels, dark-cyan letters (`interactiveScrabbleCells`,
   `.interactive-scrabble`) for a "Suivant" word with `placed.from_
   scrabble`, like the theme/challenge sets; a "Mots Défi" challenge-word list — stored and

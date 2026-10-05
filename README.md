@@ -326,7 +326,9 @@ you enter this mode, so you can look up words while you fill in the grid:
   initial capital and a wrong word order in the definition you
   typed while keeping your wording, **"Definitions"**
   fills in one
-  automatically for every valid word that still lacks one, and **"Check"**
+  automatically for every valid word that still lacks one, **"Recompute"**
+  rewrites the definitions of every valid word (after asking you to
+  confirm when that replaces existing ones), and **"Check"**
   points you at any word still missing one), pick a title — **"Suggest a
   title"** offers up to 10 clickable ideas the same way, and its own
   **"Correct"** button fixes the title you typed — then click
