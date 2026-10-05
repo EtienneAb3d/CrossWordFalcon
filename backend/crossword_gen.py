@@ -1659,9 +1659,12 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
         cells_in_slot = [cell for cell in slot if cell in candidate_set]
         if rng is not None:
             rng.shuffle(cells_in_slot)
+        # A cell of a corner 2x2 square (`_in_corner_square`) comes last,
+        # tried only once every other cell of the slot has failed.
         options = sorted(
             cells_in_slot,
-            key=lambda cell: row_black[cell[0]] + col_black[cell[1]],
+            key=lambda cell: (_in_corner_square(rows, cols, *cell),
+                              row_black[cell[0]] + col_black[cell[1]]),
         )
 
         # The per-zone budget is the overall black-fill objective's
@@ -1759,7 +1762,8 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
 
     This ratio-based draw never places a black cell in one of the grid's
     four corner 2x2 squares (`_in_corner_square`, `CORNER_SQUARE_SIZE`);
-    the pre-fill pass and every later repair mechanism still may.
+    the pre-fill pass tries such a cell only after every other cell of the
+    slot it cuts, and every later repair mechanism still may.
 
     Structural validity itself (`is_structurally_valid`) is equally simple
     now: an *interior* white zone (bounded by a black cell on both sides)
@@ -1974,8 +1978,8 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         round(black_enrichment_fraction * rows * cols),
     )
     # The ratio-based draw never places a black cell in a corner 2x2
-    # square (`_in_corner_square`); pre-fill and every later repair
-    # mechanism still may. Corner cells stay in `candidates` for the
+    # square (`_in_corner_square`); pre-fill tries one only as a last
+    # resort, and every later repair mechanism still may. Corner cells stay in `candidates` for the
     # pre-fill pass below, in their shuffled order.
     ratio_candidates = [cell for cell in candidates if not _in_corner_square(rows, cols, *cell)]
     drawn = set(ratio_candidates)

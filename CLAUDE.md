@@ -431,8 +431,9 @@ via `ProcessPoolExecutor`:
    the draw resumes to the target — at most `SHORT_SLOT_REDRAW_MAX_ROUNDS`
    (10) rounds, the grid then kept as it is. This ratio-based draw never
    considers a cell of the four corner 2x2 squares (`_in_corner_square`/
-   `CORNER_SQUARE_SIZE=2`, which only pre-fill and the repair mechanisms
-   below may blacken). Adjacency is never accepted at all, on any palier
+   `CORNER_SQUARE_SIZE=2`, which only the repair mechanisms below may
+   blacken, and pre-fill as a last resort: it ranks such a cell after every
+   other cell of the slot it cuts). Adjacency is never accepted at all, on any palier
    (`forbid_adjacency=True`, always): a palier whose black-fill
    percentage target can't be reached without an adjacent cell simply
    ends up short of that target, left as-is, rather than forcing one. A

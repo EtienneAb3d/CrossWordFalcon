@@ -1492,8 +1492,8 @@ cycle: a cycle whose black-cell density target can't be reached without
 doing so simply ends up with fewer black cells than aimed for, left as-is,
 rather than forcing an adjacent one. The draw toward the density target
 also never blackens a cell of the 2×2 square at each of the grid's four
-corners; only the unfillable-slot pre-fill or a later repair may put a
-black cell there. Once the density target is reached, the generator counts
+corners; the unfillable-slot pre-fill only uses such a cell when no other
+cell of the slot it cuts will do, and a later repair may put one there. Once the density target is reached, the generator counts
 the 2- and 3-letter slots not touching a border: if there are more than 10, the black cells it
 just drew around them are removed and the draw resumes until the target is
 reached again (at most 10 times), so the grid is not cut into a mosaic of

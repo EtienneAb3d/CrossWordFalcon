@@ -463,10 +463,12 @@ retirée redevient candidate pour la relance (`make_pattern`,
 **Coins interdits au tirage.** Le tirage vers l'objectif « Taux noir » ne
 pose jamais de case noire dans le carré de 2×2 cases de chacun des quatre
 coins de la grille (`CORNER_SQUARE_SIZE`) : ces cases sont retirées de ses
-candidates (`make_pattern`, `_in_corner_square`). Une case noire ne peut y
-apparaître que par un autre mécanisme : le pré-remplissage, la reprise
-entre paliers, la résolution des zones impossibles ou le réaménagement
-d'une case noire flottante.
+candidates (`make_pattern`, `_in_corner_square`). Le pré-remplissage ne
+choisit une case de ces carrés qu'en dernier recours, quand aucune autre
+case de l'emplacement à couper ne convient (`_prefill_unfillable_slots`).
+Une case noire peut aussi y apparaître par la reprise entre paliers, la
+résolution des zones impossibles ou le réaménagement d'une case noire
+flottante.
 
 **L'adjacence n'est jamais acceptée par la génération de motif**, à aucun
 palier : si aucune candidate isolée ne convient, plus aucune case n'est

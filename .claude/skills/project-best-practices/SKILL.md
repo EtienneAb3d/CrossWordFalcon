@@ -975,9 +975,10 @@ the current defaults/behavior to know before touching this code.
   independent, non-paired placement, which reaches sparser valid patterns).
 - The ratio-based ("Taux noir") black-cell draw of `make_pattern` never
   blackens a cell of the 2x2 square at each corner (`_in_corner_square`,
-  `CORNER_SQUARE_SIZE`); a corner black cell can only come from another
-  mechanism (pre-fill, cross-palier cleanup, impossible-zone repair,
-  floating-black-cell reshape).
+  `CORNER_SQUARE_SIZE`); pre-fill tries a corner cell only after every
+  other cell of the slot it cuts; otherwise a corner black cell can only
+  come from cross-palier cleanup, impossible-zone repair or a
+  floating-black-cell reshape.
 - `is_structurally_valid`: an *interior* white zone (black cells on both
   sides) must be at least `min_interior_free` cells long
   (`STRUCTURAL_MIN_INTERIOR_FREE`, 6, which only the ratio draw uses —

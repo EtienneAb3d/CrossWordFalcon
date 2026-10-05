@@ -792,9 +792,16 @@ public final class Grids {
             List<Integer> cellsInSlot = new ArrayList<>();
             for (int c : slot) if (candidateSet.contains(c)) cellsInSlot.add(c);
             if (rng != null) rng.shuffle(cellsInSlot);
+            // A cell of a corner 2x2 square (inCornerSquare) comes last,
+            // tried only once every other cell of the slot has failed.
             List<Integer> options = new ArrayList<>(cellsInSlot);
-            options.sort((a, b) -> Integer.compare(rowBlack[Cells.r(a)] + colBlack[Cells.c(a)],
-                    rowBlack[Cells.r(b)] + colBlack[Cells.c(b)]));
+            options.sort((a, b) -> {
+                int ca = inCornerSquare(rows, cols, Cells.r(a), Cells.c(a)) ? 1 : 0;
+                int cb = inCornerSquare(rows, cols, Cells.r(b), Cells.c(b)) ? 1 : 0;
+                if (ca != cb) return Integer.compare(ca, cb);
+                return Integer.compare(rowBlack[Cells.r(a)] + colBlack[Cells.c(a)],
+                        rowBlack[Cells.r(b)] + colBlack[Cells.c(b)]);
+            });
             int zoneBudget = Math.max(PREFILL_ZONE_BLACK_BUDGET_FLOOR, (int) (fillObjectiveFraction * zoneWhiteCount));
             boolean withinBudget = isLengthProblem || zoneWhiteCount == 0 || ((int) footprint[1]) + 1 <= zoneBudget;
             boolean placedOne = false;
