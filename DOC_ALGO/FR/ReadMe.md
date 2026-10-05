@@ -900,24 +900,27 @@ récursion).
 `backend/crossword_gen.py`, `Filler._attention_pool`,
 `Filler._widen_attention`) : à chaque palier (`generate_grid`), pour
 toutes ses tentatives — grilles reprises comme grilles neuves —, les temps
-1 et 2 se déroulent d'abord dans une **zone d'attention** : le carré des N premières
-lignes et N premières colonnes, à partir de la case (0, 0). Seul un
+1 et 2 se déroulent d'abord dans une **zone d'attention** : le rectangle des R premières
+lignes et C premières colonnes, à partir de la case (0, 0). Seul un
 emplacement ayant au moins une case encore libre (ni mot posé, ni lettre
-verrouillée) dans ce carré peut recevoir une pose. N vaut d'abord
+verrouillée) dans ce rectangle peut recevoir une pose. R et C valent d'abord
 `INCREMENTAL_FILL_START_SIZE` (6). Quand le nœud ne peut plus rien poser
 dans la zone — plus aucun emplacement concerné, ou tous essayés, écartés
-libérés compris —, la zone grandit de `INCREMENTAL_FILL_STEP` (2) et le
+libérés compris —, la zone s'élargit de `INCREMENTAL_FILL_COL_STEP` (4)
+colonnes tant qu'elle n'occupe pas toute la largeur de la grille, puis,
+une fois la pleine largeur atteinte, s'allonge de
+`INCREMENTAL_FILL_ROW_STEP` (4) lignes (`Filler._widen_attention`), et le
 nœud reprend au temps 1 sur l'ensemble agrandi (les emplacements déjà
 essayés par ce nœud le restent), jusqu'à couvrir toute la grille ; le
 temps 3 ne vient qu'ensuite. La taille de la zone est un paramètre de
 récursion comme `released` : héritée par la descente qui suit,
 restaurée en remontant ; chaque racine (`solve()`, y compris après un
-nettoyage précoce) repart de 6. Une tentative partie de lettres
+nettoyage précoce) repart de 6x6. Une tentative partie de lettres
 verrouillées (palier 2 et suivants) qui les perd toutes à la suite d'un
-nettoyage dur (précoce ou sur mot répété) ramène sa zone à 6, une seule
+nettoyage dur (précoce ou sur mot répété) ramène sa zone à 6x6, une seule
 fois par tentative (`Filler._attention_after_unlock`) : le nœud qui
-poursuit après le nettoyage sur mot répété repart de 6 ; après un
-nettoyage précoce, la racine repart de 6 de toute façon et la
+poursuit après le nettoyage sur mot répété repart de 6x6 ; après un
+nettoyage précoce, la racine repart de 6x6 de toute façon et la
 réinitialisation est simplement consommée. Un emplacement asséché, où
 qu'il soit, provoque le retour en arrière habituel : seule la sélection
 est limitée par la zone (`try_fill`, `incremental_fill`). Un emplacement écarté est repris dès que son domaine

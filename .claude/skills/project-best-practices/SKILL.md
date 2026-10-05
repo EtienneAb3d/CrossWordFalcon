@@ -1312,9 +1312,11 @@ the current defaults/behavior to know before touching this code.
   `_undo_reshape` keeps a word ghosted since the reshape off the grid.
 - **Incremental fill on every palier** (`INCREMENTAL_FILL_ENABLED`, on
   "pour le moment", in the user's words; Java mirror in `Filler`): the
-  user's rule — limit the slots a placement may choose to an NxN
-  "attention zone" starting at (0,0), N=6 first, fill until nothing more
-  can be placed within it, then N+=2, until the zone is the whole grid;
+  user's rule — limit the slots a placement may choose to an "attention
+  zone" starting at (0,0), 6x6 first, fill until nothing more can be
+  placed within it, then widen it horizontally only, 4 columns per step,
+  and once it spans 100 % of the width extend it vertically, 4 rows per
+  step, until the zone is the whole grid;
   applied at every palier ("à toutes les étapes"), to resumed and freshly
   created grids alike. From palier 2 on, when every locked cell of an
   attempt has been unlocked, the zone is reset — once per grid (the
@@ -1329,7 +1331,7 @@ the current defaults/behavior to know before touching this code.
   all-rejected slot still backtracks as usual, and the descent cap can
   still end the node first; the zone size is a recursion parameter,
   restored on unwinding like `released`, and every root (`solve()`,
-  early-hardclean restarts included) starts again at 6; "from palier 2
+  early-hardclean restarts included) starts again at 6x6; "from palier 2
   on" is implemented as "the attempt started with locked letters" (also
   true of "Continuer"; never true of "Finir la grille/la zone", whose
   permanent locks are never cleared); the reset happens after the

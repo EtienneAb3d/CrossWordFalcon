@@ -2646,20 +2646,23 @@ MAX_SAME_WORD_PLACEMENTS = 1000
 
 # Incremental fill ("remplissage incrémental"), every palier: a node only
 # places a word on a slot holding at least one still-free cell (no placed
-# word nor locked letter on it) inside the "attention zone", the square of
-# the grid's first N rows and N columns from (0, 0) (`Filler.
-# _attention_pool`). N starts at INCREMENTAL_FILL_START_SIZE; once the node
-# can place nothing more inside the zone (no such slot left, or every one
-# tried, écarté ones released included), the zone grows by
-# INCREMENTAL_FILL_STEP and the node carries on, until it covers the whole
-# grid. The size is a `_backtrack` recursion parameter, like `released`.
+# word nor locked letter on it) inside the "attention zone", the rectangle
+# of the grid's first R rows and C columns from (0, 0) (`Filler.
+# _attention_pool`). R and C start at INCREMENTAL_FILL_START_SIZE; once the
+# node can place nothing more inside the zone (no such slot left, or every
+# one tried, écarté ones released included), the zone grows by
+# INCREMENTAL_FILL_COL_STEP columns until it spans the grid's whole width,
+# then by INCREMENTAL_FILL_ROW_STEP rows (`Filler._widen_attention`), and
+# the node carries on, until it covers the whole grid. The zone is a
+# `_backtrack` recursion parameter, like `released`.
 # An attempt that starts from locked letters resets the zone to its start
 # size once, the first time a hardclean leaves it no locked letter at all
 # (`Filler._attention_after_unlock`). `generate_grid` enables it on every
 # attempt (`try_fill(incremental_fill=True)`).
 INCREMENTAL_FILL_ENABLED = True
 INCREMENTAL_FILL_START_SIZE = 6
-INCREMENTAL_FILL_STEP = 2
+INCREMENTAL_FILL_COL_STEP = 4
+INCREMENTAL_FILL_ROW_STEP = 4
 
 # Check frequency (in checks elapsed) for the "another
 # attempt of the same palier has already finished" signal (see
@@ -3404,9 +3407,9 @@ class Filler:
         # Incremental fill (see INCREMENTAL_FILL_ENABLED): off unless
         # `try_fill` turns it on.
         self.incremental_fill = False
-        # Attention-zone size of the node the search is currently in, and
-        # the one `best_assignment` was recorded under (None: the whole
-        # grid) — published with every preview (`attention_size`).
+        # Attention zone (rows, cols) of the node the search is currently
+        # in, and the one `best_assignment` was recorded under (None: the
+        # whole grid) — published with every preview (`attention_size`).
         self.attention_size = None
         self.best_attention_size = None
         # True while the attempt, started from locked letters, has not yet
@@ -4425,43 +4428,53 @@ class Filler:
         return target
 
     def _initial_attention(self):
-        """Attention-zone size a root node starts with (see
-        INCREMENTAL_FILL_ENABLED): None (the whole grid) when incremental
-        fill is off."""
+        """Attention zone a root node starts with (see
+        INCREMENTAL_FILL_ENABLED), as (rows, cols): None (the whole grid)
+        when incremental fill is off or the start zone already covers the
+        grid."""
         if not self.incremental_fill:
             return None
-        return self._widen_attention(INCREMENTAL_FILL_START_SIZE - INCREMENTAL_FILL_STEP)
+        rows = min(INCREMENTAL_FILL_START_SIZE, self.rows)
+        cols = min(INCREMENTAL_FILL_START_SIZE, self.cols)
+        return None if rows >= self.rows and cols >= self.cols else (rows, cols)
 
     def _attention_after_unlock(self, attention):
-        """The attention-zone size a node carries on with after a hardclean
+        """The attention zone a node carries on with after a hardclean
         that may have unlocked letters (`attention` otherwise): the start
-        size, once per attempt, the first time an attempt started from
+        zone, once per attempt, the first time an attempt started from
         locked letters is left with none (see INCREMENTAL_FILL_ENABLED)."""
         if self._attention_reset_pending and not self.locked_letters:
             self._attention_reset_pending = False
             return self._initial_attention()
         return attention
 
-    def _widen_attention(self, size):
-        """The attention-zone size after `size`, None once it covers the
-        whole grid."""
-        size += INCREMENTAL_FILL_STEP
-        return None if size >= max(self.rows, self.cols) else size
+    def _widen_attention(self, zone):
+        """The attention zone after `zone` (rows, cols): INCREMENTAL_FILL_
+        COL_STEP more columns while it is narrower than the grid, then
+        INCREMENTAL_FILL_ROW_STEP more rows; None once it covers the whole
+        grid."""
+        rows, cols = zone
+        if cols < self.cols:
+            cols = min(cols + INCREMENTAL_FILL_COL_STEP, self.cols)
+        else:
+            rows = min(rows + INCREMENTAL_FILL_ROW_STEP, self.rows)
+        return None if rows >= self.rows and cols >= self.cols else (rows, cols)
 
-    def _attention_pool(self, slots, size):
+    def _attention_pool(self, slots, zone):
         """The slots of `slots` holding at least one still-free cell (no
-        placed word nor locked letter on it) inside the attention zone of
-        size `size` — rows and columns 0 to `size` - 1. All of `slots` when
-        `size` is None."""
-        if size is None:
+        placed word nor locked letter on it) inside the attention zone
+        `zone` (rows, cols) — rows 0 to rows - 1, columns 0 to cols - 1.
+        All of `slots` when `zone` is None."""
+        if zone is None:
             return list(slots)
+        rows, cols = zone
         known = set(self.locked_letters)
         for j, word in enumerate(self.assignment):
             if word is not None:
                 known.update(self.slots[j])
         return [
             i for i in slots
-            if any(r < size and c < size and (r, c) not in known for r, c in self.slots[i])
+            if any(r < rows and c < cols and (r, c) not in known for r, c in self.slots[i])
         ]
 
     def _fail_or_backghost(self, conflict, deadline_checks, released, attention=None):
@@ -5988,7 +6001,7 @@ class Filler:
         self._last_conflict = None
         self._last_jumped = False
         entry_released = released
-        # Attention-zone size this node was entered with (see
+        # Attention zone (rows, cols) this node was entered with (see
         # INCREMENTAL_FILL_ENABLED), None for the whole grid.
         entry_attention = attention
         self.attention_size = attention

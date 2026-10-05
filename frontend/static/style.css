@@ -1230,11 +1230,11 @@ button:disabled {
 }
 
 /* Incremental fill's attention zone (script.js's renderAttemptPreview(),
-   backend's `attention_size`): a bold dashed frame around the first N
-   rows and columns, laid over the cells (an absolutely positioned child
+   backend's `attention_size`): a bold dashed frame around the first R
+   rows and C columns, laid over the cells (an absolutely positioned child
    takes no part in the grid's placement). Starts on the grid's own border
-   (-2px) and spans N cells plus their gaps, so its right/bottom edge sits
-   on the grid line after row/column N. */
+   (-2px) and spans C x R cells plus their gaps, so its right/bottom edge
+   sits on the grid line after column C / row R. */
 .attempt-preview-grid .attention-zone {
   position: absolute;
   top: -2px;

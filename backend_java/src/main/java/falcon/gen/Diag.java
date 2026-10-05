@@ -17,9 +17,9 @@ public final class Diag {
     public List<Integer> forcedCells, impossibleCells, deadlockCells, excludedCells, lockedCells, themeCells,
             challengeCells;
     public List<Object> statLetters;
-    /** Incremental fill's attention-zone size (mirrors `attention_size`, null = the whole grid); only serialized
-     * once hasAttentionSize is set. */
-    public Integer attentionSize;
+    /** Incremental fill's attention zone as [rows, cols] (mirrors `attention_size`, null = the whole grid); only
+     * serialized once hasAttentionSize is set. */
+    public List<Integer> attentionSize;
     public boolean hasAttentionSize;
     public Integer assignedLetterCount;
     public String[] assignment;

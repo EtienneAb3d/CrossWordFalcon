@@ -50,14 +50,17 @@ public final class Filler {
      * word the clean takes off stays off. The streak restarts from zero. 0 = off. */
     public static final int MAX_SAME_WORD_PLACEMENTS = 1000;
     /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), every palier: a node only places a word on a slot
-     * holding a still-free cell inside the attention zone, the grid's first N rows and N columns from (0, 0)
-     * (attentionPool). N starts at INCREMENTAL_FILL_START_SIZE and grows by INCREMENTAL_FILL_STEP once the node
-     * can place nothing more inside the zone, until it covers the whole grid; a backtrack recursion parameter,
-     * like released. An attempt that starts from locked letters resets the zone to its start size once, the first
-     * time a hardclean leaves it no locked letter at all (attentionAfterUnlock). */
+     * holding a still-free cell inside the attention zone, the grid's first R rows and C columns from (0, 0)
+     * (attentionPool). R and C start at INCREMENTAL_FILL_START_SIZE; once the node can place nothing more inside
+     * the zone, it grows by INCREMENTAL_FILL_COL_STEP columns until it spans the grid's whole width, then by
+     * INCREMENTAL_FILL_ROW_STEP rows (widenAttention), until it covers the whole grid; a backtrack recursion
+     * parameter, like released, packed as Cells.of(R, C). An attempt that starts from locked letters resets the
+     * zone to its start size once, the first time a hardclean leaves it no locked letter at all
+     * (attentionAfterUnlock). */
     public static final boolean INCREMENTAL_FILL_ENABLED = true;
     public static final int INCREMENTAL_FILL_START_SIZE = 6;
-    public static final int INCREMENTAL_FILL_STEP = 2;
+    public static final int INCREMENTAL_FILL_COL_STEP = 4;
+    public static final int INCREMENTAL_FILL_ROW_STEP = 4;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 100;
     // Of that window, re-sorted by frequency in the freq wordlist, the most frequent words the draw is made among.
@@ -218,10 +221,10 @@ public final class Filler {
     public int earlyHardcleanPercent = 100;
     /** Incremental fill (INCREMENTAL_FILL_ENABLED): off unless Fill.tryFill turns it on. */
     public boolean incrementalFill;
-    /** Attention-zone size of the node the search is currently in, and the one bestAssignment was recorded under
-     * (null = the whole grid), published with every preview as attention_size. */
-    public volatile Integer attentionSize;
-    public Integer bestAttentionSize;
+    /** Attention zone of the node the search is currently in, and the one bestAssignment was recorded under, as
+     * [rows, cols] (null = the whole grid), published with every preview as attention_size (attentionJson). */
+    public volatile List<Integer> attentionSize;
+    public List<Integer> bestAttentionSize;
     /** True while the attempt, started from locked letters, has not yet reset its attention zone for losing them
      * all (attentionAfterUnlock). */
     boolean attentionResetPending;
@@ -788,14 +791,17 @@ public final class Filler {
         return target;
     }
 
-    /** Attention-zone size a root node starts with (mirrors _initial_attention); -1 = the whole grid. */
+    /** Attention zone a root node starts with, packed as Cells.of(rows, cols) (mirrors _initial_attention); -1 =
+     * the whole grid. */
     int initialAttention() {
         if (!incrementalFill) return -1;
-        return widenAttention(INCREMENTAL_FILL_START_SIZE - INCREMENTAL_FILL_STEP);
+        int r = Math.min(INCREMENTAL_FILL_START_SIZE, rows);
+        int c = Math.min(INCREMENTAL_FILL_START_SIZE, cols);
+        return r >= rows && c >= cols ? -1 : Cells.of(r, c);
     }
 
-    /** Mirrors _attention_after_unlock: the attention-zone size a node carries on with after a hardclean that may
-     * have unlocked letters (attention otherwise) — the start size, once per attempt, the first time an attempt
+    /** Mirrors _attention_after_unlock: the attention zone a node carries on with after a hardclean that may have
+     * unlocked letters (attention otherwise) — the start zone, once per attempt, the first time an attempt
      * started from locked letters is left with none. */
     int attentionAfterUnlock(int attention) {
         if (attentionResetPending && lockedLetters.isEmpty()) {
@@ -805,16 +811,25 @@ public final class Filler {
         return attention;
     }
 
-    /** The attention-zone size after size, -1 once it covers the whole grid (mirrors _widen_attention). */
-    int widenAttention(int size) {
-        size += INCREMENTAL_FILL_STEP;
-        return size >= Math.max(rows, cols) ? -1 : size;
+    /** The attention zone after zone: INCREMENTAL_FILL_COL_STEP more columns while it is narrower than the grid,
+     * then INCREMENTAL_FILL_ROW_STEP more rows; -1 once it covers the whole grid (mirrors _widen_attention). */
+    int widenAttention(int zone) {
+        int r = Cells.r(zone), c = Cells.c(zone);
+        if (c < cols) c = Math.min(c + INCREMENTAL_FILL_COL_STEP, cols);
+        else r = Math.min(r + INCREMENTAL_FILL_ROW_STEP, rows);
+        return r >= rows && c >= cols ? -1 : Cells.of(r, c);
     }
 
-    /** The slots holding a still-free cell (no placed word nor locked letter on it) inside the attention zone of
-     * size size; all of them when size is -1 (mirrors _attention_pool). */
-    List<Integer> attentionPool(List<Integer> pool, int size) {
-        if (size < 0) return new ArrayList<>(pool);
+    /** [rows, cols] of a packed attention zone, null for -1 (the whole grid): the attention_size JSON shape. */
+    static List<Integer> attentionJson(int zone) {
+        return zone < 0 ? null : List.of(Cells.r(zone), Cells.c(zone));
+    }
+
+    /** The slots holding a still-free cell (no placed word nor locked letter on it) inside the attention zone
+     * zone (rows 0 to rows - 1, columns 0 to cols - 1); all of them when zone is -1 (mirrors _attention_pool). */
+    List<Integer> attentionPool(List<Integer> pool, int zone) {
+        if (zone < 0) return new ArrayList<>(pool);
+        int zr = Cells.r(zone), zc = Cells.c(zone);
         Set<Integer> known = new HashSet<>(lockedLetters.keySet());
         for (int j = 0; j < assignment.length; j++) {
             if (assignment[j] != null) for (int cell : slots.get(j)) known.add(cell);
@@ -822,7 +837,7 @@ public final class Filler {
         List<Integer> out = new ArrayList<>();
         for (int i : pool) {
             for (int cell : slots.get(i)) {
-                if (Cells.r(cell) < size && Cells.c(cell) < size && !known.contains(cell)) {
+                if (Cells.r(cell) < zr && Cells.c(cell) < zc && !known.contains(cell)) {
                     out.add(i);
                     break;
                 }
@@ -1725,13 +1740,14 @@ public final class Filler {
 
     // ================================================================== search
 
-    /** attention: the attention-zone size (INCREMENTAL_FILL_ENABLED), -1 for the whole grid. */
+    /** attention: the attention zone (INCREMENTAL_FILL_ENABLED), packed as Cells.of(rows, cols), -1 for the whole
+     * grid. */
     boolean backtrack(long deadlineChecks, boolean released, int attention) {
         lastConflict = null;
         lastJumped = false;
         final boolean entryReleased = released;
         final int entryAttention = attention;
-        attentionSize = attention < 0 ? null : attention;
+        attentionSize = attentionJson(attention);
         if (abandoned || restartPending) return false;
         if (deadlineReachedWithoutExtension(deadlineChecks)) {
             budgetExhausted = true;
@@ -1750,7 +1766,7 @@ public final class Filler {
             bestSlots = slots;
             bestPattern = pattern;
             bestStatLetters = statLetters(assignment);
-            bestAttentionSize = attention < 0 ? null : attention;
+            bestAttentionSize = attentionJson(attention);
             if (onNewBest != null) onNewBest.accept(bestAssignment);
             // Early hardclean: checked right as the record is taken, the only moment bestAssignment is the
             // current assignment, on the current slots and pattern. Every node unwinds (restartPending) and
@@ -1785,7 +1801,7 @@ public final class Filler {
             attention = widenAttention(attention);
             zonePool = attentionPool(selectable, attention);
         }
-        attentionSize = attention < 0 ? null : attention;
+        attentionSize = attentionJson(attention);
         List<Integer> primary;
         if (released) {
             primary = zonePool;
@@ -1820,7 +1836,7 @@ public final class Filler {
                     // on the larger pool (slots already tried here stay tried).
                     attention = widenAttention(attention);
                     zonePool = attentionPool(selectable, attention);
-                    attentionSize = attention < 0 ? null : attention;
+                    attentionSize = attentionJson(attention);
                     released = entryReleased;
                     if (released) {
                         primary = zonePool;
@@ -1894,7 +1910,7 @@ public final class Filler {
                             attention);
                     String outcome = (String) out[0];
                     if (outcome.equals("success")) return true;
-                    attentionSize = attention < 0 ? null : attention;
+                    attentionSize = attentionJson(attention);
                     if (outcome.equals("rejected")) {
                         @SuppressWarnings("unchecked")
                         Set<Integer> blame = (Set<Integer>) out[2];
@@ -1974,7 +1990,7 @@ public final class Filler {
                     long seq = placementCounter++;
                     placementSeq.put(bestI, seq);
                     if (descend(bestI, w, deadlineChecks, released, attention)) return true;
-                    attentionSize = attention < 0 ? null : attention;
+                    attentionSize = attentionJson(attention);
                     Set<Integer> childConflict = lastConflict;
                     boolean jumpedIn = lastJumped;
                     toleratedDry.removeAll(newlyTolerated);

@@ -221,12 +221,14 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `_noise_slot_cells`.)
 
 - **Zone d'attention** (*remplissage incrémental*) : à chaque palier,
-  carré des N premières lignes et N
+  rectangle des R premières lignes et C
   premières colonnes de la grille, à partir de la case (0, 0) ; seul un
-  emplacement ayant une case encore libre dans ce carré peut recevoir une
-  pose. N vaut d'abord 6 et grandit de 2 chaque fois que plus rien ne peut
-  être posé dans la zone, jusqu'à couvrir toute la grille ; une tentative
-  partie de lettres verrouillées la ramène à 6 une fois, quand un
+  emplacement ayant une case encore libre dans ce rectangle peut recevoir
+  une pose. R et C valent d'abord 6 ; chaque fois que plus rien ne peut
+  être posé dans la zone, elle s'élargit de 4 colonnes jusqu'à occuper
+  toute la largeur de la grille, puis s'allonge de 4 lignes, jusqu'à
+  couvrir toute la grille (`Filler._widen_attention`) ; une tentative
+  partie de lettres verrouillées la ramène à 6x6 une fois, quand un
   nettoyage dur lui retire sa dernière lettre verrouillée
   (`Filler._attention_after_unlock`). Ne concerne que
   le choix de l'emplacement, jamais le retour en arrière ni la détection

@@ -1520,16 +1520,20 @@ function renderAttemptPreview(examples) {
       }
     }
     // Incremental fill's attention zone (backend/crossword_gen.py's
-    // INCREMENTAL_FILL_ENABLED, `attention_size`): the square of the first
-    // N rows and columns the search may currently place a word in, framed
-    // by a bold dashed border laid over the cells. Absent once the
-    // zone covers the whole grid (`attention_size` null).
-    if (typeof attentionSize === "number" && attentionSize < Math.max(width, height)) {
-      const zone = document.createElement("div");
-      zone.className = "attention-zone";
-      zone.style.setProperty("--zone-rows", Math.min(attentionSize, height));
-      zone.style.setProperty("--zone-cols", Math.min(attentionSize, width));
-      miniGrid.appendChild(zone);
+    // INCREMENTAL_FILL_ENABLED, `attention_size` = [rows, cols]): the
+    // rectangle of the first rows and columns the search may currently
+    // place a word in, framed by a bold dashed border laid over the cells.
+    // Absent once the zone covers the whole grid (`attention_size` null).
+    if (Array.isArray(attentionSize) && attentionSize.length === 2) {
+      const zoneRows = Math.min(attentionSize[0], height);
+      const zoneCols = Math.min(attentionSize[1], width);
+      if (zoneRows < height || zoneCols < width) {
+        const zone = document.createElement("div");
+        zone.className = "attention-zone";
+        zone.style.setProperty("--zone-rows", zoneRows);
+        zone.style.setProperty("--zone-cols", zoneCols);
+        miniGrid.appendChild(zone);
+      }
     }
     // Final overlay pass: every previously-built cell already sits in the
     // DOM at this point, so adding .forced/.locked/.low-candidates here
