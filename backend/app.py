@@ -929,7 +929,7 @@ class InteractiveStepRequest(BaseModel):
     `last_placed_cells` are the cells (`[[row, col], ...]`) of the last
     word a previous "Suivant" placed that the grid still holds: the origin
     of the slot-selection cascade's geometric score (see `interactive_
-    place_word`'s own `last_placed_cells`). Empty — the grid's center —
+    place_word`'s own `last_placed_cells`). Empty — the top-left corner —
     when there is none."""
     job_id: str
     grid: list[list[str]]

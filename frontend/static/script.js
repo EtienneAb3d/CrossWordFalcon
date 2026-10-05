@@ -903,8 +903,9 @@ let interactiveDeadlockCells = new Set();
 let interactiveExcludedCells = new Set();
 // The candidate slots of the last "Suivant" click — the level-6 window of
 // the slot-selection cascade (backend `Filler._select_target_slot`), the
-// slots closest to the selection origin (the center of the last placed
-// word, the grid's center before any) the cascade chose among — each
+// slots closest to the selection origin (halfway between the top-left
+// corner and the center of the last placed word, the top-left corner
+// before any) the cascade chose among — each
 // shown by its own cell closest to that origin, outlined blue. Same staleness
 // rule as the sets above.
 let interactiveWindowCells = new Set();

@@ -394,8 +394,9 @@ public final class Interactive {
         return row || col ? out : null;
     }
 
-    /** Each slot's cell(s) closest to the level-6 origin — the center of the
-     *  last word "Suivant" placed, or the grid's center before any (mirrors
+    /** Each slot's cell(s) closest to the level-6 origin — the midpoint of
+     *  the grid's top-left corner and the center of the last word "Suivant"
+     *  placed, or the top-left corner before any (mirrors
      *  _origin_closest_cells). */
     static List<Object> originClosestCells(Filler f, Collection<Integer> slotIndices) {
         double[] origin = f.selectionOrigin();

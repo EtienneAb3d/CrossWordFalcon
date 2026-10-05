@@ -94,19 +94,18 @@ public final class Filler {
     // Level 4 of the slot-selection cascade (restrict to slots already
     // carrying a real letter): optional, currently disabled.
     public static final boolean KNOWN_LETTER_LEVEL_ENABLED = false;
-    /** Origin {row, col} of level 6's geometric score: the grid's center,
-     *  ((rows - 1) / 2, (cols - 1) / 2), half-integer when a dimension is
-     *  even (mirrors _slot_selection_origin). */
+    /** Anchor {row, col} of level 6's geometric score: the grid's top-left
+     *  corner, (0, 0), whatever the grid's size (mirrors _slot_selection_origin). */
     public static double[] slotSelectionOrigin(int rows, int cols) {
-        return new double[]{(rows - 1) / 2.0, (cols - 1) / 2.0};
+        return new double[]{0.0, 0.0};
     }
     /** Origin {row, col} of level 6's geometric score: the midpoint of the
-     *  segment joining the grid's center and the center of the most recent
+     *  segment joining the grid's top-left corner and the center of the most recent
      *  word the current descent placed and still holds (highest
      *  placementSeq; a word's center is the midpoint of its first and last
      *  cells); while the descent holds no word of its own, the same with
      *  the last word Interactive mode's "Suivant" placed (lastPlacedCells),
-     *  else the grid's center itself (mirrors Filler._selection_origin). */
+     *  else the top-left corner itself (mirrors Filler._selection_origin). */
     public double[] selectionOrigin() {
         int[] cells;
         if (placementSeq.isEmpty()) {
@@ -125,8 +124,8 @@ public final class Filler {
             minR = Math.min(minR, Cells.r(cell)); maxR = Math.max(maxR, Cells.r(cell));
             minC = Math.min(minC, Cells.c(cell)); maxC = Math.max(maxC, Cells.c(cell));
         }
-        double[] center = slotSelectionOrigin(rows, cols);
-        return new double[]{((minR + maxR) / 2.0 + center[0]) / 2.0, ((minC + maxC) / 2.0 + center[1]) / 2.0};
+        double[] anchor = slotSelectionOrigin(rows, cols);
+        return new double[]{((minR + maxR) / 2.0 + anchor[0]) / 2.0, ((minC + maxC) / 2.0 + anchor[1]) / 2.0};
     }
     public static final int SLOT_SELECTION_WINDOW_SIZE = 10;
     public static final int MOST_CONSTRAINED_START_LENGTH = 4;
@@ -206,8 +205,8 @@ public final class Filler {
     /** Level 6's geometric window of the last selectTargetSlot call (mirrors last_selection_window). */
     public List<Integer> lastSelectionWindow = new ArrayList<>();
     /** Cells of the last word Interactive mode's "Suivant" placed, set by
-     *  Interactive.placeWord: selectionOrigin's fallback before the grid's
-     *  center; null everywhere else (mirrors last_placed_cells). */
+     *  Interactive.placeWord: selectionOrigin's fallback before the top-left
+     *  corner; null everywhere else (mirrors last_placed_cells). */
     public int[] lastPlacedCells;
     /** For slot i and position p: the crossing slot (or -1) and its position there. */
     int[][] crossSlot, crossPos;

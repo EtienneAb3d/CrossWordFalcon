@@ -1410,9 +1410,11 @@ the current defaults/behavior to know before touching this code.
   already determined by a real letter is skipped, otherwise every
   partially-filled slot would report 1. Level 7 runs inside level 6's
   geometric window (the `SLOT_SELECTION_WINDOW_SIZE` (10) slots closest to
-  the midpoint between the grid's center and the center of the last word
-  the current descent placed, `Filler._selection_origin` — the grid's
-  center while it has placed none; in Interactive mode, the same midpoint
+  the midpoint between the grid's top-left corner `(0, 0)` and the center
+  of the last word the current descent placed, `Filler._selection_origin`
+  — the top-left corner while it has placed none — the user's rule: the
+  slots offered for a placement are measured from the corner (0,0), not
+  from the grid's center; in Interactive mode, the same midpoint
   with the last word "Suivant" placed that the grid still holds, sent by
   the client as `last_placed_cells`),
   not over the whole group, and measures slots through a

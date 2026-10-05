@@ -1013,17 +1013,17 @@ d'attention du remplissage incrémental (voir « Les emplacements
 6. **fenêtre géométrique** : chaque emplacement reçoit pour score le carré
    de la distance (euclidienne) entre l'origine et sa **case la plus
    proche de l'origine** — pas son point médian. L'origine est le **milieu
-   du segment reliant le centre de la grille**
-   (`((lignes - 1) / 2, (colonnes - 1) / 2)`, `_slot_selection_origin`)
+   du segment reliant le coin haut gauche de la grille**
+   (`(0, 0)`, `_slot_selection_origin`)
    **au centre du dernier mot posé par la descente en cours** (le plus
    grand `_placement_seq` encore sur la grille ; centre = milieu de sa
    première et de sa dernière case) : le remplissage progresse de proche
    en proche autour de chaque nouveau mot, ramené à mi-chemin vers le
-   centre, sans rester cantonné au disque central ni tourner au hasard
-   dans toute la grille. Un mot retiré par retour en arrière ou retrait
+   coin haut gauche, de sorte que la grille se remplit en partant de ce
+   coin plutôt qu'au hasard. Un mot retiré par retour en arrière ou retrait
    fantôme ne compte plus. Tant que la descente n'a posé aucun mot (les
    mots présents au départ de `solve()` n'étant pas numérotés), l'origine
-   est le centre de la grille. En mode Interactif, le dernier mot est le
+   est le coin haut gauche lui-même. En mode Interactif, le dernier mot est le
    dernier posé par « Suivant » encore entièrement présent — un mot annulé
    par « Précédent » ou effacé à la main ne compte plus, on remonte au
    précédent

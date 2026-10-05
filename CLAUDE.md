@@ -479,19 +479,18 @@ via `ProcessPoolExecutor`:
    geometrically (squared distance between the slot's own CLOSEST cell to
    an origin, `Filler._selection_origin`, and that origin itself — not the
    slot's own midpoint: the origin is the midpoint of the segment joining
-   the grid's center, `_slot_selection_origin` = `((rows - 1) / 2,
-   (cols - 1) / 2)`, and the center of the most recent word the current
+   the grid's top-left corner, `_slot_selection_origin` = `(0, 0)`, and the center of the most recent word the current
    descent placed and still holds — the highest `_placement_seq`, the
    midpoint of its first and last cells — so the fill keeps exploring one
-   region around each new word, pulled halfway back toward the center
-   rather than confined to the central disk or wandering the whole grid;
-   the origin is the grid's center itself while the descent holds no word
+   region around each new word, pulled halfway back toward the top-left
+   corner, so the fill spreads out from that corner rather than wandering
+   the whole grid; the origin is the top-left corner itself while the descent holds no word
    of its own, at the root; Interactive mode's `Filler` runs no descent
    and takes instead the same midpoint with the last word "Suivant" placed that the grid still fully holds (`Filler.
    last_placed_cells`, from `InteractiveStepRequest.last_placed_cells` —
    the client's `interactivePlacedHistory`, so an undone or erased word is
    skipped — validated by `_placed_word_origin_cells` as one straight run
-   of letters), the grid's center before any), shuffle, and keep the
+   of letters), the top-left corner before any), shuffle, and keep the
    `SLOT_SELECTION_WINDOW_SIZE=10` lowest-scored as a window; (7) within
    that window, among slots of at least
    `MOST_CONSTRAINED_START_LENGTH=4` letters — a threshold lowered one
@@ -1650,8 +1649,9 @@ tried when nothing is placed):
 by every call), which `_tier_target` reads right after resolving that
 tier's target — before the tier-3 sweep re-runs the cascade — and turns into
 `window_cells` (`_origin_closest_cells`: for each window slot, its cell(s)
-closest to `_selection_origin` — in Interactive mode, the center of the
-last word "Suivant" placed, see below — i.e. the cell that gives it its
+closest to `_selection_origin` — in Interactive mode, the midpoint of
+the top-left corner and the center of the last word "Suivant" placed,
+see below — i.e. the cell that gives it its
 level-6 score, ties included). Threaded through `POST /api/interactive/step` (and
 the start job's result; empty on a resume) into `script.js`'s
 `interactiveWindowCells`, rendered as a blue outline

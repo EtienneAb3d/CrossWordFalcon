@@ -3079,12 +3079,11 @@ ALTERNATE_DIRECTION_ENABLED = False
 KNOWN_LETTER_LEVEL_ENABLED = False
 
 def _slot_selection_origin(rows, cols):
-    """Origin `(row, col)` of level 6's geometric score (see `Filler._
-    select_target_slot`): the grid's center, `((rows - 1) / 2, (cols - 1) /
-    2)` — a half-integer coordinate when the dimension is even, so the
-    central cells tie. Each slot is scored by the squared distance between
-    its own cell closest to this point and the point itself."""
-    return ((rows - 1) / 2, (cols - 1) / 2)
+    """Anchor `(row, col)` of level 6's geometric score (see `Filler._
+    select_target_slot`): the grid's top-left corner, `(0, 0)`, whatever
+    the grid's size. Each slot is scored by the squared distance between
+    its own cell closest to the origin and the origin itself."""
+    return (0.0, 0.0)
 
 # Size (fixed, not a proportion of the group) of the final draw window
 # among the retained group of slots (`selection_pool`, see `Filler.
@@ -3395,7 +3394,7 @@ class Filler:
         self.last_selection_window = []
         # Cells of the last word Interactive mode's "Suivant" placed, set
         # by `interactive_place_word` (whose `Filler` runs no descent of its
-        # own): `_selection_origin`'s fallback before the grid's center.
+        # own): `_selection_origin`'s fallback before the top-left corner.
         # `None` everywhere else.
         self.last_placed_cells = None
         # Every per-slot lookup derived from `slots` (see `_index_slots`).
@@ -5658,18 +5657,18 @@ class Filler:
     def _selection_origin(self):
         """Origin `(row, col)` of level 6's geometric score (see `_select_
         target_slot`): the midpoint of the segment joining the grid's
-        center (`_slot_selection_origin`) and the center of the most
+        top-left corner (`_slot_selection_origin`, `(0, 0)`) and the center of the most
         recent word the current descent placed and still holds — the
         highest `_placement_seq`, so a word reverted by backtracking or
         taken off by a backghost no longer counts — that word's center
         being the midpoint of its first and last cells. Pulling halfway
-        back toward the grid's center keeps the fill exploring one region
-        around the last word without either staying in the central disk
-        or wandering across the whole grid. While the descent holds no
+        back toward the top-left corner keeps the fill exploring one region
+        around the last word, drifting from that corner across the grid
+        rather than wandering over it at random. While the descent holds no
         word of its own, Interactive mode's `Filler` uses the last word
         "Suivant" placed (`last_placed_cells`) the same way, and every
         other caller (search root, words already there when `solve()`
-        started) the grid's center itself, which is also Interactive
+        started) the top-left corner itself, which is also Interactive
         mode's own before any placed word."""
         if not self._placement_seq:
             if not self.last_placed_cells:
@@ -5682,8 +5681,8 @@ class Filler:
         cols = [c for _, c in cells]
         word_row = (min(rows) + max(rows)) / 2
         word_col = (min(cols) + max(cols)) / 2
-        center_row, center_col = _slot_selection_origin(self.rows, self.cols)
-        return ((word_row + center_row) / 2, (word_col + center_col) / 2)
+        anchor_row, anchor_col = _slot_selection_origin(self.rows, self.cols)
+        return ((word_row + anchor_row) / 2, (word_col + anchor_col) / 2)
 
     def _select_target_slot(self, unassigned, domains, challenge_level=True, theme_level=True):
         """Chooses which slot to fill next among `unassigned` (already
@@ -5813,9 +5812,9 @@ class Filler:
         # 6. among the slots of the group obtained at the previous level, a
         #    purely **geometric** score is computed for each: the squared
         #    distance between the slot's own CLOSEST cell to
-        #    `_selection_origin()` (the midpoint between the grid's center
+        #    `_selection_origin()` (the midpoint between the grid's top-left corner
         #    and the center of the last word the current descent placed,
-        #    or the grid's center while it has placed none; every cell of `self.slots[i]` is considered
+        #    or the top-left corner while it has placed none; every cell of `self.slots[i]` is considered
         #    individually, the smallest of their own squared distances
         #    being the slot's score — NOT the midpoint of its own span, so
         #    a long slot only needs to REACH toward that point to score
@@ -5824,10 +5823,10 @@ class Filler:
         #    the slot's own fill state (neither its known letters nor its
         #    domain) — only on its position relative to that origin —
         #    which keeps the fill exploring one region around each new
-        #    word, pulled halfway back toward the grid's center, rather
+        #    word, pulled halfway back toward the top-left corner, rather
         #    than following each slot's own difficulty.
         #    Only **the `SLOT_SELECTION_WINDOW_SIZE` (10) slots with the
-        #    smallest score** (the closest to that corner) are
+        #    smallest score** (the closest to that origin) are
         #    kept — a fixed window size, not a
         #    proportion of the group (see its own docstring). The slots are
         #    shuffled (with this attempt's own
@@ -5988,8 +5987,8 @@ class Filler:
                 selection_pool = theme_placeable
         # Geometric score: squared distance between the slot's own CLOSEST
         # cell to `_selection_origin()` (the midpoint between the grid's
-        # center and the center of the last word this descent placed, or
-        # the grid's center while it has placed none),
+        # top-left corner and the center of the last word this descent placed, or
+        # the top-left corner while it has placed none),
         # and that point itself — not the slot's own midpoint.
         # Every cell of the slot (`self.slots[i]`, a straight run of cells
         # along one axis — see `extract_slots`) is considered individually,
@@ -8705,8 +8704,8 @@ def _placed_word_origin_cells(cells, known):
 def _origin_closest_cells(filler, slot_indices):
     """For each slot of `slot_indices`, its cell(s) closest to
     `Filler._selection_origin()` (here the midpoint between the grid's
-    center and the center of the last word "Suivant" placed, or the grid's
-    center before any) — the cell that
+    top-left corner and the center of the last word "Suivant" placed, or
+    the top-left corner before any) — the cell that
     gives the slot its level-6
     geometric score in
     `Filler._select_target_slot` (every cell tied at that smallest squared
@@ -8843,7 +8842,7 @@ def interactive_place_word(grid, rows, cols, index, rng, priority_words=None,
     word a previous "Suivant" placed: the origin of the cascade's level-6
     geometric score (`Filler.last_placed_cells`), used only when they
     still form one straight run of letters on `grid`
-    (`_placed_word_origin_cells`) — the grid's center otherwise.
+    (`_placed_word_origin_cells`) — the top-left corner otherwise.
 
     A "Mots Défi"/theme word with no matching-length slot anywhere yet can
     still be reached, via `_try_reshape_for_word` relocating or inserting a

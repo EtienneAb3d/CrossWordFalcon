@@ -1033,8 +1033,8 @@ real letter. Both update after every edit.
   still placed normally, unlike a red (impossible) one. After each click,
   a blue frame marks the spots the generator was choosing among when it
   picked where to put the word it placed — the ones closest to the point
-  halfway between the grid's center and the middle of the previous word
-  **Suivant** placed (the grid's center before the first one) — each by its own square nearest that point (`frontend/static/script.js`,
+  halfway between the grid's top-left corner and the middle of the previous word
+  **Suivant** placed (the top-left corner before the first one) — each by its own square nearest that point (`frontend/static/script.js`,
   `interactiveWindowCells`). Once no spot in
   the whole grid has a completely safe word left, **Suivant** widens what
   it will accept rather than stopping: first a word that leaves some
@@ -1543,14 +1543,14 @@ below — the same priority the Interactive mode panel's own "Suivant" /
 real dictionary candidates left is tackled first, on the theory that
 finishing it with a genuine word now is better than letting a later
 cleanup pass shorten it with a black cell instead; the ten slots of that
-group closest to the point halfway between the grid's center and the
+group closest to the point halfway between the grid's top-left corner and the
 middle of the last word the search placed are then kept (so the fill keeps
-exploring one region around each new word, without being confined to the
-center or wandering across the whole grid, starting from the grid's
-center while no word is placed yet); within those ten, the choice narrows to whichever long slots
-own the single most constrained cell (only slots of 12 letters or more
+exploring one region around each new word, spreading out from that corner
+rather than wandering across the whole grid, starting from the corner
+itself while no word is placed yet); within those ten, the choice narrows to whichever long slots
+own the single most constrained cell (only slots of 4 letters or more
 are looked at first; if none has a free cell left to measure, the bar
-drops to 11 letters, then 10, and so on down to 2) — the cell with the
+drops to 3 letters, then 2) — the cell with the
 fewest letters still possible on it, counted separately for its across
 and its down word and keeping only the letters both agree on, the same
 figure the interactive "Stats" button shows — since the tightest cell

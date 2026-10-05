@@ -368,14 +368,14 @@ plusieurs signaux) :
   emplacement ; les autres mots de son groupe y sont posés en priorité
   (voir « Groupe d'un nœud »). En mode Interactif, les emplacements de la
   fenêtre géométrique du niveau 6 de la cascade de choix d'emplacement —
-  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du milieu du segment reliant le centre de la grille au centre du dernier mot posé par « Suivant » (du centre de la grille tant qu'il n'y en a pas)
+  les `SLOT_SELECTION_WINDOW_SIZE` (10) plus proches du milieu du segment reliant le coin haut gauche de la grille, `(0, 0)`, au centre du dernier mot posé par « Suivant » (du coin haut gauche tant qu'il n'y en a pas)
   parmi ceux retenus par les niveaux précédents — dans laquelle a été
   tiré, lors d'un clic sur « Suivant », l'emplacement où le mot a été posé
   — pour le dictionnaire général, la sélection du balayage qui a fourni cet
   emplacement ; pour les Mots Défi et le glossaire thématique, la cible de
   la famille ; chaque famille évalue la cascade par rapport à son seul
   glossaire. Chacun est
-  signalé par sa ou ses cases les plus proches de ce centre, entourées en
+  signalé par sa ou ses cases les plus proches de ce point, entourées en
   bleu. (`backend/crossword_gen.py`, `Filler.last_selection_window`,
   `_origin_closest_cells` ; `frontend/static/script.js`,
   `interactiveWindowCells`.)
