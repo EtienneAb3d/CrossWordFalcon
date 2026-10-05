@@ -50,11 +50,14 @@ public final class Filler {
      * word the clean takes off stays off. The streak restarts from zero. 0 = off. */
     public static final int MAX_SAME_WORD_PLACEMENTS = 1000;
     /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), every palier: a node only places a word on a slot
-     * holding a still-free cell inside the attention zone, the grid's first R rows and C columns from (0, 0)
-     * (attentionPool). R and C start at INCREMENTAL_FILL_START_SIZE; once the node can place nothing more inside
-     * the zone, it grows by INCREMENTAL_FILL_COL_STEP columns until it spans the grid's whole width, then by
-     * INCREMENTAL_FILL_ROW_STEP rows (widenAttention), until it covers the whole grid; a backtrack recursion
-     * parameter, like released, packed as Cells.of(R, C). An attempt that starts from locked letters resets the
+     * holding a still-free cell inside the attention zone, the union of two rectangles anchored at (0, 0)
+     * (attentionPool): a horizontal one (the first Rh rows and Ch columns) and a vertical one (the first Rv rows
+     * and Cv columns), all four starting at INCREMENTAL_FILL_START_SIZE. Once the node can place nothing more
+     * inside the zone, both grow at once (widenAttention): the horizontal one by INCREMENTAL_FILL_COL_STEP columns
+     * until it spans the grid's whole width, then by INCREMENTAL_FILL_ROW_STEP rows; the vertical one by
+     * INCREMENTAL_FILL_ROW_STEP rows until it spans the grid's whole height, then by INCREMENTAL_FILL_COL_STEP
+     * columns; until one of them covers the whole grid. A backtrack recursion parameter, like released, packed
+     * as a long (attentionZone). An attempt that starts from locked letters resets the
      * zone to its start size once, the first time a hardclean leaves it no locked letter at all
      * (attentionAfterUnlock). */
     public static final boolean INCREMENTAL_FILL_ENABLED = true;
@@ -222,9 +225,10 @@ public final class Filler {
     /** Incremental fill (INCREMENTAL_FILL_ENABLED): off unless Fill.tryFill turns it on. */
     public boolean incrementalFill;
     /** Attention zone of the node the search is currently in, and the one bestAssignment was recorded under, as
-     * [rows, cols] (null = the whole grid), published with every preview as attention_size (attentionJson). */
-    public volatile List<Integer> attentionSize;
-    public List<Integer> bestAttentionSize;
+     * [[Rh, Ch], [Rv, Cv]] (null = the whole grid), published with every preview as attention_size
+     * (attentionJson). */
+    public volatile List<List<Integer>> attentionSize;
+    public List<List<Integer>> bestAttentionSize;
     /** True while the attempt, started from locked letters, has not yet reset its attention zone for losing them
      * all (attentionAfterUnlock). */
     boolean attentionResetPending;
@@ -499,7 +503,7 @@ public final class Filler {
 
     /** Mirrors _descend: count the placement and run a child node, or hard-clean the slot in place first when the
      * word has been placed there too often in a row. */
-    boolean descend(int i, String word, long deadlineChecks, boolean released, int attention) {
+    boolean descend(int i, String word, long deadlineChecks, boolean released, long attention) {
         if (recordTriedWord(i, word)) return repeatHardclean(i, deadlineChecks, released, attention);
         return backtrack(deadlineChecks, released, attention);
     }
@@ -509,7 +513,7 @@ public final class Filler {
      * words leave the grid without unwinding any node, like a backghost; the slot becomes an "emplacement écarté"
      * and a fresh node carries on. The letter statistics re-tallied for the removals are restored when that node
      * fails; the removed words stay off. */
-    boolean repeatHardclean(int i, long deadlineChecks, boolean released, int attention) {
+    boolean repeatHardclean(int i, long deadlineChecks, boolean released, long attention) {
         String[] work = assignment.clone();
         work[i] = null;
         Set<Integer> cleared = new HashSet<>();
@@ -791,19 +795,32 @@ public final class Filler {
         return target;
     }
 
-    /** Attention zone a root node starts with, packed as Cells.of(rows, cols) (mirrors _initial_attention); -1 =
-     * the whole grid. */
-    int initialAttention() {
+    /** Attention zone a root node starts with, packed by attentionZone (mirrors _initial_attention); -1 = the
+     * whole grid. */
+    long initialAttention() {
         if (!incrementalFill) return -1;
         int r = Math.min(INCREMENTAL_FILL_START_SIZE, rows);
         int c = Math.min(INCREMENTAL_FILL_START_SIZE, cols);
-        return r >= rows && c >= cols ? -1 : Cells.of(r, c);
+        return attentionZone(r, c, r, c);
     }
+
+    /** The attention zone of horizontal rectangle (hr, hc) and vertical rectangle (vr, vc), packed 16 bits each
+     * (attentionHr/Hc/Vr/Vc read them back); -1 once one of them, both being anchored at (0, 0), covers the whole
+     * grid (mirrors _attention_or_whole). */
+    long attentionZone(int hr, int hc, int vr, int vc) {
+        if ((hr >= rows && hc >= cols) || (vr >= rows && vc >= cols)) return -1;
+        return ((long) hr << 48) | ((long) hc << 32) | ((long) vr << 16) | vc;
+    }
+
+    static int attentionHr(long zone) { return (int) (zone >>> 48) & 0xFFFF; }
+    static int attentionHc(long zone) { return (int) (zone >>> 32) & 0xFFFF; }
+    static int attentionVr(long zone) { return (int) (zone >>> 16) & 0xFFFF; }
+    static int attentionVc(long zone) { return (int) zone & 0xFFFF; }
 
     /** Mirrors _attention_after_unlock: the attention zone a node carries on with after a hardclean that may have
      * unlocked letters (attention otherwise) — the start zone, once per attempt, the first time an attempt
      * started from locked letters is left with none. */
-    int attentionAfterUnlock(int attention) {
+    long attentionAfterUnlock(long attention) {
         if (attentionResetPending && lockedLetters.isEmpty()) {
             attentionResetPending = false;
             return initialAttention();
@@ -811,25 +828,32 @@ public final class Filler {
         return attention;
     }
 
-    /** The attention zone after zone: INCREMENTAL_FILL_COL_STEP more columns while it is narrower than the grid,
-     * then INCREMENTAL_FILL_ROW_STEP more rows; -1 once it covers the whole grid (mirrors _widen_attention). */
-    int widenAttention(int zone) {
-        int r = Cells.r(zone), c = Cells.c(zone);
-        if (c < cols) c = Math.min(c + INCREMENTAL_FILL_COL_STEP, cols);
-        else r = Math.min(r + INCREMENTAL_FILL_ROW_STEP, rows);
-        return r >= rows && c >= cols ? -1 : Cells.of(r, c);
+    /** The attention zone after zone, both rectangles grown at once: the horizontal one by
+     * INCREMENTAL_FILL_COL_STEP more columns while it is narrower than the grid, then INCREMENTAL_FILL_ROW_STEP
+     * more rows; the vertical one by INCREMENTAL_FILL_ROW_STEP more rows while it is shorter than the grid, then
+     * INCREMENTAL_FILL_COL_STEP more columns; -1 once the zone covers the whole grid (mirrors _widen_attention). */
+    long widenAttention(long zone) {
+        int hr = attentionHr(zone), hc = attentionHc(zone), vr = attentionVr(zone), vc = attentionVc(zone);
+        if (hc < cols) hc = Math.min(hc + INCREMENTAL_FILL_COL_STEP, cols);
+        else hr = Math.min(hr + INCREMENTAL_FILL_ROW_STEP, rows);
+        if (vr < rows) vr = Math.min(vr + INCREMENTAL_FILL_ROW_STEP, rows);
+        else vc = Math.min(vc + INCREMENTAL_FILL_COL_STEP, cols);
+        return attentionZone(hr, hc, vr, vc);
     }
 
-    /** [rows, cols] of a packed attention zone, null for -1 (the whole grid): the attention_size JSON shape. */
-    static List<Integer> attentionJson(int zone) {
-        return zone < 0 ? null : List.of(Cells.r(zone), Cells.c(zone));
+    /** [[Rh, Ch], [Rv, Cv]] of a packed attention zone, null for -1 (the whole grid): the attention_size JSON
+     * shape. */
+    static List<List<Integer>> attentionJson(long zone) {
+        if (zone < 0) return null;
+        return List.of(List.of(attentionHr(zone), attentionHc(zone)), List.of(attentionVr(zone), attentionVc(zone)));
     }
 
     /** The slots holding a still-free cell (no placed word nor locked letter on it) inside the attention zone
-     * zone (rows 0 to rows - 1, columns 0 to cols - 1); all of them when zone is -1 (mirrors _attention_pool). */
-    List<Integer> attentionPool(List<Integer> pool, int zone) {
+     * zone (rows 0 to Rh - 1 and columns 0 to Ch - 1, or rows 0 to Rv - 1 and columns 0 to Cv - 1); all of them
+     * when zone is -1 (mirrors _attention_pool). */
+    List<Integer> attentionPool(List<Integer> pool, long zone) {
         if (zone < 0) return new ArrayList<>(pool);
-        int zr = Cells.r(zone), zc = Cells.c(zone);
+        int hr = attentionHr(zone), hc = attentionHc(zone), vr = attentionVr(zone), vc = attentionVc(zone);
         Set<Integer> known = new HashSet<>(lockedLetters.keySet());
         for (int j = 0; j < assignment.length; j++) {
             if (assignment[j] != null) for (int cell : slots.get(j)) known.add(cell);
@@ -837,7 +861,8 @@ public final class Filler {
         List<Integer> out = new ArrayList<>();
         for (int i : pool) {
             for (int cell : slots.get(i)) {
-                if (Cells.r(cell) < zr && Cells.c(cell) < zc && !known.contains(cell)) {
+                int r = Cells.r(cell), c = Cells.c(cell);
+                if (((r < hr && c < hc) || (r < vr && c < vc)) && !known.contains(cell)) {
                     out.add(i);
                     break;
                 }
@@ -847,7 +872,7 @@ public final class Filler {
     }
 
     /** Report a failure, backghosting first when allowed (mirrors _fail_or_backghost). */
-    boolean failOrBackghost(Set<Integer> conflict, long deadlineChecks, boolean released, int attention) {
+    boolean failOrBackghost(Set<Integer> conflict, long deadlineChecks, boolean released, long attention) {
         while (true) {
             int target = backghostTarget(conflict);
             if (target < 0) return fail(conflict);
@@ -1127,7 +1152,7 @@ public final class Filler {
 
     /** Mirrors _try_reshape: returns {outcome, conflict-or-null, blame-or-null}. */
     Object[] tryReshape(Reshape option, int i, Map<Integer, Dom> domains, Set<String> active, boolean allowBreaking,
-                        long deadlineChecks, boolean released, int attention) {
+                        long deadlineChecks, boolean released, long attention) {
         Object[] saved = applyReshape(option);
         int t = option.target;
         String w = option.word;
@@ -1740,13 +1765,13 @@ public final class Filler {
 
     // ================================================================== search
 
-    /** attention: the attention zone (INCREMENTAL_FILL_ENABLED), packed as Cells.of(rows, cols), -1 for the whole
+    /** attention: the attention zone (INCREMENTAL_FILL_ENABLED), packed by attentionZone, -1 for the whole
      * grid. */
-    boolean backtrack(long deadlineChecks, boolean released, int attention) {
+    boolean backtrack(long deadlineChecks, boolean released, long attention) {
         lastConflict = null;
         lastJumped = false;
         final boolean entryReleased = released;
-        final int entryAttention = attention;
+        final long entryAttention = attention;
         attentionSize = attentionJson(attention);
         if (abandoned || restartPending) return false;
         if (deadlineReachedWithoutExtension(deadlineChecks)) {

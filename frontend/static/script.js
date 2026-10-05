@@ -1397,6 +1397,48 @@ let lastPreviewExamples = null;
 let pendingGridChoiceJobId = null;
 let chosenGridChoiceIndex = null;
 
+// Outline of incremental fill's attention zone (`attention_size`, a list of
+// [rows, cols] rectangles anchored at the top-left corner) on a grid of
+// `height` x `width` cells, as maximal straight edges on the grid lines:
+// {horizontal, line, from, to} — a horizontal edge runs along row line
+// `line` from column line `from` to `to`, a vertical one along column line
+// `line` from row line `from` to `to`. Empty when the zone is absent or
+// covers the whole grid.
+function attentionZoneEdges(attentionSize, height, width) {
+  if (!Array.isArray(attentionSize)) return [];
+  const rects = attentionSize
+    .filter((rect) => Array.isArray(rect) && rect.length === 2)
+    .map(([rows, cols]) => [Math.min(rows, height), Math.min(cols, width)]);
+  if (!rects.length || rects.some(([rows, cols]) => rows >= height && cols >= width)) return [];
+  const inZone = (r, c) =>
+    r >= 0 && c >= 0 && r < height && c < width && rects.some(([rows, cols]) => r < rows && c < cols);
+  const edges = [];
+  // Unit edges between a zone cell and a non-zone one, merged into runs.
+  for (let line = 0; line <= height; line++) {
+    let start = null;
+    for (let c = 0; c <= width; c++) {
+      const boundary = c < width && inZone(line - 1, c) !== inZone(line, c);
+      if (boundary && start === null) start = c;
+      if (!boundary && start !== null) {
+        edges.push({ horizontal: true, line, from: start, to: c });
+        start = null;
+      }
+    }
+  }
+  for (let line = 0; line <= width; line++) {
+    let start = null;
+    for (let r = 0; r <= height; r++) {
+      const boundary = r < height && inZone(r, line - 1) !== inZone(r, line);
+      if (boundary && start === null) start = r;
+      if (!boundary && start !== null) {
+        edges.push({ horizontal: false, line, from: start, to: r });
+        start = null;
+      }
+    }
+  }
+  return edges;
+}
+
 function renderAttemptPreview(examples) {
   if (!examples || !examples.length) return;
   lastPreviewExamples = examples;
@@ -1520,20 +1562,20 @@ function renderAttemptPreview(examples) {
       }
     }
     // Incremental fill's attention zone (backend/crossword_gen.py's
-    // INCREMENTAL_FILL_ENABLED, `attention_size` = [rows, cols]): the
-    // rectangle of the first rows and columns the search may currently
-    // place a word in, framed by a bold dashed border laid over the cells.
-    // Absent once the zone covers the whole grid (`attention_size` null).
-    if (Array.isArray(attentionSize) && attentionSize.length === 2) {
-      const zoneRows = Math.min(attentionSize[0], height);
-      const zoneCols = Math.min(attentionSize[1], width);
-      if (zoneRows < height || zoneCols < width) {
-        const zone = document.createElement("div");
-        zone.className = "attention-zone";
-        zone.style.setProperty("--zone-rows", zoneRows);
-        zone.style.setProperty("--zone-cols", zoneCols);
-        miniGrid.appendChild(zone);
-      }
+    // INCREMENTAL_FILL_ENABLED, `attention_size` = [[Rh, Ch], [Rv, Cv]]):
+    // the union of a horizontal and a vertical rectangle anchored at the
+    // top-left corner, where the search may currently place a word, its
+    // outline drawn as bold dashed edges laid over the cells. Absent once
+    // the zone covers the whole grid (`attention_size` null).
+    for (const edge of attentionZoneEdges(attentionSize, height, width)) {
+      const zoneEdge = document.createElement("div");
+      zoneEdge.className = `attention-edge ${edge.horizontal ? "horizontal" : "vertical"}`;
+      zoneEdge.style.setProperty("--edge-line", edge.line);
+      zoneEdge.style.setProperty("--edge-from", edge.from);
+      zoneEdge.style.setProperty("--edge-to", edge.to);
+      zoneEdge.style.setProperty("--edge-from-offset", edge.from === 0 ? "2px" : "1px");
+      zoneEdge.style.setProperty("--edge-line-offset", edge.line === 0 ? "2px" : "1px");
+      miniGrid.appendChild(zoneEdge);
     }
     // Final overlay pass: every previously-built cell already sits in the
     // DOM at this point, so adding .forced/.locked/.low-candidates here

@@ -898,16 +898,20 @@ the backtrack unwinds back above the node that released it.
 INCREMENTAL_FILL_ENABLED`): on every palier and every attempt of it
 (`generate_grid`, `try_fill(incremental_fill=True)` via `_pattern_attempt`/
 `_pattern_continue`; Java `Generator.Ctx.incrementalFill`), stages 1 and 2 first run
-inside an "attention zone" — rows 0 to R-1, columns 0 to C-1, the
-`(rows, cols)` pair `attention` (Java: packed `Cells.of(R, C)`, -1 = whole
-grid) — over the slots holding a still-free cell (no placed word nor
-locked letter) there (`Filler._attention_pool`). R and C start at
-`INCREMENTAL_FILL_START_SIZE` (6); once both stages place nothing in the
-zone (or the zone has no such slot), it grows by `INCREMENTAL_FILL_COL_STEP`
-(4) columns while narrower than the grid, then by `INCREMENTAL_FILL_ROW_STEP`
-(4) rows, and the node goes back to stage 1 on the larger pool, slots it
-already tried staying tried (`_widen_attention`, `None` once it covers the
-grid); the
+inside an "attention zone" — the union of a horizontal rectangle (rows
+0 to Rh-1, columns 0 to Ch-1) and a vertical one (rows 0 to Rv-1, columns
+0 to Cv-1), the pair `attention` = `((Rh, Ch), (Rv, Cv))` (Java: a `long`
+packed 16 bits per value by `attentionZone`, -1 = whole grid) — over the
+slots holding a still-free cell (no placed word nor locked letter) there
+(`Filler._attention_pool`). All four start at `INCREMENTAL_FILL_START_SIZE`
+(6); once both stages place nothing in the zone (or the zone has no such
+slot), both rectangles grow at once — the horizontal one by
+`INCREMENTAL_FILL_COL_STEP` (4) columns while narrower than the grid, then
+by `INCREMENTAL_FILL_ROW_STEP` (4) rows; the vertical one by
+`INCREMENTAL_FILL_ROW_STEP` rows while shorter than the grid, then by
+`INCREMENTAL_FILL_COL_STEP` columns — and the node goes back to stage 1 on
+the larger pool, slots it already tried staying tried (`_widen_attention`,
+`None` once one rectangle covers the grid, `_attention_or_whole`); the
 `allow_breaking` stage comes only after. The size is a `_backtrack`
 parameter (`attention`) inherited and restored like `released`, passed
 through `_try_reshape`/`_fail_or_backghost`; every root (`solve()`)
@@ -919,11 +923,12 @@ starts at 6x6; after `_early_hardclean` the root starts at 6x6 anyway and the
 reset is only used up. Dry-slot detection and backtracking are unchanged.
 `Filler.attention_size` (the current node's zone, kept current on entry,
 widening and return from a child) and `best_attention_size` (the zone a
-record was taken under) feed every preview's `attention_size` (`[rows,
-cols]`, `None` = whole grid; `_publish_live_state`, `_publish_new_best`, the final
+record was taken under) feed every preview's `attention_size` (`None` =
+whole grid; `_publish_live_state`, `_publish_new_best`, the final
 diagnostics, the "failed" live-tile whitelist and `last_examples`; Java
-`Diag.attentionSize`); `renderAttemptPreview()` frames it with a bold
-dashed `.attention-zone` overlay.
+`Diag.attentionSize`) as `[[Rh, Ch], [Rv, Cv]]`; `renderAttemptPreview()`
+draws its outline as bold dashed `.attention-edge` overlays, one per
+straight run (`attentionZoneEdges`).
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
 `MAX_DESCENTS_PER_NODE` (10; `<= 0` disables it) — set to
 `EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 20) for a node entered while fewer than

@@ -1315,16 +1315,19 @@ the current defaults/behavior to know before touching this code.
   "pour le moment", in the user's words; Java mirror in `Filler`): the
   user's rule — limit the slots a placement may choose to an "attention
   zone" starting at (0,0), 6x6 first, fill until nothing more can be
-  placed within it, then widen it horizontally only, 4 columns per step,
-  and once it spans 100 % of the width extend it vertically, 4 rows per
-  step, until the zone is the whole grid;
+  placed within it, then widen it; the zone combines two rectangles, one
+  extending horizontally 4 columns at a time and one extending vertically
+  4 rows at a time, each turning to the other direction once it reaches
+  the opposite edge, until the zone is the whole grid;
   applied at every palier ("à toutes les étapes"), to resumed and freshly
   created grids alike. From palier 2 on, when every locked cell of an
   attempt has been unlocked, the zone is reset — once per grid (the
   user's words: "ne le faire qu'une fois pour une grille, ensuite, il ne
   devrait plus y avoir de case verrouillée avant l'étape suivante";
   `Filler._attention_after_unlock`). Choices made with the change, to
-  revisit with the user: a slot is in the zone when one of its still-free
+  revisit with the user: both rectangles grow at the same widening step
+  (never alternately), and the zone is the whole grid as soon as one of
+  them is; a slot is in the zone when one of its still-free
   cells is (a slot reaching into the zone with only known cells there is
   not); "nothing more can be placed" is the node's own stages 1-2
   (non-écarté, then released écarté) exhausted inside the zone, after

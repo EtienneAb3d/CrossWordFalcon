@@ -902,18 +902,23 @@ récursion).
 `backend/crossword_gen.py`, `Filler._attention_pool`,
 `Filler._widen_attention`) : à chaque palier (`generate_grid`), pour
 toutes ses tentatives — grilles reprises comme grilles neuves —, les temps
-1 et 2 se déroulent d'abord dans une **zone d'attention** : le rectangle des R premières
-lignes et C premières colonnes, à partir de la case (0, 0). Seul un
-emplacement ayant au moins une case encore libre (ni mot posé, ni lettre
-verrouillée) dans ce rectangle peut recevoir une pose. R et C valent d'abord
+1 et 2 se déroulent d'abord dans une **zone d'attention** : la réunion de
+deux rectangles partant de la case (0, 0), un rectangle horizontal (les Rh
+premières lignes et Ch premières colonnes) et un rectangle vertical (les Rv
+premières lignes et Cv premières colonnes). Seul un emplacement ayant au
+moins une case encore libre (ni mot posé, ni lettre verrouillée) dans cette
+zone peut recevoir une pose. Les quatre valeurs valent d'abord
 `INCREMENTAL_FILL_START_SIZE` (6). Quand le nœud ne peut plus rien poser
 dans la zone — plus aucun emplacement concerné, ou tous essayés, écartés
-libérés compris —, la zone s'élargit de `INCREMENTAL_FILL_COL_STEP` (4)
-colonnes tant qu'elle n'occupe pas toute la largeur de la grille, puis,
-une fois la pleine largeur atteinte, s'allonge de
-`INCREMENTAL_FILL_ROW_STEP` (4) lignes (`Filler._widen_attention`), et le
-nœud reprend au temps 1 sur l'ensemble agrandi (les emplacements déjà
-essayés par ce nœud le restent), jusqu'à couvrir toute la grille ; le
+libérés compris —, les deux rectangles grandissent ensemble
+(`Filler._widen_attention`) : l'horizontal s'élargit de
+`INCREMENTAL_FILL_COL_STEP` (4) colonnes tant qu'il n'occupe pas toute la
+largeur de la grille, puis s'allonge de `INCREMENTAL_FILL_ROW_STEP` (4)
+lignes ; le vertical s'allonge de `INCREMENTAL_FILL_ROW_STEP` (4) lignes
+tant qu'il n'occupe pas toute la hauteur, puis s'élargit de
+`INCREMENTAL_FILL_COL_STEP` (4) colonnes. Le nœud reprend alors au temps 1
+sur l'ensemble agrandi (les emplacements déjà essayés par ce nœud le
+restent), jusqu'à ce que l'un des deux rectangles couvre toute la grille ; le
 temps 3 ne vient qu'ensuite. La taille de la zone est un paramètre de
 récursion comme `released` : héritée par la descente qui suit,
 restaurée en remontant ; chaque racine (`solve()`, y compris après un
@@ -2338,12 +2343,14 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   aperçus de début de cycle ni après le nettoyage. Comme les vraies
   lettres, elle ne s'affiche que lorsque le bouton **Voir** est activé
   (`frontend/static/script.js`, `renderAttemptPreview`).
-- **Cadre gras en pointillés** (zone d'attention) : le carré des N premières lignes et colonnes où la recherche peut encore
+- **Cadre gras en pointillés** (zone d'attention) : le contour de la
+  réunion des deux rectangles (horizontal et vertical) où la recherche peut encore
   poser un mot (voir « Remplissage incrémental », chapitre 4), à sa taille
   du moment (`Filler.attention_size` pour les aperçus en direct,
   `Filler.best_attention_size` pour l'état record ; champ
-  `attention_size`). Présent sur les mêmes aperçus que les lettres
-  statistiques ; absent dès que la zone couvre toute la grille (`frontend/static/script.js`, `renderAttemptPreview`).
+  `attention_size`, `[[Rh, Ch], [Rv, Cv]]`). Présent sur les mêmes aperçus que les lettres
+  statistiques ; absent dès que la zone couvre toute la grille (`frontend/static/script.js`, `renderAttemptPreview`,
+  `attentionZoneEdges`).
 
 ### Cas particulier : palier « motif neuf »
 

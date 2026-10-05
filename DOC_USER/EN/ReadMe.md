@@ -674,10 +674,13 @@ word list is shown in bold dark-cyan letters; magenta and green win over
 dark cyan on a cell shared with a crossing theme or challenge word
 (`frontend/static/script.js`, `renderAttemptPreview`).
 A bold dashed frame marks the "attention
-zone": the rectangle, from the top-left corner, where the search may
-currently place its next word. It starts at 6x6; each time nothing more
-fits inside, it widens by 4 columns until it spans the grid's full width,
-then grows by 4 rows, and disappears once it covers the whole grid (`renderAttemptPreview`, `.attention-zone`).
+zone": the L-shaped area, from the top-left corner, where the search may
+currently place its next word — the union of a horizontal and a vertical
+rectangle, both 6x6 at first. Each time nothing more fits inside, both
+grow: the horizontal one by 4 columns until it spans the grid's full width,
+then by 4 rows; the vertical one by 4 rows until it spans the grid's full
+height, then by 4 columns. The frame disappears once the zone covers the
+whole grid (`renderAttemptPreview`, `attentionZoneEdges`, `.attention-edge`).
 A green outline marks whichever preview is currently considered the
 best candidate. While a preview grid is still actively being searched
 (not yet a recorded step of the back/forward history below, just the
@@ -1518,10 +1521,13 @@ it was made for.
 accepted, every run of at least 2 white cells (across or down) becomes a
 slot that needs a real dictionary word. On every cycle, the fill grows
 outward from the top-left corner: only slots
-with a still-empty cell inside a 6x6 "attention zone" starting at the
-top-left cell may take the next word, and once nothing more can be placed
-there the zone widens by 4 columns until it spans the grid's full width,
-then grows downward by 4 rows at a time, until it covers the whole
+with a still-empty cell inside an "attention zone" starting at the
+top-left cell may take the next word. That zone joins two rectangles, both
+6x6 at first: once nothing more can be placed there, the horizontal one
+widens by 4 columns until it spans the grid's full width, then grows
+downward by 4 rows at a time, while the vertical one grows downward by 4
+rows until it spans the grid's full height, then widens by 4 columns at a
+time — until the zone covers the whole
 grid (`backend/crossword_gen.py`, `Filler._attention_pool`). A grid
 carried over from a previous cycle that loses its last locked letter to a
 cleanup starts the zone over at 6x6, once. Rather than filling slots in a

@@ -1225,25 +1225,36 @@ button:disabled {
   border: 2px solid var(--border);
   align-content: start;
   align-self: flex-start;
-  /* Containing block of the .attention-zone frame below. */
+  /* Containing block of the .attention-edge frame below. */
   position: relative;
 }
 
-/* Incremental fill's attention zone (script.js's renderAttemptPreview(),
-   backend's `attention_size`): a bold dashed frame around the first R
-   rows and C columns, laid over the cells (an absolutely positioned child
-   takes no part in the grid's placement). Starts on the grid's own border
-   (-2px) and spans C x R cells plus their gaps, so its right/bottom edge
-   sits on the grid line after column C / row R. */
-.attempt-preview-grid .attention-zone {
+/* Incremental fill's attention zone (script.js's renderAttemptPreview()/
+   attentionZoneEdges(), backend's `attention_size`): the outline of the
+   zone, one bold dashed edge per straight run, laid over the cells (an
+   absolutely positioned child takes no part in the grid's placement).
+   Grid line k sits on the 1px gap before cell k plus 1px of that cell
+   (line 0: the grid's own 2px border, hence the 2px offsets); an edge
+   spans its lines' 2px bands from end to end. */
+.attempt-preview-grid .attention-edge {
   position: absolute;
-  top: -2px;
-  left: -2px;
-  width: calc(var(--zone-cols) * (1.1rem + 1px) + 3px);
-  height: calc(var(--zone-rows) * (1.1rem + 1px) + 3px);
   box-sizing: border-box;
-  border: 2px dashed var(--fg);
+  border: 0 dashed var(--fg);
   pointer-events: none;
+}
+.attempt-preview-grid .attention-edge.horizontal {
+  top: calc(var(--edge-line) * (1.1rem + 1px) - var(--edge-line-offset));
+  left: calc(var(--edge-from) * (1.1rem + 1px) - var(--edge-from-offset));
+  width: calc((var(--edge-to) - var(--edge-from)) * (1.1rem + 1px) + 1px + var(--edge-from-offset));
+  height: 2px;
+  border-top-width: 2px;
+}
+.attempt-preview-grid .attention-edge.vertical {
+  left: calc(var(--edge-line) * (1.1rem + 1px) - var(--edge-line-offset));
+  top: calc(var(--edge-from) * (1.1rem + 1px) - var(--edge-from-offset));
+  height: calc((var(--edge-to) - var(--edge-from)) * (1.1rem + 1px) + 1px + var(--edge-from-offset));
+  width: 2px;
+  border-left-width: 2px;
 }
 
 /* Green outline around the grid the backend reports as the real winner of
