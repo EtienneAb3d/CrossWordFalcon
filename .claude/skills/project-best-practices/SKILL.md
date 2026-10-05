@@ -978,20 +978,24 @@ the current defaults/behavior to know before touching this code.
   `CORNER_SQUARE_SIZE`); a corner black cell can only come from another
   mechanism (pre-fill, cross-palier cleanup, impossible-zone repair,
   floating-black-cell reshape).
-- `is_structurally_valid`: a white zone between two black cells must be at
-  least `min_interior_free` cells long (`STRUCTURAL_MIN_INTERIOR_FREE`, 6,
-  which only the ratio draw uses — lowered one step at a time to 1 when
-  nothing fits; every other caller passes 1); a zone touching the grid's
-  border is accepted at any length. The ratio draw additionally requires,
-  on the run it cuts, every border-touching piece to be at least
-  `min(STRUCTURAL_MIN_BORDER_FREE (3), min_interior_free)` — the user's
-  rule: a black cell may stand close to a border only to cut a run of the
-  other direction. Those short border slots are not counted by the
-  short-slot limit (`_short_slot_bounding_blacks`). One
+- `is_structurally_valid`: an *interior* white zone (black cells on both
+  sides) must be at least `min_interior_free` cells long
+  (`STRUCTURAL_MIN_INTERIOR_FREE`, 6, which only the ratio draw uses —
+  lowered one step at a time to 1 when nothing fits; every other caller
+  passes 1); a zone touching the grid's own border on at least one side is
+  unrestricted in length or count (the user's rule). One
   invariant is absolute, never relaxed: a white cell can never be short
   (1 letter) in *both* directions at once (fully isolated on all 4 sides).
   A 1-letter zone is a pure passthrough, never its own slot; a 2-letter zone
   *is* a real, cluable slot.
+- **Short-slot limit of the ratio draw** (`make_pattern`,
+  `_short_slot_bounding_blacks`): once "Taux noir" is reached, more than
+  `SHORT_SLOT_MAX_COUNT` (10) slots of at most 3 letters NOT touching the
+  border (a border slot is never counted, its length being free) reopen
+  the drawn black cells bounding them and the draw resumes to the target.
+  Choices made with the change, to revisit with the user: only cells this
+  draw placed are reopened, they stay candidates for the redraw, and at
+  most `SHORT_SLOT_REDRAW_MAX_ROUNDS` (10) rounds run.
 - A pre-fill phase runs before ratio-based placement, adding black cells
   (never counted against the ratio target) until every slot has at least
   `PREFILL_MIN_WORD_COUNT` (10) real dictionary candidates — locked-letter

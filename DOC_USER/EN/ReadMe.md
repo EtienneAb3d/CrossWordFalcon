@@ -1470,10 +1470,9 @@ respect a few hard rules: a white cell can never end up boxed in on all
 four sides (it would belong to no word at all and could never receive a
 letter); the white area of the grid must stay fully connected, never
 split into isolated pockets by a wall of black cells; and an ordinary
-word slot between two black cells should normally be at least 6 cells
-long; near a border, a black cell may only leave a stub shorter than 3
-cells against the border in the direction it is not cutting (it can sit in
-column 1-3 to split a vertical slot, not to split that row). Before this placement even starts, a separate "pre-fill" pass
+interior word slot should normally be at least 6 cells long, unless one
+of its ends touches the grid's own border, in which case any length is
+allowed. Before this placement even starts, a separate "pre-fill" pass
 runs first: as long as some slot's own length is covered by too few
 dictionary words to be safely fillable, more black cells are added
 specifically to shorten it, and this pre-fill is itself intertwined with
@@ -1495,8 +1494,7 @@ rather than forcing an adjacent one. The draw toward the density target
 also never blackens a cell of the 2×2 square at each of the grid's four
 corners; only the unfillable-slot pre-fill or a later repair may put a
 black cell there. Once the density target is reached, the generator counts
-the 2- and 3-letter slots (leaving out the stubs of fewer than 3 cells
-against a border): if there are more than 10, the black cells it
+the 2- and 3-letter slots not touching a border: if there are more than 10, the black cells it
 just drew around them are removed and the draw resumes until the target is
 reached again (at most 10 times), so the grid is not cut into a mosaic of
 tiny words.

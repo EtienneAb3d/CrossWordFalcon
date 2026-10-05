@@ -417,20 +417,15 @@ via `ProcessPoolExecutor`:
    valid cell, the percentage grows by 5 and the draw starts over. The
    hard constraints: still white, not adjacent to a black cell,
    `_new_black_cell_breaks_locked_slot` false, structurally valid at
-   `STRUCTURAL_MIN_INTERIOR_FREE=6` (a white zone between two black
-   cells must be at least this long; on the run the cell is drawn from —
-   a selected run holding it, either direction sufficing — a piece
-   touching the border must be at least `min(STRUCTURAL_MIN_BORDER_FREE=3,
-   that minimum)`, while the perpendicular run keeps any border length:
-   `_BlackCellValidity.valid_with_black(direction)`; `is_structurally_
-   valid` accepts any border zone) — answered by `_BlackCellValidity`, built once per
+   `STRUCTURAL_MIN_INTERIOR_FREE=6` (an interior white zone must be at
+   least this long) — answered by `_BlackCellValidity`, built once per
    draw and level (zones per row/column, isolated cells, articulation
    points of the white graph), always equal to `is_structurally_valid`
    on the modified grid; once every run is selected and nothing fits, the
    draw restarts at 5 % with that minimum lowered by one, down to 1. Once
    the target is reached, more than `SHORT_SLOT_MAX_COUNT` (10) slots of
-   at most `SHORT_SLOT_MAX_LENGTH` (3) letters (a border slot shorter than
-   `STRUCTURAL_MIN_BORDER_FREE` not counted) reopen the black cells this
+   at most `SHORT_SLOT_MAX_LENGTH` (3) letters (a slot touching the
+   border not counted) reopen the black cells this
    draw placed right before or after them (`_short_slot_bounding_blacks`;
    the seed's and pre-fill's never), which become candidates again, and
    the draw resumes to the target — at most `SHORT_SLOT_REDRAW_MAX_ROUNDS`

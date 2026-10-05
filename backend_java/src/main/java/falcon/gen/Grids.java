@@ -21,11 +21,6 @@ public final class Grids {
     public static final char BLACK = '#';
     public static final char WHITE = '.';
     public static final int STRUCTURAL_MIN_INTERIOR_FREE = 6;
-    /**
-     * Minimum length of a border-touching piece of the run a ratio-drawn black cell cuts, while the required minimum
-     * is at least this high (below it, that minimum); the perpendicular pieces keep the border exception.
-     */
-    public static final int STRUCTURAL_MIN_BORDER_FREE = 3;
     /** Side of the corner squares the ratio-based ("Taux noir") draw never blackens. */
     public static final int CORNER_SQUARE_SIZE = 2;
     public static final int PREFILL_MIN_WORD_COUNT = 3;
@@ -126,20 +121,6 @@ public final class Grids {
         return isStructurallyValid(grid, rows, cols, STRUCTURAL_MIN_INTERIOR_FREE);
     }
 
-    /** A white zone of {@code run} cells over [start, end): at least {@code minFree} cells, or touching the border. */
-    static boolean zoneLengthOk(int run, int start, int end, int length, int minFree) {
-        return run >= minFree || start == 0 || end == length;
-    }
-
-    /**
-     * A piece of the run a new black cell cuts: {@link #zoneLengthOk}, but a piece touching the border needs
-     * {@code min(STRUCTURAL_MIN_BORDER_FREE, minFree)} cells.
-     */
-    static boolean cutPieceLengthOk(int run, int start, int end, int length, int minFree) {
-        if (run >= minFree) return true;
-        return (start == 0 || end == length) && run >= STRUCTURAL_MIN_BORDER_FREE;
-    }
-
     public static boolean isStructurallyValid(char[][] grid, int rows, int cols, int minInteriorFree) {
         int[][] rowRun = new int[rows][cols];
         int[][] colRun = new int[rows][cols];
@@ -150,12 +131,12 @@ public final class Grids {
                     if (run == 0) start = c;
                     run++;
                 } else {
-                    if (run > 0 && !zoneLengthOk(run, start, start + run, cols, minInteriorFree)) return false;
+                    if (run > 0 && !(run >= minInteriorFree || start == 0 || start + run == cols)) return false;
                     for (int cc = start; cc < start + run; cc++) rowRun[r][cc] = run;
                     run = 0;
                 }
             }
-            if (run > 0 && !zoneLengthOk(run, start, start + run, cols, minInteriorFree)) return false;
+            if (run > 0 && !(run >= minInteriorFree || start == 0 || start + run == cols)) return false;
             for (int cc = start; cc < start + run; cc++) rowRun[r][cc] = run;
         }
         for (int c = 0; c < cols; c++) {
@@ -165,12 +146,12 @@ public final class Grids {
                     if (run == 0) start = r;
                     run++;
                 } else {
-                    if (run > 0 && !zoneLengthOk(run, start, start + run, rows, minInteriorFree)) return false;
+                    if (run > 0 && !(run >= minInteriorFree || start == 0 || start + run == rows)) return false;
                     for (int rr = start; rr < start + run; rr++) colRun[rr][c] = run;
                     run = 0;
                 }
             }
-            if (run > 0 && !zoneLengthOk(run, start, start + run, rows, minInteriorFree)) return false;
+            if (run > 0 && !(run >= minInteriorFree || start == 0 || start + run == rows)) return false;
             for (int rr = start; rr < start + run; rr++) colRun[rr][c] = run;
         }
         int whiteCount = 0, firstR = -1, firstC = -1;
@@ -367,18 +348,18 @@ public final class Grids {
 
     /**
      * {@link #makePattern}'s short-slot limit: once the ratio draw has reached its target, a pattern holding more
-     * than {@link #SHORT_SLOT_MAX_COUNT} slots of at most {@link #SHORT_SLOT_MAX_LENGTH} letters (across and down)
-     * has the black cells this draw placed that bound them reopened, and the draw runs again to reach the target —
-     * at most {@link #SHORT_SLOT_REDRAW_MAX_ROUNDS} times.
+     * than {@link #SHORT_SLOT_MAX_COUNT} slots of at most {@link #SHORT_SLOT_MAX_LENGTH} letters (across and down, a
+     * slot touching the border never counted) has the black cells this draw placed that bound them reopened, and the
+     * draw runs again to reach the target — at most {@link #SHORT_SLOT_REDRAW_MAX_ROUNDS} times.
      */
     static final int SHORT_SLOT_MAX_LENGTH = 3;
     static final int SHORT_SLOT_MAX_COUNT = 10;
     static final int SHORT_SLOT_REDRAW_MAX_ROUNDS = 10;
 
     /**
-     * Number of slots of at most {@link #SHORT_SLOT_MAX_LENGTH} letters (a slot of fewer than
-     * {@link #STRUCTURAL_MIN_BORDER_FREE} letters touching the border not counted); the cells of {@code removable}
-     * that are the black cell right before or right after one of them are added to {@code bounding}.
+     * Number of slots of at most {@link #SHORT_SLOT_MAX_LENGTH} letters (a slot touching the grid's border not
+     * counted); the cells of {@code removable} that are the black cell right before or right after one of them are
+     * added to {@code bounding}.
      */
     static int shortSlotBoundingBlacks(char[][] grid, int rows, int cols, Set<Integer> removable,
                                        Set<Integer> bounding) {
@@ -389,7 +370,7 @@ public final class Grids {
             int r1 = Cells.r(slot[slot.length - 1]), c1 = Cells.c(slot[slot.length - 1]);
             int dr = r0 == r1 ? 0 : 1, dc = r0 == r1 ? 1 : 0;
             boolean touchesBorder = dr == 0 ? c0 == 0 || c1 == cols - 1 : r0 == 0 || r1 == rows - 1;
-            if (touchesBorder && slot.length < STRUCTURAL_MIN_BORDER_FREE) continue;
+            if (touchesBorder) continue;
             count++;
             int before = r0 - dr >= 0 && c0 - dc >= 0 ? Cells.of(r0 - dr, c0 - dc) : -1;
             int after = r1 + dr < rows && c1 + dc < cols ? Cells.of(r1 + dr, c1 + dc) : -1;
@@ -527,48 +508,29 @@ public final class Grids {
                                          boolean allowAdjacency, Rng rng, DualIndex index,
                                          Map<Integer, Character> locked, LengthSets available) {
         BlackCellValidity structure = new BlackCellValidity(grid, rows, cols, minFree);
-        // During this draw, at this level: candidate index -> valid apart from structure, and
-        // (candidate index, direction) -> structurally valid when cutting a run of that direction.
-        Map<Integer, Boolean> base = new HashMap<>();
-        Map<Long, Boolean> checked = new HashMap<>();
+        Map<Integer, Boolean> checked = new HashMap<>(); // candidate index -> valid at this level, during this draw
         for (int percent = BLACK_DRAW_WINDOW_PERCENT; ; percent += BLACK_DRAW_WINDOW_PERCENT) {
             int runCount = windowSize(runOrder.size(), percent);
-            // Candidate index -> directions of the selected runs holding it (bit 1 across, bit 2 down; both for a
-            // single-cell run).
-            java.util.TreeMap<Integer, Integer> inRuns = new java.util.TreeMap<>();
+            java.util.TreeSet<Integer> inRuns = new java.util.TreeSet<>();
             for (int[] run : runOrder.subList(0, runCount)) {
-                int dirs = run.length == 1 ? 3 : Cells.r(run[0]) == Cells.r(run[1]) ? 1 : 2;
                 for (int cell : run) {
                     Integer i = position.get(cell);
-                    if (i != null) inRuns.merge(i, dirs, (a, b) -> a | b);
+                    if (i != null) inRuns.add(i);
                 }
             }
             List<Integer> valid = new ArrayList<>();
-            for (Map.Entry<Integer, Integer> e : inRuns.entrySet()) {
-                int i = e.getKey();
-                int cell = remaining.get(i);
-                int r = Cells.r(cell), c = Cells.c(cell);
-                Boolean ok = base.get(i);
+            for (int i : inRuns) {
+                Boolean ok = checked.get(i);
                 if (ok == null) {
+                    int cell = remaining.get(i);
+                    int r = Cells.r(cell), c = Cells.c(cell);
                     ok = grid[r][c] != BLACK
                             && (allowAdjacency || !hasBlackNeighbor(grid, rows, cols, r, c))
-                            && !newBlackCellBreaksLockedSlot(grid, rows, cols, r, c, index, locked, available);
-                    base.put(i, ok);
+                            && !newBlackCellBreaksLockedSlot(grid, rows, cols, r, c, index, locked, available)
+                            && structure.validWithBlack(r, c);
+                    checked.put(i, ok);
                 }
-                if (!ok) continue;
-                for (int dir = 1; dir <= 2; dir++) {
-                    if ((e.getValue() & dir) == 0) continue;
-                    long key = (long) i << 2 | dir;
-                    Boolean cut = checked.get(key);
-                    if (cut == null) {
-                        cut = structure.validWithBlack(r, c, dir);
-                        checked.put(key, cut);
-                    }
-                    if (cut) {
-                        valid.add(i);
-                        break;
-                    }
-                }
+                if (ok) valid.add(i);
             }
             if (!valid.isEmpty()) {
                 valid.sort((a, b) -> Double.compare(dist.get(b), dist.get(a)));
@@ -650,12 +612,8 @@ public final class Grids {
             componentsAndArticulations();
         }
 
-        private boolean pieceOk(int start, int end, int length, boolean cut) {
-            return cut ? cutPieceLengthOk(end - start, start, end, length, minFree) : zoneOk(start, end, length);
-        }
-
         private boolean zoneOk(int start, int end, int length) {
-            return zoneLengthOk(end - start, start, end, length, minFree);
+            return end - start >= minFree || start == 0 || end == length;
         }
 
         private boolean white(int r, int c) {
@@ -725,14 +683,6 @@ public final class Grids {
         }
 
         boolean validWithBlack(int r, int c) {
-            return validWithBlack(r, c, 0);
-        }
-
-        /**
-         * {@code direction}: 1 across, 2 down — the run the black cell cuts, whose pieces follow
-         * {@link #cutPieceLengthOk}; the perpendicular pieces follow {@link #zoneOk}. 0: both follow {@link #zoneOk}.
-         */
-        boolean validWithBlack(int r, int c, int direction) {
             if (hStart[r][c] < 0) {
                 char previous = grid[r][c];
                 grid[r][c] = BLACK;
@@ -745,10 +695,10 @@ public final class Grids {
             int h0 = hStart[r][c], h1 = hEnd[r][c], v0 = vStart[r][c], v1 = vEnd[r][c];
             if (badRows[r] - (zoneOk(h0, h1, cols) ? 0 : 1) > 0) return false;
             if (badCols[c] - (zoneOk(v0, v1, rows) ? 0 : 1) > 0) return false;
-            if (c > h0 && !pieceOk(h0, c, cols, direction == 1)) return false;
-            if (h1 > c + 1 && !pieceOk(c + 1, h1, cols, direction == 1)) return false;
-            if (r > v0 && !pieceOk(v0, r, rows, direction == 2)) return false;
-            if (v1 > r + 1 && !pieceOk(r + 1, v1, rows, direction == 2)) return false;
+            if (c > h0 && !zoneOk(h0, c, cols)) return false;
+            if (h1 > c + 1 && !zoneOk(c + 1, h1, cols)) return false;
+            if (r > v0 && !zoneOk(v0, r, rows)) return false;
+            if (v1 > r + 1 && !zoneOk(r + 1, v1, rows)) return false;
             for (int cell : isolated) {
                 int ir = Cells.r(cell), ic = Cells.c(cell);
                 boolean changed = (ir == r && ic >= h0 && ic < h1) || (ic == c && ir >= v0 && ir < v1);
