@@ -3,7 +3,9 @@
 "Dictionnaire" panel, at the user's explicit request: given a word, list
 every word of the same root (same canonical form) from
 `data/wordlist_<lang>_freq.tsv`, each with its real definitions pulled
-from `data/gloss_dictionary/<lang>_glosses.jsonl`.
+from `data/gloss_dictionary/<lang>_glosses.jsonl`. The root is also
+resolved through the inflection table (`data/inflection/<lang>.jsonl`),
+so a form the wordlist lacks still finds its lemma's definitions.
 
 Distinct from `backend/gloss_lookup.py` (which only ever looks a single
 known lemma up, for clue grounding): this walks the whole wordlist to
@@ -14,6 +16,7 @@ and cached — the fr wordlist is ~200k lines.
 import unicodedata
 from pathlib import Path
 
+from . import inflection_lookup
 from .gloss_lookup import _load as _load_gloss_index
 
 WORDLIST_DIR = Path(__file__).resolve().parent.parent / "data"
@@ -169,6 +172,12 @@ def search(query, language):
     # "chatter" conjugation just because one shared member happens to
     # link the two.
     roots = set()
+    # A third way in: the inflection table's lemmas of the exact form
+    # (`data/inflection/<lang>.jsonl`), which also covers a form the freq
+    # wordlist lacks ("foehna", a Scrabble-only word -> "foehner").
+    inflection_lemmas = inflection_lookup.lemmas_of(q, language)
+    for lemma in inflection_lemmas:
+        roots.add(_norm(lemma))
     if qn in idx.by_canon:
         roots.add(qn)
     for i in idx.by_key.get(qn, []):
@@ -209,6 +218,26 @@ def search(query, language):
                     "definitions": _definitions_for([w], gloss_index, False),
                 })
                 break
+    # The query as an inflected form the wordlist lacks, with its lemmas'
+    # definitions, and each of those lemmas the wordlist lacks as well.
+    present = {_norm(row["form"]) for row in rows}
+    if inflection_lemmas and not idx.by_key.get(qn) and qn not in present:
+        rows.append({
+            "form": q.lower(),
+            "canonical": "; ".join(inflection_lemmas),
+            "_canon_norm": {_norm(lemma) for lemma in inflection_lemmas},
+            "definitions": _definitions_for(inflection_lemmas, gloss_index, len(inflection_lemmas) > 1),
+        })
+        present.add(qn)
+    for lemma in inflection_lemmas:
+        if _norm(lemma) not in present and gloss_index.get(lemma.lower()):
+            rows.append({
+                "form": lemma,
+                "canonical": lemma,
+                "_canon_norm": {_norm(lemma)},
+                "definitions": _definitions_for([lemma], gloss_index, False),
+            })
+            present.add(_norm(lemma))
 
     # Canonical/searched forms first, then alphabetical by folded form.
     def sort_key(row):

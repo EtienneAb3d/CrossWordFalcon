@@ -2417,7 +2417,11 @@ lookup.py` (exact-form grammatical analysis), `example_sentences.py`
 (reservoir-sampled real usage sentences per exact inflected form),
 `dictionary_lookup.py` (accent/case-insensitive same-root-family search
 for the "Dictionnaire" panel — distinct from `gloss_lookup.py`'s single-
-lemma lookup), `secret_store.py` (`verify_or_claim`: PBKDF2-hashed
+lemma lookup; the roots come from the freq wordlist rows the query
+spells, the query itself as a lemma, and the inflection table's lemmas of
+the exact form, `inflection_lookup.lemmas_of`, so a form the wordlist
+lacks — "foehna" — gets a row with its lemmas' definitions, plus one per
+such lemma with definitions; Java `DictionaryLookup.search`), `secret_store.py` (`verify_or_claim`: PBKDF2-hashed
 nickname secret words under `SECRET/`, anti-pseudo-theft only, not a
 real auth system).
 

@@ -132,6 +132,10 @@ public final class DictionaryLookup {
         String qn = norm(q);
 
         Set<String> roots = new LinkedHashSet<>();
+        // The inflection table's lemmas of the exact form, which also covers a form the freq wordlist lacks
+        // (backend/dictionary_lookup.py, search).
+        List<String> inflectionLemmas = InflectionLookup.lemmasOf(q, language);
+        for (String lemma : inflectionLemmas) roots.add(norm(lemma));
         if (idx.byCanon.containsKey(qn)) roots.add(qn);
         for (int i : idx.byKey.getOrDefault(qn, List.of())) {
             for (String c : idx.canonicals.get(i)) roots.add(norm(c));
@@ -173,6 +177,21 @@ public final class DictionaryLookup {
                         break;
                     }
                 }
+            }
+        }
+        Set<String> present = new HashSet<>();
+        for (Row row : rows) present.add(norm(row.form));
+        if (!inflectionLemmas.isEmpty() && idx.byKey.getOrDefault(qn, List.of()).isEmpty() && !present.contains(qn)) {
+            Set<String> cn = new HashSet<>();
+            for (String lemma : inflectionLemmas) cn.add(norm(lemma));
+            rows.add(new Row(q.toLowerCase(Locale.ROOT), String.join("; ", inflectionLemmas), cn,
+                    definitionsFor(inflectionLemmas, glossIndex, inflectionLemmas.size() > 1)));
+            present.add(qn);
+        }
+        for (String lemma : inflectionLemmas) {
+            if (!present.contains(norm(lemma)) && glossIndex.get(lemma.toLowerCase(Locale.ROOT)) != null) {
+                rows.add(new Row(lemma, lemma, Set.of(norm(lemma)), definitionsFor(List.of(lemma), glossIndex, false)));
+                present.add(norm(lemma));
             }
         }
         rows.sort(Comparator.<Row>comparingInt(row -> norm(row.form).equals(qn) ? 0 : 1)

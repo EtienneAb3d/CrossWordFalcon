@@ -407,7 +407,9 @@ those was showing.
 - Type an expression in the field (`#dictionary-input`) and use one of four buttons:
   - **Chercher / Search** (`#dictionary-search-btn`) — lists every word
     sharing the same root as what you typed (accents and case ignored),
-    each with its real definitions, in a table
+    each with its real definitions, in a table. An inflected form is
+    traced back to its base form(s) even when the main word list lacks
+    it (e.g. "foehna" shows "foehner" and its definition)
     (`frontend/static/script.js`, `renderDictionaryResult`; `GET
     /api/dictionary`).
   - **Synonymes / Synonyms** (`#dictionary-synonyms-btn`,
