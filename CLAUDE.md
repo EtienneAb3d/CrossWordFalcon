@@ -57,7 +57,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `DOC_ALGO/FR/`, `DOC_DIC/FR/`, `DOC_USER/EN/` | Hand-maintained, present-tense-only reference docs (see intro). |
 | `GRID_STORE/`, `GRID_WORK/`, `GRID_GAME/` | Persisted grids: published library grids, in-progress "Interactif" authoring drafts, per-player play state. All gitignored. |
 | `STOP_DUMP/` | One diagnostic snapshot per automatic-generation job interrupted via the "Stop" button: last known cell/slot state of every attempt still running at that moment. Gitignored. |
-| `GRID_SVG/`, `GRID_PNG/` | Generated SVG/PNG exports of every finished grid. Gitignored. `GRID_SAMPLES/` (committed) is a small, hand-curated set of examples — never written automatically. |
+| `GRID_SVG/`, `GRID_PNG/` | Generated SVG/PNG exports of every published grid, one file per page (`_GRID`, `_CLUES`, `_SOLUTION`), laid out like its PDF. Gitignored. `GRID_SAMPLES/` (committed) is a small, hand-curated set of examples — never written automatically. |
 | `LOG_LLM/`, `LOG_CHAT/`, `LOG_THEME/`, `LOG_USERS/` | Diagnostic/audit logs (LLM call traces, chat transcripts, theme pre-search traces, daily presence headcount). Gitignored. |
 | `RSS/`, `SCRAPP/` | Daily-refreshed scraper output caches. Gitignored. |
 | `CORPUS/`, `data/wiktionary/` | Raw downloaded source caches for the dictionary pipeline (OPUS corpora; Wiktionary/Kaikki dumps, kept for reuse). Gitignored. |
@@ -2384,11 +2384,10 @@ Four independent filesystem stores, one JSON file shape shared with the
 
 ### `svg_export.py`
 
-Renders a `generate_grid()`-shaped result to a self-contained SVG:
-`render_grid_svg` (empty grid + clue lists + solved grid, for the
-per-generation archive under `GRID_SVG/`) or `render_puzzle_pages` (a
-printable, answer-free sheet for the library's PDF download, one SVG per
-page). A grid whose sides are both at most `PDF_ONE_PAGE_MAX_SIDE` (20)
+Renders a `generate_grid()`-shaped result as A4 landscape SVG pages:
+`render_puzzle_pages` (the printable, answer-free sheet for the library's
+PDF download, one SVG per page) and `render_export_pages` (the SVG/PNG
+record of a published grid, same layout, see below). A grid whose sides are both at most `PDF_ONE_PAGE_MAX_SIDE` (20)
 cells takes one page, `render_puzzle_svg`: one A4
 landscape page, `297mm`x`210mm` over a `PDF_PAGE_WIDTH`x`PDF_PAGE_HEIGHT`
 viewBox — header, grid at the top right, the across then down clues
@@ -2411,9 +2410,26 @@ takes one SVG (stdin) or a list (temporary files, `rsvg-convert -f pdf
 page1.svg page2.svg ...`, one PDF page each); Java `SvgExport.
 renderPuzzlePages`/`renderTwoPagePuzzle`/`svgToPdfBytes(List)`. Both draw
 a black cell like the web UI: a bordered white cell holding a centered
-half-size square of `BLACK_CELL_FILL` (`#2563eb`). `save_grid_
-png` and `svg_to_pdf_bytes` shell out to the external `rsvg-convert`
-binary (a real runtime dependency, installed by `Install.sh`).
+half-size square of `BLACK_CELL_FILL` (`#2563eb`).
+
+The SVG/PNG record (`render_export_pages`, Java `SvgExport.
+renderExportPages`) is a list of `(suffix, svg)` pages laid out like the
+PDF: a one-page grid gives `GRID` (`render_puzzle_svg`, grid and clues)
+and `SOLUTION`; a larger one gives `GRID` (`_large_grid_page`: header,
+grid, footer), `CLUES` (`_clue_pages`; `CLUES_2`, `CLUES_3`... when the
+clues run on over further pages) and `SOLUTION`. `SOLUTION`
+(`render_solution_page`) is `_large_grid_page` with a "Solution" heading
+(`PDF_SOLUTION_HEADING_HEIGHT`) above the grid filled with the solution's
+letters (`_puzzle_grid_svg`'s `letters`). `save_grid_svgs` (Java
+`saveGridSvgs`) writes one `GRID_SVG/<timestamp>_<language>_<SUFFIX>.svg`
+per page and `save_grid_png` renders each to `GRID_PNG/` at `PNG_DPI`
+(300: 3508x2480 px per A4 page). `backend/app.py`'s `_save_grid_images`
+(Java `App.saveGridImages`, best-effort) calls both right after a grid is
+saved to the library — an automatic generation's publish, "Recalculer",
+Interactive "Publier" — so the footer carries its "play online" link.
+`save_grid_png` and `svg_to_pdf_bytes` shell out to the external
+`rsvg-convert` binary (a real runtime dependency, installed by
+`Install.sh`).
 
 ### `system_info.py`
 

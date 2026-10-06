@@ -18,8 +18,9 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * Renders a generate_grid()-shaped result (a JSON-shaped Map) to a
- * self-contained SVG, and converts it to PNG/PDF through the external
+ * Renders a generate_grid()-shaped result (a JSON-shaped Map) as A4
+ * landscape SVG pages (the PDF puzzle sheet, and the GRID/CLUES/SOLUTION
+ * export record), and converts them to PNG/PDF through the external
  * {@code rsvg-convert} binary (mirrors backend/svg_export.py).
  */
 public final class SvgExport {
@@ -30,16 +31,8 @@ public final class SvgExport {
     private static final Path LOGO_PATH = Env.path("frontend", "static", "logo.png");
     private static final Path VERSION_PATH = Env.path("VERSION.txt");
 
-    static final int CELL_SIZE = 26;
     // Colour of a black cell's centered square (the web UI's --black-cell).
     static final String BLACK_CELL_FILL = "#2563eb";
-    static final int LINE_HEIGHT = 16;
-    static final int MARGIN = 16;
-    static final int MIN_CANVAS_WIDTH = 720;
-    static final int HEADER_LOGO_SIZE = 48;
-    static final int HEADER_HEIGHT = HEADER_LOGO_SIZE + 16 + 18;
-    static final int GRID_SIDEBAR_GAP = 24;
-    static final int DOWN_COLUMN_GAP = 24;
     // Printable puzzle sheet (renderPuzzlePages): A4 landscape pages — one
     // (renderPuzzleSvg) while both sides are at most PDF_ONE_PAGE_MAX_SIDE,
     // the grid then the clues on two otherwise (renderTwoPagePuzzle).
@@ -57,6 +50,8 @@ public final class SvgExport {
     static final int PDF_MIN_CLUE_COLUMN_WIDTH = 120;
     static final double PDF_LINE_HEIGHT_FACTOR = 1.3;
     static final int PDF_ONE_PAGE_MAX_SIDE = 20;
+    // Room taken above the grid by the solution export's heading.
+    static final int PDF_SOLUTION_HEADING_HEIGHT = 24;
     static final int PDF_MAX_CLUE_PAGES = 8;
     static final double[] PDF_FONT_SIZES = new double[17];
     static {
@@ -94,25 +89,6 @@ public final class SvgExport {
             "es", Map.of("easy", "Fácil", "medium", "Media", "hard", "Difícil"),
             "it", Map.of("easy", "Facile", "medium", "Media", "hard", "Difficile"),
             "pt", Map.of("easy", "Fácil", "medium", "Média", "hard", "Difícil"));
-    private static final Map<String, String> MODE_LABEL = Map.of(
-            "fr", "Mode", "en", "Mode", "de", "Modus", "es", "Modo", "it", "Modalità", "pt", "Modo");
-    private static final Map<String, Map<String, String>> MODE_NAMES = Map.of(
-            "fr", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rapide", "medium", "Moyen", "ultra", "Ultra", "megatron", "Megatron", "gridzilla", "GridZilla"),
-            "en", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Fast", "medium", "Medium", "ultra", "Ultra", "megatron", "Megatron", "gridzilla", "GridZilla"),
-            "de", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Schnell", "medium", "Mittel", "ultra", "Ultra", "megatron", "Megatron", "gridzilla", "GridZilla"),
-            "es", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rápido", "medium", "Medio", "ultra", "Ultra", "megatron", "Megatron", "gridzilla", "GridZilla"),
-            "it", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Veloce", "medium", "Medio", "ultra", "Ultra", "megatron", "Megatron", "gridzilla", "GridZilla"),
-            "pt", Map.of("flash", "Flash", "turbo", "Turbo", "fast", "Rápido", "medium", "Médio", "ultra", "Ultra", "megatron", "Megatron", "gridzilla", "GridZilla"));
-    private static final Map<String, String[]> DURATION_LABELS = Map.of(
-            "fr", new String[]{"Grille générée en", "Optimisation en", "Définitions générées en"},
-            "en", new String[]{"Grid generated in", "Optimized in", "Definitions generated in"},
-            "de", new String[]{"Gitter erzeugt in", "Optimiert in", "Definitionen erzeugt in"},
-            "es", new String[]{"Crucigrama generado en", "Optimizado en", "Definiciones generadas en"},
-            "it", new String[]{"Griglia generata in", "Ottimizzata in", "Definizioni generate in"},
-            "pt", new String[]{"Grelha gerada em", "Otimizada em", "Definições geradas em"});
-    private static final Map<String, String> BLACK_RATIO_LABELS = Map.of(
-            "fr", "{p} % noir", "en", "{p}% black", "de", "{p}% schwarz", "es", "{p}% negro", "it", "{p}% nero",
-            "pt", "{p}% preto");
     private static final Map<String, String> PLAY_ONLINE_LABELS = Map.of(
             "fr", "Jouer en ligne (avec solution) : {url}",
             "en", "Play online (with solution): {url}",
@@ -121,28 +97,8 @@ public final class SvgExport {
             "it", "Gioca online (con soluzione): {url}",
             "pt", "Jogar online (com solução): {url}");
 
-    /** Python-style number formatting: ints print bare, doubles in their
-     * shortest repr ("13.0", "1003.3333333333334"). */
-    static String num(double d) {
-        return Double.toString(d);
-    }
-
-    static String f1(double d) {
-        return Py.fmt(d, 1);
-    }
-
     static String escape(String s) {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
-    }
-
-    static String formatDuration(double seconds) {
-        long total = Math.max(0, Py.round(seconds));
-        long h = total / 3600, rem = total % 3600, m = rem / 60, s = rem % 60;
-        StringBuilder out = new StringBuilder();
-        if (h > 0) out.append(h).append("h");
-        if (h > 0 || m > 0) out.append(m).append("mn");
-        out.append(s).append("s");
-        return out.toString();
     }
 
     static double textWidth(String text, double fontSize, boolean bold) {
@@ -165,36 +121,7 @@ public final class SvgExport {
         return lines;
     }
 
-    static String headingSvg(Object x, int y, String text) {
-        return "<text x=\"" + x + "\" y=\"" + (y + 12) + "\" font-size=\"13\" font-family=\"sans-serif\" "
-                + "font-weight=\"bold\">" + escape(text) + "</text>";
-    }
-
     record Line(int pos, String text) {}
-
-    /** Returns [markup, height]. */
-    static Object[] clueLinesSvg(Object x, double width, int y0, List<Line> lines) {
-        int fontSize = 11;
-        StringBuilder parts = new StringBuilder();
-        int y = y0;
-        double xNum = ((Number) x).doubleValue();
-        for (Line l : lines) {
-            String prefix = (l.pos + 1) + " ";
-            double indent = textWidth(prefix, fontSize, true);
-            List<String> wrapped = wrapLine(l.text, fontSize, width - indent);
-            parts.append("<text x=\"").append(x).append("\" y=\"").append(y + 10).append("\" font-size=\"")
-                    .append(fontSize).append("\" font-family=\"sans-serif\"><tspan font-weight=\"bold\">")
-                    .append(l.pos + 1).append("</tspan> ").append(escape(wrapped.get(0))).append("</text>");
-            y += LINE_HEIGHT;
-            for (String cont : wrapped.subList(1, wrapped.size())) {
-                parts.append("<text x=\"").append(f1(xNum + indent)).append("\" y=\"").append(y + 10)
-                        .append("\" font-size=\"").append(fontSize).append("\" font-family=\"sans-serif\">")
-                        .append(escape(cont)).append("</text>");
-                y += LINE_HEIGHT;
-            }
-        }
-        return new Object[]{parts.toString(), y - y0};
-    }
 
     private static volatile String logoCache;
 
@@ -246,71 +173,6 @@ public final class SvgExport {
         return row instanceof List<?> l ? l.size() : row.toString().length();
     }
 
-    /** Returns [markup, height, width]. */
-    static Object[] gridSvg(List<Object> pattern, List<Object> letters, List<Object> words, int yOffset, Object xOffset) {
-        int rows = pattern.size(), cols = rowLength(pattern.get(0));
-        Map<String, Object> numberByCell = new HashMap<>();
-        for (Object w : words) numberByCell.put(Json.integer(w, "row", 0) + "," + Json.integer(w, "col", 0), Json.get(w, "number"));
-        StringBuilder parts = new StringBuilder();
-        double xo = ((Number) xOffset).doubleValue();
-        boolean xInt = xOffset instanceof Integer;
-        // Python keeps an int x-offset an int and a float one a float.
-        java.util.function.DoubleFunction<String> fmt = v -> xInt ? String.valueOf((long) v) : num(v);
-        double gridX0 = xo + CELL_SIZE;
-        int gridY0 = yOffset + CELL_SIZE;
-        for (int c = 0; c < cols; c++) {
-            double x = gridX0 + c * CELL_SIZE;
-            parts.append("<text x=\"").append(num(x + CELL_SIZE / 2.0)).append("\" y=\"")
-                    .append(num(yOffset + CELL_SIZE / 2.0 + 4)).append("\" font-size=\"10\" font-family=\"sans-serif\" "
-                            + "text-anchor=\"middle\" fill=\"#4b5563\">").append(c + 1).append("</text>");
-        }
-        for (int r = 0; r < rows; r++) {
-            int y = gridY0 + r * CELL_SIZE;
-            parts.append("<text x=\"").append(num(xo + CELL_SIZE / 2.0)).append("\" y=\"")
-                    .append(num(y + CELL_SIZE / 2.0 + 4)).append("\" font-size=\"10\" font-family=\"sans-serif\" "
-                            + "text-anchor=\"middle\" fill=\"#4b5563\">").append(r + 1).append("</text>");
-        }
-        for (int r = 0; r < rows; r++) {
-            for (int c = 0; c < cols; c++) {
-                double x = gridX0 + c * CELL_SIZE;
-                int y = gridY0 + r * CELL_SIZE;
-                String xs = fmt.apply(x);
-                if ("#".equals(cell(pattern, r, c))) {
-                    // A black cell is a white cell carrying a centered square
-                    // half its size, filled with BLACK_CELL_FILL — the web UI's
-                    // own `.cell.black` look.
-                    parts.append("<rect x=\"").append(xs).append("\" y=\"").append(y).append("\" width=\"")
-                            .append(CELL_SIZE).append("\" height=\"").append(CELL_SIZE)
-                            .append("\" fill=\"#ffffff\" stroke=\"#1f2937\" stroke-width=\"1\"/>");
-                    parts.append("<rect x=\"").append(num(x + CELL_SIZE / 4.0)).append("\" y=\"")
-                            .append(num(y + CELL_SIZE / 4.0)).append("\" width=\"").append(num(CELL_SIZE / 2.0))
-                            .append("\" height=\"").append(num(CELL_SIZE / 2.0)).append("\" fill=\"")
-                            .append(BLACK_CELL_FILL).append("\"/>");
-                    continue;
-                }
-                parts.append("<rect x=\"").append(xs).append("\" y=\"").append(y).append("\" width=\"")
-                        .append(CELL_SIZE).append("\" height=\"").append(CELL_SIZE)
-                        .append("\" fill=\"#ffffff\" stroke=\"#1f2937\" stroke-width=\"1\"/>");
-                Object number = numberByCell.get(r + "," + c);
-                if (Json.truthy(number)) {
-                    parts.append("<text x=\"").append(fmt.apply(x + 2)).append("\" y=\"").append(y + 9)
-                            .append("\" font-size=\"7\" font-family=\"sans-serif\">").append(number).append("</text>");
-                }
-                if (letters != null) {
-                    String letter = cell(letters, r, c);
-                    if (letter != null && !letter.isEmpty() && !letter.equals("#")) {
-                        parts.append("<text x=\"").append(num(x + CELL_SIZE / 2.0)).append("\" y=\"")
-                                .append(y + CELL_SIZE - 7).append("\" font-size=\"")
-                                .append(Py.fmt(CELL_SIZE * 0.55, 0))
-                                .append("\" font-family=\"sans-serif\" text-anchor=\"middle\">")
-                                .append(escape(letter)).append("</text>");
-                    }
-                }
-            }
-        }
-        return new Object[]{parts.toString(), CELL_SIZE + rows * CELL_SIZE, CELL_SIZE + cols * CELL_SIZE};
-    }
-
     private static String version() {
         try {
             return Py.strip(Files.readString(VERSION_PATH, StandardCharsets.UTF_8));
@@ -319,103 +181,18 @@ public final class SvgExport {
         }
     }
 
-    public static String renderGridSvg(Map<String, Object> result, String language, String difficulty, String mode) {
-        List<Object> words = Json.listOrEmpty(result.get("words"));
-        String[] headings = HEADINGS.getOrDefault(language, HEADINGS.get("en"));
-        List<Line> across = groupClueLines(words, "across", "row", language);
-        List<Line> down = groupClueLines(words, "down", "col", language);
-        int gridWidthPx = CELL_SIZE + Json.integer(result, "width", 0) * CELL_SIZE;
-        int sidebarWidth = gridWidthPx;
-        int canvasWidth = Math.max(2 * gridWidthPx + GRID_SIDEBAR_GAP + 2 * MARGIN, MIN_CANVAS_WIDTH);
-        StringBuilder parts = new StringBuilder();
-        int y = MARGIN;
-        int logoX = MARGIN, logoY = y;
-        parts.append("<image x=\"").append(logoX).append("\" y=\"").append(logoY).append("\" width=\"")
-                .append(HEADER_LOGO_SIZE).append("\" height=\"").append(HEADER_LOGO_SIZE).append("\" href=\"")
-                .append(logoDataUri()).append("\"/>");
-        int textX = logoX + HEADER_LOGO_SIZE + 12;
-        String languageName = NATIVE_LANGUAGE_NAMES.getOrDefault(language, language);
-        String diffLabel = DIFFICULTY_LABEL.getOrDefault(language, DIFFICULTY_LABEL.get("en"));
-        Map<String, String> diffNames = DIFFICULTY_NAMES.getOrDefault(language, DIFFICULTY_NAMES.get("en"));
-        String diffName = difficulty == null ? "" : diffNames.getOrDefault(difficulty, difficulty);
-        String date = LocalDate.now().toString();
-        parts.append("<text x=\"").append(textX).append("\" y=\"").append(logoY + 20)
-                .append("\" font-size=\"18\" font-family=\"sans-serif\" font-weight=\"bold\">CrossWordFalcon</text>")
-                .append("<text x=\"").append(textX).append("\" y=\"").append(logoY + 38)
-                .append("\" font-size=\"12\" font-family=\"sans-serif\" fill=\"#4b5563\">v").append(escape(version()))
-                .append(" — ").append(escape(date)).append(" — ").append(escape(languageName)).append(" — ")
-                .append(escape(diffLabel)).append("\u00a0: ").append(escape(diffName)).append("</text>");
-        String modeLabel = MODE_LABEL.getOrDefault(language, MODE_LABEL.get("en"));
-        Map<String, String> modeNames = MODE_NAMES.getOrDefault(language, MODE_NAMES.get("en"));
-        String[] dl = DURATION_LABELS.getOrDefault(language, DURATION_LABELS.get("en"));
-        List<String> info = new ArrayList<>();
-        if (mode != null) info.add(modeLabel + " " + modeNames.getOrDefault(mode, mode));
-        if (result.containsKey("generation_duration_seconds"))
-            info.add(dl[0] + " " + formatDuration(Json.dbl(result, "generation_duration_seconds", 0)));
-        if (result.containsKey("optimization_duration_seconds"))
-            info.add(dl[1] + " " + formatDuration(Json.dbl(result, "optimization_duration_seconds", 0)));
-        if (result.containsKey("clues_duration_seconds"))
-            info.add(dl[2] + " " + formatDuration(Json.dbl(result, "clues_duration_seconds", 0)));
-        if (result.containsKey("black_ratio")) {
-            String tpl = BLACK_RATIO_LABELS.getOrDefault(language, BLACK_RATIO_LABELS.get("en"));
-            info.add(tpl.replace("{p}", String.valueOf(Py.round(100 * Json.dbl(result, "black_ratio", 0)))));
-        }
-        if (!info.isEmpty()) {
-            parts.append("<text x=\"").append(textX).append("\" y=\"").append(logoY + 56)
-                    .append("\" font-size=\"12\" font-family=\"sans-serif\" fill=\"#4b5563\">")
-                    .append(escape(String.join(" — ", info))).append("</text>");
-        }
-        y += HEADER_HEIGHT;
-
-        parts.append(headingSvg(MARGIN, y, headings[0]));
-        Object[] al = clueLinesSvg(MARGIN, sidebarWidth, y + 22, across);
-        parts.append(al[0]);
-        int sidebarHeight = 22 + (int) al[1];
-        int gridX0 = MARGIN + sidebarWidth + GRID_SIDEBAR_GAP;
-        List<Object> pattern = Json.listOrEmpty(result.get("pattern"));
-        Object[] eg = gridSvg(pattern, null, words, y, gridX0);
-        parts.append(eg[0]);
-        y += Math.max(sidebarHeight, (int) eg[1]) + 24;
-
-        parts.append(headingSvg(MARGIN, y, headings[1]));
-        y += 22;
-        int half = (down.size() + 1) / 2;
-        double downColWidth = (canvasWidth - 2 * MARGIN - DOWN_COLUMN_GAP) / 2.0;
-        Object[] left = clueLinesSvg(MARGIN, downColWidth, y, down.subList(0, half));
-        double rightX = MARGIN + downColWidth + DOWN_COLUMN_GAP;
-        Object[] right = clueLinesSvg(rightX, downColWidth, y, down.subList(half, down.size()));
-        parts.append(left[0]).append(right[0]);
-        y += Math.max((int) left[1], (int) right[1]) + 10;
-        y += 8;
-        parts.append("<line x1=\"").append(MARGIN).append("\" y1=\"").append(y).append("\" x2=\"")
-                .append(canvasWidth - MARGIN).append("\" y2=\"").append(y).append("\" stroke=\"#9ca3af\"/>");
-        y += 24;
-        parts.append(headingSvg(MARGIN, y, headings[2]));
-        y += 22;
-        Object[] sg = gridSvg(pattern, Json.listOrEmpty(result.get("solution")), words, y, MARGIN);
-        parts.append(sg[0]);
-        y += (int) sg[1] + MARGIN;
-        return wrapDocument(String.valueOf(canvasWidth), canvasWidth, y, parts.toString());
-    }
-
-    private static String wrapDocument(String canvasWidthStr, double canvasWidth, int y, String body) {
-        double wm = canvasWidth * 0.9;
-        double wx = (canvasWidth - wm) / 2;
-        double wy = (y - wm) / 2;
-        String watermark = "<image x=\"" + f1(wx) + "\" y=\"" + f1(wy) + "\" width=\"" + f1(wm) + "\" height=\""
-                + f1(wm) + "\" href=\"" + logoDataUri() + "\" opacity=\"0.1\"/>";
-        return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" + canvasWidthStr + "\" height=\"" + y
-                + "\" viewBox=\"0 0 " + canvasWidthStr + " " + y + "\"><rect x=\"0\" y=\"0\" width=\""
-                + canvasWidthStr + "\" height=\"" + y + "\" fill=\"#ffffff\"/>" + watermark + body + "</svg>";
-    }
-
     /** Two-decimal formatting for renderPuzzleSvg (Python's {@code _n}). */
     static String n2(double v) {
         return Py.fmt(v, 2);
     }
 
-    /** Empty grid for renderPuzzleSvg (Python's {@code _puzzle_grid_svg}). */
+    /** Grid for the puzzle sheets, empty or showing {@code letters} (Python's {@code _puzzle_grid_svg}). */
     static String puzzleGridSvg(List<Object> pattern, List<Object> words, double x0, double y0, double cell) {
+        return puzzleGridSvg(pattern, words, x0, y0, cell, null);
+    }
+
+    static String puzzleGridSvg(List<Object> pattern, List<Object> words, double x0, double y0, double cell,
+                                List<Object> letters) {
         int rows = pattern.size(), cols = rowLength(pattern.get(0));
         Map<String, Object> numberByCell = new HashMap<>();
         for (Object w : words) numberByCell.put(Json.integer(w, "row", 0) + "," + Json.integer(w, "col", 0), Json.get(w, "number"));
@@ -447,6 +224,13 @@ public final class SvgExport {
                     parts.append("<text x=\"").append(n2(x + cell * 0.08)).append("\" y=\"").append(n2(y + cell * 0.33))
                             .append("\" font-size=\"").append(n2(cell * 0.27)).append("\" font-family=\"sans-serif\">")
                             .append(number).append("</text>");
+                }
+                String letter = letters != null ? cell(letters, r, c) : null;
+                if (letter != null && !letter.isEmpty() && !letter.equals("#")) {
+                    parts.append("<text x=\"").append(n2(x + cell / 2)).append("\" y=\"").append(n2(y + cell * 0.8))
+                            .append("\" font-size=\"").append(n2(cell * 0.55))
+                            .append("\" font-family=\"sans-serif\" text-anchor=\"middle\">").append(escape(letter))
+                            .append("</text>");
                 }
             }
         }
@@ -692,31 +476,45 @@ public final class SvgExport {
     }
 
     /**
-     * Python's {@code render_two_page_puzzle}: page 1 the header, the grid
-     * centered and the footer; page 2 the clues in one full-width column at
-     * the largest font that fits, running on over further pages (at most
-     * PDF_MAX_CLUE_PAGES) when even the smallest one does not.
+     * Python's {@code _large_grid_page}: the header, the grid centered under
+     * it (with the solution's {@code letters} and a {@code heading} above it
+     * for the solution export) and the footer.
      */
-    public static List<String> renderTwoPagePuzzle(Map<String, Object> result, String language, String title,
-                                                   String difficulty) {
+    static String largeGridPage(Map<String, Object> result, String language, String title, String difficulty,
+                                List<Object> letters, String heading) {
         List<Object> words = Json.listOrEmpty(result.get("words"));
         List<Object> pattern = Json.listOrEmpty(result.get("pattern"));
         int rows = pattern.size(), cols = rowLength(pattern.get(0));
-        List<Map.Entry<String, List<Line>>> sections = puzzleSections(words, language);
         Object gridId = result.get("id");
-        boolean hasId = Json.truthy(gridId);
-
         double pageW = PDF_PAGE_WIDTH, pageH = PDF_PAGE_HEIGHT;
         int margin = PDF_MARGIN;
         double contentW = pageW - 2 * margin;
-        int bodyTop = margin + PDF_LOGO_SIZE + PDF_HEADER_GAP;
-        double bodyBottom = pageH - margin - (hasId ? PDF_FOOTER_HEIGHT : 0);
+        double bodyTop = margin + PDF_LOGO_SIZE + PDF_HEADER_GAP;
+        double bodyBottom = pageH - margin - (Json.truthy(gridId) ? PDF_FOOTER_HEIGHT : 0);
+        StringBuilder parts = new StringBuilder(puzzleHeaderSvg(language, title, difficulty));
+        if (heading != null && !heading.isEmpty()) {
+            parts.append("<text x=\"").append(n2(margin)).append("\" y=\"").append(n2(bodyTop + 14))
+                    .append("\" font-size=\"14\" font-family=\"sans-serif\" font-weight=\"bold\">")
+                    .append(escape(heading)).append("</text>");
+            bodyTop += PDF_SOLUTION_HEADING_HEIGHT;
+        }
         double cell = Math.min(Math.min((bodyBottom - bodyTop) / (rows + 1), contentW / (cols + 1)), PDF_MAX_CELL_SIZE);
         double gridX0 = margin + (contentW - cell * (cols + 1)) / 2;
-        String firstPage = puzzleHeaderSvg(language, title, difficulty)
-                + puzzleGridSvg(pattern, words, gridX0, bodyTop, cell)
-                + puzzleFooterSvg(language, gridId);
+        parts.append(puzzleGridSvg(pattern, words, gridX0, bodyTop, cell, letters));
+        parts.append(puzzleFooterSvg(language, gridId));
+        return puzzlePageSvg(parts.toString());
+    }
 
+    /**
+     * Python's {@code _clue_pages}: the clues in one full-width column at the
+     * largest font that fits on one page, running on over further pages (at
+     * most PDF_MAX_CLUE_PAGES) when even the smallest one does not.
+     */
+    static List<String> cluePages(Map<String, Object> result, String language) {
+        List<Map.Entry<String, List<Line>>> sections = puzzleSections(Json.listOrEmpty(result.get("words")), language);
+        double pageW = PDF_PAGE_WIDTH, pageH = PDF_PAGE_HEIGHT;
+        int margin = PDF_MARGIN;
+        double contentW = pageW - 2 * margin;
         double clueH = pageH - 2 * margin;
         double fontSize = 0;
         List<ClueItem> items = null;
@@ -738,21 +536,60 @@ public final class SvgExport {
             byPage.computeIfAbsent((int) Math.floor(item.top() / pageH), k -> new ArrayList<>()).add(item);
         }
         List<String> pages = new ArrayList<>();
-        pages.add(puzzlePageSvg(firstPage));
         for (Map.Entry<Integer, List<ClueItem>> e : byPage.entrySet()) {
             pages.add(puzzlePageSvg(puzzleClueItemsSvg(e.getValue(), fontSize, e.getKey() * pageH)));
         }
         return pages;
     }
 
+    /** Python's {@code render_two_page_puzzle}: the grid page, then the clue pages. */
+    public static List<String> renderTwoPagePuzzle(Map<String, Object> result, String language, String title,
+                                                   String difficulty) {
+        List<String> pages = new ArrayList<>();
+        pages.add(largeGridPage(result, language, title, difficulty, null, null));
+        pages.addAll(cluePages(result, language));
+        return pages;
+    }
+
     /** Python's {@code render_puzzle_pages}: one page, or two for a side above PDF_ONE_PAGE_MAX_SIDE. */
     public static List<String> renderPuzzlePages(Map<String, Object> result, String language, String title,
                                                  String difficulty) {
-        List<Object> pattern = Json.listOrEmpty(result.get("pattern"));
-        if (Math.max(pattern.size(), rowLength(pattern.get(0))) > PDF_ONE_PAGE_MAX_SIDE) {
-            return renderTwoPagePuzzle(result, language, title, difficulty);
-        }
+        if (isLargeGrid(result)) return renderTwoPagePuzzle(result, language, title, difficulty);
         return List.of(renderPuzzleSvg(result, language, title, difficulty));
+    }
+
+    /** Python's {@code _is_large_grid}: a side above PDF_ONE_PAGE_MAX_SIDE. */
+    static boolean isLargeGrid(Map<String, Object> result) {
+        List<Object> pattern = Json.listOrEmpty(result.get("pattern"));
+        return Math.max(pattern.size(), rowLength(pattern.get(0))) > PDF_ONE_PAGE_MAX_SIDE;
+    }
+
+    /** Python's {@code render_solution_page}: the solved grid under a "Solution" heading. */
+    public static String renderSolutionPage(Map<String, Object> result, String language, String title, String difficulty) {
+        String heading = HEADINGS.getOrDefault(language, HEADINGS.get("en"))[2];
+        return largeGridPage(result, language, title, difficulty, Json.listOrEmpty(result.get("solution")), heading);
+    }
+
+    /**
+     * Python's {@code render_export_pages}: the SVG/PNG export laid out like
+     * the PDF, as (suffix, svg) pairs — GRID and SOLUTION for a one-page
+     * grid; GRID, CLUES (CLUES_2... for further clue pages) and SOLUTION
+     * for a larger one.
+     */
+    public static List<Map.Entry<String, String>> renderExportPages(Map<String, Object> result, String language,
+                                                                   String title, String difficulty) {
+        List<Map.Entry<String, String>> pages = new ArrayList<>();
+        if (isLargeGrid(result)) {
+            pages.add(Map.entry("GRID", largeGridPage(result, language, title, difficulty, null, null)));
+            List<String> clues = cluePages(result, language);
+            for (int i = 0; i < clues.size(); i++) {
+                pages.add(Map.entry(i == 0 ? "CLUES" : "CLUES_" + (i + 1), clues.get(i)));
+            }
+        } else {
+            pages.add(Map.entry("GRID", renderPuzzleSvg(result, language, title, difficulty)));
+        }
+        pages.add(Map.entry("SOLUTION", renderSolutionPage(result, language, title, difficulty)));
+        return pages;
     }
 
     private static PuzzleLayout attemptPuzzle(List<Map.Entry<String, List<Line>>> sections, double fontSize, double cell,
@@ -825,13 +662,18 @@ public final class SvgExport {
         }
     }
 
-    public static Path saveGridSvg(Map<String, Object> result, String language, String difficulty, String mode)
+    /** Python's {@code save_grid_svgs}: one {@code <timestamp>_<language>_<SUFFIX>.svg} file per export page. */
+    public static List<Path> saveGridSvgs(Map<String, Object> result, String language, String difficulty, String title)
             throws IOException {
         Files.createDirectories(GRID_SVG_DIR);
         String ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSSSSS"));
-        Path path = GRID_SVG_DIR.resolve(ts + "_" + language + ".svg");
-        Files.writeString(path, renderGridSvg(result, language, difficulty, mode), StandardCharsets.UTF_8);
-        return path;
+        List<Path> paths = new ArrayList<>();
+        for (Map.Entry<String, String> page : renderExportPages(result, language, title == null ? "" : title, difficulty)) {
+            Path path = GRID_SVG_DIR.resolve(ts + "_" + language + "_" + page.getKey() + ".svg");
+            Files.writeString(path, page.getValue(), StandardCharsets.UTF_8);
+            paths.add(path);
+        }
+        return paths;
     }
 
     public static Path saveGridPng(Path svgPath) throws IOException {

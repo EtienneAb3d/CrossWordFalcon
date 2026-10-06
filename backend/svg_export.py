@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
 Renders a generated grid (backend/crossword_gen.py's `generate_grid()`
-result) to a single, self-contained SVG file: the empty puzzle with its
-clue lists — the same view the web UI shows before any letter is typed in
-— followed by the fully-solved grid underneath. This is a durable, on-disk
-record of each grid the app produces; the web UI itself has no export
-feature and never persists a grid once the browser tab is closed.
+result, or a grid_store record) as A4 landscape SVG pages: the printable,
+answer-free puzzle sheet behind the library's PDF download
+(render_puzzle_pages), and the same layout plus a solution page as the
+durable on-disk record of each published grid (render_export_pages).
 
-Called by backend/app.py after a grid + its clues are both ready; saved
-under GRID_SVG/ (project root, gitignored — these are generated
-artifacts, not source content), one file per grid, named
-`<timestamp>_<language>.svg` so files sort chronologically by filename.
-A PNG rendering of the same grid is also saved under GRID_PNG/ (project
-root, gitignored too — see save_grid_png) via `rsvg-convert`. Neither
-directory is GRID_SAMPLES/: that one is a separate, hand-curated
-selection of examples, never written to by this module — see
-save_grid_png's own docstring.
+Called by backend/app.py once a grid is saved to the library; the record
+is written under GRID_SVG/ (project root, gitignored — generated
+artifacts, not source content), one file per page, named
+`<timestamp>_<language>_<SUFFIX>.svg` (GRID, CLUES, SOLUTION) so files
+sort chronologically by filename. A PNG rendering of each page is also
+saved under GRID_PNG/ (project root, gitignored too — see save_grid_png)
+via `rsvg-convert`. Neither directory is GRID_SAMPLES/: that one is a
+separate, hand-curated selection of examples, never written to by this
+module — see save_grid_png's own docstring.
 """
 import base64
 import subprocess
@@ -32,31 +31,8 @@ GRID_PNG_DIR = PROJECT_ROOT / "GRID_PNG"
 _LOGO_PATH = PROJECT_ROOT / "frontend" / "static" / "logo.png"
 _VERSION_PATH = PROJECT_ROOT / "VERSION.txt"
 
-CELL_SIZE = 26
 # Colour of a black cell's centered square (the web UI's --black-cell).
 BLACK_CELL_FILL = "#2563eb"
-LINE_HEIGHT = 16
-MARGIN = 16
-MIN_CANVAS_WIDTH = 720
-HEADER_LOGO_SIZE = 48
-# +18 (one extra line of text) at the user's explicit request — the 3rd
-# info line (mode + durations, see render_grid_svg) now makes the text
-# height exceed that of the logo itself (48px), which alone used to
-# dictate HEADER_HEIGHT.
-HEADER_HEIGHT = HEADER_LOGO_SIZE + 16 + 18
-# Layout mirroring the web UI's own #board (frontend/static/style.css), at
-# the user's explicit request: the across clues sit in a sidebar to the
-# *left* of the empty grid (like #clues next to #grid), and the down
-# clues span the full row's width in 2 columns underneath (like
-# #down-clues-section's own CSS multi-column layout) rather than every
-# clue list being stacked in one single column below the grid, as this
-# export used to do. The across sidebar and the grid each take 50% of that
-# row's width, at the user's own explicit follow-up request — since the
-# grid itself can't stretch (it's a fixed number of fixed-size cells), an
-# even 50/50 split means giving the sidebar exactly the grid's own
-# rendered width (see render_grid_svg), not a separately-chosen constant.
-GRID_SIDEBAR_GAP = 24
-DOWN_COLUMN_GAP = 24
 # Printable puzzle sheet (render_puzzle_pages, the library's PDF): A4
 # landscape pages (297x210 mm, in 96-DPI user units). A grid whose sides
 # are both at most PDF_ONE_PAGE_MAX_SIDE cells takes one page, the grid on
@@ -78,6 +54,8 @@ PDF_MAX_CLUE_COLUMNS = 3
 PDF_MIN_CLUE_COLUMN_WIDTH = 120
 PDF_LINE_HEIGHT_FACTOR = 1.3
 PDF_ONE_PAGE_MAX_SIDE = 20
+# Room taken above the grid by the solution export's heading.
+PDF_SOLUTION_HEADING_HEIGHT = 24
 # Two-page sheet: clue pages added past the second when even the smallest
 # font does not fit on it.
 PDF_MAX_CLUE_PAGES = 8
@@ -92,10 +70,8 @@ PDF_CELL_SIZE_STEP = 0.025
 # cell to write in, 7 pt clue text.
 PDF_TARGET_CELL_SIZE = 18.9
 PDF_TARGET_FONT_SIZE = 9.33
-# rsvg-convert defaults to 96 DPI (screen resolution) when the source SVG has
-# no physical units — GRID_PNG/ is a print-quality visual record (see
-# save_grid_png), so it's rendered at 300 DPI instead, scaling up the output
-# pixel dimensions (not the SVG's own layout) accordingly.
+# GRID_PNG/ is a print-quality record (see save_grid_png): its pages are
+# rendered at 300 DPI rather than rsvg-convert's default 96.
 PNG_DPI = 300
 
 # Mirrors frontend/static/script.js's I18N table (acrossHeading/downHeading,
@@ -142,74 +118,6 @@ _DIFFICULTY_LABELS = {
     "pt": ("Dificuldade", {"easy": "Fácil", "medium": "Média", "hard": "Difícil"}),
 }
 
-# Mirrors frontend/static/i18n.js's modeLabel/modeFlash/modeTurbo/modeFast/
-# modeMedium/modeUltra/modeMegatron/modeGridzilla per language, for the metadata header line (see
-# backend/app.py's BUDGET_MODES for the internal key -> budget mapping).
-_MODE_LABELS = {
-    "fr": ("Mode", {
-        "flash": "Flash", "turbo": "Turbo", "fast": "Rapide",
-        "medium": "Moyen", "ultra": "Ultra",
-        "megatron": "Megatron",
-        "gridzilla": "GridZilla",
-    }),
-    "en": ("Mode", {
-        "flash": "Flash", "turbo": "Turbo", "fast": "Fast",
-        "medium": "Medium", "ultra": "Ultra",
-        "megatron": "Megatron",
-        "gridzilla": "GridZilla",
-    }),
-    "de": ("Modus", {
-        "flash": "Flash", "turbo": "Turbo", "fast": "Schnell",
-        "medium": "Mittel", "ultra": "Ultra",
-        "megatron": "Megatron",
-        "gridzilla": "GridZilla",
-    }),
-    "es": ("Modo", {
-        "flash": "Flash", "turbo": "Turbo", "fast": "Rápido",
-        "medium": "Medio", "ultra": "Ultra",
-        "megatron": "Megatron",
-        "gridzilla": "GridZilla",
-    }),
-    "it": ("Modalità", {
-        "flash": "Flash", "turbo": "Turbo", "fast": "Veloce",
-        "medium": "Medio", "ultra": "Ultra",
-        "megatron": "Megatron",
-        "gridzilla": "GridZilla",
-    }),
-    "pt": ("Modo", {
-        "flash": "Flash", "turbo": "Turbo", "fast": "Rápido",
-        "medium": "Médio", "ultra": "Ultra",
-        "megatron": "Megatron",
-        "gridzilla": "GridZilla",
-    }),
-}
-
-# Mirrors frontend/static/script.js's gridGenerationTime/gridOptimizationTime/
-# cluesGenerationTime labels per language, for the metadata header line.
-_DURATION_LABELS = {
-    "fr": ("Grille générée en", "Optimisation en", "Définitions générées en"),
-    "en": ("Grid generated in", "Optimized in", "Definitions generated in"),
-    "de": ("Gitter erzeugt in", "Optimiert in", "Definitionen erzeugt in"),
-    "es": ("Crucigrama generado en", "Optimizado en", "Definiciones generadas en"),
-    "it": ("Griglia generata in", "Ottimizzata in", "Definizioni generate in"),
-    "pt": ("Grelha gerada em", "Otimizada em", "Definições geradas em"),
-}
-
-# Mirrors frontend/static/i18n.js's attemptPreviewStats own "XX % noir"/
-# "XX% black"/etc. wording (same per-language spacing before "%") — added
-# to the same 3rd header line, right after the 3 durations, at the user's
-# explicit request: "after the list of processing times, on the same
-# line, show the grid's black-cell ratio." `{p}` is replaced
-# with the rounded black-cell percentage.
-_BLACK_RATIO_LABELS = {
-    "fr": "{p} % noir",
-    "en": "{p}% black",
-    "de": "{p}% schwarz",
-    "es": "{p}% negro",
-    "it": "{p}% nero",
-    "pt": "{p}% preto",
-}
-
 # Public base for the "play online" link printed in the PDF's footer
 # (render_puzzle_svg). Must stay aligned with SHARE_BASE_URL in
 # frontend/static/script.js (the Library's "Link" column).
@@ -224,22 +132,6 @@ _PLAY_ONLINE_LABELS = {
     "pt": "Jogar online (com solução): {url}",
 }
 
-
-def _format_duration(seconds):
-    """Mirrors frontend/static/script.js's formatDuration exactly (same
-    "XhXmnXs" format, leading-zero units omitted) — a separate
-    implementation since this file has no access to the frontend's own JS,
-    not a shared one; keep both in sync if the format ever changes."""
-    total = max(0, round(seconds or 0))
-    h, rem = divmod(total, 3600)
-    m, s = divmod(rem, 60)
-    out = ""
-    if h > 0:
-        out += f"{h}h"
-    if h > 0 or m > 0:
-        out += f"{m}mn"
-    out += f"{s}s"
-    return out
 
 # Rough per-character width estimates (as a fraction of font-size), used only
 # to decide where a clue line needs to wrap — not pixel-perfect (that depends
@@ -280,48 +172,6 @@ def _wrap_line(text, font_size, max_width):
             current = candidate
     lines.append(current)
     return lines
-
-
-def _heading_svg(x, y, text):
-    """A single bold clue-list heading ("Horizontalement"/"Verticalement"/
-    "Solution") at (x, y) — its own small helper since render_grid_svg now
-    places a heading in more than one distinct layout position (the across
-    sidebar, the down clues spanning the full row, the solution heading)."""
-    return (
-        f'<text x="{x}" y="{y + 12}" font-size="13" font-family="sans-serif" '
-        f'font-weight="bold">{escape(text)}</text>'
-    )
-
-
-def _clue_lines_svg(x, width, y0, lines, font_size=11):
-    """Word-wrapped clue lines (no heading — see _heading_svg for that)
-    rendered in a column starting at (x, y0), each at most `width` px wide.
-    Returns (svg_markup, height_px) so a caller laying out more than one
-    such column side by side (the across sidebar next to the grid, or the
-    down clues' own 2 columns — see render_grid_svg) can size/align them
-    against whatever else shares that same row. Bold row/column-number
-    prefix, wrapped continuation lines indented under the first line's own
-    text — same convention as before this function existed, just no
-    longer tied to a single shared `y`/`parts` closure so it can run more
-    than once per document with independent coordinates."""
-    parts = []
-    y = y0
-    for pos, line in lines:
-        prefix = f"{pos + 1} "
-        indent = _text_width(prefix, font_size, bold=True)
-        wrapped = _wrap_line(line, font_size, width - indent)
-        parts.append(
-            f'<text x="{x}" y="{y + 10}" font-size="{font_size}" font-family="sans-serif">'
-            f'<tspan font-weight="bold">{pos + 1}</tspan> {escape(wrapped[0])}</text>'
-        )
-        y += LINE_HEIGHT
-        for continuation in wrapped[1:]:
-            parts.append(
-                f'<text x="{x + indent:.1f}" y="{y + 10}" font-size="{font_size}" '
-                f'font-family="sans-serif">{escape(continuation)}</text>'
-            )
-            y += LINE_HEIGHT
-    return "".join(parts), y - y0
 
 
 _logo_data_uri_cache = None
@@ -366,245 +216,17 @@ def _group_clue_lines(words, direction, position_key, language):
     return lines
 
 
-def _grid_svg(pattern, letters, words, y_offset, x_offset=MARGIN):
-    """SVG markup for one grid (black/white cells, clue numbers, and
-    1-based row/column index headers matching the web UI) starting at
-    `(x_offset, y_offset)`; `letters` fills in each white cell's letter
-    when given (the solution view), or leaves cells blank when None (the
-    empty puzzle). Returns (markup, height_in_px, width_in_px). `x_offset`
-    (defaults to `MARGIN`, the original always-at-the-left placement) lets
-    render_grid_svg's empty-puzzle grid start further right, next to the
-    across clues sidebar, at the user's explicit request — the solution
-    grid at the bottom keeps the default, since it has no sidebar next to
-    it."""
-    rows, cols = len(pattern), len(pattern[0])
-    number_by_cell = {(w["row"], w["col"]): w["number"] for w in words}
-    parts = []
-    grid_x0 = x_offset + CELL_SIZE
-    grid_y0 = y_offset + CELL_SIZE
-
-    for c in range(cols):
-        x = grid_x0 + c * CELL_SIZE
-        parts.append(
-            f'<text x="{x + CELL_SIZE / 2}" y="{y_offset + CELL_SIZE / 2 + 4}" font-size="10" '
-            f'font-family="sans-serif" text-anchor="middle" fill="#4b5563">{c + 1}</text>'
-        )
-    for r in range(rows):
-        y = grid_y0 + r * CELL_SIZE
-        parts.append(
-            f'<text x="{x_offset + CELL_SIZE / 2}" y="{y + CELL_SIZE / 2 + 4}" font-size="10" '
-            f'font-family="sans-serif" text-anchor="middle" fill="#4b5563">{r + 1}</text>'
-        )
-
-    for r in range(rows):
-        for c in range(cols):
-            x, y = grid_x0 + c * CELL_SIZE, grid_y0 + r * CELL_SIZE
-            if pattern[r][c] == BLACK:
-                # A black cell is a white cell carrying a centered square
-                # half its size, filled with BLACK_CELL_FILL — the web UI's
-                # own `.cell.black` look.
-                parts.append(
-                    f'<rect x="{x}" y="{y}" width="{CELL_SIZE}" height="{CELL_SIZE}" '
-                    f'fill="#ffffff" stroke="#1f2937" stroke-width="1"/>'
-                )
-                parts.append(
-                    f'<rect x="{x + CELL_SIZE / 4}" y="{y + CELL_SIZE / 4}" '
-                    f'width="{CELL_SIZE / 2}" height="{CELL_SIZE / 2}" fill="{BLACK_CELL_FILL}"/>'
-                )
-                continue
-            parts.append(
-                f'<rect x="{x}" y="{y}" width="{CELL_SIZE}" height="{CELL_SIZE}" '
-                f'fill="#ffffff" stroke="#1f2937" stroke-width="1"/>'
-            )
-            number = number_by_cell.get((r, c))
-            if number:
-                parts.append(
-                    f'<text x="{x + 2}" y="{y + 9}" font-size="7" font-family="sans-serif">{number}</text>'
-                )
-            if letters is not None:
-                letter = letters[r][c]
-                if letter and letter != BLACK:
-                    parts.append(
-                        f'<text x="{x + CELL_SIZE / 2}" y="{y + CELL_SIZE - 7}" '
-                        f'font-size="{CELL_SIZE * 0.55:.0f}" font-family="sans-serif" '
-                        f'text-anchor="middle">{escape(letter)}</text>'
-                    )
-    return "".join(parts), CELL_SIZE + rows * CELL_SIZE, CELL_SIZE + cols * CELL_SIZE
-
-
-def render_grid_svg(result, language, difficulty=None, mode=None):
-    """Builds the full SVG document (as a string) for one generate_grid()
-    result: a header identifying the grid (logo, software name, version,
-    date, language, difficulty), the empty grid + clue lists, then the
-    solved grid.
-
-    `mode` (`None` by default — the CLI/any generation with no chosen
-    budget then shows no 3rd line at all), at the user's explicit
-    request: the web UI's "Mode" selector's own internal key (see
-    backend/app.py's BUDGET_MODES), shown alongside the 3 durations
-    already present on `result` (`generation_duration_seconds`/
-    `optimization_duration_seconds`/`clues_duration_seconds`, added by
-    backend/app.py — absent for any caller that doesn't supply them, in
-    which case this whole line is omitted rather than showing misleading
-    zeros), followed by the grid's black-cell ratio
-    (`result["black_ratio"]`, always present — CLI included — so always
-    shown, at the user's explicit request)."""
-    words = result["words"]
-    across_heading, down_heading, solution_heading = _HEADINGS.get(language, _HEADINGS["en"])
-    across_lines = _group_clue_lines(words, "across", "row", language)
-    down_lines = _group_clue_lines(words, "down", "col", language)
-
-    # The across sidebar and the empty grid each take 50% of their shared
-    # row's width, at the user's explicit request — since the grid itself
-    # is a fixed number of fixed-size cells (it can't stretch to fit a
-    # percentage), an even split means giving the sidebar exactly the
-    # grid's own rendered width, not the other way around.
-    grid_width_px = CELL_SIZE + result["width"] * CELL_SIZE
-    sidebar_width = grid_width_px
-    canvas_width = max(
-        2 * grid_width_px + GRID_SIDEBAR_GAP + 2 * MARGIN, MIN_CANVAS_WIDTH
-    )
-    parts = []
-    y = MARGIN
-
-    # Header: logo + software name/version on one line, generation date +
-    # grid language + difficulty on the next — identifies the file at a
-    # glance without needing to trust its filename/timestamp alone.
-    logo_x, logo_y = MARGIN, y
-    parts.append(
-        f'<image x="{logo_x}" y="{logo_y}" width="{HEADER_LOGO_SIZE}" height="{HEADER_LOGO_SIZE}" '
-        f'href="{_logo_data_uri()}"/>'
-    )
-    text_x = logo_x + HEADER_LOGO_SIZE + 12
-    version = _VERSION_PATH.read_text(encoding="utf-8").strip()
-    date_str = datetime.now().strftime("%Y-%m-%d")
-    language_name = _NATIVE_LANGUAGE_NAMES.get(language, language)
-    difficulty_label, difficulty_names = _DIFFICULTY_LABELS.get(language, _DIFFICULTY_LABELS["en"])
-    difficulty_name = difficulty_names.get(difficulty, difficulty or "")
-    parts.append(
-        f'<text x="{text_x}" y="{logo_y + 20}" font-size="18" font-family="sans-serif" '
-        f'font-weight="bold">CrossWordFalcon</text>'
-        f'<text x="{text_x}" y="{logo_y + 38}" font-size="12" font-family="sans-serif" '
-        f'fill="#4b5563">v{escape(version)} — {escape(date_str)} — {escape(language_name)} — '
-        f'{escape(difficulty_label)} : {escape(difficulty_name)}</text>'
-    )
-    # 3rd line: chosen mode + the 3 durations, at the user's explicit
-    # request — omitted entirely if the caller supplied neither `mode`
-    # nor the durations on `result` (the CLI, which knows neither),
-    # rather than showing a half-empty line or misleading zeros.
-    mode_label, mode_names = _MODE_LABELS.get(language, _MODE_LABELS["en"])
-    grid_label, optimization_label, clues_label = _DURATION_LABELS.get(
-        language, _DURATION_LABELS["en"]
-    )
-    info_bits = []
-    if mode is not None:
-        info_bits.append(f"{mode_label} {mode_names.get(mode, mode)}")
-    if "generation_duration_seconds" in result:
-        info_bits.append(f"{grid_label} {_format_duration(result['generation_duration_seconds'])}")
-    if "optimization_duration_seconds" in result:
-        info_bits.append(
-            f"{optimization_label} {_format_duration(result['optimization_duration_seconds'])}"
-        )
-    if "clues_duration_seconds" in result:
-        info_bits.append(f"{clues_label} {_format_duration(result['clues_duration_seconds'])}")
-    if "black_ratio" in result:
-        black_ratio_template = _BLACK_RATIO_LABELS.get(language, _BLACK_RATIO_LABELS["en"])
-        info_bits.append(black_ratio_template.format(p=round(100 * result["black_ratio"])))
-    if info_bits:
-        parts.append(
-            f'<text x="{text_x}" y="{logo_y + 56}" font-size="12" font-family="sans-serif" '
-            f'fill="#4b5563">{escape(" — ".join(info_bits))}</text>'
-        )
-    y += HEADER_HEIGHT
-
-    # Row: across clues sidebar (left, 50% width) + empty grid (right, 50%
-    # width) side by side — matching the web UI's own #board layout
-    # (#clues next to #grid, see frontend/static/style.css), at the user's
-    # explicit request. The heading + lines share the sidebar's own local
-    # y-cursor, independent of the grid's, since the two run down the page
-    # at different rates — the row only advances past both once the
-    # taller of the two finishes.
-    sidebar_heading_svg = _heading_svg(MARGIN, y, across_heading)
-    parts.append(sidebar_heading_svg)
-    across_lines_svg, across_lines_height = _clue_lines_svg(
-        MARGIN, sidebar_width, y + 22, across_lines
-    )
-    parts.append(across_lines_svg)
-    sidebar_height = 22 + across_lines_height
-
-    grid_x0 = MARGIN + sidebar_width + GRID_SIDEBAR_GAP
-    empty_grid_svg, grid_height, _ = _grid_svg(result["pattern"], None, words, y, x_offset=grid_x0)
-    parts.append(empty_grid_svg)
-
-    y += max(sidebar_height, grid_height) + 24
-
-    # Down clues span the row's full width, in 2 columns — matching the web
-    # UI's own #down-clues-section (CSS multi-column), at the user's
-    # explicit request. Split by count into two halves rather than
-    # balancing by rendered height (CSS's own column-count only balances
-    # approximately too) — simple and deterministic, and each half still
-    # reads top-to-bottom in row/column order within its own column.
-    parts.append(_heading_svg(MARGIN, y, down_heading))
-    y += 22
-    half = (len(down_lines) + 1) // 2
-    down_col_width = (canvas_width - 2 * MARGIN - DOWN_COLUMN_GAP) / 2
-    left_svg, left_height = _clue_lines_svg(MARGIN, down_col_width, y, down_lines[:half])
-    right_x = MARGIN + down_col_width + DOWN_COLUMN_GAP
-    right_svg, right_height = _clue_lines_svg(right_x, down_col_width, y, down_lines[half:])
-    parts.append(left_svg)
-    parts.append(right_svg)
-    y += max(left_height, right_height) + 10
-
-    y += 8
-    parts.append(f'<line x1="{MARGIN}" y1="{y}" x2="{canvas_width - MARGIN}" y2="{y}" stroke="#9ca3af"/>')
-    y += 24
-
-    parts.append(_heading_svg(MARGIN, y, solution_heading))
-    y += 22
-    solution_grid_svg, solution_height, _ = _grid_svg(result["pattern"], result["solution"], words, y)
-    parts.append(solution_grid_svg)
-    y += solution_height + MARGIN
-
-    body = "".join(parts)
-    # Faint logo watermark behind the whole page — mirrors the web UI's own
-    # watermark (frontend/static/style.css's `body::before`), sized/
-    # positioned differently since this is a fixed document rather than a
-    # viewport: 90% of the canvas's width (logo.png is ~square, ~1022x1024,
-    # so height uses the same value rather than a separate aspect-ratio
-    # calculation) and centered vertically in the *final* page height `y`
-    # (known only now, after the header/grids/clues above have all been
-    # laid out) rather than some intermediate/partial height — placed right
-    # after the background rect and before every real element (`body`), so
-    # it paints behind all of them in SVG's document-order paint model.
-    # `opacity="0.1"` on the <image> itself is the same 90%-transparent
-    # treatment as the web UI, not a filter on the embedded PNG.
-    watermark_size = canvas_width * 0.9
-    watermark_x = (canvas_width - watermark_size) / 2
-    watermark_y = (y - watermark_size) / 2
-    watermark_svg = (
-        f'<image x="{watermark_x:.1f}" y="{watermark_y:.1f}" '
-        f'width="{watermark_size:.1f}" height="{watermark_size:.1f}" '
-        f'href="{_logo_data_uri()}" opacity="0.1"/>'
-    )
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{canvas_width}" height="{y}" '
-        f'viewBox="0 0 {canvas_width} {y}">'
-        f'<rect x="0" y="0" width="{canvas_width}" height="{y}" fill="#ffffff"/>'
-        f"{watermark_svg}"
-        f"{body}</svg>"
-    )
-
-
 def _n(value):
     """Two-decimal coordinate/size formatting for render_puzzle_svg."""
     return f"{value:.2f}"
 
 
-def _puzzle_grid_svg(pattern, words, x0, y0, cell):
-    """Empty grid (black/white cells, clue numbers, 1-based row/column
-    headers) for render_puzzle_svg, with its top-left corner (headers
-    included) at (x0, y0) and `cell` px cells, every text sized from
-    `cell`."""
+def _puzzle_grid_svg(pattern, words, x0, y0, cell, letters=None):
+    """Grid (black/white cells, clue numbers, 1-based row/column headers)
+    for the puzzle sheets, with its top-left corner (headers included) at
+    (x0, y0) and `cell` px cells, every text sized from `cell`. Empty, or
+    showing each white cell's letter of `letters` (the solution) when
+    given."""
     rows, cols = len(pattern), len(pattern[0])
     number_by_cell = {(w["row"], w["col"]): w["number"] for w in words}
     parts = []
@@ -641,6 +263,13 @@ def _puzzle_grid_svg(pattern, words, x0, y0, cell):
                 parts.append(
                     f'<text x="{_n(x + cell * 0.08)}" y="{_n(y + cell * 0.33)}" '
                     f'font-size="{_n(cell * 0.27)}" font-family="sans-serif">{number}</text>'
+                )
+            letter = letters[r][c] if letters is not None else None
+            if letter and letter != BLACK:
+                parts.append(
+                    f'<text x="{_n(x + cell / 2)}" y="{_n(y + cell * 0.8)}" '
+                    f'font-size="{_n(cell * 0.55)}" font-family="sans-serif" '
+                    f'text-anchor="middle">{escape(letter)}</text>'
                 )
     return "".join(parts)
 
@@ -928,33 +557,43 @@ def _puzzle_page_svg(body):
     )
 
 
-def render_two_page_puzzle(result, language, title="", difficulty=None):
-    """Printable puzzle sheet of a grid with a side above
-    PDF_ONE_PAGE_MAX_SIDE, as a list of page SVGs. Page 1: the header, the
-    grid centered under it at the largest cell size the body allows (at
-    most PDF_MAX_CELL_SIZE), and the "play online" footer. Page 2: the
-    across then down clues in one column spanning the page's full width,
-    at the largest font of PDF_FONT_SIZES that fits on it. When even the
-    smallest one does not, the clues run on over further pages (at most
-    PDF_MAX_CLUE_PAGES, the last one running past its bottom)."""
+def _large_grid_page(result, language, title, difficulty, letters=None, heading=None):
+    """One page holding the header, the grid centered under it at the
+    largest cell size the body allows (at most PDF_MAX_CELL_SIZE) and the
+    "play online" footer — the first page of render_two_page_puzzle, and,
+    with the solution's `letters` and a `heading` above the grid, the
+    solution export (render_solution_page)."""
     words = result["words"]
     pattern = result["pattern"]
     rows, cols = len(pattern), len(pattern[0])
-    sections = _puzzle_sections(words, language)
     grid_id = result.get("id")
-
     page_w, page_h, margin = PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN
     content_w = page_w - 2 * margin
     body_top = margin + PDF_LOGO_SIZE + PDF_HEADER_GAP
     body_bottom = page_h - margin - (PDF_FOOTER_HEIGHT if grid_id else 0)
+    parts = [_puzzle_header_svg(language, title, difficulty)]
+    if heading:
+        parts.append(
+            f'<text x="{_n(margin)}" y="{_n(body_top + 14)}" font-size="14" '
+            f'font-family="sans-serif" font-weight="bold">{escape(heading)}</text>'
+        )
+        body_top += PDF_SOLUTION_HEADING_HEIGHT
     cell = min((body_bottom - body_top) / (rows + 1), content_w / (cols + 1), PDF_MAX_CELL_SIZE)
     grid_x0 = margin + (content_w - cell * (cols + 1)) / 2
-    first_page = "".join([
-        _puzzle_header_svg(language, title, difficulty),
-        _puzzle_grid_svg(pattern, words, grid_x0, body_top, cell),
-        _puzzle_footer_svg(language, grid_id),
-    ])
+    parts.append(_puzzle_grid_svg(pattern, words, grid_x0, body_top, cell, letters))
+    parts.append(_puzzle_footer_svg(language, grid_id))
+    return _puzzle_page_svg("".join(parts))
 
+
+def _clue_pages(result, language):
+    """The clue pages of render_two_page_puzzle: the across then down
+    clues in one column spanning the page's full width, at the largest
+    font of PDF_FONT_SIZES that fits on one page. When even the smallest
+    one does not, the clues run on over further pages (at most
+    PDF_MAX_CLUE_PAGES, the last one running past its bottom)."""
+    sections = _puzzle_sections(result["words"], language)
+    page_w, page_h, margin = PDF_PAGE_WIDTH, PDF_PAGE_HEIGHT, PDF_MARGIN
+    content_w = page_w - 2 * margin
     clue_h = page_h - 2 * margin
     layout = None
     for font_size in PDF_FONT_SIZES:
@@ -972,10 +611,17 @@ def render_two_page_puzzle(result, language, title="", difficulty=None):
     by_page = {}
     for item in items:
         by_page.setdefault(int(item[1] // page_h), []).append(item)
-    pages = [_puzzle_page_svg(first_page)]
-    for k in sorted(by_page):
-        pages.append(_puzzle_page_svg(_puzzle_clue_items_svg(by_page[k], font_size, k * page_h)))
-    return pages
+    return [
+        _puzzle_page_svg(_puzzle_clue_items_svg(by_page[k], font_size, k * page_h))
+        for k in sorted(by_page)
+    ]
+
+
+def render_two_page_puzzle(result, language, title="", difficulty=None):
+    """Printable puzzle sheet of a grid with a side above
+    PDF_ONE_PAGE_MAX_SIDE, as a list of page SVGs: the header, grid and
+    footer page (_large_grid_page), then the clue pages (_clue_pages)."""
+    return [_large_grid_page(result, language, title, difficulty)] + _clue_pages(result, language)
 
 
 def render_puzzle_pages(result, language, title="", difficulty=None):
@@ -983,10 +629,41 @@ def render_puzzle_pages(result, language, title="", difficulty=None):
     (render_puzzle_svg) while both sides are at most
     PDF_ONE_PAGE_MAX_SIDE cells, two or more (render_two_page_puzzle)
     otherwise."""
-    pattern = result["pattern"]
-    if max(len(pattern), len(pattern[0])) > PDF_ONE_PAGE_MAX_SIDE:
+    if _is_large_grid(result):
         return render_two_page_puzzle(result, language, title, difficulty)
     return [render_puzzle_svg(result, language, title, difficulty)]
+
+
+def _is_large_grid(result):
+    """True when a side of the grid exceeds PDF_ONE_PAGE_MAX_SIDE cells."""
+    pattern = result["pattern"]
+    return max(len(pattern), len(pattern[0])) > PDF_ONE_PAGE_MAX_SIDE
+
+
+def render_solution_page(result, language, title="", difficulty=None):
+    """The solution export: a puzzle-sheet page (header, footer) holding
+    the solved grid under a "Solution" heading."""
+    solution_heading = _HEADINGS.get(language, _HEADINGS["en"])[2]
+    return _large_grid_page(
+        result, language, title, difficulty, letters=result["solution"], heading=solution_heading,
+    )
+
+
+def render_export_pages(result, language, title="", difficulty=None):
+    """The SVG/PNG export of a grid, laid out like its PDF, as
+    [(suffix, svg), ...]: a grid with both sides at most
+    PDF_ONE_PAGE_MAX_SIDE gives GRID (the one-page puzzle sheet, grid and
+    clues) and SOLUTION; a larger one gives GRID (header, grid, footer),
+    CLUES (the clue page; CLUES_2, CLUES_3... when they run on over
+    further pages) and SOLUTION."""
+    if _is_large_grid(result):
+        pages = [("GRID", _large_grid_page(result, language, title, difficulty))]
+        for index, page in enumerate(_clue_pages(result, language)):
+            pages.append(("CLUES" if index == 0 else f"CLUES_{index + 1}", page))
+    else:
+        pages = [("GRID", render_puzzle_svg(result, language, title, difficulty))]
+    pages.append(("SOLUTION", render_solution_page(result, language, title, difficulty)))
+    return pages
 
 
 def svg_to_pdf_bytes(svg_str):
@@ -1024,25 +701,28 @@ def svg_to_pdf_bytes(svg_str):
     return proc.stdout
 
 
-def save_grid_svg(result, language, difficulty=None, mode=None, grid_svg_dir=GRID_SVG_DIR):
-    """Renders and writes the SVG for `result`, named
-    `<timestamp>_<language>.svg` (sortable, one file per generated grid).
-    Returns the written Path. `mode` (see render_grid_svg's own docstring)
-    threaded straight through."""
+def save_grid_svgs(result, language, difficulty=None, title="", grid_svg_dir=GRID_SVG_DIR):
+    """Renders and writes the SVG export of `result` (render_export_pages),
+    one file per page, named `<timestamp>_<language>_<SUFFIX>.svg`
+    (sortable, the pages of one grid sharing their timestamp). Returns the
+    written Paths in page order."""
     grid_svg_dir = Path(grid_svg_dir)
     grid_svg_dir.mkdir(parents=True, exist_ok=True)
     # Microsecond precision, not just seconds — two requests (different
     # browser tabs, or the polling architecture overlapping two jobs) can
     # otherwise finish within the same second and silently overwrite one
-    # another's file.
+    # another's files.
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    path = grid_svg_dir / f"{timestamp}_{language}.svg"
-    path.write_text(render_grid_svg(result, language, difficulty, mode), encoding="utf-8")
-    return path
+    paths = []
+    for suffix, svg in render_export_pages(result, language, title, difficulty):
+        path = grid_svg_dir / f"{timestamp}_{language}_{suffix}.svg"
+        path.write_text(svg, encoding="utf-8")
+        paths.append(path)
+    return paths
 
 
 def save_grid_png(svg_path, grid_png_dir=GRID_PNG_DIR):
-    """Renders `svg_path` (a file already written by save_grid_svg) to a
+    """Renders `svg_path` (a file already written by save_grid_svgs) to a
     PNG of the same basename under GRID_PNG/ (project root, gitignored —
     a generated artifact like GRID_SVG/, not source content). This is
     *not* GRID_SAMPLES/: that directory is a separate, hand-curated
@@ -1056,7 +736,7 @@ def save_grid_png(svg_path, grid_png_dir=GRID_PNG_DIR):
     frontend/static/logo.png (see the style-guide SKILL for why
     `rsvg-convert` specifically, over e.g. macOS's `qlmanage -t`).
     Raises OSError if `rsvg-convert` is missing or fails — callers should
-    treat that the same as save_grid_svg's own failure: log a warning and
+    treat that the same as save_grid_svgs's own failure: log a warning and
     move on, never fail the actual request over a sample image. Returns
     the written Path."""
     svg_path = Path(svg_path)
@@ -1065,15 +745,9 @@ def save_grid_png(svg_path, grid_png_dir=GRID_PNG_DIR):
     png_path = grid_png_dir / f"{svg_path.stem}.png"
     try:
         subprocess.run(
-            # `--dpi-x`/`--dpi-y` only rescale physical units (in/mm/pt) —
-            # this SVG's root <svg> has none (its width/height are bare
-            # numbers, i.e. CSS px), so librsvg's default of "1 px = 1/96
-            # inch" means those flags alone would have no effect (verified
-            # directly: identical output size with or without them). `-z`
-            # (zoom) is what actually scales pixel output on a unitless
-            # SVG — PNG_DPI/96 reproduces the same effect a true 300 DPI
-            # setting would have on a document authored at the standard
-            # 96 CSS-px-per-inch baseline.
+            # The pages are 297x210 mm, which rsvg-convert renders at 96
+            # DPI; `-z` PNG_DPI/96 scales that to PNG_DPI (an A4 page at
+            # 300 DPI, 3508x2480 px).
             ["rsvg-convert", "-z", str(PNG_DPI / 96), "-o", str(png_path), str(svg_path)],
             check=True, capture_output=True,
         )

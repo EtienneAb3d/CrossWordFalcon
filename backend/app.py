@@ -70,7 +70,7 @@ from .grid_store import (
 from .svg_export import (
     render_puzzle_pages,
     save_grid_png,
-    save_grid_svg,
+    save_grid_svgs,
     svg_to_pdf_bytes,
 )
 from .system_info import get_system_info, sample_resource_usage
@@ -3596,6 +3596,25 @@ async def _await_grid_choice(job, choices, progress, cancel_event, short_id,
     return {k: v for k, v in choices[index].items() if k not in ("score", "recommended")}
 
 
+async def _save_grid_images(result, language, difficulty, title, log_tag):
+    """Writes the SVG/PNG record of a published grid (svg_export.
+    save_grid_svgs/save_grid_png: GRID, CLUES, SOLUTION pages laid out like
+    its PDF). Best-effort: a durable copy of the grid is a nice-to-have,
+    never a reason to fail the request — a failure is only logged."""
+    try:
+        svg_paths = await asyncio.to_thread(save_grid_svgs, result, language, difficulty, title or "")
+    except OSError as e:
+        logger.warning("[%s] failed to save grid SVG: %s", log_tag, e)
+        return
+    for svg_path in svg_paths:
+        logger.info("[%s] saved %s", log_tag, svg_path)
+        try:
+            png_path = await asyncio.to_thread(save_grid_png, svg_path)
+            logger.info("[%s] saved %s", log_tag, png_path)
+        except OSError as e:
+            logger.warning("[%s] failed to save grid PNG: %s", log_tag, e)
+
+
 async def _run_generate_job(job_id, req, resume_state=None, override_priority_words=None,
                              override_theme_description="", preserved_clues=None,
                              permanent_locked_letters=None, permanent_black_cells=None,
@@ -4512,21 +4531,6 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
             "theme_precision": req.theme_precision,
         }
         if publish:
-            try:
-                svg_path = await asyncio.to_thread(
-                    save_grid_svg, result, req.language, req.difficulty, req.mode
-                )
-                logger.info("[%s] saved %s", short_id, svg_path)
-                try:
-                    png_path = await asyncio.to_thread(save_grid_png, svg_path)
-                    logger.info("[%s] saved %s", short_id, png_path)
-                except OSError as e:
-                    logger.warning("[%s] failed to save grid PNG sample: %s", short_id, e)
-            except OSError as e:
-                # A durable copy of the grid is a nice-to-have, not the point
-                # of the request — never fail the user's grid over it.
-                logger.warning("[%s] failed to save grid SVG: %s", short_id, e)
-
             # Bibliothèque (see GET /api/library, GET /api/library/{grid_id}
             # below, and frontend/static/script.js's "Bibliothèque" button),
             # at the user's explicit request — same best-effort treatment as
@@ -4550,6 +4554,9 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 result["id"] = grid_id
             except OSError as e:
                 logger.warning("[%s] failed to save grid to library: %s", short_id, e)
+            # After the library save, so the pages' footer carries the
+            # grid's own "play online" link, like its PDF.
+            await _save_grid_images(result, req.language, req.difficulty, title, short_id)
         else:
             # "Finir la grille" (see this function's own docstring for
             # `publish`) — no SVG/PNG, no Bibliothèque record. Saved as a
@@ -5017,16 +5024,6 @@ async def _run_recompute_job(job_id, grid_id):
         result["title"] = new_title
 
         progress("saving")
-        try:
-            svg_path = await asyncio.to_thread(save_grid_svg, result, language, difficulty, mode)
-            logger.info("[%s] recompute saved %s", short_id, svg_path)
-            try:
-                png_path = await asyncio.to_thread(save_grid_png, svg_path)
-                logger.info("[%s] recompute saved %s", short_id, png_path)
-            except OSError as e:
-                logger.warning("[%s] recompute failed to save grid PNG sample: %s", short_id, e)
-        except OSError as e:
-            logger.warning("[%s] recompute failed to save grid SVG: %s", short_id, e)
 
         try:
             # A recompute creates a new "same grid, different definitions"
@@ -5048,6 +5045,7 @@ async def _run_recompute_job(job_id, grid_id):
             result["id"] = new_grid_id
         except OSError as e:
             logger.warning("[%s] recompute failed to save grid to library: %s", short_id, e)
+        await _save_grid_images(result, language, difficulty, new_title, short_id)
 
         progress("done")
         job["status"] = "done"
@@ -5648,16 +5646,6 @@ async def interactive_save(req: InteractiveSaveRequest):
         "theme": (req.theme or "").strip() or None,
         "title": req.title,
     }
-    try:
-        svg_path = await asyncio.to_thread(
-            save_grid_svg, result, req.language, req.difficulty, "interactive",
-        )
-        try:
-            await asyncio.to_thread(save_grid_png, svg_path)
-        except OSError:
-            pass
-    except OSError:
-        logger.warning("interactive save: SVG/PNG export skipped")
     pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
     grid_id = await asyncio.to_thread(
         save_grid_json, result, req.language, req.difficulty, "interactive",
@@ -5679,6 +5667,9 @@ async def interactive_save(req: InteractiveSaveRequest):
         # so "Ouvrir en mode Interactif" restores it later — see grid_
         # store.save_grid_json's own `challenge_words` docstring.
         challenge_words=req.challenge_words or None,
+    )
+    await _save_grid_images(
+        {**result, "id": grid_id}, req.language, req.difficulty, req.title, "interactive save",
     )
     # Also refresh this session's own GRID_WORK snapshot to the final,
     # published state (at the user's explicit request: "Au moment de

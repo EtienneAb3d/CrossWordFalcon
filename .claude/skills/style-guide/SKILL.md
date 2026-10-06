@@ -291,26 +291,12 @@ English (see `project-best-practices`).
   the browser window and does not scroll away with the page content —
   standard behavior for a persistent watermark, not treated as a bug.
 
-- mirrored the same watermark onto the SVG/PNG exports
-  (`backend/svg_export.py`'s `render_grid_svg()`), at the user's explicit
-  request — a different sizing/position than the web UI's (90% of the
-  canvas's width, centered vertically, vs. the web UI's 50vw) since this
-  is a request for the export specifically, not a re-application of the
-  web UI's own numbers. Unlike the web UI, this target's canvas has a
-  *fixed*, fully-known final size (`canvas_width`/`y` are only computed
-  once the whole document — header, both grids, both clue lists — is laid
-  out), so there was never a version of the truncation/invisibility bug
-  the web UI hit — the watermark is placed and centered against that
-  final size directly, correct on the first attempt. Reuses
-  `_logo_data_uri()` (the same base64-embedded `frontend/static/logo.png`
-  already used for the header logo) rather than embedding `logo.svg`
-  separately — one asset, one caching mechanism, and this PNG is already
-  confirmed to have a transparent background (see the entry above on
-  `rsvg-convert` vs. `qlmanage`). Verified visually, not just by reading
-  the markup: generated a real grid, rendered it through `save_grid_png()`
-  (the actual `rsvg-convert` path used in production), and read the
-  resulting PNG — the watermark is faintly visible behind the entire page
-  (empty puzzle and solution both), correctly sized and centered.
+- the SVG/PNG/PDF exports (`backend/svg_export.py`'s `_puzzle_page_svg`)
+  carry the same logo watermark: `frontend/static/logo.png` embedded
+  base64 (`_logo_data_uri()`, shared with the header logo), centered on
+  each A4 page at 80 % of its height, opacity 0.1. The SVG/PNG record of a
+  published grid uses the PDF's own page layout (GRID, CLUES, SOLUTION
+  pages).
 
 - added bidirectional hover highlighting between the grid and the clue
   lists, at the user's explicit request: hovering a grid cell frames every

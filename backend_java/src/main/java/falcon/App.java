@@ -839,6 +839,28 @@ public final class App {
         return chosen;
     }
 
+    /**
+     * Python's {@code _save_grid_images}: the SVG/PNG record of a published
+     * grid (GRID, CLUES, SOLUTION pages laid out like its PDF), best-effort.
+     */
+    static void saveGridImages(Map<String, Object> result, String language, String difficulty, String title, String logTag) {
+        List<Path> svgs;
+        try {
+            svgs = SvgExport.saveGridSvgs(result, language, difficulty, title);
+        } catch (IOException e) {
+            Log.warning("[%s] failed to save grid SVG: %s", logTag, e.getMessage());
+            return;
+        }
+        for (Path svg : svgs) {
+            Log.info("[%s] saved %s", logTag, svg);
+            try {
+                Log.info("[%s] saved %s", logTag, SvgExport.saveGridPng(svg));
+            } catch (IOException e) {
+                Log.warning("[%s] failed to save grid PNG: %s", logTag, e.getMessage());
+            }
+        }
+    }
+
     static void runGenerateJob(String jobId, GenReq req, GenJobArgs a) {
         Job job = job(jobId);
         if (job == null) return;
@@ -1128,17 +1150,6 @@ public final class App {
                     "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
             if (a.publish) {
                 try {
-                    Path svg = SvgExport.saveGridSvg(result, req.language, req.difficulty, req.mode);
-                    Log.info("[%s] saved %s", shortId, svg);
-                    try {
-                        Log.info("[%s] saved %s", shortId, SvgExport.saveGridPng(svg));
-                    } catch (IOException e) {
-                        Log.warning("[%s] failed to save grid PNG sample: %s", shortId, e.getMessage());
-                    }
-                } catch (IOException e) {
-                    Log.warning("[%s] failed to save grid SVG: %s", shortId, e.getMessage());
-                }
-                try {
                     String gridId = GridStore.saveGridJson(result, req.language, req.difficulty, req.mode, title,
                             (String) result.get("bilingual_language"), pseudo, theme.isEmpty() ? null : theme, false, null,
                             generationParams, req.challengeWords.isEmpty() ? null : req.challengeWords);
@@ -1147,6 +1158,9 @@ public final class App {
                 } catch (IOException e) {
                     Log.warning("[%s] failed to save grid to library: %s", shortId, e.getMessage());
                 }
+                // After the library save, so the pages' footer carries the
+                // grid's own "play online" link, like its PDF.
+                saveGridImages(result, req.language, req.difficulty, title, shortId);
             } else {
                 try {
                     List<Object> definitions = new ArrayList<>();
@@ -1562,17 +1576,6 @@ public final class App {
             result.put("title", newTitle);
             progress.on("saving", new LinkedHashMap<>());
             try {
-                Path svg = SvgExport.saveGridSvg(result, language, difficulty, mode);
-                Log.info("[%s] recompute saved %s", shortId, svg);
-                try {
-                    Log.info("[%s] recompute saved %s", shortId, SvgExport.saveGridPng(svg));
-                } catch (IOException e) {
-                    Log.warning("[%s] recompute failed to save grid PNG sample: %s", shortId, e.getMessage());
-                }
-            } catch (IOException e) {
-                Log.warning("[%s] recompute failed to save grid SVG: %s", shortId, e.getMessage());
-            }
-            try {
                 Object cw = result.get("challenge_words");
                 String newId = GridStore.saveGridJson(result, language, difficulty, mode, newTitle, bilingual,
                         (String) result.get("pseudo"), (String) result.get("theme"), false, null, result.get("generation_params"),
@@ -1582,6 +1585,7 @@ public final class App {
             } catch (IOException e) {
                 Log.warning("[%s] recompute failed to save grid to library: %s", shortId, e.getMessage());
             }
+            saveGridImages(result, language, difficulty, newTitle, shortId);
             progress.on("done", new LinkedHashMap<>());
             job.update(d -> {
                 d.put("status", "done");
@@ -2392,18 +2396,13 @@ public final class App {
             result.put("difficulty", difficulty);
             result.put("theme", themeClean);
             result.put("title", title);
-            try {
-                Path svg = SvgExport.saveGridSvg(result, language, difficulty, "interactive");
-                try {
-                    SvgExport.saveGridPng(svg);
-                } catch (IOException ignored) { }
-            } catch (IOException e) {
-                Log.warning("interactive save: SVG/PNG export skipped");
-            }
             String pseudo = pseudoOf(pseudoRaw);
             String gridId = GridStore.saveGridJson(result, language, difficulty, "interactive", title, isBilingual ? bilingual : null,
                     pseudo, themeClean, true, meta.get("origin"), meta.get("generation_params"),
                     challengeWords.isEmpty() ? null : challengeWords);
+            Map<String, Object> exported = new LinkedHashMap<>(result);
+            exported.put("id", gridId);
+            saveGridImages(exported, language, difficulty, title, "interactive save");
             Session s = INTERACTIVE_SESSIONS.get(jobId);
             if (s != null) {
                 try {
