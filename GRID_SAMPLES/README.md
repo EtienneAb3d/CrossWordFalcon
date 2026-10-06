@@ -1,3 +1,17 @@
+# Ristretto noisette (6x6 grid, 0% black)
+
+[Download PDF](20261006-051229-776052_air_de_liberte_soudaine_6542.pdf)
+
+[Play online](https://falcon.cubaix.com/?grid=20261006-051229-776052_air_de_liberte_soudaine_6542)
+
+## Grid and clues
+
+![Grid and clues](20261006-051229-776052_air_de_liberte_soudaine_6542_GRID.png)
+
+## Solution
+
+![Solution](20261006-051229-776052_air_de_liberte_soudaine_6542_SOLUTION.png)
+
 # Macchiato (15x10 grid, 12% black)
 
 [Download PDF](20261006-045520-486606_la_ou_les_vents_soufflent_3578.pdf)
