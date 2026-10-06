@@ -6118,6 +6118,16 @@ function appendChatBubble(role, text) {
   return bubble;
 }
 
+// The assistant's reply bubble, shown right after the player's message:
+// it holds a waiting phrase (`chatbotPending`, with animated dots) until
+// the first chunk of the reply replaces it.
+function appendChatPendingBubble(text) {
+  const bubble = appendChatBubble("assistant", "");
+  bubble.classList.add("chatbot-message-pending");
+  bubble.textContent = text;
+  return bubble;
+}
+
 function renderChatWelcome() {
   if (chatUserHasSpoken) return;
   chatbotMessages.replaceChildren();
@@ -6274,7 +6284,7 @@ chatbotForm.addEventListener("submit", async (event) => {
   chatbotInput.value = "";
   chatbotInput.disabled = true;
   appendChatBubble("user", message);
-  const replyBubble = appendChatBubble("assistant", "");
+  const replyBubble = appendChatPendingBubble(t.chatbotPending);
   let fullReply = "";
   try {
     const response = await fetchWithTimeout("/api/chat", {
@@ -6297,6 +6307,8 @@ chatbotForm.addEventListener("submit", async (event) => {
       // accumulated, so a `**bold**` marker split across two separate
       // stream chunks still renders correctly once its closing `**`
       // finally arrives, rather than ever being parsed a token at a time.
+      // The first chunk also replaces the waiting phrase.
+      replyBubble.classList.remove("chatbot-message-pending");
       replyBubble.innerHTML = renderMarkdown(textSoFar);
       chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
     });
@@ -6304,6 +6316,7 @@ chatbotForm.addEventListener("submit", async (event) => {
     chatHistory.push({ role: "user", content: message });
     chatHistory.push({ role: "assistant", content: fullReply });
   } catch (err) {
+    replyBubble.classList.remove("chatbot-message-pending");
     replyBubble.innerHTML = renderMarkdown(t.chatbotErrorFailed);
   } finally {
     chatbotInput.disabled = false;

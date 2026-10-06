@@ -127,6 +127,15 @@ function appendChatBubble(role, text) {
   return bubble;
 }
 
+// Reply bubble holding a waiting phrase until the first reply chunk
+// replaces it (same as the main page's chat).
+function appendChatPendingBubble(text) {
+  const bubble = appendChatBubble("assistant", "");
+  bubble.classList.add("chatbot-message-pending");
+  bubble.textContent = text;
+  return bubble;
+}
+
 function renderChatWelcome() {
   chatbotMessages.replaceChildren();
   appendChatBubble("assistant", t.devbotWelcome);
@@ -176,7 +185,7 @@ chatbotForm.addEventListener("submit", async (event) => {
   chatbotInput.value = "";
   chatbotInput.disabled = true;
   appendChatBubble("user", message);
-  const replyBubble = appendChatBubble("assistant", "");
+  const replyBubble = appendChatPendingBubble(t.chatbotPending);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CHAT_FETCH_TIMEOUT_MS);
   try {
@@ -193,6 +202,7 @@ chatbotForm.addEventListener("submit", async (event) => {
     });
     if (!response.ok || !response.body) throw new Error(t.chatbotErrorFailed);
     const fullReply = await readChatStream(response, (textSoFar) => {
+      replyBubble.classList.remove("chatbot-message-pending");
       replyBubble.innerHTML = renderMarkdown(textSoFar);
       chatbotMessages.scrollTop = chatbotMessages.scrollHeight;
     });
@@ -200,6 +210,7 @@ chatbotForm.addEventListener("submit", async (event) => {
     chatHistory.push({ role: "user", content: message });
     chatHistory.push({ role: "assistant", content: fullReply });
   } catch (err) {
+    replyBubble.classList.remove("chatbot-message-pending");
     replyBubble.innerHTML = renderMarkdown(t.chatbotErrorFailed);
   } finally {
     clearTimeout(timer);

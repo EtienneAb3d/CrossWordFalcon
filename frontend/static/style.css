@@ -3657,6 +3657,36 @@ button:disabled {
   background: var(--bg);
 }
 
+/* Waiting phrase shown in the reply bubble until the first chunk of the
+   reply arrives (script.js/devbot.js, appendChatPendingBubble): italic,
+   dimmed, followed by dots appearing one by one. */
+.chatbot-message-pending {
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.chatbot-message-pending::after {
+  content: "";
+  display: inline-block;
+  width: 1.2em;
+  text-align: left;
+  animation: chatbot-pending-dots 1.2s steps(1, end) infinite;
+}
+
+@keyframes chatbot-pending-dots {
+  0% { content: ""; }
+  25% { content: "."; }
+  50% { content: ".."; }
+  75% { content: "..."; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chatbot-message-pending::after {
+    animation: none;
+    content: "…";
+  }
+}
+
 /* David FALCON's own replies are rendered as real Markdown (see
    script.js's renderMarkdown()), not plain text, at the user's explicit
    request — these rules tame the browser's own default block-element

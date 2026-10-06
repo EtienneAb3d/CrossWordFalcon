@@ -1406,7 +1406,11 @@ FALCON (`POST /api/chat`, `backend/chatbot.py`), along with the current
 conversation so far and a snapshot of the interface's own state: whether
 a grid is loaded, which cell is currently selected in it, and — if a
 grid is loaded — every one of its words with their starting position,
-direction, clue, and answer. David FALCON replies in the
+direction, clue, and answer. Until the first words of the reply arrive,
+its bubble shows a waiting phrase in italics with animated dots
+("Analysing the question, loading the relevant data, initialising the
+AI…"), which the reply then replaces (`frontend/static/script.js`,
+`appendChatPendingBubble`). David FALCON replies in the
 interface's current language, and only ever answers questions about
 using this app or about the grid currently on screen — for anything
 else, it politely suggests looking elsewhere instead. On a bilingual
@@ -1453,8 +1457,8 @@ outside that documentation. Although the documentation is in French,
 DevBot replies in the visitor's language: the interface language chosen
 on the main page when there is one, otherwise the browser's language;
 adding `?lang=en` (or `fr`, `de`, `es`, `it`, `pt`) to the address forces
-it (`devbot.js`, `detectLanguage`). The message field, the send button
-and the reset button work as in David FALCON's panel.
+it (`devbot.js`, `detectLanguage`). The message field, the send button,
+the reset button and the waiting phrase work as in David FALCON's panel.
 
 ## How a grid is actually built (a summary of the generation algorithm)
 

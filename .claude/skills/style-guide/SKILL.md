@@ -1820,6 +1820,12 @@ English (see `project-best-practices`).
   local LLM server, see CLAUDE.md for the full trail) rather than by
   looking at the rendered page.
 
+- While a reply is awaited, the assistant bubble carries
+  `.chatbot-message-pending` (David FALCON and DevBot alike): the
+  translated waiting phrase (`chatbotPending`) in italics at 0.7 opacity,
+  followed by dots appearing one by one (`::after`, `chatbot-pending-dots`
+  keyframes; a static "…" under `prefers-reduced-motion`). The first
+  reply chunk removes the class and replaces the text. No new color token.
 - David FALCON's own replies (`.chatbot-message-assistant`) now render
   real Markdown (bold/italic/inline-code/lists/links — see CLAUDE.md's
   `backend/chatbot.py` entry for `renderMarkdown()`'s own logic and its
