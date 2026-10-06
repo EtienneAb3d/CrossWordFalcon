@@ -4047,9 +4047,11 @@ function showLeaderboard() {
 // panel is absolutely positioned against the page, not fixed, so it
 // scrolls with the grid). Re-run whenever the page layout moves (a panel
 // opening above the grid, a resize — see the ResizeObserver below).
+// Measured on #grid-viewport, the visible frame, not on #grid: a zoomed
+// grid scrolls inside that frame, so its own top goes up with the scroll.
 function positionLeaderboard() {
   if (leaderboardPanel.hidden) return;
-  const top = gridEl.getBoundingClientRect().top + window.scrollY;
+  const top = gridViewportEl.getBoundingClientRect().top + window.scrollY;
   leaderboardPanel.style.top = `${Math.max(0, Math.round(top))}px`;
 }
 

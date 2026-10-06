@@ -4488,7 +4488,9 @@ end through the real running API (interactive start/step/save,
   dessus la marge, aligné sur le haut de la grille". An `<aside>` after
   `<main>`, `position: absolute; right: 0` (it scrolls with the grid,
   unlike the fixed medal/chatbot/keyboard), `top` set by
-  `positionLeaderboard()` from `#grid`'s own top, re-run on resize and by
+  `positionLeaderboard()` from the top of `#grid-viewport` (the visible
+  frame — `#grid`'s own top goes up with the scroll of a zoomed grid,
+  which sent the card to the top of the page), re-run on resize and by
   a `ResizeObserver` on `main` (a panel opening above the grid moves it).
   A white card exactly as wide as the page's right margin (`width: 10%`:
   `<main>` is 80% of the body wide, centered), so it never covers the grid
