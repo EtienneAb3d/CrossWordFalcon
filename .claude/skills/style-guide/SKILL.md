@@ -4490,18 +4490,25 @@ end through the real running API (interactive start/step/save,
   unlike the fixed medal/chatbot/keyboard), `top` set by
   `positionLeaderboard()` from `#grid`'s own top, re-run on resize and by
   a `ResizeObserver` on `main` (a panel opening above the grid moves it).
-  A 15rem (max 40vw) white card, flush against the window edge (no right
-  border, left corners rounded, soft shadow), `z-index: 4` (under the
-  chatbot/keyboard at 5), 0.75rem text, accent-coloured `<h3>` title. Each
-  line is a 4-column CSS grid (rank grey right-aligned, pseudo with
-  ellipsis, percentage, time — tabular digits); the player's own line is
+  A white card exactly as wide as the page's right margin (`width: 10%`:
+  `<main>` is 80% of the body wide, centered), so it never covers the grid
+  — even when the clue lists ("Définitions") push the grid flush against
+  `<main>`'s right edge (a former 15rem width overlapped it there, reported
+  by the user). Flush against the window edge (no right border, left
+  corners rounded, soft shadow), `z-index: 4` (under the chatbot/keyboard
+  at 5), 0.75rem text, accent-coloured `<h3>` title. Each entry is a
+  two-line CSS grid (`grid-template-areas`: rank grey + pseudo with
+  ellipsis, then percentage left and time right — tabular digits), which
+  fits the narrow margin; the player's own line is
   bold on `--selected`; when ranked below the 10, it follows under a
   dashed `--border` separator (`#leaderboard-me`). No new token.
   `#leaderboard[hidden]`/`#leaderboard-me[hidden]` overrides guard the
   usual bare-id `display` trap. **Visually confirmed** with
   Playwright/Chromium at 1400×900: the card's top matches the grid's
   (379px), its right edge is the window's (1400px), and a player ranked
-  13th shows under the separator.
+  13th shows under the separator. The 10% width was confirmed at 1100,
+  1400 and 1920px wide with the clue lists shown: the card's left edge
+  equals `<main>`'s right edge (990/1260/1728px), clear of the grid.
 
 - **Solution confirmation dialog** (`#solution-confirm-overlay`,
   `#solution-confirm-box`), at the user's explicit request: before the
@@ -4565,10 +4572,15 @@ end through the real running API (interactive start/step/save,
 
 - **Board tool column** (`#grid-tools`): absolutely positioned at the
   left edge and top of `#board` (`position: relative`), i.e. flush with the
-  central column's margin and level with the grid's top, `z-index: 5`; a
-  flex column (`gap: 0.4rem`) stacking the grid statistics button (play
-  mode), the black/fill card `#interactive-cell-stats` (Interactive mode,
-  now in normal flow inside the column) and the zoom buttons.
+  central column's edge and level with the grid's top, `z-index: 5`; a
+  flex column (`gap: 0.4rem`) holding the black/fill card
+  `#interactive-cell-stats` (Interactive mode).
+- **Grid buttons in the page margin** (`#grid-margin-tools`), play and
+  Interactive modes: the grid statistics button then the zoom buttons, in
+  a flex column (`gap: 0.4rem`, `z-index: 5`) absolutely positioned
+  against `#board`'s top, at the far left of the page's margin (`left:
+  calc(-12.5% - 12px)`: `<main>` is 80% wide, centered, 1rem padding, so
+  this lands 8px from the page's left edge).
 - **Zoom buttons** (`#grid-zoom`, `.grid-zoom-btn`), play and Interactive
   modes: three square `.nav-btn.clear-icon-btn` icon buttons stacked
   vertically (`gap: 0.25rem`), inline stroke SVGs in `--accent` —
@@ -4591,7 +4603,7 @@ end through the real running API (interactive start/step/save,
 - **Grid statistics button** (`#grid-stats`, `#grid-stats-btn`,
   `#grid-stats-panel`), play and Interactive modes: a square `.nav-btn.clear-icon-btn`
   bar-chart icon (inline SVG, `currentColor`, `--accent`), first item of
-  `#grid-tools`.
+  `#grid-margin-tools`.
   Its panel is an overlay card right below it (same white card, border,
   radius and shadow as `#leaderboard`), a right-aligned
   tabular table (letters, words — slots in Interactive mode; longest

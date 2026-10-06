@@ -1006,8 +1006,7 @@ button:disabled {
 }
 
 /* Black-cell / white-cell-fill percentages, one line each — a small card
-   in #grid-tools' column (see below), at the grid's top-left, above the
-   zoom controls. */
+   in #grid-tools' column (see below), at the grid's top-left. */
 #interactive-cell-stats {
   display: flex;
   flex-direction: column;
@@ -4096,16 +4095,31 @@ button:disabled {
   color: var(--correct-fg);
 }
 
-/* Left-hand tool column of the board (play and Interactive modes):
-   absolutely positioned in #board (position: relative), at its left edge
-   — the central column's margin — and its top, which is the grid's own
-   top (#board aligns its children on flex-start). Stacks the word
-   statistics (#grid-stats), the black/fill card (#interactive-cell-stats)
-   and the zoom buttons (#grid-zoom). script.js's updateGridViewport keeps
-   the grid's viewport clear of this column's width. */
+/* Left-hand tool column of the board (Interactive mode): absolutely
+   positioned in #board (position: relative), at its left edge and its
+   top, which is the grid's own top (#board aligns its children on
+   flex-start). Holds the black/fill card (#interactive-cell-stats).
+   script.js's updateGridViewport keeps the grid's viewport clear of this
+   column's width. */
 #grid-tools {
   position: absolute;
   left: 0;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+}
+/* Grid buttons (play and Interactive modes): the word statistics
+   (#grid-stats) and the zoom buttons (#grid-zoom), at the far left of the
+   page's margin, level with the grid's top. <main> is 80% of the body
+   wide, centered, with a 1rem padding, so #board's left edge sits
+   12.5% of #board's width + 20px from the page's left edge; -12.5% -
+   12px puts the column 8px from it. */
+#grid-margin-tools {
+  position: absolute;
+  left: calc(-12.5% - 12px);
   top: 0;
   z-index: 5;
   display: flex;
@@ -4129,8 +4143,8 @@ button:disabled {
   border-color: var(--accent);
 }
 
-/* Grid word statistics (#grid-stats, script.js's showGridStats): play
-   mode only, first item of #grid-tools. The square icon button opens
+/* Grid word statistics (#grid-stats, script.js's showGridStats): first
+   item of #grid-margin-tools. The square icon button opens
    #grid-stats-panel right below it, an overlay card (same look as
    #leaderboard) listing the number of words per length. */
 #grid-stats {
@@ -4187,18 +4201,20 @@ button:disabled {
 /* Player ranking (#leaderboard, script.js's showLeaderboard): absolutely
    positioned against the page (it scrolls with the grid), flush with the
    right edge of the window over main's right margin, its top level with
-   the grid's (positionLeaderboard sets `top`). A small white card; each
-   line is a 4-column grid (rank, pseudo, percentage, time). The current
+   the grid's (positionLeaderboard sets `top`). A small white card exactly
+   as wide as that margin (main is 80% of the body wide, centered: 10% on
+   each side), so it never covers the grid, even when the clue lists push
+   the grid to the right. Each entry takes two lines: rank and pseudo, then
+   the percentage on the left and the time on the right. The current
    player's own line is bold and tinted; when they rank below the 10
    shown, it follows under a dashed separator (#leaderboard-me). */
 #leaderboard {
   position: absolute;
   right: 0;
   z-index: 4;
-  width: 15rem;
-  max-width: 40vw;
+  width: 10%;
   box-sizing: border-box;
-  padding: 0.5rem 0.6rem;
+  padding: 0.4rem 0.35rem;
   background: var(--white-cell);
   border: 1px solid var(--border);
   border-right: none;
@@ -4235,8 +4251,11 @@ button:disabled {
 }
 .leaderboard-row {
   display: grid;
-  grid-template-columns: 1.6rem minmax(0, 1fr) auto auto;
-  column-gap: 0.4rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "rank pseudo pseudo"
+    "percent percent time";
+  column-gap: 0.3rem;
   padding: 0.1rem 0.2rem;
   border-radius: 4px;
   font-variant-numeric: tabular-nums;
@@ -4246,10 +4265,12 @@ button:disabled {
   font-weight: 700;
 }
 .leaderboard-rank {
+  grid-area: rank;
   color: #777;
   text-align: right;
 }
 .leaderboard-pseudo {
+  grid-area: pseudo;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4258,6 +4279,13 @@ button:disabled {
 .leaderboard-time {
   text-align: right;
   white-space: nowrap;
+}
+.leaderboard-percent {
+  grid-area: percent;
+  text-align: left;
+}
+.leaderboard-time {
+  grid-area: time;
 }
 
 /* Gold-medal success counter (#success-medal): fixed in the page's left

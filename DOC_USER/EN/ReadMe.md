@@ -862,17 +862,16 @@ Once generation completes, the search-progress panel disappears and
   Escape or a click outside the dialog) closes it and changes nothing.
 - **Grid statistics** (`#grid-stats`, `frontend/static/script.js`,
   `showGridStats`/`renderGridStatsPanel`) — an icon button (a small bar
-  chart) sits at the left edge of the central column, level with the top
-  of the grid. A click opens a panel right below it giving, per length in
+  chart) sits at the far left of the page, in its margin, level with the
+  top of the grid. A click opens a panel right below it giving, per length in
   letters, longest first, then the total: the number of words of the grid
   in play mode, the number of slots (white runs of at least 2 cells,
   filled or not) in Interactive mode, where the panel follows every change
   of the grid while it is open. A second click, a click elsewhere or
   Escape closes it.
 - **Zoom** (`#grid-zoom`, `frontend/static/script.js`, `setGridZoom`/
-  `fitGridZoom`) — three icon buttons at the left edge of the central
-  column, under the statistics button (and, in Interactive mode, the
-  black/fill card): zoom in (magnifier +), zoom out (magnifier −), and
+  `fitGridZoom`) — three icon buttons at the far left of the page, in
+  its margin, under the statistics button: zoom in (magnifier +), zoom out (magnifier −), and
   fit to window (four corners), which shows the whole grid again and is
   framed while it is the zoom in force. Every grid opens fitted to the
   window. Zooming keeps the center of the view; once the grid no longer
@@ -884,11 +883,12 @@ Once generation completes, the search-progress panel disappears and
   selected cell in view (`ensureSelectionVisible`).
 - **Ranking** (`#leaderboard`, `frontend/static/script.js`,
   `showLeaderboard`/`refreshLeaderboard`) — a small card against the
-  window's right edge, over the page margin, level with the top of the
-  grid, for a grid stored in the Library. It lists the 10 best players of
-  that grid, sorted by percentage of correct letters (highest first) then
-  by time (fastest first); each line shows the rank, the pseudo, the
-  percentage and the time. The player's own line is highlighted; when
+  window's right edge, exactly as wide as the page margin (so it never
+  covers the grid), level with the top of the grid, for a grid stored in
+  the Library. It lists the 10 best players of that grid, sorted by
+  percentage of correct letters (highest first) then by time (fastest
+  first); each entry shows the rank and the pseudo, then, on a second
+  line, the percentage and the time. The player's own line is highlighted; when
   they rank below the 10 shown, their own line follows under a dashed
   separator. It refreshes when the grid opens, after each save of the
   player's letters, when the pseudo changes and every 30 seconds.

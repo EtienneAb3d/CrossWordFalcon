@@ -2568,13 +2568,16 @@ state, unlike the backend).
   direction; the header cells are `position: sticky`; `renderGrid` keeps
   the scroll position across its rebuild and, only when the selection
   changes, scrolls just enough to show the selected cell,
-  `ensureSelectionVisible`); the board's left tool column (`#grid-tools`,
-  absolutely positioned at `#board`'s top-left: the grid statistics
-  `#grid-stats` — an icon button opening an overlay panel of counts per length, longest
+  `ensureSelectionVisible`); the grid buttons in the page's left margin
+  (`#grid-margin-tools`, absolutely positioned against `#board`'s top at
+  `left: calc(-12.5% - 12px)`, i.e. 8px from the page's left edge given
+  `<main>`'s 80% width and 1rem padding: the grid statistics `#grid-stats`
+  — an icon button opening an overlay panel of counts per length, longest
   first: the grid's words in play mode, `interactiveSlots()` in Interactive mode, re-rendered
   by `renderInteractiveCellStats` while open, `showGridStats`/`renderGridStatsPanel` —
-  then Interactive mode's `#interactive-cell-stats` card, then the zoom
-  buttons `#grid-zoom`); the end-of-generation grid
+  then the zoom buttons `#grid-zoom`); the board's left tool column
+  (`#grid-tools`, absolutely positioned at `#board`'s top-left: Interactive
+  mode's `#interactive-cell-stats` card); the end-of-generation grid
   choice (`pollJob` arms `pendingGridChoiceJobId` while the job's
   `grid_choice_count` is set and jumps to the `choose_grid` entry,
   `renderAttemptPreview` colours each example's `scrabble_cells` dark cyan

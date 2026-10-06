@@ -774,16 +774,14 @@
                 data-i18n-aria="attemptPreviewNextBtn" disabled>▶</button>
       </p>
       <div id="board">
-        <!-- Left-hand tool column of the board (play and Interactive modes),
-             absolutely positioned at #board's top-left corner, stacked
-             top to bottom: the word statistics (play mode), the black/fill
-             percentages card (Interactive mode), then the zoom controls
+        <!-- Grid buttons in the page's left margin (play and Interactive
+             modes), absolutely positioned against #board's top, stacked top
+             to bottom: the word statistics, then the zoom controls
              (script.js's setGridZoom/fitGridZoom). -->
-        <div id="grid-tools">
-          <!-- Statistics of the grid on screen. An icon button at #board's
-               left edge (the central column's margin), level with the top
-               of the grid; a click opens the panel right below it — number
-               of words (play mode) or slots (Interactive mode) per length,
+        <div id="grid-margin-tools">
+          <!-- Statistics of the grid on screen. An icon button in the page's
+               left margin, level with the top of the grid; a click opens
+               the panel right below it — number of words (play mode) or slots (Interactive mode) per length,
                longest first (script.js's showGridStats/renderGridStatsPanel). -->
           <div id="grid-stats" hidden>
             <button type="button" id="grid-stats-btn" class="nav-btn clear-icon-btn"
@@ -814,12 +812,6 @@
               </table>
             </div>
           </div>
-          <!-- Black-cell / white-cell-fill percentages (Interactive mode),
-               kept current by script.js's renderInteractive(). -->
-          <div id="interactive-cell-stats" hidden>
-            <p id="interactive-black-stat"></p>
-            <p id="interactive-fill-stat"></p>
-          </div>
           <!-- Zoom of #grid: zoom in, zoom out, fit the whole grid to the
                window (script.js's GRID_ZOOM_* constants). -->
           <div id="grid-zoom">
@@ -844,6 +836,17 @@
                 <path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>
               </svg>
             </button>
+          </div>
+        </div>
+        <!-- Left-hand tool column of the board (Interactive mode),
+             absolutely positioned at #board's top-left corner: the
+             black/fill percentages card. -->
+        <div id="grid-tools">
+          <!-- Black-cell / white-cell-fill percentages (Interactive mode),
+               kept current by script.js's renderInteractive(). -->
+          <div id="interactive-cell-stats" hidden>
+            <p id="interactive-black-stat"></p>
+            <p id="interactive-fill-stat"></p>
           </div>
         </div>
         <!-- Groups #clues and #grid-column so they keep centering together
