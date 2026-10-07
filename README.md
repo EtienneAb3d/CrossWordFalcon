@@ -11,6 +11,9 @@ language, a size, and a difficulty level, and the app builds a full grid.
 - **Works on CPU or GPU** — uses a graphics card automatically if you have
   one (including Apple Silicon Macs), and falls back to your CPU otherwise.
 
+**Try it online:** a demo is running at
+[https://falcon.cubaix.com/](https://falcon.cubaix.com/).
+
 ## What you need
 
 - **Python 3** installed on your computer (and, only for the optional Java
