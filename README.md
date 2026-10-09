@@ -176,7 +176,11 @@ On the page:
    language than the one you just chose; leaving it the same gives an
    ordinary, single-language grid. On a bilingual grid, definitions,
    dictionary lookups, and David FALCON's own hints all follow the
-   language of the specific word they're about.
+   language of the specific word they're about. The **"Symmetry"** menu,
+   right of the black-cell rate, makes the black cells come in mirrored
+   groups (horizontal, vertical, diagonal, both ways, or "Rotation" — four cells turned by quarter turns — for a
+   square grid); it shapes the starting layout, and the finished grid can
+   still lose a little of that symmetry as the generator adjusts it.
 2. Two optional fields sit right above the **"Generate grid"** button,
    both built the same way: type a word and click **+** (or just type a
    space, comma, or other punctuation right after it) to add it to the
@@ -303,9 +307,11 @@ you enter this mode, so you can look up words while you fill in the grid:
   at random from among the best candidates for that spot — so undoing it
   and clicking again usually offers a different word;
   **"Back"** undoes the last change, one step at a time.
-- You can click any cell and type a letter, press **Space** to add or
-  remove a black cell, or **Delete** to clear a cell. **Ctrl** flips the
-  horizontal/vertical direction the cursor moves in, one tap at a time.
+- You can click any cell and type a letter, press **Space** (or any
+  punctuation key) to add or remove a black cell — mirrored according to
+  the **"Symmetry"** menu — or **Delete** to clear a cell. **Ctrl**, or a
+  second click on the selected cell, flips the horizontal/vertical
+  direction the cursor moves in.
 - A **"Challenge Words"** box beside the grid lets you list words you
   want to see in the finished puzzle: type one and click **+** (or just
   type a space or other punctuation right after it) to add it, or **−**
@@ -349,9 +355,9 @@ you enter this mode, so you can look up words while you fill in the grid:
 - If you don't want to place every remaining word by hand, click **"Finir
   la grille"** at any point: it permanently locks every letter you've
   already placed and lets the automatic grid generator take over from
-  there, filling in the rest (adding black cells where needed) and
-  writing a definition for any word that doesn't already have one — your
-  own definitions are left untouched. The screen switches to the same
+  there, filling in the rest (adding black cells where needed). It
+  writes no definitions: yours are kept, and the **"Definitions"** button
+  fills in the missing ones afterwards. The screen switches to the same
   live preview you'd see for an ordinary automatic generation, and your
   already-placed letters are shown framed in light green throughout.
 
@@ -366,10 +372,11 @@ level filter narrows it to Easy, Medium, or Hard grids (**"All levels"**
 by default). Click a row to load that grid straight into the player,
 exactly as if it had just finished generating.
 
-Each row also has a shareable "Play" link, a PDF download of the empty
-grid (one A4 landscape page, sized so the grid and all its clues fit;
-for a grid with a side above 20 cells, two pages — the grid, then all
-the clues), and a small pencil button that opens the grid in Interactive mode
+Each row also has a shareable "Play" link, an **Export** column with a
+PDF download of the empty grid (one A4 landscape page, sized so the grid
+and all its clues fit; for a grid with a side above 20 cells, two pages —
+the grid, then all the clues) and, next to it, a **.puz** download (the
+Across Lite format most crossword apps open), and a small pencil button that opens the grid in Interactive mode
 with all its letters and clues already filled in — handy for editing an
 existing grid. Opening one that way starts a fresh entry in your
 "Créations" list and never changes the stored grid. When you publish

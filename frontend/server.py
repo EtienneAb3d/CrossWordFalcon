@@ -418,6 +418,30 @@ async def proxy_library_get_pdf(grid_id: str):
     )
 
 
+@app.get("/api/library/{grid_id}/puz")
+async def proxy_library_get_puz(grid_id: str):
+    """Relays downloading a library grid's Across Lite .puz file (see
+    backend/app.py's library_get_puz) — the same binary passthrough as
+    proxy_library_get_pdf."""
+    try:
+        async with httpx.AsyncClient(timeout=PROXY_TIMEOUT_S) as client:
+            resp = await client.get(f"{BACKEND_URL}/api/library/{grid_id}/puz")
+    except httpx.RequestError:
+        raise HTTPException(status_code=502, detail={"code": "backend_unavailable"})
+    if resp.status_code != 200:
+        try:
+            return JSONResponse(status_code=resp.status_code, content=resp.json())
+        except ValueError:
+            return Response(status_code=resp.status_code, content=resp.content)
+    headers = {}
+    disposition = resp.headers.get("content-disposition")
+    if disposition:
+        headers["Content-Disposition"] = disposition
+    return Response(
+        content=resp.content, media_type="application/x-crossword", headers=headers
+    )
+
+
 @app.post("/api/game/save")
 async def proxy_game_save(request: Request):
     """Relays the current game's autosave (see script.js's

@@ -145,6 +145,22 @@
         </span>
       </label>
 
+      <!-- "Symétrie": the black-cell symmetry of the ratio draw, automatic
+           and Interactive alike (GenerateRequest.symmetry, crossword_gen.
+           py's symmetry_cells; script.js's symmetryCells for a black cell
+           toggled by hand). -->
+      <label for="symmetry">
+        <span data-i18n="symmetryLabel">Symétrie</span>
+        <select id="symmetry" name="symmetry">
+          <option value="none" selected data-i18n="symmetryNone">Aucune</option>
+          <option value="horizontal" data-i18n="symmetryHorizontal">Horizontale</option>
+          <option value="vertical" data-i18n="symmetryVertical">Verticale</option>
+          <option value="diagonal" data-i18n="symmetryDiagonal">Diagonale</option>
+          <option value="bidirectional" data-i18n="symmetryBidirectional">Bidirectionnelle</option>
+          <option value="rotation" data-i18n="symmetryRotation">Rotation</option>
+        </select>
+      </label>
+
       <!-- "Mots par pose": the most words a search node places at once,
            on an empty attention zone (GenerateRequest.words_per_node,
            crossword_gen.py's WORDS_PER_NODE; decreasing to 1 as the zone
@@ -401,10 +417,9 @@
                    explicit request, next to "Jouer". Header with no
                    label. -->
               <th data-i18n="libraryColInteractive"></th>
-              <!-- Printable PDF download (empty grid + clues + title, no
-                   answers) — last column, at the user's explicit
-                   request. -->
-              <th data-i18n="libraryColPdf"></th>
+              <!-- Exports: printable PDF (empty grid + clues + title, no
+                   answers), then the Across Lite .puz file. -->
+              <th data-i18n="libraryColExport"></th>
             </tr>
           </thead>
           <tbody id="library-tbody"></tbody>

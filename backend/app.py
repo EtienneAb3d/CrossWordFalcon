@@ -49,9 +49,10 @@ from .dictionary_lookup import search as dictionary_search_impl
 from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError
 from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
+from .puz_export import PUZ_MEDIA_TYPE, render_puz
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    PREFILL_MIN_WORD_COUNT, WORDS_PER_NODE, DualIndex, DualSet, build_letters_grid,
+    BLACK_SYMMETRIES, PREFILL_MIN_WORD_COUNT, WORDS_PER_NODE, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
@@ -875,6 +876,13 @@ class GenerateRequest(BaseModel):
         default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE,
         description=f"Words placed at once by every search node (integer, 1 to {MAX_WORDS_PER_NODE})",
     )
+    # "Symétrie": the black-cell symmetry of the ratio draw (crossword_gen.
+    # py's BLACK_SYMMETRIES, `make_pattern`'s `symmetry`), also applied to
+    # an Interactive session's starting pattern.
+    symmetry: str = Field(
+        default="none",
+        description=f"Black-cell symmetry: {list(BLACK_SYMMETRIES)}",
+    )
     # "Mode" selector (see BUDGET_MODES above), at the user's explicit
     # request — directly sets the search budget per
     # attempt, replacing for this request the default formula of
@@ -1253,7 +1261,7 @@ class InteractiveFinishRequest(BaseModel):
     words of that language, so the search must keep its dictionary.
     Every other generation parameter mirrors the generation form's own
     CURRENT values, which the player may have changed since the session
-    started: `mode`/`black_enrichment_percent`/`words_per_node`/`force_letters_percent`/
+    started: `mode`/`black_enrichment_percent`/`words_per_node`/`symmetry`/`force_letters_percent`/
     `difficulty`/`theme`/`theme_precision`/`challenge_words`. The last four
     fall back to the session's own value when omitted (`None`). The
     session's already-resolved theme glossary is reused only while it
@@ -1265,6 +1273,7 @@ class InteractiveFinishRequest(BaseModel):
     mode: str = "medium"
     black_enrichment_percent: int = Field(default=15, ge=0, le=100)
     words_per_node: int = Field(default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE)
+    symmetry: str = "none"
     force_letters_percent: int = Field(default=0, ge=0, le=100)
     difficulty: Optional[str] = None
     theme: Optional[str] = None
@@ -2160,6 +2169,23 @@ async def library_get_pdf(grid_id: str):
         content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{slug}.pdf"'},
+    )
+
+
+@app.get("/api/library/{grid_id}/puz")
+def library_get_puz(grid_id: str):
+    """Downloads a library grid as an Across Lite .puz file (puz_export.
+    render_puz: grid, answers, clues, title), the format most crossword
+    apps open."""
+    record = get_grid(grid_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="grille introuvable dans la bibliothèque")
+    title = (record.get("title") or "").strip()
+    slug = _slugify_title(title) if title else "grille"
+    return Response(
+        content=render_puz(record, title),
+        media_type=PUZ_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{slug}.puz"'},
     )
 
 
@@ -3629,8 +3655,13 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                              override_theme_description="", preserved_clues=None,
                              permanent_locked_letters=None, permanent_black_cells=None,
                              publish=True, origin=None, zone_revert=None,
-                             required_cells=None):
-    """`permanent_black_cells` (`None` by default — no effect for any
+                             required_cells=None, start_grid=None):
+    """`start_grid` (`None` by default: a blank grid) is "Finir la
+    grille"/"Finir la zone"'s Interactive grid pattern, passed straight to
+    `generate_grid(start_grid=...)`: every attempt starting afresh starts
+    from it.
+
+    `permanent_black_cells` (`None` by default — no effect for any
     other caller) is "Finir la zone"'s own set of cells frozen black
     because they lie outside the selected zone — passed straight through
     to `generate_grid(permanent_black_cells=...)`, see that function's own
@@ -3991,10 +4022,10 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         logger.info(
             "[%s] starting generation: language=%s bilingual_language=%s width=%s "
             "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
-            "words_per_node=%s mode=%s theme_precision=%s source=%s",
+            "words_per_node=%s symmetry=%s mode=%s theme_precision=%s source=%s",
             short_id, req.language, req.bilingual_language, req.width, req.height,
             req.difficulty, req.force_letters_percent, req.black_enrichment_percent,
-            req.words_per_node, req.mode, req.theme_precision, req.source,
+            req.words_per_node, req.symmetry, req.mode, req.theme_precision, req.source,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
         # QUEUE's own module-level docstring: at most one grid search runs
@@ -4166,6 +4197,8 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         required_cells=required_cells,
                         challenge_words=challenge_words,
                         words_per_node=req.words_per_node,
+                        black_symmetry=req.symmetry,
+                        start_grid=start_grid,
                     )
                     break
                 except GenerationPaused as p:
@@ -4358,9 +4391,12 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         # this very first "clues" event already shows the true total word
         # count to define, consistent with the progress shown afterward.
         preserved_by_word = preserved_clues or {}
+        # "Finir la grille"/"Finir la zone" (`publish` False) writes no
+        # definition: the draft keeps the ones already typed, and the
+        # Interactive panel's "Définitions" button writes the rest.
         words_needing_clue = [
             w for w in result["words"]
-            if not preserved_by_word.get(w["answer"])
+            if publish and not preserved_by_word.get(w["answer"])
         ]
         total_words_for_clues = len(words_needing_clue)
         progress(
@@ -4438,7 +4474,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                 await _wait_in_queue(CLUES_QUEUE, task, job, cancel_event, "queued_clues")
                 clues_start = time.monotonic()
                 try:
-                    new_clues = await asyncio.to_thread(
+                    new_clues = {} if not remaining_entries else await asyncio.to_thread(
                         definition_clue_generator.generate,
                         remaining_entries,
                         req.difficulty,
@@ -4538,6 +4574,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         generation_params = {
             "black_enrichment_percent": req.black_enrichment_percent,
             "words_per_node": req.words_per_node,
+            "symmetry": req.symmetry,
             "force_letters_percent": req.force_letters_percent,
             "mode": req.mode,
             "theme_precision": req.theme_precision,
@@ -4762,6 +4799,7 @@ async def _run_interactive_job(job_id, req):
             make_pattern, rows, cols, 0.0, rng,
             available_lengths=available_lengths, index=index,
             black_enrichment_fraction=req.black_enrichment_percent / 100,
+            symmetry=req.symmetry,
         )
         # "Mots Défi (personnalisation)" typed on the main generation form
         # before switching to "mode == interactive" (GenerateRequest.
@@ -5131,6 +5169,15 @@ def _validate_generate_request(req):
             status_code=400,
             detail=f"mode inconnu : {req.mode!r} (attendu : {sorted(BUDGET_MODES)})",
         )
+    _validate_symmetry(req.symmetry)
+
+
+def _validate_symmetry(symmetry):
+    if symmetry not in BLACK_SYMMETRIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"symétrie inconnue : {symmetry!r} (attendu : {list(BLACK_SYMMETRIES)})",
+        )
 
 
 @app.post("/api/generate", status_code=202)
@@ -5193,6 +5240,7 @@ async def interactive_start(req: GenerateRequest):
             raise HTTPException(status_code=400, detail="langue bilingue inconnue ou dictionnaire absent")
     if req.difficulty not in DIFFICULTY_PRESETS:
         raise HTTPException(status_code=400, detail="difficulté inconnue")
+    _validate_symmetry(req.symmetry)
     job_id = _new_job()
     task = asyncio.create_task(_run_interactive_job(job_id, req))
     _BACKGROUND_TASKS.add(task)
@@ -6403,6 +6451,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
         force_letters_percent=req.force_letters_percent,
         black_enrichment_percent=req.black_enrichment_percent,
         words_per_node=req.words_per_node,
+        symmetry=req.symmetry,
         mode=req.mode,
         theme=theme or None,
         theme_precision=theme_precision,
@@ -6422,6 +6471,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
             publish=False, origin=meta.get("origin"),
             zone_revert=zone_revert,
             required_cells=required_cells,
+            start_grid=seed_grid,
         )
     )
     _BACKGROUND_TASKS.add(task)

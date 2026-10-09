@@ -466,14 +466,22 @@ project's engineering language.
   only while the form's theme and precision match the ones it was built
   with, and rebuilds it otherwise. The main form's "Mots Défi" list and
   the Interactive panel's are one list kept in sync client-side. It
-  only asks the LLM for a clue on a word that doesn't already have one
-  (`_run_generate_job`'s `preserved_clues` parameter, a `{(row, col,
-  direction): clue}` map built from the definitions already typed) — a
-  word's exact position/spelling can't have changed once its letters are
-  locked, so this map still matches after the grid is completed. Returns
+  writes no definition — the user's rule: "Finir la zone"/"Finir la
+  grille" do not go through definition generation, only the
+  "Définitions" button does — and keeps the ones already typed
+  (`_run_generate_job`'s `preserved_clues` parameter, built from the
+  definitions already typed; a word's exact position/spelling can't have
+  changed once its letters are locked, so it still matches after the grid
+  is completed). Returns
   a brand-new job_id, polled exactly like an ordinary generation
   (`GET /api/generate/status/{job_id}`); the interactive session itself
-  is left untouched. The frontend highlights every already-placed cell
+  is left untouched. Every grid the search starts afresh (a palier's
+  reset attempts, the mid-palier replacements, the whole-search restart)
+  starts from the Interactive grid itself — its black cells, its letters
+  being the permanent locks — never from a blank grid (`generate_grid`'s
+  `start_grid`, Java `Generator.Params.startGrid`; the user's rule for
+  the palier-start new grids, extended to the other two with the change,
+  to revisit with the user). The frontend highlights every already-placed cell
   in a dedicated light-green border (`.finish-locked`, `--finish-locked`
   token) throughout every attempt-preview grid of that run, distinct
   from `.locked` (a cell merely confirmed by the search itself, which a
@@ -986,8 +994,22 @@ the current defaults/behavior to know before touching this code.
   blackened by the draw); the window is the `BLACK_DRAW_WINDOW_PERCENT` %
   best runs (ties in random order), growing by the same step while they
   hold no valid cell; scores are recomputed after each placement.
-- Black-cell placement is **not** 180°-symmetric (dropped in favor of
-  independent, non-paired placement, which reaches sparser valid patterns).
+- Black-cell placement is independent by default; the **"Symétrie"**
+  selector (`GenerateRequest.symmetry`, `BLACK_SYMMETRIES`, the user's
+  spec: horizontal, vertical, diagonal, bidirectional, rotation — square
+  grids only, bidirectional otherwise) makes the ratio draw place each
+  drawn cell with its images (`symmetry_cells`, Java `Grids.
+  symmetryCells`), for automatic generation, an Interactive session's
+  starting pattern and a black cell toggled by hand in Interactive mode.
+  "Rotation" places 4 cells at a time, the cell and its three
+  quarter-turn images about the grid's center (the user's rule).
+  Choices made with the change, to revisit with the user: coordinates are
+  0-based (an image of (x, y) is (W-1-x, y)); a group is placed only if
+  every image satisfies the draw's hard constraints, adjacency between two
+  cells of the group included; the short-slot limit reopens a cell with its
+  images; pre-fill, cross-palier repairs, reshapes and minimization stay
+  unpaired, so a finished grid is not always symmetric; in Interactive
+  mode an image holding a letter is left alone.
 - The ratio-based ("Taux noir") black-cell draw of `make_pattern` never
   blackens a cell of the 2x2 square at each corner (`_in_corner_square`,
   `CORNER_SQUARE_SIZE`); pre-fill tries a corner cell only after every

@@ -1929,6 +1929,16 @@ button:disabled {
   display: block;
 }
 
+/* "Export" column: the PDF icon, then the .puz icon (blue badge) on its
+   right. */
+#library-table td.library-export-cell {
+  white-space: nowrap;
+}
+
+#library-table td .library-puz-link {
+  margin-left: 4px;
+}
+
 /* "Interactif" column: an icon button (pencil) opening the grid in
    Interactif mode — no text so no button background/border, accent-
    tinted, centered like the neighboring PDF link. Must reset the blue

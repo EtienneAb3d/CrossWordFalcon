@@ -937,6 +937,38 @@ def _in_corner_square(rows, cols, r, c):
         c < CORNER_SQUARE_SIZE or c >= cols - CORNER_SQUARE_SIZE)
 
 
+# Black-cell symmetries of the "Symétrie" selector (`make_pattern`'s
+# `symmetry`, `symmetry_cells`): every black cell the ratio draw places
+# brings its images under the chosen symmetry with it.
+BLACK_SYMMETRIES = ("none", "horizontal", "vertical", "diagonal", "bidirectional", "rotation")
+
+
+def symmetry_cells(rows, cols, r, c, symmetry):
+    """The cells a black cell at (r, c) brings with it under `symmetry`
+    (`BLACK_SYMMETRIES`), (r, c) included, sorted: "horizontal" mirrors the
+    column (cols-1-c), "vertical" the row (rows-1-r), "diagonal" both at
+    once, "bidirectional" all three images, "rotation" — on a square grid
+    only, "bidirectional" otherwise — its three quarter-turn images about
+    the grid's center, (c, cols-1-r), (rows-1-r, cols-1-c) and
+    (rows-1-c, r)."""
+    w, h = cols - 1, rows - 1
+    if symmetry == "rotation" and rows != cols:
+        symmetry = "bidirectional"
+    if symmetry == "horizontal":
+        images = [(r, w - c)]
+    elif symmetry == "vertical":
+        images = [(h - r, c)]
+    elif symmetry == "diagonal":
+        images = [(h - r, w - c)]
+    elif symmetry == "bidirectional":
+        images = [(r, w - c), (h - r, c), (h - r, w - c)]
+    elif symmetry == "rotation":
+        images = [(c, w - r), (h - r, w - c), (h - c, r)]
+    else:
+        images = []
+    return sorted({(r, c), *images})
+
+
 # `_place_black_cells`' draw window, in percent, and its widening step: the
 # share of the white runs (`_run_score`-ranked) the draw is restricted to,
 # and, among their valid cells, the share farthest from every black cell
@@ -1081,7 +1113,7 @@ def _run_score(run, cell_score):
 
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
                         rng, index=None, locked_letters=None, available_lengths=None,
-                        forbid_adjacency=False):
+                        forbid_adjacency=False, symmetry=None):
     """Ratio-based black-cell placement of `make_pattern` ("Taux noir"):
     places black cells one at a time until `placed` reaches `target` or no
     candidate can be placed any more.
@@ -1126,11 +1158,19 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     cross-palier cleanups and the impossible-zone repairs may still place
     or move a black cell next to another one.
 
+    `symmetry` ("Symétrie", `BLACK_SYMMETRIES`, `None`/"none" = none):
+    the drawn cell is placed together with its images (`symmetry_cells`),
+    the same hard constraints holding for the whole group — every image
+    still white must be a candidate, satisfy them on its own, touch no
+    black cell nor another cell of the group, and the grid with the whole
+    group blackened must stay structurally valid.
+
     `candidates` is updated in place (placed cells removed). Returns
     (placed, unplaced cells)."""
     remaining = candidates
+    symmetric = bool(symmetry) and symmetry != "none"
 
-    def _valid(r, c, structure, allow_adjacency):
+    def _valid_single(r, c, structure, allow_adjacency):
         if grid[r][c] == BLACK:
             return False
         if not allow_adjacency and _has_black_neighbor(grid, rows, cols, r, c):
@@ -1139,6 +1179,32 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
                                                available_lengths):
             return False
         return structure.valid_with_black(r, c)
+
+    def _group(r, c):
+        return [cell for cell in symmetry_cells(rows, cols, r, c, symmetry)
+                if grid[cell[0]][cell[1]] != BLACK]
+
+    def _valid(r, c, structure, allow_adjacency, position):
+        if not _valid_single(r, c, structure, allow_adjacency):
+            return False
+        if not symmetric:
+            return True
+        group = _group(r, c)
+        if len(group) == 1:
+            return True
+        if any(cell not in position or not _valid_single(*cell, structure, allow_adjacency)
+               for cell in group):
+            return False
+        for cr, cc in group:
+            grid[cr][cc] = BLACK
+        try:
+            if not allow_adjacency and any(
+                    _has_black_neighbor(grid, rows, cols, cr, cc) for cr, cc in group):
+                return False
+            return is_structurally_valid(grid, rows, cols, min_interior_free=structure.min_free)
+        finally:
+            for cr, cc in group:
+                grid[cr][cc] = WHITE
 
     def _draw(run_order, position, min_free, allow_adjacency):
         structure = _BlackCellValidity(grid, rows, cols, min_free)
@@ -1153,7 +1219,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
             valid = []
             for i in in_runs:
                 if i not in checked:
-                    checked[i] = _valid(*remaining[i], structure, allow_adjacency)
+                    checked[i] = _valid(*remaining[i], structure, allow_adjacency, position)
                 if checked[i]:
                     valid.append(i)
             if valid:
@@ -1177,6 +1243,29 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     # squared weighted distances, and the resulting score.
     nearest = [_nearest_black_distances_sq(blacks, r, c) for r, c in remaining]
     dist = [_black_spread_score(n) for n in nearest]
+
+    def _place(cell):
+        nonlocal runs
+        r, c = cell
+        chosen = remaining.index(cell)
+        remaining.pop(chosen)
+        dist.pop(chosen)
+        nearest.pop(chosen)
+        old_runs = _split_cell_runs(run_at, cell)
+        runs = _split_run_list(runs, run_at, old_runs, cell)
+        del cell_score[cell]
+        rescored = {(rr + dr, cc + dc) for run in old_runs for rr, cc in run
+                    for dr in (-1, 0, 1) for dc in (-1, 0, 1)}
+        for other in rescored:
+            if other in cell_score:
+                cell_score[other] = _crossing_length_score(run_at, *other)
+        for i, (cr, cc) in enumerate(remaining):
+            if _record_black(nearest[i], cr, cc, r, c):
+                dist[i] = _black_spread_score(nearest[i])
+        grid[r][c] = BLACK
+        row_black[r] += 1
+        col_black[c] += 1
+
     while remaining and placed < target:
         position = {cell: i for i, cell in enumerate(remaining)}
         run_order = list(runs)
@@ -1193,24 +1282,10 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
                 break
         if chosen is None:
             break
-        r, c = remaining.pop(chosen)
-        dist.pop(chosen)
-        nearest.pop(chosen)
-        old_runs = _split_cell_runs(run_at, (r, c))
-        runs = _split_run_list(runs, run_at, old_runs, (r, c))
-        del cell_score[(r, c)]
-        rescored = {(rr + dr, cc + dc) for run in old_runs for rr, cc in run
-                    for dr in (-1, 0, 1) for dc in (-1, 0, 1)}
-        for cell in rescored:
-            if cell in cell_score:
-                cell_score[cell] = _crossing_length_score(run_at, *cell)
-        for i, (cr, cc) in enumerate(remaining):
-            if _record_black(nearest[i], cr, cc, r, c):
-                dist[i] = _black_spread_score(nearest[i])
-        grid[r][c] = BLACK
-        row_black[r] += 1
-        col_black[c] += 1
-        placed += 1
+        group = _group(*remaining[chosen]) if symmetric else [remaining[chosen]]
+        for cell in group:
+            _place(cell)
+            placed += 1
     return placed, list(remaining)
 
 
@@ -1814,14 +1889,12 @@ def _prefill_unfillable_slots(grid, rows, cols, row_black, col_black, candidates
 
 def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
                   seed_grid=None, locked_letters=None, index=None,
-                  black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION):
-    """Places black cells one at a time, independently (no symmetry
-    constraint — dropped at the user's explicit request, since the CSP
-    fill is fast enough that trying more patterns is cheap, and a
-    non-symmetric search can reach a much lower black-cell ratio while
-    staying structurally valid, in a way pairing every cell with its
-    180° mirror could not always do), biased to keep black cells apart
-    from each other.
+                  black_enrichment_fraction=POST_PREFILL_BLACK_FRACTION, symmetry=None):
+    """Places black cells one at a time, independently unless `symmetry`
+    ("Symétrie", `BLACK_SYMMETRIES`) is set — the ratio draw then places
+    every drawn cell together with its images (`symmetry_cells`), and the
+    short-slot limit reopens a bounding cell with its images; pre-fill
+    stays unpaired — biased to keep black cells apart from each other.
 
     A purely random placement order (just shuffling every cell) tends to
     let black cells end up touching each other by chance, forming small
@@ -2063,7 +2136,7 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     drawn = set(ratio_candidates)
     _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target, placed,
                         rng, index=index, locked_letters=locked_letters, available_lengths=available_lengths,
-                        forbid_adjacency=True)
+                        forbid_adjacency=True, symmetry=symmetry)
     drawn -= set(ratio_candidates)
     # Short-slot limit: once the target is reached, too many slots of at
     # most `SHORT_SLOT_MAX_LENGTH` letters reopen the drawn black cells
@@ -2072,6 +2145,9 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         short_count, bounding = _short_slot_bounding_blacks(grid, rows, cols, drawn)
         if short_count <= SHORT_SLOT_MAX_COUNT or not bounding:
             break
+        if symmetry and symmetry != "none":
+            bounding = {image for cell in bounding
+                        for image in symmetry_cells(rows, cols, *cell, symmetry) if image in drawn}
         reopened = sorted(bounding)
         rng.shuffle(reopened)
         for r, c in reopened:
@@ -2083,7 +2159,8 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
         before = set(ratio_candidates)
         _place_black_cells(grid, rows, cols, row_black, col_black, ratio_candidates, target,
                             sum(row_black), rng, index=index, locked_letters=locked_letters,
-                            available_lengths=available_lengths, forbid_adjacency=True)
+                            available_lengths=available_lengths, forbid_adjacency=True,
+                            symmetry=symmetry)
         drawn |= before - set(ratio_candidates)
     still_candidates = set(ratio_candidates)
     candidates = [
@@ -13411,6 +13488,9 @@ _worker_scrabble_words = None
 # Words placed per search node (generate_grid's `words_per_node`, see
 # WORDS_PER_NODE), shared the same way.
 _worker_words_per_node = WORDS_PER_NODE
+# Black-cell symmetry of the ratio draw (generate_grid's `black_symmetry`,
+# see `make_pattern`'s `symmetry`), shared the same way.
+_worker_black_symmetry = None
 # "Stop" button (see CANCEL_CHECK_INTERVAL/Filler.__init__), at the
 # user's explicit request — like `_worker_index` right above, passed once
 # per worker via the pool's initializer rather than as an argument of
@@ -13652,7 +13732,7 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
                   proper_noun_words=None,
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
                   priority_words=None, challenge_words=None, scrabble_words=None,
-                  words_per_node=WORDS_PER_NODE):
+                  words_per_node=WORDS_PER_NODE, black_symmetry=None):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -13677,9 +13757,11 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         _worker_warmup_barrier, \
         _worker_proper_noun_words, _worker_max_proper_nouns, \
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
-        _worker_challenge_words, _worker_scrabble_words, _worker_words_per_node
+        _worker_challenge_words, _worker_scrabble_words, _worker_words_per_node, \
+        _worker_black_symmetry
     _worker_index = index
     _worker_words_per_node = words_per_node
+    _worker_black_symmetry = black_symmetry
     _worker_priority_words = priority_words
     _worker_challenge_words = challenge_words
     _worker_scrabble_words = scrabble_words
@@ -14184,7 +14266,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
             seed_grid[r][c] = BLACK
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
-                         black_enrichment_fraction=black_enrichment_fraction)
+                         black_enrichment_fraction=black_enrichment_fraction,
+                         symmetry=_worker_black_symmetry)
     # The palier's "pattern_generated" preview is built from this very
     # pattern (see `generate_grid`, `_publish_pattern_preview`).
     if racing and _worker_best_state_queue is not None:
@@ -14826,10 +14909,23 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    bilingual_wordlist_path=None, priority_words=None,
                    bilingual_priority_words=None, permanent_locked_letters=None,
                    permanent_black_cells=None, required_cells=None, challenge_words=None,
-                   on_live_preview=None, words_per_node=WORDS_PER_NODE):
-    """`words_per_node` (`WORDS_PER_NODE` by default): words every search
+                   on_live_preview=None, words_per_node=WORDS_PER_NODE, black_symmetry=None,
+                   start_grid=None):
+    """`start_grid` (`None` by default: a blank grid): the grid every
+    attempt that starts afresh starts from instead of a blank grid — the
+    reset attempts of a palier, the mid-palier replacement attempts and the
+    whole-search restart once every cleaned grid is dropped. "Finir la
+    grille"/"Finir la zone" pass the Interactive grid's black cells
+    (`BLACK`/`WHITE` rows; its letters are `permanent_locked_letters`), so
+    a new grid never loses the author's pattern.
+
+    `words_per_node` (`WORDS_PER_NODE` by default): words every search
     node of every attempt places at once (`Filler._descend_group`), the web
     UI's "Mots par pose" field.
+
+    `black_symmetry` (`BLACK_SYMMETRIES`, `None` = "none"): the web UI's
+    "Symétrie" selector, applied by every attempt's ratio draw
+    (`make_pattern`'s `symmetry`).
 
     The Scrabble wordlist of each language (`merge_scrabble_lexicon`)
     is merged into the lexicon loaded for it, whatever `max_words` — whole,
@@ -15420,6 +15516,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     # telle-quelle" paliers before a forced cleanup, exactly like any other
     # top-level `generate_grid()` call, rather than carrying over wherever
     # the previous run's own counter happened to be.
+    # Seed grid of every attempt starting afresh (see `start_grid`): a
+    # fresh copy per attempt, `None` for a blank grid.
+    fresh_seed_grid = (
+        None if start_grid is None
+        else [[BLACK if ch == BLACK else WHITE for ch in row] for row in start_grid]
+    )
+
+    def _fresh_seed_grid():
+        return None if fresh_seed_grid is None else [row[:] for row in fresh_seed_grid]
+
     if resume_state is not None:
         (carry_seed_grid, carry_locked_letters, carry_preseed_assignment, carry_excluded_slots,
          carry_continue_locked) = (
@@ -15801,7 +15907,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
                   non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words,
-                  words_per_node)
+                  words_per_node, black_symmetry)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -16120,7 +16226,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     if i < reset_count:
                         futures.append(executor.submit(
                             _pattern_attempt, rows, cols, ratio, s, force_letters_fraction,
-                            None, None,
+                            _fresh_seed_grid(), None,
                             black_enrichment_fraction, deadline_checks,
                             permanent_locked_letters, permanent_black_cells,
                             required_cells=required_cells, checks_slot=i,
@@ -16236,7 +16342,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 futures = []
                 for i, s in enumerate(seeds):
                     if i < reset_count:
-                        task_seed_grid, task_locked_letters = None, None
+                        task_seed_grid, task_locked_letters = _fresh_seed_grid(), None
                     else:
                         task_seed_grid, task_locked_letters = pool[(i - reset_count) % len(pool)]
                     futures.append(executor.submit(
@@ -16545,7 +16651,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             checks_progress[freed_slot] = 0
                         new_future = executor.submit(
                             _pattern_attempt, rows, cols, ratio, new_seed,
-                            force_letters_fraction, None, None,
+                            force_letters_fraction, _fresh_seed_grid(), None,
                             black_enrichment_fraction, deadline_checks,
                             permanent_locked_letters, permanent_black_cells,
                             required_cells=required_cells, checks_slot=freed_slot,
@@ -17530,12 +17636,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     carry_discarded_count = discarded_count
                 else:
                     # Every cleaned grid was dropped: the next cycle
-                    # starts again from an entirely blank grid — exactly
-                    # this function's own initial state (see
-                    # `carry_seed_grid = None` at the very top), including
-                    # both pools and the "reprise telle quelle" streak
-                    # counter.
-                    carry_seed_grid = None
+                    # starts again from a blank grid (`start_grid` when
+                    # given) — exactly this function's own initial state
+                    # (see `carry_seed_grid = None` at the very top),
+                    # including both pools and the "reprise telle quelle"
+                    # streak counter.
+                    carry_seed_grid = _fresh_seed_grid()
                     carry_locked_letters = None
                     carry_preseed_assignment = None
                     carry_excluded_slots = None
@@ -17807,6 +17913,8 @@ def main():
     ap.add_argument("--attempts", type=int, default=200,
                      help="nombre de motifs essayés avant d'abandonner")
     ap.add_argument("--seed", type=int, default=None)
+    ap.add_argument("--symmetry", choices=BLACK_SYMMETRIES, default="none",
+                     help="symétrie des cases noires tirées")
     args = ap.parse_args()
 
     result = generate_grid(
@@ -17818,6 +17926,7 @@ def main():
         attempts=args.attempts,
         seed=args.seed,
         wordlist_path=args.wordlist,
+        black_symmetry=args.symmetry,
     )
 
     if result is None:

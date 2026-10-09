@@ -35,4 +35,5 @@ install_cuda13.sh
 renew-https.sh
 
 nohup.out
-TODO.txt
+TODO.md
+DONE.md

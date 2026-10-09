@@ -171,6 +171,8 @@ public final class Generator {
         volatile boolean incrementalFill;
         /** Words placed per search node (Params.wordsPerNode, mirrors _worker_words_per_node). */
         int wordsPerNode = Filler.WORDS_PER_NODE;
+        /** Black-cell symmetry of the ratio draw (Params.blackSymmetry, mirrors _worker_black_symmetry). */
+        String blackSymmetry = null;
         /** Pattern each original attempt of a fresh-pattern palier drew (patternAttempt), by attempt seed: the
          * palier's "pattern_generated" preview is built from them (mirrors generate_grid's early_patterns). */
         final Map<Long, char[][]> earlyPatterns = new ConcurrentHashMap<>();
@@ -265,7 +267,8 @@ public final class Generator {
             seedGrid = seedGrid == null ? Grids.blank(rows, cols) : Grids.copy(seedGrid);
             for (int cell : permanentBlack) seedGrid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         }
-        char[][] grid = Grids.makePattern(rows, cols, ratio, rng, available, seedGrid, locked, ctx.index, enrichment);
+        char[][] grid = Grids.makePattern(rows, cols, ratio, rng, available, seedGrid, locked, ctx.index, enrichment,
+                ctx.blackSymmetry);
         // The palier's "pattern_generated" preview is built from this very pattern (publishPatternPreview).
         if (racing) ctx.earlyPatterns.put(seed, Grids.copy(grid));
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
@@ -602,6 +605,11 @@ public final class Generator {
         public Consumer<List<Object>> onLivePreview;
         /** Words every search node places at once (mirrors generate_grid's words_per_node). */
         public int wordsPerNode = Filler.WORDS_PER_NODE;
+        /** The "Symétrie" selector (Grids.BLACK_SYMMETRIES, null = none), applied by every attempt's ratio draw. */
+        public String blackSymmetry = null;
+        /** Seed grid of every attempt starting afresh instead of a blank grid (mirrors generate_grid's start_grid):
+         *  "Finir la grille"/"Finir la zone" pass the Interactive grid's black cells. */
+        public char[][] startGrid = null;
     }
 
     // ================================================================== generate_grid
@@ -613,6 +621,21 @@ public final class Generator {
         Map<Integer, Character> permanentLocked = p.permanentLockedLetters == null ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(p.permanentLockedLetters);
         Set<Integer> permanentBlack = p.permanentBlackCells;
+        // Seed grid of every attempt starting afresh (see Params.startGrid): a fresh copy per attempt, null for a
+        // blank grid.
+        final char[][] startGrid;
+        if (p.startGrid == null) {
+            startGrid = null;
+        } else {
+            startGrid = new char[p.startGrid.length][];
+            for (int r = 0; r < startGrid.length; r++) {
+                startGrid[r] = new char[p.startGrid[r].length];
+                for (int c = 0; c < startGrid[r].length; c++) {
+                    startGrid[r][c] = p.startGrid[r][c] == BLACK ? BLACK : WHITE;
+                }
+            }
+        }
+        java.util.function.Supplier<char[][]> freshSeedGrid = () -> startGrid == null ? null : Grids.copy(startGrid);
         Rng rng = Rng.of(p.seed);
         Number mw = p.maxWords != null ? p.maxWords : Words.DIFFICULTY_PRESETS.get(p.difficulty);
         boolean easy = "easy".equals(p.difficulty);
@@ -760,6 +783,7 @@ public final class Generator {
         ctx.scrabbleWords = scrabble;
         ctx.challengeWords = challenge;
         ctx.wordsPerNode = p.wordsPerNode;
+        ctx.blackSymmetry = p.blackSymmetry;
         ctx.cancelEvent = p.cancelEvent;
         ctx.attemptDoneEvent = attemptDoneEvent;
         ctx.bestStateQueue = bestStateQueue::add;
@@ -961,8 +985,8 @@ public final class Generator {
                         final long s = seeds[i];
                         Future<Outcome> f;
                         if (i < resetCount) {
-                            f = ecs.submit(() -> patternAttempt(ctx, rows, cols, ratio, s, p.forceLettersFraction, null,
-                                    null, p.blackEnrichmentFraction, p.deadlineChecks, permanentLocked, permanentBlack,
+                            f = ecs.submit(() -> patternAttempt(ctx, rows, cols, ratio, s, p.forceLettersFraction,
+                                    freshSeedGrid.get(), null, p.blackEnrichmentFraction, p.deadlineChecks, permanentLocked, permanentBlack,
                                     p.requiredCells, slot, true));
                         } else {
                             Object[] task = continuePool.get((i - resetCount) % continuePool.size());
@@ -1003,7 +1027,7 @@ public final class Generator {
                         char[][] tg;
                         Map<Integer, Character> tl;
                         if (i < resetCount) {
-                            tg = null;
+                            tg = freshSeedGrid.get();
                             tl = null;
                         } else {
                             Object[] task = pool.get((i - resetCount) % pool.size());
@@ -1155,8 +1179,8 @@ public final class Generator {
                             if (freed != null) checksProgress.set(freed, 0);
                             final Integer fslot = freed;
                             Future<Outcome> nf = ecs.submit(() -> patternAttempt(ctx, rows, cols, ratio, newSeed,
-                                    p.forceLettersFraction, null, null, p.blackEnrichmentFraction, p.deadlineChecks,
-                                    permanentLocked, permanentBlack, p.requiredCells, fslot, false));
+                                    p.forceLettersFraction, freshSeedGrid.get(), null, p.blackEnrichmentFraction,
+                                    p.deadlineChecks, permanentLocked, permanentBlack, p.requiredCells, fslot, false));
                             pending.add(nf);
                             futureSeed.put(nf, newSeed);
                             if (freed != null) seedToSlot.put(newSeed, freed);
@@ -1473,7 +1497,8 @@ public final class Generator {
                         nextLineage = (int) rl[1];
                         carryDiscardedCount = discarded;
                     } else {
-                        carrySeedGrid = null;
+                        // Every cleaned grid was dropped: restart from a blank grid (startGrid when given).
+                        carrySeedGrid = freshSeedGrid.get();
                         carryLocked = null;
                         carryPreseed = null;
                         carryExcluded = null;
@@ -1693,6 +1718,7 @@ public final class Generator {
                 case "--attempts" -> p.attempts = Integer.parseInt(args[++i]);
                 case "--seed" -> p.seed = Long.parseLong(args[++i]);
                 case "--deadline-checks" -> p.deadlineChecks = Long.parseLong(args[++i]);
+                case "--symmetry" -> p.blackSymmetry = args[++i];
                 default -> {
                     System.err.println("unknown option " + args[i]);
                     System.exit(2);

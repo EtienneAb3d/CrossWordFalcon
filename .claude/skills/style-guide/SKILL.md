@@ -1768,9 +1768,14 @@ English (see `project-best-practices`).
   circled-i) — with `libraryPdfText` ("Télécharger le PDF" / "Download
   PDF" / …) as its `aria-label`/`title`; `.library-pdf-link` is
   `inline-flex`, **not** underlined, its `.pdf-icon` `display: block`.
-  Both links `stopPropagation` on click/keydown so they don't also
+  The "PDF" link sits in the **"Export"** column (`libraryColExport`,
+  `td.library-export-cell`, `white-space: nowrap`), followed on its right
+  (`margin-left: 4px`) by the `.puz` download (`/api/library/<id>/puz`,
+  `library-pdf-link library-puz-link`): the same document icon with a
+  blue (`#2563eb`) "PUZ" badge, `libraryPuzText` as its label/title.
+  All these links `stopPropagation` on click/keydown so they don't also
   trigger the row's own load-into-player behaviour (the "Lien" opens a
-  new tab, the "PDF" downloads).
+  new tab, the "PDF"/"PUZ" download).
 
   **Not yet visually confirmed in an actual browser** — same tooling
   limitation noted throughout this file; verified structurally (a real

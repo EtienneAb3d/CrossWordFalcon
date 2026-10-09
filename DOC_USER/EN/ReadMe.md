@@ -143,6 +143,22 @@ full again whenever a new generation or an Interactive session starts.
   black cells the finished grid aims for, as a percentage of the grid's
   cells (0-100%, 15% by default). A higher value gives shorter, easier
   words at the cost of a denser-looking grid.
+- **Symétrie / Symmetry** (`#symmetry`) — whether the black cells the
+  pattern draw adds come with mirror images: **Aucune / None** (one at a
+  time), **Horizontale / Horizontal** (mirrored left-right), **Verticale /
+  Vertical** (mirrored top-bottom), **Diagonale / Diagonal** (mirrored
+  through the center), **Bidirectionnelle / Bidirectional** (the three
+  images at once), **Rotation** (the cell and its three images by a
+  quarter turn of the grid around its center, four cells per placement;
+  square grids only — on any other grid it works as Bidirectional). It shapes the pattern of an automatic
+  generation and of a new Interactive session, and, in Interactive mode, a
+  black cell you add or remove by hand brings its empty (or black) images
+  along. The cells blackened afterwards to make an unfillable slot
+  workable, the repairs between cycles and the final removal of black
+  cells add or remove cells one at a time, so a finished grid is not
+  always perfectly symmetric (`frontend/static/script.js`,
+  `symmetryCells`; `backend/crossword_gen.py`, `symmetry_cells`,
+  `make_pattern`).
 - **Mots par pose / Words per placement** (`#words-per-node`) — the most
   words the search places in one go before checking how the rest of the
   grid copes, and takes back off together when that leads nowhere (1-10,
@@ -598,8 +614,8 @@ your own local address. Next to it, a small pencil icon
 Interactive authoring mode (see "Interactive mode" below) with every
 letter and clue already in place, so you can edit an existing grid; doing
 so creates a brand-new entry in your **Créations** list on the first
-autosave and never changes the stored library grid. **PDF** (a small
-red PDF icon) downloads a printable sheet of the grid: the empty grid,
+autosave and never changes the stored library grid. The **Export** column
+holds two icons. The red **PDF** one downloads a printable sheet of the grid: the empty grid,
 its clues and its title only — never the answers — with a footer line
 linking back to play it online, with its solution, at the same shareable
 address. A grid whose sides are both at most 20 cells fits on one A4
@@ -610,7 +626,10 @@ largest that keep everything on that single page (`backend/svg_export.py`,
 header and the grid, as large as the page allows; the second lists the
 across clues, then the down clues, across the full width of the page, in
 the largest text that fits (very long clue lists continue on further
-pages) (`backend/svg_export.py`, `render_two_page_puzzle`).
+pages) (`backend/svg_export.py`, `render_two_page_puzzle`). The blue
+**PUZ** icon on its right downloads the grid as an Across Lite `.puz` file
+— grid, answers, clues and title — which most crossword apps open
+(`backend/puz_export.py`, `render_puz`; `renderLibraryList`).
 
 A grid created this way (`backend/grid_store.py`, `save_grid_json`'s own
 `origin` field — a snapshot of the original grid's title, author and
@@ -943,8 +962,9 @@ The same guidance below is also available in-app, once the interactive
 session has started: click the **?** button (`#interactive-help-btn`) just
 to the left of **Mots / Words** to open it as an overlay panel.
 
-- Place your letters in the grid. The Space key adds or removes a black
-  cell.
+- Place your letters in the grid. The Space key or any punctuation mark
+  adds or removes a black cell. Clicking the cell that already has the
+  focus switches the fill direction, like the Ctrl key.
 - The **Suivant / Next** button automatically generates a new word (taking
   any "Mots Défi (personnalisation)" list into account first, then any
   theme glossary — see "Mots Défi (personnalisation) / Challenge Words
@@ -1000,7 +1020,8 @@ to the left of **Mots / Words** to open it as an overlay panel.
   everything outside it, letters and black cells alike, is frozen exactly
   as it stands.
 - Click **Finir la grille / Finish the grid** so Falcon fills in the cells
-  that are still empty.
+  that are still empty. It writes no definition: use **Définitions /
+  Definitions** afterwards for the new words.
 - At the end of the automatic process, delete any words you don't like,
   then go back to placing letters, black cells and definitions. You can run
   **Finir la grille / Finish the grid** again as many times as needed.
@@ -1085,10 +1106,13 @@ real letter. Both update after every edit.
   one step at a time: a typed letter, a black-cell toggle, or a whole
   "Suivant" placement. Disabled once there is nothing left to undo.
 - The grid is fully editable, black cells included. Click any cell, then:
-  type a letter to fill it; press **Space** (or the **■** key on the
-  virtual keyboard) to turn it black or white; press **Backspace** or
-  **Delete** to clear it. The cursor advances in the current Across/Down
-  direction after a letter.
+  type a letter to fill it; press **Space** or any punctuation mark (or
+  the **■** key on the virtual keyboard) to turn it black or white — with
+  its images under the **Symétrie** setting (`interactiveToggleBlack`);
+  press **Backspace** or **Delete** to clear it. The cursor advances in
+  the current Across/Down direction after a letter. Clicking the cell
+  that is already selected switches between Across and Down, like the
+  **Ctrl** key (`selectCell`).
 - **→ / ↓** (`#interactive-dir-across-btn`/`#interactive-dir-down-btn`) —
   set which direction the cursor advances and which word counts as
   "selected"; the same shared state as the virtual keyboard's arrows,
@@ -1336,8 +1360,12 @@ real letter. Both update after every edit.
   `POST /api/interactive/finish`) — permanently locks every letter
   already placed and hands the grid off to the automatic generation
   engine, which fills in whatever is left (adding new black cells/words
-  wherever still needed) and writes a definition for any word that does
-  not already have one, leaving every existing definition untouched.
+  wherever still needed). Every new grid the engine starts along the way
+  starts from your grid as it was when you clicked, never from an empty
+  one (`backend/crossword_gen.py`, `generate_grid`'s `start_grid`). It writes no definition: every existing
+  definition is kept, and the new words get theirs from the
+  **Définitions / Definitions** button once the grid is back in the
+  editor (`backend/app.py`, `_run_generate_job` with `publish` off).
   Clicking it leaves Interactive mode and shows the exact same live
   attempt-preview grids and progress reporting as an ordinary automatic
   generation, ending with the same playable, finished grid. In those
@@ -1349,7 +1377,7 @@ real letter. Both update after every edit.
   it stays available in your "Créations" list. The grid size and the
   language(s) stay those of the session; every other setting is read from
   the generation form at the top of the page as it stands at the moment
-  you click — Difficulté, Taux noir, Mots par pose, Mode (an "Interactif" Mode
+  you click — Difficulté, Taux noir, Symétrie, Mots par pose, Mode (an "Interactif" Mode
   counts as "Moyen"), Thématique, Précision thématique and the "Mots Défi"
   list — so you can change any of them before finishing. The session's
   theme glossary is reused only while the form still asks for the same

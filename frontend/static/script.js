@@ -262,6 +262,7 @@ const widthInput = document.getElementById("width");
 const heightInput = document.getElementById("height");
 const blackEnrichmentInput = document.getElementById("black-enrichment");
 const wordsPerNodeInput = document.getElementById("words-per-node");
+const symmetrySelect = document.getElementById("symmetry");
 // "Thématique" field — shared const so both the generation form's submit
 // handler and Interactive mode's own enterInteractiveMode() (re-filling
 // it from a re-edited grid's own origin theme, at the user's explicit
@@ -2355,6 +2356,11 @@ function selectCell(r, c) {
     // is still actively using without having clicked the grid).
     if (document.activeElement && document.activeElement !== document.body) {
       document.activeElement.blur();
+    }
+    // A click on the cell that already has the focus swaps the fill
+    // direction, like the Ctrl key.
+    if (selected && selected.row === r && selected.col === c) {
+      setActiveDirection(activeDirection === "across" ? "down" : "across");
     }
     selected = { row: r, col: c };
     renderInteractive();
@@ -5008,6 +5014,29 @@ async function renderLibraryList() {
     pdfLink.addEventListener("click", (event) => event.stopPropagation());
     pdfLink.addEventListener("keydown", (event) => event.stopPropagation());
     pdfTd.appendChild(pdfLink);
+    // Right of the PDF icon: the Across Lite .puz file (grid, answers,
+    // clues — GET /api/library/<id>/puz), for any crossword app.
+    const puzLink = document.createElement("a");
+    puzLink.href = `/api/library/${encodeURIComponent(entry.id)}/puz`;
+    puzLink.setAttribute("download", "");
+    puzLink.rel = "noopener";
+    puzLink.className = "library-link library-pdf-link library-puz-link";
+    puzLink.setAttribute("aria-label", t.libraryPuzText);
+    puzLink.title = t.libraryPuzText;
+    puzLink.innerHTML =
+      '<svg class="pdf-icon" viewBox="0 0 24 24" width="20" height="20" ' +
+      'aria-hidden="true" focusable="false">' +
+      '<path d="M7 2h7l5 5v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" ' +
+      'fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
+      '<path d="M14 2v5h5" fill="#ffffff" stroke="#9ca3af" stroke-width="1.3"/>' +
+      '<rect x="3.5" y="12" width="17" height="8" rx="1.5" fill="#2563eb"/>' +
+      '<text x="12" y="18.2" font-size="5.4" font-weight="700" ' +
+      'text-anchor="middle" fill="#ffffff" font-family="sans-serif">PUZ</text>' +
+      "</svg>";
+    puzLink.addEventListener("click", (event) => event.stopPropagation());
+    puzLink.addEventListener("keydown", (event) => event.stopPropagation());
+    pdfTd.appendChild(puzLink);
+    pdfTd.className = "library-export-cell";
     tr.append(
       languageTd, dateTd, versionTd, titleTd, themeTd, difficultyTd, sizeTd, authorTd,
       playersTd, linkTd, interactiveTd, pdfTd,
@@ -7021,9 +7050,43 @@ function interactiveToggleBlack() {
   interactivePushUndo();
   const cur = interactiveGrid[selected.row][selected.col];
   if (cur !== "" && cur !== "#") interactiveClearDefsAt(selected.row, selected.col);
-  interactiveGrid[selected.row][selected.col] = cur === "#" ? "" : "#";
+  const toBlack = cur !== "#";
+  interactiveGrid[selected.row][selected.col] = toBlack ? "#" : "";
+  // "Symétrie": the images of the cell follow it — an empty image turns
+  // black with it, a black image turns white with it; an image holding a
+  // letter is left as it is.
+  for (const [r, c] of symmetryCells(interactiveGrid.length, interactiveGrid[0].length,
+    selected.row, selected.col, symmetrySelect.value)) {
+    if (toBlack && interactiveGrid[r][c] === "") interactiveGrid[r][c] = "#";
+    else if (!toBlack && interactiveGrid[r][c] === "#") interactiveGrid[r][c] = "";
+  }
   setInteractiveMessage("");
   renderInteractive();
+}
+
+// The cells a black cell at (r, c) brings with it under the "Symétrie"
+// selector's `symmetry` — the same images as backend/crossword_gen.py's
+// symmetry_cells, (r, c) included.
+function symmetryCells(rows, cols, r, c, symmetry) {
+  const w = cols - 1;
+  const h = rows - 1;
+  const sym = symmetry === "rotation" && rows !== cols ? "bidirectional" : symmetry;
+  const images = {
+    horizontal: [[r, w - c]],
+    vertical: [[h - r, c]],
+    diagonal: [[h - r, w - c]],
+    bidirectional: [[r, w - c], [h - r, c], [h - r, w - c]],
+    rotation: [[c, w - r], [h - r, w - c], [h - c, r]],
+  }[sym] || [];
+  const seen = new Set([`${r},${c}`]);
+  const out = [[r, c]];
+  for (const [ir, ic] of images) {
+    if (!seen.has(`${ir},${ic}`)) {
+      seen.add(`${ir},${ic}`);
+      out.push([ir, ic]);
+    }
+  }
+  return out;
 }
 function interactiveErase() {
   if (!interactiveMode || !selected) return;
@@ -7118,7 +7181,8 @@ function handleInteractiveKeydown(event) {
   } else if (key.length === 1 && /[a-zA-Z]/.test(key)) {
     event.preventDefault();
     interactiveTypeLetter(key);
-  } else if (key === " ") {
+  } else if (key === " " || /^\p{P}$/u.test(key)) {
+    // A space or any punctuation mark toggles the selected cell black.
     event.preventDefault();
     interactiveToggleBlack();
   } else if (key === "Backspace" || key === "Delete") {
@@ -8235,6 +8299,7 @@ function enterInteractiveMode(state) {
     if (gp.words_per_node !== undefined && gp.words_per_node !== null) {
       wordsPerNodeInput.value = gp.words_per_node;
     }
+    if (gp.symmetry) symmetrySelect.value = gp.symmetry;
     if (gp.theme_precision !== undefined && gp.theme_precision !== null) {
       document.getElementById("theme-precision").value = gp.theme_precision;
     }
@@ -9716,6 +9781,7 @@ async function runInteractiveFinish(zoneCells) {
           mode: finishMode,
           black_enrichment_percent: Number(blackEnrichmentInput.value),
           words_per_node: Number(wordsPerNodeInput.value),
+          symmetry: symmetrySelect.value,
           difficulty: document.getElementById("difficulty").value,
           theme: themeKeywords.join(" "),
           theme_precision: readThemePrecision(),
@@ -10033,6 +10099,7 @@ form.addEventListener("submit", async (event) => {
       language, width, height, difficulty,
       bilingual_language: interactiveBilingualLanguage || undefined,
       black_enrichment_percent: blackEnrichmentPercent,
+      symmetry: symmetrySelect.value,
       theme: theme || undefined,
       theme_precision: themePrecision,
       pseudo: userPseudo || undefined,
@@ -10064,6 +10131,7 @@ form.addEventListener("submit", async (event) => {
           bilingual_language: bilingualLanguage !== language ? bilingualLanguage : undefined,
           black_enrichment_percent: blackEnrichmentPercent,
           words_per_node: wordsPerNode,
+          symmetry: symmetrySelect.value,
           // Thématique: a word list semantically steering the grid
           // (a backend-side Qdrant pre-search — see backend/app.py's
           // THEME_PRESEARCH_LIMIT). Omitted if empty.

@@ -369,6 +369,14 @@ public final class App {
         if (!BUDGET_MODES.containsKey(req.mode)) {
             throw http(400, "mode inconnu : " + Log.repr(req.mode) + " (attendu : ['fast', 'flash', 'gridzilla', 'medium', 'megatron', 'turbo', 'ultra'])");
         }
+        validateSymmetry(req.symmetry);
+    }
+
+    static void validateSymmetry(String symmetry) {
+        if (!Grids.BLACK_SYMMETRIES.contains(symmetry)) {
+            throw http(400, "symétrie inconnue : " + Log.repr(symmetry)
+                    + " (attendu : ['none', 'horizontal', 'vertical', 'diagonal', 'bidirectional', 'rotation'])");
+        }
     }
 
     static void requireLang(String lang) {
@@ -736,6 +744,8 @@ public final class App {
         Object origin;
         Map<Integer, String> zoneRevert;
         Set<Integer> requiredCells;
+        /** "Finir la grille"/"Finir la zone"'s Interactive grid pattern, Generator.Params.startGrid. */
+        char[][] startGrid;
     }
 
     @SuppressWarnings("unchecked")
@@ -939,9 +949,9 @@ public final class App {
         };
         try {
             Log.info("[%s] starting generation: language=%s bilingual_language=%s width=%s height=%s difficulty=%s "
-                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s mode=%s theme_precision=%s source=%s", shortId,
+                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s symmetry=%s mode=%s theme_precision=%s source=%s", shortId,
                     req.language, req.bilingualLanguage, req.width, req.height, req.difficulty, req.forceLettersPercent,
-                    req.blackEnrichmentPercent, req.wordsPerNode, req.mode, req.themePrecision, req.source);
+                    req.blackEnrichmentPercent, req.wordsPerNode, req.symmetry, req.mode, req.themePrecision, req.source);
             String theme = req.theme == null ? "" : Py.strip(req.theme);
             List<String> themePriority = null, bilingualThemePriority = null;
             String themeDescription = "";
@@ -1001,6 +1011,7 @@ public final class App {
                         p.forceLettersFraction = req.forceLettersPercent / 100.0;
                         p.blackEnrichmentFraction = req.blackEnrichmentPercent / 100.0;
                         p.wordsPerNode = req.wordsPerNode;
+                        p.blackSymmetry = req.symmetry;
                         p.cancelEvent = job.cancel;
                         p.deadlineChecks = BUDGET_MODES.get(req.mode);
                         p.resumeState = gridResume;
@@ -1010,6 +1021,7 @@ public final class App {
                         p.permanentLockedLetters = a.permanentLocked;
                         p.permanentBlackCells = a.permanentBlack;
                         p.requiredCells = a.requiredCells;
+                        p.startGrid = a.startGrid;
                         p.challengeWords = new ArrayList<>(challengeWords);
                         result = Generator.generateGrid(p);
                         break;
@@ -1079,10 +1091,12 @@ public final class App {
             List<Object> themeCells = wordCellsJson(words, themeSet);
             List<Object> challengeCells = wordCellsJson(words, challengeWords);
             Map<String, String> preservedByWord = a.preservedClues == null ? Map.of() : a.preservedClues;
+            // "Finir la grille"/"Finir la zone" (publish false) writes no definition: the draft keeps the ones already
+            // typed, and the Interactive panel's "Définitions" button writes the rest.
             List<Object> needingClue = new ArrayList<>();
             for (Object w : words) {
                 String pc = preservedByWord.get(Json.str(w, "answer", ""));
-                if (pc == null || pc.isEmpty()) needingClue.add(w);
+                if (a.publish && (pc == null || pc.isEmpty())) needingClue.add(w);
             }
             int totalForClues = needingClue.size();
             Map<String, Object> clueExample = new LinkedHashMap<>();
@@ -1111,7 +1125,7 @@ public final class App {
                     long cluesStart = System.nanoTime();
                     try {
                         final int before = accumulated.size();
-                        Map<String, String> newClues = DEFINITION_CLUE_GENERATOR.generate(remaining, req.difficulty, req.language,
+                        Map<String, String> newClues = remaining.isEmpty() ? Map.of() : DEFINITION_CLUE_GENERATOR.generate(remaining, req.difficulty, req.language,
                                 Clues.DEFAULT_TIMEOUT, (current, total, answer, clue) -> progress.on("clues", Json.obj(
                                         "current", before + current, "total", totalForClues, "new_clue", clue != null
                                                 ? Json.obj("answer", answer, "accented", Json.str(wordsByAnswer.get(answer), "accented", answer), "clue", clue)
@@ -1150,7 +1164,7 @@ public final class App {
             progress.on("saving", new LinkedHashMap<>());
             String pseudo = pseudoOf(req.pseudo);
             Map<String, Object> generationParams = Json.obj("black_enrichment_percent", req.blackEnrichmentPercent,
-                    "words_per_node", req.wordsPerNode, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
+                    "words_per_node", req.wordsPerNode, "symmetry", req.symmetry, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
             if (a.publish) {
                 try {
                     String gridId = GridStore.saveGridJson(result, req.language, req.difficulty, req.mode, title,
@@ -1285,7 +1299,7 @@ public final class App {
             Rng rng = Rng.of(req.seed);
             int rows = req.height, cols = req.width;
             char[][] grid = Grids.makePattern(rows, cols, 0.0, rng, Words.LengthSets.available(index, Grids.PREFILL_MIN_WORD_COUNT),
-                    null, null, index, req.blackEnrichmentPercent / 100.0);
+                    null, null, index, req.blackEnrichmentPercent / 100.0, req.symmetry);
             Set<String> challenge = challengeSet(req.challengeWords);
             PW scrabble = scrabbleWords(req.language, req.bilingualLanguage, req.difficulty);
             Map<String, Object> placed = Interactive.placeWord(grid, rows, cols, index, rng, PW.single(priority), challenge,
@@ -1814,6 +1828,15 @@ public final class App {
             String slug = title.isEmpty() ? "grille" : GridStore.slugifyTitle(title);
             return new Web.Raw(200, "application/pdf", pdf, Map.of("Content-Disposition", "attachment; filename=\"" + slug + ".pdf\""));
         });
+        w.get("/api/library/{grid_id}/puz", r -> {
+            Map<String, Object> record = GridStore.getGrid(r.pathParams.get("grid_id"));
+            if (record == null) throw http(404, "grille introuvable dans la bibliothèque");
+            String title = Json.str(record, "title", "");
+            title = title == null ? "" : Py.strip(title);
+            String slug = title.isEmpty() ? "grille" : GridStore.slugifyTitle(title);
+            return new Web.Raw(200, PuzExport.PUZ_MEDIA_TYPE, PuzExport.renderPuz(record, title),
+                    Map.of("Content-Disposition", "attachment; filename=\"" + slug + ".puz\""));
+        });
         w.post("/api/game/save", r -> {
             Body b = new Body(r.json());
             String gridId = b.required("grid_id");
@@ -2140,6 +2163,7 @@ public final class App {
                 throw http(400, "langue bilingue inconnue ou dictionnaire absent");
             }
             if (!Words.DIFFICULTY_PRESETS.containsKey(req.difficulty)) throw http(400, "difficulté inconnue");
+            validateSymmetry(req.symmetry);
             String id = newJob();
             runInBackground("interactive-" + id.substring(0, 8), () -> runInteractiveJob(id, req));
             return Json.obj("job_id", id);
@@ -2496,6 +2520,7 @@ public final class App {
             String mode = b.str("mode", "medium");
             int bep = b.integer("black_enrichment_percent", 15, 0, 100);
             int wpn = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, MAX_WORDS_PER_NODE);
+            String symmetry = b.str("symmetry", "none");
             int flp = b.integer("force_letters_percent", 0, 0, 100);
             String pseudo = b.str("pseudo", null);
             String reqDifficulty = b.str("difficulty", null);
@@ -2602,6 +2627,7 @@ public final class App {
             genreq.forceLettersPercent = flp;
             genreq.blackEnrichmentPercent = bep;
             genreq.wordsPerNode = wpn;
+            genreq.symmetry = symmetry;
             genreq.mode = mode;
             genreq.theme = theme.isEmpty() ? null : theme;
             genreq.themePrecision = themePrecision;
@@ -2632,6 +2658,7 @@ public final class App {
             a.origin = meta.get("origin");
             a.zoneRevert = zoneRevert;
             a.requiredCells = required;
+            a.startGrid = seedGrid;
             runInBackground("finish-" + id.substring(0, 8), () -> runGenerateJob(id, genreq, a));
             return Json.obj("job_id", id);
         });

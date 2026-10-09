@@ -167,10 +167,12 @@ s'ouvre aussi dans l'interface par le bouton **?** à gauche de **Mots**.
 - **Définitions** génère les définitions manquantes ; **Proposer une
   définition** et **Proposer un titre** font plusieurs propositions.
 - **Finir la grille** (ou **Finir la zone**, si une zone est sélectionnée)
-  confie les cases vides à la génération automatique ; on peut ensuite
+  confie les cases vides à la génération automatique, sans écrire de
+  définition (le bouton **Définitions** les écrit ensuite) ; on peut
   corriger et relancer autant de fois que nécessaire.
 - Sauvegarder, puis **Publier** la grille complète : elle rejoint la
-  **Bibliothèque**, d'où l'on peut copier un lien ou l'exporter en PDF.
+  **Bibliothèque**, d'où l'on peut copier un lien ou l'exporter en PDF ou
+  au format .puz (Across Lite).
 
 **Finir la grille / Finir la zone** réutilise le pipeline automatique :
 chaque case déjà posée devient une contrainte permanente
@@ -181,7 +183,13 @@ touche aucune case de la zone est retiré de la recherche (`excluded_slots`,
 `_outside_zone_slot_indices`, `backend/crossword_gen.py`, `try_fill`) : tout
 le budget va aux emplacements de la zone, et ces emplacements hors zone ne
 comptent pas non plus comme un espoir de progrès entre deux étapes
-(`generate_grid`, `still_has_hope`).
+(`generate_grid`, `still_has_hope`). Toute grille nouvelle de la
+recherche — tentatives réinitialisées en début d'étape, tentatives de
+remplacement, redémarrage complet quand toutes les grilles sont écartées —
+part de la grille interactive de départ (ses cases noires, et ses lettres
+verrouillées), jamais d'une grille vierge (`generate_grid`, `start_grid`). Aucune définition n'est demandée au
+LLM : le brouillon garde celles déjà tapées (`backend/app.py`,
+`_run_generate_job` sans publication).
 
 ### Grilles bilingues
 
@@ -366,8 +374,9 @@ l'est sur l'état brut : sa tentative ne réapparaît pas plus loin.
 Chaque tentative part d'une grille de `width` × `height` cases (15×10 par
 défaut) — blanche au premier palier, ou déjà partiellement noircie et
 verrouillée si elle hérite d'un palier précédent — et y ajoute des cases
-noires **une par une, sans aucune contrainte de symétrie** (`make_pattern`/
-`_place_black_cells`), ce qui permet des motifs bien plus clairsemés.
+noires **une par une** (`make_pattern`/`_place_black_cells`), ce qui
+permet des motifs bien plus clairsemés — ou, avec une **symétrie**
+choisie (ci-dessous), par groupes de cases symétriques.
 
 La pose se fait en deux temps : un **pré-remplissage** qui noircit ce qui
 est de toute façon inremplissable, puis une **densification** jusqu'au
@@ -477,6 +486,35 @@ case de l'emplacement à couper ne convient (`_prefill_unfillable_slots`).
 Une case noire peut aussi y apparaître par la reprise entre paliers, la
 résolution des zones impossibles ou le réaménagement d'une case noire
 flottante.
+
+**Symétrie.** Le réglage « Symétrie » (`symmetry`, valeurs
+`BLACK_SYMMETRIES`) fait poser à chaque tirage la case tirée **avec ses
+images** (`symmetry_cells`), en notant (r, c) la ligne et la colonne,
+L × H la taille de la grille :
+
+- **Aucune** : la case seule ;
+- **Horizontale** : (r, L−1−c) ;
+- **Verticale** : (H−1−r, c) ;
+- **Diagonale** : (H−1−r, L−1−c) ;
+- **Bidirectionnelle** : les trois images précédentes ;
+- **Rotation** (grille carrée seulement, Bidirectionnelle sinon) : les
+  trois images par quart de tour autour du centre de la grille,
+  (c, L−1−r), (H−1−r, L−1−c) et (H−1−c, r) — 4 cases par pose.
+
+Une case n'est candidate que si tout le groupe respecte les contraintes
+fortes : chaque image encore blanche est elle-même candidate au tirage
+(hors coins, hors lettre verrouillée) et les respecte seule, aucune case
+du groupe ne touche une case noire ni une autre case du groupe, et la
+grille avec tout le groupe noirci reste structurellement valide
+(`_place_black_cells`). La limite des emplacements courts retire une
+case délimitante avec ses images. Le pré-remplissage, la reprise entre
+paliers, la résolution des zones impossibles, le réaménagement des cases
+flottantes et la minimisation (chapitre 6) posent ou retirent les cases
+une à une : la grille finale n'est donc pas forcément symétrique. Le même
+réglage s'applique au motif de départ d'une session Interactive, et, dans
+ce mode, à la case noircie ou blanchie à la main (ses images vides
+noircissent, ses images noires blanchissent ; `frontend/static/script.js`,
+`interactiveToggleBlack`).
 
 **L'adjacence n'est jamais acceptée par la génération de motif**, à aucun
 palier : si aucune candidate isolée ne convient, plus aucune case n'est
@@ -2273,7 +2311,8 @@ chacune recevant sa propre grille de départ.
 
 Juste après un nettoyage complet, **une seule** des tentatives parallèles du
 palier suivant repart d'une grille entièrement vierge
-(`FULL_RESET_ATTEMPT_COUNT`) ; les autres reprennent chacune sa propre
+(`FULL_RESET_ATTEMPT_COUNT` ; avec « Finir la grille »/« Finir la zone »,
+de la grille interactive de départ, `start_grid`) ; les autres reprennent chacune sa propre
 grille nettoyée parmi les survivantes. Le nombre de grilles nouvelles ainsi
 réservées est précisément le nombre de grilles nettoyées éliminées, pour que
 chaque place du palier suivant soit pourvue exactement une fois.

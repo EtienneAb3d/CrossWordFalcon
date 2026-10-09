@@ -327,6 +327,8 @@ json`. Holds all server-side state in plain module dicts/lists:
   "Joueurs" column),
   `GET /api/library/{grid_id}` (optionally merges a player's saved play
   state), `GET /api/library/{grid_id}/pdf` (answer-free printable sheet),
+  `GET /api/library/{grid_id}/puz` (Across Lite .puz file, see
+  `puz_export.py`),
   `POST /api/game/save` (autosave play state to `GRID_GAME`), `GET
   /api/game/leaderboard/{grid_id}` (players' ranking on that grid).
 - *Dictionary/paraphrase*: `GET /api/dictionary` (root-family search),
@@ -370,7 +372,9 @@ json`. Holds all server-side state in plain module dicts/lists:
 (`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
 `black_enrichment_percent` [0-100, default 15], `words_per_node` [1-10,
-default `WORDS_PER_NODE`], `mode` [flash/turbo/fast/
+default `WORDS_PER_NODE`], `symmetry` [`BLACK_SYMMETRIES`, default
+"none", 400 otherwise, also applied to an Interactive session's starting
+pattern], `mode` [flash/turbo/fast/
 medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_precision`
 [0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
 [list of free-form "Mots Défi" strings, default empty]); `RecomputeRequest`;
@@ -486,7 +490,23 @@ own rng drawn from the parent's in candidate order:
    other cell of the slot it cuts). Adjacency is never accepted at all, on any palier
    (`forbid_adjacency=True`, always): a palier whose black-fill
    percentage target can't be reached without an adjacent cell simply
-   ends up short of that target, left as-is, rather than forcing one. A
+   ends up short of that target, left as-is, rather than forcing one.
+   **Symmetry** ("Symétrie", `make_pattern(symmetry=)`, `generate_grid(
+   black_symmetry=)` -> `_worker_black_symmetry`, `GenerateRequest.
+   symmetry`, one of `BLACK_SYMMETRIES`: none/horizontal/vertical/
+   diagonal/bidirectional/rotation; Java `Grids.BLACK_SYMMETRIES`,
+   `Generator.Params.blackSymmetry`): the ratio draw places each drawn
+   cell together with its images (`symmetry_cells`, Java `Grids.
+   symmetryCells`: horizontal (r, cols-1-c), vertical (rows-1-r, c),
+   diagonal both mirrored, bidirectional all three, rotation — square
+   grids only, bidirectional otherwise — the three quarter-turn images
+   about the center, (c, cols-1-r), (rows-1-r, cols-1-c) and (rows-1-c,
+   r)); a candidate is valid only if every image still
+   white is a candidate satisfying the hard constraints on its own, no cell
+   of the group touches a black cell or another cell of the group, and the
+   grid with the whole group blackened passes `is_structurally_valid`; the
+   short-slot limit reopens a bounding cell with its images. Pre-fill, the
+   cross-palier repairs, reshapes and minimization stay unpaired. A
    pre-fill phase (`_prefill_unfillable_slots`) runs first (and again
    after ratio-based placement, whenever letters are already locked) to
    blacken any slot whose length has too few dictionary candidates
@@ -2138,7 +2158,7 @@ like the real letters.
 "Finir la grille"/"Finir la zone" (`POST /api/interactive/finish`) keeps
 the session's grid size and language(s) and takes every other generation
 parameter from the generation form's current values (`Interactive
-FinishRequest`: `mode`, `black_enrichment_percent`, `words_per_node`, `force_letters_percent`,
+FinishRequest`: `mode`, `black_enrichment_percent`, `words_per_node`, `symmetry`, `force_letters_percent`,
 `difficulty`, `theme`, `theme_precision`, `challenge_words` — each of the
 last four falling back to the session's own when omitted); the session's
 theme glossary is reused only while the form's theme and precision equal
@@ -2152,12 +2172,20 @@ via `permanent_locked_letters`/`permanent_black_cells` (every already-
 placed cell becomes a hard, permanent constraint) and `required_cells`
 (when a zone is selected rather than the whole grid, only that zone's
 cells must end up resolved for the search to declare success — cells
-outside it may remain unresolved). `try_fill` adds every still-open slot
+outside it may remain unresolved). Every attempt that starts afresh —
+a palier's reset attempts, the mid-palier replacement attempts, the
+whole-search restart once every cleaned grid is dropped — starts from the
+Interactive grid itself (`generate_grid(start_grid=)`, the grid's black
+cells, its letters being `permanent_locked_letters`; Java `Generator.
+Params.startGrid`), never from a blank grid. `try_fill` adds every still-open slot
 touching no required cell to `excluded_slots` (`_outside_zone_slot_
 indices`, Java `Fill.outsideZoneSlotIndices`), so the search spends its
 budget on the zone only, and `generate_grid`'s `still_has_hope` ignores
 those slots too; empty for "Finir la grille", where every blank cell is
-required.
+required. It writes no definition (`_run_generate_job` with `publish`
+off sends no word to the LLM): the draft keeps the definitions already
+typed (`preserved_clues`), and the Interactive panel's "Définitions"
+button writes the others.
 
 ### `clues.py` — `LLMClueGenerator`
 
@@ -2190,8 +2218,7 @@ routing (Java `App.DEFINITION_CLUE_GENERATOR`/`DEFINITION_DEFINE_
 GENERATOR`).
 
 Every definition written by the LLM goes through one code path — a grid
-word's clue (`generate`: automatic generation, "Recalculer", "Finir la
-grille") and "Définir" (`generate_definitions`: the Dictionnaire panel,
+word's clue (`generate`: automatic generation, "Recalculer") and "Définir" (`generate_definitions`: the Dictionnaire panel,
 Interactive mode's "Proposer"/"Définitions"/"Recalculer") alike: the
 entry `_word_entry` resolves (Java `Clues.wordEntry`: the natural
 spelling, else the first wordlist row's; the base forms given, then those
@@ -2498,6 +2525,18 @@ Four independent filesystem stores, one JSON file shape shared with the
   entirely, see "Live progress reporting during a still-running attempt"
   above).
 
+### `puz_export.py`
+
+`render_puz(record, title)` (Java `PuzExport.renderPuz`) writes a library
+record as an Across Lite .puz file (version 1.3, `application/x-
+crossword`): header with its checksums (CIB, global, masked "ICHEATED"
+low/high), solution ("." for a black cell), empty player grid ("-"),
+then NUL-terminated title, author (the record's pseudo, else
+"CrossWordFalcon"), copyright ("CrossWordFalcon"), the clues in the
+format's order (cells row by row, the across word starting there then the
+down word, `_clues_in_order`), and empty notes; text is Windows-1252, a
+character it lacks written "?". Both back ends produce identical bytes.
+
 ### `svg_export.py`
 
 Renders a `generate_grid()`-shaped result as A4 landscape SVG pages:
@@ -2599,6 +2638,7 @@ validation) and `Job.java` (one `JOBS` entry, mutated and serialized under
 its own lock); the theme-glossary/Qdrant part of `app.py` → `Themes.java`;
 `clues.py` → `Clues.java`; `chatbot.py` → `ChatBot.java` (SSE streaming);
 `grid_store.py` → `GridStore.java`; `svg_export.py` → `SvgExport.java`;
+`puz_export.py` → `PuzExport.java`;
 `embedder.py`/`qdrant_store.py`/`system_info.py`/`gloss_lookup.py`/
 `inflection_lookup.py`/`example_sentences.py`/`dictionary_lookup.py`/
 `secret_store.py`/`text_lines.py` → one class each; `crossword_gen.py` → package
@@ -2706,7 +2746,10 @@ state, unlike the backend).
   else `step.code`, `generationStepKey` — measured client-side and
   re-rendered every `STATUS_CLOCK_INTERVAL_MS` (1 s)); the interactive-authoring
   mode (by far the largest block — zone selection, undo stack, per-cell
-  editing, calls to every `/api/interactive/*` endpoint, "Définitions"/
+  editing — space or any punctuation toggles the selected cell black,
+  with its images under the form's `#symmetry` (`interactiveToggleBlack`,
+  `symmetryCells`), and a click on the already-selected cell swaps the
+  fill direction (`selectCell`) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
   "Recalculer" (`generateInteractiveDefinitions`: `POST /api/interactive/
   verify` then `GET /api/dictionary/define` per filled valid word —
   only those lacking a definition, or all of them, replacing the
