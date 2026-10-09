@@ -2749,7 +2749,7 @@ state, unlike the backend).
   editing — space or any punctuation toggles the selected cell black,
   with its images under the form's `#symmetry` (`interactiveToggleBlack`,
   `symmetryCells`), and a click on the already-selected cell swaps the
-  fill direction (`selectCell`) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
+  fill direction (`selectCell`, in play mode too) —, calls to every `/api/interactive/*` endpoint, "Définitions"/
   "Recalculer" (`generateInteractiveDefinitions`: `POST /api/interactive/
   verify` then `GET /api/dictionary/define` per filled valid word —
   only those lacking a definition, or all of them, replacing the

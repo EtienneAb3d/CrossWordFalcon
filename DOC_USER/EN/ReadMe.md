@@ -856,7 +856,8 @@ Once generation completes, the search-progress panel disappears and
   black cell can't be selected) — the clicked cell turns light blue, and
   the rest of the word running through it in the current Across/Down
   direction is tinted light green (`applySelectedWordHighlight`), so it
-  is clear which word is being filled. Type a letter to fill the cell
+  is clear which word is being filled. Clicking the cell that is already
+  selected switches between Across and Down, like **Ctrl**. Type a letter to fill the cell
   and move to the next cell in the current Across/Down direction
   (`handleKeydown`, `moveSelection`) — so setting the direction with
   **Ctrl** or the Across/Down buttons also controls which way typing

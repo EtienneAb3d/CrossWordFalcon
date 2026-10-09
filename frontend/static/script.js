@@ -2367,6 +2367,11 @@ function selectCell(r, c) {
     return;
   }
   if (showSolution || !isWhite(r, c)) return;
+  // Same rule as Interactive mode: a click on the cell that already has
+  // the focus swaps the fill direction.
+  if (selected && selected.row === r && selected.col === c) {
+    setActiveDirection(activeDirection === "across" ? "down" : "across");
+  }
   selected = { row: r, col: c };
   renderGrid();
 }
