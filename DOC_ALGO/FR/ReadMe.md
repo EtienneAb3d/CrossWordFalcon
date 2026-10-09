@@ -414,14 +414,21 @@ absence de case orpheline).
 
 Chaque case blanche reçoit un **score** : la somme des longueurs des
 mots (suites maximales d'au moins 2 cases non noires, horizontales et
-verticales, chacune comptée une fois) qui croisent le **carré de 3×3
-cases centré sur elle** (`_crossing_length_score`). Chaque **segment** —
+verticales, chacune comptée une fois) qui croisent sa **croix** : la case elle-même et
+jusqu'à `CROSSING_SCORE_RADIUS` (**3**) cases dans chacune des quatre
+directions (gauche, droite, haut, bas), chaque direction s'arrêtant à la
+première case noire ou au bord — **13 cases au plus**
+(`_crossing_score_cells`, `_crossing_length_score`). Pour ne pas
+sous-évaluer les cases proches des bords, ce score est multiplié par le
+nombre de cases de la croix complète (1 + 4 × `CROSSING_SCORE_RADIUS`,
+soit 13) divisé par le nombre de ses cases situées dans la grille (cases
+noires comprises) : ×13/10 au milieu d'un bord, ×13/7 dans un coin. Chaque **segment** —
 suite maximale de cases non noires d'une ligne ou d'une colonne, case
 seule comprise — reçoit la **somme des scores de ses cases**
 (`_run_score`). Les suites de cases sont calculées une fois, puis tenues
 à jour à chaque pose : la nouvelle case noire coupe le segment horizontal
 et le segment vertical qui la contiennent en deux morceaux (un seul quand
-elle est en bout de segment), et le score de chaque case à une case ou
+elle est en bout de segment), et le score de chaque case à `CROSSING_SCORE_RADIUS` (3) cases ou
 moins de ces deux segments est recalculé (`backend/crossword_gen.py`,
 `_cell_runs`, `_split_cell_runs`, `_split_run_list`).
 
@@ -429,7 +436,10 @@ Chaque tirage classe les segments du meilleur score au moins bon (à
 égalité, au hasard) et retient les `BLACK_DRAW_WINDOW_PERCENT` (**5 %**)
 premiers (au moins un). Parmi les cases candidates de ces segments,
 seules celles qui respectent les
-**contraintes fortes** sont conservées. Pour chacune, on retient `BLACK_DISTANCE_NEIGHBORS`
+**contraintes fortes** sont conservées, et parmi elles seuls les **5 %**
+de plus fort **score de longueurs cumulées** (`_crossing_length_score`,
+au moins une ; à égalité, l'ordre de leur mélange initial) sont gardés
+pour la suite. Pour chacune, on retient `BLACK_DISTANCE_NEIGHBORS`
 (**7**) cases noires : d'abord les cases **alignées**, la plus proche dans
 chacune des quatre directions (gauche, droite, haut, bas — bords compris,
 donc toujours quatre), puis les **3** cases non alignées les plus proches.
@@ -446,7 +456,7 @@ juste à l'extérieur. On classe ces cases du meilleur score d'écartement au mo
 hasard** parmi les **5 %** de meilleur score d'écartement (au moins une). Si les segments retenus ne contiennent
 aucune case valide, le pourcentage est **augmenté de 5 %** (10 %, 15 %…),
 pour les segments retenus (pris plus loin dans le même classement) comme
-pour la fenêtre de distance, et le tirage recommence (`_place_black_cells`).
+pour la fenêtre de score de longueurs et la fenêtre de distance, et le tirage recommence (`_place_black_cells`).
 
 Les contraintes fortes : la case est encore blanche, ne **touche aucune
 autre case noire**, ne fait pas tomber un emplacement touchant une lettre

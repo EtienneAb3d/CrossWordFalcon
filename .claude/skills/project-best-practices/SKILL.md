@@ -532,7 +532,11 @@ project's engineering language.
   servers — LLM 3002/3004, embeddings 3003, Qdrant 6333 — launched from
   the development checkout, since the GPUs cannot hold a second copy.
   Restarting `run_llm.sh`/`run_embed.sh`/`run_qdrant.sh` therefore
-  interrupts the public site too.
+  interrupts the public site too. **The development server is always
+  launched under `nice -n 9`** (`nice -n 9 ./run_Falcon.sh`, `nice -n 9
+  ./run_FalconJ.sh`), so its back end and its search workers yield the
+  CPU to the production server, whose resources take precedence; the
+  production server runs at normal priority.
 - `CROSSWORDFALCON_PARALLEL_ATTEMPTS` (default: this machine's own CPU
   count, `os.cpu_count()` — changed from a fixed 10 at the user's explicit
   request, so a deployment automatically uses as many parallel attempts as
@@ -983,11 +987,24 @@ the current defaults/behavior to know before touching this code.
 - **The ratio draw selects white runs by their summed word-length score**
   (`_place_black_cells`, `_crossing_length_score`, `_run_score`) — the
   user's rule: each white cell scores the sum of the lengths of the words
-  crossing the 3x3 square centered on it, each run (segment) of white
+  crossing its cross (itself and up to 3 cells in each of the four
+  directions, each direction stopping at a black cell — the user's rule:
+  the 7x7 group limited to its row and column, cut short by the black
+  cells already placed, 13 cells at most), multiplied by 13 over the
+  number of the full cross's cells inside the grid (the user's rule:
+  compensate the edges for the cells they make unreachable). Choice made
+  with that rule, to revisit with the user: only cells outside the grid
+  count as unreachable, not those cut off by a black cell (a cell in the
+  middle of an edge thus gets 13/10), each run (segment) of white
   cells the sum of its cells' scores, and the best-scored runs are
   selected (like the former "longest runs" window, the length replaced by
-  this score); the existing rules (hard constraints, spread score, random
-  pick among the best) pick the black cell among their cells. Choices made
+  this score); among their cells satisfying the hard constraints, only the
+  `BLACK_DRAW_WINDOW_PERCENT` % with the highest cell score are kept (the
+  user's rule: filter by cumulated lengths before the neighbourhood
+  ranking), then the spread score and the random pick among the best
+  choose the black cell. Choice made with that rule, to revisit with the
+  user: this cell window widens with the draw's percentage like the
+  others. Choices made
   with the change, to revisit with the user: a run is a maximal run of
   non-black cells across or down, single cells included, scored over all
   its white cells (corner and locked cells included, though never

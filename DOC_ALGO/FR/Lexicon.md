@@ -292,8 +292,12 @@ plusieurs signaux) :
 
 - **Score de tirage d'une case noire** : pour une case blanche, au tirage
   « Taux noir », somme des longueurs des mots (suites d'au moins 2 cases
-  non noires, horizontales et verticales) qui croisent le carré de 3×3
-  cases centré sur elle. Le **score d'un segment** (suite maximale de
+  non noires, horizontales et verticales) qui croisent sa **croix** : elle-même et
+  jusqu'à 3 cases dans chacune des quatre directions, chaque direction
+  s'arrêtant à la première case noire ou au bord (13 cases au plus),
+  multipliée par 13 divisé par le nombre de cases de la croix situées dans
+  la grille (compensation des bords)
+  (`backend/crossword_gen.py`, `_crossing_score_cells`). Le **score d'un segment** (suite maximale de
   cases non noires d'une ligne ou d'une colonne, case seule comprise) est
   la somme des scores de ses cases ; le tirage retient les segments les
   mieux scorés, et la case posée est ensuite choisie parmi leurs cases

@@ -447,16 +447,24 @@ own rng drawn from the parent's in candidate order:
    a time (never symmetric pairs), via `_place_black_cells`, which scores
    every white cell by `_crossing_length_score` — the sum of the lengths of
    the words (maximal runs of at least 2 non-black cells, across and down,
-   each counted once) crossing the 3x3 square centered on it — and every
+   each counted once) crossing its cross — itself and up to `CROSSING_SCORE_RADIUS` (3)
+   cells in each of the four directions, each direction stopping at the
+   first black cell or the edge, 13 cells at most (`_crossing_score_cells`),
+   multiplied by 13 (1 + 4 x the radius) over the number of the full
+   cross's cells lying inside the grid, so edge cells are not underrated
+   (a float, summed in order identically in both back ends)
+   — and every
    white run (maximal run of non-black cells, across and down, single
    cells included) by the sum of its cells' scores (`_run_score`), both
    kept up to date as cells are placed (`_cell_runs`: each cell's across
    and down run; `_split_cell_runs`/`_split_run_list`: a new black cell
-   splits both into the pieces on either side, and every cell within one
-   cell of them is rescored). Every draw ranks the runs by decreasing
+   splits both into the pieces on either side, and every cell within
+   `CROSSING_SCORE_RADIUS` cells of them is rescored). Every draw ranks the runs by decreasing
    score (ties in random order), keeps the `BLACK_DRAW_WINDOW_PERCENT` (5)
    % best (at least one), keeps their candidate cells satisfying the hard
-   constraints, ranks those by `_black_spread_score` — the mean, over
+   constraints, then only the same percentage of those with the highest
+   `_crossing_length_score` (at least one, ties keeping the shuffled
+   order), ranks those by `_black_spread_score` — the mean, over
    `BLACK_DISTANCE_NEIGHBORS` (7) black cells (the closest aligned one in
    each of the four directions, edges included so always four, then the 3
    closest non-aligned ones, `_record_black`), of the square root
@@ -467,8 +475,8 @@ own rng drawn from the parent's in candidate order:
    `_nearest_black_distances_sq`, kept per candidate and updated as each
    cell is placed; highest first, ties keeping the shuffled order), and
    draws at random among the same percentage best scored (at least one); when the selected runs hold
-   no valid cell, the percentage grows by 5 (more runs, same order) and the
-   draw starts over. The
+   no valid cell, the percentage grows by 5 (more runs, same order, every
+   window widened alike) and the draw starts over. The
    hard constraints: still white, not adjacent to a black cell,
    `_new_black_cell_breaks_locked_slot` false, structurally valid at
    `STRUCTURAL_MIN_INTERIOR_FREE=6` (an interior white zone must be at

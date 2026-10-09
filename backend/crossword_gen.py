@@ -971,8 +971,9 @@ def symmetry_cells(rows, cols, r, c, symmetry):
 
 # `_place_black_cells`' draw window, in percent, and its widening step: the
 # share of the white runs (`_run_score`-ranked) the draw is restricted to,
-# and, among their valid cells, the share farthest from every black cell
-# already placed.
+# among their valid cells the share with the highest
+# `_crossing_length_score`, and among those the share farthest from every
+# black cell already placed.
 BLACK_DRAW_WINDOW_PERCENT = 5
 
 # `make_pattern`'s short-slot limit: once the ratio draw has reached its
@@ -1047,22 +1048,45 @@ def _split_cell_runs(run_at, cell):
     return old
 
 
-def _crossing_length_score(run_at, r, c):
+# Reach of `_crossing_length_score` around a cell, in each of the four
+# directions: 3 = the cross of the 7x7 square centered on it.
+CROSSING_SCORE_RADIUS = 3
+
+
+def _crossing_score_cells(run_at, r, c):
+    """The cells `_crossing_length_score` measures around the white cell
+    (r, c): itself, then up to `CROSSING_SCORE_RADIUS` cells in each of the
+    four directions, each direction stopping at the first black cell or the
+    grid's edge (at most 13 cells)."""
+    cells = [(r, c)]
+    for dr, dc in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+        for k in range(1, CROSSING_SCORE_RADIUS + 1):
+            cell = (r + dr * k, c + dc * k)
+            if cell not in run_at:
+                break
+            cells.append(cell)
+    return cells
+
+
+def _crossing_length_score(run_at, rows, cols, r, c):
     """`_place_black_cells`' score of the white cell (r, c): the sum of the
     lengths of the words (runs of at least 2 cells, across and down, each
-    counted once) crossing the 3x3 square centered on it."""
+    counted once) crossing the cells of its cross (`_crossing_score_cells`:
+    up to `CROSSING_SCORE_RADIUS` cells in each direction, stopping at a
+    black cell), multiplied by the full cross's cell count (1 + 4 x
+    `CROSSING_SCORE_RADIUS`) over the count of its cells lying inside the
+    grid, so a cell near the edge is not underrated."""
+    reach = CROSSING_SCORE_RADIUS
+    inside = (1 + min(reach, c) + min(reach, cols - 1 - c)
+              + min(reach, r) + min(reach, rows - 1 - r))
     seen = set()
     total = 0
-    for rr in (r - 1, r, r + 1):
-        for cc in (c - 1, c, c + 1):
-            runs = run_at.get((rr, cc))
-            if runs is None:
-                continue
-            for run in runs:
-                if len(run) >= 2 and id(run) not in seen:
-                    seen.add(id(run))
-                    total += len(run)
-    return total
+    for cell in _crossing_score_cells(run_at, r, c):
+        for run in run_at[cell]:
+            if len(run) >= 2 and id(run) not in seen:
+                seen.add(id(run))
+                total += len(run)
+    return total * (1 + 4 * reach) / inside
 
 
 def _ordered_runs(run_at, rows, cols):
@@ -1108,7 +1132,10 @@ def _split_run_list(runs, run_at, old_runs, cell):
 def _run_score(run, cell_score):
     """`_place_black_cells`' ranking score of a white run: the sum of its
     cells' `_crossing_length_score`."""
-    return sum(cell_score[cell] for cell in run)
+    total = 0.0
+    for cell in run:  # in order, uncompensated: the Java mirror's exact sum
+        total += cell_score[cell]
+    return total
 
 
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
@@ -1120,16 +1147,20 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
 
     Every white cell gets a score, `_crossing_length_score`: the sum of
     the lengths of the words (runs of at least 2 non-black cells, across
-    and down) crossing the 3x3 square centered on it. Every white run
+    and down) crossing its cross: itself and up to `CROSSING_SCORE_RADIUS`
+    (3) cells in each direction, each direction stopping at a black cell
+    (`_crossing_score_cells`). Every white run
     (maximal run of non-black cells, across and down, single cells
     included) gets the sum of its cells' scores (`_run_score`). Both are
     kept up to date as cells are placed (`_cell_runs`, `_split_cell_runs`,
     `_split_run_list`: a new black cell splits its across and down runs,
-    which changes the score of every cell within one cell of them). Every
+    which changes the score of every cell within `CROSSING_SCORE_RADIUS` cells of them). Every
     draw ranks the runs by decreasing score (ties in random order) and
     keeps the `BLACK_DRAW_WINDOW_PERCENT` % best (at least one). Only the
     candidates lying in those runs that satisfy the hard constraints are
-    kept; they are ranked by `_black_spread_score`: the mean, over
+    kept; of those, only the same percentage with the highest
+    `_crossing_length_score` is kept (at least one, ties keeping
+    `candidates`' shuffled order); they are ranked by `_black_spread_score`: the mean, over
     `BLACK_DISTANCE_NEIGHBORS` black cells — the closest aligned one in
     each of the four directions, then the closest non-aligned ones — of
     the square root of the distance to each (`_black_distance_sq`:
@@ -1223,6 +1254,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
                 if checked[i]:
                     valid.append(i)
             if valid:
+                valid.sort(key=lambda i: -cell_score[remaining[i]])
+                valid = valid[:_window_size(len(valid), percent)]
                 valid.sort(key=lambda i: -dist[i])
                 window = valid[:_window_size(len(valid), percent)]
                 return window[rng.randrange(len(window))]
@@ -1232,7 +1265,7 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
 
     run_at = _cell_runs(grid, rows, cols)
     runs = _ordered_runs(run_at, rows, cols)
-    cell_score = {cell: _crossing_length_score(run_at, *cell) for cell in run_at}
+    cell_score = {cell: _crossing_length_score(run_at, rows, cols, *cell) for cell in run_at}
     blacks = [(br, bc) for br in range(rows) for bc in range(cols) if grid[br][bc] == BLACK]
     # The grid's edges count as black cells: a ring of virtual black cells
     # just outside the grid.
@@ -1254,11 +1287,12 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         old_runs = _split_cell_runs(run_at, cell)
         runs = _split_run_list(runs, run_at, old_runs, cell)
         del cell_score[cell]
+        span = range(-CROSSING_SCORE_RADIUS, CROSSING_SCORE_RADIUS + 1)
         rescored = {(rr + dr, cc + dc) for run in old_runs for rr, cc in run
-                    for dr in (-1, 0, 1) for dc in (-1, 0, 1)}
+                    for dr in span for dc in span}
         for other in rescored:
             if other in cell_score:
-                cell_score[other] = _crossing_length_score(run_at, *other)
+                cell_score[other] = _crossing_length_score(run_at, rows, cols, *other)
         for i, (cr, cc) in enumerate(remaining):
             if _record_black(nearest[i], cr, cc, r, c):
                 dist[i] = _black_spread_score(nearest[i])
@@ -1905,9 +1939,11 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
 
     Implemented by `_place_black_cells`: at each step, the white runs are
     ranked by the sum of their cells' `_crossing_length_score` (the lengths
-    of the words crossing the 3x3 square centered on each cell), the
-    `BLACK_DRAW_WINDOW_PERCENT` % best are kept, and a valid cell of theirs
-    is drawn at random among the same percentage of them farthest from
+    of the words crossing each cell's cross, up to 3 cells in each direction
+    short of a black cell), the
+    `BLACK_DRAW_WINDOW_PERCENT` % best are kept, then the same percentage
+    of their valid cells with the highest `_crossing_length_score`, and a
+    cell is drawn at random among the same percentage of those farthest from
     every black cell already placed, the percentage widening by the same
     step while the selected runs hold no valid cell.
 

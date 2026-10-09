@@ -342,8 +342,8 @@ public final class Grids {
 
     /**
      * {@link #placeBlackCells}' draw window, in percent, and its widening step: the share of the white runs
-     * ({@link #runScore}-ranked) the draw is restricted to, and, among their valid cells, the share farthest from every
-     * black cell placed.
+     * ({@link #runScore}-ranked) the draw is restricted to, among their valid cells the share with the highest
+     * {@link #crossingLengthScore}, and among those the share farthest from every black cell placed.
      */
     static final int BLACK_DRAW_WINDOW_PERCENT = 5;
 
@@ -468,23 +468,50 @@ public final class Grids {
     }
 
     /**
-     * {@link #placeBlackCells}' score of the white cell (r, c): the sum of the lengths of the words (runs of at least
-     * 2 cells, across and down, each counted once) crossing the 3x3 square centered on it.
+     * Reach of {@link #crossingLengthScore} around a cell, in each of the four directions: 3 = the cross of the 7x7
+     * square centered on it.
      */
-    static int crossingLengthScore(Map<Integer, int[][]> runAt, int r, int c) {
-        Set<int[]> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
-        int total = 0;
-        for (int rr = r - 1; rr <= r + 1; rr++) {
-            for (int cc = c - 1; cc <= c + 1; cc++) {
-                if (rr < 0 || cc < 0) continue;
-                int[][] runs = runAt.get(Cells.of(rr, cc));
-                if (runs == null) continue;
-                for (int[] run : runs) {
-                    if (run.length >= 2 && seen.add(run)) total += run.length;
-                }
+    static final int CROSSING_SCORE_RADIUS = 3;
+
+    private static final int[][] CROSS_DIRECTIONS = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+
+    /**
+     * The cells {@link #crossingLengthScore} measures around the white cell (r, c): itself, then up to
+     * {@link #CROSSING_SCORE_RADIUS} cells in each of the four directions, each direction stopping at the first black
+     * cell or the grid's edge (at most 13 cells).
+     */
+    static List<Integer> crossingScoreCells(Map<Integer, int[][]> runAt, int r, int c) {
+        List<Integer> cells = new ArrayList<>();
+        cells.add(Cells.of(r, c));
+        for (int[] d : CROSS_DIRECTIONS) {
+            for (int k = 1; k <= CROSSING_SCORE_RADIUS; k++) {
+                int rr = r + d[0] * k, cc = c + d[1] * k;
+                if (rr < 0 || cc < 0 || !runAt.containsKey(Cells.of(rr, cc))) break;
+                cells.add(Cells.of(rr, cc));
             }
         }
-        return total;
+        return cells;
+    }
+
+    /**
+     * {@link #placeBlackCells}' score of the white cell (r, c): the sum of the lengths of the words (runs of at least
+     * 2 cells, across and down, each counted once) crossing the cells of its cross ({@link #crossingScoreCells}: up to
+     * {@link #CROSSING_SCORE_RADIUS} cells in each direction, stopping at a black cell), multiplied by the full cross's
+     * cell count (1 + 4 x {@link #CROSSING_SCORE_RADIUS}) over the count of its cells lying inside the grid, so a cell
+     * near the edge is not underrated.
+     */
+    static double crossingLengthScore(Map<Integer, int[][]> runAt, int rows, int cols, int r, int c) {
+        int reach = CROSSING_SCORE_RADIUS;
+        int inside = 1 + Math.min(reach, c) + Math.min(reach, cols - 1 - c) + Math.min(reach, r)
+                + Math.min(reach, rows - 1 - r);
+        Set<int[]> seen = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        int total = 0;
+        for (int cell : crossingScoreCells(runAt, r, c)) {
+            for (int[] run : runAt.get(cell)) {
+                if (run.length >= 2 && seen.add(run)) total += run.length;
+            }
+        }
+        return (double) (total * (1 + 4 * reach)) / inside;
     }
 
     /**
@@ -532,18 +559,19 @@ public final class Grids {
     }
 
     /** {@link #placeBlackCells}' ranking score of a white run: the sum of its cells' {@link #crossingLengthScore}. */
-    static int runScore(int[] run, Map<Integer, Integer> cellScore) {
-        int total = 0;
+    static double runScore(int[] run, Map<Integer, Double> cellScore) {
+        double total = 0.0;
         for (int cell : run) total += cellScore.get(cell);
         return total;
     }
 
     /**
      * Ratio-based black-cell placement: every white cell is scored by {@link #crossingLengthScore} (the lengths of
-     * the words crossing the 3x3 square centered on it) and every white run (across and down, single cells included)
+     * the words crossing its cross, up to 3 cells in each direction short of a black cell) and every white run (across and down, single cells included)
      * by the sum of its cells' scores ({@link #runScore}), both kept up to date as each black cell splits its across
      * and down runs; each draw ranks the runs by decreasing score (ties in random order), keeps the
-     * {@link #BLACK_DRAW_WINDOW_PERCENT} % best, keeps their candidates satisfying the hard constraints, ranks those
+     * {@link #BLACK_DRAW_WINDOW_PERCENT} % best, keeps their candidates satisfying the hard constraints, then the same
+     * percentage of those with the highest {@link #crossingLengthScore} (ties keeping the shuffled order), ranks those
      * by spread score (highest first, ties keeping the shuffled order) and draws at random among the same percentage
      * best; with no valid cell, the percentage grows by the same step. Every run selected without a valid cell
      * relaxes {@code minInteriorFree} one step (down to 1), then accepts adjacency unless {@code forbidAdjacency};
@@ -561,8 +589,10 @@ public final class Grids {
         List<Integer> remaining = candidates;
         Map<Integer, int[][]> runAt = cellRuns(grid, rows, cols);
         List<int[]> runs = orderedRuns(runAt, rows, cols);
-        Map<Integer, Integer> cellScore = new HashMap<>();
-        for (int cell : runAt.keySet()) cellScore.put(cell, crossingLengthScore(runAt, Cells.r(cell), Cells.c(cell)));
+        Map<Integer, Double> cellScore = new HashMap<>();
+        for (int cell : runAt.keySet()) {
+            cellScore.put(cell, crossingLengthScore(runAt, rows, cols, Cells.r(cell), Cells.c(cell)));
+        }
         List<Integer> blacks = new ArrayList<>();
         for (int br = 0; br < rows; br++) {
             for (int bc = 0; bc < cols; bc++) if (grid[br][bc] == BLACK) blacks.add(Cells.of(br, bc));
@@ -594,13 +624,14 @@ public final class Grids {
             for (int i = 0; i < remaining.size(); i++) position.put(remaining.get(i), i);
             List<int[]> runOrder = new ArrayList<>(runs);
             rng.shuffle(runOrder);
-            Map<int[], Integer> runScores = new java.util.IdentityHashMap<>();
+            Map<int[], Double> runScores = new java.util.IdentityHashMap<>();
             for (int[] run : runOrder) runScores.put(run, runScore(run, cellScore));
-            runOrder.sort((x, y) -> Integer.compare(runScores.get(y), runScores.get(x)));
+            runOrder.sort((x, y) -> Double.compare(runScores.get(y), runScores.get(x)));
             Integer chosen = null;
             for (int adj = 0; adj < (forbidAdjacency ? 1 : 2) && chosen == null; adj++) {
                 for (int minFree = STRUCTURAL_MIN_INTERIOR_FREE; minFree > 0 && chosen == null; minFree--) {
-                    chosen = drawBlackCell(grid, rows, cols, remaining, dist, runOrder, position, minFree, adj == 1,
+                    chosen = drawBlackCell(grid, rows, cols, remaining, dist, cellScore, runOrder, position, minFree,
+                            adj == 1,
                             rng, index, locked, available, symmetric ? symmetry : null);
                 }
             }
@@ -629,7 +660,7 @@ public final class Grids {
     private static List<int[]> placeOneBlackCell(char[][] grid, int[] rowBlack, int[] colBlack, List<Integer> remaining,
                                                  List<Double> dist, List<NearestBlacks> nearest,
                                                  Map<Integer, int[][]> runAt, List<int[]> runs,
-                                                 Map<Integer, Integer> cellScore, int cell) {
+                                                 Map<Integer, Double> cellScore, int cell) {
         int chosen = remaining.indexOf(cell);
         remaining.remove(chosen);
         dist.remove(chosen);
@@ -641,8 +672,8 @@ public final class Grids {
         Set<Integer> rescored = new HashSet<>();
         for (int[] run : oldRuns) {
             for (int member : run) {
-                for (int dr = -1; dr <= 1; dr++) {
-                    for (int dc = -1; dc <= 1; dc++) {
+                for (int dr = -CROSSING_SCORE_RADIUS; dr <= CROSSING_SCORE_RADIUS; dr++) {
+                    for (int dc = -CROSSING_SCORE_RADIUS; dc <= CROSSING_SCORE_RADIUS; dc++) {
                         int rr = Cells.r(member) + dr, cc = Cells.c(member) + dc;
                         if (rr >= 0 && cc >= 0) rescored.add(Cells.of(rr, cc));
                     }
@@ -651,7 +682,8 @@ public final class Grids {
         }
         for (int other : rescored) {
             if (cellScore.containsKey(other)) {
-                cellScore.put(other, crossingLengthScore(runAt, Cells.r(other), Cells.c(other)));
+                cellScore.put(other, crossingLengthScore(runAt, grid.length, grid[0].length, Cells.r(other),
+                        Cells.c(other)));
             }
         }
         for (int i = 0; i < remaining.size(); i++) {
@@ -703,7 +735,7 @@ public final class Grids {
     }
 
     private static Integer drawBlackCell(char[][] grid, int rows, int cols, List<Integer> remaining, List<Double> dist,
-                                         List<int[]> runOrder, Map<Integer, Integer> position, int minFree,
+                                         Map<Integer, Double> cellScore, List<int[]> runOrder, Map<Integer, Integer> position, int minFree,
                                          boolean allowAdjacency, Rng rng, DualIndex index,
                                          Map<Integer, Character> locked, LengthSets available, String symmetry) {
         BlackCellValidity structure = new BlackCellValidity(grid, rows, cols, minFree);
@@ -729,6 +761,8 @@ public final class Grids {
                 if (ok) valid.add(i);
             }
             if (!valid.isEmpty()) {
+                valid.sort((x, y) -> Double.compare(cellScore.get(remaining.get(y)), cellScore.get(remaining.get(x))));
+                valid = new ArrayList<>(valid.subList(0, windowSize(valid.size(), percent)));
                 valid.sort((x, y) -> Double.compare(dist.get(y), dist.get(x)));
                 List<Integer> window = valid.subList(0, windowSize(valid.size(), percent));
                 return window.get(rng.randrange(window.size()));

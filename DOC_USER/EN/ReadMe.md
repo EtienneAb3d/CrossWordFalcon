@@ -1558,12 +1558,15 @@ within that slot's own cells (never from some unrelated part of the
 grid), or, if that isn't enough, by removing one of the crossing words
 that pinned those letters in place to begin with. Each new black cell is
 picked in two steps. First, every white cell gets a score — the
-total length of the words (across and down) crossing the 3×3 square
-centered on it — every row or column segment of white cells adds up the
+total length of the words (across and down) crossing its cross: the cell
+itself and up to 3 cells left, right, up and down, each direction
+stopping at a black cell, scaled up near the grid's edges to make up for
+the part of the cross lying outside the grid — every row or column segment of white cells adds up the
 scores of its cells, and the 5% best-scored segments are kept, so black
-cells tend to land where long words would otherwise run. Then one of
-their usable cells is chosen at random among the 5% lying farthest from
-every black cell already placed (both shares widening by 5% at a time
+cells tend to land where long words would otherwise run. Of their usable
+cells, only the 5% with the highest cell score are kept; one of those is
+then chosen at random among the 5% lying farthest from
+every black cell already placed (all three shares widening by 5% at a time
 whenever the selected segments hold no usable cell) — spreading them out rather than letting them clump into ugly
 "walls" — and the
 generator never places a black cell right next to another one, on any
