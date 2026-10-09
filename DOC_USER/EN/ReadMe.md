@@ -143,6 +143,17 @@ full again whenever a new generation or an Interactive session starts.
   black cells the finished grid aims for, as a percentage of the grid's
   cells (0-100%, 15% by default). A higher value gives shorter, easier
   words at the cost of a denser-looking grid.
+- **Mots par pose / Words per placement** (`#words-per-node`) — the most
+  words the search places in one go before checking how the rest of the
+  grid copes, and takes back off together when that leads nowhere (1-10,
+  5 by default). The search uses this many while the outer band of the
+  area it is currently filling (the attention zone minus the smaller,
+  already full zone inside it) is empty, and fewer as that band fills
+  up, down to one word at a time once it is three-quarters full. 1 is the most
+  careful, word-by-word search throughout; a higher value moves faster at
+  the start but commits to more words at once (`frontend/static/
+  script.js`, `wordsPerNodeInput`; `backend/crossword_gen.py`,
+  `Filler._group_size`, `Filler._descend_group`).
 - **Mode** (`#mode`) — how much computing effort one attempt is allowed
   before giving up and trying again: Flash (fastest, least thorough),
   Turbo, Rapide/Fast, Moyen/Medium (the default), Ultra, Megatron
@@ -379,6 +390,15 @@ and retries a few times on its own before giving up (`pollJob`,
 server the whole time regardless of what this browser tab can currently
 reach.
 
+During an automatic generation, the progress message ends with two
+counters, updated every second: the time elapsed since the generation
+started, and the time spent in the current step — the current palier of
+the search (every phase of that palier counts as one step), otherwise the
+current phase (waiting in line, minimizing, choosing the grid, writing
+the definitions…) (`pollJob`'s `timed` option, `generationStepKey`).
+Both are measured by this browser tab from the moment it starts
+following the generation.
+
 The server only ever builds one grid's pattern and writes one grid's
 definitions at a time (`backend/app.py`, `GRID_QUEUE`/`CLUES_QUEUE`), to
 avoid overloading the machine when several people generate grids at
@@ -551,7 +571,9 @@ gated to loopback requests by `frontend/server.py`, `_require_localhost`):
 Opened with the **Bibliothèque** button (`#library`, `frontend/static/
 script.js`, `renderLibraryList`). Lists every grid ever saved on this
 server (`backend/grid_store.py`, `GET /api/library`), one row per grid:
-its language, creation date, title, the theme words it was generated with
+its language, creation date, **Falcon** — the version of the software
+the grid was published with (blank for a grid saved before this
+information was recorded) —, title, the theme words it was generated with
 (if any), difficulty, size, and the pseudo of
 whoever generated it — a grid generated with no pseudo set is credited to
 "Falcon Auto Bot" — then **Joueurs / Players**, the number of players
@@ -676,12 +698,16 @@ word list is shown in bold dark-cyan letters; magenta and green win over
 dark cyan on a cell shared with a crossing theme or challenge word
 (`frontend/static/script.js`, `renderAttemptPreview`).
 A bold dashed frame marks the "attention
-zone": the L-shaped area, from the top-left corner, where the search may
-currently place its next word — the union of a horizontal and a vertical
-rectangle, both 4x4 at first. Each time nothing more fits inside, both
-grow: the horizontal one by 2 columns until it spans the grid's full width,
-then by 2 rows; the vertical one by 2 rows until it spans the grid's full
-height, then by 2 columns. The frame disappears once the zone covers the
+zone", where the search may currently place its next word: a band of top
+rows across the whole grid width (none at first), plus a 16-row block
+below it starting from the left edge. It is the 16x16 square at the top-left
+corner at first (a grid of at most 16x16 is therefore whole from the start,
+with no frame); each time nothing more fits inside, the block grows by 16
+columns to the right, and once it reaches the right edge its rows join the
+band and a new 16x16 block starts at the left edge below. The zone only
+grows as the search goes deeper (an optional fallback onto the largest zone
+already completely filled exists but is currently off). The frame
+disappears once the zone covers the
 whole grid (`renderAttemptPreview`, `attentionZoneEdges`, `.attention-edge`).
 A green outline marks whichever preview is currently considered the
 best candidate. While a preview grid is still actively being searched
@@ -709,7 +735,10 @@ lettered reads 100 %), and unplayable cells as a share of the whole grid
 (blue/yellow/orange-bordered), its stats line also names what percentage
 of its own search budget that specific attempt has consumed so far
 (`budget_percent`, `renderAttemptPreview`), refreshed every 2 seconds
-while it runs and frozen at whatever it reached once the attempt stops.
+while it runs and frozen at whatever it reached once the attempt stops,
+followed by the number of words the search currently places at once
+("6 m/p" — words per placement, see "Mots par pose" above;
+`words_per_pose`, `renderAttemptPreview`).
 It can go above 100%: an attempt that has used up its own budget keeps
 searching as long as another attempt of the same step is still under
 its own, so no processor core sits idle while the step waits for that
@@ -1320,7 +1349,7 @@ real letter. Both update after every edit.
   it stays available in your "Créations" list. The grid size and the
   language(s) stay those of the session; every other setting is read from
   the generation form at the top of the page as it stands at the moment
-  you click — Difficulté, Taux noir, Mode (an "Interactif" Mode
+  you click — Difficulté, Taux noir, Mots par pose, Mode (an "Interactif" Mode
   counts as "Moyen"), Thématique, Précision thématique and the "Mots Défi"
   list — so you can change any of them before finishing. The session's
   theme glossary is reused only while the form still asks for the same
@@ -1499,10 +1528,14 @@ words gets shortened the same way, by removing a black cell from right
 within that slot's own cells (never from some unrelated part of the
 grid), or, if that isn't enough, by removing one of the crossing words
 that pinned those letters in place to begin with. Each new black cell is
-drawn only in the 5% longest white runs (across or down), at random
-among the 5% of their usable cells lying farthest from every black cell
-already placed (the share widening by 5% at a time whenever those runs
-hold no usable cell) — spreading them out rather than letting them clump into ugly
+picked in two steps. First, every white cell gets a score — the
+total length of the words (across and down) crossing the 3×3 square
+centered on it — every row or column segment of white cells adds up the
+scores of its cells, and the 5% best-scored segments are kept, so black
+cells tend to land where long words would otherwise run. Then one of
+their usable cells is chosen at random among the 5% lying farthest from
+every black cell already placed (both shares widening by 5% at a time
+whenever the selected segments hold no usable cell) — spreading them out rather than letting them clump into ugly
 "walls" — and the
 generator never places a black cell right next to another one, on any
 cycle: a cycle whose black-cell density target can't be reached without
@@ -1534,17 +1567,30 @@ it was made for.
 **Choosing which word slot to fill next.** Once a black-cell pattern is
 accepted, every run of at least 2 white cells (across or down) becomes a
 slot that needs a real dictionary word. On every cycle, the fill grows
-outward from the top-left corner: only slots
-with a still-empty cell inside an "attention zone" starting at the
-top-left cell may take the next word. That zone joins two rectangles, both
-4x4 at first: once nothing more can be placed there, the horizontal one
-widens by 2 columns until it spans the grid's full width, then grows
-downward by 2 rows at a time, while the vertical one grows downward by 2
-rows until it spans the grid's full height, then widens by 2 columns at a
-time — until the zone covers the whole
-grid (`backend/crossword_gen.py`, `Filler._attention_pool`). A grid
+from the top-left corner of the grid ("incremental fill", an option that
+is currently on — off, the whole grid is open to every placement): only
+slots with a still-empty cell inside an "attention zone" may take the
+next word. That zone is two
+rectangles — a band of top rows spanning the whole grid width (no row at
+first) and, below it, a 16-row block anchored at the left edge. It is the
+16x16 square at the top-left corner at first (the whole grid when it is no
+larger); once nothing more can be placed
+there — after first clearing any impossible or set-aside slot that still
+has an empty cell inside the zone, together with the words crossing it, to
+give the zone another chance (like every such clearing during the search,
+this wipes the undo history: the search restarts from the cleared grid as
+its new starting point, so its memory never piles up from one clearing to
+the next) — its block grows by 16 columns to the right; once the block
+reaches the right edge, its rows join the band and a new 16x16 block starts
+at the left edge below, until the zone covers the whole grid; the zone only
+grows as the search goes deeper — an optional fallback, currently off, would
+instead shrink it after every word onto the largest zone of that shape
+already completely filled (`backend/crossword_gen.py`,
+`ATTENTION_FALLBACK_ENABLED`, `Filler._fallback_attention`,
+`Filler._attention_pool`, `Filler._backtrack`); a clearing during the search
+keeps the zone where it was. A grid
 carried over from a previous cycle that loses its last locked letter to a
-cleanup starts the zone over at 4x4, once. Rather than filling slots in a
+cleanup starts the zone over at its starting square, once. Rather than filling slots in a
 fixed reading order, the generator picks the next slot through several
 layers of priority, starting from every still-open slot in the grid (an
 optional first step that would narrow this down to only "across" or only
@@ -1666,9 +1712,11 @@ not, at any point. A spot that the new letter itself puts back in play
 seeded the grid with, for instance) is not stuck any more, so it is no
 obstacle: what counts is the state a word leaves behind, never which of
 its neighbours happened to be stuck before it. Each step of this search
-actually places a small group of words at once — currently two: once
-its chosen word passes that check, the step adds one more word, the
-first candidate that leaves every neighbor still fillable, preferably on
+actually places a group of words at once — up to ten (the "Mots par
+pause" field) while the area currently being filled is empty, fewer as it
+fills up, down to a single word once it is full: once its chosen word
+passes that check, the step adds the others one by one, each the first
+candidate that leaves every neighbor still fillable, preferably on
 the slots that were competing with the chosen one for selection (the ones
 closest to where the fill is currently working), otherwise on any other
 slot the step could have picked. When the search later has to undo that
@@ -1681,11 +1729,12 @@ be tried there instead — this "undo and try something else" behavior can
 ripple back through several slots at once if needed. Undoing goes
 straight to the cause: when a step fails, the generator notes which
 already-placed words its failure depends on (the words crossing the slot
-it could not fill). When at most 5 words have been placed since the most
-recent of them, every word placed since the cause that has nothing to do
+it could not fill). When at most 5 placement steps (a step that placed
+several words at once counting once) have come since the one that placed
+the most recent of them, every word placed since the cause that has nothing to do
 with it is removed in one go, without being retried, until the most
-recent word actually involved gets a different candidate. When more have
-been placed since, the generator uses a lighter fix instead: it takes
+recent word actually involved gets a different candidate. When more
+steps have come since, the generator uses a lighter fix instead: it takes
 just that one word off the grid, leaves every word placed since then
 where it is, and simply carries on filling from there — and if that
 fails too, it takes the next word causing the conflict off the same way

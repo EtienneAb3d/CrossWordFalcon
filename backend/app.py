@@ -51,7 +51,7 @@ from .qdrant_store import QdrantStore, QdrantStoreError
 from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .crossword_gen import (
     DEFAULT_HEIGHT, DEFAULT_WIDTH, DIFFICULTY_PRESETS, GenerationCancelled, GenerationPaused,
-    PREFILL_MIN_WORD_COUNT, DualIndex, DualSet, build_letters_grid,
+    PREFILL_MIN_WORD_COUNT, WORDS_PER_NODE, DualIndex, DualSet, build_letters_grid,
     build_word_entries, challenge_word_grid_form, extract_slots, generate_grid, slot_direction,
     word_forms,
     _interactive_fill_diagnostics, _interactive_letter_stats,
@@ -411,6 +411,9 @@ BUDGET_MODES = {
     "megatron": 20_000_000,
     "gridzilla": 100_000_000,
 }
+
+# Upper bound of the "Mots par pose" field (GenerateRequest.words_per_node).
+MAX_WORDS_PER_NODE = 10
 
 # Optional "Theme" field on the generation form, at the user's explicit
 # request: if the theme's word list is non-empty, a Qdrant vector
@@ -866,6 +869,12 @@ class GenerateRequest(BaseModel):
             "into black cells at every palier, pre-fill included (integer, 0 to 100)"
         ),
     )
+    # "Mots par pose": words every search node places at once (see
+    # crossword_gen.py's WORDS_PER_NODE, its default).
+    words_per_node: int = Field(
+        default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE,
+        description=f"Words placed at once by every search node (integer, 1 to {MAX_WORDS_PER_NODE})",
+    )
     # "Mode" selector (see BUDGET_MODES above), at the user's explicit
     # request — directly sets the search budget per
     # attempt, replacing for this request the default formula of
@@ -1244,7 +1253,7 @@ class InteractiveFinishRequest(BaseModel):
     words of that language, so the search must keep its dictionary.
     Every other generation parameter mirrors the generation form's own
     CURRENT values, which the player may have changed since the session
-    started: `mode`/`black_enrichment_percent`/`force_letters_percent`/
+    started: `mode`/`black_enrichment_percent`/`words_per_node`/`force_letters_percent`/
     `difficulty`/`theme`/`theme_precision`/`challenge_words`. The last four
     fall back to the session's own value when omitted (`None`). The
     session's already-resolved theme glossary is reused only while it
@@ -1255,6 +1264,7 @@ class InteractiveFinishRequest(BaseModel):
     definitions: list[dict] = []
     mode: str = "medium"
     black_enrichment_percent: int = Field(default=15, ge=0, le=100)
+    words_per_node: int = Field(default=WORDS_PER_NODE, ge=1, le=MAX_WORDS_PER_NODE)
     force_letters_percent: int = Field(default=0, ge=0, le=100)
     difficulty: Optional[str] = None
     theme: Optional[str] = None
@@ -3981,10 +3991,10 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         logger.info(
             "[%s] starting generation: language=%s bilingual_language=%s width=%s "
             "height=%s difficulty=%s force_letters_percent=%s black_enrichment_percent=%s "
-            "mode=%s theme_precision=%s source=%s",
+            "words_per_node=%s mode=%s theme_precision=%s source=%s",
             short_id, req.language, req.bilingual_language, req.width, req.height,
             req.difficulty, req.force_letters_percent, req.black_enrichment_percent,
-            req.mode, req.theme_precision, req.source,
+            req.words_per_node, req.mode, req.theme_precision, req.source,
         )
         # Grid (CPU) queue, at the user's explicit request — see GRID_
         # QUEUE's own module-level docstring: at most one grid search runs
@@ -4155,6 +4165,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
                         permanent_black_cells=permanent_black_cells,
                         required_cells=required_cells,
                         challenge_words=challenge_words,
+                        words_per_node=req.words_per_node,
                     )
                     break
                 except GenerationPaused as p:
@@ -4526,6 +4537,7 @@ async def _run_generate_job(job_id, req, resume_state=None, override_priority_wo
         pseudo = (req.pseudo or "").strip()[:MAX_PSEUDO_LENGTH] or None
         generation_params = {
             "black_enrichment_percent": req.black_enrichment_percent,
+            "words_per_node": req.words_per_node,
             "force_letters_percent": req.force_letters_percent,
             "mode": req.mode,
             "theme_precision": req.theme_precision,
@@ -6390,6 +6402,7 @@ async def interactive_finish(req: InteractiveFinishRequest):
         seed=random.randrange(2**31),
         force_letters_percent=req.force_letters_percent,
         black_enrichment_percent=req.black_enrichment_percent,
+        words_per_node=req.words_per_node,
         mode=req.mode,
         theme=theme or None,
         theme_precision=theme_precision,

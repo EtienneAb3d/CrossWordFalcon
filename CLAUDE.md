@@ -48,7 +48,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | Path | Contents |
 |---|---|
 | `backend/` | All Python business logic: the API server, the generation engine, LLM/chat/embedding clients, persistence, export. No subpackages — every `.py` file sits directly under `backend/`. |
-| `backend_java/` | The Java back end (Java 21, Maven, `pom.xml`): `src/main/java/falcon/` mirrors `backend/` (see "Java back end"), `build.sh` builds `dist/crosswordfalcon-backend.jar`, committed with `dist/sources.sha256` (the fingerprint of the sources it was built from) so a checkout runs it without rebuilding; `target/` (Maven's own output) is gitignored. |
+| `backend_java/` | The Java back end (Java 21, Maven, `pom.xml`): `src/main/java/falcon/` mirrors `backend/` (see "Java back end"), `build.sh` builds `dist/crosswordfalcon-backend.jar` (replaced atomically, so a running JVM keeps its own copy), committed with `dist/sources.sha256` (the fingerprint of the sources it was built from) so a checkout runs it without rebuilding; `target/` (Maven's own output) is gitignored. |
 | `frontend/` | `server.py` (proxy + static host) and `static/` (the whole single-page app: `index.html`, `script.js`, `style.css`, `i18n.js`, logo assets). |
 | `data_builder/` | One-off/periodic scripts that build each language's dictionary artifacts (corpus → wordlist → gloss dictionary → inflection table → Qdrant embeddings), plus one orchestration shell script per language. |
 | `scrapper/` | Daily-refreshed content scrapers feeding the web UI's "Actu Croisée" panel (RSS feeds, aggregated crossword-publisher links). |
@@ -369,7 +369,8 @@ json`. Holds all server-side state in plain module dicts/lists:
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
 (`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
-`black_enrichment_percent` [0-100, default 15], `mode` [flash/turbo/fast/
+`black_enrichment_percent` [0-100, default 15], `words_per_node` [1-10,
+default `WORDS_PER_NODE`], `mode` [flash/turbo/fast/
 medium/ultra/megatron/gridzilla, default medium], `pseudo`, `theme`, `theme_precision`
 [0.0-1.0, default `THEME_MIN_SCORE`], `source`, `challenge_words`
 [list of free-form "Mots Défi" strings, default empty]); `RecomputeRequest`;
@@ -424,16 +425,33 @@ fully-lettered grid marked failed for no visible reason.
 across up to `attempts` (default 200) *paliers*, each running
 `PARALLEL_ATTEMPTS` (default: `CROSSWORDFALCON_PARALLEL_ATTEMPTS` env
 override, else `os.cpu_count()`) independent worker processes in parallel
-via `ProcessPoolExecutor`:
+via `ProcessPoolExecutor`. Every per-grid step runs on that pool, one grid
+per process: each attempt draws its own pattern (`_pattern_attempt`, which
+also puts it on `best_state_queue` as a `"kind": "pattern"` message — the
+drain thread stores it in `early_patterns`, and the harvest loop publishes
+the fresh-pattern palier's "pattern_generated" preview from those patterns
+once every one it waits for has arrived, `_publish_pattern_preview`, or
+when the harvest ends, after at most `PATTERN_PREVIEW_GRACE_S`; Java: a
+`Ctx.earlyPatterns` map, `publishPatternPreview`), and the end-of-palier
+optimization and cleanups are submitted per candidate
+(`_optimize_before_cleanup_task`, `_clean_continue_candidate_task`,
+`_clean_retry_candidate_task` — the ordinary cleanups at once, then the
+deep ones; Java `Generator.await` on `executor.submit`), each task with its
+own rng drawn from the parent's in candidate order:
 
 1. **Black-cell placement** (`make_pattern`) — places black cells one at
-   a time (never symmetric pairs), via `_place_black_cells`, which keeps
-   the grid's white runs (`_white_runs`: every maximal run of non-black
-   cells, across and down, single cells included) up to date — a new
-   black cell splits its across and down runs into the pieces on either
-   side (`_split_runs`). Every draw ranks the runs by decreasing length
-   (ties in random order), keeps the `BLACK_DRAW_WINDOW_PERCENT` (5) %
-   longest (at least one), keeps their candidates satisfying the hard
+   a time (never symmetric pairs), via `_place_black_cells`, which scores
+   every white cell by `_crossing_length_score` — the sum of the lengths of
+   the words (maximal runs of at least 2 non-black cells, across and down,
+   each counted once) crossing the 3x3 square centered on it — and every
+   white run (maximal run of non-black cells, across and down, single
+   cells included) by the sum of its cells' scores (`_run_score`), both
+   kept up to date as cells are placed (`_cell_runs`: each cell's across
+   and down run; `_split_cell_runs`/`_split_run_list`: a new black cell
+   splits both into the pieces on either side, and every cell within one
+   cell of them is rescored). Every draw ranks the runs by decreasing
+   score (ties in random order), keeps the `BLACK_DRAW_WINDOW_PERCENT` (5)
+   % best (at least one), keeps their candidate cells satisfying the hard
    constraints, ranks those by `_black_spread_score` — the mean, over
    `BLACK_DISTANCE_NEIGHBORS` (7) black cells (the closest aligned one in
    each of the four directions, edges included so always four, then the 3
@@ -444,15 +462,16 @@ via `ProcessPoolExecutor`:
    ring of virtual black cells just outside it (`_black_distance_sq`,
    `_nearest_black_distances_sq`, kept per candidate and updated as each
    cell is placed; highest first, ties keeping the shuffled order), and
-   draws at random among the same percentage best scored (at least one); when the selected runs hold no
-   valid cell, the percentage grows by 5 and the draw starts over. The
+   draws at random among the same percentage best scored (at least one); when the selected runs hold
+   no valid cell, the percentage grows by 5 (more runs, same order) and the
+   draw starts over. The
    hard constraints: still white, not adjacent to a black cell,
    `_new_black_cell_breaks_locked_slot` false, structurally valid at
    `STRUCTURAL_MIN_INTERIOR_FREE=6` (an interior white zone must be at
    least this long) — answered by `_BlackCellValidity`, built once per
    draw and level (zones per row/column, isolated cells, articulation
    points of the white graph), always equal to `is_structurally_valid`
-   on the modified grid; once every run is selected and nothing fits, the
+   on the modified grid; once every candidate is sampled and nothing fits, the
    draw restarts at 5 % with that minimum lowered by one, down to 1. Once
    the target is reached, more than `SHORT_SLOT_MAX_COUNT` (10) slots of
    at most `SHORT_SLOT_MAX_LENGTH` (3) letters (a slot touching the
@@ -579,7 +598,7 @@ via `ProcessPoolExecutor`:
    from `sample_letter_biases`, which draws `LETTER_BIAS_SAMPLE_SIZE=10`
    words per slot) divided by (1 + the number of times the search already
    placed that word on this slot during the attempt, `_tried_words`) with each pick taken from a `CANDIDATE_SCORE_
-   WINDOW=100`-word sliding window of the best remaining words —
+   WINDOW=200`-word sliding window of the best remaining words —
    deliberately far narrower than a slot's own domain, so the statistical
    ranking stays in charge — re-sorted by frequency in the freq wordlist
    (`index[length]["dict_freq"]`, float32, built by `build_index` from
@@ -587,7 +606,7 @@ via `ProcessPoolExecutor`:
    the difficulty cut, 0 for a word absent from it; highest first, ties
    keeping the score order; Java `LenIndex.dictFreq`/`Words.
    loadDictionaryFrequencies`) and drawn at random among its
-   `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE` = 20) most frequent words, so two attempts on the
+   `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE` = 100) most frequent words, so two attempts on the
    same state still diverge; the slot's words of its
    direction's Scrabble dictionary (`Filler.scrabble_words`) are then
    pulled ahead of the rest as a stable block (`Filler.scrabble_first`),
@@ -681,7 +700,12 @@ or reopened; `cleared_cells_out` returns the cells it erased), then
 worker, under the same lineage number, with the attempt's own locked
 letters (`diag["locked_letters"]`, `[row, col, letter]` triples set by
 `try_fill` on failure) minus the erased cells — a locked cell whose letter
-the clean removes is unlocked — plus the clean's `confirmed`. The chain's
+the clean removes is unlocked. Like the early hardclean it locks nothing:
+the words the clean keeps go on as `preseed_assignment` only
+(`_pattern_continue(lock_known=False)`, Java `patternContinue(...,
+lockKnown)`, which passes `try_fill` only those locked letters and
+`permanent_locked_letters`), and the previews outline exactly
+`Filler.locked_letters` (`_locked_cells`), never a preseeded word. The chain's
 blocked states (`_blocked_state_key`: pattern + placed letters) are kept
 per attempt seed (`second_chance_keys`); a failure reproducing one of them
 is final, and so is one `_plug_isolated_cells` completes. A superseded
@@ -832,8 +856,9 @@ stack is dropped: `Filler._restart_pending` is set and every node unwinds
 the way it does on an abandon (`return self._fail(None)`, its own undo
 included — words, letter tallies, `_tolerated_dry`, reshapes; no backghost
 is attempted). `Filler.solve` runs its strict and last-resort passes in a
-loop: when a pass ends on `_restart_pending`, `_restart_from_record` (Java
-`restartFromRecord`) takes the record back flat — `adopt_best_structure`,
+loop: when a pass ends on `_restart_pending` with no `_flat_restart`
+pending, `_restart_from_record` (Java `restartFromRecord`) takes the record
+back flat — `adopt_best_structure`,
 `assignment`/`used_words` from `best_assignment`, letter tallies re-sampled
 around every placed word — and the loop starts over from it as a new root.
 At the start of each iteration, on that root, `_early_hardclean_due` is
@@ -845,7 +870,8 @@ nothing becomes locked; a kept letter no remaining word or locked letter
 carries (an orphan letter) is erased. The record restarts from the cleaned
 state and is published. The root's `_tolerated_dry`, `_placement_seq` and
 backghost count are then reset, so the words of the root are never
-backtracked or backghosted: only a later early hardclean takes them off. A
+backtracked or backghosted: only a later hardclean (early, zone or
+repeated-word) takes them off. A
 reshape the record carried stays in the pattern, even when the clean
 removes the word it was made for. A cleaned state (pattern + every known
 letter) already produced earlier in the attempt switches the early
@@ -867,13 +893,45 @@ placement's recursion (`Filler._descend_group`, which counts every word of
 the node's group, the first slot of the group past the limit being the one
 cleaned) runs `_repeat_hardclean` instead of a plain child node:
 `_clean_blocked_slots` with that slot as the only impossible slot, its own
-word taken off first, applied in place without unwinding anything — the
-removed words leave `assignment`/`used_words`/`_placement_seq` (their
-owners find nothing to remove, as after a backghost; `_undo_reshape` keeps
-them off), locked letters it erases are unlocked, the slot joins
-`_impossible_this_attempt`, and a fresh `_backtrack` node carries on with
-the same `released`/`attention`; the tallies re-sampled for the removals are
-restored if it fails. The streak restarts from 0; the record is not touched.
+word taken off first, no black cell touched. Like the early hardclean, it
+drops the backtracking history (`Filler._request_flat_restart`, Java
+`requestFlatRestart`): the cleaned assignment, the cells it erased, the slot
+list and pattern it lives on and the slot to set aside are kept in
+`Filler._flat_restart` (Java `flatRestart`, a `FlatRestart` record),
+`_restart_pending` makes every node unwind like on an abandon, and
+`Filler.solve` restarts flat from that state (`_restart_from_flat` ->
+`_restart_from_state`, Java `restartFromFlat`/`restartFromState`): the
+"emplacements écartés" carried over to its slot list by cells, its words,
+the locked letters it erased unlocked, the slot joining
+`_impossible_this_attempt`, letter tallies re-sampled around every slot
+holding a word in it or in the root it replaces; it becomes the new root
+(in the attention zone of the node that requested the clean, strict pass
+first). The early-hardclean test is
+skipped on that root, which is not the record. The streak restarts from 0;
+the record is not touched.
+
+**Zone softclean** (`ZONE_CLEAN_ENABLED`, on; Java `Filler.
+ZONE_CLEAN_ENABLED`): with incremental fill, right before the attention
+zone would grow — at node entry when no selectable slot holds a free cell
+of the zone, or once every zone slot has been tried (écarté ones released),
+never in the `allow_breaking` stage — `Filler._zone_clean` (Java
+`zoneClean`) takes the node's dry unassigned slots (no candidate, so
+tolerated, `_tolerated_dry`) — plus, once every zone slot has been tried,
+the selectable ones `slot_is_blocked` finds caught in a crossing deadlock
+and the "emplacements écartés" (`_impossible_this_attempt`) — holding a free
+cell of the zone and soft-cleans the first whose clean changes the grid
+(`_slot_clean(i, hard=False)`, Java `slotClean`, shared with
+`_repeat_hardclean`, which passes `hard=True`: `_clean_blocked_slots` on that
+slot alone with `hard_clean=False` — Java's `cleanBlockedSlots` overload
+taking `hardClean` — so only the words crossing it are removed, a removed
+word's letters held by a remaining whole word staying in place, no cascade;
+erased locked letters unlocked) into a state (pattern + known letters) no zone softclean
+of the attempt produced yet (`_zone_clean_states`), then restarts the
+search flat from the cleaned state, exactly like the repeated-word hardclean
+(`_request_flat_restart`, `_restart_from_state`; no slot set aside).
+Every clean of the search thus leaves the recursion depth bounded by the
+open slots of one root: a node's per-node `domains`/`options_cache` are
+never stacked across cleans.
 
 **An "emplacement écarté" (yellow) is a pure deprioritization, and is
 reset to nothing at the start of every new palier.** `Filler._impossible_
@@ -925,47 +983,98 @@ nothing can be placed even on those does the node fail and ordinary
 backtracking resume. `released` is a plain `_backtrack` parameter, so it
 is inherited by everything placed below a release and restores itself as
 the backtrack unwinds back above the node that released it.
-**Incremental fill** (`INCREMENTAL_FILL_ENABLED`, on; Java `Filler.
-INCREMENTAL_FILL_ENABLED`): on every palier and every attempt of it
-(`generate_grid`, `try_fill(incremental_fill=True)` via `_pattern_attempt`/
+**Incremental fill** (`INCREMENTAL_FILL_ENABLED`, optional, currently
+on; Java `Filler.INCREMENTAL_FILL_ENABLED`). Off, the whole grid is the
+attention zone (`attention` `None`, Java -1): stages 1 and 2 pool every
+slot, previews carry no `attention_zone`, `_group_size` measures the whole
+grid, and the zone softclean (which only runs before the zone grows) never
+runs. On, on every palier and every attempt of it
+(`generate_grid`, `try_fill(incremental_fill=INCREMENTAL_FILL_ENABLED)` via `_pattern_attempt`/
 `_pattern_continue`; Java `Generator.Ctx.incrementalFill`), stages 1 and 2 first run
-inside an "attention zone" — the union of a horizontal rectangle (rows
-0 to Rh-1, columns 0 to Ch-1) and a vertical one (rows 0 to Rv-1, columns
-0 to Cv-1), the pair `attention` = `((Rh, Ch), (Rv, Cv))` (Java: a `long`
-packed 16 bits per value by `attentionZone`, -1 = whole grid) — over the
-slots holding a still-free cell (no placed word nor locked letter) there
-(`Filler._attention_pool`). All four start at `INCREMENTAL_FILL_START_SIZE`
-(6); once both stages place nothing in the zone (or the zone has no such
-slot), both rectangles grow at once — the horizontal one by
-`INCREMENTAL_FILL_COL_STEP` (2) columns while narrower than the grid, then
-by `INCREMENTAL_FILL_ROW_STEP` (2) rows; the vertical one by
-`INCREMENTAL_FILL_ROW_STEP` rows while shorter than the grid, then by
-`INCREMENTAL_FILL_COL_STEP` columns — and the node goes back to stage 1 on
-the larger pool, slots it already tried staying tried (`_widen_attention`,
-`None` once one rectangle covers the grid, `_attention_or_whole`); the
-`allow_breaking` stage comes only after. The size is a `_backtrack`
-parameter (`attention`) inherited and restored like `released`, passed
-through `_try_reshape`/`_fail_or_backghost`; every root (`solve()`)
-restarts at 4x4. An attempt started from locked letters resets the zone to 4x4
-once (`Filler._attention_after_unlock`, armed by `solve()` as
-`_attention_reset_pending`; Java `attentionAfterUnlock`), the first time a
-hardclean leaves `locked_letters` empty: `_repeat_hardclean`'s fresh node
-starts at 4x4; after `_early_hardclean` the root starts at 4x4 anyway and the
-reset is only used up. Dry-slot detection and backtracking are unchanged.
-`Filler.attention_size` (the current node's zone, kept current on entry,
-widening and return from a child) and `best_attention_size` (the zone a
-record was taken under) feed every preview's `attention_size` (`None` =
-whole grid; `_publish_live_state`, `_publish_new_best`, the final
-diagnostics, the "failed" live-tile whitelist and `last_examples`; Java
-`Diag.attentionSize`) as `[[Rh, Ch], [Rv, Cv]]`; `renderAttemptPreview()`
-draws its outline as bold dashed `.attention-edge` overlays, one per
-straight run (`attentionZoneEdges`).
-**Words per node** (`WORDS_PER_NODE` = 2, `<= 1` = one word; Java
-`Filler.WORDS_PER_NODE`): a node places a GROUP of words before recursing.
+inside an "attention zone" — two rectangles: a top band of whole rows
+across the grid's whole width (no row at first) and, below it, a block of
+`INCREMENTAL_FILL_STEP` (16) rows (clipped to the grid) anchored at the left
+edge (`_in_attention`, Java `inAttention`) — over the slots holding a
+still-free cell (no placed word nor locked letter) there
+(`Filler._attention_pool`). The `attention` value is `(band, width, iband,
+iwidth)`: the band's rows and the block's width, then the same for its inner
+zone, the filled zone it grew from (Java: one `long`, `packAttention`, 16
+bits each; `None`/-1 = incremental fill off; `_attention_is_whole`, Java
+`attentionIsWhole`, true once the band covers the grid). A block reaching
+the right edge joins the band, a new empty block starting below it
+(`_attention_shape`, Java `attentionShape`). Every root starts from the 16x16
+square at the top-left corner (clipped to the grid: a grid of at most
+16x16 is whole from the start) (`_initial_attention`). The fallback is
+optional, currently off (`ATTENTION_FALLBACK_ENABLED` = False; Java
+`Filler.ATTENTION_FALLBACK_ENABLED`): a node then keeps the zone it is
+entered with, so the zone only grows along a descent. On, on entry every node
+falls back (`_fallback_attention`, Java `fallbackAttention`) on the largest
+zone of that shape holding no free cell of a selectable slot — the band
+being the top rows before the first such cell rounded down to a multiple of
+`INCREMENTAL_FILL_STEP`, the block the columns of the 16 rows below it
+before the first such cell — at least the start square, that filled zone
+becoming the inner zone; once both stages place nothing in the zone (or the
+zone has no such slot), the zone grows (`_widen_attention`, Java
+`widenAttention`): the block widens by `INCREMENTAL_FILL_STEP` columns,
+joining the band at the right edge (40x20: the 16x16 square, rows 0-15 x
+cols 0-31, rows 0-15, rows 0-15 + rows 16-19 x cols 0-15, then x cols
+0-31, the whole grid), the zone it grew from becoming
+its inner zone, and the node goes back to stage
+1 on the larger pool, slots it already tried staying tried; on entry a
+zone with no such slot grows at once (`_backtrack`; Java `backtrack`), so
+a word placed after a widening brings the search back to the cells left
+empty towards the top-left of the grid; the `allow_breaking` stage comes only
+after. The zone is a `_backtrack` parameter (`attention`) inherited and
+restored like `released`, passed through `_try_reshape`/
+`_fail_or_backghost`; the first root (`solve()`) starts from the start
+square (`_initial_attention`), and a root restarted flat after a clean keeps
+the zone the clean happened in — the record's (`best_attention_step`) for an
+early hardclean, the requesting node's (`_flat_restart`'s last element) for
+a zone softclean or repeated-word hardclean (`_restart_from_record`/
+`_restart_from_state` return it; Java `restartFromRecord`/
+`restartFromState`, `FlatRestart.attention`), so the zone never shrinks
+back. An attempt started from locked letters resets the
+zone to the start square once (`Filler._attention_after_unlock`, armed by
+`solve()` as `_attention_reset_pending`; Java `attentionAfterUnlock`), the
+first time a hardclean leaves `locked_letters` empty. Dry-slot detection
+and backtracking are
+unchanged. `Filler.attention_step` (the current node's zone, kept current
+on entry, widening and return from a child) and `best_attention_step` (the
+zone a record was taken under; Java `attentionStep`/`bestAttentionStep`)
+feed every preview's `attention_zone` (`_attention_zone_json`, Java
+`attentionZoneJson`: `[band rows, block height, block width]`, `None` = whole grid;
+`_publish_live_state`, `_publish_new_best`, the final diagnostics, the
+"failed" live-tile whitelist and `last_examples`; Java
+`Diag.attentionZone`); `renderAttemptPreview()` draws the zone's outline as bold dashed `.attention-edge` overlays, one per straight run
+(`attentionZoneEdges`).
+**Words per node** (`WORDS_PER_NODE` = 5, `<= 1` = one word; Java
+`Filler.WORDS_PER_NODE`) is the default of `generate_grid(words_per_node=)`
+(the web UI's "Mots par pose" field, default 5, `GenerateRequest.words_per_node`
+[1-`MAX_WORDS_PER_NODE`=10]), passed to the workers through the pool
+initializer (`_worker_words_per_node`) and on to `try_fill(words_per_node=)`
+-> `Filler.words_per_node` (Java `Generator.Params`/`Ctx.wordsPerNode`,
+`Fill.FillArgs.wordsPerNode`, `Filler.wordsPerNode`); every other `try_fill`
+caller keeps the constant. A node places a GROUP of words before recursing.
 Once its chosen slot's candidate has passed the crossing check,
 `Filler._descend_group` (Java `descendGroup`, called from `_backtrack` and
-`_try_reshape`) places up to `WORDS_PER_NODE - 1` more words
-(`_extra_group_words`): each step takes the still-open slots of the
+`_try_reshape`) places up to `_group_size(attention) - 1` more words
+(`_extra_group_words`). `Filler._group_size` (Java `groupSize`) decreases
+linearly with the fill rate of the attention zone's ring, measured once the
+node's own word is placed: with W = `words_per_node`, `white` the ring's
+white cells (slot cells inside the zone, `_in_attention`, the whole grid
+when `attention` is `None`, minus those inside its inner zone — the filled
+zone it grew from, none without incremental fill) and `known` those
+holding a placed
+word or a locked letter, the group holds
+`max(1, W - (W - 1) * known * 100 // (white * GROUP_SIZE_MIN_FILL_PERCENT))`
+words (W on an empty ring, 1 once `GROUP_SIZE_MIN_FILL_PERCENT` (75) % of it
+is filled, and above; integer arithmetic, identical in both back ends; Java
+`Filler.GROUP_SIZE_MIN_FILL_PERCENT`). Every preview carrying `attention_zone` also carries
+`words_per_pose` (`Filler.best_words_per_pose`, set with the record; the
+current node's `_group_size` on a heartbeat; Java `bestWordsPerPose`/
+`Diag.wordsPerPose`), shown as "N m/p" on the tile's stats line
+(`renderAttemptPreview`, i18n `attemptPreviewWordsPerPose`). Each step
+(`_extra_group_words`) each step takes the still-open slots of the
 selection's level-6 window (`last_selection_window`, read right after
 `_select_target_slot`; the "emplacements candidats") holding a free cell in
 the attention zone, or, when none has a candidate, those of the node's
@@ -986,8 +1095,8 @@ node. The group counts as one descent (exempt when the node's own word is
 a "Mots Défi"/theme word), and a node's other candidates each get a fresh
 group.
 Every stage of a node (the `allow_breaking` pass included) shares one cap,
-`MAX_DESCENTS_PER_NODE` (10; `<= 0` disables it) — set to
-`EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 20) for a node entered while fewer than
+`MAX_DESCENTS_PER_NODE` (50; `<= 0` disables it) — set to
+`EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 100) for a node entered while fewer than
 `EARLY_DESCENTS_WORD_COUNT` (10) words are in place on top of the
 attempt's initial state (`Filler._initial_assigned_count`, the words
 already assigned when `solve()` starts), and removed entirely for an
@@ -1023,7 +1132,7 @@ backtracking jumps straight to the most recent word actually involved
 instead of replaying the same failure under every unrelated intermediate
 level. `None` (budget, abandon, periodic stop, disabled) falls back to
 chronological backtracking; an empty set (only root-dry slots left) jumps
-to the root. A backjump is at most `MAX_BACKJUMP_LEVELS` (5) long; a
+to the root. A backjump is at most `MAX_BACKJUMP_LEVELS` (5) nodes long; a
 longer one is replaced by a backghost
 (`Filler._fail_or_backghost`, `MAX_BACKGHOSTS_PER_DESCENT` = 10): at each
 place a failure arises with a conflict set (a dry slot, a slot whose
@@ -1031,8 +1140,11 @@ candidates were all rejected blameably, a node exhausted or at its descent
 cap — never a child's failure merely passed up), if the most recent word of
 that set placed by this search (`Filler._placement_seq`, slot → placement
 sequence number; words already there when `solve()` starts are never
-ghosted) has more than `MAX_BACKJUMP_LEVELS` search-placed words after it
-— the words a backjump would take off without replacing them — that word
+ghosted) has more than `MAX_BACKJUMP_LEVELS` nodes after the node that
+placed it, counting the distinct nodes still holding a search-placed word
+(`Filler._seq_node` maps each extra word of a group to its node's own word,
+so a group counts once; `_backghost_target`) — the nodes a backjump would
+unwind — that word
 alone is taken off the grid in
 place (its crossers' letter tallies re-sampled, restored afterwards), and a
 fresh `_backtrack` node carries on from there, with every word in between
@@ -2026,7 +2138,7 @@ like the real letters.
 "Finir la grille"/"Finir la zone" (`POST /api/interactive/finish`) keeps
 the session's grid size and language(s) and takes every other generation
 parameter from the generation form's current values (`Interactive
-FinishRequest`: `mode`, `black_enrichment_percent`, `force_letters_percent`,
+FinishRequest`: `mode`, `black_enrichment_percent`, `words_per_node`, `force_letters_percent`,
 `difficulty`, `theme`, `theme_precision`, `challenge_words` — each of the
 last four falling back to the session's own when omitted); the session's
 theme glossary is reused only while the form's theme and precision equal
@@ -2291,7 +2403,11 @@ Four independent filesystem stores, one JSON file shape shared with the
 - **`GRID_STORE/<language|bilingual>/`** — one file per published grid,
   named `<timestamp>_<title-slug>_<4-digit-code>.json`, never rewritten.
   `save_grid_json`/`get_grid`/`list_grids` (paginated, filterable by
-  language/difficulty/seen-state/pseudo). A grid published from Interactive mode
+  language/difficulty/seen-state/pseudo). Every record carries
+  `falcon_version`, the `VERSION.txt` value read when it is saved
+  (`_falcon_version`, Java `GridStore.falconVersion`; absent from an older
+  record), listed by `_iter_stored_grids` and shown in the Library's
+  "Falcon" column right after the date. A grid published from Interactive mode
   carries `interactive: true`; when it was reworked from a library grid,
   `origin` (that grid's id/title/pseudo/created_at plus its three
   `*_duration_seconds`, snapshotted by `_library_record_to_interactive`)
@@ -2583,7 +2699,12 @@ state, unlike the backend).
   `renderAttemptPreview` colours each example's `scrabble_cells` dark cyan
   (`.scrabble`, `--scrabble-fg`, declared before `.theme`/`.challenge` so
   those win a shared cell) and makes each tile carrying a `choice_index`
-  clickable, `chooseGeneratedGrid` posts the pick); the interactive-authoring
+  clickable, `chooseGeneratedGrid` posts the pick); the automatic
+  generation's status-line clocks (`pollJob(..., {timed: true})`, from
+  `runGeneration` only: `statusElapsed` appends the time since the job was
+  started and the time in its current step — the palier, `step.attempt`,
+  else `step.code`, `generationStepKey` — measured client-side and
+  re-rendered every `STATUS_CLOCK_INTERVAL_MS` (1 s)); the interactive-authoring
   mode (by far the largest block — zone selection, undo stack, per-cell
   editing, calls to every `/api/interactive/*` endpoint, "Définitions"/
   "Recalculer" (`generateInteractiveDefinitions`: `POST /api/interactive/

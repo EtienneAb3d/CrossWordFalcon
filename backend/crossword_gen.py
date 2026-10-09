@@ -938,9 +938,9 @@ def _in_corner_square(rows, cols, r, c):
 
 
 # `_place_black_cells`' draw window, in percent, and its widening step: the
-# share of the longest white runs the draw is restricted to, and, among
-# their valid cells, the share farthest from every black cell already
-# placed.
+# share of the white runs (`_run_score`-ranked) the draw is restricted to,
+# and, among their valid cells, the share farthest from every black cell
+# already placed.
 BLACK_DRAW_WINDOW_PERCENT = 5
 
 # `make_pattern`'s short-slot limit: once the ratio draw has reached its
@@ -982,40 +982,101 @@ def _window_size(count, percent):
     return min(count, max(1, math.ceil(count * percent / 100)))
 
 
-def _white_runs(grid, rows, cols):
-    """Every maximal run of non-black cells, across then down, as a tuple
-    of (row, col) cells — single cells included."""
+def _cell_runs(grid, rows, cols):
+    """Per non-black cell, its `[across run, down run]` — each the maximal
+    run of non-black cells holding it in that direction, as a tuple of
+    (row, col) cells (a single cell included)."""
+    run_at = {}
+    for direction, (outer, inner) in enumerate(((rows, cols), (cols, rows))):
+        for a in range(outer):
+            run = []
+            for b in range(inner + 1):
+                cell = (a, b) if direction == 0 else (b, a)
+                if b < inner and grid[cell[0]][cell[1]] != BLACK:
+                    run.append(cell)
+                elif run:
+                    run = tuple(run)
+                    for member in run:
+                        run_at.setdefault(member, [None, None])[direction] = run
+                    run = []
+    return run_at
+
+
+def _split_cell_runs(run_at, cell):
+    """Updates `run_at` (`_cell_runs`) for `cell` just blackened: its across
+    and down runs are each replaced, for their other cells, by the piece on
+    their side of it. Returns the two runs it held before."""
+    old = run_at.pop(cell)
+    for direction, run in enumerate(old):
+        k = run.index(cell)
+        for piece in (run[:k], run[k + 1:]):
+            for member in piece:
+                run_at[member][direction] = piece
+    return old
+
+
+def _crossing_length_score(run_at, r, c):
+    """`_place_black_cells`' score of the white cell (r, c): the sum of the
+    lengths of the words (runs of at least 2 cells, across and down, each
+    counted once) crossing the 3x3 square centered on it."""
+    seen = set()
+    total = 0
+    for rr in (r - 1, r, r + 1):
+        for cc in (c - 1, c, c + 1):
+            runs = run_at.get((rr, cc))
+            if runs is None:
+                continue
+            for run in runs:
+                if len(run) >= 2 and id(run) not in seen:
+                    seen.add(id(run))
+                    total += len(run)
+    return total
+
+
+def _ordered_runs(run_at, rows, cols):
+    """Every run of `run_at` (`_cell_runs`) once, the same tuple objects:
+    the across runs in row-major order, then the down runs in column-major
+    order."""
     runs = []
-    for r in range(rows):
-        run = []
-        for c in range(cols + 1):
-            if c < cols and grid[r][c] != BLACK:
-                run.append((r, c))
-            elif run:
-                runs.append(tuple(run))
-                run = []
-    for c in range(cols):
-        run = []
-        for r in range(rows + 1):
-            if r < rows and grid[r][c] != BLACK:
-                run.append((r, c))
-            elif run:
-                runs.append(tuple(run))
-                run = []
+    for direction in (0, 1):
+        outer, inner = (rows, cols) if direction == 0 else (cols, rows)
+        for a in range(outer):
+            for b in range(inner):
+                cell = (a, b) if direction == 0 else (b, a)
+                held = run_at.get(cell)
+                if held is not None and held[direction][0] == cell:
+                    runs.append(held[direction])
     return runs
 
 
-def _split_runs(runs, cell):
-    """`runs` with the across and the down run holding `cell` (just
-    blackened) each replaced by its non-empty pieces on either side of it."""
+def _split_run_list(runs, run_at, old_runs, cell):
+    """`runs` (`_ordered_runs`) once `cell` was blackened and `run_at`
+    updated by `_split_cell_runs` (which returned `old_runs`): each of the
+    two runs holding it is replaced, in place in the order, by its
+    non-empty pieces on either side of it, the tuples `run_at` now holds."""
+    replaced = {}
+    for direction, run in enumerate(old_runs):
+        k = run.index(cell)
+        pieces = []
+        if k > 0:
+            pieces.append(run_at[run[0]][direction])
+        if k < len(run) - 1:
+            pieces.append(run_at[run[-1]][direction])
+        replaced[id(run)] = pieces
     out = []
     for run in runs:
-        if cell in run:
-            k = run.index(cell)
-            out.extend(piece for piece in (run[:k], run[k + 1:]) if piece)
-        else:
+        pieces = replaced.get(id(run))
+        if pieces is None:
             out.append(run)
+        else:
+            out.extend(pieces)
     return out
+
+
+def _run_score(run, cell_score):
+    """`_place_black_cells`' ranking score of a white run: the sum of its
+    cells' `_crossing_length_score`."""
+    return sum(cell_score[cell] for cell in run)
 
 
 def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, target, placed,
@@ -1025,25 +1086,28 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     places black cells one at a time until `placed` reaches `target` or no
     candidate can be placed any more.
 
-    The grid's white runs (`_white_runs`: every maximal run of non-black
-    cells, across and down) are kept up to date as cells are placed — a
-    new black cell splits the across and the down run holding it into the
-    pieces on either side of it (`_split_runs`; none on a grid edge).
-
-    Every draw ranks the runs by decreasing length (ties in random order)
-    and keeps the `BLACK_DRAW_WINDOW_PERCENT` % longest (at least one).
-    Only the candidates lying in those runs that satisfy the hard
-    constraints are kept; they are ranked by `_black_spread_score`: the
-    mean, over `BLACK_DISTANCE_NEIGHBORS` black cells — the closest aligned
-    one in each of the four directions, then the closest non-aligned ones
-    — of the square root of the distance to each (`_black_distance_sq`: Euclidean,
-    a black cell of the same row or column counting `BLACK_ALIGNED_
-    DISTANCE_FACTOR` times its real distance, before the root; the grid's
-    edges count as a ring of black cells just outside it) — highest
-    first, ties keeping `candidates`' shuffled order,
-    and a cell is drawn at random among the same percentage of them
-    farthest (at least one). When the selected runs hold no valid cell,
-    the percentage grows by `BLACK_DRAW_WINDOW_PERCENT` and the draw starts
+    Every white cell gets a score, `_crossing_length_score`: the sum of
+    the lengths of the words (runs of at least 2 non-black cells, across
+    and down) crossing the 3x3 square centered on it. Every white run
+    (maximal run of non-black cells, across and down, single cells
+    included) gets the sum of its cells' scores (`_run_score`). Both are
+    kept up to date as cells are placed (`_cell_runs`, `_split_cell_runs`,
+    `_split_run_list`: a new black cell splits its across and down runs,
+    which changes the score of every cell within one cell of them). Every
+    draw ranks the runs by decreasing score (ties in random order) and
+    keeps the `BLACK_DRAW_WINDOW_PERCENT` % best (at least one). Only the
+    candidates lying in those runs that satisfy the hard constraints are
+    kept; they are ranked by `_black_spread_score`: the mean, over
+    `BLACK_DISTANCE_NEIGHBORS` black cells — the closest aligned one in
+    each of the four directions, then the closest non-aligned ones — of
+    the square root of the distance to each (`_black_distance_sq`:
+    Euclidean, a black cell of the same row or column counting
+    `BLACK_ALIGNED_DISTANCE_FACTOR` times its real distance, before the
+    root; the grid's edges count as a ring of black cells just outside
+    it) — highest first, ties keeping `candidates`' shuffled order, and a
+    cell is drawn at random among the same percentage of them farthest
+    (at least one). When the selected runs hold no valid cell, the
+    percentage grows by `BLACK_DRAW_WINDOW_PERCENT` and the draw starts
     over.
 
     Hard constraints: the cell is still white; it touches no black cell
@@ -1051,9 +1115,9 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
     letter below its candidate threshold (`_new_black_cell_breaks_locked_
     slot`); the grid stays structurally valid (`is_structurally_valid`)
     with `min_interior_free` = `STRUCTURAL_MIN_INTERIOR_FREE`. When every
-    run is selected without a valid cell, the draw starts over from the
-    first percentage with `min_interior_free` lowered by one (down to 1);
-    when even 1 fails, with adjacency accepted unless `forbid_adjacency`
+    run is selected without a valid cell, the draw starts over from
+    the first percentage with `min_interior_free` lowered by one (down to
+    1); when even 1 fails, with adjacency accepted unless `forbid_adjacency`
     (which `make_pattern` always passes) — and when that fails too,
     nothing can be placed and the function stops short of `target`,
     leaving the grid as it is.
@@ -1100,7 +1164,9 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
                 return None
             percent += BLACK_DRAW_WINDOW_PERCENT
 
-    runs = _white_runs(grid, rows, cols)
+    run_at = _cell_runs(grid, rows, cols)
+    runs = _ordered_runs(run_at, rows, cols)
+    cell_score = {cell: _crossing_length_score(run_at, *cell) for cell in run_at}
     blacks = [(br, bc) for br in range(rows) for bc in range(cols) if grid[br][bc] == BLACK]
     # The grid's edges count as black cells: a ring of virtual black cells
     # just outside the grid.
@@ -1115,7 +1181,8 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         position = {cell: i for i, cell in enumerate(remaining)}
         run_order = list(runs)
         rng.shuffle(run_order)
-        run_order.sort(key=lambda run: -len(run))
+        run_scores = {id(run): _run_score(run, cell_score) for run in run_order}
+        run_order.sort(key=lambda run: -run_scores[id(run)])
         chosen = None
         for allow_adjacency in ((False,) if forbid_adjacency else (False, True)):
             for min_free in range(STRUCTURAL_MIN_INTERIOR_FREE, 0, -1):
@@ -1129,10 +1196,17 @@ def _place_black_cells(grid, rows, cols, row_black, col_black, candidates, targe
         r, c = remaining.pop(chosen)
         dist.pop(chosen)
         nearest.pop(chosen)
+        old_runs = _split_cell_runs(run_at, (r, c))
+        runs = _split_run_list(runs, run_at, old_runs, (r, c))
+        del cell_score[(r, c)]
+        rescored = {(rr + dr, cc + dc) for run in old_runs for rr, cc in run
+                    for dr in (-1, 0, 1) for dc in (-1, 0, 1)}
+        for cell in rescored:
+            if cell in cell_score:
+                cell_score[cell] = _crossing_length_score(run_at, *cell)
         for i, (cr, cc) in enumerate(remaining):
             if _record_black(nearest[i], cr, cc, r, c):
                 dist[i] = _black_spread_score(nearest[i])
-        runs = _split_runs(runs, (r, c))
         grid[r][c] = BLACK
         row_black[r] += 1
         col_black[c] += 1
@@ -1756,12 +1830,13 @@ def make_pattern(rows, cols, black_ratio, rng, available_lengths=None,
     black cells in that row/column). Keeping black cells apart avoids
     that directly.
 
-    Implemented by `_place_black_cells`: at each step, the draw is
-    restricted to the `BLACK_DRAW_WINDOW_PERCENT` % longest white runs, and
-    a valid cell is drawn at random among the same percentage of their
-    valid cells farthest from every black cell already placed, the
-    percentage widening by the same step while those runs hold no valid
-    cell.
+    Implemented by `_place_black_cells`: at each step, the white runs are
+    ranked by the sum of their cells' `_crossing_length_score` (the lengths
+    of the words crossing the 3x3 square centered on each cell), the
+    `BLACK_DRAW_WINDOW_PERCENT` % best are kept, and a valid cell of theirs
+    is drawn at random among the same percentage of them farthest from
+    every black cell already placed, the percentage widening by the same
+    step while the selected runs hold no valid cell.
 
     This ratio-based draw never places a black cell in one of the grid's
     four corner 2x2 squares (`_in_corner_square`, `CORNER_SQUARE_SIZE`);
@@ -2641,41 +2716,73 @@ EARLY_HARDCLEAN_PERCENT = 10
 # on the same slot more than this many times in a row — no other word placed
 # there in between (`Filler._last_word_streak`, the last word placed on each
 # slot with its count, restarting at 1 when another word is placed there) —
-# that slot is declared impossible and hard-cleaned in place, inside the search
+# that slot is declared impossible and hard-cleaned inside the search
 # (`Filler._repeat_hardclean`): `_clean_blocked_slots` runs with that slot
 # as its only impossible slot (its own word, the words crossing it and the
-# letters left on it are cleared, no black cell touched), the slot becomes
-# an "emplacement écarté" and a fresh node carries on from there. Like a
-# backghost, the backtracking stack is kept: every word the clean takes off
-# stays off, and the node that placed it finds nothing to remove when the
-# search unwinds to it. The word's count on that slot restarts from zero.
+# letters left on it are cleared, no black cell touched). Like the early
+# hardclean, the backtracking history is dropped: every node unwinds, and
+# `solve()` takes the cleaned state back flat as its new root
+# (`Filler._restart_from_state`), the slot becoming an "emplacement
+# écarté". The word's count on that slot restarts from zero.
 # `None`/0 disables it. Only the generation attempts (`_pattern_attempt`/
 # `_pattern_continue`) enable it.
 MAX_SAME_WORD_PLACEMENTS = 1000
 
-# Incremental fill ("remplissage incrémental"), every palier: a node only
+# Incremental fill ("remplissage incrémental"), optional, currently on
+# (False: the whole grid is the attention zone, `attention` None, and the
+# zone softclean, which only runs before the zone grows, never runs). When
+# on, on every palier: a node only
 # places a word on a slot holding at least one still-free cell (no placed
-# word nor locked letter on it) inside the "attention zone", the union of
-# two rectangles anchored at (0, 0) (`Filler._attention_pool`): a
-# horizontal one (the grid's first Rh rows and Ch columns) and a vertical
-# one (first Rv rows and Cv columns), all four starting at
-# INCREMENTAL_FILL_START_SIZE. Once the node can place nothing more inside
-# the zone (no such slot left, or every one tried, écarté ones released
-# included), both rectangles grow at once (`Filler._widen_attention`): the
-# horizontal one by INCREMENTAL_FILL_COL_STEP columns until it spans the
-# grid's whole width, then by INCREMENTAL_FILL_ROW_STEP rows; the vertical
-# one by INCREMENTAL_FILL_ROW_STEP rows until it spans the grid's whole
-# height, then by INCREMENTAL_FILL_COL_STEP columns. The node carries on
-# until one of them covers the whole grid. The zone is a `_backtrack`
-# recursion parameter, like `released`.
+# word nor locked letter on it) inside the "attention zone"
+# (`Filler._attention_pool`). The zone is made of two rectangles: a top band
+# of whole rows across the grid's whole width (no row at first), and below
+# it a block of INCREMENTAL_FILL_STEP rows (clipped to the grid) anchored at
+# the left edge, INCREMENTAL_FILL_STEP columns wide at first
+# (`Filler._in_attention`). It is a (band rows, block width, inner band rows,
+# inner block width) tuple — the inner pair being the filled zone it grew
+# from (`Filler._group_size`'s ring); a block reaching the right edge joins
+# the band (`Filler._attention_shape`). The start zone is the
+# INCREMENTAL_FILL_STEP x INCREMENTAL_FILL_STEP square at the top-left corner
+# (`Filler._initial_attention`). With ATTENTION_FALLBACK_ENABLED, a node
+# falls back on entry on the largest fully filled zone of that shape (band
+# rows a multiple of INCREMENTAL_FILL_STEP), at least the start zone
+# (`Filler._fallback_attention`); without it, a node keeps the zone it is
+# entered with. Once the node can place nothing more
+# inside the zone (no such slot left, or every one tried, écarté ones
+# released included), the block grows INCREMENTAL_FILL_STEP columns to the
+# right; once it reaches the right edge its rows join the band and a new
+# block starts at the left edge below it (`Filler._widen_attention`), until
+# the zone covers the whole grid. The zone is a `_backtrack` recursion
+# parameter, like `released` (None: incremental fill off).
 # An attempt that starts from locked letters resets the zone to its start
 # size once, the first time a hardclean leaves it no locked letter at all
-# (`Filler._attention_after_unlock`). `generate_grid` enables it on every
-# attempt (`try_fill(incremental_fill=True)`).
+# (`Filler._attention_after_unlock`). `generate_grid` passes it to every
+# attempt (`try_fill(incremental_fill=INCREMENTAL_FILL_ENABLED)`).
 INCREMENTAL_FILL_ENABLED = True
-INCREMENTAL_FILL_START_SIZE = 4
-INCREMENTAL_FILL_COL_STEP = 2
-INCREMENTAL_FILL_ROW_STEP = 2
+INCREMENTAL_FILL_STEP = 16
+# Attention-zone fallback, with incremental fill: optional, currently off
+# (the zone only grows along a descent). On, every node falls back on entry
+# on the largest fully filled zone (`Filler._fallback_attention`).
+ATTENTION_FALLBACK_ENABLED = False
+
+# Zone softclean, with incremental fill: before the attention zone grows
+# (nothing selectable left in it, or everything selectable in it tried), a
+# node soft-cleans an impossible slot holding a free cell of the zone — an
+# "emplacement bloqué" (`Filler.slot_is_blocked`): an unassigned slot with
+# no candidate, left out of the node's selectable slots (`_tolerated_dry`),
+# or a selectable one caught in a crossing deadlock — or an "emplacement
+# écarté" (`_impossible_this_attempt`) instead (`Filler._zone_clean`):
+# `_clean_blocked_slots` on that slot alone without the hardclean option
+# (`hard_clean=False`: only the words crossing it are removed, their letters
+# held by a remaining whole word kept; erased locked letters unlocked, no
+# black cell touched); like every clean of the search, the backtracking
+# history is dropped and `solve()` takes the cleaned state back
+# flat as its new root (`Filler._restart_from_state`). A clean that changes
+# nothing, or yields
+# a state (pattern + known letters) a zone softclean of the attempt has
+# already produced, is skipped. Not in the last-resort `allow_breaking`
+# stage.
+ZONE_CLEAN_ENABLED = True
 
 # Check frequency (in checks elapsed) for the "another
 # attempt of the same palier has already finished" signal (see
@@ -2910,7 +3017,7 @@ def _slots_touching(slots, target_indices):
 # the best-scored candidates be reached first, while still leaving enough
 # room for two attempts (or two "Suivant" clicks) on the same state to
 # diverge.
-CANDIDATE_SCORE_WINDOW = 100
+CANDIDATE_SCORE_WINDOW = 200
 
 # Within that window, the words are re-sorted by their frequency in the
 # freq wordlist (`index[length]["dict_freq"]`, highest first, 0 for a word
@@ -2938,7 +3045,7 @@ CANDIDATE_SCORE_WINDOW = 100
 # drops to `descents + 1`. It can only reach MAX_DESCENTS_PER_NODE while
 # every failure it received came back through ordinary backtracking (a
 # failure arising in its own child). Applies only where a cap applies.
-MAX_DESCENTS_PER_NODE = 10
+MAX_DESCENTS_PER_NODE = 50
 
 # See `CANDIDATE_SCORE_WINDOW`: twice the descents a node makes, so the
 # draw covers the words a node can actually try. With the descent cap
@@ -2974,10 +3081,11 @@ EARLY_MAX_DESCENTS_PER_NODE = 2 * MAX_DESCENTS_PER_NODE
 # chronological backtracking.
 BACKJUMPING_ENABLED = True
 
-# Longest backjump `Filler._backtrack` makes: the number of words placed by
-# this search after the most recent word of a conflict set, i.e. the words
-# a backjump to it would take off without replacing them. A failure within
-# that distance backjumps (0 is plain chronological backtracking); a
+# Longest backjump `Filler._backtrack` makes: the number of nodes holding a
+# word placed by this search after the node that placed the most recent
+# word of a conflict set, i.e. the nodes a backjump to it would unwind. A
+# node placing a group of words (WORDS_PER_NODE) counts once. A failure
+# within that distance backjumps (0 is plain chronological backtracking); a
 # failure beyond it is backghosted instead (see below).
 MAX_BACKJUMP_LEVELS = 5
 
@@ -2997,14 +3105,26 @@ MAX_BACKJUMP_LEVELS = 5
 # full).
 MAX_BACKGHOSTS_PER_DESCENT = 10
 
-# Words `Filler._backtrack` places per node: after the word of the slot the
-# node chose, up to `WORDS_PER_NODE - 1` more words are placed at once
+# Most words `Filler._backtrack` places per node ("mots par pose"): after
+# the word of the slot the node chose, more words are placed at once
 # (`Filler._descend_group`) before recursing — on the slots of that choice's
 # geometric selection window first ("emplacements candidats"), then on the
 # node's other selectable slots — and a failure below takes them all back
-# off together. Each word tried for them costs one check, like any
-# candidate. `<= 1` places a single word per node.
-WORDS_PER_NODE = 2
+# off together. The group's size decreases with the fill rate of the
+# attention zone's ring (`Filler._group_size`) — the zone minus the next
+# smaller attention zone, which is full (otherwise the zone would have
+# shrunk back to it): `WORDS_PER_NODE` words on an empty ring, down to 1 on
+# a full one. Each word tried for them costs one check,
+# like any candidate. `<= 1` places a single word per node. The default of
+# `generate_grid(words_per_node=)`/`try_fill(words_per_node=)`, which the
+# web UI's "Mots par pose" field overrides (`GenerateRequest.words_per_node`).
+WORDS_PER_NODE = 5
+
+# Fill rate (percent) of the attention zone's ring at which a node is down
+# to one word per node (`Filler._group_size`): the group shrinks linearly
+# from `words_per_node` on an empty ring to 1 at this rate, and stays at 1
+# above it.
+GROUP_SIZE_MIN_FILL_PERCENT = 75
 
 # Maximum number of "emplacements écartés" `Filler._impossible_this_attempt`
 # holds at once: only the most recently added ones are kept, the oldest
@@ -3428,22 +3548,37 @@ class Filler:
         # Incremental fill (see INCREMENTAL_FILL_ENABLED): off unless
         # `try_fill` turns it on.
         self.incremental_fill = False
-        # Attention zone ((Rh, Ch), (Rv, Cv)) of the node the search is
-        # currently in, and the one `best_assignment` was recorded under (None: the
-        # whole grid) — published with every preview (`attention_size`).
-        self.attention_size = None
-        self.best_attention_size = None
+        # Attention zone (see `_fallback_attention`) of the node the
+        # search is currently in, and the one `best_assignment` was recorded
+        # under (None: the whole grid) — published with every preview as
+        # `attention_zone` (`_attention_zone_json`).
+        self.attention_step = None
+        self.best_attention_step = None
+        # Words per node ("mots par pose", `_group_size`) for the attention
+        # zone the record was taken under, published with its preview
+        # (`words_per_pose`).
+        self.best_words_per_pose = None
         # True while the attempt, started from locked letters, has not yet
         # reset its attention zone for losing them all (see
         # `_attention_after_unlock`).
         self._attention_reset_pending = False
         self._early_hardclean_states = set()
+        # Cleaned states the zone softclean has produced in this attempt
+        # (see ZONE_CLEAN_ENABLED): pattern + every known letter.
+        self._zone_clean_states = set()
         self.permanent_locked_letters = {}
-        # Set by `_backtrack` when a record calls for an early hardclean:
-        # every node then unwinds like on an abandon (running its own
-        # undo), and `solve()` restarts the search flat from the record
-        # (`_restart_from_record`).
+        # Set by every clean of the search: every node then unwinds
+        # like on an abandon (running its own undo), and `solve()` restarts
+        # the search flat — from the record for an early hardclean
+        # (`_restart_from_record`), from the cleaned state `_flat_restart`
+        # holds for a zone softclean or repeated-word hardclean
+        # (`_restart_from_state`).
         self._restart_pending = False
+        # (cleaned assignment, cells whose letter it erased, slot list,
+        # pattern, slot to set aside or None): the state a zone or
+        # repeated-word hardclean restarts the search from, captured before
+        # the stack unwinds (see `_request_flat_restart`).
+        self._flat_restart = None
         # Repeated-word rule (see MAX_SAME_WORD_PLACEMENTS): the limit
         # (None = off, the default for every caller that is not a
         # generation attempt), and the last word the search placed on each
@@ -3451,6 +3586,8 @@ class Filler:
         # cells (tuple) -> [word, count].
         self.same_word_limit = None
         self._last_word_streak = {}
+        # Words placed per node (see WORDS_PER_NODE); set by try_fill.
+        self.words_per_node = WORDS_PER_NODE
         # Set when a `_backtrack` call returned because the check budget
         # ran out (see `_deadline_reached_without_extension`), so `solve()`
         # can tell a strict search cut short from one genuinely exhausted.
@@ -3482,6 +3619,11 @@ class Filler:
         # search started are never in it, and never ghosted.
         self._placement_seq = {}
         self._placement_counter = 0
+        # Placement sequence number of each extra word of a group (see
+        # WORDS_PER_NODE) -> that of the node's own word, so the distance
+        # MAX_BACKJUMP_LEVELS measures counts nodes, not words. A node's own
+        # word is its own node (absent from this map).
+        self._seq_node = {}
         # Every word this attempt's search has placed on each slot, with the
         # number of times it was placed there: slot cells (tuple) -> {word:
         # count}, plus the per-slot total. Keyed by cells rather than slot
@@ -3988,18 +4130,23 @@ class Filler:
 
     def _descend_group(self, i, word, window, pool, deadline_checks, released, attention):
         """Recurse below the word just placed on slot `i`, after placing up
-        to WORDS_PER_NODE - 1 more words at once (`_extra_group_words`) —
+        to `_group_size(attention)` - 1 more words at once (`_extra_group_words`) —
         on the slots of `window` (the geometric selection window `i` was
         chosen from) first, then on those of `pool` (the node's selectable
         slots). Every word of the group is counted (`_record_tried_word`);
-        one placed too often in a row on its slot hard-cleans that slot in
-        place instead of a plain child node. When the recursion fails, the
-        extra words are all taken back off together (those a backghost or a
-        hardclean has not removed already), their letter statistics
+        one placed too often in a row on its slot hard-cleans that slot
+        (`_repeat_hardclean`, a flat restart) instead of a plain child node.
+        When the recursion fails, the extra words are all taken back off
+        together (those a backghost has not removed already), their letter
+        statistics
         restored, and the caller takes `word` off. A conflict reported on an
         extra slot is charged to `i` plus the words crossing that extra slot
         — what fixed its choice — so a backjump still lands on this node."""
         group, stopped = self._extra_group_words(window, pool, deadline_checks, attention)
+        node_seq = self._placement_seq.get(i)
+        if node_seq is not None:
+            for _, _, seq, _ in group:
+                self._seq_node[seq] = node_seq
         if stopped:
             self._undo_group(group)
             return self._fail(None)
@@ -4008,7 +4155,7 @@ class Filler:
             if self._record_tried_word(k, w) and hit is None:
                 hit = k
         if hit is not None:
-            solved = self._repeat_hardclean(hit, deadline_checks, released, attention)
+            solved = self._repeat_hardclean(hit, attention)
         else:
             solved = self._backtrack(deadline_checks, released, attention)
         if solved:
@@ -4028,17 +4175,18 @@ class Filler:
     def _undo_group(self, group):
         """Take the extra words of `_descend_group` back off, the last
         placed first: letter statistics restored, and each word removed
-        unless a backghost or a hardclean below took it off already."""
+        unless a backghost below took it off already."""
         for k, w, seq, saved_scores in reversed(group):
             self._restore_letter_scores(saved_scores)
+            self._seq_node.pop(seq, None)
             if self._placement_seq.get(k) == seq:
                 del self._placement_seq[k]
                 self.assignment[k] = None
                 self.used_words.discard(w)
 
     def _extra_group_words(self, window, pool, deadline_checks, attention):
-        """Place up to WORDS_PER_NODE - 1 extra words for the current node
-        (see `_descend_group`). Each step takes the still-open slots of
+        """Place up to `_group_size(attention)` - 1 extra words for the
+        current node (see `_descend_group`). Each step takes the still-open slots of
         `window` holding a free cell in the attention zone, or, when none
         has a candidate left, those of `pool`; picks one by the selection
         cascade (`_select_target_slot`); and places the first of its
@@ -4051,10 +4199,11 @@ class Filler:
         placement seq, saved letter scores)`; stopped is True when the
         budget, an abandon or a periodic stop signal interrupted it."""
         group = []
-        if WORDS_PER_NODE <= 1:
+        if self.words_per_node <= 1:
             return group, False
+        size = self._group_size(attention)
         tried = set()
-        while len(group) < WORDS_PER_NODE - 1:
+        while len(group) < size - 1:
             active = self._active_challenge_words()
             domains = {}
             dry = False
@@ -4133,18 +4282,27 @@ class Filler:
             group.append((k, placed, seq, saved_scores))
         return group, False
 
-    def _repeat_hardclean(self, i, deadline_checks, released, attention):
+    def _repeat_hardclean(self, i, attention):
         """Declare slot `i` impossible (see MAX_SAME_WORD_PLACEMENTS) and
-        hard-clean it in place: `_clean_blocked_slots` with `i` as its only
+        hard-clean it: `_clean_blocked_slots` with `i` as its only
         impossible slot and its own word taken off first, no black cell
         touched — its word, every word crossing it and every letter left on
         it are cleared, same locking and orphan-letter rules as the early
-        hardclean. The words it takes off leave the grid without unwinding
-        any node, like a backghost (their `_placement_seq` entries go, so
-        the nodes that placed them find nothing to remove), the slot becomes
-        an "emplacement écarté", and a fresh node carries on. The letter
-        statistics re-tallied for the removals are restored when that node
-        fails; the removed words stay off."""
+        hardclean. The backtracking history is dropped
+        (`_request_flat_restart`): every node unwinds, and `solve()` takes
+        the cleaned state back flat as its new root, `i` set aside as an
+        "emplacement écarté", with the attention zone `attention` of the
+        node that triggered it. Always False (the unwinding)."""
+        cleaned, cleared = self._slot_clean(i, hard=True)
+        return self._request_flat_restart(cleaned, cleared, attention, set_aside=i)
+
+    def _slot_clean(self, i, hard):
+        """The clean of slot `i` alone (see `_repeat_hardclean`/
+        `_zone_clean`) — the hardclean when `hard`, the softclean otherwise
+        (`_clean_blocked_slots`' `hard_clean`) — computed without applying
+        it: `_clean_blocked_slots` with `i` as its only impossible slot, its
+        own word taken off first, no black cell touched. Returns (cleaned
+        assignment, cells whose letter it erased)."""
         work = list(self.assignment)
         work[i] = None
         cleared = set()
@@ -4152,28 +4310,59 @@ class Filler:
             self.slots, work, [i],
             locked_letters=dict(self.locked_letters) or None, index=self.index, rng=self.rng,
             permanent_locked_letters=self.permanent_locked_letters or None,
-            cleared_cells_out=cleared,
+            cleared_cells_out=cleared, hard_clean=hard,
         )
-        removed = [
-            j for j, word in enumerate(self.assignment)
-            if word is not None and cleaned[j] is None
-        ]
-        for j in removed:
-            self.used_words.discard(self.assignment[j])
-            self.assignment[j] = None
-            self._placement_seq.pop(j, None)
-        saved = [self._refresh_letter_scores_around(j) for j in removed]
-        if cleared:
-            self.locked_letters = {
+        return cleaned, cleared
+
+    def _request_flat_restart(self, cleaned, cleared, attention, set_aside=None):
+        """Drop the backtracking history for a `_slot_clean` result
+        (`cleaned`, `cleared`): the cleaned state is captured with the slot
+        list and pattern it lives on and the attention zone of the node
+        that requested it (`attention`, `_flat_restart`), `_restart_pending`
+        makes every node unwind like on an abandon, and `solve()` takes that
+        state back flat as its new root (`_restart_from_state`), in that
+        zone. Returns `_fail(None)`, for the caller to return."""
+        self._flat_restart = (
+            list(cleaned), set(cleared), self.slots, self.pattern, set_aside, attention,
+        )
+        self._restart_pending = True
+        return self._fail(None)
+
+    def _zone_clean(self, impossible, attention):
+        """Soft-clean an impossible slot of the attention zone (see
+        ZONE_CLEAN_ENABLED): the first slot of `impossible` (the node's
+        unassigned slots that are "emplacements bloqués" — no candidate, or
+        a crossing deadlock — or "emplacements écartés") holding a free
+        cell in the zone whose softclean (`_slot_clean`, `hard=False`)
+        changes the grid into a
+        state no zone softclean of this attempt has produced yet is cleaned,
+        and the backtracking history is dropped (`_request_flat_restart`):
+        `solve()` takes the cleaned state back flat as its new root. None
+        when no slot qualifies (nothing done), False otherwise (the
+        unwinding)."""
+        for i in self._attention_pool(impossible, attention):
+            cleaned, cleared = self._slot_clean(i, hard=False)
+            removed = any(
+                word is not None and cleaned[j] is None
+                for j, word in enumerate(self.assignment)
+            )
+            if not removed and not cleared:
+                continue
+            known = {
                 cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared
             }
-        self._impossible_this_attempt.add(i)
-        attention = self._attention_after_unlock(attention)
-        if self._backtrack(deadline_checks, released, attention):
-            return True
-        for scores in reversed(saved):
-            self._restore_letter_scores(scores)
-        return False
+            for j, word in enumerate(cleaned):
+                if word is not None:
+                    known.update(zip(self.slots[j], word))
+            state = (
+                tuple("".join(row) for row in self.pattern),
+                tuple(sorted(known.items())),
+            )
+            if state in self._zone_clean_states:
+                continue
+            self._zone_clean_states.add(state)
+            return self._request_flat_restart(cleaned, cleared, attention)
+        return None
 
     def _slot_try_count(self, i):
         """Total number of word placements the search has made on slot
@@ -4573,7 +4762,9 @@ class Filler:
         be reported (see MAX_BACKGHOSTS_PER_DESCENT): no conflict known,
         the backghost budget of this descent used up, no word of the set
         placed by this search, or its most recent one lying within
-        MAX_BACKJUMP_LEVELS words of the top, which a backjump reaches."""
+        MAX_BACKJUMP_LEVELS nodes of the top, which a backjump reaches: the
+        distinct nodes holding a search-placed word placed after the node
+        that placed it (the words of one group count as one node)."""
         if (conflict is None or not self._placement_seq or self._restart_pending
                 or self._ghosts_in_descent >= MAX_BACKGHOSTS_PER_DESCENT):
             return None
@@ -4581,31 +4772,58 @@ class Filler:
         if not ghostable:
             return None
         target = max(ghostable, key=self._placement_seq.__getitem__)
-        seq = self._placement_seq[target]
-        if sum(1 for s in self._placement_seq.values() if s > seq) <= MAX_BACKJUMP_LEVELS:
+        node_of = self._seq_node.get
+        target_node = node_of(self._placement_seq[target], self._placement_seq[target])
+        later_nodes = set()
+        for s in self._placement_seq.values():
+            node = node_of(s, s)
+            if node > target_node:
+                later_nodes.add(node)
+        if len(later_nodes) <= MAX_BACKJUMP_LEVELS:
             return None
         return target
 
+    def _attention_shape(self, band, width):
+        """The (band rows, block width) pair of an attention zone (see
+        INCREMENTAL_FILL_ENABLED), normalized: a block reaching the right
+        edge joins the band, a new empty block starting below it; the band
+        clipped to the grid."""
+        if width >= self.cols:
+            band, width = band + INCREMENTAL_FILL_STEP, 0
+        return min(band, self.rows), width
+
+    def _in_attention(self, shape, r, c):
+        """True when cell (r, c) lies in the attention zone of (band rows,
+        block width) `shape`: the band's rows, or the block of
+        INCREMENTAL_FILL_STEP rows below it, its first `width` columns."""
+        band, width = shape
+        return r < band or (r < band + INCREMENTAL_FILL_STEP and c < width)
+
     def _initial_attention(self):
         """Attention zone a root node starts with (see
-        INCREMENTAL_FILL_ENABLED), as ((Rh, Ch), (Rv, Cv)), its horizontal
-        and vertical rectangles: None (the whole grid) when incremental
-        fill is off or the start zone already covers the grid."""
+        INCREMENTAL_FILL_ENABLED): the INCREMENTAL_FILL_STEP square at the
+        top-left corner, with no inner zone, or None (incremental fill
+        off)."""
         if not self.incremental_fill:
             return None
-        rows = min(INCREMENTAL_FILL_START_SIZE, self.rows)
-        cols = min(INCREMENTAL_FILL_START_SIZE, self.cols)
-        return self._attention_or_whole(((rows, cols), (rows, cols)))
+        return (*self._attention_shape(0, INCREMENTAL_FILL_STEP), 0, 0)
 
-    def _attention_or_whole(self, zone):
-        """`zone`, or None once one of its two rectangles (both anchored
-        at (0, 0)) covers the whole grid — their union then does too."""
-        if any(r >= self.rows and c >= self.cols for r, c in zone):
+    def _attention_is_whole(self, attention):
+        """True when `attention` covers the whole grid (None included)."""
+        return attention is None or attention[0] >= self.rows
+
+    def _attention_zone_json(self, attention):
+        """The attention zone as published with the previews
+        (`attention_zone`): [band rows, block height, block width] — the
+        band across the whole width, then the block below it anchored at the
+        left edge — None for the whole grid."""
+        if self._attention_is_whole(attention):
             return None
-        return zone
+        band, width = attention[0], attention[1]
+        return [band, min(INCREMENTAL_FILL_STEP, self.rows - band), width]
 
     def _attention_after_unlock(self, attention):
-        """The attention zone a node carries on with after a hardclean
+        """The attention zone a root carries on with after a hardclean
         that may have unlocked letters (`attention` otherwise): the start
         zone, once per attempt, the first time an attempt started from
         locked letters is left with none (see INCREMENTAL_FILL_ENABLED)."""
@@ -4614,34 +4832,51 @@ class Filler:
             return self._initial_attention()
         return attention
 
-    def _widen_attention(self, zone):
-        """The attention zone after `zone` ((Rh, Ch), (Rv, Cv)), both
-        rectangles grown at once: the horizontal one by INCREMENTAL_FILL_
-        COL_STEP more columns while it is narrower than the grid, then
-        INCREMENTAL_FILL_ROW_STEP more rows; the vertical one by
-        INCREMENTAL_FILL_ROW_STEP more rows while it is shorter than the
-        grid, then INCREMENTAL_FILL_COL_STEP more columns. None once the
-        zone covers the whole grid."""
-        (hr, hc), (vr, vc) = zone
-        if hc < self.cols:
-            hc = min(hc + INCREMENTAL_FILL_COL_STEP, self.cols)
-        else:
-            hr = min(hr + INCREMENTAL_FILL_ROW_STEP, self.rows)
-        if vr < self.rows:
-            vr = min(vr + INCREMENTAL_FILL_ROW_STEP, self.rows)
-        else:
-            vc = min(vc + INCREMENTAL_FILL_COL_STEP, self.cols)
-        return self._attention_or_whole(((hr, hc), (vr, vc)))
+    def _widen_attention(self, attention):
+        """The attention zone after `attention` (see
+        INCREMENTAL_FILL_ENABLED): the block INCREMENTAL_FILL_STEP columns
+        wider — joining the band once it reaches the right edge, a new block
+        then starting at the left edge below it; `attention` becomes its
+        inner zone."""
+        band, width = attention[0], attention[1]
+        return (*self._attention_shape(band, width + INCREMENTAL_FILL_STEP), band, width)
 
-    def _attention_pool(self, slots, zone):
+    def _fallback_attention(self, selectable):
+        """The attention zone a node enters with (see
+        INCREMENTAL_FILL_ENABLED): the largest zone holding no free cell
+        (no placed word nor locked letter) of a slot of `selectable` — a
+        band of whole rows, a multiple of INCREMENTAL_FILL_STEP, then the
+        block below it as wide as its leading columns are filled — at least
+        the start zone, with that filled zone as its inner zone. None when
+        incremental fill is off."""
+        if not self.incremental_fill:
+            return None
+        known = set(self.locked_letters)
+        for j, word in enumerate(self.assignment):
+            if word is not None:
+                known.update(self.slots[j])
+        free = {
+            cell for i in selectable for cell in self.slots[i]
+            if cell not in known
+        }
+        if not free:
+            return (self.rows, 0, self.rows, 0)
+        band = min(r for r, _ in free) // INCREMENTAL_FILL_STEP * INCREMENTAL_FILL_STEP
+        width = min(
+            c for r, c in free if r < band + INCREMENTAL_FILL_STEP
+        )
+        filled = (band, width)
+        start = self._attention_shape(0, INCREMENTAL_FILL_STEP)
+        return (*max(filled, start), *filled)
+
+    def _attention_pool(self, slots, side):
         """The slots of `slots` holding at least one still-free cell (no
         placed word nor locked letter on it) inside the attention zone
-        `zone` ((Rh, Ch), (Rv, Cv)) — rows 0 to Rh - 1 and columns 0 to
-        Ch - 1, or rows 0 to Rv - 1 and columns 0 to Cv - 1. All of
-        `slots` when `zone` is None."""
-        if zone is None:
+        `side` (`_in_attention`). All of `slots` when `side` covers the
+        whole grid."""
+        if self._attention_is_whole(side):
             return list(slots)
-        (hr, hc), (vr, vc) = zone
+        shape = (side[0], side[1])
         known = set(self.locked_letters)
         for j, word in enumerate(self.assignment):
             if word is not None:
@@ -4649,10 +4884,39 @@ class Filler:
         return [
             i for i in slots
             if any(
-                ((r < hr and c < hc) or (r < vr and c < vc)) and (r, c) not in known
+                self._in_attention(shape, r, c) and (r, c) not in known
                 for r, c in self.slots[i]
             )
         ]
+
+    def _group_size(self, attention):
+        """Words the current node places at once, its own included (see
+        WORDS_PER_NODE, "mots par pose"): `words_per_node` on an empty ring,
+        down to 1 once its fill rate reaches GROUP_SIZE_MIN_FILL_PERCENT (P),
+        linearly — the ring being the attention zone (the whole grid when
+        `attention` is None) minus its inner zone (the filled zone it grew
+        from), and its fill rate the share of its white cells holding a
+        placed word or a locked letter:
+        `max(1, W - floor((W - 1) * known * 100 / (white * P)))`."""
+        top = self.words_per_node
+        if top <= 1:
+            return 1
+        shape = (self.rows, 0) if attention is None else (attention[0], attention[1])
+        inner = (0, 0) if attention is None else (attention[2], attention[3])
+        known = set(self.locked_letters)
+        for j, word in enumerate(self.assignment):
+            if word is not None:
+                known.update(self.slots[j])
+        white = set()
+        for slot in self.slots:
+            for r, c in slot:
+                if (self._in_attention(shape, r, c)
+                        and not self._in_attention(inner, r, c)):
+                    white.add((r, c))
+        if not white:
+            return 1
+        return max(1, top - (top - 1) * len(white & known) * 100
+                   // (len(white) * GROUP_SIZE_MIN_FILL_PERCENT))
 
     def _fail_or_backghost(self, conflict, deadline_checks, released, attention=None):
         """Report a failure whose conflict set is `conflict`, backghosting
@@ -4986,6 +5250,7 @@ class Filler:
         self._impossible_this_attempt = recent
         self._tolerated_dry = set()
         self._placement_seq = {}
+        self._seq_node = {}
 
     def solve(self, deadline_checks):
         # Resolved here (once, from the same `deadline_checks` every
@@ -5010,42 +5275,106 @@ class Filler:
         # placement is reverted on the way back up), and `best_assignment`
         # keeps whatever record it reached.
         #
-        # An early hardclean ends both passes early (`_restart_pending`):
-        # the record that called for it is taken back flat
-        # (`_restart_from_record`), and the loop starts over from it as a
-        # new root, with no backtracking history. The attempt's descent
-        # caps (`_inherited`, `_initial_assigned_count`) are those of its
-        # first start.
+        # Every clean of the search ends both passes early
+        # (`_restart_pending`): an early hardclean's record is taken back
+        # flat (`_restart_from_record`), a zone softclean or repeated-word hardclean's
+        # cleaned state too (`_restart_from_state`), and the loop starts
+        # over from it as a new root, with no backtracking history, in the
+        # attention zone the clean happened in (`root_attention`: the
+        # record's for an early hardclean, the requesting node's otherwise),
+        # so the zone never shrinks back to its start size. The attempt's
+        # descent caps (`_inherited`, `_initial_assigned_count`) are those
+        # of its first start.
         self._initial_assigned_count = sum(1 for a in self.assignment if a is not None)
         self._inherited = bool(self.locked_letters) or self._initial_assigned_count > 0
         self._attention_reset_pending = self.incremental_fill and bool(self.locked_letters)
+        from_state = False
+        root_attention = self._initial_attention()
         while True:
             # Early hardclean on the state the search starts from (no
             # record is taken until a word is added to it). Nothing to
-            # restore: no node is running yet. Every root starts at the
-            # attention zone's start size anyway, so a clean leaving no
-            # locked letter only uses up the attempt's one zone reset.
-            if self._early_hardclean_due():
+            # restore: no node is running yet. A clean leaving no locked
+            # letter resets the root's zone to its start size, once per
+            # attempt (`_attention_after_unlock`). Not on a state a zone
+            # softclean or repeated-word hardclean has just cleaned, which
+            # is not the record the test reads.
+            if not from_state and self._early_hardclean_due():
                 self._early_hardclean()
-                self._attention_after_unlock(None)
+                root_attention = self._attention_after_unlock(root_attention)
             self._tolerated_dry = self._dry_open_slots()
             self._placement_seq = {}
+            self._seq_node = {}
             self._ghosts_in_descent = 0
             self.breaking_permitted = False
-            if self._backtrack(deadline_checks, attention=self._initial_attention()):
+            if self._backtrack(deadline_checks, attention=root_attention):
                 return True
             if self._restart_pending:
-                self._restart_from_record()
+                from_state = self._flat_restart is not None
+                root_attention = self._restart_from_flat()
                 continue
             if self.abandoned or self._budget_exhausted:
                 return False
             self.breaking_permitted = True
-            if self._backtrack(deadline_checks, attention=self._initial_attention()):
+            if self._backtrack(deadline_checks, attention=root_attention):
                 return True
             if self._restart_pending:
-                self._restart_from_record()
+                from_state = self._flat_restart is not None
+                root_attention = self._restart_from_flat()
                 continue
             return False
+
+    def _restart_from_flat(self):
+        """Take the search back flat once a hardclean has unwound the whole
+        backtracking stack (`_restart_pending`): from the cleaned state of a
+        zone softclean or repeated-word hardclean (`_restart_from_state`), else from
+        the record (`_restart_from_record`). Returns the attention zone the
+        new root starts with."""
+        if self._flat_restart is not None:
+            return self._restart_from_state()
+        return self._restart_from_record()
+
+    def _restart_from_state(self):
+        """Take the state a zone softclean or repeated-word hardclean cleaned
+        (`_flat_restart`) back flat as the search's new root, the whole
+        backtracking stack having unwound to `solve()`: its slot list and
+        pattern (the "emplacements écartés" carried over to them by cells),
+        its words, the locked letters the clean erased unlocked, the slot it
+        sets aside added to the "emplacements écartés", and letter
+        statistics re-sampled around every slot holding a word in it or in
+        the root it replaces (the unwinding having restored those of that
+        root). Its words become part of the root: only a later hardclean
+        can take them off. The record is left as it is. Returns the
+        attention zone of the node that requested the clean (the start
+        zone instead when `_attention_after_unlock` resets it)."""
+        cleaned, cleared, slots, pattern, set_aside, attention = self._flat_restart
+        self._flat_restart = None
+        self._restart_pending = False
+        root_cells = {
+            tuple(self.slots[j]) for j, word in enumerate(self.assignment) if word is not None
+        }
+        if slots is not self.slots:
+            by_cells = {tuple(cells): j for j, cells in enumerate(slots)}
+            recent = _RecentSlots(MAX_EXCLUDED_SLOTS)
+            for j in self._impossible_this_attempt:
+                k = by_cells.get(tuple(self.slots[j]))
+                if k is not None:
+                    recent.add(k)
+            self._index_slots(slots)
+            self.pattern = pattern
+            self._impossible_this_attempt = recent
+        self.assignment = list(cleaned)
+        self.used_words = {w for w in self.assignment if w is not None}
+        if cleared:
+            self.locked_letters = {
+                cell: ch for cell, ch in self.locked_letters.items() if cell not in cleared
+            }
+        attention = self._attention_after_unlock(attention)
+        if set_aside is not None:
+            self._impossible_this_attempt.add(set_aside)
+        for j, word in enumerate(self.assignment):
+            if word is not None or tuple(self.slots[j]) in root_cells:
+                self._refresh_letter_scores_around(j)
+        return attention
 
     def _restart_from_record(self):
         """Take `best_assignment` back flat as the search's new root, once
@@ -5054,7 +5383,8 @@ class Filler:
         structure`), its words, and letter statistics re-sampled around
         each of them (`_refresh_letter_scores_around`, the unwinding having
         restored those of the previous root). Its words become part of the
-        root: only a later early hardclean can take them off."""
+        root: only a later hardclean can take them off. Returns the
+        attention zone the record was taken under (`best_attention_step`)."""
         self._restart_pending = False
         self.adopt_best_structure()
         self.assignment = list(self.best_assignment)
@@ -5062,6 +5392,9 @@ class Filler:
         for i, w in enumerate(self.assignment):
             if w is not None:
                 self._refresh_letter_scores_around(i)
+        if self.best_attention_step is not None:
+            return self.best_attention_step
+        return self._initial_attention()
 
     def _slot_letter_options(self, i, used_words, challenge_words=()):
         """Per-position sets of letters slot `i` can still legitimately
@@ -6185,10 +6518,10 @@ class Filler:
         self._last_conflict = None
         self._last_jumped = False
         entry_released = released
-        # Attention zone ((Rh, Ch), (Rv, Cv)) this node was entered with (see
+        # Attention zone (see `_fallback_attention`) this node was entered with (see
         # INCREMENTAL_FILL_ENABLED), None for the whole grid.
         entry_attention = attention
-        self.attention_size = attention
+        self.attention_step = attention
         if self.abandoned or self._restart_pending:
             return False
         # See `_deadline_reached_without_extension`'s own docstring — the
@@ -6218,7 +6551,8 @@ class Filler:
             self.best_slots = self.slots
             self.best_pattern = self.pattern
             self.best_stat_letters = self.stat_letters(self.assignment)
-            self.best_attention_size = attention
+            self.best_attention_step = attention
+            self.best_words_per_pose = self._group_size(attention)
             if self.on_new_best is not None:
                 self.on_new_best(self.best_assignment)
             # Early hardclean: checked right as the record is taken, the
@@ -6295,11 +6629,10 @@ class Filler:
                         )
                     continue
             domains[i] = domain
-        if not domains:
-            # Every remaining unassigned slot is dry at once, and all of
-            # them are tolerated (dry before the search started): no
-            # placement of this search is to blame.
-            return self._fail(set())
+        # Unassigned slots with no candidate left, all tolerated (see
+        # `_tolerated_dry`): what the zone softclean cleans.
+        zone_clean = self.incremental_fill and ZONE_CLEAN_ENABLED
+        dry = [i for i in unassigned if i not in domains] if zone_clean else []
         # Memoises `_slot_letter_options` for this node across every
         # candidate tried here (see `slot_is_blocked`): a slot's own
         # options only change when a word lands on a slot CROSSING it, so
@@ -6369,14 +6702,32 @@ class Filler:
         # run inside the attention zone first (`zone_pool`); once they have
         # placed nothing there, the zone grows and the node goes back to
         # its first stage on the larger pool, until the zone covers the
-        # whole grid (`attention` None). A zone with nothing left to fill
-        # grows at once.
+        # whole grid. With ATTENTION_FALLBACK_ENABLED, on entry the zone
+        # falls back on the largest filled zone (band + block,
+        # `_fallback_attention`); otherwise the node keeps the zone it was
+        # entered with. A zone with nothing left to fill grows at once.
         selectable = list(domains)
-        zone_pool = self._attention_pool(selectable, attention)
-        while not zone_pool and attention is not None:
-            attention = self._widen_attention(attention)
+        if self.incremental_fill and ATTENTION_FALLBACK_ENABLED:
+            attention = self._fallback_attention(selectable)
+        while True:
             zone_pool = self._attention_pool(selectable, attention)
-        self.attention_size = attention
+            if zone_pool:
+                break
+            if dry:
+                # Nothing selectable in the zone: soft-clean an impossible
+                # slot holding one of its free cells before widening.
+                outcome = self._zone_clean(dry, attention)
+                if outcome is not None:
+                    return outcome
+            if self._attention_is_whole(attention):
+                break
+            attention = self._widen_attention(attention)
+        if not domains:
+            # Every remaining unassigned slot is dry at once, and all of
+            # them are tolerated (dry before the search started): no
+            # placement of this search is to blame.
+            return self._fail(set())
+        self.attention_step = attention
         set_aside = [i for i in zone_pool if i in self._impossible_this_attempt]
         primary = zone_pool if released else [i for i in zone_pool if i not in set_aside]
         if not primary:
@@ -6406,13 +6757,28 @@ class Filler:
                     # this descent and carry on without backtracking.
                     primary, released = zone_pool, True
                     continue
-                if attention is not None:
+                if zone_clean and not allow_breaking:
+                    # Nothing more can be placed inside the attention
+                    # zone: soft-clean an impossible slot holding one of
+                    # its free cells before widening it — a dry one, a
+                    # selectable one blocked by a crossing deadlock, or an
+                    # "emplacement écarté".
+                    blocked = [
+                        i for i in self._attention_pool(selectable, attention)
+                        if i in self._impossible_this_attempt or self.slot_is_blocked(
+                            i, self.used_words, active_challenge_words, options_cache,
+                        )
+                    ]
+                    outcome = self._zone_clean(sorted(dry + blocked), attention)
+                    if outcome is not None:
+                        return outcome
+                if not self._attention_is_whole(attention):
                     # Nothing more can be placed inside the attention
                     # zone: widen it and start again from stage 1 on the
                     # larger pool (slots already tried here stay tried).
                     attention = self._widen_attention(attention)
                     zone_pool = self._attention_pool(selectable, attention)
-                    self.attention_size = attention
+                    self.attention_step = attention
                     released = entry_released
                     primary = zone_pool if released else [
                         i for i in zone_pool if i not in self._impossible_this_attempt
@@ -6564,7 +6930,7 @@ class Filler:
                     )
                     if outcome == "success":
                         return True
-                    self.attention_size = attention
+                    self.attention_step = attention
                     if outcome == "rejected":
                         if blame is not None:
                             blameable_rejection = True
@@ -6753,7 +7119,7 @@ class Filler:
                     if self._descend_group(best_i, w, window, primary, deadline_checks,
                                            released, attention):
                         return True
-                    self.attention_size = attention
+                    self.attention_step = attention
                     child_conflict = self._last_conflict
                     jumped_in = self._last_jumped
                     self._tolerated_dry.difference_update(newly_tolerated)
@@ -7295,12 +7661,16 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
              challenge_words=None, required_cells=None, reshape_black_cells=False,
              permanent_black_cells=None, scrabble_words=None,
              early_hardclean_percent=100, permanent_locked_letters=None,
-             incremental_fill=False, same_word_limit=None):
+             incremental_fill=False, same_word_limit=None,
+             words_per_node=WORDS_PER_NODE):
     """`incremental_fill`: see INCREMENTAL_FILL_ENABLED.
 
+    `words_per_node`: see WORDS_PER_NODE (`Filler._descend_group`).
+
     `same_word_limit`: see MAX_SAME_WORD_PLACEMENTS (None = off), run inside
-    the search (`Filler._repeat_hardclean`), which may unlock letters of
-    `locked_letters` like the early hardclean.
+    the search (`Filler._repeat_hardclean`, then `Filler._restart_from_
+    state`), which may unlock letters of `locked_letters` like the early
+    hardclean.
 
     `early_hardclean_percent`: see `EARLY_HARDCLEAN_PERCENT` (100 = off),
     run inside the search (`Filler._early_hardclean`), which may unlock
@@ -7540,58 +7910,16 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     outside_zone = _outside_zone_slot_indices(slots, required_cells, preseed_assignment, locked_letters)
     if outside_zone:
         excluded_slots = set(excluded_slots or ()) | outside_zone
-    # Cells already locked *even before* this search starts (see
-    # `preseed_assignment` above) — at the user's explicit request, so the
-    # web preview can visually tell them apart from `forced_cells`'s own
-    # statistical letters (sample_letter_biases): a locked cell carries a
-    # real letter, confirmed by a previous palier's own search, not a mere
-    # guess. Computed once here, before `solve()` runs, since neither
-    # `preseed_assignment` nor `locked_letters` change during this search
-    # (a slot already assigned in `preseed_assignment` is never
-    # reconsidered — see `Filler._backtrack`, which only ever retains
-    # slots still at `None` —, and `locked_letters` itself is never
-    # modified after this point).
-    #
-    # Fixed after a direct user report, backed by two screenshots: "there
-    # are cases where the word-generation process doesn't preserve locked
-    # cells" — the preview shown right after black cells were placed
-    # (before the search) showed many cells outlined as locked, but the
-    # preview shown after the search failed only showed a handful left.
-    # The cause wasn't a genuine loss of constraint: `locked_letters`
-    # (once merged into `forced_letters` by the caller — see `_pattern_
-    # attempt`/`_pattern_continue`) is indeed still applied as a hard
-    # constraint by `Filler._domain` on every slot touching one of its
-    # cells, in both directions, so the letter itself never changed. The
-    # bug was purely in this `locked_cells` diagnostic: before this fix,
-    # it only ever listed the cells of a slot *entirely* covered by
-    # `locked_letters` (so already promoted to a real word in `preseed_
-    # assignment`) — a locked cell belonging to a slot only *partially*
-    # covered (the rest of its letters still to be discovered by the
-    # search) never appeared in `locked_cells`, even though it's just as
-    # locked and constrained as the others. `locked_letters`, when given,
-    # is therefore now this diagnostic's primary source — the same
-    # complete cell list already shown by `_cycle_start_preview` before
-    # the search (see generate_grid) — rather than `preseed_assignment`
-    # alone, which remains a plain fallback for a caller that would supply
-    # only that (no real case today: `_pattern_attempt`/`_pattern_
-    # continue` always supply both together).
-    # Recomputed on every publication: an early hardclean
-    # (`Filler._early_hardclean`) unlocks the locked letters it erases and
-    # takes off preseeded words.
-    locked_from_letters = bool(locked_letters)
-    initial_slots = slots
-
+    # The cells the search holds locked (`Filler.locked_letters`, which
+    # `Filler._domain` applies as a hard constraint), shown outlined in the
+    # previews. A preseeded word is not a locked letter: a second chance
+    # (`_second_chance_seed`) resumes its words unlocked, like an early
+    # hardclean. Recomputed on every publication: a hardclean of the search
+    # (`Filler._early_hardclean`, `Filler._restart_from_state`) unlocks the
+    # locked letters it erases.
     def _locked_cells():
-        if locked_from_letters:
-            all_slot_cells = {cell for s in filler.slots for cell in s}
-            return sorted(cell for cell in filler.locked_letters if cell in all_slot_cells)
-        if preseed_assignment is not None:
-            known = filler._known_cells()
-            return sorted({cell for cells, word in zip(initial_slots, preseed_assignment)
-                           if word is not None
-                           and all(known.get(c) == ch for c, ch in zip(cells, word))
-                           for cell in cells})
-        return []
+        all_slot_cells = {cell for s in filler.slots for cell in s}
+        return sorted(cell for cell in filler.locked_letters if cell in all_slot_cells)
     filler = Filler(slots, index, rng, forced_letters=forced_letters, letter_scores=letter_scores,
                      excluded_slots=excluded_slots, cancel_event=cancel_event,
                      batch_abandoned_event=batch_abandoned_event,
@@ -7603,6 +7931,7 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
     filler.reshape_enabled = reshape_black_cells and not excluded_slots
     filler.early_hardclean_percent = early_hardclean_percent
     filler.same_word_limit = same_word_limit
+    filler.words_per_node = words_per_node
     filler.incremental_fill = incremental_fill
     filler.permanent_locked_letters = dict(permanent_locked_letters or {})
     filler.permanent_black_cells = frozenset(permanent_black_cells or ())
@@ -7671,7 +8000,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "deadlock_cells": filler.deadlock_zone_cells(),
                 "excluded_cells": filler.excluded_zone_cells(best_assignment, include_deadlock=True),
                 "stat_letters": filler.best_stat_letters_for(),
-                "attention_size": filler.best_attention_size,
+                "attention_zone": filler._attention_zone_json(filler.best_attention_step),
+                "words_per_pose": filler.best_words_per_pose,
                 "impossible_slots": filler.impossible_zone_slots(),
                 "forced_cells": forced_cells,
                 "locked_cells": _locked_cells(),
@@ -7737,7 +8067,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 "deadlock_cells": [],
                 "excluded_cells": filler.excluded_zone_cells(current_assignment),
                 "stat_letters": filler.stat_letters(current_assignment),
-                "attention_size": filler.attention_size,
+                "attention_zone": filler._attention_zone_json(filler.attention_step),
+                "words_per_pose": filler._group_size(filler.attention_step),
                 "forced_cells": forced_cells,
                 "locked_cells": _locked_cells(),
                 "theme_cells": _theme_word_cells(filler.slots, current_assignment, priority_words),
@@ -7849,7 +8180,8 @@ def try_fill(grid, rows, cols, index, rng, deadline_checks=None, diagnostics=Non
                 filler.best_assignment, include_deadlock=True
             )
             diagnostics["stat_letters"] = filler.best_stat_letters_for()
-            diagnostics["attention_size"] = filler.best_attention_size
+            diagnostics["attention_zone"] = filler._attention_zone_json(filler.best_attention_step)
+            diagnostics["words_per_pose"] = filler.best_words_per_pose
             diagnostics["assigned_letter_count"] = assigned_letter_count
             diagnostics["assignment"] = list(filler.best_assignment)
             diagnostics["impossible_slots"] = filler.impossible_zone_slots()
@@ -11752,7 +12084,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                           exclude_impossible_locked=False, index=None, rng=None,
                           grid=None, rows=None, cols=None, permanent_locked_letters=None,
                           black_cell_links=None, deadlocked_slots=None, deep=False,
-                          cleared_cells_out=None):
+                          cleared_cells_out=None, hard_clean=None):
     """Steps 1 and 2 of `_build_retry_seed` (see its own docstring for the
     complete history), extracted into their own function at the user's
     explicit request: "à la fin d'un tour, nettoyer automatiquement les
@@ -11931,7 +12263,10 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
     that forced the removed word straight back in (held by those crossing
     words) are freed too.
 
-    `HARD_CLEAN_ENABLED` (hardclean): once every removal above is done,
+    `hard_clean` (`HARD_CLEAN_ENABLED` when None) — the hardclean; False
+    gives the softclean, the removals above alone, a removed word's letters
+    held by a remaining whole word staying in place. The hardclean: once
+    every removal above is done,
     every cell of a word this call removed is cleared, even when a
     still-assigned word that does not cross the impossible slot shares
     it. Such a word, partially erased, is removed whole (paired black-cell
@@ -12187,7 +12522,7 @@ def _clean_blocked_slots(slots, assignment, impossible_slots, locked_letters=Non
                         _revert_black_cell_link(k)
 
     cleared_cells = set()
-    if HARD_CLEAN_ENABLED:
+    if HARD_CLEAN_ENABLED if hard_clean is None else hard_clean:
         cleared_cells = {
             cell
             for j, word in enumerate(assignment)
@@ -12265,19 +12600,19 @@ def _second_chance_seed(grid, diag, rows, cols, index, rng, permanent_locked_let
     Returns `(seed_grid, preseed_assignment, locked_letters)`, the shape
     `_pattern_continue` expects. `locked_letters` is the attempt's own
     locked letters (`diag["locked_letters"]`) minus every cell the clean
-    erased — a locked cell whose letter is removed is unlocked — plus the
-    letters the clean confirmed."""
+    erased — a locked cell whose letter is removed is unlocked. Like the
+    early hardclean, it locks nothing: the words the clean keeps go on as
+    `preseed_assignment` alone (`_pattern_continue(lock_known=False)`)."""
     slots = extract_slots(grid, rows, cols)
     attempt_locked = _diag_locked_letters(diag) or {}
     cleared = set()
-    cleaned_assignment, confirmed, _, _ = _clean_blocked_slots(
+    cleaned_assignment, _, _, _ = _clean_blocked_slots(
         slots, diag["assignment"], diag["impossible_slots"],
         locked_letters=attempt_locked or None, index=index, rng=rng,
         permanent_locked_letters=permanent_locked_letters,
         cleared_cells_out=cleared,
     )
     locked = {cell: ch for cell, ch in attempt_locked.items() if cell not in cleared}
-    locked.update(confirmed)
     return [row[:] for row in grid], cleaned_assignment, locked
 
 
@@ -13073,6 +13408,9 @@ _worker_challenge_words = None
 # scrabble_first): a frozenset, or a DualSet on a bilingual grid, shared
 # the same way as `_worker_priority_words`.
 _worker_scrabble_words = None
+# Words placed per search node (generate_grid's `words_per_node`, see
+# WORDS_PER_NODE), shared the same way.
+_worker_words_per_node = WORDS_PER_NODE
 # "Stop" button (see CANCEL_CHECK_INTERVAL/Filler.__init__), at the
 # user's explicit request — like `_worker_index` right above, passed once
 # per worker via the pool's initializer rather than as an argument of
@@ -13313,7 +13651,8 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
                   best_state_queue=None, checks_progress=None, attempt_active=None, warmup_barrier=None,
                   proper_noun_words=None,
                   max_proper_nouns=None, non_gloss_words=None, max_non_gloss=None,
-                  priority_words=None, challenge_words=None, scrabble_words=None):
+                  priority_words=None, challenge_words=None, scrabble_words=None,
+                  words_per_node=WORDS_PER_NODE):
     # See GENERATION_PROCESS_NICE_INCREMENT (right after PARALLEL_ATTEMPTS)
     # for the full reasoning — applied only once here, the very first time
     # this worker starts up (never per submitted task), since the pool
@@ -13338,8 +13677,9 @@ def _init_worker(index, cancel_event=None, batch_abandoned_event=None, attempt_d
         _worker_warmup_barrier, \
         _worker_proper_noun_words, _worker_max_proper_nouns, \
         _worker_non_gloss_words, _worker_max_non_gloss, _worker_priority_words, \
-        _worker_challenge_words, _worker_scrabble_words
+        _worker_challenge_words, _worker_scrabble_words, _worker_words_per_node
     _worker_index = index
+    _worker_words_per_node = words_per_node
     _worker_priority_words = priority_words
     _worker_challenge_words = challenge_words
     _worker_scrabble_words = scrabble_words
@@ -13845,6 +14185,12 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
     grid = make_pattern(rows, cols, ratio, rng, available_lengths=available_lengths,
                          seed_grid=seed_grid, locked_letters=locked_letters, index=_worker_index,
                          black_enrichment_fraction=black_enrichment_fraction)
+    # The palier's "pattern_generated" preview is built from this very
+    # pattern (see `generate_grid`, `_publish_pattern_preview`).
+    if racing and _worker_best_state_queue is not None:
+        _worker_best_state_queue.put({
+            "kind": "pattern", "attempt_id": seed, "grid": [row[:] for row in grid],
+        })
     # Retrieves, even before launching the search (and even before the
     # sample_letter_biases sampling below — see right after), the word
     # already entirely determined by `locked_letters` for every slot
@@ -13991,7 +14337,8 @@ def _pattern_attempt(rows, cols, ratio, seed, force_letters_fraction=0.0,
                            early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
                            permanent_locked_letters=permanent_locked_letters,
                            incremental_fill=incremental_fill,
-                           same_word_limit=MAX_SAME_WORD_PLACEMENTS)
+                           same_word_limit=MAX_SAME_WORD_PLACEMENTS,
+                           words_per_node=_worker_words_per_node)
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
             _worker_attempt_active[checks_slot] = 0
@@ -14002,9 +14349,15 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
                        force_letters_fraction=0.0, deadline_checks=None,
                        permanent_locked_letters=None, required_cells=None,
                        checks_slot=None, permanent_black_cells=None,
-                       locked_letters=None, racing=True, incremental_fill=False):
+                       locked_letters=None, racing=True, incremental_fill=False,
+                       lock_known=True):
     """`permanent_black_cells` is only passed on to `try_fill`, whose
     in-search reshapes never free one of them.
+
+    `lock_known=False` (the second chance, see `_second_chance_seed`)
+    locks only `locked_letters` and `permanent_locked_letters`: the words
+    of `preseed_assignment` and the deduced letters stay unlocked, as
+    after an early hardclean.
 
     `racing=False` marks a second-chance attempt dispatched mid-palier
     (see `_second_chance_seed`), exactly like `_pattern_attempt`'s own
@@ -14113,6 +14466,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
             rows, cols, seed, rng, seed_grid, preseed_assignment, excluded_slots,
             force_letters_fraction, deadline_checks, permanent_locked_letters, required_cells,
             checks_slot, permanent_black_cells, locked_letters, racing, incremental_fill,
+            lock_known,
         )
     finally:
         if racing and checks_slot is not None and _worker_attempt_active is not None:
@@ -14123,7 +14477,7 @@ def _pattern_continue(rows, cols, seed, seed_grid, preseed_assignment, excluded_
 def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, excluded_slots,
                       force_letters_fraction, deadline_checks, permanent_locked_letters,
                       required_cells, checks_slot, permanent_black_cells, locked_letters, racing,
-                      incremental_fill=False):
+                      incremental_fill=False, lock_known=True):
     """One search from a seeded grid: everything `_pattern_continue` does
     between receiving its arguments and handing them to `try_fill` (known
     letters, deduced single-candidate slots, statistical sampling), then
@@ -14217,6 +14571,10 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
     # locked_letters` unconditionally before ever considering `self.
     # forced_letters` — any letter of `known_letters` therefore already
     # reaches `Filler` as a real constraint, merge or not.
+    if lock_known:
+        search_locked = known_letters
+    else:
+        search_locked = {**(locked_letters or {}), **(permanent_locked_letters or {})}
     diag = {}
     # `batch_abandoned_event` always `None` here now — this was only true
     # as long as ALL parallel attempts of the same "reprise telle quelle"
@@ -14240,7 +14598,7 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        cancel_event=_worker_cancel_event,
                        batch_abandoned_event=None,
                        attempt_done_event=_worker_attempt_done_event,
-                       locked_letters=known_letters,
+                       locked_letters=search_locked or None,
                        best_state_queue=_worker_best_state_queue,
                        checks_progress=_worker_checks_progress,
                        checks_slot=checks_slot,
@@ -14259,7 +14617,8 @@ def _continue_search(rows, cols, seed, rng, seed_grid, preseed_assignment, exclu
                        early_hardclean_percent=EARLY_HARDCLEAN_PERCENT,
                        permanent_locked_letters=permanent_locked_letters,
                        incremental_fill=incremental_fill,
-                       same_word_limit=MAX_SAME_WORD_PLACEMENTS)
+                       same_word_limit=MAX_SAME_WORD_PLACEMENTS,
+                       words_per_node=_worker_words_per_node)
     return result, diag
 
 
@@ -14354,6 +14713,110 @@ def _one_step_previous(entry):
     return {k: v for k, v in entry.items() if k != "previous"}
 
 
+# Seconds the end of a palier's harvest waits for the drain thread to read
+# the pattern messages still missing from its "pattern_generated" preview
+# (`_publish_pattern_preview`) before publishing it without them.
+PATTERN_PREVIEW_GRACE_S = 2.0
+
+
+def _pattern_preview_ready(plan, early_patterns, lock):
+    """True once every attempt seed of `plan` has published its pattern."""
+    with lock:
+        return all(seed in early_patterns for seed, _, _, _ in plan)
+
+
+def _publish_pattern_preview(progress, plan, early_patterns, lock, rows, cols,
+                             priority_words, challenge_words, **step):
+    """Publish a fresh-pattern palier's "pattern_generated" preview from the
+    patterns its workers drew (`early_patterns`, attempt seed -> pattern):
+    one tile per `plan` entry `(seed, locked letters, process number,
+    is_best)` whose pattern has arrived, in plan order, deduplicated by
+    pattern."""
+    with lock:
+        patterns = {seed: early_patterns.get(seed) for seed, _, _, _ in plan}
+    seen = set()
+    examples = []
+    for seed, locked, process_number, is_best in plan:
+        pattern = patterns[seed]
+        if pattern is None:
+            continue
+        key = tuple(tuple(row) for row in pattern)
+        if key in seen:
+            continue
+        seen.add(key)
+        preview_grid, preview_locked = _cycle_start_preview(rows, cols, pattern, locked, None)
+        examples.append({
+            "example_grid": preview_grid,
+            "impossible_cells": [],
+            "deadlock_cells": [],
+            # A cycle-start preview always falls past the per-attempt
+            # reset point of the "emplacements écartés".
+            "excluded_cells": [],
+            "forced_cells": [],
+            "locked_cells": preview_locked,
+            "theme_cells": _theme_cells_from_preview_state(
+                pattern, rows, cols, locked, None, priority_words
+            ) if locked else [],
+            "challenge_cells": _challenge_cells_from_preview_state(
+                pattern, rows, cols, locked, None, challenge_words
+            ) if locked else [],
+            "process_number": process_number,
+            "is_best": is_best,
+        })
+    progress("pattern_generated", examples=_sort_examples_by_process(examples), **step)
+
+
+# End-of-palier work run on the palier's own worker pool, one candidate grid
+# per task (`generate_grid`): each worker reads the index and the "Stop"
+# event from its own globals (`_init_worker`), and each task gets its own
+# rng, seeded by the parent in candidate order.
+
+def _optimize_before_cleanup_task(cand_grid, cand_diag, rows, cols, rng_seed,
+                                  permanent_locked_letters, permanent_black_cells,
+                                  challenge_words):
+    """`_optimize_before_cleanup` of one failed attempt, in a worker."""
+    return _optimize_before_cleanup(
+        cand_grid, cand_diag, rows, cols, _worker_index, random.Random(rng_seed),
+        cancel_event=_worker_cancel_event,
+        permanent_locked_letters=permanent_locked_letters,
+        permanent_black_cells=permanent_black_cells,
+        challenge_words=challenge_words,
+    )
+
+
+def _clean_continue_candidate_task(cand_grid, cand_diag, rows, cols, rng_seed,
+                                   permanent_locked_letters, permanent_black_cells,
+                                   challenge_words):
+    """`_clean_continue_candidate` of one optimized attempt, in a worker."""
+    return _clean_continue_candidate(
+        cand_grid, cand_diag, rows, cols, _worker_index, random.Random(rng_seed),
+        permanent_locked_letters=permanent_locked_letters,
+        permanent_black_cells=permanent_black_cells,
+        challenge_words=challenge_words,
+    )
+
+
+def _clean_retry_candidate_task(cand_grid, cand_diag, rows, cols, deep, rng_seed,
+                                carry_locked_letters, carry_seed_grid,
+                                permanent_locked_letters, permanent_black_cells):
+    """Full cleanup (`_build_retry_seed`) of one optimized attempt, in a
+    worker: `(seed grid, confirmed letters, slots, process number)`."""
+    cand_slots = extract_slots(cand_grid, rows, cols)
+    cand_seed, cand_confirmed = _build_retry_seed(
+        cand_grid, rows, cols, cand_slots,
+        cand_diag["assignment"], cand_diag["impossible_slots"],
+        locked_letters=(
+            _diag_locked_letters(cand_diag, cand_grid)
+            if "locked_letters" in cand_diag else carry_locked_letters
+        ),
+        exclude_impossible_locked=deep, deep=deep,
+        seed_grid=carry_seed_grid, index=_worker_index, rng=random.Random(rng_seed),
+        permanent_locked_letters=permanent_locked_letters,
+        permanent_black_cells=permanent_black_cells,
+    )
+    return cand_seed, cand_confirmed, cand_slots, cand_diag.get("process_number")
+
+
 def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    max_words=None, black_ratio=0.0, attempts=200, seed=None,
                    wordlist_path="data/wordlist_fr_freq.tsv", on_progress=None,
@@ -14363,8 +14826,12 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                    bilingual_wordlist_path=None, priority_words=None,
                    bilingual_priority_words=None, permanent_locked_letters=None,
                    permanent_black_cells=None, required_cells=None, challenge_words=None,
-                   on_live_preview=None):
-    """The Scrabble wordlist of each language (`merge_scrabble_lexicon`)
+                   on_live_preview=None, words_per_node=WORDS_PER_NODE):
+    """`words_per_node` (`WORDS_PER_NODE` by default): words every search
+    node of every attempt places at once (`Filler._descend_group`), the web
+    UI's "Mots par pose" field.
+
+    The Scrabble wordlist of each language (`merge_scrabble_lexicon`)
     is merged into the lexicon loaded for it, whatever `max_words` — whole,
     except at "easy" `difficulty`, where only its words with a known
     inflection are merged — and its words are exempt from the proper-noun and
@@ -14770,23 +15237,6 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     challenge_words = frozenset(
         gf for w in (challenge_words or ()) if (gf := challenge_word_grid_form(w))
     )
-    # Precomputed once (not per palier) — same lengths for the whole
-    # generation, `index` never changes. Reproduces exactly the same
-    # computation each worker does in `_pattern_attempt` (see its own
-    # docstring), but on the PARENT process's side this time — used only
-    # by the early "cases noires posées" preview below, never by the CSP
-    # search itself (which is still always computed inside the worker
-    # processes, with their own `_worker_index`).
-    available_lengths_preview = DualSet(
-        across={
-            length for length, data in index.across.items()
-            if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
-        },
-        down={
-            length for length, data in index.down.items()
-            if len(data["words"]) >= PREFILL_MIN_WORD_COUNT
-        },
-    )
     # Logged once per request, not per attempt: the CSP's failure mode
     # (below) can't be told apart from a genuinely empty word list for
     # some length without this — a `require_gloss`/`max_words` combination
@@ -15112,6 +15562,13 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
     best_state_buffer = []
     best_state_buffer_lock = threading.Lock()
     stop_best_state_drain = threading.Event()
+    # Black/white pattern each original attempt of a fresh-pattern palier
+    # computed (`_pattern_attempt`, published as a `"kind": "pattern"`
+    # message), by attempt seed — read back by `_publish_pattern_preview`
+    # to build that palier's "pattern_generated" preview from the very
+    # patterns the workers search, with no second computation in this
+    # process. Emptied at the start of every such palier.
+    early_patterns = {}
     # (Monotonic) timestamp of the last budget-consumption-percentage
     # report — see BUDGET_PROGRESS_REPORT_INTERVAL_S. A single-element
     # list (not a plain variable) purely to stay mutable from inside the
@@ -15238,6 +15695,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 msg = best_state_queue.get(timeout=0.1)
             except queue.Empty:
                 msg = None
+            if msg is not None and msg.get("kind") == "pattern":
+                with best_state_buffer_lock:
+                    early_patterns[msg["attempt_id"]] = msg["grid"]
+                msg = None
             if msg is not None:
                 # A `"kind": "heartbeat"` message (see `Filler.on_live_
                 # state`/`_publish_live_state`) is a mid-backtracking
@@ -15339,7 +15800,8 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         max_workers=PARALLEL_ATTEMPTS, initializer=_init_worker,
         initargs=(index, cancel_event, batch_abandoned_event, attempt_done_event, best_state_queue,
                   checks_progress, attempt_active, warmup_barrier, proper_noun_words, max_proper_nouns,
-                  non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words)
+                  non_gloss_words, max_non_gloss, priority_words, challenge_words, scrabble_words,
+                  words_per_node)
     ) as executor:
         # Pool warm-up: forces every worker to finish its real startup
         # before the very first palier (see `_warmup_worker`/`warmup_
@@ -15365,7 +15827,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
         for attempt in range(attempts):
             if cancel_event is not None and cancel_event.is_set():
                 raise GenerationCancelled()
-            # Incremental fill (see INCREMENTAL_FILL_ENABLED): every palier.
+            # Incremental fill (see INCREMENTAL_FILL_ENABLED): every palier, when on.
             incremental_fill = INCREMENTAL_FILL_ENABLED
             if should_pause is not None and should_pause():
                 # The same serialization mechanism as the "attempts
@@ -15615,6 +16077,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                                 "previous": carried_previous.get(ex["process_number"]),
                             }
                 _publish_live_preview()
+            pattern_preview_plan = None
             seeds = [rng.randrange(2**31) for _ in range(PARALLEL_ATTEMPTS)]
             if carry_preseed_assignment is not None:
                 # `reset_count` attempts of this "reprise telle quelle"
@@ -15718,229 +16181,43 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # this palier's own non-reset workers nor for the "cases
                 # noires posées" preview right below.
                 # "Cases noires posées, recherche des mots en cours"
-                # preview published RIGHT NOW — even before submitting a
-                # single parallel attempt to the executor, so well before
-                # this palier's own CSP search (the slow part) finishes —
-                # at the user's explicit request: "Le Front n'affiche les
-                # aperçus qu'après la fin d'un cycle. Les états
-                # d'initialisation n'apparaissent pas avant la fin du
-                # cycle. Il faut que la stack Back soit proprement
-                # alimentée à chaque étape du cycle." Root-caused directly
-                # in the code, not assumed: the existing `pattern_
-                # generated` further below (`_cycle_start_preview` on
-                # `failed_pairs`/`best`) can only be computed once ALL of
-                # this palier's parallel attempts have finished
-                # (the harvesting loop further below, built on
-                # `concurrent.futures.wait`) —
-                # for a "fresh pattern" palier (this one, not the "reprise
-                # telle quelle" above, whose own `pattern_generated`
-                # already coincides with the cycle's own starting state),
-                # the "cases noires posées" step could therefore never
-                # actually appear before the end of the cycle, however
-                # fast the Front tried to display it — the Back itself
-                # simply hadn't computed it yet. Reconstructed here, in
-                # the PARENT process, with the same parameters a real
-                # worker will use in its own separate process further
-                # below — since `make_pattern` is a pure function of its
-                # arguments, calling it twice with the same seed produces
-                # the same pattern both times, so there's never a false
-                # impression of a "moved" black cell once the real
-                # `pattern_generated` (computed afterward, see further
-                # below) is received.
+                # preview ("pattern_generated"), published while this
+                # palier's search is still running: each original worker
+                # publishes the pattern it has just drawn (`_pattern_
+                # attempt`, a `"kind": "pattern"` message, stored in
+                # `early_patterns` by the drain thread) and the harvest
+                # loop below publishes the preview as soon as every
+                # pattern it waits for has arrived (`_publish_pattern_
+                # preview`). Each pattern is therefore drawn once, by its
+                # own worker, in parallel with the others, and the preview
+                # shows exactly the grids being searched.
                 #
-                # An initialization PER PROCESS, but reserved for the very
-                # first initialization of the generation (`carry_seed_grid
-                # is None` — no previous palier has run yet) — at the
-                # user's explicit request: "la toute première
-                # initialisation des cases noires ne prépare qu'une seule
-                # grille. Intégrer cette première initialisation au début
-                # du cycle, de manière à créer une initialisation par
-                # process." Clarified by the user themselves after a first
-                # implementation that applied it to *every* "fresh
-                # pattern" cycle (not just the very first one), causing a
-                # real slowdown measured live (up to +250% per palier)
-                # and, worse, a genuine risk of making a generation fail
-                # that would otherwise have succeeded (the extra
-                # sequential computation in the parent process shifts the
-                # real timing at which the parallel attempts get
-                # submitted, and this palier uses an interruption
-                # mechanism sensitive to the real completion order —
-                # `attempt_done_event`/`batch_abandoned_event` — not just
-                # to the seed): "Il ne faut pas changer le budget, juste
-                # initialiser N grilles au premier cycle au lieu d'une
-                # seule. Les cycles suivants, à partir de 2, reprendront la
-                # meilleure grille (sauf 20% de nouvelles grilles)." From
-                # the 2nd palier onward, `carry_seed_grid` already carries
-                # the previous best attempt's own content (or starts from
-                # a blank grid for the `reset_count` reset attempts,
-                # already its own source of diversity) — the "one grid per
-                # process" diversity therefore only has real meaning at
-                # the very first palier, where nothing yet distinguishes
-                # the attempts from each other besides their own seed.
+                # Very first palier (`carry_seed_grid is None`): one tile
+                # per process, every worker starting from a blank grid and
+                # numbered 1..PARALLEL_ATTEMPTS by its submission index.
+                # Later fresh-pattern paliers: one tile per pool entry, the
+                # pattern of the first worker it is assigned to
+                # (`seeds[reset_count + p]`, see `futures` below), `pool[0]`
+                # being the pool's best grid. Both deduplicate by pattern,
+                # with no cap.
                 if carry_seed_grid is None:
-                    # Every worker here starts from a blank grid,
-                    # independently of the others (see below) — each
-                    # therefore receives ITS OWN lineage from the moment
-                    # it's created, numbered 1..PARALLEL_ATTEMPTS by its
-                    # own submission index, rather than the `None`/no-
-                    # number behavior before this feature: at the user's
-                    # explicit request, a grid must carry its own number
-                    # from the moment it exists, not only once its first
-                    # real result is known.
                     dispatch_lineage = list(range(1, PARALLEL_ATTEMPTS + 1))
-                    # One per process (up to PARALLEL_ATTEMPTS), at the
-                    # user's explicit request: "il n'y a jamais eu 6
-                    # grilles par process, mais 1 grille par process (1
-                    # process par processeur)." — same principle here: one
-                    # computation per attempt about to be submitted,
-                    # deduplicated by real black/white pattern (two
-                    # workers can legitimately land on the same pattern),
-                    # with no cap at all beyond this dedup — at the user's
-                    # explicit request ("Afficher toutes les meilleures
-                    # grilles dans l'aperçu, pas seulement les 6
-                    # meilleures"), which removes the `FAILED_ATTEMPT_
-                    # EXAMPLES` (6) cap previously applied here — the same
-                    # convention (dedup, no cap) already used further
-                    # below for the patterns genuinely searched
-                    # (`failed_unique`).
-                    seen_early_patterns = set()
-                    early_examples = []
-                    for i, s in enumerate(seeds):
-                        early_pattern = make_pattern(
-                            rows, cols, ratio, random.Random(s),
-                            available_lengths=available_lengths_preview,
-                            seed_grid=None, locked_letters=permanent_locked_letters or None,
-                            index=index, black_enrichment_fraction=black_enrichment_fraction,
-                        )
-                        pattern_key = tuple(tuple(row) for row in early_pattern)
-                        if pattern_key in seen_early_patterns:
-                            continue
-                        seen_early_patterns.add(pattern_key)
-                        early_pattern_grid, early_pattern_locked = _cycle_start_preview(
-                            rows, cols, early_pattern, None, None,
-                        )
-                        early_examples.append({
-                            "example_grid": early_pattern_grid,
-                            "impossible_cells": [],
-                            "deadlock_cells": [],
-                            # A fresh pattern (`_pattern_attempt`) never
-                            # carries an `excluded_slots` set of its own
-                            # at all — and, regardless, a cycle-start
-                            # preview is always past this session's own
-                            # reset point (see the "reprise telle quelle"
-                            # branch's own comment above for the full
-                            # per-attempt lifecycle rule).
-                            "excluded_cells": [],
-                            "forced_cells": [],
-                            "locked_cells": early_pattern_locked,
-                            # Very first palier: nothing is locked or
-                            # assigned yet, so no theme/challenge word to
-                            # report.
-                            "theme_cells": [],
-                            "challenge_cells": [],
-                            "process_number": dispatch_lineage[i],
-                            # No comparison has happened yet at this
-                            # point (very first palier, every attempt
-                            # starts independently from a blank grid) —
-                            # so none of them is "the best" for now.
-                            "is_best": False,
-                        })
+                    pattern_preview_plan = [
+                        (s, None, dispatch_lineage[i], False)
+                        for i, s in enumerate(seeds)
+                    ]
                 else:
-                    # One preview per pool grid (not just one), at the
-                    # user's explicit request: since the next palier can
-                    # genuinely start from several distinct patterns (see
-                    # `pool` above), a single preview rebuilt from `carry_
-                    # seed_grid` alone would no longer necessarily match
-                    # what a real worker will compute — exactly the bug
-                    # class already encountered several times in this
-                    # file for a "model" pattern that ends up diverging
-                    # from reality once several variants are in play (see
-                    # CLAUDE.md). For every pool entry, rebuilds here, in
-                    # the PARENT process, exactly the same pattern (same
-                    # parameters, same seed) as the FIRST real worker this
-                    # entry will actually be assigned to in `futures`
-                    # further below (`seeds[reset_count + p]` for the
-                    # p-th pool entry — always a valid index: the pool
-                    # never holds more entries than non-reset slots, see
-                    # `_seed_pool`). The same real-pattern dedup, with no
-                    # cap at all, as the "very first palier" branch above
-                    # — not a distinct mechanism, only the source (the
-                    # pool, rather than `seeds` on a shared blank grid)
-                    # differs.
                     dispatch_lineage = _build_dispatch_lineage(
                         PARALLEL_ATTEMPTS, reset_count,
                         pool_lineage if carry_seed_pool_lineage else None,
                     )
-                    seen_pool_patterns = set()
-                    early_examples = []
-                    for p, (pool_grid, pool_locked) in enumerate(pool):
-                        # `min(..., len(seeds) - 1)`: a safety net for a
-                        # degenerate case (PARALLEL_ATTEMPTS <= FULL_
-                        # RESET_ATTEMPT_COUNT, never the case with default
-                        # values) where `reset_count + p` would otherwise
-                        # overflow `seeds` — never reached in practice
-                        # (see `_seed_pool`, which already guarantees
-                        # `len(pool) <= PARALLEL_ATTEMPTS - reset_count`
-                        # in the normal case), but an approximate preview
-                        # is still preferable to an outright crash.
-                        early_pattern = make_pattern(
-                            rows, cols, ratio,
-                            random.Random(seeds[min(reset_count + p, len(seeds) - 1)]),
-                            available_lengths=available_lengths_preview,
-                            seed_grid=pool_grid,
-                            locked_letters=(
-                                {**(pool_locked or {}), **permanent_locked_letters}
-                                if permanent_locked_letters else pool_locked
-                            ),
-                            index=index, black_enrichment_fraction=black_enrichment_fraction,
-                        )
-                        pattern_key = tuple(tuple(row) for row in early_pattern)
-                        if pattern_key in seen_pool_patterns:
-                            continue
-                        seen_pool_patterns.add(pattern_key)
-                        early_pattern_grid, early_pattern_locked = _cycle_start_preview(
-                            rows, cols, early_pattern, pool_locked, None,
-                        )
-                        # The lineage number is read directly from this
-                        # entry's own POSITION in the pool (`pool_
-                        # lineage`, parallel to `pool` — see its own
-                        # definition), never from `pool_grid`/`early_
-                        # pattern`'s own content: two distinct pool
-                        # entries can, in theory, produce an identical
-                        # pattern without being the same lineage, so only
-                        # the position is authoritative.
-                        early_examples.append({
-                            "example_grid": early_pattern_grid,
-                            "impossible_cells": [],
-                            "deadlock_cells": [],
-                            # A fresh pattern (`_pattern_attempt`) never
-                            # carries an `excluded_slots` set of its own
-                            # at all — and, regardless, a cycle-start
-                            # preview is always past this session's own
-                            # reset point (see the "reprise telle quelle"
-                            # branch's own comment above for the full
-                            # per-attempt lifecycle rule).
-                            "excluded_cells": [],
-                            "forced_cells": [],
-                            "locked_cells": early_pattern_locked,
-                            "theme_cells": _theme_cells_from_preview_state(
-                                early_pattern, rows, cols, pool_locked, None, priority_words
-                            ),
-                            "challenge_cells": _challenge_cells_from_preview_state(
-                                early_pattern, rows, cols, pool_locked, None, challenge_words
-                            ),
-                            "process_number": pool_lineage[p % len(pool_lineage)],
-                            # `pool[0]` (never a duplicate — the first
-                            # one examined, `seen_pool_patterns` still
-                            # empty at that point) is the pool's best
-                            # grid.
-                            "is_best": p == 0,
-                        })
-                progress(
-                    "pattern_generated", attempt=attempt + 1, attempts=attempts,
-                    total_attempts=total_attempts_tried,
-                    examples=_sort_examples_by_process(early_examples),
-                )
+                    pattern_preview_plan = [
+                        (seeds[min(reset_count + p, len(seeds) - 1)], pool_locked,
+                         pool_lineage[p % len(pool_lineage)], p == 0)
+                        for p, (_pool_grid, pool_locked) in enumerate(pool)
+                    ]
+                with best_state_buffer_lock:
+                    early_patterns.clear()
                 # Every non-reset worker (`i >= reset_count`) receives its
                 # own pool entry (`pool`, see its own definition above),
                 # not systematically `carry_seed_grid` — at the user's
@@ -16072,6 +16349,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 done, pending = concurrent.futures.wait(
                     pending, timeout=0.5, return_when=concurrent.futures.FIRST_COMPLETED
                 )
+                if pattern_preview_plan is not None and _pattern_preview_ready(
+                        pattern_preview_plan, early_patterns, best_state_buffer_lock):
+                    _publish_pattern_preview(
+                        progress, pattern_preview_plan, early_patterns, best_state_buffer_lock,
+                        rows, cols, priority_words, challenge_words,
+                        attempt=attempt + 1, attempts=attempts, total_attempts=total_attempts_tried,
+                    )
+                    pattern_preview_plan = None
                 if not attempt_done_event.is_set() and _originals_all_spent():
                     attempt_done_event.set()
                 for f in done:
@@ -16180,7 +16465,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                                     "example_grid", "impossible_cells", "deadlock_cells",
                                     "excluded_cells", "forced_cells", "locked_cells",
                                     "theme_cells", "challenge_cells", "stat_letters",
-                                    "attention_size",
+                                    "attention_zone", "words_per_pose",
                                 )
                             }
                             # An attempt stopped by `attempt_done_event`
@@ -16240,6 +16525,7 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                             required_cells=required_cells, checks_slot=freed_slot,
                             permanent_black_cells=permanent_black_cells,
                             locked_letters=sc_locked, racing=False, incremental_fill=incremental_fill,
+                            lock_known=False,
                         )
                         pending.add(new_future)
                         future_seed[new_future] = new_seed
@@ -16273,6 +16559,20 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                         # advance it.
                         seed_to_lineage[new_seed] = next_lineage_number
                         next_lineage_number += 1
+            if pattern_preview_plan is not None:
+                # Every attempt has returned: its pattern message was put
+                # on `best_state_queue` before its result, but the drain
+                # thread may not have read it yet.
+                give_up = time.monotonic() + PATTERN_PREVIEW_GRACE_S
+                while (time.monotonic() < give_up and not _pattern_preview_ready(
+                        pattern_preview_plan, early_patterns, best_state_buffer_lock)):
+                    time.sleep(0.05)
+                _publish_pattern_preview(
+                    progress, pattern_preview_plan, early_patterns, best_state_buffer_lock,
+                    rows, cols, priority_words, challenge_words,
+                    attempt=attempt + 1, attempts=attempts, total_attempts=total_attempts_tried,
+                )
+                pattern_preview_plan = None
             # Last resort on every failed attempt, before any success is
             # counted: one whose only unfilled cells are isolated ones
             # becomes a complete grid once they are plugged (see `_plug_
@@ -16791,7 +17091,9 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # Incremental fill's attention zone (see INCREMENTAL_
                     # FILL_ENABLED) the record was taken under, None
                     # without one; same lifecycle as `stat_letters`.
-                    "attention_size": d.get("attention_size"),
+                    "attention_zone": d.get("attention_zone"),
+                    # Words per node ("mots par pose") of that record.
+                    "words_per_pose": d.get("words_per_pose"),
                     "forced_cells": d["forced_cells"],
                     "locked_cells": d.get("locked_cells", []),
                     "theme_cells": d.get("theme_cells", []),
@@ -16937,13 +17239,17 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
             # live while `_optimize_before_cleanup` runs.
             progress("pre_cleanup_optimizing", attempt=attempt + 1, attempts=attempts,
                      total_attempts=total_attempts_tried)
+            # One candidate per worker of the palier's pool, each with its
+            # own rng (`_optimize_before_cleanup_task`).
             optimized_pairs = [
-                _optimize_before_cleanup(cand_grid, cand_diag, rows, cols, index, rng,
-                                          cancel_event=cancel_event,
-                                          permanent_locked_letters=permanent_locked_letters,
-                                          permanent_black_cells=permanent_black_cells,
-                                          challenge_words=challenge_words)
-                for cand_grid, cand_diag in failed_pairs
+                f.result() for f in [
+                    executor.submit(
+                        _optimize_before_cleanup_task, cand_grid, cand_diag, rows, cols,
+                        rng.randrange(2**31), permanent_locked_letters,
+                        permanent_black_cells, challenge_words,
+                    )
+                    for cand_grid, cand_diag in failed_pairs
+                ]
             ]
             # "Before" preview: already `last_examples`/`pattern_attempt_
             # failed` above, on `failed_pairs`'s own raw state —
@@ -17026,15 +17332,16 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 # reasoning), applied once per attempt instead of once on
                 # the winner alone.
                 cleaned_continue_candidates = _sorted_by_score(
-                    (
-                        _clean_continue_candidate(
-                            cand_grid, cand_diag, rows, cols, index, rng,
-                            permanent_locked_letters=permanent_locked_letters,
-                            permanent_black_cells=permanent_black_cells,
-                            challenge_words=challenge_words,
-                        )
-                        for cand_grid, cand_diag in optimized_pairs
-                    ),
+                    [
+                        f.result() for f in [
+                            executor.submit(
+                                _clean_continue_candidate_task, cand_grid, cand_diag, rows, cols,
+                                rng.randrange(2**31), permanent_locked_letters,
+                                permanent_black_cells, challenge_words,
+                            )
+                            for cand_grid, cand_diag in optimized_pairs
+                        ]
+                    ],
                     priority_words=priority_words, challenge_words=challenge_words,
                 )
                 carry_seed_pool_continue = _continue_seed_pool(cleaned_continue_candidates)
@@ -17114,21 +17421,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     # already carries at most one entry per attempt.
                     # `deep` is the deep cleanup of a grid repeating the
                     # same state (see GRID_REPEAT_DEEP_CLEANUP_STREAK).
-                    cand_slots = extract_slots(cand_grid, rows, cols)
-                    cand_seed, cand_confirmed = _build_retry_seed(
-                        cand_grid, rows, cols, cand_slots,
-                        cand_diag["assignment"], cand_diag["impossible_slots"],
-                        locked_letters=(
-                            _diag_locked_letters(cand_diag, cand_grid)
-                            if "locked_letters" in cand_diag else carry_locked_letters
-                        ),
-                        exclude_impossible_locked=deep, deep=deep,
-                        seed_grid=carry_seed_grid, index=index, rng=rng,
-                        permanent_locked_letters=permanent_locked_letters,
-                        permanent_black_cells=permanent_black_cells,
+                    # Submitted to the palier's worker pool, one candidate
+                    # per task (`_clean_retry_candidate_task`): returns
+                    # its future.
+                    return executor.submit(
+                        _clean_retry_candidate_task, cand_grid, cand_diag, rows, cols, deep,
+                        rng.randrange(2**31), carry_locked_letters, carry_seed_grid,
+                        permanent_locked_letters, permanent_black_cells,
                     )
-                    return (cand_seed, cand_confirmed, cand_slots,
-                            cand_diag.get("process_number"))
 
                 def _cleaned_state_key(cand):
                     # Pattern + confirmed content merged into one
@@ -17176,8 +17476,14 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                 cleanup_streaks = {}
                 kept_candidates = []
                 discarded_count = 0
-                for cand_grid, cand_diag in optimized_pairs:
-                    cand = _clean_candidate(cand_grid, cand_diag, deep=False)
+                # Every ordinary cleanup runs at once, then every deep one.
+                ordinary = [
+                    f.result() for f in [
+                        _clean_candidate(cand_grid, cand_diag, deep=False)
+                        for cand_grid, cand_diag in optimized_pairs
+                    ]
+                ]
+                for (cand_grid, cand_diag), cand in zip(optimized_pairs, ordinary):
                     key = _cleaned_state_key(cand)
                     streak = carry_cleanup_streaks.get(key, 0) + 1
                     cleanup_streaks[key] = max(cleanup_streaks.get(key, 0), streak)
@@ -17187,6 +17493,10 @@ def generate_grid(width=DEFAULT_WIDTH, height=DEFAULT_HEIGHT, difficulty="easy",
                     if streak >= GRID_REPEAT_DEEP_CLEANUP_STREAK:
                         cand = _clean_candidate(cand_grid, cand_diag, deep=True)
                     kept_candidates.append(cand)
+                kept_candidates = [
+                    c.result() if isinstance(c, concurrent.futures.Future) else c
+                    for c in kept_candidates
+                ]
                 carry_cleanup_streaks = cleanup_streaks
                 just_cleaned = True
                 if kept_candidates:

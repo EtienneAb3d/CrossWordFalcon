@@ -36,6 +36,7 @@ from datetime import datetime
 from pathlib import Path
 
 GRID_STORE_DIR = Path(__file__).resolve().parent.parent / "GRID_STORE"
+VERSION_PATH = Path(__file__).resolve().parent.parent / "VERSION.txt"
 
 # Longest a title slug is ever allowed to grow to, regardless of how long
 # the LLM-generated title itself turned out to be (already clamped to a
@@ -230,6 +231,9 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
         # `None`/empty for a grid with none.
         "challenge_words": list(challenge_words) if challenge_words else None,
         "created_at": datetime.now().isoformat(),
+        # The software version the grid was published with (see
+        # `_falcon_version`), shown in the Library's "Falcon" column.
+        "falcon_version": _falcon_version(),
     }
     (directory / f"{grid_id}.json").write_text(
         json.dumps(record, ensure_ascii=False), encoding="utf-8",
@@ -237,9 +241,18 @@ def save_grid_json(result, language, difficulty, mode, title, bilingual=None, ps
     return grid_id
 
 
+def _falcon_version():
+    """The software version (VERSION.txt, the web UI's version badge) a
+    grid is published with; None when the file cannot be read."""
+    try:
+        return VERSION_PATH.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 def _iter_stored_grids():
     """Yields every stored grid's own compact metadata dict ({id,
-    created_at, language, bilingual, pseudo, interactive, origin, theme,
+    created_at, falcon_version, language, bilingual, pseudo, interactive, origin, theme,
     difficulty, title, width, height}) — never the full pattern/solution/
     words payload, so listing
     many grids stays cheap even though each file can run to several
@@ -258,6 +271,7 @@ def _iter_stored_grids():
         yield {
             "id": record.get("id", path.stem),
             "created_at": record.get("created_at"),
+            "falcon_version": record.get("falcon_version"),
             "language": record.get("language"),
             # The grid's own second (vertical-words) language — see
             # save_grid_json's own docstring — `None`/absent for every

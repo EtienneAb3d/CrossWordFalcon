@@ -145,6 +145,16 @@
         </span>
       </label>
 
+      <!-- "Mots par pose": the most words a search node places at once,
+           on an empty attention zone (GenerateRequest.words_per_node,
+           crossword_gen.py's WORDS_PER_NODE; decreasing to 1 as the zone
+           fills, Filler._group_size). -->
+      <label for="words-per-node">
+        <span data-i18n="wordsPerNodeLabel">Mots par pose</span>
+        <input type="number" id="words-per-node" name="words_per_node"
+               min="1" max="10" step="1" value="5">
+      </label>
+
       <label for="mode">
         <span data-i18n="modeLabel">Mode</span>
         <select id="mode" name="mode">
@@ -366,6 +376,10 @@
             <tr>
               <th data-i18n="libraryColLanguage"></th>
               <th data-i18n="libraryColDate"></th>
+              <!-- Software version the grid was published with
+                   (`falcon_version` field of the JSON record, empty for
+                   an older record). -->
+              <th data-i18n="libraryColVersion"></th>
               <th data-i18n="libraryColTitle"></th>
               <!-- Theme typed in at generation time (`theme` field of the
                    JSON record, empty if none) — at the user's explicit

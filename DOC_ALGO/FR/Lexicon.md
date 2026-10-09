@@ -220,19 +220,31 @@ plusieurs signaux) :
   l'orange de l'emplacement pauvre et le rouge de l'emplacement bloqué.
   (`backend/crossword_gen.py`, `_noise_slot_cells`.)
 
-- **Zone d'attention** (*remplissage incrémental*) : à chaque palier,
-  réunion de deux rectangles partant de la case (0, 0) — un rectangle
-  horizontal (les Rh premières lignes et Ch premières colonnes) et un
-  rectangle vertical (les Rv premières lignes et Cv premières colonnes) ;
-  seul un emplacement ayant une case encore libre dans cette zone peut
-  recevoir une pose. Les quatre valeurs valent d'abord 4 ; chaque fois que
-  plus rien ne peut être posé dans la zone, les deux rectangles grandissent
-  ensemble : l'horizontal de 2 colonnes jusqu'à occuper toute la largeur de
-  la grille, puis de 2 lignes ; le vertical de 2 lignes jusqu'à occuper
-  toute la hauteur, puis de 2 colonnes ; jusqu'à ce que l'un d'eux couvre
-  toute la grille (`Filler._widen_attention`) ; une tentative
-  partie de lettres verrouillées la ramène à 4x4 une fois, quand un
-  nettoyage dur lui retire sa dernière lettre verrouillée
+- **Zone d'attention** (*remplissage incrémental*, optionnel, activé ;
+  désactivé, toute la grille est dans la zone d'attention) : à chaque
+  palier,
+  la partie de la grille où une pose est permise, faite de deux
+  rectangles : une **bande haute** de lignes entières, sur toute la largeur
+  (aucune ligne au départ), et, juste en dessous, un **bloc** de 16 lignes
+  (`INCREMENTAL_FILL_STEP`) ancré au bord gauche, qui progresse de gauche à
+  droite (`Filler._in_attention`) ; seul un emplacement ayant une case
+  encore libre dans cette zone peut recevoir une pose. Elle part du carré
+  16 × 16 du coin haut gauche (`Filler._initial_attention`). Chaque fois que
+  plus rien ne peut être posé dans la zone, le bloc s'élargit de 16 colonnes
+  vers la droite ; quand il atteint le bord droit, ses lignes rejoignent la
+  bande haute et un nouveau bloc 16 × 16 commence au bord gauche en dessous
+  (`Filler._attention_shape`, `Filler._widen_attention`), la zone d'avant
+  devenant sa **zone intérieure**, jusqu'à couvrir toute la grille. Le
+  **repli** est optionnel et actuellement désactivé
+  (`ATTENTION_FALLBACK_ENABLED`) : la zone ne fait alors que croître le long
+  d'une descente. Activé, à l'entrée de chaque nœud, elle se replie sur la
+  plus grande zone de cette forme entièrement remplie (sans case libre d'un
+  emplacement sélectionnable ; bande haute d'un multiple de 16 lignes), au
+  moins le carré de départ, cette zone remplie étant sa zone intérieure
+  (`Filler._fallback_attention`). Une reprise à plat après un nettoyage
+  garde la zone dans laquelle il a eu lieu. Une
+  tentative partie de lettres verrouillées la ramène au carré de départ une
+  fois, quand un nettoyage dur lui retire sa dernière lettre verrouillée
   (`Filler._attention_after_unlock`). Ne concerne que
   le choix de l'emplacement, jamais le retour en arrière ni la détection
   des emplacements bloqués (`backend/crossword_gen.py`,
@@ -247,12 +259,12 @@ plusieurs signaux) :
   Les candidats sont mélangés, puis classés par leur
   correspondance au consensus statistique des lettres sur les cases encore
   libres (`_candidate_score`), puis tirés un à un dans la fenêtre des
-  **`CANDIDATE_SCORE_WINDOW` (100) meilleurs candidats restants** — qui
+  **`CANDIDATE_SCORE_WINDOW` (200) meilleurs candidats restants** — qui
   se décale à mesure que les mots en sortent, jamais un simple « meilleur
   score gagne » : cette fenêtre est retriée par fréquence dans le
   dictionnaire FREQ (la plus élevée en premier, 0 pour un mot qui n'y
   figure pas) et le tirage se fait **au hasard parmi ses
-  `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE`, soit 20) mots les plus fréquents**. Les deux modes emploient la même méthode : la recherche
+  `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE`, soit 100) mots les plus fréquents**. Les deux modes emploient la même méthode : la recherche
   automatique sur l'emplacement qu'elle vient de choisir, et le bouton
   **Suivant** du mode Interactif pour chacune de ses trois familles (Mots
   Défi, glossaire thématique, dictionnaire général), qui retient le premier
@@ -277,6 +289,17 @@ plusieurs signaux) :
   (`backend/crossword_gen.py`, `merge_scrabble_lexicon`,
   `Filler.scrabble_first`, `scrabble_word_cells` ; `backend/app.py`,
   `_annotate_scrabble_cells`.)
+
+- **Score de tirage d'une case noire** : pour une case blanche, au tirage
+  « Taux noir », somme des longueurs des mots (suites d'au moins 2 cases
+  non noires, horizontales et verticales) qui croisent le carré de 3×3
+  cases centré sur elle. Le **score d'un segment** (suite maximale de
+  cases non noires d'une ligne ou d'une colonne, case seule comprise) est
+  la somme des scores de ses cases ; le tirage retient les segments les
+  mieux scorés, et la case posée est ensuite choisie parmi leurs cases
+  par l'écartement aux cases noires existantes
+  (`backend/crossword_gen.py`, `_crossing_length_score`, `_run_score`,
+  `_place_black_cells`).
 
 - **Emplacement court** : emplacement de 2 ou 3 lettres. Une fois le
   « Taux noir » atteint, un motif qui en compte plus de 10 (sans compter
@@ -317,14 +340,21 @@ plusieurs signaux) :
 
 - **Groupe d'un nœud** : les mots qu'un nœud de la recherche pose d'un
   coup avant de descendre — le mot de l'emplacement qu'il a choisi, puis
-  jusqu'à `WORDS_PER_NODE` − 1 (soit 1) autre, posé de préférence sur les
+  d'autres, jusqu'à un total qui décroît avec le taux de remplissage de
+  l'anneau de la zone d'attention (la zone privée de sa zone intérieure,
+  la zone remplie dont elle est issue) : `WORDS_PER_NODE` (5, le
+  champ « Mots par pose ») pour un anneau vide, jusqu'à 1 pour un anneau
+  rempli à `GROUP_SIZE_MIN_FILL_PERCENT` (75 %) ou plus
+  (`Filler._group_size`) ; affiché « N m/p » sur la ligne
+  d'information des aperçus —
+  posés de préférence sur les
   emplacements candidats de ce choix (fenêtre géométrique du niveau 6),
   sinon sur les autres emplacements sélectionnables du nœud, le
   premier candidat qui ne laisse aucun emplacement croisé bloqué. Au retour
   en arrière, le groupe est retiré en entier, d'un seul coup ; il compte
   pour une seule descente, et chaque mot essayé pour le compléter compte
   pour le budget. (`backend/crossword_gen.py`, `WORDS_PER_NODE`,
-  `Filler._descend_group`, `Filler._extra_group_words`,
+  `Filler._group_size`, `Filler._descend_group`, `Filler._extra_group_words`,
   `Filler._undo_group`.)
 
 - **Plafond de descentes par nœud** : nombre maximal de descentes
@@ -339,7 +369,7 @@ plusieurs signaux) :
   ordinaires. Un nœud atteint alors que la recherche a posé moins de
   `EARLY_DESCENTS_WORD_COUNT` (10) mots en plus de ceux de l'état initial
   de la tentative a un plafond porté à `EARLY_MAX_DESCENTS_PER_NODE`
-  (2 × `MAX_DESCENTS_PER_NODE`, soit 20) descentes, le compte étant pris à
+  (2 × `MAX_DESCENTS_PER_NODE`, soit 100) descentes, le compte étant pris à
   l'entrée du nœud. Une grille héritée d'une étape précédente (tentative qui
   démarre avec des cases verrouillées) n'a aucun plafond : tous ses
   nœuds explorent toutes leurs possibilités. (`backend/crossword_gen.py`,
@@ -357,8 +387,8 @@ plusieurs signaux) :
   remettre en cause le dernier mot posé, remonte directement au mot le
   plus récent de l'ensemble de conflit, en retirant au passage sans les
   remplacer tous les mots posés entre-temps qui n'y figurent pas. Un saut
-  arrière retire au plus `MAX_BACKJUMP_LEVELS` (5) mots posés par la
-  recherche ; au-delà, il est remplacé par un retrait fantôme (voir
+  arrière dépile au plus `MAX_BACKJUMP_LEVELS` (5) nœuds, un nœud qui a
+  posé un groupe de mots comptant pour un seul ; au-delà, il est remplacé par un retrait fantôme (voir
   ci-dessous).
   (`backend/crossword_gen.py`, `Filler._backtrack`, `BACKJUMPING_ENABLED`,
   `MAX_BACKJUMP_LEVELS`.)
@@ -381,7 +411,7 @@ plusieurs signaux) :
   `interactiveWindowCells`.)
 
 - **Retrait fantôme** (*backghost*) : simple nettoyage du conflit, qui
-  remplace un saut arrière de plus de `MAX_BACKJUMP_LEVELS` (5) mots : seul
+  remplace un saut arrière de plus de `MAX_BACKJUMP_LEVELS` (5) nœuds : seul
   le mot le plus récent de l'ensemble de conflit est retiré de la grille,
   sur place, sans dépiler aucun nœud ni retirer les mots posés depuis ; la
   recherche continue sur la grille ainsi libérée, et le nœud qui avait posé
@@ -466,7 +496,7 @@ plusieurs signaux) :
   descentes est effacé : tous les nœuds se défont, la grille est reprise à
   plat dans l'état du record, nettoyée, et le retour arrière recommence de
   zéro depuis cet état, qui devient la nouvelle racine de la recherche ; ses
-  mots ne sont plus défaits que par un nettoyage dur précoce ultérieur. La
+  mots ne sont plus défaits que par un nettoyage ultérieur de la recherche. La
   tentative n'est ni déclarée échouée ni terminée, et ne quitte pas son
   palier.
   Il ne verrouille aucune lettre : une case verrouillée dont il efface la
@@ -481,22 +511,51 @@ plusieurs signaux) :
   de la recherche d'une tentative de génération quand elle pose le même mot
   au même emplacement plus de `MAX_SAME_WORD_PLACEMENTS` (1000) fois de suite,
   sans autre mot posé à cet emplacement entre-temps. L'emplacement est
-  déclaré impossible et nettoyé sur place, avec cet emplacement pour seul
+  déclaré impossible et nettoyé, avec cet emplacement pour seul
   emplacement impossible (son mot, les mots qui le croisent et les lettres
   restées dessus sont effacés, mêmes règles de verrouillage que le nettoyage
-  dur précoce). Aucun nœud n'est défait : comme pour un retrait fantôme, les
-  mots retirés restent absents et un nouveau nœud poursuit la recherche ;
-  l'emplacement devient un emplacement écarté et son décompte repart de
-  zéro. (`backend/crossword_gen.py`, `Filler._record_tried_word`,
+  dur précoce). Comme pour le nettoyage dur précoce, l'historique des
+  descentes est effacé : tous les nœuds se défont et la recherche repart à
+  plat de l'état nettoyé, nouvelle racine de la recherche ; l'emplacement
+  devient un emplacement écarté et son décompte repart de zéro.
+  (`backend/crossword_gen.py`, `Filler._record_tried_word`,
   `Filler._last_word_streak`, `Filler._descend_group`, `Filler._repeat_hardclean`,
+  `Filler._request_flat_restart`, `Filler._restart_from_state`,
   `MAX_SAME_WORD_PLACEMENTS`.)
+
+- **Nettoyage doux** (*softclean*) : nettoyage des emplacements bloqués
+  sans l'option nettoyage dur : seuls les mots qui croisent l'emplacement
+  bloqué sont retirés ; une lettre qu'un mot retiré partage avec un mot
+  entier restant reste en place (ce mot n'est pas retiré), et une lettre
+  restée sur l'emplacement bloqué sans mot pour la porter n'est effacée
+  que si aucun verrou ne la porte. Mêmes règles de verrouillage et de
+  lettres orphelines que le nettoyage dur. Seul le nettoyage doux de zone
+  l'utilise. (`backend/crossword_gen.py`, `_clean_blocked_slots`,
+  paramètre `hard_clean=False` ; `Filler._slot_clean`.)
+
+- **Nettoyage doux de zone** : nettoyage doux déclenché à l'intérieur de la
+  recherche, avec le remplissage incrémental, juste avant que la zone
+  d'attention ne s'agrandisse (plus rien de sélectionnable dans la zone, ou
+  tout ce qui l'est déjà essayé) : un emplacement bloqué — non rempli et
+  sans aucun candidat (hors des emplacements sélectionnables), ou pris dans
+  une case croisée bloquée — ou un emplacement écarté, ayant
+  une case libre dans la zone est nettoyé (nettoyage doux), avec cet
+  emplacement pour seul emplacement impossible ; comme après un nettoyage
+  dur sur mot répété, l'historique des descentes est effacé et la recherche repart à plat de
+  l'état nettoyé, nouvelle racine de la recherche. Un
+  nettoyage qui ne change rien, ou qui redonne un état (motif + lettres
+  connues) déjà produit par un nettoyage doux de zone de la tentative, est
+  sauté. Jamais au temps de dernier recours. (`backend/crossword_gen.py`,
+  `ZONE_CLEAN_ENABLED`, `Filler._zone_clean`, `Filler._backtrack`,
+  `Filler.slot_is_blocked`, `Filler._restart_from_state`.)
 
 - **Seconde chance** : reprise d'une tentative qui échoue alors que le
   palier est encore en course (au moins une tentative d'origine n'a pas
   atteint son budget). Au lieu d'être déclarée échouée et remplacée par une
   grille vierge, sa grille subit un nettoyage dur, sans génération de cases
   noires (motif gardé tel quel), et reprend sur le même processus. Une case
-  verrouillée dont le nettoyage efface la lettre est déverrouillée. La
+  verrouillée dont le nettoyage efface la lettre est déverrouillée ; elle
+  ne verrouille aucune lettre (les mots gardés repartent non verrouillés). La
   tentative n'est réellement déclarée échouée que lorsqu'elle reproduit un
   état bloqué (motif et lettres placées) déjà produit au cours de ses
   secondes chances ; son processus passe alors à une grille vierge.

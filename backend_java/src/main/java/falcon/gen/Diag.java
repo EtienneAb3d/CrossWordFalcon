@@ -17,10 +17,12 @@ public final class Diag {
     public List<Integer> forcedCells, impossibleCells, deadlockCells, excludedCells, lockedCells, themeCells,
             challengeCells;
     public List<Object> statLetters;
-    /** Incremental fill's attention zone as [[Rh, Ch], [Rv, Cv]] (mirrors `attention_size`, null = the whole grid); only
-     * serialized once hasAttentionSize is set. */
-    public List<List<Integer>> attentionSize;
+    /** Incremental fill's attention zone as [band rows, block height, block width] (mirrors
+     * `attention_zone`, null = the whole grid); only serialized once hasAttentionSize is set. */
+    public List<Integer> attentionZone;
     public boolean hasAttentionSize;
+    /** Words per node ("mots par pose", mirrors `words_per_pose`); serialized with attention_zone. */
+    public Integer wordsPerPose;
     public Integer assignedLetterCount;
     public String[] assignment;
     public List<Integer> impossibleSlots;
@@ -47,8 +49,9 @@ public final class Diag {
         d.themeCells = themeCells;
         d.challengeCells = challengeCells;
         d.statLetters = statLetters;
-        d.attentionSize = attentionSize;
+        d.attentionZone = attentionZone;
         d.hasAttentionSize = hasAttentionSize;
+        d.wordsPerPose = wordsPerPose;
         d.assignedLetterCount = assignedLetterCount;
         d.assignment = assignment;
         d.impossibleSlots = impossibleSlots;
@@ -82,7 +85,8 @@ public final class Diag {
         if (deadlockCells != null) m.put("deadlock_cells", cells(deadlockCells));
         if (excludedCells != null) m.put("excluded_cells", cells(excludedCells));
         if (statLetters != null) m.put("stat_letters", statLetters);
-        if (hasAttentionSize) m.put("attention_size", attentionSize);
+        if (hasAttentionSize) m.put("attention_zone", attentionZone);
+        if (hasAttentionSize) m.put("words_per_pose", wordsPerPose);
         if (forcedCells != null) m.put("forced_cells", cells(forcedCells));
         if (assignedLetterCount != null) m.put("assigned_letter_count", assignedLetterCount);
         if (includeAssignment && assignment != null) m.put("assignment", assignmentJson(assignment));

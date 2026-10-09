@@ -972,6 +972,20 @@ Full mechanism-level detail and iteration history live in `CLAUDE.md`
 (current state) and this project's own file history — the facts below are
 the current defaults/behavior to know before touching this code.
 
+- **The ratio draw selects white runs by their summed word-length score**
+  (`_place_black_cells`, `_crossing_length_score`, `_run_score`) — the
+  user's rule: each white cell scores the sum of the lengths of the words
+  crossing the 3x3 square centered on it, each run (segment) of white
+  cells the sum of its cells' scores, and the best-scored runs are
+  selected (like the former "longest runs" window, the length replaced by
+  this score); the existing rules (hard constraints, spread score, random
+  pick among the best) pick the black cell among their cells. Choices made
+  with the change, to revisit with the user: a run is a maximal run of
+  non-black cells across or down, single cells included, scored over all
+  its white cells (corner and locked cells included, though never
+  blackened by the draw); the window is the `BLACK_DRAW_WINDOW_PERCENT` %
+  best runs (ties in random order), growing by the same step while they
+  hold no valid cell; scores are recomputed after each placement.
 - Black-cell placement is **not** 180°-symmetric (dropped in favor of
   independent, non-paired placement, which reaches sparser valid patterns).
 - The ratio-based ("Taux noir") black-cell draw of `make_pattern` never
@@ -999,8 +1013,8 @@ the current defaults/behavior to know before touching this code.
   draw placed are reopened, they stay candidates for the redraw, and at
   most `SHORT_SLOT_REDRAW_MAX_ROUNDS` (10) rounds run.
 - A pre-fill phase runs before ratio-based placement, adding black cells
-  (never counted against the ratio target) until every slot has at least
-  `PREFILL_MIN_WORD_COUNT` (10) real dictionary candidates — locked-letter
+  (counted toward the ratio target) until every slot has at least
+  `PREFILL_MIN_WORD_COUNT` (3) real dictionary candidates — locked-letter
   aware, so a slot partially fixed by letters carried over from a previous
   palier is checked by real per-position candidate count, not just raw
   length. A preventive filter (`_new_black_cell_breaks_locked_slot`) refuses
@@ -1027,6 +1041,17 @@ the current defaults/behavior to know before touching this code.
   `ProcessPoolExecutor`; `attempts` (paliers)
   defaults to 200 (raised from an original 40 — some grids need many quick,
   unproductive cycles before a workable state emerges).
+- **Every per-grid step of a palier runs on the palier's worker pool, one
+  grid per process** — the user's rule ("une grille par process"): the
+  black-cell pattern (drawn once, by its own attempt; the parent never
+  recomputes it, the "pattern_generated" preview is built from what the
+  workers send), the pre-cleanup optimization and the cleanups (one task
+  per candidate, each with its own rng drawn by the parent in candidate
+  order). Any new per-candidate step must be submitted the same way, never
+  looped over in the parent: measured on 25×25 Flash before this, the
+  parent's sequential loops took 85 % of the wall time (21 s of preview
+  patterns, 60-110 s of optimization, 33-52 s of cleanups per palier,
+  against 7-16 s of parallel search).
 - **A failure while the palier still races gets a second chance before
   being declared failed** (`_second_chance_seed`) — the user's rule: "au
   moment de déclarer une grille échouée, tenter un cleanhard (sans
@@ -1272,7 +1297,7 @@ the current defaults/behavior to know before touching this code.
   squares`, a solitary CLI run) is unaffected — same plain, unconditional
   stop as always.
 - **Each `Filler._backtrack` node makes at most `MAX_DESCENTS_PER_NODE`
-  (10) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 20) while the
+  (50) recursive descents** — `EARLY_MAX_DESCENTS_PER_NODE` (2 × `MAX_DESCENTS_PER_NODE` = 100) while the
   search has placed fewer than `EARLY_DESCENTS_WORD_COUNT` (10) words on
   top of the attempt's initial state — before returning `False` to its parent — one
   cap shared by all four stages of the node, `allow_breaking` included;
@@ -1289,13 +1314,29 @@ the current defaults/behavior to know before touching this code.
   skipped its other candidates, `Filler._last_jumped`) may make only one
   more descent — the user's rule: the cap is only reached when every
   failure came back through ordinary backtracking.
-- **Each `Filler._backtrack` node places `WORDS_PER_NODE` (2) words at
+- **Each `Filler._backtrack` node places up to `WORDS_PER_NODE` (5, the
+  default of the generation form's "Mots par pose" field, 1-10, also sent
+  by "Finir la grille") words at
   once and takes them back off together** (`Filler._descend_group`, Java
   `descendGroup`) — the user's rule: "chaque noeud pose N mots en une seule
-  fois (N=3 pour le moment) en privilégiant les cases candidates
+  fois en privilégiant les cases candidates
   sélectionnées, et dépile les N mots en même temps au backtrack. Le budget
   est toujours compté de la même manière (chaque mot prélève un élément au
-  budget)." Choices made with the change, to revisit with the user: only
+  budget)." N decreases with the attention zone's fill rate, reaching 1 at
+  `GROUP_SIZE_MIN_FILL_PERCENT` (75 %) and staying there above it (the
+  user's rule: "décroitre jusqu'à arriver à 1 pour 75% de la zone
+  d'attention remplie"; `Filler._group_size`). Choices
+  made with that rule, to revisit with the user: the field's value is the
+  count at 0 % (so a field at 5 goes from 5 down to 1); the fill rate is the
+  share of the zone's white cells holding a placed word or a locked letter,
+  measured once the node's own word is placed; the count is
+  `max(1, W - floor((W - 1) * rate / 0.75))`. The rate is that of the zone's ring — the
+  user's rule: "le pourcentage de remplissage de la zone différentielle
+  entre l'actuelle zone d'attention, et la zone d'attention plus petite
+  (celle-ci devant être à 100%, sinon il y aurait repli de la zone
+  d'attention sur cette plus petite)" — the smaller zone being the zone's
+  inner zone, the filled rectangle it fell back on or grew from; the value is shown as "N m/p"
+  on each preview's stats line. Choices made with the change, to revisit with the user: only
   the node's own word has alternatives — each extra word is the first
   candidate of its slot that leaves no crossing slot blocked, strictly
   (never `allow_breaking`, never a reshape), and the group just stops short
@@ -1310,13 +1351,15 @@ the current defaults/behavior to know before touching this code.
   and a local failure is replayed under every unrelated intermediate word.
   Every failure path goes through `Filler._fail` so `_last_conflict` is
   never stale; `None` means "backtrack chronologically".
-- **A backjump is at most `MAX_BACKJUMP_LEVELS` (5) words long; a longer
+- **A backjump is at most `MAX_BACKJUMP_LEVELS` (5) nodes long; a longer
   one is replaced by a backghost** (`Filler._fail_or_backghost`,
   `MAX_BACKGHOSTS_PER_DESCENT` = 10) — the user's rule: "Limiter le
   backjump complet à 5 sauts en arrière. Pour plus de 5 sauts, effectuer
   un simple nettoyage du conflit, en retirant les mots créant le conflit."
-  The distance is the number of search-placed words after the most recent
-  word of the conflict set. Beyond it, only that word is taken off the
+  The distance is the number of nodes, not words, after the node that
+  placed the most recent word of the conflict set — the user's rule: since
+  a node places several words, the nodes upstream are what counts
+  (`Filler._seq_node`: a group counts once). Beyond it, only that word is taken off the
   grid, in place, with no node unwound and every later word kept; the
   node that placed it later finds nothing to remove. A failed retry
   re-decides on the merged conflict set, so conflict words are taken off
@@ -1327,36 +1370,57 @@ the current defaults/behavior to know before touching this code.
   backghosts on one descent, the backjump is made in full (bounds the
   recursion). Backghosting and in-search reshapes coexist:
   `_undo_reshape` keeps a word ghosted since the reshape off the grid.
-- **Incremental fill on every palier** (`INCREMENTAL_FILL_ENABLED`, on
-  "pour le moment", in the user's words; Java mirror in `Filler`): the
+- **Incremental fill is optional and currently on** (`INCREMENTAL_FILL_
+  ENABLED` = True in both back ends) — the user's rule: the attention zone
+  is optional; off, the whole grid is the attention zone and the zone
+  softclean never runs either (it only precedes a zone widening). When on,
+  it applies on every palier (Java mirror in `Filler`): the
   user's rule — limit the slots a placement may choose to an "attention
-  zone" starting at (0,0), 4x4 first, fill until nothing more can be
-  placed within it, then widen it; the zone combines two rectangles, one
-  extending horizontally 2 columns at a time and one extending vertically
-  2 rows at a time, each turning to the other direction once it reaches
-  the opposite edge, until the zone is the whole grid;
+  zone", fill until nothing more can be placed within it, then widen it;
+  the zone is two rectangles — the user's rule: start with the 16x16
+  square at the top-left corner, then extend it to the right by 16 until
+  the right edge; from there its 16 rows join the zone, which extends with
+  a new 16x16 square at the left below it — "La grille est
+  donc découpée en 2 rectangles d'attention : 1 rectangle pour la partie
+  haute sur toute la largeur, (0 ligne au début) et un second rectangle qui
+  progresse de gauche à droite en dessous" (`INCREMENTAL_FILL_STEP`,
+  `Filler._in_attention`/`_attention_shape`) — taking its next step each
+  time it is saturated (`Filler._attention_pool`/`_widen_attention`),
+  until it is the whole grid. The fallback is optional and currently off
+  (`ATTENTION_FALLBACK_ENABLED` = False, the user's rule: "rendre le repli
+  de la zone optionnel, désactivé pour le moment (la zone d'attention ne
+  fait que croître)"); when on, on entry every node falls back on the largest
+  fully filled zone — the user's rule: "le repli se fait sur la plus grande
+  zone entièrement remplie" — i.e. the largest band + block holding no free
+  cell (`Filler._fallback_attention`; a cell is unfilled only on a
+  selectable slot, i.e. not one left dry; the zone is at least the start
+  square), that filled zone becoming the zone's inner zone, and grows from
+  there;
   applied at every palier ("à toutes les étapes"), to resumed and freshly
   created grids alike. From palier 2 on, when every locked cell of an
   attempt has been unlocked, the zone is reset — once per grid (the
   user's words: "ne le faire qu'une fois pour une grille, ensuite, il ne
   devrait plus y avoir de case verrouillée avant l'étape suivante";
   `Filler._attention_after_unlock`). Choices made with the change, to
-  revisit with the user: both rectangles grow at the same widening step
-  (never alternately), and the zone is the whole grid as soon as one of
-  them is; a slot is in the zone when one of its still-free
+  revisit with the user: the fallback's band is rounded down to a multiple
+  of 16 rows (so every zone shape nests in the previous one), its block as
+  wide as the leading columns of the 16 rows below are filled, and the block
+  is clipped to the grid's bottom; a slot is in the zone when one of its still-free
   cells is (a slot reaching into the zone with only known cells there is
   not); "nothing more can be placed" is the node's own stages 1-2
   (non-écarté, then released écarté) exhausted inside the zone, after
   which the node widens instead of failing — a dry slot or a blameable
   all-rejected slot still backtracks as usual, and the descent cap can
   still end the node first; the zone size is a recursion parameter,
-  restored on unwinding like `released`, and every root (`solve()`,
-  early-hardclean restarts included) starts again at 4x4; "from palier 2
+  restored on unwinding like `released`; the first root starts from the
+  start square and a root restarted flat after a clean keeps the zone the
+  clean happened in (the user's rule: "la zone d'attention ne fait que
+  croître"); "from palier 2
   on" is implemented as "the attempt started with locked letters" (also
   true of "Continuer"; never true of "Finir la grille/la zone", whose
   permanent locks are never cleared); the reset happens after the
-  repeated-word hardclean (its fresh node starts at 4) and is merely used
-  up by an early hardclean (whose root starts at 4 anyway); "once per
+  repeated-word hardclean and after an early hardclean, every node's entry
+  fallback (when enabled) applying after it; "once per
   grid" means once per attempt.
 - **The last-resort `allow_breaking` stage is gated globally, not per
   node.** `Filler.solve` runs a strict pass from the root first; only if
@@ -1504,10 +1568,10 @@ the current defaults/behavior to know before touching this code.
   root-of-sum-of-squares score against `letter_scores`, then drawn via a
   `CANDIDATE_SCORE_WINDOW`-wide sliding window of the best remaining
   words, re-sorted by frequency in the freq wordlist (highest first, 0 for
-  a word absent from it) and cut to its `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE` = **20**)
+  a word absent from it) and cut to its `CANDIDATE_FREQ_WINDOW` (2 × `MAX_DESCENTS_PER_NODE` = **100**)
   most frequent words, the pick being random among those (not a strict
   rank order) — this ranking is always active,
-  independent of whether letter-forcing itself is on. The window is **100**
+  independent of whether letter-forcing itself is on. The window is **200**
   — deliberately far narrower than a slot's own domain, which routinely
   holds thousands of words: a window wider than the domain puts every
   candidate in it at every draw, which makes the order a plain uniform
@@ -2020,10 +2084,7 @@ the current defaults/behavior to know before touching this code.
   (`Filler._restart_from_record`), hard-cleaned (`Filler._early_hardclean`)
   and backtracking restarts from zero with that state as the new root
   (`Filler.solve`'s loop). The words of that root are then only ever taken
-  off by a later early hardclean. Nesting a fresh node per clean on top of
-  the live stack (the previous shape) made the recursion depth, and every
-  node's retained caches, grow without bound — a 30×30 Megatron job ran
-  out of a 30 GB Java heap. The user's locking rules: a locked letter
+  off by a later hardclean. The user's locking rules: a locked letter
   the clean erases is unlocked; a locked letter it keeps stays locked; a
   letter that was not locked stays unlocked — so a grid with no locked
   letter never gets one from it. A letter left with no complete word and
@@ -2033,6 +2094,49 @@ the current defaults/behavior to know before touching this code.
   record; the attempt keeps the descent caps of its first start; a reshape
   carried by the record stays in the pattern even when the clean removes
   its word. Interactive mode never uses it.
+- **Every clean inside the search drops the backtracking history** —
+  the user's rule: "Remettre à plat l'historique des backtrack à chaque
+  hardclean." The early hardclean, the zone softclean and the
+  repeated-word hardclean all end with
+  every node unwinding (`Filler._restart_pending`) and `Filler.solve`
+  restarting flat from the cleaned grid as a new root — the early one from
+  the cleaned record, the other two from the cleaned current state
+  (`Filler._request_flat_restart` -> `_restart_from_state`, Java
+  `requestFlatRestart`/`restartFromState`). The recursion depth therefore
+  stays bounded by the open slots of one root: a fresh node stacked on the
+  live stack per clean retains every node's `domains`/`options_cache`
+  below it, and a 50×50 GridZilla job ran out of a 32 GB Java heap that
+  way. Never reintroduce a clean that carries on above the live stack.
+  Choices made with the change, to revisit with the user: the zone
+  softclean and the repeated-word hardclean restart from the current (cleaned) state, not
+  the record, and leave the record as it is; the early-hardclean test is
+  skipped on such a root; the new root keeps the attention zone the clean
+  happened in (the record's for an early hardclean, the requesting node's
+  otherwise). Accepted consequence: the words of that root are no longer
+  backtracked — a later clean is what takes them off.
+- **Zone softclean** (`ZONE_CLEAN_ENABLED` in `backend/crossword_gen.py`,
+  `Filler.ZONE_CLEAN_ENABLED` in Java) — the user's rule: "Il faut tout
+  tenter pour remplir la zone d'attention : si une case vide appartient à
+  un emplacement impossible, déclencher un hardclean sur cet emplacement."
+  The clean is a **softclean** — the user's rule: "Nettoyage de zone avant
+  extension : effectuer un softclean (et non un hardclean)":
+  `_clean_blocked_slots(hard_clean=False)` (`Filler._slot_clean` with
+  `hard=False`), i.e. only the words crossing the slot are removed, a
+  removed word's letters held by a remaining whole word stay in place, no
+  cascade. `Filler._zone_clean` soft-cleans that slot and the search
+  restarts flat from the cleaned state (see the entry above). Choices made with the
+  change, to revisit with the user: it fires
+  only when the zone would otherwise grow (nothing selectable left in it,
+  or everything selectable tried), not as soon as such a slot exists;
+  the slots cleaned are the "emplacements bloqués" (`slot_is_blocked`:
+  no candidate, or a crossing deadlock) and, by the user's further rule
+  ("déclencher un hardclean sur les emplacements écartés avant
+  d'agrandir la zone"), the "emplacements écartés"
+  (`_impossible_this_attempt`, e.g. a slot whose every candidate would
+  make a crossing slot impossible);
+  never in the `allow_breaking` stage; a clean changing nothing or giving a
+  state already produced by a zone softclean of the attempt is skipped
+  (loop guard).
 - **Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 1000 in `backend/
   crossword_gen.py`, `Filler.MAX_SAME_WORD_PLACEMENTS` in Java) — the
   user's rule: in automatic fill, when the same word is placed more than 1000
@@ -2041,13 +2145,10 @@ the current defaults/behavior to know before touching this code.
   with its count, which restarts when another word is placed there, so the
   rule only catches a word that has become mandatory in a loop replaying
   the same scenario, not the diversity the other mechanisms create. The
-  hardclean runs in place, like a backghost (no node unwound, removed words
-  stay off, a fresh node carries on in the same attention zone), never as
-  a flat restart from the current state, which would make the whole descent
-  an un-backtrackable root, fold the attention zone back to its start with
-  words left outside it, and let the zone grow past slots those frozen
-  words make unfillable. Choices made with the change, to revisit with the
-  user: the slot is flagged écarté, not frozen; the streak restarts from
+  search then restarts flat from the cleaned state (see "Every hardclean
+  inside the search drops the backtracking history" above). Choices made
+  with the change, to revisit with the user: the slot is flagged écarté,
+  not frozen; the streak restarts from
   zero after the clean; the record is not touched; only the generation
   attempts use it. Measured (30×30 easy, first palier, 300 000 checks, 6
   seeds): each clean takes off 40-55 % of the placed words (the hardclean

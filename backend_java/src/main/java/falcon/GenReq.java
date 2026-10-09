@@ -13,6 +13,7 @@ public final class GenReq {
     public Long seed;
     public int forceLettersPercent = 0;
     public int blackEnrichmentPercent = 15;
+    public int wordsPerNode = falcon.gen.Filler.WORDS_PER_NODE;
     public String mode = "medium";
     public String pseudo;
     public String theme;
@@ -31,6 +32,7 @@ public final class GenReq {
         r.seed = b.optLong("seed");
         r.forceLettersPercent = b.integer("force_letters_percent", 0, 0, 100);
         r.blackEnrichmentPercent = b.integer("black_enrichment_percent", 15, 0, 100);
+        r.wordsPerNode = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, App.MAX_WORDS_PER_NODE);
         r.mode = b.str("mode", "medium");
         r.pseudo = b.str("pseudo", null);
         r.theme = b.str("theme", null);
@@ -50,6 +52,7 @@ public final class GenReq {
         m.put("seed", seed);
         m.put("force_letters_percent", forceLettersPercent);
         m.put("black_enrichment_percent", blackEnrichmentPercent);
+        m.put("words_per_node", wordsPerNode);
         m.put("mode", mode);
         m.put("pseudo", pseudo);
         m.put("theme", theme);

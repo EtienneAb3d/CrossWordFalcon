@@ -135,6 +135,10 @@ fi
 echo "Building the Java back end with $JDK ..."
 JAVA_HOME="$JDK" "$MVN" -q package
 mkdir -p dist
-cp "$BUILT_JAR" "$JAR"
+# Replace the jar atomically (new inode): a running JVM keeps reading the
+# file it opened, whose classes it loads lazily; overwriting it in place
+# makes every class not yet loaded fail with NoClassDefFoundError.
+cp "$BUILT_JAR" "$JAR.tmp.$$"
+mv -f "$JAR.tmp.$$" "$JAR"
 sources_fingerprint > "$STAMP"
 echo "Built $(pwd)/$JAR"

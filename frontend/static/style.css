@@ -1229,7 +1229,7 @@ button:disabled {
 }
 
 /* Incremental fill's attention zone (script.js's renderAttemptPreview()/
-   attentionZoneEdges(), backend's `attention_size`): the outline of the
+   attentionZoneEdges(), backend's `attention_zone`): the outline of the
    zone, one bold dashed edge per straight run, laid over the cells (an
    absolutely positioned child takes no part in the grid's placement).
    Grid line k sits on the 1px gap before cell k plus 1px of that cell

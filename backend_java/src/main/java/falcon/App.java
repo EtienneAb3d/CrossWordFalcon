@@ -67,6 +67,8 @@ public final class App {
     static final Map<String, Long> BUDGET_MODES = new TreeMap<>(Map.of("flash", 1000L, "turbo", 10000L, "fast", 100000L,
             "medium", 500000L, "ultra", 5000000L, "megatron", 20000000L,
             "gridzilla", 100000000L));
+    /** Upper bound of the "Mots par pose" field (GenReq.wordsPerNode). */
+    static final int MAX_WORDS_PER_NODE = 10;
     static final Path RSS_DIR = Env.path("RSS");
     static final Path SCRAPP_DIR = Env.path("SCRAPP");
     static final int RSS_FETCH_HOUR = 8;
@@ -937,9 +939,9 @@ public final class App {
         };
         try {
             Log.info("[%s] starting generation: language=%s bilingual_language=%s width=%s height=%s difficulty=%s "
-                            + "force_letters_percent=%s black_enrichment_percent=%s mode=%s theme_precision=%s source=%s", shortId,
+                            + "force_letters_percent=%s black_enrichment_percent=%s words_per_node=%s mode=%s theme_precision=%s source=%s", shortId,
                     req.language, req.bilingualLanguage, req.width, req.height, req.difficulty, req.forceLettersPercent,
-                    req.blackEnrichmentPercent, req.mode, req.themePrecision, req.source);
+                    req.blackEnrichmentPercent, req.wordsPerNode, req.mode, req.themePrecision, req.source);
             String theme = req.theme == null ? "" : Py.strip(req.theme);
             List<String> themePriority = null, bilingualThemePriority = null;
             String themeDescription = "";
@@ -998,6 +1000,7 @@ public final class App {
                         };
                         p.forceLettersFraction = req.forceLettersPercent / 100.0;
                         p.blackEnrichmentFraction = req.blackEnrichmentPercent / 100.0;
+                        p.wordsPerNode = req.wordsPerNode;
                         p.cancelEvent = job.cancel;
                         p.deadlineChecks = BUDGET_MODES.get(req.mode);
                         p.resumeState = gridResume;
@@ -1147,7 +1150,7 @@ public final class App {
             progress.on("saving", new LinkedHashMap<>());
             String pseudo = pseudoOf(req.pseudo);
             Map<String, Object> generationParams = Json.obj("black_enrichment_percent", req.blackEnrichmentPercent,
-                    "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
+                    "words_per_node", req.wordsPerNode, "force_letters_percent", req.forceLettersPercent, "mode", req.mode, "theme_precision", req.themePrecision);
             if (a.publish) {
                 try {
                     String gridId = GridStore.saveGridJson(result, req.language, req.difficulty, req.mode, title,
@@ -2492,6 +2495,7 @@ public final class App {
             List<Object> definitions = b.list("definitions", false);
             String mode = b.str("mode", "medium");
             int bep = b.integer("black_enrichment_percent", 15, 0, 100);
+            int wpn = b.integer("words_per_node", falcon.gen.Filler.WORDS_PER_NODE, 1, MAX_WORDS_PER_NODE);
             int flp = b.integer("force_letters_percent", 0, 0, 100);
             String pseudo = b.str("pseudo", null);
             String reqDifficulty = b.str("difficulty", null);
@@ -2597,6 +2601,7 @@ public final class App {
             genreq.seed = ThreadLocalRandom.current().nextLong(1L << 31);
             genreq.forceLettersPercent = flp;
             genreq.blackEnrichmentPercent = bep;
+            genreq.wordsPerNode = wpn;
             genreq.mode = mode;
             genreq.theme = theme.isEmpty() ? null : theme;
             genreq.themePrecision = themePrecision;

@@ -393,6 +393,8 @@ public final class Fill {
         public int earlyHardcleanPercent = 100;
         /** Repeated-word limit, 0 = off (mirrors try_fill's same_word_limit, Filler.MAX_SAME_WORD_PLACEMENTS). */
         public int sameWordLimit;
+        /** Words placed per search node (mirrors try_fill's words_per_node, Filler.WORDS_PER_NODE). */
+        public int wordsPerNode = Filler.WORDS_PER_NODE;
         /** Incremental fill (Filler.INCREMENTAL_FILL_ENABLED, mirrors try_fill's incremental_fill). */
         public boolean incrementalFill;
         /** Cells the early hardclean never clears (mirrors try_fill's permanent_locked_letters). */
@@ -465,32 +467,17 @@ public final class Fill {
             excludedSlots = new HashSet<>(a.excludedSlots == null ? Set.of() : a.excludedSlots);
             excludedSlots.addAll(outsideZone);
         }
-        // Recomputed on every publication: an early hardclean (Filler.earlyHardclean) unlocks the locked letters
-        // it erases and takes off preseeded words.
-        final boolean lockedFromLetters = a.lockedLetters != null && !a.lockedLetters.isEmpty();
+        // The cells the search holds locked (Filler.lockedLetters), shown outlined in the previews. A preseeded word
+        // is not a locked letter: a second chance (Generator.secondChanceSeed) resumes its words unlocked, like an
+        // early hardclean. Recomputed on every publication: a hardclean of the search unlocks the locked letters
+        // it erases.
         final Filler[] fillerRef = new Filler[1];
-        final List<int[]> initialSlots = slots;
         Supplier<List<Integer>> lockedCells = () -> {
             Filler f = fillerRef[0];
+            Set<Integer> allSlotCells = new HashSet<>();
+            for (int[] s : f.slots) for (int c : s) allSlotCells.add(c);
             TreeSet<Integer> t = new TreeSet<>();
-            if (lockedFromLetters) {
-                Set<Integer> allSlotCells = new HashSet<>();
-                for (int[] s : f.slots) for (int c : s) allSlotCells.add(c);
-                for (int cell : f.lockedLetters.keySet()) if (allSlotCells.contains(cell)) t.add(cell);
-            } else if (a.preseedAssignment != null) {
-                Map<Integer, Character> known = f.knownCells();
-                for (int i = 0; i < a.preseedAssignment.length; i++) {
-                    String w = a.preseedAssignment[i];
-                    if (w == null) continue;
-                    int[] cells = initialSlots.get(i);
-                    boolean present = true;
-                    for (int p = 0; p < cells.length && present; p++) {
-                        Character k = known.get(cells[p]);
-                        present = k != null && k == w.charAt(p);
-                    }
-                    if (present) for (int c : cells) t.add(c);
-                }
-            }
+            for (int cell : f.lockedLetters.keySet()) if (allSlotCells.contains(cell)) t.add(cell);
             return new ArrayList<>(t);
         };
         PW pw = a.priorityWords == null ? PW.EMPTY : a.priorityWords;
@@ -504,6 +491,7 @@ public final class Fill {
         filler.reshapeEnabled = a.reshapeBlackCells && (excludedSlots == null || excludedSlots.isEmpty());
         filler.earlyHardcleanPercent = a.earlyHardcleanPercent;
         filler.sameWordLimit = a.sameWordLimit;
+        filler.wordsPerNode = a.wordsPerNode;
         filler.incrementalFill = a.incrementalFill;
         filler.permanentLockedLetters = a.permanentLocked == null ? Map.of() : a.permanentLocked;
         filler.permanentBlackCells = a.permanentBlackCells == null ? Set.of() : a.permanentBlackCells;
@@ -530,7 +518,8 @@ public final class Fill {
                 m.deadlockCells = filler.deadlockZoneCells();
                 m.excludedCells = filler.excludedZoneCells(best, true);
                 m.statLetters = filler.bestStatLettersFor();
-                m.attentionSize = filler.bestAttentionSize;
+                m.attentionZone = filler.attentionZoneJson(filler.bestAttentionStep);
+                m.wordsPerPose = filler.bestWordsPerPose;
                 m.hasAttentionSize = true;
                 m.impossibleSlots = filler.impossibleZoneSlots();
                 @SuppressWarnings("unchecked")
@@ -553,7 +542,9 @@ public final class Fill {
                 m.deadlockCells = new ArrayList<>();
                 m.excludedCells = filler.excludedZoneCells(current, false);
                 m.statLetters = filler.statLetters(current);
-                m.attentionSize = filler.attentionSize;
+                Long step = filler.attentionStep;
+                m.attentionZone = filler.attentionZoneJson(step);
+                m.wordsPerPose = filler.groupSize(step == null ? -1 : step);
                 m.hasAttentionSize = true;
                 @SuppressWarnings("unchecked")
                 List<Integer> fc = (List<Integer>) partial[1];
@@ -626,7 +617,8 @@ public final class Fill {
                 diag.deadlockCells = filler.deadlockZoneCells();
                 diag.excludedCells = filler.excludedZoneCells(filler.bestAssignment, true);
                 diag.statLetters = filler.bestStatLettersFor();
-                diag.attentionSize = filler.bestAttentionSize;
+                diag.attentionZone = filler.attentionZoneJson(filler.bestAttentionStep);
+                diag.wordsPerPose = filler.bestWordsPerPose;
                 diag.hasAttentionSize = true;
                 diag.assignedLetterCount = (int) partial[2];
                 diag.assignment = filler.bestAssignment.clone();

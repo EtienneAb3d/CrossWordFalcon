@@ -125,6 +125,17 @@ public final class GridStore {
 
     // ------------------------------------------------------------------ GRID_STORE
 
+    /** Mirrors _falcon_version: the software version (VERSION.txt) a grid is published with; null when the file
+     * cannot be read. */
+    static String falconVersion() {
+        try {
+            String v = Py.strip(Files.readString(Env.path("VERSION.txt"), StandardCharsets.UTF_8));
+            return v.isEmpty() ? null : v;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
     public static String saveGridJson(Map<String, Object> result, String language, String difficulty, String mode,
                                       String title, String bilingual, String pseudo, String theme,
                                       boolean interactive, Object origin, Object generationParams,
@@ -146,6 +157,7 @@ public final class GridStore {
         record.put("generation_params", generationParams);
         record.put("challenge_words", challengeWords != null && !challengeWords.isEmpty() ? new ArrayList<>(challengeWords) : null);
         record.put("created_at", isoNow());
+        record.put("falcon_version", falconVersion());
         write(dir.resolve(gridId + ".json"), record);
         return gridId;
     }
@@ -158,8 +170,8 @@ public final class GridStore {
                 if (r == null) continue;
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", r.getOrDefault("id", stem(path)));
-                for (String k : List.of("created_at", "language", "bilingual", "pseudo", "interactive", "origin",
-                        "theme", "difficulty", "title", "width", "height")) {
+                for (String k : List.of("created_at", "falcon_version", "language", "bilingual", "pseudo",
+                        "interactive", "origin", "theme", "difficulty", "title", "width", "height")) {
                     m.put(k, r.get(k));
                 }
                 out.add(m);

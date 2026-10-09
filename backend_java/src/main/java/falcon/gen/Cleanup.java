@@ -534,6 +534,18 @@ public final class Cleanup {
                                              DualIndex index, Rng rng, char[][] grid, Integer rows, Integer cols,
                                              Map<Integer, Character> permanentLocked, Map<Cells.Key, Link> links,
                                              Set<Integer> deadlockedSlots, boolean deep, Set<Integer> clearedOut) {
+        return cleanBlockedSlots(slots, assignmentIn, impossibleSlots, lockedLetters, excludeImpossibleLocked, index,
+                rng, grid, rows, cols, permanentLocked, links, deadlockedSlots, deep, clearedOut, HARD_CLEAN_ENABLED);
+    }
+
+    /** hardClean: the hardclean option (HARD_CLEAN_ENABLED by default, mirrors hard_clean); false gives the
+     * softclean — only the removals, a removed word's letters held by a remaining whole word kept. */
+    public static Object[] cleanBlockedSlots(List<int[]> slots, String[] assignmentIn, Collection<Integer> impossibleSlots,
+                                             Map<Integer, Character> lockedLetters, boolean excludeImpossibleLocked,
+                                             DualIndex index, Rng rng, char[][] grid, Integer rows, Integer cols,
+                                             Map<Integer, Character> permanentLocked, Map<Cells.Key, Link> links,
+                                             Set<Integer> deadlockedSlots, boolean deep, Set<Integer> clearedOut,
+                                             boolean hardClean) {
         String[] assignment = assignmentIn.clone();
         if (lockedLetters != null && !lockedLetters.isEmpty()) {
             Set<Integer> impossibleSet = excludeImpossibleLocked ? new HashSet<>(impossibleSlots) : Set.of();
@@ -692,7 +704,7 @@ public final class Cleanup {
             }
         }
         Set<Integer> cleared = new HashSet<>();
-        if (HARD_CLEAN_ENABLED) {
+        if (hardClean) {
             for (int j = 0; j < assignment.length; j++) {
                 if (assignment[j] != null || before[j] == null) continue;
                 for (int cell : slots.get(j)) {

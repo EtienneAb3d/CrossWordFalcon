@@ -169,6 +169,11 @@ public final class Generator {
         Integer maxProperNouns, maxNonGloss;
         /** Incremental fill for the attempts of the current palier: every palier (Filler.INCREMENTAL_FILL_ENABLED). */
         volatile boolean incrementalFill;
+        /** Words placed per search node (Params.wordsPerNode, mirrors _worker_words_per_node). */
+        int wordsPerNode = Filler.WORDS_PER_NODE;
+        /** Pattern each original attempt of a fresh-pattern palier drew (patternAttempt), by attempt seed: the
+         * palier's "pattern_generated" preview is built from them (mirrors generate_grid's early_patterns). */
+        final Map<Long, char[][]> earlyPatterns = new ConcurrentHashMap<>();
     }
 
     /** One finished attempt: the grid it worked on, the solved fill (or
@@ -195,6 +200,7 @@ public final class Generator {
         a.challengeWords = ctx.challengeWords;
         a.requiredCells = requiredCells;
         a.incrementalFill = ctx.incrementalFill;
+        a.wordsPerNode = ctx.wordsPerNode;
         return a;
     }
 
@@ -211,6 +217,36 @@ public final class Generator {
         }
         seedToLineageRef[0] = seedToLineage;
         seedToSlotRef[0] = seedToSlot;
+    }
+
+    /** True once every attempt seed of plan has recorded its pattern (mirrors _pattern_preview_ready). */
+    static boolean patternPreviewReady(List<Object[]> plan, Map<Long, char[][]> earlyPatterns) {
+        for (Object[] e : plan) if (!earlyPatterns.containsKey((Long) e[0])) return false;
+        return true;
+    }
+
+    /** Publish a fresh-pattern palier's "pattern_generated" preview from the patterns its workers drew: one tile per
+     * plan entry {seed, locked letters, process number, is_best} whose pattern is in, in plan order, deduplicated
+     * by pattern (mirrors _publish_pattern_preview). */
+    @SuppressWarnings("unchecked")
+    static void publishPatternPreview(Progress progress, List<Object[]> plan, Map<Long, char[][]> earlyPatterns,
+                                      int rows, int cols, PW priority, Set<String> challenge, int attempt,
+                                      int attempts, long totalAttemptsTried) {
+        Set<String> seen = new HashSet<>();
+        List<Map<String, Object>> early = new ArrayList<>();
+        for (Object[] e : plan) {
+            char[][] ep = earlyPatterns.get((Long) e[0]);
+            if (ep == null || !seen.add(Grids.key(ep))) continue;
+            Map<Integer, Character> pl = (Map<Integer, Character>) e[1];
+            Object[] st = Fill.cycleStartPreview(rows, cols, ep, pl, null);
+            List<Integer> lc = (List<Integer>) st[1];
+            early.add(example((char[][]) st[0], List.of(), List.of(), List.of(), List.of(), lc,
+                    pl == null ? List.of() : Fill.themeCellsFromPreviewState(ep, rows, cols, pl, null, priority),
+                    pl == null ? List.of() : Fill.challengeCellsFromPreviewState(ep, rows, cols, pl, null, challenge),
+                    (Integer) e[2], (Boolean) e[3]));
+        }
+        progress.on("pattern_generated", data("attempt", attempt, "attempts", attempts,
+                "total_attempts", totalAttemptsTried, "examples", sortExamplesByProcess(early)));
     }
 
     static Outcome patternAttempt(Ctx ctx, int rows, int cols, double ratio, long seed, double forceFraction,
@@ -230,6 +266,8 @@ public final class Generator {
             for (int cell : permanentBlack) seedGrid[Cells.r(cell)][Cells.c(cell)] = BLACK;
         }
         char[][] grid = Grids.makePattern(rows, cols, ratio, rng, available, seedGrid, locked, ctx.index, enrichment);
+        // The palier's "pattern_generated" preview is built from this very pattern (publishPatternPreview).
+        if (racing) ctx.earlyPatterns.put(seed, Grids.copy(grid));
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
         locked = Fill.forceSingleCandidateSlots(slots, ctx.index, locked == null ? Map.of() : locked, null);
         String[] preseed = null;
@@ -289,23 +327,25 @@ public final class Generator {
                                    Integer checksSlot, Set<Integer> permanentBlack,
                                    Map<Integer, Character> lockedLetters) {
         return patternContinue(ctx, rows, cols, seed, seedGrid, preseedIn, excludedSlots, forceFraction, deadlineChecks,
-                permanentLocked, requiredCells, checksSlot, permanentBlack, lockedLetters, true);
+                permanentLocked, requiredCells, checksSlot, permanentBlack, lockedLetters, true, true);
     }
 
     /** racing=false marks a second-chance attempt dispatched mid-palier (secondChanceSeed), exactly like
-     * patternAttempt's own replacements: never a sibling still racing, no elastic budget. */
+     * patternAttempt's own replacements: never a sibling still racing, no elastic budget. lockKnown=false (the
+     * second chance) locks only lockedLetters and permanentLocked: the preseed words and the deduced letters stay
+     * unlocked, as after an early hardclean. */
     static Outcome patternContinue(Ctx ctx, int rows, int cols, long seed, char[][] seedGrid, String[] preseedIn,
                                    Set<Integer> excludedSlots, double forceFraction, Long deadlineChecks,
                                    Map<Integer, Character> permanentLocked, Set<Integer> requiredCells,
                                    Integer checksSlot, Set<Integer> permanentBlack,
-                                   Map<Integer, Character> lockedLetters, boolean racing) {
+                                   Map<Integer, Character> lockedLetters, boolean racing, boolean lockKnown) {
         Rng rng = new Rng(seed);
         boolean flag = racing && checksSlot != null && ctx.attemptActive != null;
         if (flag) ctx.attemptActive.set(checksSlot, 1);
         try {
             return continueSearch(ctx, rows, cols, seed, rng, seedGrid, preseedIn, excludedSlots,
                     forceFraction, deadlineChecks, permanentLocked, requiredCells, checksSlot, permanentBlack,
-                    lockedLetters, racing);
+                    lockedLetters, racing, lockKnown);
         } finally {
             if (flag) ctx.attemptActive.set(checksSlot, 0);
         }
@@ -319,7 +359,7 @@ public final class Generator {
                                   String[] preseedIn, Set<Integer> excludedSlots, double forceFraction,
                                   Long deadlineChecks, Map<Integer, Character> permanentLocked,
                                   Set<Integer> requiredCells, Integer checksSlot, Set<Integer> permanentBlack,
-                                  Map<Integer, Character> lockedLetters, boolean racing) {
+                                  Map<Integer, Character> lockedLetters, boolean racing, boolean lockKnown) {
         List<int[]> slots = Grids.extractSlots(seedGrid, rows, cols);
         Map<Integer, Character> known = new LinkedHashMap<>();
         for (int i = 0; i < slots.size(); i++) {
@@ -355,7 +395,14 @@ public final class Generator {
         a.letterScores = scores;
         a.preseedAssignment = preseed;
         a.excludedSlots = excludedSlots;
-        a.lockedLetters = known;
+        if (lockKnown) {
+            a.lockedLetters = known;
+        } else {
+            Map<Integer, Character> searchLocked = new LinkedHashMap<>();
+            if (lockedLetters != null) searchLocked.putAll(lockedLetters);
+            if (permanentLocked != null) searchLocked.putAll(permanentLocked);
+            a.lockedLetters = searchLocked.isEmpty() ? null : searchLocked;
+        }
         a.reshapeBlackCells = true;
         a.earlyHardcleanPercent = Filler.EARLY_HARDCLEAN_PERCENT;
         a.sameWordLimit = Filler.MAX_SAME_WORD_PLACEMENTS;
@@ -478,8 +525,9 @@ public final class Generator {
     /** Second chance of an attempt that fails while the palier still runs: hard clean of its blocked
      * emplacements (cleanBlockedSlots with no grid, so no black cell is added, moved or reopened), its pattern
      * kept as is. Returns {seedGrid, preseedAssignment, lockedLetters}: the attempt's own locked letters minus
-     * every cell the clean erased (a locked cell whose letter is removed is unlocked), plus the letters the
-     * clean confirmed. */
+     * every cell the clean erased (a locked cell whose letter is removed is unlocked). Like the early hardclean,
+     * it locks nothing: the words the clean keeps go on as preseedAssignment alone (patternContinue with
+     * lockKnown=false). */
     static Object[] secondChanceSeed(char[][] grid, Diag diag, int rows, int cols, DualIndex index, Rng rng,
                                      Map<Integer, Character> permanentLocked) {
         List<int[]> slots = Grids.extractSlots(grid, rows, cols);
@@ -489,13 +537,10 @@ public final class Generator {
         Object[] cleaned = Cleanup.cleanBlockedSlots(slots, diag.assignment, diag.impossibleSlots,
                 attemptLocked.isEmpty() ? null : attemptLocked, false, index, rng, null, null, null,
                 permanentLocked, null, null, false, cleared);
-        @SuppressWarnings("unchecked")
-        Map<Integer, Character> confirmed = (Map<Integer, Character>) cleaned[1];
         Map<Integer, Character> locked = new LinkedHashMap<>();
         for (Map.Entry<Integer, Character> e : attemptLocked.entrySet()) {
             if (!cleared.contains(e.getKey())) locked.put(e.getKey(), e.getValue());
         }
-        locked.putAll(confirmed);
         return new Object[]{Grids.copy(grid), cleaned[0], locked};
     }
 
@@ -555,6 +600,8 @@ public final class Generator {
         public Set<Integer> requiredCells;
         public List<String> challengeWords;
         public Consumer<List<Object>> onLivePreview;
+        /** Words every search node places at once (mirrors generate_grid's words_per_node). */
+        public int wordsPerNode = Filler.WORDS_PER_NODE;
     }
 
     // ================================================================== generate_grid
@@ -618,7 +665,6 @@ public final class Generator {
             nonGloss.removeAll(down.scrabbleWords());
         }
         Set<String> challenge = new LinkedHashSet<>(Words.challengeSet(p.challengeWords));
-        LengthSets availablePreview = LengthSets.available(index, Grids.PREFILL_MIN_WORD_COUNT);
         Map<String, Object> lengthCounts = new LinkedHashMap<>();
         new TreeMap<>(across.index()).forEach((len, li) -> lengthCounts.put(String.valueOf(len), li.size()));
         int wordCount = across.wordCount();
@@ -713,6 +759,7 @@ public final class Generator {
         ctx.priorityWords = priority;
         ctx.scrabbleWords = scrabble;
         ctx.challengeWords = challenge;
+        ctx.wordsPerNode = p.wordsPerNode;
         ctx.cancelEvent = p.cancelEvent;
         ctx.attemptDoneEvent = attemptDoneEvent;
         ctx.bestStateQueue = bestStateQueue::add;
@@ -894,6 +941,7 @@ public final class Generator {
                 }
                 long[] seeds = new long[PA];
                 for (int i = 0; i < PA; i++) seeds[i] = rng.seed31();
+                List<Object[]> patternPlan = null;
                 ExecutorCompletionService<Outcome> ecs = new ExecutorCompletionService<>(executor);
                 Map<Future<Outcome>, Long> futureSeed = new HashMap<>();
                 Set<Future<Outcome>> origFutures = new HashSet<>();
@@ -929,49 +977,25 @@ public final class Generator {
                     }
                 } else {
                     int resetCount = justCleaned ? Math.min(PA, FULL_RESET_ATTEMPT_COUNT + carryDiscardedCount) : 0;
-                    List<Map<String, Object>> early = new ArrayList<>();
+                    // "pattern_generated" preview: each original worker records the pattern it draws
+                    // (patternAttempt, ctx.earlyPatterns) and the harvest loop publishes the preview once every
+                    // pattern of the plan is in (publishPatternPreview). Plan entries: {seed, locked letters,
+                    // process number, is_best} — very first palier: one per process; later: one per pool entry,
+                    // the pattern of the first worker it is assigned to.
+                    patternPlan = new ArrayList<>();
                     if (carrySeedGrid == null) {
                         dispatchLineage = new ArrayList<>();
                         for (int i = 1; i <= PA; i++) dispatchLineage.add(i);
-                        Set<String> seen = new HashSet<>();
-                        for (int i = 0; i < PA; i++) {
-                            char[][] ep = Grids.makePattern(rows, cols, ratio, new Rng(seeds[i]), availablePreview, null,
-                                    permanentLocked.isEmpty() ? null : permanentLocked, index, p.blackEnrichmentFraction);
-                            if (!seen.add(Grids.key(ep))) continue;
-                            Object[] st = Fill.cycleStartPreview(rows, cols, ep, null, null);
-                            @SuppressWarnings("unchecked")
-                            List<Integer> lc = (List<Integer>) st[1];
-                            early.add(example((char[][]) st[0], List.of(), List.of(), List.of(), List.of(), lc, List.of(),
-                                    List.of(), dispatchLineage.get(i), false));
-                        }
+                        for (int i = 0; i < PA; i++) patternPlan.add(new Object[]{seeds[i], null, dispatchLineage.get(i), false});
                     } else {
                         dispatchLineage = Cleanup.buildDispatchLineage(PA, resetCount,
                                 carrySeedPoolLineage != null && !carrySeedPoolLineage.isEmpty() ? poolLineage : null);
-                        Set<String> seen = new HashSet<>();
                         for (int k = 0; k < pool.size(); k++) {
-                            char[][] pg = (char[][]) pool.get(k)[0];
-                            @SuppressWarnings("unchecked")
-                            Map<Integer, Character> pl = (Map<Integer, Character>) pool.get(k)[1];
-                            Map<Integer, Character> merged = pl;
-                            if (!permanentLocked.isEmpty()) {
-                                merged = new LinkedHashMap<>(pl == null ? Map.of() : pl);
-                                merged.putAll(permanentLocked);
-                            }
-                            char[][] ep = Grids.makePattern(rows, cols, ratio,
-                                    new Rng(seeds[Math.min(resetCount + k, seeds.length - 1)]), availablePreview, pg,
-                                    merged, index, p.blackEnrichmentFraction);
-                            if (!seen.add(Grids.key(ep))) continue;
-                            Object[] st = Fill.cycleStartPreview(rows, cols, ep, pl, null);
-                            @SuppressWarnings("unchecked")
-                            List<Integer> lc = (List<Integer>) st[1];
-                            early.add(example((char[][]) st[0], List.of(), List.of(), List.of(), List.of(), lc,
-                                    Fill.themeCellsFromPreviewState(ep, rows, cols, pl, null, priority),
-                                    Fill.challengeCellsFromPreviewState(ep, rows, cols, pl, null, challenge),
-                                    poolLineage.get(k % poolLineage.size()), k == 0));
+                            patternPlan.add(new Object[]{seeds[Math.min(resetCount + k, seeds.length - 1)],
+                                    pool.get(k)[1], poolLineage.get(k % poolLineage.size()), k == 0});
                         }
                     }
-                    progress.on("pattern_generated", data("attempt", attempt + 1, "attempts", p.attempts,
-                            "total_attempts", totalAttemptsTried, "examples", sortExamplesByProcess(early)));
+                    ctx.earlyPatterns.clear();
                     publishDispatchMaps(seeds, dispatchLineage, seedToLineage, seedToSlot, seedToLineageRef, seedToSlotRef);
                     for (int i = 0; i < PA; i++) {
                         final int slot = i;
@@ -1019,6 +1043,11 @@ public final class Generator {
                         while ((more = ecs.poll()) != null) done.add(more);
                     }
                     pending.removeAll(done);
+                    if (patternPlan != null && patternPreviewReady(patternPlan, ctx.earlyPatterns)) {
+                        publishPatternPreview(progress, patternPlan, ctx.earlyPatterns, rows, cols, priority, challenge,
+                                attempt + 1, p.attempts, totalAttemptsTried);
+                        patternPlan = null;
+                    }
                     if (!attemptDoneEvent.get()) {
                         boolean allSpent = true;
                         for (Future<Outcome> f : pending) {
@@ -1089,7 +1118,7 @@ public final class Generator {
                                 entry = new LinkedHashMap<>();
                                 for (String k : List.of("example_grid", "impossible_cells", "deadlock_cells", "excluded_cells",
                                         "forced_cells", "locked_cells", "theme_cells", "challenge_cells", "stat_letters",
-                                        "attention_size")) {
+                                        "attention_zone", "words_per_pose")) {
                                     if (dj.containsKey(k)) entry.put(k, dj.get(k));
                                 }
                                 entry.put("live_status", "interrupted_other_attempt_done".equals(res.diag().reason)
@@ -1113,7 +1142,7 @@ public final class Generator {
                             Map<Integer, Character> scLocked = (Map<Integer, Character>) sc[2];
                             Future<Outcome> nf = ecs.submit(() -> patternContinue(ctx, rows, cols, newSeed,
                                     (char[][]) sc[0], (String[]) sc[1], null, p.forceLettersFraction, p.deadlineChecks,
-                                    permanentLocked, p.requiredCells, fslot, permanentBlack, scLocked, false));
+                                    permanentLocked, p.requiredCells, fslot, permanentBlack, scLocked, false, false));
                             pending.add(nf);
                             futureSeed.put(nf, newSeed);
                             if (freed != null) seedToSlot.put(newSeed, freed);
@@ -1134,6 +1163,11 @@ public final class Generator {
                             seedToLineage.put(newSeed, nextLineage++);
                         }
                     }
+                }
+                if (patternPlan != null) {
+                    publishPatternPreview(progress, patternPlan, ctx.earlyPatterns, rows, cols, priority, challenge,
+                            attempt + 1, p.attempts, totalAttemptsTried);
+                    patternPlan = null;
                 }
                 // Last resort on every failed attempt, before any success is counted: one whose only
                 // unfilled cells are isolated ones becomes a complete grid once they are plugged, and is
@@ -1269,7 +1303,8 @@ public final class Generator {
                     m.put("deadlock_cells", Cells.toJson(d.deadlockCells == null ? List.of() : d.deadlockCells));
                     m.put("excluded_cells", Cells.toJson(d.excludedCells == null ? List.of() : d.excludedCells));
                     m.put("stat_letters", d.statLetters == null ? List.of() : d.statLetters);
-                    m.put("attention_size", d.attentionSize);
+                    m.put("attention_zone", d.attentionZone);
+                    m.put("words_per_pose", d.wordsPerPose);
                     m.put("forced_cells", Cells.toJson(d.forcedCells));
                     m.put("locked_cells", Cells.toJson(d.lockedCells == null ? List.of() : d.lockedCells));
                     m.put("theme_cells", Cells.toJson(d.themeCells == null ? List.of() : d.themeCells));
@@ -1306,11 +1341,16 @@ public final class Generator {
                 if (consecutiveContinue >= MAX_CONSECUTIVE_CONTINUE_PALIERS) stillHasHope = false;
                 progress.on("pre_cleanup_optimizing", data("attempt", attempt + 1, "attempts", p.attempts,
                         "total_attempts", totalAttemptsTried));
-                List<Object[]> optimized = new ArrayList<>();
+                // One candidate per thread of the palier's pool, each with its own rng (mirrors
+                // _optimize_before_cleanup_task).
+                List<Future<Object[]>> optimizing = new ArrayList<>();
                 for (Outcome o : failedPairs) {
-                    optimized.add(Cleanup.optimizeBeforeCleanup(o.grid(), o.diag(), rows, cols, index, rng, 6000,
-                            p.cancelEvent, permanentLocked, permanentBlack, challenge));
+                    final Rng taskRng = new Rng(rng.seed31());
+                    optimizing.add(executor.submit(() -> Cleanup.optimizeBeforeCleanup(o.grid(), o.diag(), rows, cols,
+                            index, taskRng, 6000, p.cancelEvent, permanentLocked, permanentBlack, challenge)));
                 }
+                List<Object[]> optimized = new ArrayList<>();
+                for (Future<Object[]> f : optimizing) optimized.add(await(f));
                 List<Map<String, Object>> optEx = new ArrayList<>();
                 for (int idx = 0; idx < optimized.size(); idx++) {
                     char[][] g = (char[][]) optimized.get(idx)[0];
@@ -1335,11 +1375,14 @@ public final class Generator {
                 if (stillHasHope) {
                     consecutiveContinue++;
                     justCleaned = false;
-                    List<Cleanup.ContinueCandidate> cc = new ArrayList<>();
+                    List<Future<Cleanup.ContinueCandidate>> cleaning = new ArrayList<>();
                     for (Object[] o : optimized) {
-                        cc.add(Cleanup.cleanContinueCandidate((char[][]) o[0], (Diag) o[1], rows, cols, index, rng,
-                                permanentLocked, permanentBlack, challenge));
+                        final Rng taskRng = new Rng(rng.seed31());
+                        cleaning.add(executor.submit(() -> Cleanup.cleanContinueCandidate((char[][]) o[0], (Diag) o[1],
+                                rows, cols, index, taskRng, permanentLocked, permanentBlack, challenge)));
                     }
+                    List<Cleanup.ContinueCandidate> cc = new ArrayList<>();
+                    for (Future<Cleanup.ContinueCandidate> f : cleaning) cc.add(await(f));
                     cc = sortContinue(cc, priority, challenge);
                     int keep = Cleanup.seedPoolKeep(cc.size(), PA, FULL_RESET_ATTEMPT_COUNT);
                     carrySeedPoolContinue = new ArrayList<>();
@@ -1371,11 +1414,20 @@ public final class Generator {
                     Map<String, Integer> cleanupStreaks = new HashMap<>();
                     List<Object[]> kept = new ArrayList<>();
                     int discarded = 0;
+                    // Every ordinary cleanup runs at once on the palier's pool, then every deep one (mirrors
+                    // _clean_retry_candidate_task), each with its own rng.
+                    final Map<Integer, Character> fCarryLocked = carryLocked;
+                    final char[][] fCarrySeedGrid = carrySeedGrid;
+                    List<Future<Object[]>> ordinary = new ArrayList<>();
                     for (Object[] o : optimized) {
-                        char[][] cg = (char[][]) o[0];
-                        Diag cd = (Diag) o[1];
-                        Object[] cand = cleanCandidate(cg, cd, rows, cols, carryLocked, carrySeedGrid, index, rng,
-                                permanentLocked, permanentBlack, false);
+                        final Rng taskRng = new Rng(rng.seed31());
+                        ordinary.add(executor.submit(() -> cleanCandidate((char[][]) o[0], (Diag) o[1], rows, cols,
+                                fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, false)));
+                    }
+                    List<Object> keptOrDeep = new ArrayList<>();
+                    for (int k = 0; k < optimized.size(); k++) {
+                        Object[] o = optimized.get(k);
+                        Object[] cand = await(ordinary.get(k));
                         @SuppressWarnings("unchecked")
                         Map<Integer, Character> conf = (Map<Integer, Character>) cand[1];
                         String key = Grids.key((char[][]) Fill.cycleStartPreview(rows, cols, (char[][]) cand[0], conf, null)[0]);
@@ -1386,9 +1438,16 @@ public final class Generator {
                             continue;
                         }
                         if (streak >= GRID_REPEAT_DEEP_CLEANUP_STREAK) {
-                            cand = cleanCandidate(cg, cd, rows, cols, carryLocked, carrySeedGrid, index, rng,
-                                    permanentLocked, permanentBlack, true);
+                            final Rng taskRng = new Rng(rng.seed31());
+                            keptOrDeep.add(executor.submit(() -> cleanCandidate((char[][]) o[0], (Diag) o[1], rows, cols,
+                                    fCarryLocked, fCarrySeedGrid, index, taskRng, permanentLocked, permanentBlack, true)));
+                        } else {
+                            keptOrDeep.add(cand);
                         }
+                    }
+                    for (Object c : keptOrDeep) {
+                        @SuppressWarnings("unchecked")
+                        Object[] cand = c instanceof Future<?> f ? await((Future<Object[]>) f) : (Object[]) c;
                         kept.add(cand);
                     }
                     carryCleanupStreaks = cleanupStreaks;
@@ -1559,6 +1618,21 @@ public final class Generator {
         out.put("language", language);
         out.put("bilingual_language", bilingualLanguage);
         return out;
+    }
+
+    /** The result of a task of the palier's pool, rethrowing what the task threw. */
+    static <T> T await(Future<T> f) {
+        try {
+            return f.get();
+        } catch (ExecutionException ee) {
+            Throwable c = ee.getCause();
+            if (c instanceof RuntimeException re) throw re;
+            if (c instanceof Error er) throw er;
+            throw new IllegalStateException(c);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            throw new GenerationCancelled();
+        }
     }
 
     static Object[] cleanCandidate(char[][] cg, Diag cd, int rows, int cols, Map<Integer, Character> carryLocked,
