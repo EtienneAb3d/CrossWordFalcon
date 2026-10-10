@@ -14,6 +14,87 @@ language, a size, and a difficulty level, and the app builds a full grid.
 **Try it online:** a demo is running at
 [https://falcon.cubaix.com/](https://falcon.cubaix.com/).
 
+## Features
+
+**Grid generation**
+
+- Six languages: French, English, German, Spanish, Italian, Portuguese.
+- Bilingual grids: across words in one language, down words in another.
+- Any size from 5×5 to 50×50, plus ready-made formats ("Préconfigurations"):
+  grids up to 30×30 work reliably; 50×50 is still being fine-tuned.
+- Three difficulty levels (Easy, Medium, Hard).
+- Symmetric black-cell layouts: horizontal, vertical, diagonal, both ways,
+  or rotation.
+- Seven levels of computing effort for filling the grid automatically,
+  from the quick "Flash" to the exhaustive "GridZilla".
+- Themed grids: vocabulary and clues steered toward a subject you choose.
+- "Challenge Words": force your own words into the grid.
+
+**Clues**
+
+- Clues written automatically by an AI language model, in the grid's language.
+- Grounded in real dictionary definitions, grammar and example sentences.
+- Short generated title for every grid.
+- "Recompute": rewrite every clue of a grid, saved as a new version.
+- Local AI model by default; optional cloud AI models (Mistral, Claude...)
+  with automatic fallback to the local AI model.
+
+**Playing**
+
+- Playable grid in the browser, with keyboard or on-screen keyboard.
+- "Check" and "Solution" buttons, without losing your answers.
+- Zoom and sliders for large grids.
+- Grid statistics: word count per length.
+- Timer and progress saved under your nickname; resume anytime.
+- Per-grid leaderboard (correct letters, then time).
+- Shareable "Play" link for each grid.
+
+**Interactive mode (build a grid yourself)**
+
+- Place words one at a time ("Next") or by hand, undo step by step.
+- Toggle black cells by hand, mirrored if the symmetry option is on.
+- Word suggestions per slot, per crossing, by start or end.
+- Warnings on letters that would block a crossing word.
+- Highlighting of impossible, poor and set-aside slots.
+- Letter statistics for every empty cell.
+- "Clean": remove impossible zones automatically.
+- "Finish the grid" / "Finish the zone": let the generator complete it.
+- Suggested and automatic definitions, suggested titles.
+- "Correct": fix spelling and grammar in a definition or title.
+- Drafts saved automatically ("Créations"), publish to the Library.
+- Reopen any Library grid, or any generation attempt, for editing.
+
+**Library and export**
+
+- Every grid stored in a shared Library, filterable by language and level.
+- Player count per grid; "seen" tracking.
+- PDF download (one or two A4 pages).
+- Across Lite `.puz` download.
+- SVG/PNG images of each published grid and its solution.
+
+**Tools**
+
+- Dictionary: same-root search, real definitions, AI-proposed definitions.
+- Synonyms and theme-related words.
+- Paraphraser: 5 rewordings of a sentence.
+- Bilingual lookups side by side.
+- One-click links to Perplexity, ChatGPT, Claude, Mistral and Euria.
+- David FALCON: chat assistant for help and hints, without spoiling
+  answers.
+- Crossword news panel (RSS feeds and publishers' daily grids).
+
+**Interface and deployment**
+
+- Interface in six languages, following the chosen language.
+- Nickname protected by a secret word.
+- Online-user counter and CPU/GPU load meters.
+- Runs entirely locally, on CPU or GPU (NVIDIA, Apple Silicon).
+- Optional dual-GPU setup.
+- Server available in Python or Java, interchangeable.
+- Batch generator to pre-fill the Library.
+- Command-line generator.
+- Dictionaries rebuildable from their original sources.
+
 ## What you need
 
 - **Python 3** installed on your computer (and, only for the optional Java
