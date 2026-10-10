@@ -1,7 +1,5 @@
 # CrossWordFalcon
 
-![CrossWordFalcon](frontend/static/logo.png)
-
 CrossWordFalcon generates crossword grids, complete with clues, straight
 from a web page — in French, English, German, Spanish, Italian, or
 Portuguese. Pick a
@@ -13,6 +11,8 @@ language, a size, and a difficulty level, and the app builds a full grid.
 
 **Try it online:** a demo is running at
 [https://falcon.cubaix.com/](https://falcon.cubaix.com/).
+
+![CrossWordFalcon](frontend/static/logo.png)
 
 ## Features
 
