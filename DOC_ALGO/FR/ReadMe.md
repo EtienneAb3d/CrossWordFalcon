@@ -802,19 +802,18 @@ La recherche est une fonction récursive, un emplacement à la fois
      programme s'appelle récursivement ; un succès remonte tel quel, un
      échec fait retirer le groupe entier et essayer le candidat suivant.
 4 bis. **Un nœud pose plusieurs mots d'un coup**, au plus
-   `WORDS_PER_NODE` (5) (`Filler._descend_group`,
+   `WORDS_PER_NODE` (3) (`Filler._descend_group`,
    `Filler._extra_group_words`). Ce maximum est réglable pour chaque
-   génération par le champ « Mots par pose » du formulaire (de 1 à 10 ;
+   génération par le champ « Mots par pose » du formulaire (de 1 à 50 ;
    `backend/app.py`, `GenerateRequest.words_per_node` ;
    `backend/crossword_gen.py`, `generate_grid`, `try_fill`,
    `Filler.words_per_node`). La taille du groupe décroît avec le **taux de
-   remplissage de l'anneau de la zone d'attention** : la zone (toute la
-   grille quand elle la couvre) privée de sa zone intérieure, la zone
-   remplie dont elle est issue par repli ou par agrandissement (aucune hors
-   remplissage incrémental). Le taux est la part des
-   cases blanches de l'anneau portant déjà un mot posé ou une lettre
+   remplissage de la zone d'attention** : la fenêtre courante (toute la
+   grille quand la zone la couvre, ou hors remplissage incrémental). Le
+   taux est la part des
+   cases blanches de la zone portant déjà un mot posé ou une lettre
    verrouillée, mesurée une fois le mot du nœud posé : le maximum M pour
-   un anneau vide, jusqu'à 1 pour un anneau rempli à
+   une zone vide, jusqu'à 1 pour une zone remplie à
    `GROUP_SIZE_MIN_FILL_PERCENT` (75 %), linéairement, puis 1 au-delà, soit
    max(1, M − ⌊(M − 1) × taux / 75 %⌋) mots, celui du nœud compris
    (`Filler._group_size`). Chaque aperçu porteur d'une zone d'attention
@@ -1006,59 +1005,55 @@ récursion).
 
 **Remplissage incrémental** (`INCREMENTAL_FILL_ENABLED`, optionnel,
 **activé** ; `backend/crossword_gen.py`,
-`Filler._attention_pool`, `Filler._widen_attention`). Désactivé, toute la
+`Filler._attention_pool`, `Filler._next_attention`). Désactivé, toute la
 grille est dans la zone d'attention : les temps 1 et 2 portent sur tous
 les emplacements, aucun cadre n'est dessiné sur les aperçus, la taille des
 groupes de pose se mesure sur toute la grille et le nettoyage de zone
-(qui ne précède qu'un agrandissement de la zone) ne se déclenche jamais.
+(qui ne précède qu'un déplacement de la zone) ne se déclenche jamais.
 Activé : à chaque palier (`generate_grid`), pour
 toutes ses tentatives — grilles reprises comme grilles neuves —, les temps
-1 et 2 se déroulent d'abord dans une **zone d'attention**, faite de deux
-rectangles : une **bande haute** de lignes entières, sur toute la largeur
-de la grille (aucune ligne au départ), et, juste en dessous, un **bloc** de
-`INCREMENTAL_FILL_STEP` (16) lignes (rogné au bas de la grille) ancré au bord
-gauche, d'une largeur variable (`Filler._in_attention` ; la zone est le
-quadruplet lignes de la bande, largeur du bloc, puis les mêmes pour sa zone
-intérieure). Elle part du **carré 16 × 16 du coin haut gauche**
-(rogné à la grille : une grille d'au plus 16 × 16 est entière dès le départ)
-(`Filler._initial_attention`). Seul un emplacement ayant au moins une
-case encore libre (ni mot posé, ni lettre verrouillée) dans cette zone peut
-recevoir une pose.
+1 et 2 se déroulent d'abord dans une **zone d'attention** : une **fenêtre**
+de `INCREMENTAL_FILL_STEP` (16) lignes × 16 colonnes, rognée par la
+grille, donc plus petite le long des bords droit et bas
+(`Filler._in_attention` ; la zone est le couple ligne du haut, colonne de
+gauche de la fenêtre). Elle part du **coin haut gauche**
+(`Filler._initial_attention`) ; une grille d'au plus 16 × 16 est entière
+dès le départ. Seul un emplacement ayant au moins une
+case encore libre (ni mot posé, ni lettre verrouillée) dans cette fenêtre
+peut recevoir une pose.
 
 Le **repli** de la zone est optionnel et actuellement désactivé
 (`ATTENTION_FALLBACK_ENABLED`, `backend/crossword_gen.py`) : chaque nœud
-garde alors la zone avec laquelle il est entré, et la zone ne fait que
-croître le long d'une descente. Activé, à l'entrée de chaque nœud, la zone
-se replie sur la plus grande zone
-de cette forme entièrement remplie (`Filler._fallback_attention`) : la
-bande haute couvre les lignes du haut sans case libre d'un emplacement
-sélectionnable, arrondies au multiple de 16 inférieur, et le bloc en
-dessous couvre ses premières colonnes sans case libre ; au moins le carré
-de départ. Cette zone remplie devient la **zone intérieure** de la zone
-d'attention. Un mot posé après un agrandissement ramène ainsi la
+garde alors la zone avec laquelle il est entré, et la zone ne fait
+qu'avancer le long d'une descente. Activé, à l'entrée de chaque nœud, la
+zone revient à la première fenêtre, dans l'ordre de parcours (de gauche à
+droite, puis vers le bas), ayant une case libre d'un emplacement
+sélectionnable (`Filler._fallback_attention`) : toutes les fenêtres
+d'avant sont remplies. Un mot posé après un déplacement ramène ainsi la
 recherche vers les cases restées vides en haut à gauche de la grille.
 
 Quand le nœud ne peut plus rien poser dans la zone — plus aucun emplacement
 concerné, ou tous essayés, écartés libérés compris —, il tente d'abord un
 nettoyage doux de zone sur un emplacement impossible ayant une case libre
 dans la zone (voir « Nettoyage doux de zone », chapitre 5) ; à défaut, la
-zone **s'agrandit** (`Filler._widen_attention`) : le bloc s'élargit de
-`INCREMENTAL_FILL_STEP` (16) colonnes vers la droite ; quand il atteint le
-bord droit, ses lignes rejoignent la bande haute et un nouveau bloc,
-vide, commence au bord gauche en dessous, qui s'élargira à son tour
-(`Filler._attention_shape`). La zone d'avant devient la zone intérieure
-(sur une grille de 40 colonnes × 20 lignes : le carré lignes 0 à 15 ×
-colonnes 0 à 15, puis lignes 0 à 15 × colonnes 0 à 31, puis les lignes 0
-à 15 sur toute la largeur, puis en plus les lignes 16 à 19 × colonnes 0 à
-15, puis × colonnes 0 à 31, puis toute la grille). Le nœud reprend
-alors au temps 1 sur l'ensemble agrandi (les emplacements déjà essayés par
-ce nœud le restent), jusqu'à ce que la zone couvre toute la grille ; le
-temps 3 ne vient qu'ensuite. Une zone qui ne contient, dès l'entrée, aucun
-emplacement concerné s'agrandit aussitôt (`Filler._backtrack`).
+fenêtre **se déplace** (`Filler._next_attention`) de
+`INCREMENTAL_FILL_STEP` (16) colonnes vers la droite, en gardant sa
+taille ; au-delà du bord droit, elle repart du bord gauche 16 lignes plus
+bas (`Filler._attention_shape`). Une fois la fenêtre du coin bas droit
+traitée, la zone devient toute la grille (sur une grille de 40 colonnes ×
+20 lignes : lignes 0 à 15 × colonnes 0 à 15, puis × colonnes 16 à 31, puis
+× colonnes 32 à 39, puis lignes 16 à 19 × colonnes 0 à 15, puis × colonnes
+16 à 31, puis × colonnes 32 à 39, puis toute la grille). Les cases restées
+libres dans une fenêtre quittée ne sont reprises qu'une fois la zone
+étendue à toute la grille. Le nœud reprend alors au temps 1 sur la
+nouvelle zone (les emplacements déjà essayés par ce nœud le restent),
+jusqu'à ce que la zone couvre toute la grille ; le temps 3 ne vient
+qu'ensuite. Une zone qui ne contient, dès l'entrée, aucun emplacement
+concerné se déplace aussitôt (`Filler._backtrack`).
 
 La zone est un paramètre de récursion comme `released` : transmise à la
 descente qui suit et restaurée en remontant. La première racine
-(`solve()`) part du carré de départ (`Filler._initial_attention`) ; une
+(`solve()`) part de la fenêtre de départ (`Filler._initial_attention`) ; une
 racine reprise à plat après un nettoyage garde la zone dans laquelle ce
 nettoyage a eu lieu — celle du record pour un nettoyage dur précoce
 (`Filler._restart_from_record`), celle du nœud qui l'a demandé pour un
@@ -1066,7 +1061,7 @@ nettoyage dur sur mot répété ou doux de zone (`Filler._restart_from_state`)
 —, de sorte que la zone ne revient pas en arrière ; elle est repliée à
 l'entrée comme pour tout nœud quand le repli est activé. Une tentative
 partie de lettres verrouillées (palier 2 et suivants) qui les perd toutes
-à la suite d'un nettoyage dur ramène en revanche la zone au carré de
+à la suite d'un nettoyage dur ramène en revanche la zone à la fenêtre de
 départ, une seule fois par tentative (`Filler._attention_after_unlock`).
 Un emplacement asséché, où
 qu'il soit, provoque le retour en arrière habituel : seule la sélection
@@ -2170,7 +2165,7 @@ servent.
 
 **Nettoyage doux de zone** (`ZONE_CLEAN_ENABLED`, activé ;
 `Filler._zone_clean`, appelé par `Filler._backtrack`). Pour tout
-tenter avant d'agrandir la zone d'attention, un nœud du remplissage
+tenter avant de déplacer la zone d'attention, un nœud du remplissage
 incrémental qui n'a plus rien de sélectionnable dans sa zone — dès son
 entrée, ou après avoir essayé tous ses emplacements de la zone, écartés
 libérés compris — cherche d'abord un **emplacement bloqué** ayant une case
@@ -2197,8 +2192,13 @@ recherche, ses asséchés tolérés recalculés. Un nettoyage qui ne retire
 rien, ou qui donne un état (motif + lettres connues) déjà produit par un
 nettoyage doux de zone de la même tentative, est sauté
 (`Filler._zone_clean_states`) : l'emplacement suivant est essayé, puis
-la zone s'agrandit. Le temps de dernier recours (`allow_breaking`) ne le
-déclenche pas.
+la zone se déplace. Le temps de dernier recours (`allow_breaking`) ne le
+déclenche pas. Un emplacement qui a déjà subi un nettoyage doux de zone
+dans la tentative et sur lequel la recherche n'a posé aucun mot depuis
+(`Filler._zone_softcleaned`, vidé d'un emplacement par
+`Filler._record_tried_word` dès qu'un mot y est posé) subit cette fois un
+**nettoyage dur** (`Filler._slot_clean` avec `hard=True`), avec la même
+reprise à plat et la même garde contre les états déjà produits.
 
 Le nettoyage dur laisse davantage d'emplacements libres, donc la reprise
 « telle quelle » reste possible plus longtemps : les paliers à motif neuf —
@@ -2530,11 +2530,11 @@ premier (`backend/crossword_gen.py`, `generate_grid`,
   lettres, elle ne s'affiche que lorsque le bouton **Voir** est activé
   (`frontend/static/script.js`, `renderAttemptPreview`).
 - **Cadre gras en pointillés** (zone d'attention) : le contour de la
-  bande haute et du bloc en dessous où la recherche peut encore poser un
-  mot (voir « Remplissage incrémental », chapitre 4), à sa taille du moment
+  fenêtre où la recherche peut encore poser un
+  mot (voir « Remplissage incrémental », chapitre 4), à sa position du moment
   (`Filler.attention_step` pour les aperçus en direct,
   `Filler.best_attention_step` pour l'état record ; champ `attention_zone`,
-  [lignes de la bande, hauteur du bloc, largeur du bloc],
+  [ligne du haut, colonne de gauche, hauteur, largeur],
   `Filler._attention_zone_json`). Présent sur les mêmes aperçus que les lettres
   statistiques ; absent dès que la zone couvre toute la grille (`frontend/static/script.js`, `renderAttemptPreview`,
   `attentionZoneEdges`).

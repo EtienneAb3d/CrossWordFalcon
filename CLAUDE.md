@@ -64,6 +64,7 @@ Engineering language is English (code, comments, this file, the SKILLs,
 | `env.sh` / `env_default.sh` | Runtime configuration (ports, LLM/embed/Qdrant endpoints, model choice). `env.sh` is gitignored (real machine config); `env_default.sh` is the checked-in template. |
 | `run_*.sh`, `Install*.sh` | Launch/setup scripts — see "Environment, ports, launch scripts" below. |
 | `requirements.txt`, `requirements-llama.txt` | Base web-server dependencies (`fastapi`, `uvicorn[standard]`, `httpx`) and the optional local-LLM dependency (`llama-cpp-python[server]`), respectively. |
+| `test_secret.tsv` | Secret words of the `Claude_Code_Test<N>` pseudos used by every test (`PSEUDO<TAB>SECRET`). Gitignored. |
 | `VERSION.txt` | Single version string, read by both the CLI and the web UI's version badge. |
 
 ## Data pipeline & data files
@@ -371,7 +372,7 @@ json`. Holds all server-side state in plain module dicts/lists:
 **Key request models** (Pydantic, all in `app.py`): `GenerateRequest`
 (`language`, `bilingual_language`, `width`/`height` [5-50], `difficulty`
 [easy/medium/hard], `seed`, `force_letters_percent` [0-100, default 0],
-`black_enrichment_percent` [0-100, default 15], `words_per_node` [1-10,
+`black_enrichment_percent` [0-100, default 15], `words_per_node` [1-50,
 default `WORDS_PER_NODE`], `symmetry` [`BLACK_SYMMETRIES`, default
 "none", 400 otherwise, also applied to an Interactive session's starting
 pattern], `mode` [flash/turbo/fast/
@@ -940,7 +941,7 @@ the record is not touched.
 
 **Zone softclean** (`ZONE_CLEAN_ENABLED`, on; Java `Filler.
 ZONE_CLEAN_ENABLED`): with incremental fill, right before the attention
-zone would grow — at node entry when no selectable slot holds a free cell
+zone would move on — at node entry when no selectable slot holds a free cell
 of the zone, or once every zone slot has been tried (écarté ones released),
 never in the `allow_breaking` stage — `Filler._zone_clean` (Java
 `zoneClean`) takes the node's dry unassigned slots (no candidate, so
@@ -957,6 +958,11 @@ erased locked letters unlocked) into a state (pattern + known letters) no zone s
 of the attempt produced yet (`_zone_clean_states`), then restarts the
 search flat from the cleaned state, exactly like the repeated-word hardclean
 (`_request_flat_restart`, `_restart_from_state`; no slot set aside).
+A slot the zone softclean already soft-cleaned in the attempt that still
+took no new word from the search since (`Filler._zone_softcleaned`, keyed
+by cells, a slot dropped by `_record_tried_word` as soon as a word is placed
+on it; Java `zoneSoftcleaned`/`recordTriedWord`) is hard-cleaned instead
+(`_slot_clean(i, hard=True)`), with the same flat restart and state guard.
 Every clean of the search thus leaves the recursion depth bounded by the
 open slots of one root: a node's per-node `domains`/`options_cache` are
 never stacked across cleans.
@@ -1015,70 +1021,66 @@ the backtrack unwinds back above the node that released it.
 on; Java `Filler.INCREMENTAL_FILL_ENABLED`). Off, the whole grid is the
 attention zone (`attention` `None`, Java -1): stages 1 and 2 pool every
 slot, previews carry no `attention_zone`, `_group_size` measures the whole
-grid, and the zone softclean (which only runs before the zone grows) never
-runs. On, on every palier and every attempt of it
+grid, and the zone softclean (which only runs before the zone moves on)
+never runs. On, on every palier and every attempt of it
 (`generate_grid`, `try_fill(incremental_fill=INCREMENTAL_FILL_ENABLED)` via `_pattern_attempt`/
 `_pattern_continue`; Java `Generator.Ctx.incrementalFill`), stages 1 and 2 first run
-inside an "attention zone" — two rectangles: a top band of whole rows
-across the grid's whole width (no row at first) and, below it, a block of
-`INCREMENTAL_FILL_STEP` (16) rows (clipped to the grid) anchored at the left
-edge (`_in_attention`, Java `inAttention`) — over the slots holding a
+inside an "attention zone" — a window of `INCREMENTAL_FILL_STEP` (16) rows
+by 16 columns, clipped by the grid, so smaller along its right and bottom
+edges (`_in_attention`, Java `inAttention`) — over the slots holding a
 still-free cell (no placed word nor locked letter) there
-(`Filler._attention_pool`). The `attention` value is `(band, width, iband,
-iwidth)`: the band's rows and the block's width, then the same for its inner
-zone, the filled zone it grew from (Java: one `long`, `packAttention`, 16
-bits each; `None`/-1 = incremental fill off; `_attention_is_whole`, Java
-`attentionIsWhole`, true once the band covers the grid). A block reaching
-the right edge joins the band, a new empty block starting below it
-(`_attention_shape`, Java `attentionShape`). Every root starts from the 16x16
-square at the top-left corner (clipped to the grid: a grid of at most
-16x16 is whole from the start) (`_initial_attention`). The fallback is
-optional, currently off (`ATTENTION_FALLBACK_ENABLED` = False; Java
+(`Filler._attention_pool`). The `attention` value is `(top, left)`, the
+window's top row and left column, `(rows, 0)` being the whole grid (Java:
+one `long`, `packAttention`, 16 bits each; `None`/-1 = incremental fill
+off; `_attention_is_whole`, Java `attentionIsWhole`, true once the window
+starts below the grid, or for a grid of at most 16x16, whole from the
+start). Every root starts from the window at the top-left corner
+(`_initial_attention`). The fallback is optional, currently off
+(`ATTENTION_FALLBACK_ENABLED` = False; Java
 `Filler.ATTENTION_FALLBACK_ENABLED`): a node then keeps the zone it is
-entered with, so the zone only grows along a descent. On, on entry every node
-falls back (`_fallback_attention`, Java `fallbackAttention`) on the largest
-zone of that shape holding no free cell of a selectable slot — the band
-being the top rows before the first such cell rounded down to a multiple of
-`INCREMENTAL_FILL_STEP`, the block the columns of the 16 rows below it
-before the first such cell — at least the start square, that filled zone
-becoming the inner zone; once both stages place nothing in the zone (or the
-zone has no such slot), the zone grows (`_widen_attention`, Java
-`widenAttention`): the block widens by `INCREMENTAL_FILL_STEP` columns,
-joining the band at the right edge (40x20: the 16x16 square, rows 0-15 x
-cols 0-31, rows 0-15, rows 0-15 + rows 16-19 x cols 0-15, then x cols
-0-31, the whole grid), the zone it grew from becoming
-its inner zone, and the node goes back to stage
-1 on the larger pool, slots it already tried staying tried; on entry a
-zone with no such slot grows at once (`_backtrack`; Java `backtrack`), so
-a word placed after a widening brings the search back to the cells left
-empty towards the top-left of the grid; the `allow_breaking` stage comes only
+entered with, so the zone only moves forward along a descent. On, on entry
+every node falls back (`_fallback_attention`, Java `fallbackAttention`) on
+the first window, in scan order (left to right, then down), holding a free
+cell of a selectable slot, every window before it being filled; once both
+stages place nothing in the zone (or the zone has no such slot), the
+window moves on (`_next_attention`, Java `nextAttention`): 16 columns to
+the right, keeping its size, back to the left edge 16 rows down past the
+right edge (`_attention_shape`, Java `attentionShape`), the whole grid
+once the window holding the bottom-right corner is done (40x20: rows 0-15
+x cols 0-15, x cols 16-31, x cols 32-39, rows 16-19 x cols 0-15, x cols
+16-31, x cols 32-39, the whole grid) — free cells left in a window it
+moved past are only taken up again once the zone is the whole grid — and
+the node goes back to stage 1 on the new pool, slots it already tried
+staying tried; on entry a zone with no such slot moves on at once
+(`_backtrack`; Java `backtrack`); the `allow_breaking` stage comes only
 after. The zone is a `_backtrack` parameter (`attention`) inherited and
 restored like `released`, passed through `_try_reshape`/
 `_fail_or_backghost`; the first root (`solve()`) starts from the start
-square (`_initial_attention`), and a root restarted flat after a clean keeps
+window (`_initial_attention`), and a root restarted flat after a clean keeps
 the zone the clean happened in — the record's (`best_attention_step`) for an
 early hardclean, the requesting node's (`_flat_restart`'s last element) for
 a zone softclean or repeated-word hardclean (`_restart_from_record`/
 `_restart_from_state` return it; Java `restartFromRecord`/
-`restartFromState`, `FlatRestart.attention`), so the zone never shrinks
+`restartFromState`, `FlatRestart.attention`), so the zone never moves
 back. An attempt started from locked letters resets the
-zone to the start square once (`Filler._attention_after_unlock`, armed by
+zone to the start window once (`Filler._attention_after_unlock`, armed by
 `solve()` as `_attention_reset_pending`; Java `attentionAfterUnlock`), the
 first time a hardclean leaves `locked_letters` empty. Dry-slot detection
 and backtracking are
 unchanged. `Filler.attention_step` (the current node's zone, kept current
-on entry, widening and return from a child) and `best_attention_step` (the
+on entry, move and return from a child) and `best_attention_step` (the
 zone a record was taken under; Java `attentionStep`/`bestAttentionStep`)
 feed every preview's `attention_zone` (`_attention_zone_json`, Java
-`attentionZoneJson`: `[band rows, block height, block width]`, `None` = whole grid;
+`attentionZoneJson`: `[top row, left column, height, width]`, the window
+clipped by the grid, `None` = whole grid;
 `_publish_live_state`, `_publish_new_best`, the final diagnostics, the
 "failed" live-tile whitelist and `last_examples`; Java
 `Diag.attentionZone`); `renderAttemptPreview()` draws the zone's outline as bold dashed `.attention-edge` overlays, one per straight run
 (`attentionZoneEdges`).
-**Words per node** (`WORDS_PER_NODE` = 5, `<= 1` = one word; Java
+**Words per node** (`WORDS_PER_NODE` = 3, `<= 1` = one word; Java
 `Filler.WORDS_PER_NODE`) is the default of `generate_grid(words_per_node=)`
-(the web UI's "Mots par pose" field, default 5, `GenerateRequest.words_per_node`
-[1-`MAX_WORDS_PER_NODE`=10]), passed to the workers through the pool
+(the web UI's "Mots par pose" field, default 3, `GenerateRequest.words_per_node`
+[1-`MAX_WORDS_PER_NODE`=50]), passed to the workers through the pool
 initializer (`_worker_words_per_node`) and on to `try_fill(words_per_node=)`
 -> `Filler.words_per_node` (Java `Generator.Params`/`Ctx.wordsPerNode`,
 `Fill.FillArgs.wordsPerNode`, `Filler.wordsPerNode`); every other `try_fill`
@@ -1086,16 +1088,15 @@ caller keeps the constant. A node places a GROUP of words before recursing.
 Once its chosen slot's candidate has passed the crossing check,
 `Filler._descend_group` (Java `descendGroup`, called from `_backtrack` and
 `_try_reshape`) places up to `_group_size(attention) - 1` more words
-(`_extra_group_words`). `Filler._group_size` (Java `groupSize`) decreases
-linearly with the fill rate of the attention zone's ring, measured once the
-node's own word is placed: with W = `words_per_node`, `white` the ring's
-white cells (slot cells inside the zone, `_in_attention`, the whole grid
-when `attention` is `None`, minus those inside its inner zone — the filled
-zone it grew from, none without incremental fill) and `known` those
+(`_extra_group_words`). `Filler._group_size` (Java `groupSize`)
+decreases linearly with the fill rate of the attention zone, measured once the
+node's own word is placed: with W = `words_per_node`, `white` the zone's
+white cells (slot cells inside the window, `_in_attention`, the whole grid
+when the zone covers it or `attention` is `None`) and `known` those
 holding a placed
 word or a locked letter, the group holds
 `max(1, W - (W - 1) * known * 100 // (white * GROUP_SIZE_MIN_FILL_PERCENT))`
-words (W on an empty ring, 1 once `GROUP_SIZE_MIN_FILL_PERCENT` (75) % of it
+words (W on an empty zone, 1 once `GROUP_SIZE_MIN_FILL_PERCENT` (75) % of it
 is filled, and above; integer arithmetic, identical in both back ends; Java
 `Filler.GROUP_SIZE_MIN_FILL_PERCENT`). Every preview carrying `attention_zone` also carries
 `words_per_pose` (`Filler.best_words_per_pose`, set with the record; the
@@ -2632,8 +2633,19 @@ spells, the query itself as a lemma, and the inflection table's lemmas of
 the exact form, `inflection_lookup.lemmas_of`, so a form the wordlist
 lacks — "foehna" — gets a row with its lemmas' definitions, plus one per
 such lemma with definitions; Java `DictionaryLookup.search`), `secret_store.py` (`verify_or_claim`: PBKDF2-hashed
-nickname secret words under `SECRET/`, anti-pseudo-theft only, not a
-real auth system).
+nickname secret words under `SECRET/<slug>.json`, keyed by the same slug
+as every per-player save file — `grid_store._slugify_pseudo`, so
+"Étienne"/"etienne" or "Jean-Luc"/"jean luc" are one pseudo, claimed by
+the first comer; files of the former `<sha256(pseudo)>.json` layout are
+renamed to their slug once per process, `_migrate_legacy_files`, the
+earliest claim keeping a shared slug and the others becoming
+`<hash>.json.duplicate`; `is_valid_pseudo`: once NFC-normalized, only
+letters — an ASCII letter, possibly followed by combining accents in NFD —
+digits, "-", "_" and inner spaces, at least one letter, checked by
+`POST /api/pseudo/claim`, which answers `{"ok": false, "code":
+"pseudo_invalid"}` otherwise, and by `script.js`'s `isValidPseudo`; Java
+`SecretStore.isValidPseudo`/`migrateLegacyFiles`; anti-pseudo-theft only,
+not a real auth system).
 
 ## Java back end (`backend_java/`)
 

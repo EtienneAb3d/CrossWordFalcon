@@ -1401,22 +1401,22 @@ let lastPreviewExamples = null;
 let pendingGridChoiceJobId = null;
 let chosenGridChoiceIndex = null;
 
-// Outline of incremental fill's attention zone (`attention_zone`, [band
-// rows, block height, block width]: the band of whole rows at the top, then
-// the block below it anchored at the left edge) on a grid of `height` x
+// Outline of incremental fill's attention zone (`attention_zone`, [top
+// row, left column, height, width]: the window, already clipped by the
+// grid) on a grid of `height` x
 // `width` cells, as maximal straight edges on the grid lines: {horizontal,
 // line, from, to} — a horizontal edge runs along row line `line` from column
 // line `from` to `to`, a vertical one along column line `line` from row line
 // `from` to `to`. Empty when the zone is absent or covers the whole grid.
 function attentionZoneEdges(attentionZone, height, width) {
-  if (!Array.isArray(attentionZone) || attentionZone.length !== 3) return [];
-  const [band, blockHeight, blockWidth] = attentionZone.map(Number);
-  if (![band, blockHeight, blockWidth].every((v) => Number.isInteger(v) && v >= 0)) return [];
-  if (band >= height) return [];
+  if (!Array.isArray(attentionZone) || attentionZone.length !== 4) return [];
+  const [top, left, zoneHeight, zoneWidth] = attentionZone.map(Number);
+  if (![top, left, zoneHeight, zoneWidth].every((v) => Number.isInteger(v) && v >= 0)) return [];
+  if (top >= height) return [];
   // Same zone as backend/crossword_gen.py's `Filler._in_attention`.
   const inZone = (r, c) =>
     r >= 0 && c >= 0 && r < height && c < width
-    && (r < band || (r < band + blockHeight && c < blockWidth));
+    && r >= top && r < top + zoneHeight && c >= left && c < left + zoneWidth;
   const edges = [];
   // Unit edges between a zone cell and a non-zone one, merged into runs.
   for (let line = 0; line <= height; line++) {
@@ -1568,8 +1568,8 @@ function renderAttemptPreview(examples) {
       }
     }
     // Incremental fill's attention zone (backend/crossword_gen.py's
-    // INCREMENTAL_FILL_ENABLED, `attention_zone` = [band rows, block height,
-    // block width]): the band of top rows and the block below it where the
+    // INCREMENTAL_FILL_ENABLED, `attention_zone` = [top row, left column,
+    // height, width]): the window where the
     // search may currently place a word, its outline drawn as bold dashed
     // edges laid over the cells. Absent once the zone covers the whole grid
     // (`attention_zone` null).
@@ -3402,12 +3402,26 @@ welcomeLanguageSelect.addEventListener("change", () => setUiLanguage(welcomeLang
 // form. Preferences live in a single functional cookie — no tracking,
 // no advertising — leaving the (potentially large) seen-grids list in
 // localStorage as before.
-const MAX_PSEUDO_LENGTH = 15;
+const MAX_PSEUDO_LENGTH = 20;
 // Secret word max length (see backend/app.py's own MAX_SECRET_LENGTH,
 // kept in sync) — at the user's explicit request, to let a user prove a
 // pseudo belongs to them.
 const MAX_SECRET_LENGTH = 60;
 const PREFS_COOKIE = "cwf-prefs";
+
+// Same rule as backend/secret_store.py's is_valid_pseudo: once
+// NFC-normalized, only letters (an ASCII letter, possibly carrying
+// accents), digits, "-", "_" and inner spaces, with at least one letter.
+function isValidPseudo(pseudo) {
+  const normalized = pseudo.normalize("NFC");
+  if (!normalized || normalized !== normalized.replace(/^ +| +$/g, "")) return false;
+  let hasLetter = false;
+  for (const c of normalized) {
+    if (/^[A-Za-z]\p{Mn}*$/u.test(c.normalize("NFD"))) hasLetter = true;
+    else if (!/^[0-9_\- ]$/.test(c)) return false;
+  }
+  return hasLetter;
+}
 
 function loadPrefs() {
   try {
@@ -3456,12 +3470,13 @@ function openWelcomeOverlay() {
   welcomePseudoInput.focus();
 }
 
-// POST /api/pseudo/claim (backend/app.py + backend/secret_store.py) — at
-// the user's explicit request: "Mot secret" proves a chosen pseudo
-// belongs to this user. Returns true (claim accepted — either the secret
-// matched, or the pseudo was genuinely unclaimed and is now registered
-// with it) or false (the pseudo already exists under a different secret
-// — the caller must keep the panel open and tell the user so).
+// POST /api/pseudo/claim (backend/app.py + backend/secret_store.py):
+// "Mot secret" proves a chosen pseudo belongs to this user. Returns "ok"
+// (claim accepted — either the secret matched, or the pseudo was
+// genuinely unclaimed and is now registered with it), "pseudo_invalid"
+// (characters the backend refuses) or "pseudo_taken" (the pseudo, compared
+// accents/case/separators aside, already exists under a different secret)
+// — on either refusal the caller keeps the panel open and says why.
 async function claimPseudoSecret(pseudo, secret) {
   const response = await fetchWithTimeout("/api/pseudo/claim", {
     method: "POST",
@@ -3470,18 +3485,24 @@ async function claimPseudoSecret(pseudo, secret) {
   }, FETCH_TIMEOUT_MS);
   if (!response.ok) throw new Error("pseudo claim failed: " + response.status);
   const data = await response.json();
-  return !!data.ok;
+  if (data.ok) return "ok";
+  return data.code === "pseudo_invalid" ? "pseudo_invalid" : "pseudo_taken";
 }
 
 welcomeForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const pseudo = welcomePseudoInput.value.trim().slice(0, MAX_PSEUDO_LENGTH);
+  const pseudo = welcomePseudoInput.value.trim().normalize("NFC").slice(0, MAX_PSEUDO_LENGTH).trim();
   // The panel doesn't close if the pseudo is empty, at the user's
   // explicit request. `required` already blocks a strictly empty field on
   // the browser's own side (the "submit" event doesn't even fire); this
   // additionally covers the "whitespace only" case.
   if (!pseudo) {
     welcomePseudoInput.setCustomValidity(I18N[uiLanguage].welcomePseudoRequired);
+    welcomePseudoInput.reportValidity();
+    return;
+  }
+  if (!isValidPseudo(pseudo)) {
+    welcomePseudoInput.setCustomValidity(I18N[uiLanguage].welcomePseudoInvalid);
     welcomePseudoInput.reportValidity();
     return;
   }
@@ -3508,7 +3529,12 @@ welcomeForm.addEventListener("submit", async (event) => {
     return;
   }
   welcomeAcceptBtn.disabled = false;
-  if (!claimed) {
+  if (claimed === "pseudo_invalid") {
+    welcomePseudoInput.setCustomValidity(I18N[uiLanguage].welcomePseudoInvalid);
+    welcomePseudoInput.reportValidity();
+    return;
+  }
+  if (claimed !== "ok") {
     // Pseudo already taken under a different secret word — at the user's
     // explicit request: "tell the user this pseudo is already taken,
     // don't close the box."
@@ -3575,7 +3601,7 @@ userPseudoBtn.addEventListener("click", openWelcomeOverlay);
     // secret word is still required to close it) — if it was never
     // claimed by anyone else, submitting it simply claims it for the
     // first time.
-    if (userPseudo && !userSecret) {
+    if (userPseudo && (!userSecret || !isValidPseudo(userPseudo))) {
       openWelcomeOverlay();
     }
   } else {

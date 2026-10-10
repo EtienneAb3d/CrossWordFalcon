@@ -27,14 +27,19 @@ contains:
   immediately re-renders both the panel itself and the whole page behind
   it in that language (this is the "second" language selector — it stays
   in sync with `#language` in the form).
-- A **pseudo / nickname** field (up to 15 characters). It is required —
-  the panel will not close until it is filled in.
+- A **pseudo / nickname** field (up to 20 characters). It is required —
+  the panel will not close until it is filled in. A nickname may only
+  contain letters (with or without accents), digits, hyphens, underscores
+  and spaces between words, with at least one letter; otherwise the panel
+  says so and stays open (`frontend/static/script.js`, `isValidPseudo`).
 - A **Mot secret / Secret word** field (`#welcome-secret`), also
   required. The first time a nickname is used, the secret word typed with
   it is attached to that nickname; afterwards, the same nickname is only
   accepted with the same secret word (`POST /api/pseudo/claim`), so
   nobody else can take your nickname — and you can reuse it from another
-  device. With a different secret word, the panel says the nickname is
+  device. Nicknames differing only by accents, capitals or separators
+  ("Étienne" and "etienne", "Jean-Luc" and "jean luc") count as the same
+  nickname. With a different secret word, the panel says the nickname is
   already taken and stays open; enter the right word or pick another
   nickname. This is only a nickname guard, not a real account password.
 - A short notice that the site needs a functional preferences cookie to
@@ -161,11 +166,10 @@ full again whenever a new generation or an Interactive session starts.
   `make_pattern`).
 - **Mots par pose / Words per placement** (`#words-per-node`) — the most
   words the search places in one go before checking how the rest of the
-  grid copes, and takes back off together when that leads nowhere (1-10,
-  5 by default). The search uses this many while the outer band of the
-  area it is currently filling (the attention zone minus the smaller,
-  already full zone inside it) is empty, and fewer as that band fills
-  up, down to one word at a time once it is three-quarters full. 1 is the most
+  grid copes, and takes back off together when that leads nowhere (1-50,
+  3 by default). The search uses this many while the area it is currently filling (the attention zone) is
+  empty, and fewer as that area fills up, down to one word at a time once
+  it is three-quarters full. 1 is the most
   careful, word-by-word search throughout; a higher value moves faster at
   the start but commits to more words at once (`frontend/static/
   script.js`, `wordsPerNodeInput`; `backend/crossword_gen.py`,
@@ -717,15 +721,15 @@ word list is shown in bold dark-cyan letters; magenta and green win over
 dark cyan on a cell shared with a crossing theme or challenge word
 (`frontend/static/script.js`, `renderAttemptPreview`).
 A bold dashed frame marks the "attention
-zone", where the search may currently place its next word: a band of top
-rows across the whole grid width (none at first), plus a 16-row block
-below it starting from the left edge. It is the 16x16 square at the top-left
-corner at first (a grid of at most 16x16 is therefore whole from the start,
-with no frame); each time nothing more fits inside, the block grows by 16
-columns to the right, and once it reaches the right edge its rows join the
-band and a new 16x16 block starts at the left edge below. The zone only
-grows as the search goes deeper (an optional fallback onto the largest zone
-already completely filled exists but is currently off). The frame
+zone", where the search may currently place its next word: a 16x16
+window, smaller along the right and bottom edges of the grid. It starts
+at the top-left corner (a grid of at most 16x16 is therefore whole from
+the start, with no frame); each time nothing more fits inside, the window
+moves 16 columns to the right, keeping its size, and past the right edge
+it starts again at the left edge 16 rows down. Once the bottom-right
+window is done, the zone becomes the whole grid. The zone only moves
+forward as the search goes deeper (an optional fallback onto the first
+window still holding an empty cell exists but is currently off). The frame
 disappears once the zone covers the
 whole grid (`renderAttemptPreview`, `attentionZoneEdges`, `.attention-edge`).
 A green outline marks whichever preview is currently considered the
@@ -1602,27 +1606,26 @@ slot that needs a real dictionary word. On every cycle, the fill grows
 from the top-left corner of the grid ("incremental fill", an option that
 is currently on — off, the whole grid is open to every placement): only
 slots with a still-empty cell inside an "attention zone" may take the
-next word. That zone is two
-rectangles — a band of top rows spanning the whole grid width (no row at
-first) and, below it, a 16-row block anchored at the left edge. It is the
-16x16 square at the top-left corner at first (the whole grid when it is no
-larger); once nothing more can be placed
+next word. That zone is a 16x16 window (smaller along the right and
+bottom edges), starting at the top-left corner (the whole grid when the
+grid is no larger); once nothing more can be placed
 there — after first clearing any impossible or set-aside slot that still
 has an empty cell inside the zone, together with the words crossing it, to
 give the zone another chance (like every such clearing during the search,
 this wipes the undo history: the search restarts from the cleared grid as
 its new starting point, so its memory never piles up from one clearing to
-the next) — its block grows by 16 columns to the right; once the block
-reaches the right edge, its rows join the band and a new 16x16 block starts
-at the left edge below, until the zone covers the whole grid; the zone only
-grows as the search goes deeper — an optional fallback, currently off, would
-instead shrink it after every word onto the largest zone of that shape
-already completely filled (`backend/crossword_gen.py`,
+the next) — the window moves 16 columns to the right, keeping its size;
+past the right edge it starts again at the left edge 16 rows down; once the
+bottom-right window is done, the zone becomes the whole grid, which is
+when cells left empty in earlier windows are taken up again; the zone only
+moves forward as the search goes deeper — an optional fallback, currently
+off, would instead move it back after every word to the first window still
+holding an empty cell (`backend/crossword_gen.py`,
 `ATTENTION_FALLBACK_ENABLED`, `Filler._fallback_attention`,
 `Filler._attention_pool`, `Filler._backtrack`); a clearing during the search
 keeps the zone where it was. A grid
 carried over from a previous cycle that loses its last locked letter to a
-cleanup starts the zone over at its starting square, once. Rather than filling slots in a
+cleanup starts the zone over at its starting window, once. Rather than filling slots in a
 fixed reading order, the generator picks the next slot through several
 layers of priority, starting from every still-open slot in the grid (an
 optional first step that would narrow this down to only "across" or only

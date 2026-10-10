@@ -168,7 +168,7 @@
       <label for="words-per-node">
         <span data-i18n="wordsPerNodeLabel">Mots par pose</span>
         <input type="number" id="words-per-node" name="words_per_node"
-               min="1" max="10" step="1" value="5">
+               min="1" max="50" step="1" value="3">
       </label>
 
       <label for="mode">
@@ -1442,7 +1442,7 @@
              not close as long as the pseudo is empty (native
              `required` validation, + a JS guard against whitespace-
              only input). -->
-        <input type="text" id="welcome-pseudo" maxlength="15" required
+        <input type="text" id="welcome-pseudo" maxlength="20" required
                autocomplete="nickname" autocapitalize="off"
                data-i18n-placeholder="welcomePseudoPlaceholder">
       </label>

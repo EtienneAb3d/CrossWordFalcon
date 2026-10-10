@@ -51,26 +51,24 @@ public final class Filler {
     public static final int MAX_SAME_WORD_PLACEMENTS = 1000;
     /** Incremental fill (mirrors INCREMENTAL_FILL_ENABLED), optional, currently on (false: the whole grid is the
      * attention zone, attention -1, and the zone softclean never runs). When on, every palier: a node only places a
-     * word on a slot
-     * holding a still-free cell inside the attention zone (attentionPool): a top band of whole rows across the
-     * grid's whole width (no row at first), and below it a block of INCREMENTAL_FILL_STEP rows anchored at the left
-     * edge (inAttention), packed with the filled zone it grew from (packAttention); a block reaching the right edge
-     * joins the band (attentionShape). The start zone is the INCREMENTAL_FILL_STEP square at the top-left corner
-     * (initialAttention). With ATTENTION_FALLBACK_ENABLED, a node falls back on entry on the largest fully filled zone
-     * of that shape (band rows a multiple of INCREMENTAL_FILL_STEP), at least the start zone (fallbackAttention);
-     * without it, a node keeps the zone it is entered with. Once the node can place
-     * nothing more inside the zone, the block grows INCREMENTAL_FILL_STEP columns to the right, joining the band at
-     * the right edge, a new block then starting at the left edge below it (widenAttention), until the zone covers
-     * the whole grid. A backtrack recursion parameter, like released (-1 = incremental fill off). An attempt that
-     * starts from locked letters resets the zone to its start size once, the first time a hardclean leaves it no
-     * locked letter at all (attentionAfterUnlock). */
+     * word on a slot holding a still-free cell inside the attention zone (attentionPool): a window of
+     * INCREMENTAL_FILL_STEP rows by INCREMENTAL_FILL_STEP columns, clipped by the grid (inAttention), packed as its
+     * top row and left column (packAttention), (rows, 0) being the whole grid (attentionShape). The start zone is the
+     * window at the top-left corner (initialAttention). With ATTENTION_FALLBACK_ENABLED, a node falls back on entry
+     * on the first window, in scan order, holding a free cell of a selectable slot (fallbackAttention); without it,
+     * a node keeps the zone it is entered with. Once the node can place nothing more inside the zone, the window
+     * moves INCREMENTAL_FILL_STEP columns to the right, keeping its size, back to the left edge INCREMENTAL_FILL_STEP
+     * rows down past the right edge (nextAttention); once the window holding the bottom-right corner is done, the
+     * zone is the whole grid. A backtrack recursion parameter, like released (-1 = incremental fill off). An attempt
+     * that starts from locked letters resets the zone to its start window once, the first time a hardclean leaves
+     * it no locked letter at all (attentionAfterUnlock). */
     public static final boolean INCREMENTAL_FILL_ENABLED = true;
     public static final int INCREMENTAL_FILL_STEP = 16;
     /** Attention-zone fallback (mirrors ATTENTION_FALLBACK_ENABLED), with incremental fill: optional, currently off
-     * (the zone only grows along a descent). On, every node falls back on entry on the largest fully filled zone
-     * (fallbackAttention). */
+     * (the zone only moves forward along a descent). On, every node falls back on entry on the first window holding
+     * a free cell (fallbackAttention). */
     public static final boolean ATTENTION_FALLBACK_ENABLED = false;
-    /** Zone softclean (mirrors ZONE_CLEAN_ENABLED), with incremental fill: before the attention zone grows
+    /** Zone softclean (mirrors ZONE_CLEAN_ENABLED), with incremental fill: before the attention zone moves on
      * (nothing selectable left in it, or everything selectable in it tried), a node soft-cleans an impossible slot
      * holding a free cell of the zone — an "emplacement bloqué" (slotIsBlocked): an unassigned slot with no
      * candidate, left out of the node's selectable slots (toleratedDry), or a selectable one caught in a crossing
@@ -80,7 +78,8 @@ public final class Filler {
      * every clean of the search, the backtracking history is dropped and solve() takes the cleaned state back flat
      * as its new root (restartFromState). A clean that changes nothing, or yields a state (pattern + known letters)
      * a zone softclean of the attempt has already produced, is skipped.
-     * Not in the last-resort allowBreaking stage. */
+     * Not in the last-resort allowBreaking stage. A slot already soft-cleaned in the attempt that still takes no new
+     * word (no word placed on it by the search since, zoneSoftcleaned) is hard-cleaned instead (hardClean true). */
     public static final boolean ZONE_CLEAN_ENABLED = true;
     public static final int PALIER_ATTEMPT_DONE_CHECK_INTERVAL = 500;
     public static final int CANDIDATE_SCORE_WINDOW = 200;
@@ -107,12 +106,12 @@ public final class Filler {
     // Most words backtrack places per node, "mots par pose" (mirrors WORDS_PER_NODE): after the word of the
     // chosen slot, more at once (descendGroup), on the slots of that choice's selection window first, then on the
     // node's other selectable slots; a failure below takes them all back off together. The group's size decreases
-    // with the attention zone's ring fill rate (groupSize): WORDS_PER_NODE on an empty ring, down to 1 on a full one.
+    // with the attention zone's fill rate (groupSize): WORDS_PER_NODE on an empty zone, down to 1 on a full one.
     // <= 1 places a single word per node. The default of Generator.Params.wordsPerNode/Fill.FillArgs.wordsPerNode,
     // which the web UI's "Mots par pose" field overrides (GenReq.wordsPerNode).
-    public static final int WORDS_PER_NODE = 5;
-    // Fill rate (percent) of the attention zone's ring at which a node is down to one word per node (mirrors
-    // GROUP_SIZE_MIN_FILL_PERCENT, groupSize): the group shrinks linearly from wordsPerNode on an empty ring to 1
+    public static final int WORDS_PER_NODE = 3;
+    // Fill rate (percent) of the attention zone at which a node is down to one word per node (mirrors
+    // GROUP_SIZE_MIN_FILL_PERCENT, groupSize): the group shrinks linearly from wordsPerNode on an empty zone to 1
     // at this rate, and stays at 1 above it.
     public static final int GROUP_SIZE_MIN_FILL_PERCENT = 75;
     public static final int MAX_EXCLUDED_SLOTS = 3;
@@ -267,6 +266,10 @@ public final class Filler {
     final Set<String> earlyHardcleanStates = new HashSet<>();
     /** Cleaned states the zone softclean has produced in this attempt (pattern + every known letter). */
     final Set<String> zoneCleanStates = new HashSet<>();
+    /** Slots (cells) the zone softclean has soft-cleaned in this attempt and on which the search has placed no word
+     * since (recordTriedWord drops them): the next zone clean of such a slot is a hardclean (mirrors
+     * _zone_softcleaned). */
+    final Set<String> zoneSoftcleaned = new HashSet<>();
     /** Set by every clean of the search: every node then unwinds like on an abandon (running its own undo),
      * and solve() restarts the search flat — from the record for an early hardclean (restartFromRecord), from the
      * cleaned state flatRestart holds for a zone softclean or repeated-word hardclean (restartFromState). */
@@ -536,6 +539,7 @@ public final class Filler {
      * streak then restarts from zero and the caller hard-cleans the slot, repeatHardclean). */
     boolean recordTriedWord(int i, String word) {
         String key = Arrays.toString(slots.get(i));
+        zoneSoftcleaned.remove(key);
         triedWords.computeIfAbsent(key, k -> new HashMap<>()).merge(word, 1, Integer::sum);
         triedTotals.merge(key, 1, Integer::sum);
         if (sameWordLimit <= 0) return false;
@@ -739,15 +743,17 @@ public final class Filler {
         return fail(null);
     }
 
-    /** Mirrors _zone_clean: hard-clean the first slot of impossible (no candidate, a crossing deadlock, or
+    /** Mirrors _zone_clean: soft-clean the first slot of impossible (no candidate, a crossing deadlock, or
      * écarté) holding a free cell in the attention zone whose clean changes the grid into a state no zone softclean
      * of this attempt has produced yet, and drop the backtracking history (requestFlatRestart): solve() takes the
-     * cleaned state back flat as its new root. null when no slot qualifies (nothing done), false otherwise (the
+     * cleaned state back flat as its new root. A slot already soft-cleaned that still took no new word since
+     * (zoneSoftcleaned) is hard-cleaned instead. null when no slot qualifies (nothing done), false otherwise (the
      * unwinding). */
     Boolean zoneClean(List<Integer> impossible, long attention) {
         for (int i : attentionPool(impossible, attention)) {
+            String key = Arrays.toString(slots.get(i));
             Set<Integer> cleared = new HashSet<>();
-            String[] cleanedAssignment = slotClean(i, cleared, false);
+            String[] cleanedAssignment = slotClean(i, cleared, zoneSoftcleaned.contains(key));
             boolean removed = false;
             for (int j = 0; j < assignment.length; j++) {
                 if (assignment[j] != null && cleanedAssignment[j] == null) removed = true;
@@ -762,6 +768,7 @@ public final class Filler {
                 for (int k = 0; k < cells.length; k++) known.put(cells[k], word.charAt(k));
             }
             if (!zoneCleanStates.add(Grids.key(pattern) + "|" + known)) continue;
+            zoneSoftcleaned.add(key);
             return requestFlatRestart(cleanedAssignment, cleared, -1, attention);
         }
         return null;
@@ -1022,55 +1029,54 @@ public final class Filler {
         return target;
     }
 
-    /** An attention zone packed in a long (band rows, block width, inner band rows, inner block width, 16 bits
-     * each): the band of whole rows at the top and the block of INCREMENTAL_FILL_STEP rows below it anchored at
-     * the left edge, and the filled zone it grew from (mirrors the Python tuple); -1 when incremental fill is
-     * off. */
-    static long packAttention(int band, int w, int iband, int iw) {
-        return ((long) band << 48) | ((long) w << 32) | ((long) iband << 16) | iw;
+    /** An attention zone packed in a long (top row, left column, 16 bits each): the window of
+     * INCREMENTAL_FILL_STEP rows by INCREMENTAL_FILL_STEP columns from there, clipped by the grid (mirrors the
+     * Python pair), (rows, 0) being the whole grid; -1 when incremental fill is off. */
+    static long packAttention(int top, int left) {
+        return ((long) top << 16) | left;
     }
 
-    static int attBand(long z) { return (int) (z >>> 48) & 0xFFFF; }
-    static int attW(long z) { return (int) (z >>> 32) & 0xFFFF; }
-    static int attIBand(long z) { return (int) (z >>> 16) & 0xFFFF; }
-    static int attIW(long z) { return (int) z & 0xFFFF; }
+    static int attTop(long z) { return (int) (z >>> 16) & 0xFFFF; }
+    static int attLeft(long z) { return (int) z & 0xFFFF; }
 
-    /** The {band rows, block width} pair of an attention zone, normalized (mirrors _attention_shape): a block
-     * reaching the right edge joins the band, a new empty block starting below it; the band clipped to the grid. */
-    int[] attentionShape(int band, int width) {
-        if (width >= cols) {
-            band += INCREMENTAL_FILL_STEP;
-            width = 0;
+    /** The packed attention window starting at (top, left), normalized (mirrors _attention_shape): a window
+     * starting past the right edge moves to the left edge, INCREMENTAL_FILL_STEP rows down; one starting past the
+     * bottom edge is the whole grid (rows, 0). */
+    long attentionShape(int top, int left) {
+        if (left >= cols) {
+            top += INCREMENTAL_FILL_STEP;
+            left = 0;
         }
-        return new int[] {Math.min(band, rows), width};
+        if (top >= rows) return packAttention(rows, 0);
+        return packAttention(top, left);
     }
 
-    /** True when cell (r, c) lies in the attention zone of band rows band and block width width (mirrors
-     * _in_attention): the band's rows, or the block of INCREMENTAL_FILL_STEP rows below it, its first width
-     * columns. */
-    static boolean inAttention(int band, int width, int r, int c) {
-        return r < band || (r < band + INCREMENTAL_FILL_STEP && c < width);
+    /** True when cell (r, c) lies in the attention window starting at (top, left) (mirrors _in_attention):
+     * INCREMENTAL_FILL_STEP rows by INCREMENTAL_FILL_STEP columns from there. */
+    static boolean inAttention(int top, int left, int r, int c) {
+        return top <= r && r < top + INCREMENTAL_FILL_STEP && left <= c && c < left + INCREMENTAL_FILL_STEP;
     }
 
-    /** Attention zone a root node starts with (mirrors _initial_attention): the INCREMENTAL_FILL_STEP square at the
-     * top-left corner, with no inner zone; -1 when incremental fill is off. */
+    /** Attention zone a root node starts with (mirrors _initial_attention): the window at the top-left corner;
+     * -1 when incremental fill is off. */
     long initialAttention() {
         if (!incrementalFill) return -1;
-        int[] s = attentionShape(0, INCREMENTAL_FILL_STEP);
-        return packAttention(s[0], s[1], 0, 0);
+        return attentionShape(0, 0);
     }
 
     /** True when attention covers the whole grid, -1 included (mirrors _attention_is_whole). */
     boolean attentionIsWhole(long attention) {
-        return attention < 0 || attBand(attention) >= rows;
+        return attention < 0 || attTop(attention) >= rows
+                || (rows <= INCREMENTAL_FILL_STEP && cols <= INCREMENTAL_FILL_STEP);
     }
 
-    /** The attention zone as published with the previews (mirrors _attention_zone_json): [band rows, block height,
-     * block width], null for the whole grid. */
+    /** The attention zone as published with the previews (mirrors _attention_zone_json): [top row, left column,
+     * height, width], the window clipped by the grid, null for the whole grid. */
     List<Integer> attentionZoneJson(Long attention) {
         if (attention == null || attentionIsWhole(attention)) return null;
-        int band = attBand(attention);
-        return List.of(band, Math.min(INCREMENTAL_FILL_STEP, rows - band), attW(attention));
+        int top = attTop(attention), left = attLeft(attention);
+        return List.of(top, left, Math.min(INCREMENTAL_FILL_STEP, rows - top),
+                Math.min(INCREMENTAL_FILL_STEP, cols - left));
     }
 
     /** Mirrors _attention_after_unlock: the attention zone a root carries on with after a hardclean that may have
@@ -1084,45 +1090,35 @@ public final class Filler {
         return attention;
     }
 
-    /** The attention zone after attention (mirrors _widen_attention): the block INCREMENTAL_FILL_STEP columns wider —
-     * joining the band once it reaches the right edge, a new block then starting at the left edge below it;
-     * attention becomes its inner zone. */
-    long widenAttention(long attention) {
-        int band = attBand(attention), w = attW(attention);
-        int[] s = attentionShape(band, w + INCREMENTAL_FILL_STEP);
-        return packAttention(s[0], s[1], band, w);
+    /** The attention zone after attention (mirrors _next_attention): the window moved INCREMENTAL_FILL_STEP columns
+     * to the right — to the left edge, INCREMENTAL_FILL_STEP rows down, past the right edge — and the whole grid
+     * once the window holding the bottom-right corner is done. */
+    long nextAttention(long attention) {
+        return attentionShape(attTop(attention), attLeft(attention) + INCREMENTAL_FILL_STEP);
     }
 
-    /** The attention zone a node enters with (mirrors _fallback_attention): the largest zone holding no free cell
-     * (no placed word nor locked letter) of a slot of selectable — a band of whole rows, a multiple of
-     * INCREMENTAL_FILL_STEP, then the block below it as wide as its leading columns are filled — at least the start
-     * zone, with that filled zone as its inner zone; -1 when incremental fill is off. */
+    /** The attention zone a node enters with (mirrors _fallback_attention): the first window, in scan order (left
+     * to right, then down), holding a free cell (no placed word nor locked letter) of a slot of selectable — every
+     * window before it is filled — the whole grid when none does; -1 when incremental fill is off. */
     long fallbackAttention(List<Integer> selectable) {
         if (!incrementalFill) return -1;
         Set<Integer> known = new HashSet<>(lockedLetters.keySet());
         for (int j = 0; j < assignment.length; j++) {
             if (assignment[j] != null) for (int cell : slots.get(j)) known.add(cell);
         }
-        int minRow = rows;
-        List<Integer> free = new ArrayList<>();
+        int bestTop = rows, bestLeft = 0;
         for (int i : selectable) {
             for (int cell : slots.get(i)) {
-                if (!known.contains(cell)) {
-                    free.add(cell);
-                    minRow = Math.min(minRow, Cells.r(cell));
+                if (known.contains(cell)) continue;
+                int top = Cells.r(cell) / INCREMENTAL_FILL_STEP * INCREMENTAL_FILL_STEP;
+                int left = Cells.c(cell) / INCREMENTAL_FILL_STEP * INCREMENTAL_FILL_STEP;
+                if (top < bestTop || (top == bestTop && left < bestLeft)) {
+                    bestTop = top;
+                    bestLeft = left;
                 }
             }
         }
-        if (free.isEmpty()) return packAttention(rows, 0, rows, 0);
-        int band = minRow / INCREMENTAL_FILL_STEP * INCREMENTAL_FILL_STEP;
-        int width = cols;
-        for (int cell : free) {
-            if (Cells.r(cell) < band + INCREMENTAL_FILL_STEP) width = Math.min(width, Cells.c(cell));
-        }
-        int[] start = attentionShape(0, INCREMENTAL_FILL_STEP);
-        boolean filledFirst = band > start[0] || (band == start[0] && width >= start[1]);
-        return filledFirst ? packAttention(band, width, band, width)
-                : packAttention(start[0], start[1], band, width);
+        return packAttention(bestTop, bestTop >= rows ? 0 : bestLeft);
     }
 
     /** An attention zone as stored in attentionStep/bestAttentionStep: null for -1 (incremental fill off). */
@@ -1134,7 +1130,7 @@ public final class Filler {
      * step zone (inAttention); all of them when zone covers the whole grid (mirrors _attention_pool). */
     List<Integer> attentionPool(List<Integer> pool, long zone) {
         if (attentionIsWhole(zone)) return new ArrayList<>(pool);
-        int band = attBand(zone), w = attW(zone);
+        int top = attTop(zone), left = attLeft(zone);
         Set<Integer> known = new HashSet<>(lockedLetters.keySet());
         for (int j = 0; j < assignment.length; j++) {
             if (assignment[j] != null) for (int cell : slots.get(j)) known.add(cell);
@@ -1142,7 +1138,7 @@ public final class Filler {
         List<Integer> out = new ArrayList<>();
         for (int i : pool) {
             for (int cell : slots.get(i)) {
-                if (inAttention(band, w, Cells.r(cell), Cells.c(cell)) && !known.contains(cell)) {
+                if (inAttention(top, left, Cells.r(cell), Cells.c(cell)) && !known.contains(cell)) {
                     out.add(i);
                     break;
                 }
@@ -1152,15 +1148,14 @@ public final class Filler {
     }
 
     /** Words the current node places at once, its own included (mirrors _group_size): wordsPerNode on an empty
-     * ring, down to 1 once its fill rate reaches GROUP_SIZE_MIN_FILL_PERCENT (P), linearly — the ring being the
-     * attention zone (the whole grid when attention is -1) minus its inner zone (the filled zone it grew from), and
-     * its fill rate the share of its white cells holding a placed word or a locked letter:
-     * max(1, W - floor((W - 1) * known * 100 / (white * P))). */
+     * attention zone, down to 1 once its fill rate reaches GROUP_SIZE_MIN_FILL_PERCENT (P), linearly — the zone
+     * being the attention window (the whole grid when it covers it), and its fill rate the share of its white
+     * cells holding a placed word or a locked letter: max(1, W - floor((W - 1) * known * 100 / (white * P))). */
     int groupSize(long attention) {
         int top = wordsPerNode;
-        if (top <= 1) return 1;
-        int band = attention < 0 ? rows : attBand(attention), w = attention < 0 ? 0 : attW(attention);
-        int iband = attention < 0 ? 0 : attIBand(attention), iw = attention < 0 ? 0 : attIW(attention);
+        if (top <= 1) return Math.max(1, top);
+        boolean whole = attentionIsWhole(attention);
+        int zTop = whole ? 0 : attTop(attention), zLeft = whole ? 0 : attLeft(attention);
         Set<Integer> known = new HashSet<>(lockedLetters.keySet());
         for (int j = 0; j < assignment.length; j++) {
             if (assignment[j] != null) for (int cell : slots.get(j)) known.add(cell);
@@ -1168,10 +1163,7 @@ public final class Filler {
         Set<Integer> white = new HashSet<>();
         for (int[] slot : slots) {
             for (int cell : slot) {
-                int r = Cells.r(cell), c = Cells.c(cell);
-                if (inAttention(band, w, r, c) && !inAttention(iband, iw, r, c)) {
-                    white.add(cell);
-                }
+                if (whole || inAttention(zTop, zLeft, Cells.r(cell), Cells.c(cell))) white.add(cell);
             }
         }
         if (white.isEmpty()) return 1;
@@ -1568,7 +1560,7 @@ public final class Filler {
         // taken back flat (restartFromRecord), a zone softclean or repeated-word hardclean's cleaned state too
         // (restartFromState), and the loop starts over from it as a new root, with no backtracking history, in the
         // attention zone the clean happened in (rootAttention: the record's for an early hardclean, the requesting
-        // node's otherwise), so the zone never shrinks back to its start size. The attempt's descent caps
+        // node's otherwise), so the zone never moves back to its start window. The attempt's descent caps
         // (inherited, initialAssignedCount) are those of its first start.
         int count = 0;
         for (String a : assignment) if (a != null) count++;
@@ -1580,7 +1572,7 @@ public final class Filler {
         while (true) {
             // Early hardclean on the state the search starts from (no record is taken until a word is added to
             // it). Nothing to restore: no node is running yet. A clean leaving no locked letter resets the root's
-            // zone to its start size, once per attempt (attentionAfterUnlock). Not on a state a zone softclean or
+            // zone to its start window, once per attempt (attentionAfterUnlock). Not on a state a zone softclean or
             // repeated-word hardclean has just cleaned, which is not the record the test reads.
             if (!fromState && earlyHardcleanDue()) {
                 earlyHardclean();
@@ -2200,10 +2192,10 @@ public final class Filler {
         Map<Object, OptionsEntry> optionsCache = new HashMap<>();
         List<Integer> selectable = new ArrayList<>(domains.keySet());
         // Incremental fill: the stages run inside the attention zone first (zonePool); once they have placed
-        // nothing there, the zone grows and the node goes back to its first stage on the larger pool. With
-        // ATTENTION_FALLBACK_ENABLED, on entry the zone falls back on the largest filled zone, band + block
+        // nothing there, the window moves on and the node goes back to its first stage on the new pool. With
+        // ATTENTION_FALLBACK_ENABLED, on entry the zone falls back on the first window holding a free cell
         // (fallbackAttention); otherwise the node keeps the zone it was entered with. A zone with nothing left to
-        // fill grows at once.
+        // fill moves on at once.
         if (incrementalFill && ATTENTION_FALLBACK_ENABLED) attention = fallbackAttention(selectable);
         List<Integer> zonePool;
         while (true) {
@@ -2211,12 +2203,12 @@ public final class Filler {
             if (!zonePool.isEmpty()) break;
             if (!dry.isEmpty()) {
                 // Nothing selectable in the zone: soft-clean an impossible slot holding one of its free cells before
-                // widening.
+                // moving on.
                 Boolean outcome = zoneClean(dry, attention);
                 if (outcome != null) return outcome;
             }
             if (attentionIsWhole(attention)) break;
-            attention = widenAttention(attention);
+            attention = nextAttention(attention);
         }
         if (domains.isEmpty()) return fail(new HashSet<>());
         attentionStep = attentionJson(attention);
@@ -2251,7 +2243,7 @@ public final class Filler {
                 }
                 if (zoneCleanOn && !allowBreaking) {
                     // Nothing more can be placed inside the attention zone: soft-clean an impossible slot holding
-                    // one of its free cells before widening it — a dry one, a selectable one blocked by a crossing
+                    // one of its free cells before moving it on — a dry one, a selectable one blocked by a crossing
                     // deadlock, or an "emplacement écarté".
                     List<Integer> impossible = new ArrayList<>(dry);
                     for (int i : attentionPool(selectable, attention)) {
@@ -2265,9 +2257,9 @@ public final class Filler {
                     if (outcome != null) return outcome;
                 }
                 if (!attentionIsWhole(attention)) {
-                    // Nothing more can be placed inside the attention zone: widen it and start again from stage 1
-                    // on the larger pool (slots already tried here stay tried).
-                    attention = widenAttention(attention);
+                    // Nothing more can be placed inside the attention zone: move it on and start again from stage 1
+                    // on the new pool (slots already tried here stay tried).
+                    attention = nextAttention(attention);
                     zonePool = attentionPool(selectable, attention);
                     attentionStep = attentionJson(attention);
                     released = entryReleased;

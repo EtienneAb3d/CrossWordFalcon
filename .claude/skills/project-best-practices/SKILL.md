@@ -1353,8 +1353,8 @@ the current defaults/behavior to know before touching this code.
   skipped its other candidates, `Filler._last_jumped`) may make only one
   more descent — the user's rule: the cap is only reached when every
   failure came back through ordinary backtracking.
-- **Each `Filler._backtrack` node places up to `WORDS_PER_NODE` (5, the
-  default of the generation form's "Mots par pose" field, 1-10, also sent
+- **Each `Filler._backtrack` node places up to `WORDS_PER_NODE` (3, the
+  default of the generation form's "Mots par pose" field, 1-50, also sent
   by "Finir la grille") words at
   once and takes them back off together** (`Filler._descend_group`, Java
   `descendGroup`) — the user's rule: "chaque noeud pose N mots en une seule
@@ -1366,15 +1366,14 @@ the current defaults/behavior to know before touching this code.
   user's rule: "décroitre jusqu'à arriver à 1 pour 75% de la zone
   d'attention remplie"; `Filler._group_size`). Choices
   made with that rule, to revisit with the user: the field's value is the
-  count at 0 % (so a field at 5 goes from 5 down to 1); the fill rate is the
+  count at 0 % (so a field at 3 goes from 3 down to 1); the fill rate is the
   share of the zone's white cells holding a placed word or a locked letter,
   measured once the node's own word is placed; the count is
-  `max(1, W - floor((W - 1) * rate / 0.75))`. The rate is that of the zone's ring — the
-  user's rule: "le pourcentage de remplissage de la zone différentielle
-  entre l'actuelle zone d'attention, et la zone d'attention plus petite
-  (celle-ci devant être à 100%, sinon il y aurait repli de la zone
-  d'attention sur cette plus petite)" — the smaller zone being the zone's
-  inner zone, the filled rectangle it fell back on or grew from; the value is shown as "N m/p"
+  `max(1, W - floor((W - 1) * rate / 0.75))`, applied from the start of
+  the attempt, whatever window the attention zone is on (the user's rule:
+  "décroissance systématique"). The rate is that of the
+  current attention window (the whole grid once the zone covers it): with a
+  moving window there is no smaller filled zone inside it; the value is shown as "N m/p"
   on each preview's stats line. Choices made with the change, to revisit with the user: only
   the node's own word has alternatives — each extra word is the first
   candidate of its slot that leaves no crossing slot blocked, strictly
@@ -1412,55 +1411,52 @@ the current defaults/behavior to know before touching this code.
 - **Incremental fill is optional and currently on** (`INCREMENTAL_FILL_
   ENABLED` = True in both back ends) — the user's rule: the attention zone
   is optional; off, the whole grid is the attention zone and the zone
-  softclean never runs either (it only precedes a zone widening). When on,
-  it applies on every palier (Java mirror in `Filler`): the
-  user's rule — limit the slots a placement may choose to an "attention
-  zone", fill until nothing more can be placed within it, then widen it;
-  the zone is two rectangles — the user's rule: start with the 16x16
-  square at the top-left corner, then extend it to the right by 16 until
-  the right edge; from there its 16 rows join the zone, which extends with
-  a new 16x16 square at the left below it — "La grille est
-  donc découpée en 2 rectangles d'attention : 1 rectangle pour la partie
-  haute sur toute la largeur, (0 ligne au début) et un second rectangle qui
-  progresse de gauche à droite en dessous" (`INCREMENTAL_FILL_STEP`,
-  `Filler._in_attention`/`_attention_shape`) — taking its next step each
-  time it is saturated (`Filler._attention_pool`/`_widen_attention`),
-  until it is the whole grid. The fallback is optional and currently off
+  softclean never runs either (it only precedes a move of the zone). When
+  on, it applies on every palier (Java mirror in `Filler`): the user's
+  rule — limit the slots a placement may choose to an "attention zone",
+  fill until nothing more can be placed within it, then move it on; the
+  zone is a window of the start size, 16x16 (`INCREMENTAL_FILL_STEP`),
+  clipped by the grid so smaller at its edges, that moves rather than
+  grows — the user's rule: "au lieu d'élargir la zone d'attention,
+  simplement la déplacer en conservant sa taille initiale (plus petite aux
+  bords), de gauche à droite, puis décaler vers le bas. Quand le bord
+  bas-droit est atteint, prendre toute la grille" (`Filler._in_attention`/
+  `_attention_shape`/`_next_attention`, `_attention_pool`). Choices made
+  with that rule, to revisit with the user: the window moves by its own
+  size (16 columns, then 16 rows down from the left edge), so windows never
+  overlap; free cells left in a window it moved past wait for the whole-grid
+  zone; for a grid of at most 16x16 the zone is whole from the start.
+  The fallback is optional and currently off
   (`ATTENTION_FALLBACK_ENABLED` = False, the user's rule: "rendre le repli
   de la zone optionnel, désactivé pour le moment (la zone d'attention ne
-  fait que croître)"); when on, on entry every node falls back on the largest
-  fully filled zone — the user's rule: "le repli se fait sur la plus grande
-  zone entièrement remplie" — i.e. the largest band + block holding no free
-  cell (`Filler._fallback_attention`; a cell is unfilled only on a
-  selectable slot, i.e. not one left dry; the zone is at least the start
-  square), that filled zone becoming the zone's inner zone, and grows from
-  there;
-  applied at every palier ("à toutes les étapes"), to resumed and freshly
-  created grids alike. From palier 2 on, when every locked cell of an
-  attempt has been unlocked, the zone is reset — once per grid (the
-  user's words: "ne le faire qu'une fois pour une grille, ensuite, il ne
-  devrait plus y avoir de case verrouillée avant l'étape suivante";
-  `Filler._attention_after_unlock`). Choices made with the change, to
-  revisit with the user: the fallback's band is rounded down to a multiple
-  of 16 rows (so every zone shape nests in the previous one), its block as
-  wide as the leading columns of the 16 rows below are filled, and the block
-  is clipped to the grid's bottom; a slot is in the zone when one of its still-free
-  cells is (a slot reaching into the zone with only known cells there is
-  not); "nothing more can be placed" is the node's own stages 1-2
-  (non-écarté, then released écarté) exhausted inside the zone, after
-  which the node widens instead of failing — a dry slot or a blameable
+  fait que croître)" — now "ne fait qu'avancer"); when on, on entry every
+  node falls back on the first window, in scan order, holding a free cell
+  of a selectable slot (`Filler._fallback_attention`; choice made with the
+  moving window, to revisit with the user: the windows before it are then
+  fully filled, the moving-window counterpart of "le repli se fait sur la
+  plus grande zone entièrement remplie"); applied at every palier ("à
+  toutes les étapes"), to resumed and freshly created grids alike. From
+  palier 2 on, when every locked cell of an attempt has been unlocked, the
+  zone is reset to its start window — once per grid (the user's words:
+  "ne le faire qu'une fois pour une grille, ensuite, il ne devrait plus y
+  avoir de case verrouillée avant l'étape suivante";
+  `Filler._attention_after_unlock`). Choices made earlier, to revisit with
+  the user: a slot is in the zone when one of its still-free cells is (a
+  slot reaching into the zone with only known cells there is not);
+  "nothing more can be placed" is the node's own stages 1-2 (non-écarté,
+  then released écarté) exhausted inside the zone, after which the node
+  moves the zone instead of failing — a dry slot or a blameable
   all-rejected slot still backtracks as usual, and the descent cap can
-  still end the node first; the zone size is a recursion parameter,
-  restored on unwinding like `released`; the first root starts from the
-  start square and a root restarted flat after a clean keeps the zone the
-  clean happened in (the user's rule: "la zone d'attention ne fait que
-  croître"); "from palier 2
-  on" is implemented as "the attempt started with locked letters" (also
-  true of "Continuer"; never true of "Finir la grille/la zone", whose
-  permanent locks are never cleared); the reset happens after the
-  repeated-word hardclean and after an early hardclean, every node's entry
-  fallback (when enabled) applying after it; "once per
-  grid" means once per attempt.
+  still end the node first; the zone is a recursion parameter, restored on
+  unwinding like `released`; the first root starts from the start window
+  and a root restarted flat after a clean keeps the zone the clean
+  happened in (the zone never moves back); "from palier 2 on" is
+  implemented as "the attempt started with locked letters" (also true of
+  "Continuer"; never true of "Finir la grille/la zone", whose permanent
+  locks are never cleared); the reset happens after the repeated-word
+  hardclean and after an early hardclean, every node's entry fallback
+  (when enabled) applying after it; "once per grid" means once per
+  attempt.
 - **The last-resort `allow_breaking` stage is gated globally, not per
   node.** `Filler.solve` runs a strict pass from the root first; only if
   the root itself fails (not the budget, not an abandon) is the search
@@ -2165,7 +2161,7 @@ the current defaults/behavior to know before touching this code.
   cascade. `Filler._zone_clean` soft-cleans that slot and the search
   restarts flat from the cleaned state (see the entry above). Choices made with the
   change, to revisit with the user: it fires
-  only when the zone would otherwise grow (nothing selectable left in it,
+  only when the zone would otherwise move on (nothing selectable left in it,
   or everything selectable tried), not as soon as such a slot exists;
   the slots cleaned are the "emplacements bloqués" (`slot_is_blocked`:
   no candidate, or a crossing deadlock) and, by the user's further rule
@@ -2175,7 +2171,17 @@ the current defaults/behavior to know before touching this code.
   make a crossing slot impossible);
   never in the `allow_breaking` stage; a clean changing nothing or giving a
   state already produced by a zone softclean of the attempt is skipped
-  (loop guard).
+  (loop guard). A slot that has already been soft-cleaned and still takes
+  no new word is hard-cleaned instead — the user's rule: "quand un
+  emplacement a subi un softclean, et ne permet toujours pas de poser un
+  nouveau mot, déclencher un hardclean" (`Filler._zone_softcleaned`, Java
+  `zoneSoftcleaned`). Choices made with the rule, to revisit with the user:
+  "still takes no new word" means the search has placed no word on that
+  slot (same cells) since its softclean, in the same attempt; the slot is
+  then hard-cleaned every time it comes up again until a word is placed on
+  it; the hardclean goes through the same zone-clean path (same triggers,
+  same flat restart, same already-produced-state guard, no slot set
+  aside).
 - **Repeated-word hardclean** (`MAX_SAME_WORD_PLACEMENTS` = 1000 in `backend/
   crossword_gen.py`, `Filler.MAX_SAME_WORD_PLACEMENTS` in Java) — the
   user's rule: in automatic fill, when the same word is placed more than 1000
@@ -2827,3 +2833,18 @@ the current defaults/behavior to know before touching this code.
       (`frontend/server.py`) and serves both back ends unchanged; the
       scrapers (`scrapper/`) stay Python and the Java back end runs them
       through the project's venv for the daily RSS/SCRAPP refresh.
+
+24. **Every test uses the pseudo `Claude_Code_Test`** — never a new,
+    made-up user per test (`TesterQA6`, `livecheck5`, `verifbot4`...),
+    which piles up throwaway entries in `SECRET/`, `GRID_GAME/`,
+    `GRID_WORK/`, `STOP_DUMP/`, the leaderboards and `LOG_USERS/`. When a
+    test genuinely needs several users at once, suffix it with a number:
+    `Claude_Code_Test2`, `Claude_Code_Test3`, and so on. Applies to every
+    request carrying a `pseudo` (welcome-panel claim, generation, play
+    saves, Interactive drafts), on either back end. Their secret words
+    live in `test_secret.tsv` (project root, gitignored, `PSEUDO<TAB>SECRET`
+    with a header line): read it before a test, and add a line there for
+    any new `Claude_Code_Test<N>` claimed. They are only claimed on the
+    development back end so far; on another one, the first request with a
+    line of this file claims it. Pseudos are capped at 20 characters
+    (`MAX_PSEUDO_LENGTH`), which leaves room for a two-digit suffix.

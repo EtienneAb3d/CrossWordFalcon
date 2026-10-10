@@ -17,7 +17,7 @@ public final class Diag {
     public List<Integer> forcedCells, impossibleCells, deadlockCells, excludedCells, lockedCells, themeCells,
             challengeCells;
     public List<Object> statLetters;
-    /** Incremental fill's attention zone as [band rows, block height, block width] (mirrors
+    /** Incremental fill's attention window as [top row, left column, height, width] (mirrors
      * `attention_zone`, null = the whole grid); only serialized once hasAttentionSize is set. */
     public List<Integer> attentionZone;
     public boolean hasAttentionSize;

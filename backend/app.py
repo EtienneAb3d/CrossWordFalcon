@@ -48,6 +48,7 @@ from .clues import (
 from .dictionary_lookup import search as dictionary_search_impl
 from .embedder import Embedder, EmbedderError
 from .qdrant_store import QdrantStore, QdrantStoreError
+from .secret_store import is_valid_pseudo
 from .secret_store import verify_or_claim as verify_or_claim_pseudo_secret
 from .puz_export import PUZ_MEDIA_TYPE, render_puz
 from .crossword_gen import (
@@ -414,7 +415,7 @@ BUDGET_MODES = {
 }
 
 # Upper bound of the "Mots par pose" field (GenerateRequest.words_per_node).
-MAX_WORDS_PER_NODE = 10
+MAX_WORDS_PER_NODE = 50
 
 # Optional "Theme" field on the generation form, at the user's explicit
 # request: if the theme's word list is non-empty, a Qdrant vector
@@ -663,11 +664,11 @@ MAX_JOBS = 50
 # bibliothèque : 20 lignes affichées max à chaque page."
 LIBRARY_PAGE_SIZE = 20
 
-# Max length of a user's own nickname ("pseudo"), at the user's explicit
-# request ("un pseudo (moins de 15 lettres)"). Enforced defensively on
+# Max length of a user's own nickname ("pseudo"), long enough for the
+# "Claude_Code_Test<N>" test pseudos. Enforced defensively on
 # every path that accepts one — a longer value is silently trimmed, never
 # rejected, so a stray extra character can't block a generation.
-MAX_PSEUDO_LENGTH = 15
+MAX_PSEUDO_LENGTH = 20
 
 # Max length of the secret word associated with a pseudo (backend/secret_store.py),
 # at the user's explicit request — lets a user
@@ -1778,8 +1779,12 @@ def pseudo_claim(req: PseudoClaimRequest):
     pseudo has never been claimed before (first use = claim).
 
     Returns `{"ok": true}` on success (correct secret word, or a pseudo
-    just claimed); `{"ok": false, "code": "pseudo_taken"}` if this pseudo
-    already exists under a different secret word — at the user's explicit
+    just claimed); `{"ok": false, "code": "pseudo_invalid"}` if the pseudo
+    breaks `secret_store.is_valid_pseudo` (letters, accented or not,
+    digits, "-", "_", inner spaces, at least one letter); `{"ok": false,
+    "code": "pseudo_taken"}` if this pseudo — compared by its save-file
+    slug, so "Étienne" and "etienne" are the same pseudo — already exists
+    under a different secret word — at the user's explicit
     request: "si le Pseudo saisi existe déjà et que le Mot secret ne
     correspond pas, signaler à l'utilisateur que ce Pseudo est déjà pris,
     ne pas fermer la boite." Always a 200 either way: this isn't a request
@@ -1789,6 +1794,8 @@ def pseudo_claim(req: PseudoClaimRequest):
     secret = req.secret.strip()[:MAX_SECRET_LENGTH]
     if not pseudo or not secret:
         raise HTTPException(status_code=400, detail="pseudo ou mot secret vide")
+    if not is_valid_pseudo(pseudo):
+        return {"ok": False, "code": "pseudo_invalid"}
     if verify_or_claim_pseudo_secret(pseudo, secret):
         return {"ok": True}
     return {"ok": False, "code": "pseudo_taken"}

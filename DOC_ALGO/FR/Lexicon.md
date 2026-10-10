@@ -222,35 +222,31 @@ plusieurs signaux) :
 
 - **Zone d'attention** (*remplissage incrémental*, optionnel, activé ;
   désactivé, toute la grille est dans la zone d'attention) : à chaque
-  palier,
-  la partie de la grille où une pose est permise, faite de deux
-  rectangles : une **bande haute** de lignes entières, sur toute la largeur
-  (aucune ligne au départ), et, juste en dessous, un **bloc** de 16 lignes
-  (`INCREMENTAL_FILL_STEP`) ancré au bord gauche, qui progresse de gauche à
-  droite (`Filler._in_attention`) ; seul un emplacement ayant une case
-  encore libre dans cette zone peut recevoir une pose. Elle part du carré
-  16 × 16 du coin haut gauche (`Filler._initial_attention`). Chaque fois que
-  plus rien ne peut être posé dans la zone, le bloc s'élargit de 16 colonnes
-  vers la droite ; quand il atteint le bord droit, ses lignes rejoignent la
-  bande haute et un nouveau bloc 16 × 16 commence au bord gauche en dessous
-  (`Filler._attention_shape`, `Filler._widen_attention`), la zone d'avant
-  devenant sa **zone intérieure**, jusqu'à couvrir toute la grille. Le
+  palier, la partie de la grille où une pose est permise : une **fenêtre**
+  de 16 lignes × 16 colonnes (`INCREMENTAL_FILL_STEP`), rognée par la
+  grille, donc plus petite aux bords droit et bas (`Filler._in_attention`) ;
+  seul un emplacement ayant une case encore libre dans cette fenêtre peut
+  recevoir une pose. Elle part du coin haut gauche
+  (`Filler._initial_attention`) ; une grille d'au plus 16 × 16 est entière
+  dès le départ. Chaque fois que plus rien ne peut être posé dans la
+  fenêtre, elle se **déplace** de 16 colonnes vers la droite en gardant sa
+  taille ; au-delà du bord droit, elle repart du bord gauche 16 lignes plus
+  bas (`Filler._attention_shape`, `Filler._next_attention`). Une fois la
+  fenêtre du coin bas droit traitée, la zone est toute la grille. Le
   **repli** est optionnel et actuellement désactivé
-  (`ATTENTION_FALLBACK_ENABLED`) : la zone ne fait alors que croître le long
-  d'une descente. Activé, à l'entrée de chaque nœud, elle se replie sur la
-  plus grande zone de cette forme entièrement remplie (sans case libre d'un
-  emplacement sélectionnable ; bande haute d'un multiple de 16 lignes), au
-  moins le carré de départ, cette zone remplie étant sa zone intérieure
-  (`Filler._fallback_attention`). Une reprise à plat après un nettoyage
-  garde la zone dans laquelle il a eu lieu. Une
-  tentative partie de lettres verrouillées la ramène au carré de départ une
-  fois, quand un nettoyage dur lui retire sa dernière lettre verrouillée
-  (`Filler._attention_after_unlock`). Ne concerne que
+  (`ATTENTION_FALLBACK_ENABLED`) : la zone ne fait alors qu'avancer le long
+  d'une descente. Activé, à l'entrée de chaque nœud, elle revient à la
+  première fenêtre, dans l'ordre de parcours, ayant une case libre d'un
+  emplacement sélectionnable (`Filler._fallback_attention`). Une reprise à
+  plat après un nettoyage garde la zone dans laquelle il a eu lieu. Une
+  tentative partie de lettres verrouillées la ramène à la fenêtre de départ
+  une fois, quand un nettoyage dur lui retire sa dernière lettre
+  verrouillée (`Filler._attention_after_unlock`). Ne concerne que
   le choix de l'emplacement, jamais le retour en arrière ni la détection
   des emplacements bloqués (`backend/crossword_gen.py`,
   `INCREMENTAL_FILL_ENABLED`, `Filler._attention_pool`,
   `Filler._backtrack`). Encadrée en gras pointillé sur les aperçus
-  (`frontend/static/style.css`, `.attempt-preview-grid .attention-zone`).
+  (`frontend/static/style.css`, `.attempt-preview-grid .attention-edge`).
 
 ## Choix des mots
 
@@ -344,11 +340,10 @@ plusieurs signaux) :
 
 - **Groupe d'un nœud** : les mots qu'un nœud de la recherche pose d'un
   coup avant de descendre — le mot de l'emplacement qu'il a choisi, puis
-  d'autres, jusqu'à un total qui décroît avec le taux de remplissage de
-  l'anneau de la zone d'attention (la zone privée de sa zone intérieure,
-  la zone remplie dont elle est issue) : `WORDS_PER_NODE` (5, le
-  champ « Mots par pose ») pour un anneau vide, jusqu'à 1 pour un anneau
-  rempli à `GROUP_SIZE_MIN_FILL_PERCENT` (75 %) ou plus
+  d'autres, en un nombre qui décroît avec le taux de
+  remplissage de la zone d'attention : `WORDS_PER_NODE` (3, le
+  champ « Mots par pose ») pour une zone vide, jusqu'à 1 pour une zone
+  remplie à `GROUP_SIZE_MIN_FILL_PERCENT` (75 %) ou plus
   (`Filler._group_size`) ; affiché « N m/p » sur la ligne
   d'information des aperçus —
   posés de préférence sur les
@@ -534,12 +529,13 @@ plusieurs signaux) :
   restée sur l'emplacement bloqué sans mot pour la porter n'est effacée
   que si aucun verrou ne la porte. Mêmes règles de verrouillage et de
   lettres orphelines que le nettoyage dur. Seul le nettoyage doux de zone
-  l'utilise. (`backend/crossword_gen.py`, `_clean_blocked_slots`,
+  l'utilise (une seule fois par emplacement tant qu'aucun mot n'y est posé :
+  la fois suivante, c'est un nettoyage dur). (`backend/crossword_gen.py`, `_clean_blocked_slots`,
   paramètre `hard_clean=False` ; `Filler._slot_clean`.)
 
 - **Nettoyage doux de zone** : nettoyage doux déclenché à l'intérieur de la
   recherche, avec le remplissage incrémental, juste avant que la zone
-  d'attention ne s'agrandisse (plus rien de sélectionnable dans la zone, ou
+  d'attention ne se déplace (plus rien de sélectionnable dans la zone, ou
   tout ce qui l'est déjà essayé) : un emplacement bloqué — non rempli et
   sans aucun candidat (hors des emplacements sélectionnables), ou pris dans
   une case croisée bloquée — ou un emplacement écarté, ayant
@@ -549,9 +545,11 @@ plusieurs signaux) :
   l'état nettoyé, nouvelle racine de la recherche. Un
   nettoyage qui ne change rien, ou qui redonne un état (motif + lettres
   connues) déjà produit par un nettoyage doux de zone de la tentative, est
-  sauté. Jamais au temps de dernier recours. (`backend/crossword_gen.py`,
-  `ZONE_CLEAN_ENABLED`, `Filler._zone_clean`, `Filler._backtrack`,
-  `Filler.slot_is_blocked`, `Filler._restart_from_state`.)
+  sauté. Jamais au temps de dernier recours. Un emplacement déjà nettoyé
+  ainsi dans la tentative, et qui n'a toujours reçu aucun nouveau mot de
+  la recherche, subit à la place un nettoyage dur. (`backend/crossword_gen.py`,
+  `ZONE_CLEAN_ENABLED`, `Filler._zone_clean`, `Filler._zone_softcleaned`,
+  `Filler._backtrack`, `Filler.slot_is_blocked`, `Filler._restart_from_state`.)
 
 - **Seconde chance** : reprise d'une tentative qui échoue alors que le
   palier est encore en course (au moins une tentative d'origine n'a pas

@@ -4639,9 +4639,9 @@ end through the real running API (interactive start/step/save,
 - **Attention-zone frame on the preview grids** (`.attempt-preview-grid
   .attention-edge`), at the user's explicit request ("dessiner un
   encadrement en gras pointillé autour de la zone d'attention"): during
-  incremental fill, a 2px dashed `--fg` outline of the zone — the union
-  of the horizontal and vertical rectangles of `attention_size`
-  (`[[Rh, Ch], [Rv, Cv]]`), an L shape in general — drawn as one
+  incremental fill, a 2px dashed `--fg` outline of the zone — the window
+  of `attention_zone` (`[top row, left column, height, width]`), a
+  rectangle — drawn as one
   absolutely positioned edge per straight run (script.js's
   `attentionZoneEdges`, `renderAttemptPreview`; `.horizontal` uses
   `border-top`, `.vertical` `border-left`). Each edge is a child of the

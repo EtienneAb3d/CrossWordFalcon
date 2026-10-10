@@ -68,7 +68,7 @@ public final class App {
             "medium", 500000L, "ultra", 5000000L, "megatron", 20000000L,
             "gridzilla", 100000000L));
     /** Upper bound of the "Mots par pose" field (GenReq.wordsPerNode). */
-    static final int MAX_WORDS_PER_NODE = 10;
+    static final int MAX_WORDS_PER_NODE = 50;
     static final Path RSS_DIR = Env.path("RSS");
     static final Path SCRAPP_DIR = Env.path("SCRAPP");
     static final int RSS_FETCH_HOUR = 8;
@@ -79,7 +79,7 @@ public final class App {
             Py.strip(Env.get("CROSSWORDFALCON_EXPERIMENTAL_NOTICE", "1")).toLowerCase(Locale.ROOT));
     static final int MAX_JOBS = 50;
     static final int LIBRARY_PAGE_SIZE = 20;
-    static final int MAX_PSEUDO_LENGTH = 15;
+    static final int MAX_PSEUDO_LENGTH = 20;
     static final int MAX_SECRET_LENGTH = 60;
     // Well above one minute: a browser throttles a hidden tab's timers down to
     // one wake-up per minute, so a still-open background tab heartbeats only
@@ -1759,6 +1759,7 @@ public final class App {
             if (pseudo.length() > MAX_PSEUDO_LENGTH) pseudo = pseudo.substring(0, MAX_PSEUDO_LENGTH);
             if (secret.length() > MAX_SECRET_LENGTH) secret = secret.substring(0, MAX_SECRET_LENGTH);
             if (pseudo.isEmpty() || secret.isEmpty()) throw http(400, "pseudo ou mot secret vide");
+            if (!SecretStore.isValidPseudo(pseudo)) return Json.obj("ok", false, "code", "pseudo_invalid");
             if (SecretStore.verifyOrClaim(pseudo, secret)) return Json.obj("ok", true);
             return Json.obj("ok", false, "code", "pseudo_taken");
         });

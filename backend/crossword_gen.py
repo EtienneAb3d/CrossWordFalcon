@@ -2843,42 +2843,40 @@ MAX_SAME_WORD_PLACEMENTS = 1000
 
 # Incremental fill ("remplissage incrémental"), optional, currently on
 # (False: the whole grid is the attention zone, `attention` None, and the
-# zone softclean, which only runs before the zone grows, never runs). When
+# zone softclean, which only runs before the zone moves, never runs). When
 # on, on every palier: a node only
 # places a word on a slot holding at least one still-free cell (no placed
 # word nor locked letter on it) inside the "attention zone"
-# (`Filler._attention_pool`). The zone is made of two rectangles: a top band
-# of whole rows across the grid's whole width (no row at first), and below
-# it a block of INCREMENTAL_FILL_STEP rows (clipped to the grid) anchored at
-# the left edge, INCREMENTAL_FILL_STEP columns wide at first
-# (`Filler._in_attention`). It is a (band rows, block width, inner band rows,
-# inner block width) tuple — the inner pair being the filled zone it grew
-# from (`Filler._group_size`'s ring); a block reaching the right edge joins
-# the band (`Filler._attention_shape`). The start zone is the
-# INCREMENTAL_FILL_STEP x INCREMENTAL_FILL_STEP square at the top-left corner
-# (`Filler._initial_attention`). With ATTENTION_FALLBACK_ENABLED, a node
-# falls back on entry on the largest fully filled zone of that shape (band
-# rows a multiple of INCREMENTAL_FILL_STEP), at least the start zone
+# (`Filler._attention_pool`): a window of INCREMENTAL_FILL_STEP rows by
+# INCREMENTAL_FILL_STEP columns, clipped by the grid (smaller at its right
+# and bottom edges) (`Filler._in_attention`), given as its (top row, left
+# column) pair, (rows, 0) being the whole grid (`Filler._attention_shape`).
+# The start zone is the window at the top-left corner
+# (`Filler._initial_attention`); a grid of at most INCREMENTAL_FILL_STEP x
+# INCREMENTAL_FILL_STEP is whole from the start. With
+# ATTENTION_FALLBACK_ENABLED, a node falls back on entry on the first window,
+# in scan order, holding a free cell of a selectable slot
 # (`Filler._fallback_attention`); without it, a node keeps the zone it is
 # entered with. Once the node can place nothing more
 # inside the zone (no such slot left, or every one tried, écarté ones
-# released included), the block grows INCREMENTAL_FILL_STEP columns to the
-# right; once it reaches the right edge its rows join the band and a new
-# block starts at the left edge below it (`Filler._widen_attention`), until
-# the zone covers the whole grid. The zone is a `_backtrack` recursion
+# released included), the window moves INCREMENTAL_FILL_STEP columns to the
+# right, keeping its size; past the right edge it goes back to the left edge
+# INCREMENTAL_FILL_STEP rows down (`Filler._next_attention`); once the
+# window holding the bottom-right corner is done, the zone is the whole
+# grid. The zone is a `_backtrack` recursion
 # parameter, like `released` (None: incremental fill off).
 # An attempt that starts from locked letters resets the zone to its start
-# size once, the first time a hardclean leaves it no locked letter at all
+# window once, the first time a hardclean leaves it no locked letter at all
 # (`Filler._attention_after_unlock`). `generate_grid` passes it to every
 # attempt (`try_fill(incremental_fill=INCREMENTAL_FILL_ENABLED)`).
 INCREMENTAL_FILL_ENABLED = True
 INCREMENTAL_FILL_STEP = 16
 # Attention-zone fallback, with incremental fill: optional, currently off
-# (the zone only grows along a descent). On, every node falls back on entry
-# on the largest fully filled zone (`Filler._fallback_attention`).
+# (the zone only moves forward along a descent). On, every node falls back on
+# entry on the first window holding a free cell (`Filler._fallback_attention`).
 ATTENTION_FALLBACK_ENABLED = False
 
-# Zone softclean, with incremental fill: before the attention zone grows
+# Zone softclean, with incremental fill: before the attention zone moves on
 # (nothing selectable left in it, or everything selectable in it tried), a
 # node soft-cleans an impossible slot holding a free cell of the zone — an
 # "emplacement bloqué" (`Filler.slot_is_blocked`): an unassigned slot with
@@ -2894,7 +2892,9 @@ ATTENTION_FALLBACK_ENABLED = False
 # nothing, or yields
 # a state (pattern + known letters) a zone softclean of the attempt has
 # already produced, is skipped. Not in the last-resort `allow_breaking`
-# stage.
+# stage. A slot already soft-cleaned in the attempt that still takes no new
+# word (no word placed on it by the search since, `Filler._zone_softcleaned`)
+# is hard-cleaned instead (`hard_clean=True`).
 ZONE_CLEAN_ENABLED = True
 
 # Check frequency (in checks elapsed) for the "another
@@ -3224,18 +3224,16 @@ MAX_BACKGHOSTS_PER_DESCENT = 10
 # geometric selection window first ("emplacements candidats"), then on the
 # node's other selectable slots — and a failure below takes them all back
 # off together. The group's size decreases with the fill rate of the
-# attention zone's ring (`Filler._group_size`) — the zone minus the next
-# smaller attention zone, which is full (otherwise the zone would have
-# shrunk back to it): `WORDS_PER_NODE` words on an empty ring, down to 1 on
-# a full one. Each word tried for them costs one check,
+# attention zone (`Filler._group_size`): `WORDS_PER_NODE` words on an empty
+# zone, down to 1 on a full one. Each word tried for them costs one check,
 # like any candidate. `<= 1` places a single word per node. The default of
 # `generate_grid(words_per_node=)`/`try_fill(words_per_node=)`, which the
 # web UI's "Mots par pose" field overrides (`GenerateRequest.words_per_node`).
-WORDS_PER_NODE = 5
+WORDS_PER_NODE = 3
 
-# Fill rate (percent) of the attention zone's ring at which a node is down
+# Fill rate (percent) of the attention zone at which a node is down
 # to one word per node (`Filler._group_size`): the group shrinks linearly
-# from `words_per_node` on an empty ring to 1 at this rate, and stays at 1
+# from `words_per_node` on an empty zone to 1 at this rate, and stays at 1
 # above it.
 GROUP_SIZE_MIN_FILL_PERCENT = 75
 
@@ -3679,6 +3677,11 @@ class Filler:
         # Cleaned states the zone softclean has produced in this attempt
         # (see ZONE_CLEAN_ENABLED): pattern + every known letter.
         self._zone_clean_states = set()
+        # Slots (cells) the zone softclean has soft-cleaned in this attempt
+        # and on which the search has placed no word since
+        # (`_record_tried_word` drops them): the next zone clean of such a
+        # slot is a hardclean (see ZONE_CLEAN_ENABLED).
+        self._zone_softcleaned = set()
         self.permanent_locked_letters = {}
         # Set by every clean of the search: every node then unwinds
         # like on an abandon (running its own undo), and `solve()` restarts
@@ -4227,6 +4230,7 @@ class Filler:
         caller hard-cleans the slot (`_repeat_hardclean`) instead of
         recursing plainly."""
         key = tuple(self.slots[i])
+        self._zone_softcleaned.discard(key)
         words = self._tried_words.setdefault(key, {})
         words[word] = words.get(word, 0) + 1
         self._tried_totals[key] = self._tried_totals.get(key, 0) + 1
@@ -4450,11 +4454,15 @@ class Filler:
         changes the grid into a
         state no zone softclean of this attempt has produced yet is cleaned,
         and the backtracking history is dropped (`_request_flat_restart`):
-        `solve()` takes the cleaned state back flat as its new root. None
+        `solve()` takes the cleaned state back flat as its new root. A slot
+        already soft-cleaned that still took no new word since
+        (`_zone_softcleaned`) is hard-cleaned instead (`hard=True`). None
         when no slot qualifies (nothing done), False otherwise (the
         unwinding)."""
         for i in self._attention_pool(impossible, attention):
-            cleaned, cleared = self._slot_clean(i, hard=False)
+            key = tuple(self.slots[i])
+            hard = key in self._zone_softcleaned
+            cleaned, cleared = self._slot_clean(i, hard=hard)
             removed = any(
                 word is not None and cleaned[j] is None
                 for j, word in enumerate(self.assignment)
@@ -4474,6 +4482,7 @@ class Filler:
             if state in self._zone_clean_states:
                 continue
             self._zone_clean_states.add(state)
+            self._zone_softcleaned.add(key)
             return self._request_flat_restart(cleaned, cleared, attention)
         return None
 
@@ -4896,44 +4905,51 @@ class Filler:
             return None
         return target
 
-    def _attention_shape(self, band, width):
-        """The (band rows, block width) pair of an attention zone (see
-        INCREMENTAL_FILL_ENABLED), normalized: a block reaching the right
-        edge joins the band, a new empty block starting below it; the band
-        clipped to the grid."""
-        if width >= self.cols:
-            band, width = band + INCREMENTAL_FILL_STEP, 0
-        return min(band, self.rows), width
+    def _attention_shape(self, top, left):
+        """The (top row, left column) pair of an attention window (see
+        INCREMENTAL_FILL_ENABLED), normalized: a window starting past the
+        right edge moves to the left edge, INCREMENTAL_FILL_STEP rows down;
+        one starting past the bottom edge is the whole grid (rows, 0)."""
+        if left >= self.cols:
+            top, left = top + INCREMENTAL_FILL_STEP, 0
+        if top >= self.rows:
+            return self.rows, 0
+        return top, left
 
     def _in_attention(self, shape, r, c):
-        """True when cell (r, c) lies in the attention zone of (band rows,
-        block width) `shape`: the band's rows, or the block of
-        INCREMENTAL_FILL_STEP rows below it, its first `width` columns."""
-        band, width = shape
-        return r < band or (r < band + INCREMENTAL_FILL_STEP and c < width)
+        """True when cell (r, c) lies in the attention window of (top row,
+        left column) `shape`: INCREMENTAL_FILL_STEP rows by
+        INCREMENTAL_FILL_STEP columns from there (clipped by the grid)."""
+        top, left = shape
+        return (top <= r < top + INCREMENTAL_FILL_STEP
+                and left <= c < left + INCREMENTAL_FILL_STEP)
 
     def _initial_attention(self):
         """Attention zone a root node starts with (see
-        INCREMENTAL_FILL_ENABLED): the INCREMENTAL_FILL_STEP square at the
-        top-left corner, with no inner zone, or None (incremental fill
-        off)."""
+        INCREMENTAL_FILL_ENABLED): the window at the top-left corner, or
+        None (incremental fill off)."""
         if not self.incremental_fill:
             return None
-        return (*self._attention_shape(0, INCREMENTAL_FILL_STEP), 0, 0)
+        return self._attention_shape(0, 0)
 
     def _attention_is_whole(self, attention):
         """True when `attention` covers the whole grid (None included)."""
-        return attention is None or attention[0] >= self.rows
+        return attention is None or attention[0] >= self.rows or (
+            self.rows <= INCREMENTAL_FILL_STEP and self.cols <= INCREMENTAL_FILL_STEP
+        )
 
     def _attention_zone_json(self, attention):
         """The attention zone as published with the previews
-        (`attention_zone`): [band rows, block height, block width] — the
-        band across the whole width, then the block below it anchored at the
-        left edge — None for the whole grid."""
+        (`attention_zone`): [top row, left column, height, width] — the
+        window clipped by the grid — None for the whole grid."""
         if self._attention_is_whole(attention):
             return None
-        band, width = attention[0], attention[1]
-        return [band, min(INCREMENTAL_FILL_STEP, self.rows - band), width]
+        top, left = attention
+        return [
+            top, left,
+            min(INCREMENTAL_FILL_STEP, self.rows - top),
+            min(INCREMENTAL_FILL_STEP, self.cols - left),
+        ]
 
     def _attention_after_unlock(self, attention):
         """The attention zone a root carries on with after a hardclean
@@ -4945,23 +4961,22 @@ class Filler:
             return self._initial_attention()
         return attention
 
-    def _widen_attention(self, attention):
+    def _next_attention(self, attention):
         """The attention zone after `attention` (see
-        INCREMENTAL_FILL_ENABLED): the block INCREMENTAL_FILL_STEP columns
-        wider — joining the band once it reaches the right edge, a new block
-        then starting at the left edge below it; `attention` becomes its
-        inner zone."""
-        band, width = attention[0], attention[1]
-        return (*self._attention_shape(band, width + INCREMENTAL_FILL_STEP), band, width)
+        INCREMENTAL_FILL_ENABLED): the window moved INCREMENTAL_FILL_STEP
+        columns to the right — to the left edge, INCREMENTAL_FILL_STEP rows
+        down, past the right edge — and the whole grid once the window
+        holding the bottom-right corner is done."""
+        top, left = attention
+        return self._attention_shape(top, left + INCREMENTAL_FILL_STEP)
 
     def _fallback_attention(self, selectable):
         """The attention zone a node enters with (see
-        INCREMENTAL_FILL_ENABLED): the largest zone holding no free cell
-        (no placed word nor locked letter) of a slot of `selectable` — a
-        band of whole rows, a multiple of INCREMENTAL_FILL_STEP, then the
-        block below it as wide as its leading columns are filled — at least
-        the start zone, with that filled zone as its inner zone. None when
-        incremental fill is off."""
+        INCREMENTAL_FILL_ENABLED): the first window, in scan order (left to
+        right, then down), holding a free cell (no placed word nor locked
+        letter) of a slot of `selectable` — every window before it is
+        filled — the whole grid when none does. None when incremental fill
+        is off."""
         if not self.incremental_fill:
             return None
         known = set(self.locked_letters)
@@ -4973,14 +4988,12 @@ class Filler:
             if cell not in known
         }
         if not free:
-            return (self.rows, 0, self.rows, 0)
-        band = min(r for r, _ in free) // INCREMENTAL_FILL_STEP * INCREMENTAL_FILL_STEP
-        width = min(
-            c for r, c in free if r < band + INCREMENTAL_FILL_STEP
+            return (self.rows, 0)
+        return min(
+            (r // INCREMENTAL_FILL_STEP * INCREMENTAL_FILL_STEP,
+             c // INCREMENTAL_FILL_STEP * INCREMENTAL_FILL_STEP)
+            for r, c in free
         )
-        filled = (band, width)
-        start = self._attention_shape(0, INCREMENTAL_FILL_STEP)
-        return (*max(filled, start), *filled)
 
     def _attention_pool(self, slots, side):
         """The slots of `slots` holding at least one still-free cell (no
@@ -4989,7 +5002,6 @@ class Filler:
         whole grid."""
         if self._attention_is_whole(side):
             return list(slots)
-        shape = (side[0], side[1])
         known = set(self.locked_letters)
         for j, word in enumerate(self.assignment):
             if word is not None:
@@ -4997,25 +5009,23 @@ class Filler:
         return [
             i for i in slots
             if any(
-                self._in_attention(shape, r, c) and (r, c) not in known
+                self._in_attention(side, r, c) and (r, c) not in known
                 for r, c in self.slots[i]
             )
         ]
 
     def _group_size(self, attention):
         """Words the current node places at once, its own included (see
-        WORDS_PER_NODE, "mots par pose"): `words_per_node` on an empty ring,
-        down to 1 once its fill rate reaches GROUP_SIZE_MIN_FILL_PERCENT (P),
-        linearly — the ring being the attention zone (the whole grid when
-        `attention` is None) minus its inner zone (the filled zone it grew
-        from), and its fill rate the share of its white cells holding a
-        placed word or a locked letter:
-        `max(1, W - floor((W - 1) * known * 100 / (white * P)))`."""
+        WORDS_PER_NODE, "mots par pose"): `words_per_node` on an empty
+        attention zone, down to 1 once its fill rate reaches
+        GROUP_SIZE_MIN_FILL_PERCENT (P), linearly — the zone being the
+        attention window (the whole grid when it covers it), and its fill
+        rate the share of its white cells holding a placed word or a locked
+        letter: `max(1, W - floor((W - 1) * known * 100 / (white * P)))`."""
         top = self.words_per_node
         if top <= 1:
-            return 1
-        shape = (self.rows, 0) if attention is None else (attention[0], attention[1])
-        inner = (0, 0) if attention is None else (attention[2], attention[3])
+            return max(1, top)
+        whole = self._attention_is_whole(attention)
         known = set(self.locked_letters)
         for j, word in enumerate(self.assignment):
             if word is not None:
@@ -5023,8 +5033,7 @@ class Filler:
         white = set()
         for slot in self.slots:
             for r, c in slot:
-                if (self._in_attention(shape, r, c)
-                        and not self._in_attention(inner, r, c)):
+                if whole or self._in_attention(attention, r, c):
                     white.add((r, c))
         if not white:
             return 1
@@ -5395,7 +5404,7 @@ class Filler:
         # over from it as a new root, with no backtracking history, in the
         # attention zone the clean happened in (`root_attention`: the
         # record's for an early hardclean, the requesting node's otherwise),
-        # so the zone never shrinks back to its start size. The attempt's
+        # so the zone never moves back to its start window. The attempt's
         # descent caps (`_inherited`, `_initial_assigned_count`) are those
         # of its first start.
         self._initial_assigned_count = sum(1 for a in self.assignment if a is not None)
@@ -5407,7 +5416,7 @@ class Filler:
             # Early hardclean on the state the search starts from (no
             # record is taken until a word is added to it). Nothing to
             # restore: no node is running yet. A clean leaving no locked
-            # letter resets the root's zone to its start size, once per
+            # letter resets the root's zone to its start window, once per
             # attempt (`_attention_after_unlock`). Not on a state a zone
             # softclean or repeated-word hardclean has just cleaned, which
             # is not the record the test reads.
@@ -6813,12 +6822,12 @@ class Filler:
         # it has itself explored everything.
         # Incremental fill (see INCREMENTAL_FILL_ENABLED): the stages above
         # run inside the attention zone first (`zone_pool`); once they have
-        # placed nothing there, the zone grows and the node goes back to
-        # its first stage on the larger pool, until the zone covers the
+        # placed nothing there, the window moves on and the node goes back to
+        # its first stage on the new pool, until the zone covers the
         # whole grid. With ATTENTION_FALLBACK_ENABLED, on entry the zone
-        # falls back on the largest filled zone (band + block,
-        # `_fallback_attention`); otherwise the node keeps the zone it was
-        # entered with. A zone with nothing left to fill grows at once.
+        # falls back on the first window holding a free cell
+        # (`_fallback_attention`); otherwise the node keeps the zone it was
+        # entered with. A zone with nothing left to fill moves on at once.
         selectable = list(domains)
         if self.incremental_fill and ATTENTION_FALLBACK_ENABLED:
             attention = self._fallback_attention(selectable)
@@ -6828,13 +6837,13 @@ class Filler:
                 break
             if dry:
                 # Nothing selectable in the zone: soft-clean an impossible
-                # slot holding one of its free cells before widening.
+                # slot holding one of its free cells before moving on.
                 outcome = self._zone_clean(dry, attention)
                 if outcome is not None:
                     return outcome
             if self._attention_is_whole(attention):
                 break
-            attention = self._widen_attention(attention)
+            attention = self._next_attention(attention)
         if not domains:
             # Every remaining unassigned slot is dry at once, and all of
             # them are tolerated (dry before the search started): no
@@ -6873,7 +6882,7 @@ class Filler:
                 if zone_clean and not allow_breaking:
                     # Nothing more can be placed inside the attention
                     # zone: soft-clean an impossible slot holding one of
-                    # its free cells before widening it — a dry one, a
+                    # its free cells before moving it on — a dry one, a
                     # selectable one blocked by a crossing deadlock, or an
                     # "emplacement écarté".
                     blocked = [
@@ -6887,9 +6896,9 @@ class Filler:
                         return outcome
                 if not self._attention_is_whole(attention):
                     # Nothing more can be placed inside the attention
-                    # zone: widen it and start again from stage 1 on the
-                    # larger pool (slots already tried here stay tried).
-                    attention = self._widen_attention(attention)
+                    # zone: move it on and start again from stage 1 on the
+                    # new pool (slots already tried here stay tried).
+                    attention = self._next_attention(attention)
                     zone_pool = self._attention_pool(selectable, attention)
                     self.attention_step = attention
                     released = entry_released
